@@ -710,3 +710,202 @@ fn the_order_by_of_a_recursive_term_says_which_row_is_taken_next() {
         .rows;
     assert_eq!(rows, [[Value::Int(1)], [Value::Int(3)], [Value::Int(5)]]);
 }
+
+#[test]
+fn the_schema_is_a_table_that_is_read_and_not_written() {
+    use crate::change::Writer;
+    use crate::header::Encoding;
+    // `sqlite3InitOne` builds the schema's own table in memory out of
+    // the five columns every row of it is written with, and
+    // `sqlite3SchemaMayNotBeModified` keeps a statement from writing
+    // it.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    writer.run(b"CREATE INDEX i ON t(a)").unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    let rows = database
+        .query(b"SELECT type, name, tbl_name, rootpage FROM sqlite_master ORDER BY rootpage")
+        .unwrap();
+    assert_eq!(
+        rows.names,
+        [
+            b"type".to_vec(),
+            b"name".to_vec(),
+            b"tbl_name".to_vec(),
+            b"rootpage".to_vec()
+        ]
+    );
+    assert_eq!(
+        rows.rows,
+        [
+            [
+                Value::Text(b"table".to_vec()),
+                Value::Text(b"t".to_vec()),
+                Value::Text(b"t".to_vec()),
+                Value::Int(2)
+            ],
+            [
+                Value::Text(b"index".to_vec()),
+                Value::Text(b"i".to_vec()),
+                Value::Text(b"t".to_vec()),
+                Value::Int(3)
+            ]
+        ]
+    );
+    // The three names it answers to, and the statement it holds.
+    for name in [
+        b"sqlite_master".as_slice(),
+        b"sqlite_schema",
+        b"sqlite_temp_master",
+        b"sqlite_temp_schema",
+    ] {
+        let mut sql = b"SELECT count(*) FROM ".to_vec();
+        sql.extend_from_slice(name);
+        assert_eq!(database.query(&sql).unwrap().rows, [[Value::Int(2)]]);
+    }
+    assert_eq!(
+        database
+            .query(b"SELECT sql FROM sqlite_master WHERE name='i'")
+            .unwrap()
+            .rows,
+        [[Value::Text(b"CREATE INDEX i ON t(a)".to_vec())]]
+    );
+    // It is not one of the tables the file holds, and no statement
+    // writes it.
+    assert!(
+        !database
+            .tables()
+            .any(|table| table.name == b"sqlite_master")
+    );
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    for sql in [
+        b"INSERT INTO sqlite_master VALUES('x','y','z',1,'w')".as_slice(),
+        b"UPDATE sqlite_schema SET name='q'",
+        b"DELETE FROM sqlite_master",
+        b"DROP TABLE sqlite_master",
+    ] {
+        assert_eq!(
+            writer.run(sql).err(),
+            Some(crate::db::Error::Unsupported),
+            "{}",
+            alloc::string::String::from_utf8_lossy(sql)
+        );
+    }
+}
+
+#[test]
+fn a_row_of_the_schema_holds_the_statement_from_the_name_on() {
+    use crate::change::Writer;
+    use crate::header::Encoding;
+    // `sqlite3EndTable` and `sqlite3CreateIndex` write the words
+    // `CREATE` and the kind and then the text from the name to the end,
+    // so a row holds neither the `TEMP` nor the `IF NOT EXISTS` that
+    // stand before the name.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE IF NOT EXISTS a(x)".as_slice(),
+        b"CREATE UNIQUE INDEX IF NOT EXISTS i ON a(x)",
+        b"CREATE VIEW IF NOT EXISTS v AS SELECT 1",
+        b"CREATE TEMP TABLE abc(a, b, c)",
+        b"CREATE INDEX j ON abc(a)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    let held: Vec<Vec<u8>> = database
+        .query(b"SELECT sql FROM sqlite_master")
+        .unwrap()
+        .rows
+        .iter()
+        .filter_map(|row| match row.first() {
+            Some(Value::Text(text)) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        held,
+        [
+            b"CREATE TABLE a(x)".to_vec(),
+            b"CREATE UNIQUE INDEX i ON a(x)".to_vec(),
+            b"CREATE VIEW v AS SELECT 1".to_vec(),
+            b"CREATE TABLE abc(a, b, c)".to_vec(),
+            b"CREATE INDEX j ON abc(a)".to_vec(),
+        ]
+    );
+}
+
+#[test]
+fn a_key_that_counts_up_is_counted_in_the_table_of_sequences() {
+    use crate::change::Writer;
+    use crate::header::Encoding;
+    // `sqlite3StartTable` makes `sqlite_sequence` with the first table
+    // that counts its keys up, and `autoIncrementEnd` writes the
+    // largest key the table ever held into it.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE t(x INTEGER PRIMARY KEY AUTOINCREMENT, y)")
+        .unwrap();
+    let held = |writer: &Writer| -> Vec<Vec<Value>> {
+        let written = writer.written();
+        let database = Database::open(&written).unwrap();
+        database
+            .query(b"SELECT name, seq FROM sqlite_sequence")
+            .unwrap()
+            .rows
+    };
+    // The table is there and holds no row until one is written.
+    assert_eq!(held(&writer), Vec::<Vec<Value>>::new());
+    writer
+        .run(b"INSERT INTO t VALUES(NULL,'a'),(NULL,'b')")
+        .unwrap();
+    assert_eq!(held(&writer), [[Value::Text(b"t".to_vec()), Value::Int(2)]]);
+    // A key given back is not given out again.
+    writer.run(b"DELETE FROM t").unwrap();
+    assert_eq!(held(&writer), [[Value::Text(b"t".to_vec()), Value::Int(2)]]);
+    writer.run(b"INSERT INTO t VALUES(NULL,'c')").unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    assert_eq!(
+        database.query(b"SELECT x FROM t").unwrap().rows,
+        [[Value::Int(3)]]
+    );
+    assert_eq!(held(&writer), [[Value::Text(b"t".to_vec()), Value::Int(3)]]);
+    // A second such table gains a row of its own, and a key the
+    // statement names that is smaller than the count leaves it.
+    writer
+        .run(b"CREATE TABLE u(x INTEGER PRIMARY KEY AUTOINCREMENT)")
+        .unwrap();
+    writer.run(b"INSERT INTO u VALUES(9)").unwrap();
+    writer.run(b"INSERT INTO u VALUES(4)").unwrap();
+    assert_eq!(
+        held(&writer),
+        [
+            [Value::Text(b"t".to_vec()), Value::Int(3)],
+            [Value::Text(b"u".to_vec()), Value::Int(9)]
+        ]
+    );
+    // A table taken away takes its count with it, and a table that
+    // counts nothing takes none.
+    writer.run(b"CREATE TABLE plain(a)").unwrap();
+    writer.run(b"DROP TABLE plain").unwrap();
+    writer.run(b"DROP TABLE t").unwrap();
+    assert_eq!(held(&writer), [[Value::Text(b"u".to_vec()), Value::Int(9)]]);
+
+    // A statement that writes no row leaves the count as it stands.
+    writer
+        .run(b"INSERT INTO u SELECT x FROM u WHERE 0")
+        .unwrap();
+    assert_eq!(held(&writer), [[Value::Text(b"u".to_vec()), Value::Int(9)]]);
+
+    // A database with no table that counts its keys up has no table of
+    // counts, so a `DROP` there takes no row out of one.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    writer.run(b"DROP TABLE t").unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    assert_eq!(database.tables().count(), 0);
+}

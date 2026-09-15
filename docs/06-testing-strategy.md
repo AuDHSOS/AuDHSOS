@@ -4299,7 +4299,7 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
   into the answers the files hold, which D-212 records.
 - A step this harness cannot run stops the file only where the text it
   stands for may have changed the database, which D-213 records.
-- 2322 pass, 6 answer differently and 13 036 are refused or stopped.
+- 2333 pass, 6 answer differently and 13 025 are refused or stopped.
   Document 16, section 16.23 groups the seven. Earlier runs answered
   14, then 27, then 17, then 13, then 16 differently; twenty-five were
   defects, which D-181, D-184, D-189, D-197 and D-205 record and
@@ -4711,6 +4711,20 @@ D-214 and D-215, document 16 step Q5.
 - The `LIMIT` of a recursive term bounds the rows it answers, an
   `OFFSET` passes the first over, and a count below nought bounds
   nothing.
+
+### 6.6.142 The schema as a table, and the keys that count up (`db-sqlite`)
+
+D-216, D-217 and D-218, document 16 step Q8.
+
+- `sqlite_master` answers the five columns of every row of the schema,
+  under each of the four names it carries, and no statement writes it.
+- A row of the schema holds the statement from the name on: neither
+  `TEMP` nor `IF NOT EXISTS`, and `CREATE UNIQUE INDEX` whole.
+- `sqlite_sequence` is made with the first table that counts its keys
+  up and holds no row until one is written; a key given back by a
+  `DELETE` is not given out again; a key the statement names that is
+  smaller than the count leaves it; and a `DROP TABLE` takes the count
+  away.
 
 ## 6.7 CI pipeline
 

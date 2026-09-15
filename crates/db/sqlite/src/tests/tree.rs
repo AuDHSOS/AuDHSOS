@@ -3994,6 +3994,9 @@ fn analyze_counts_no_table_of_the_system_and_refuses_no_name_of_one() {
     writer.run(b"CREATE TABLE t(a)").unwrap();
     writer.run(b"INSERT INTO t VALUES(1)").unwrap();
     writer.run(b"ANALYZE sqlite_master").unwrap();
+    // A name the word `sqlite_` begins is a table this counts nothing
+    // of, whatever the database holds under it.
+    writer.run(b"ANALYZE sqlite_stat9").unwrap();
     let written = writer.written();
     let database = Database::open(&written).unwrap();
     assert_eq!(

@@ -645,7 +645,7 @@ TRIGGER`, the four `DROP`s, `ALTER TABLE ... ADD COLUMN`, `PRAGMA`,
 and `UPDATE` are run from their text and write the files the shell wrote;
 the rest is open.
 Depends on: Q6. Recorded in D-172 to D-174, D-182, D-186, D-187, D-189,
-D-191, D-193, D-195, D-196 and D-205 to D-211.
+D-191, D-193, D-195, D-196, D-205 to D-211 and D-216 to D-218.
 Size: L.
 
 ### Does
@@ -677,6 +677,9 @@ Size: L.
 7. `PRAGMA integrity_check` and `PRAGMA quick_check`, which walk the
    file and answer what it holds against what it says. Built, which
    D-210 records.
+8. `sqlite_schema` as a table a statement reads, and `sqlite_sequence`
+   as the count a key that counts up is kept in. Built, which D-216
+   and D-218 record.
 
 ### Done when
 
@@ -687,7 +690,7 @@ library accepts or refuses it, with no count of what is waiting.
 
 Status: `sh tools/xtask.sh sqlite-suite` runs the part of SQLite's own
 test files that needs no TCL interpreter. Of 15 364 cases in 1 171
-files, 2322 pass, 6 answer differently, and 13 036 name something the
+files, 2333 pass, 6 answer differently, and 13 025 name something the
 engine refuses or something the harness cannot run.
 Depends on: Q7, Q8.
 Size: M.

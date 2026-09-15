@@ -533,32 +533,20 @@ impl<'a> Database<'a> {
             if sql.is_empty() {
                 continue;
             }
-            let (arena, definition) = parse::definition(&sql)?;
-            let crate::ast::Definition::Table(written) = definition else {
+            let Some(stored) = stored_of(sql, u32::try_from(root).unwrap_or(0), encoding)? else {
                 continue;
             };
-            let mut table = schema::table(&arena, &written, &sql)?;
-            // `BINARY` is the same collation under the same name
-            // whatever the encoding, and it answers by the bytes the
-            // file holds.
-            let binary = binary_of(encoding);
-            if binary != Collation::Binary {
-                for column in &mut table.columns {
-                    if column.collation == Collation::Binary {
-                        column.collation = binary;
-                    }
-                }
-            }
-            let places = places(&table);
-            tables.push(Stored {
-                table,
-                root: u32::try_from(root).unwrap_or(0),
-                sql,
-                arena,
-                places,
-                indexes: Vec::new(),
-            });
+            tables.push(stored);
         }
+        // `sqlite_schema` is a table of the schema like any other: it
+        // lies on page one and holds the five columns every row of it
+        // is written with, which `sqlite3InitOne` builds in memory
+        // rather than reading out of a row.
+        tables.extend(
+            stored_of(SCHEMA_CREATE.to_vec(), crate::image::SCHEMA_ROOT, encoding)
+                .ok()
+                .flatten(),
+        );
         let mut database = Database {
             image,
             tables,
@@ -825,7 +813,13 @@ impl<'a> Database<'a> {
 
     /// The tables of the schema, in the order the file holds them.
     pub fn tables(&self) -> impl Iterator<Item = &Table> {
-        self.tables.iter().map(|stored| &stored.table)
+        // The schema's own table is read out of the schema rather than
+        // written in it, so it is not one of the tables the file holds;
+        // a statement that names it reaches it through the lookup.
+        self.tables
+            .iter()
+            .map(|stored| &stored.table)
+            .filter(|table| !schema_named(&table.name))
     }
 
     /// The file the database is read out of.
@@ -838,10 +832,7 @@ impl<'a> Database<'a> {
     /// database holds one.
     #[must_use]
     pub fn table(&self, name: &[u8]) -> Option<(&Table, u32)> {
-        self.tables
-            .iter()
-            .find(|stored| stored.table.name.eq_ignore_ascii_case(name))
-            .map(|stored| (&stored.table, stored.root))
+        self.find(name).map(|stored| (&stored.table, stored.root))
     }
 
     /// The index of `name`, with the page its tree begins on.
@@ -864,9 +855,7 @@ impl<'a> Database<'a> {
     /// says so.
     #[must_use]
     pub fn indexes(&self, name: &[u8]) -> Vec<(&schema::Index, u32)> {
-        self.tables
-            .iter()
-            .find(|stored| stored.table.name.eq_ignore_ascii_case(name))
+        self.find(name)
             .map(|stored| {
                 stored
                     .indexes
@@ -917,11 +906,7 @@ impl<'a> Database<'a> {
     /// [`Error::Unsupported`] where the table keeps its rows in the
     /// key's own tree, and whatever reading a row of it refuses.
     pub fn rows_of(&self, name: &[u8]) -> Result<Vec<(i64, Vec<Value>)>, Error> {
-        let stored = self
-            .tables
-            .iter()
-            .find(|stored| stored.table.name.eq_ignore_ascii_case(name))
-            .ok_or(Error::NoTable)?;
+        let stored = self.find(name).ok_or(Error::NoTable)?;
         if stored.table.without_rowid {
             return Err(Error::Unsupported);
         }
@@ -1004,8 +989,14 @@ impl<'a> Database<'a> {
         binary_of(self.encoding)
     }
 
-    /// The table `name` names.
+    /// The table `name` names, with the three names of the schema's own
+    /// table read as the one it is held under.
     fn find(&self, name: &[u8]) -> Option<&Stored> {
+        let name = if schema_named(name) {
+            SCHEMA_TABLE
+        } else {
+            name
+        };
         self.tables
             .iter()
             .find(|stored| stored.table.name.eq_ignore_ascii_case(name))
@@ -3507,6 +3498,55 @@ fn matched(
         }
     }
     Ok(out)
+}
+
+/// One table of the schema, read out of the statement that made it,
+/// and nothing where the statement makes something else.
+///
+/// Reading one statement costs O(n) in its bytes.
+fn stored_of(sql: Vec<u8>, root: u32, encoding: Encoding) -> Result<Option<Stored>, Error> {
+    let (arena, definition) = parse::definition(&sql)?;
+    let crate::ast::Definition::Table(written) = definition else {
+        return Ok(None);
+    };
+    let mut table = schema::table(&arena, &written, &sql)?;
+    // `BINARY` is the same collation under the same name whatever the
+    // encoding, and it answers by the bytes the file holds.
+    let binary = binary_of(encoding);
+    if binary != Collation::Binary {
+        for column in &mut table.columns {
+            if column.collation == Collation::Binary {
+                column.collation = binary;
+            }
+        }
+    }
+    let places = places(&table);
+    Ok(Some(Stored {
+        table,
+        root,
+        sql,
+        arena,
+        places,
+        indexes: Vec::new(),
+    }))
+}
+
+/// The name the schema's own table is held under.
+const SCHEMA_TABLE: &[u8] = b"sqlite_master";
+
+/// The statement the schema's own table is read from, which is what
+/// `sqlite3InitOne` builds it out of.
+const SCHEMA_CREATE: &[u8] =
+    b"CREATE TABLE sqlite_master(type text,name text,tbl_name text,rootpage int,sql text)";
+
+/// Whether `name` is one of the three the schema's own table answers
+/// to.
+#[must_use]
+pub const fn schema_named(name: &[u8]) -> bool {
+    name.eq_ignore_ascii_case(b"sqlite_master")
+        || name.eq_ignore_ascii_case(b"sqlite_schema")
+        || name.eq_ignore_ascii_case(b"sqlite_temp_master")
+        || name.eq_ignore_ascii_case(b"sqlite_temp_schema")
 }
 
 /// Whether a schema name is the one a file holds.

@@ -58,6 +58,24 @@ const fn is_text(value: Option<crate::record::Value<'_>>, wanted: &[u8]) -> bool
 /// The table `ANALYZE` writes its counts into.
 const STAT: &[u8] = b"sqlite_stat1";
 
+/// The table a key that counts up is counted in.
+const SEQUENCE: &[u8] = b"sqlite_sequence";
+
+/// Refuses a statement that writes the schema's own table, which is
+/// `sqlite3SchemaMayNotBeModified`: the table is read and not written,
+/// whatever the statement says.
+const fn written_to(name: &[u8]) -> Result<(), Error> {
+    if crate::db::schema_named(name) {
+        return Err(Error::Unsupported);
+    }
+    Ok(())
+}
+
+/// Whether a row of `sqlite_sequence` names the table `wanted`.
+fn named_row(values: &[Value], wanted: &[u8]) -> bool {
+    matches!(values.first(), Some(Value::Text(text)) if text.eq_ignore_ascii_case(wanted))
+}
+
 /// Whether the schema already names a table, an index or a view, which
 /// are one namespace; a trigger is named in its own, so a trigger and
 /// an index may share a name.
@@ -384,6 +402,11 @@ impl Writer {
         for rowid in rowids {
             crate::tree::remove(&mut self.pages, crate::image::SCHEMA_ROOT, rowid)?;
         }
+        // `sqlite3CodeDropTable` takes the row of `sqlite_sequence`
+        // that names the table away with the table.
+        if asked.kind == crate::ast::Dropped::Table {
+            self.uncount(&name)?;
+        }
         roots.sort_unstable();
         for root in roots.into_iter().rev() {
             crate::tree::destroy(&mut self.pages, root)?;
@@ -396,6 +419,11 @@ impl Writer {
     /// destroys: a table takes its indexes with it, an index takes only
     /// itself.
     fn named(&self, name: &[u8], kind: crate::ast::Dropped) -> Result<(Vec<i64>, Vec<u32>), Error> {
+        // `sqlite3SchemaMayNotBeModified`: the schema's own table is
+        // read and not written, whatever the statement says.
+        if crate::db::schema_named(name) {
+            return Err(Error::Unsupported);
+        }
         let bytes = self.image();
         let database = Database::open(&bytes)?;
         let mut roots: Vec<u32> = Vec::new();
@@ -1161,7 +1189,7 @@ impl Writer {
     /// `CREATE TABLE`: a page for the tree of the table and a row of
     /// `sqlite_schema` that names it.
     fn define(&mut self, arena: &Arena, definition: Definition, sql: &[u8]) -> Result<(), Error> {
-        let (kind, name, over, already) = match definition {
+        let (kind, name, over, already, written) = match definition {
             Definition::Drop(asked) => return self.drop_object(&asked, sql),
             Definition::AddColumn(asked) => return self.add_column(arena, &asked, sql),
             Definition::Trigger(trigger) => return self.create_trigger(&trigger, sql),
@@ -1175,6 +1203,7 @@ impl Writer {
                     name.clone(),
                     name,
                     table.if_not_exists,
+                    written_statement(b"CREATE TABLE ", table.name, sql),
                 )
             }
             Definition::Index(index) => (
@@ -1182,12 +1211,27 @@ impl Writer {
                 crate::schema::dequote(index.name.text(sql)),
                 crate::schema::dequote(index.table.text(sql)),
                 index.if_not_exists,
+                written_statement(
+                    if index.unique {
+                        b"CREATE UNIQUE INDEX "
+                    } else {
+                        b"CREATE INDEX "
+                    },
+                    index.name,
+                    sql,
+                ),
             ),
             // A view holds no row of its own: it names a statement, and
             // the rows are the ones that statement answers.
             Definition::View(view) => {
                 let name = crate::schema::dequote(view.name.text(sql));
-                (None, name.clone(), name, view.if_not_exists)
+                (
+                    None,
+                    name.clone(),
+                    name,
+                    view.if_not_exists,
+                    written_statement(b"CREATE VIEW ", view.name, sql),
+                )
             }
         };
         if self.already(&name, already)? {
@@ -1220,7 +1264,7 @@ impl Writer {
                 text(&name),
                 text(&over),
                 Value::Int(i64::from(root)),
-                text(statement_text(sql)),
+                text(&written),
             ],
             &SCHEMA,
             4,
@@ -1243,13 +1287,28 @@ impl Writer {
         // table's own, which the grammar makes as it reads the
         // constraint, so its row stands before the row of the table is
         // written over the blank one.
+        let mut counts = false;
         if let Definition::Table(written) = definition {
             let table = crate::schema::table(arena, &written, sql)?;
             for at in 0..table.keys.len() {
                 self.own_index(&table, at)?;
             }
+            counts = table.autoincrement;
         }
-        self.schema_written(rowid, &row)
+        self.schema_written(rowid, &row)?;
+        // `sqlite3StartTable` makes `sqlite_sequence` with the first
+        // table that counts its keys up, and the row of that table is
+        // written before it.
+        if counts && !self.holds(SEQUENCE)? {
+            self.ran(b"CREATE TABLE sqlite_sequence(name,seq)")?;
+        }
+        Ok(())
+    }
+
+    /// Whether the database holds the table `name`.
+    fn holds(&self, name: &[u8]) -> Result<bool, Error> {
+        let bytes = self.image();
+        Ok(Database::open(&bytes)?.table(name).is_some())
     }
 
     /// Whether a `CREATE` of `name` writes nothing, because the schema
@@ -1336,6 +1395,7 @@ impl Writer {
         outer: Option<&dyn crate::eval::Row>,
         name: &[u8],
     ) -> Result<Inserting, Error> {
+        written_to(name)?;
         let named: Vec<Vec<u8>> = arena
             .names(statement.columns)
             .iter()
@@ -1516,6 +1576,16 @@ impl Writer {
         let after = self.triggers_for(&name, TriggerEvent::Insert, TriggerTime::After)?;
         let fires = !before.is_empty() || !after.is_empty();
         let mut next = largest(&self.pages, root)?.unwrap_or(0);
+        // `autoIncBegin`: a key that counts up never gives a key back,
+        // so the next one is past the largest the table ever held and
+        // not past the largest it holds.
+        let counted = table
+            .autoincrement
+            .then(|| self.counted(&name))
+            .transpose()?;
+        if let Some(held) = counted {
+            next = next.max(held);
+        }
         let mut written = 0_i64;
         for (key, mut values) in rows {
             // A trigger's body may write the table this statement
@@ -1594,7 +1664,89 @@ impl Writer {
                 self.fire(&after, &[], &row)?;
             }
         }
+        // `autoIncrementEnd` writes the largest key the table ever held
+        // back into `sqlite_sequence`, where the statement wrote a row.
+        if let Some(held) = counted
+            && written > 0
+            && next > held
+        {
+            self.count_up(&name, next)?;
+        }
         Ok(written)
+    }
+
+    /// The row of `sqlite_sequence` that names `name`, taken away with
+    /// the table it counts.
+    ///
+    /// Taking one row out costs O(log n).
+    fn uncount(&mut self, name: &[u8]) -> Result<(), Error> {
+        let wanted = crate::value::stored(name, self.header.encoding);
+        let found = {
+            let bytes = self.image();
+            let database = Database::open(&bytes)?;
+            let Some((_, root)) = database.table(SEQUENCE) else {
+                // A database with no table that counts its keys up has
+                // no table of counts to take a row out of.
+                return Ok(());
+            };
+            database
+                .rows_of(SEQUENCE)?
+                .iter()
+                .find(|(_, values)| named_row(values, &wanted))
+                .map(|(rowid, _)| (root, *rowid))
+        };
+        if let Some((root, rowid)) = found {
+            crate::tree::remove(&mut self.pages, root, rowid)?;
+        }
+        Ok(())
+    }
+
+    /// The largest key a table that counts its keys up ever held, which
+    /// is the row of `sqlite_sequence` that names it.
+    ///
+    /// Reading it costs O(n) in the rows of that table.
+    fn counted(&self, name: &[u8]) -> Result<i64, Error> {
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        let wanted = crate::value::stored(name, self.header.encoding);
+        Ok(database
+            .rows_of(SEQUENCE)?
+            .iter()
+            .find(|(_, values)| named_row(values, &wanted))
+            .and_then(|(_, values)| values.get(1))
+            .map_or(0, Value::to_integer))
+    }
+
+    /// The largest key a table ever held, written into the row of
+    /// `sqlite_sequence` that names it, which is made where the table
+    /// has none.
+    ///
+    /// Writing one row costs O(log n).
+    fn count_up(&mut self, name: &[u8], held: i64) -> Result<(), Error> {
+        let wanted = crate::value::stored(name, self.header.encoding);
+        let (root, rowid) = {
+            let bytes = self.image();
+            let database = Database::open(&bytes)?;
+            let (_, root) = database.table(SEQUENCE).ok_or(Error::NoTable)?;
+            let rowid = database
+                .rows_of(SEQUENCE)?
+                .iter()
+                .find(|(_, values)| named_row(values, &wanted))
+                .map(|(rowid, _)| *rowid);
+            (root, rowid)
+        };
+        let record = crate::record::write(
+            &[Value::Text(wanted), Value::Int(held)],
+            &[Affinity::None; 2],
+            4,
+        );
+        if let Some(rowid) = rowid {
+            crate::tree::update(&mut self.pages, root, rowid, &record)?;
+            return Ok(());
+        }
+        let rowid = largest(&self.pages, root)?.unwrap_or(0).saturating_add(1);
+        insert(&mut self.pages, root, rowid, &record)?;
+        Ok(())
     }
 }
 
@@ -1856,6 +2008,7 @@ impl Writer {
         outer: Option<&dyn crate::eval::Row>,
     ) -> Result<i64, Error> {
         let name = crate::schema::dequote(statement.name.text(sql));
+        written_to(&name)?;
         let (root, keys, kept, table) = {
             let bytes = self.image();
             let database = Database::open(&bytes)?;
@@ -1932,6 +2085,7 @@ impl Writer {
         outer: Option<&dyn crate::eval::Row>,
         name: &[u8],
     ) -> Result<Updating, Error> {
+        written_to(name)?;
         let sets = arena.sets(statement.sets);
         let bytes = self.image();
         let database = Database::open(&bytes)?;
@@ -2248,18 +2402,9 @@ pub(crate) fn order_of_keys(
         .unwrap_or(core::cmp::Ordering::Equal)
 }
 
-/// A value as the database stores it, which turns text into the
-/// encoding the file names.
-fn stored(value: &Value, encoding: Encoding) -> Value {
-    match value {
-        Value::Text(bytes) => Value::Text(crate::value::stored(bytes, encoding)),
-        other => other.clone(),
-    }
-}
-
-/// The statement without the semicolon that ends it and without the
-/// space around it, which is the text `sqlite_schema` holds.
-fn statement_text(sql: &[u8]) -> &[u8] {
+/// `sql` without the semicolon that ends it and without the space
+/// after it.
+fn trimmed(sql: &[u8]) -> &[u8] {
     let mut text = sql;
     while text
         .last()
@@ -2267,9 +2412,22 @@ fn statement_text(sql: &[u8]) -> &[u8] {
     {
         text = text.get(..text.len().saturating_sub(1)).unwrap_or_default();
     }
-    let mut at = 0;
-    while text.get(at).is_some_and(u8::is_ascii_whitespace) {
-        at = at.saturating_add(1);
+    text
+}
+
+/// The statement a row of `sqlite_schema` holds: the words `CREATE` and
+/// the kind, and then the text from the name to the end.
+fn written_statement(prefix: &[u8], name: Span, sql: &[u8]) -> Vec<u8> {
+    let mut out = prefix.to_vec();
+    out.extend_from_slice(trimmed(sql.get(name.start..).unwrap_or_default()));
+    out
+}
+
+/// A value as the database stores it, which turns text into the
+/// encoding the file names.
+fn stored(value: &Value, encoding: Encoding) -> Value {
+    match value {
+        Value::Text(bytes) => Value::Text(crate::value::stored(bytes, encoding)),
+        other => other.clone(),
     }
-    text.get(at..).unwrap_or_default()
 }
