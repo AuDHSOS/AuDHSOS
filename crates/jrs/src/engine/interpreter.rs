@@ -26,8 +26,8 @@ use super::{
     shape::{PropertyFlags, ShapeId},
     string::StringError,
     value::{
-        ObjectRef, PropertyKey, StringRef, VALUE_FALSE, VALUE_NAN, VALUE_NULL, VALUE_TRUE,
-        VALUE_UNDEFINED, Value,
+        ObjectRef, PropertyKey, StringRef, SymbolRef, VALUE_FALSE, VALUE_NAN, VALUE_NULL,
+        VALUE_TRUE, VALUE_UNDEFINED, Value,
     },
 };
 use alloc::vec::Vec;
@@ -1007,6 +1007,7 @@ impl RegisterVM {
         op: BinaryOp,
         rhs: Value,
         heap: &mut GenerationalHeap,
+        realm: &Realm,
     ) -> Result<BinaryOpFeedback, VMError> {
         let observed = if self.acc.as_smi().is_some() && rhs.as_smi().is_some() {
             BinaryOpFeedback::SignedSmallInteger
@@ -1016,8 +1017,8 @@ impl RegisterVM {
             BinaryOpFeedback::Generic
         };
         if op == BinaryOp::Add && (self.acc.is_string() || rhs.is_string()) {
-            let left = self.primitive_string(self.acc, heap)?;
-            let right = self.primitive_string(rhs, heap)?;
+            let left = self.primitive_string(self.acc, heap, realm)?;
+            let right = self.primitive_string(rhs, heap, realm)?;
             self.acc = left;
             self.add(right, heap)?;
             return Ok(observed);
@@ -1111,6 +1112,7 @@ impl RegisterVM {
         &self,
         value: Value,
         heap: &mut GenerationalHeap,
+        realm: &Realm,
     ) -> Result<Value, VMError> {
         if value.is_string() {
             return Ok(value);
@@ -1123,6 +1125,9 @@ impl RegisterVM {
             alloc::string::String::from("null")
         } else if value.is_undefined() {
             alloc::string::String::from("undefined")
+        } else if value.is_symbol() {
+            // 7.1.17 step 2: a Symbol has no String of its own.
+            return Err(type_error(heap, realm, "cannot convert Symbol operand"));
         } else {
             return Err(VMError::TypeError);
         };
@@ -1652,11 +1657,48 @@ impl RegisterVM {
             | Intrinsic::RegExpPrototypeToString => {
                 self.call_regexp_intrinsic(intrinsic, &call, units, heap, realm)
             }
-            // 20.4.1.1 makes a Symbol of its own, which needs a place for its
-            // description and a registry 20.4.2.2 shares between Realms.
-            Intrinsic::SymbolConstructor => Err(VMError::Unsupported(
-                "the Symbol constructor, which makes a Symbol of its own",
-            )),
+            // 20.4.1.1: `Symbol` is not a constructor, and its description
+            // is undefined or the text of its argument.
+            Intrinsic::SymbolConstructor => {
+                if call.construct.is_some() {
+                    return Err(type_error(heap, realm, "Symbol is not a constructor"));
+                }
+                let description = self.call_argument(&call, 0)?;
+                let description = if description.is_undefined() {
+                    None
+                } else {
+                    Some(property_name_units(description, heap)?)
+                };
+                self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+                Ok(Value::from_symbol(heap.create_symbol(description)?))
+            }
+            // 20.4.2.2 and 20.4.2.3 are the two halves of the registry.
+            Intrinsic::SymbolFor => {
+                let key = property_name_units(self.call_argument(&call, 0)?, heap)?;
+                self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+                Ok(Value::from_symbol(heap.registered_symbol(&key)?))
+            }
+            Intrinsic::SymbolKeyFor => {
+                let Some(symbol) = self.call_argument(&call, 0)?.as_symbol() else {
+                    return Err(type_error(heap, realm, "value is not a Symbol"));
+                };
+                match heap.symbol_registry_key(symbol).map(<[u16]>::to_vec) {
+                    Some(key) => self.allocate_string(heap, &key),
+                    None => Ok(VALUE_UNDEFINED),
+                }
+            }
+            // 20.4.3.3 and 20.4.3.4 take a `this` that is a Symbol; this
+            // engine has no Symbol wrapper object for one to be inside.
+            Intrinsic::SymbolPrototypeToString | Intrinsic::SymbolPrototypeValueOf => {
+                let Some(symbol) = call.receiver.as_symbol() else {
+                    return Err(type_error(heap, realm, "value is not a Symbol"));
+                };
+                if intrinsic == Intrinsic::SymbolPrototypeValueOf {
+                    return Ok(call.receiver);
+                }
+                let text = Self::symbol_descriptive_string(symbol, heap);
+                self.allocate_string(heap, &text)
+            }
             // 10.2.4.1 throws whenever it is called, however it is reached.
             Intrinsic::ThrowTypeError => Err(type_error(
                 heap,
@@ -1959,6 +2001,10 @@ impl RegisterVM {
     ) -> Result<Value, VMError> {
         let units = if target.is_undefined() && !construct {
             alloc::vec::Vec::new()
+        } else if let Some(symbol) = target.as_symbol().filter(|_| !construct) {
+            // 22.1.1.1 step 2.a answers the text 20.4.3.3.1 gives a Symbol,
+            // where every other conversion of one is a `TypeError`.
+            Self::symbol_descriptive_string(symbol, heap)
         } else {
             property_name_units(target, heap)?
         };
@@ -5861,6 +5907,60 @@ impl RegisterVM {
         }))
     }
 
+    /// `SymbolDescriptiveString` of 20.4.3.3.1: `Symbol(` and the description.
+    fn symbol_descriptive_string(symbol: SymbolRef, heap: &GenerationalHeap) -> Vec<u16> {
+        let mut text: Vec<u16> = "Symbol(".encode_utf16().collect();
+        if let Some(description) = Self::symbol_description(symbol, heap) {
+            text.extend_from_slice(&description);
+        }
+        text.push(0x29);
+        text
+    }
+
+    /// The `[[Description]]` of a Symbol, which table 1 of 20.4.2 gives the
+    /// well-known ones and the heap gives every other.
+    fn symbol_description(symbol: SymbolRef, heap: &GenerationalHeap) -> Option<Vec<u16>> {
+        if let Some(well_known) = super::realm::WellKnownSymbol::from_reference(symbol) {
+            return Some(well_known.description().encode_utf16().collect());
+        }
+        heap.symbol_description(symbol)?.map(<[u16]>::to_vec)
+    }
+
+    /// The value a Symbol answers for one property name.
+    ///
+    /// 7.1.18 would produce a wrapper whose own properties are none at all, so
+    /// every name but the `description` accessor of 20.4.3.2 is resolved on
+    /// `%Symbol.prototype%`.
+    fn symbol_member(
+        &self,
+        value: Value,
+        name: PropertyKey,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<Value>, VMError> {
+        let Some(symbol) = value.as_symbol() else {
+            return Ok(None);
+        };
+        let units = name
+            .as_string()
+            .and_then(|name| heap.strings.to_utf16(Value::from_string(name)))
+            .unwrap_or_default();
+        if units == DESCRIPTION_NAME {
+            return match Self::symbol_description(symbol, heap) {
+                Some(description) => self.allocate_string(heap, &description).map(Some),
+                None => Ok(Some(VALUE_UNDEFINED)),
+            };
+        }
+        let prototype = realm
+            .symbol_prototype(heap)?
+            .as_object()
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        Ok(Some(match heap.lookup_named(prototype, name)? {
+            Some(property) => Self::plain_value(property)?,
+            None => Self::absent_property(value, &units, heap, realm)?,
+        }))
+    }
+
     /// Whether 10.4.3.1 gives this object this name out of its
     /// `[[StringData]]` rather than out of its Shape.
     fn owns_string_exotic(
@@ -7241,7 +7341,11 @@ impl RegisterVM {
                         }
                         return Ok(None);
                     }
-                    let text = self.primitive_string(value, heap)?;
+                    if value.is_symbol() {
+                        // 7.1.17 step 2: a Symbol has no String of its own.
+                        return Err(type_error(heap, realm, "cannot convert Symbol to String"));
+                    }
+                    let text = self.primitive_string(value, heap, realm)?;
                     self.acc = text;
                 }
                 Instruction::BitNot => {
@@ -7407,7 +7511,7 @@ impl RegisterVM {
                         return Ok(None);
                     }
                     self.acc = left;
-                    let observed = self.primitive_binary(op, right, heap)?;
+                    let observed = self.primitive_binary(op, right, heap, realm)?;
                     active_feedback
                         .record_binary(slot, observed)
                         .ok_or(VMError::InvalidFeedbackVector)?;
@@ -7608,6 +7712,10 @@ impl RegisterVM {
                         return Ok(None);
                     }
                     if let Some(member) = Self::primitive_member(target, name, heap, realm)? {
+                        self.acc = member;
+                        return Ok(None);
+                    }
+                    if let Some(member) = self.symbol_member(target, name, heap, realm)? {
                         self.acc = member;
                         return Ok(None);
                     }
@@ -8643,6 +8751,11 @@ fn primitive_number(value: Value, heap: &GenerationalHeap) -> Result<f64, VMErro
     if value.is_object() {
         return Err(NUMERIC_CONVERSION_GAP);
     }
+    if value.is_symbol() {
+        // 7.1.4 step 2 is a `TypeError`, which this function has no Realm to
+        // raise.
+        return Err(VMError::Unsupported("ToNumber of a Symbol"));
+    }
     Err(VMError::TypeError)
 }
 
@@ -9102,6 +9215,11 @@ fn integer_argument(value: Value, heap: &GenerationalHeap) -> Result<i64, VMErro
 /// UTF-16 code units of the property name `"length"`.
 const LENGTH_NAME: [u16; 6] = [0x6C, 0x65, 0x6E, 0x67, 0x74, 0x68];
 
+/// `description`, which 20.4.3.2 gives a Symbol.
+const DESCRIPTION_NAME: [u16; 11] = [
+    0x64, 0x65, 0x73, 0x63, 0x72, 0x69, 0x70, 0x74, 0x69, 0x6F, 0x6E,
+];
+
 /// `callee`, which 10.4.4 gives the arguments object.
 const CALLEE_NAME: [u16; 6] = [0x63, 0x61, 0x6C, 0x6C, 0x65, 0x65];
 
@@ -9152,6 +9270,11 @@ fn property_name_units(value: Value, heap: &GenerationalHeap) -> Result<Vec<u16>
     }
     if value.is_undefined() {
         return Ok("undefined".encode_utf16().collect());
+    }
+    if value.is_symbol() {
+        // 7.1.17 step 2: a Symbol has no String of its own, which is a
+        // `TypeError` this function has no Realm to raise.
+        return Err(VMError::Unsupported("ToString of a Symbol"));
     }
     Err(VMError::Unsupported("ToString of an Object"))
 }
@@ -9352,7 +9475,7 @@ mod tests {
         for (value, expected) in [
             (
                 Value::from_symbol(super::super::value::SymbolRef(0)),
-                VMError::TypeError,
+                VMError::Unsupported("ToNumber of a Symbol"),
             ),
             (
                 Value::from_bigint(super::super::value::BigIntRef(0)),

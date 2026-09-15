@@ -20,7 +20,10 @@ use super::{
     object::{JSObject, ObjectKind},
     shape::{PropertyFlags, ShapeId, ShapeTable},
     string::{StringArena, StringError},
-    value::{ObjectRef, PropertyKey, StringRef, VALUE_NULL, VALUE_UNDEFINED, Value},
+    value::{
+        ObjectRef, PropertyKey, StringRef, SymbolRef, VALUE_NULL, VALUE_UNDEFINED, Value,
+        WELL_KNOWN_SYMBOLS,
+    },
 };
 use alloc::{collections::BTreeMap, collections::BTreeSet, vec::Vec};
 
@@ -278,6 +281,13 @@ pub struct GenerationalHeap {
     remembered_objects: BTreeSet<ObjectRef>,
     remembered_elements: BTreeSet<ElementsRef>,
     remembered_contexts: BTreeSet<ContextRef>,
+    /// The `[[Description]]` of every Symbol 20.4.1.1 made, after the ones
+    /// table 1 of 20.4.2 names. A Symbol is an identity and not an object: it
+    /// is never collected, so the fuel of the Agent is what bounds this.
+    symbols: Vec<Option<Vec<u16>>>,
+    /// The `GlobalSymbolRegistry` of 20.4.2.2, keyed by the text `Symbol.for`
+    /// was given.
+    symbol_registry: BTreeMap<Vec<u16>, u32>,
 }
 
 impl Default for GenerationalHeap {
@@ -308,7 +318,58 @@ impl GenerationalHeap {
             remembered_objects: BTreeSet::new(),
             remembered_elements: BTreeSet::new(),
             remembered_contexts: BTreeSet::new(),
+            symbols: Vec::new(),
+            symbol_registry: BTreeMap::new(),
         }
+    }
+
+    /// `SymbolDescriptiveString` input of 20.4.1.1: a Symbol no other value is.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::ReferenceSpaceExhausted`] when the reference space
+    /// of a Symbol is full.
+    pub fn create_symbol(&mut self, description: Option<Vec<u16>>) -> Result<SymbolRef, HeapError> {
+        let index = u32::try_from(self.symbols.len())
+            .ok()
+            .and_then(|index| index.checked_add(WELL_KNOWN_SYMBOLS))
+            .ok_or(HeapError::ReferenceSpaceExhausted)?;
+        self.symbols.push(description);
+        Ok(SymbolRef(index))
+    }
+
+    /// The `[[Description]]` of a Symbol a Script made, and none for one of
+    /// table 1, whose text the Realm carries.
+    #[must_use]
+    pub fn symbol_description(&self, symbol: SymbolRef) -> Option<Option<&[u16]>> {
+        let index = symbol.0.checked_sub(WELL_KNOWN_SYMBOLS)?;
+        let held = self.symbols.get(usize::try_from(index).ok()?)?;
+        Some(held.as_deref())
+    }
+
+    /// `Symbol.for` of 20.4.2.2: the Symbol of the registry under this key,
+    /// made there when it was not.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::ReferenceSpaceExhausted`] when the reference space
+    /// of a Symbol is full.
+    pub fn registered_symbol(&mut self, key: &[u16]) -> Result<SymbolRef, HeapError> {
+        if let Some(found) = self.symbol_registry.get(key) {
+            return Ok(SymbolRef(*found));
+        }
+        let symbol = self.create_symbol(Some(key.to_vec()))?;
+        self.symbol_registry.insert(key.to_vec(), symbol.0);
+        Ok(symbol)
+    }
+
+    /// `Symbol.keyFor` of 20.4.2.3: the key a registered Symbol is under.
+    #[must_use]
+    pub fn symbol_registry_key(&self, symbol: SymbolRef) -> Option<&[u16]> {
+        self.symbol_registry
+            .iter()
+            .find(|(_, held)| **held == symbol.0)
+            .map(|(key, _)| key.as_slice())
     }
 
     /// Returns whether a minor collection is required before object allocation.

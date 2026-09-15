@@ -5492,16 +5492,50 @@ fn the_well_known_symbols_are_keys_of_their_own() -> Result<(), Error> {
     ] {
         differential_scripts(&[source])?;
     }
-    // 20.4.1.1 makes a Symbol of its own, which needs a place for its
-    // description and the registry 20.4.2.2 shares between Realms.
-    for source in ["typeof Symbol()", "typeof Symbol.for"] {
-        let mut host = SilentHost;
-        let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
-        assert!(
-            matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
-            "{source}"
-        );
+    Ok(())
+}
+
+/// 20.4.1.1 makes a Symbol no other value is, 20.4.2.2 shares one under a key,
+/// and 20.4.3 answers about one without a wrapper object.
+#[test]
+fn the_symbol_constructor_makes_a_symbol_of_its_own() -> Result<(), Error> {
+    for source in [
+        "typeof Symbol()",
+        "typeof Symbol.for",
+        "Symbol('a').toString()",
+        "Symbol().toString()",
+        "typeof Symbol('a').description",
+        "Symbol('a').description",
+        "typeof Symbol().description",
+        "Symbol()===Symbol()",
+        "var s=Symbol('x');s===s",
+        "Symbol.for('k')===Symbol.for('k')",
+        "Symbol.keyFor(Symbol.for('k'))",
+        "typeof Symbol.keyFor(Symbol('q'))",
+        "Symbol.iterator.toString()",
+        "Symbol.iterator.description",
+        "var o={};var s=Symbol('p');o[s]=1;o[s]",
+        "typeof Symbol.prototype",
+        "Symbol.prototype.toString.call(Symbol('z'))",
+        "var s=Symbol('a');s.valueOf()===s",
+        "Symbol.prototype.constructor===Symbol",
+        "Symbol.length",
+        "String(Symbol('a'))",
+        "var o={};o[Symbol('a')]=1;Object.keys(o).length",
+        // 7.1.17 of a Symbol is a TypeError, whichever operation asks.
+        "var r=0;try{''+Symbol()}catch(e){r=e instanceof TypeError}r",
+        "var r=0;try{`${Symbol()}`}catch(e){r=e instanceof TypeError}r",
+        "var r=0;try{new Symbol()}catch(e){r=e instanceof TypeError}r",
+        "var r=0;try{Symbol.keyFor('x')}catch(e){r=e instanceof TypeError}r",
+        "var r=0;try{Symbol.prototype.toString.call(1)}catch(e){r=e instanceof TypeError}r",
+    ] {
+        differential_scripts(&[source])?;
     }
+    // 20.4.2.2 gives `Symbol.for` one formal parameter; the stack backend
+    // gives it none, and this checks the engine against the specification.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    assert_eq!(realm.evaluate("Symbol.for.length")?, Value::Number(1.0));
     Ok(())
 }
 

@@ -126,6 +126,10 @@ impl StringRef {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SymbolRef(pub u32);
 
+/// How many references table 1 of 20.4.2 takes before the first Symbol a
+/// Script can make.
+pub const WELL_KNOWN_SYMBOLS: u32 = 13;
+
 /// Opaque index reference to a `BigInt` in the `BigInt` arena.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BigIntRef(pub u32);

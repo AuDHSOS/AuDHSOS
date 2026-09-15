@@ -342,6 +342,14 @@ pub enum Intrinsic {
     ParseInt,
     /// `parseFloat` (19.2.4).
     ParseFloat,
+    /// `Symbol.prototype.toString` (20.4.3.3).
+    SymbolPrototypeToString,
+    /// `Symbol.prototype.valueOf` (20.4.3.4).
+    SymbolPrototypeValueOf,
+    /// `Symbol.for` (20.4.2.2).
+    SymbolFor,
+    /// `Symbol.keyFor` (20.4.2.3).
+    SymbolKeyFor,
     /// `Array.prototype.values`, which is also `%Array.prototype%[@@iterator]`
     /// (23.1.3.38 and 23.1.3.40).
     ArrayPrototypeValues,
@@ -586,11 +594,15 @@ pub enum IntrinsicHolder {
     RegExpPrototype,
     /// `%JSON%`, the namespace object of 25.5.
     Json,
+    /// `%Symbol.prototype%`, which carries the methods 20.4.3 gives it.
+    SymbolPrototype,
+    /// `%Symbol%`, which carries the functions 20.4.2 gives the constructor.
+    SymbolConstructor,
 }
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 132] = [
+    pub const ALL: [Self; 136] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -723,6 +735,10 @@ impl Intrinsic {
         Self::IsFinite,
         Self::ParseInt,
         Self::ParseFloat,
+        Self::SymbolPrototypeToString,
+        Self::SymbolPrototypeValueOf,
+        Self::SymbolFor,
+        Self::SymbolKeyFor,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -826,6 +842,10 @@ impl Intrinsic {
             Self::StringPrototypeValueOf | Self::StringPrototypeToString => {
                 IntrinsicHolder::StringPrototype
             }
+            Self::SymbolPrototypeToString | Self::SymbolPrototypeValueOf => {
+                IntrinsicHolder::SymbolPrototype
+            }
+            Self::SymbolFor | Self::SymbolKeyFor => IntrinsicHolder::SymbolConstructor,
             Self::RegExpPrototypeExec
             | Self::RegExpPrototypeTest
             | Self::RegExpPrototypeToString => IntrinsicHolder::RegExpPrototype,
@@ -1015,6 +1035,10 @@ impl Intrinsic {
             Self::IsFinite => 129,
             Self::ParseInt => 130,
             Self::ParseFloat => 131,
+            Self::SymbolPrototypeToString => 132,
+            Self::SymbolPrototypeValueOf => 133,
+            Self::SymbolFor => 134,
+            Self::SymbolKeyFor => 135,
         }
     }
 
@@ -1157,6 +1181,10 @@ impl Intrinsic {
             Self::IsFinite => 129,
             Self::ParseInt => 130,
             Self::ParseFloat => 131,
+            Self::SymbolPrototypeToString => 132,
+            Self::SymbolPrototypeValueOf => 133,
+            Self::SymbolFor => 134,
+            Self::SymbolKeyFor => 135,
         }
     }
 
@@ -1300,6 +1328,10 @@ impl Intrinsic {
             129 => Some(Self::IsFinite),
             130 => Some(Self::ParseInt),
             131 => Some(Self::ParseFloat),
+            132 => Some(Self::SymbolPrototypeToString),
+            133 => Some(Self::SymbolPrototypeValueOf),
+            134 => Some(Self::SymbolFor),
+            135 => Some(Self::SymbolKeyFor),
             _ => None,
         }
     }
@@ -1320,9 +1352,11 @@ impl Intrinsic {
             | Self::NumberPrototypeToString
             | Self::BooleanPrototypeToString
             | Self::RegExpPrototypeToString
+            | Self::SymbolPrototypeToString
             | Self::StringPrototypeToString => "toString",
             Self::NumberPrototypeValueOf
             | Self::BooleanPrototypeValueOf
+            | Self::SymbolPrototypeValueOf
             | Self::StringPrototypeValueOf => "valueOf",
             Self::ThrowTypeError => "",
             Self::SymbolConstructor => "Symbol",
@@ -1425,6 +1459,8 @@ impl Intrinsic {
             Self::StringPrototypeSearch => "search",
             Self::ParseInt => "parseInt",
             Self::ParseFloat => "parseFloat",
+            Self::SymbolFor => "for",
+            Self::SymbolKeyFor => "keyFor",
             Self::ArrayPrototypeValues | Self::ObjectValues => "values",
             Self::ArrayIteratorPrototypeNext => "next",
             Self::ArrayPrototypeJoin => "join",
@@ -1468,7 +1504,9 @@ impl Intrinsic {
             // 23.1.3.18: the separator, which `ToString` converts.
             | Self::ArrayPrototypeJoin
             // 19.2.4 applies `ToString` to its argument.
-            | Self::ParseFloat => TEXT,
+            | Self::ParseFloat
+            // 20.4.2.2 applies `ToString` to its key.
+            | Self::SymbolFor => TEXT,
             // 22.1.3: one position, which `ToIntegerOrInfinity` converts.
             Self::StringPrototypeCharAt
             | Self::StringPrototypeCharCodeAt
@@ -1639,7 +1677,10 @@ impl Intrinsic {
             | Self::IsNaN
             | Self::IsFinite
             | Self::ParseInt
-            | Self::ParseFloat => false,
+            | Self::ParseFloat
+            | Self::SymbolPrototypeToString
+            | Self::SymbolPrototypeValueOf
+            | Self::SymbolKeyFor => false,
             // 20.1.2.4, 20.1.2.8 and 20.1.2.13 apply ToPropertyKey to the
             // second argument.
             Self::ObjectDefineProperty
@@ -1681,6 +1722,8 @@ impl Intrinsic {
             | Self::BooleanPrototypeToString
             | Self::StringPrototypeValueOf
             | Self::StringPrototypeToString
+            | Self::SymbolPrototypeToString
+            | Self::SymbolPrototypeValueOf
             | Self::StringPrototypeTrim
             | Self::StringPrototypeTrimEnd
             | Self::StringPrototypeTrimStart
@@ -1700,6 +1743,8 @@ impl Intrinsic {
             | Self::IsNaN
             | Self::IsFinite
             | Self::ParseFloat
+            | Self::SymbolFor
+            | Self::SymbolKeyFor
             | Self::StringPrototypeCharAt
             | Self::StringPrototypeCharCodeAt
             | Self::StringPrototypeIndexOf
@@ -2080,6 +2125,16 @@ pub const STRING_CONSTRUCTOR_PROPERTIES: [&str; 4] =
 /// built-in function and the thirteen Symbols of table 1.
 pub const SYMBOL_CONSTRUCTOR_PROPERTIES: [&str; 3] = ["for", "keyFor", "prototype"];
 
+/// The property names 20.4.3 gives `%Symbol.prototype%`.
+pub const SYMBOL_PROTOTYPE_PROPERTIES: [&str; 4] =
+    ["constructor", "description", "toString", "valueOf"];
+
+/// Whether `%Symbol.prototype%` owns a property of this name.
+#[must_use]
+pub fn symbol_prototype_owns(name: &[u16]) -> bool {
+    wrapper_prototype_owns(&SYMBOL_PROTOTYPE_PROPERTIES, name)
+}
+
 /// Whether `%Symbol%` owns a property of this name.
 #[must_use]
 pub fn symbol_constructor_owns(name: &[u16]) -> bool {
@@ -2347,6 +2402,7 @@ pub struct Realm {
     number_prototype: Root,
     boolean_prototype: Root,
     regexp_prototype: Root,
+    symbol_prototype: Root,
     array_iterator_prototype: Root,
     error_prototype: Root,
     native_error_prototypes: [Root; NATIVE_ERROR_COUNT],
@@ -2386,6 +2442,7 @@ struct Holders {
     number_prototype: Root,
     boolean_prototype: Root,
     regexp_prototype: Root,
+    symbol_prototype: Root,
 }
 
 /// Global Environment Record of 9.1.1.4.
@@ -2451,6 +2508,10 @@ impl Realm {
         let regexp_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
         let regexp_prototype = heap.push_root(Value::from_object(regexp_prototype))?;
 
+        // 20.4.3: %Symbol.prototype% is an ordinary object and not a Symbol.
+        let symbol_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
+        let symbol_prototype = heap.push_root(Value::from_object(symbol_prototype))?;
+
         // 23.1.5.2: %ArrayIteratorPrototype% inherits from %IteratorPrototype%,
         // which is an ordinary object of %Object.prototype% until the Iterator
         // intrinsics exist.
@@ -2514,6 +2575,7 @@ impl Realm {
                 number_prototype,
                 boolean_prototype,
                 regexp_prototype,
+                symbol_prototype,
             },
         )?;
 
@@ -2525,6 +2587,7 @@ impl Realm {
             (Intrinsic::NumberConstructor, number_prototype),
             (Intrinsic::BooleanConstructor, boolean_prototype),
             (Intrinsic::RegExpConstructor, regexp_prototype),
+            (Intrinsic::SymbolConstructor, symbol_prototype),
         ] {
             Self::pair_constructor_with_prototype(heap, &intrinsics, constructor, prototype)?;
         }
@@ -2570,6 +2633,7 @@ impl Realm {
             number_prototype,
             boolean_prototype,
             regexp_prototype,
+            symbol_prototype,
             array_iterator_prototype,
             error_prototype,
             native_error_prototypes,
@@ -3048,6 +3112,13 @@ impl Realm {
                 IntrinsicHolder::NumberPrototype => Self::rooted(heap, holders.number_prototype)?,
                 IntrinsicHolder::BooleanPrototype => Self::rooted(heap, holders.boolean_prototype)?,
                 IntrinsicHolder::RegExpPrototype => Self::rooted(heap, holders.regexp_prototype)?,
+                IntrinsicHolder::SymbolPrototype => Self::rooted(heap, holders.symbol_prototype)?,
+                IntrinsicHolder::SymbolConstructor => Self::rooted(
+                    heap,
+                    *intrinsics
+                        .get(Intrinsic::SymbolConstructor.index())
+                        .ok_or(HeapError::InvalidReference)?,
+                )?,
                 IntrinsicHolder::ObjectConstructor => Self::rooted(
                     heap,
                     *intrinsics
@@ -3274,6 +3345,15 @@ impl Realm {
     /// Returns a [`HeapError`] for a stale root.
     pub fn regexp_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
         Self::rooted(heap, self.regexp_prototype)
+    }
+
+    /// `%Symbol.prototype%` (20.4.3).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError`] when the root no longer names the object.
+    pub fn symbol_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.symbol_prototype)
     }
 
     /// %`ArrayIteratorPrototype`%.
