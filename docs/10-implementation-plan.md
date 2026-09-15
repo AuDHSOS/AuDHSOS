@@ -3347,10 +3347,15 @@ specifies and which has waited for a transport.
   holds them. The acceptance run below adds one anchor of its own, the
   certificate the test builder writes for the server it starts, by
   putting that file in the same directory before the image is written.
-- `app-tls` gains the handshake: it performs an HTTPS `GET` against a
-  server the test starts on the development machine and reports the
-  status line. What the program already does is read the anchors and
-  report them.
+- The server of the run is built and in (D-148): `audhsos-tls::server`
+  under the feature `test-server`, started by `xtask::tls::Server` on a
+  port of the loopback, presenting a chain `xtask::tls::Material` builds.
+  What Phase 15 adds is the guest's half — the run puts the root of that
+  chain into `anchors/` before it writes the image, and forwards the port
+  into the machine as the network line already forwards one.
+- `app-tls` gains the handshake: it performs an HTTPS `GET` against that
+  server and reports the status line. What the program already does is
+  read the anchors and report them.
 
 Acceptance: `check` green; catalog 6.6.65; the `GET` succeeds, and an
 expired chain, a name that does not match, and an unknown anchor are each

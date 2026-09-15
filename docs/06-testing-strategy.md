@@ -2392,6 +2392,14 @@ what the kernel dispatches on, so the check is what the kernel saw.
   per anchor with the length of its subject and of its key. This is the
   part of the item the anchors are, built under D-147; the three below it
   are the handshake and are Phase 15.
+- The server of the run, on the development machine and reached over a
+  socket (D-148): the client of this project completes the handshake
+  against `audhsos-tls::server`, validates the chain against the root the
+  image carries, and reads the answer. A client that asks for another
+  name is refused with `bad_certificate`, one that trusts another root
+  with `unknown_ca`, and one whose clock is past the window with
+  `certificate_expired` — the three refusals below, checked on the host
+  before the guest is asked to make them.
 - An HTTPS `GET` against a server the test starts on the development
   machine, with a chain the test certificate builder wrote, returns a
   status line the client parses.

@@ -7,6 +7,18 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- A TLS server to reach (D-148). `audhsos-tls` gains the module `server`
+  behind the feature `test-server`: the other half of one connection,
+  sans-I/O like the client and written against the same record layer and
+  key schedule, so the two cannot drift. `xtask::tls` is the socket and
+  the thread around it — `Material` builds a root and a leaf for
+  `audhsos.test` with the certificate builder, `Server::start` takes a
+  port of the loopback and answers one HTTP request per connection — and
+  four host tests drive the client of this project against it over a real
+  socket: the answer arrives, and a wrong name, another root and a clock
+  past the window are each refused. It is what the acceptance run of
+  Phase 15 starts; the guest's half is the handshake in `app-tls`.
+
 - The image carries trust anchors (D-147). `cargo xtask image` reads every
   certificate of the directory `anchors/` — DER or PEM — and writes them
   as one table onto the boot volume as `AUDHSOS/ANCHORS.BIN`;
@@ -715,6 +727,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   clock.
 
 ### Fixed
+
+- `audhsos-tls`: a chain that reaches an anchor and carries the wrong name
+  is `bad_certificate` and no longer `unknown_ca`. RFC 8446, section 6.2
+  gives `unknown_ca` one meaning — no anchor was found — and a caller that
+  reads the alert could not tell a certificate for another host from a
+  chain it does not trust. The same moves `NotForServerAuthentication`,
+  which is also a property of the certificate and not of the authority.
 
 - `audhsos-ssh`: a global request that arrives while a key exchange runs
   is answered after the new keys are in use. `SSH_MSG_REQUEST_FAILURE` is

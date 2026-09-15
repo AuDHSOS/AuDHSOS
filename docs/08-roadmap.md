@@ -485,6 +485,11 @@ The anchors this phase validates against arrived ahead of it too
 boot volume, `audhsos-x509::anchors` reads it, and `app-tls` is the
 program of the image that holds them and reports what it read.
 
+The server the acceptance needs arrived ahead of it as well (D-148):
+`audhsos-tls::server` behind the feature `test-server` answers one
+connection, and `xtask::tls` starts it on a port of the loopback with a
+chain the certificate builder wrote.
+
 Deliverables: the transport glue that joins `audhsos-tls` to a TCP
 connection of `server-net` — the record layer's bytes in and out of the
 socket's ring, the handshake driven to completion against a deadline of

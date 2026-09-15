@@ -27,6 +27,7 @@ mod spdx;
 mod ssh;
 mod symbolize;
 mod test_ext;
+mod tls;
 mod toolchain;
 mod unsafe_budget;
 
@@ -76,6 +77,8 @@ subcommands:
                    the bandwidth and the latency of the memory of this
                    machine, measured in release mode; --help explains the
                    options. Never a step of check
+  tls-server       an HTTPS server on a port of the loopback, with a chain
+                   this project builds, for developing against Phase 15
   symbolize <elf> <address>...
                    the function, file, and line of every address
   test-ext [--status] [<suite>...]
@@ -149,6 +152,7 @@ fn run() -> Result<(), Error> {
         "qemu-runner" => commands::qemu_runner(&root, options),
         "run" => commands::run(&root, options),
         "membench" => commands::membench(&root, options),
+        "tls-server" => tls::command(options),
         "symbolize" => symbolize::command(options),
         "test-ext" => test_ext::command(&root, options),
         "check" => commands::check(&root, &channel, options),

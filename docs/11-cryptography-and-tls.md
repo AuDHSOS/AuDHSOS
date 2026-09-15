@@ -489,7 +489,17 @@ Modules:
   complete.
 - `alert.rs`: every error maps to exactly one alert description; the
   mapping table is tested exhaustively. A fatal alert poisons the
-  connection, which then refuses every further call.
+  connection, which then refuses every further call. `unknown_ca` keeps
+  the one meaning RFC 8446, section 6.2 gives it — the chain reaches no
+  anchor — so a chain that reaches one and carries the wrong name or the
+  wrong purpose is `bad_certificate` (D-148).
+- `server.rs`, behind the feature `test-server`: the other half of one
+  connection, in the same four calls, so that the client has something to
+  be driven against — in memory in this crate's tests, and over a socket
+  in the acceptance run of Phase 15, where `xtask::tls` owns the listener
+  and the thread (D-148). It answers one connection at a time, asks for no
+  client certificate, sends no ticket, answers no key update, and sends no
+  `HelloRetryRequest`.
 
 Tests: catalog 6.6.37 and 6.6.38. Fuzz targets `tls_record` and
 `tls_handshake`.

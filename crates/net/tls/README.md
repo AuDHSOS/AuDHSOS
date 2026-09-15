@@ -18,3 +18,17 @@ section 11.14 lists the seams the whole track is still waiting on.
 
 Nothing here allocates. Buffers come from the caller, and their minimum
 sizes are constants of this crate.
+
+## The other side
+
+The feature `test-server` adds `server`, the server half of one
+connection, so that the client has something to be driven against: the
+crate's own tests do it in memory, and the acceptance run of Phase 15
+does it over a socket the xtask owns (D-148). It is sans-I/O in the same
+four calls and written against the same record layer and key schedule, so
+the two halves cannot drift apart.
+
+It is no server of this system. It answers one connection at a time, asks
+for no client certificate, sends no session ticket, answers no key
+update, and never sends a `HelloRetryRequest`: a client that offers no
+X25519 share is refused instead of asked again.

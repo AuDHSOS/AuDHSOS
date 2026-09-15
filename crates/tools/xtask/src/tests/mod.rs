@@ -23,6 +23,7 @@ mod spdx;
 mod ssh;
 mod symbolize;
 mod test_ext;
+mod tls;
 mod toolchain;
 mod unsafe_budget;
 mod usage;

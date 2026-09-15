@@ -14,10 +14,12 @@ rust-version.workspace = true
 app-canvas.workspace = true
 audhsos-abi.workspace = true
 audhsos-encoding.workspace = true
-audhsos-x509.workspace = true
+audhsos-tls = { workspace = true, features = ["test-server"] }
+audhsos-x509 = { workspace = true, features = ["test-certificates"] }
 audhsos-symbols.workspace = true
 audhsos-time.workspace = true
 crypto-hash.workspace = true
+crypto-rng = { workspace = true, features = ["test-doubles"] }
 driver-i8042.workspace = true
 fs-fat.workspace = true
 fs-gpt.workspace = true
