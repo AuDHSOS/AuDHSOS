@@ -1274,7 +1274,7 @@ impl RegisterVM {
                         realm,
                     );
                 }
-                let value = self.call_intrinsic(intrinsic, call, heap, realm)?;
+                let value = self.call_intrinsic(intrinsic, call, units, heap, realm)?;
                 self.acc = value;
                 return Ok(None);
             }
@@ -1447,6 +1447,7 @@ impl RegisterVM {
         &mut self,
         intrinsic: Intrinsic,
         call: Call,
+        units: CodeUnits<'_>,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
@@ -1594,6 +1595,16 @@ impl RegisterVM {
             }
             // 22.1.3.32 and 22.1.3.28 are `thisStringValue`, which answers a
             // String and the `[[StringData]]` of a wrapper.
+            // 22.2.4.1 compiles a pattern at run time, which this engine does
+            // only where the Script was compiled.
+            Intrinsic::RegExpConstructor => Err(VMError::Unsupported(
+                "the RegExp constructor, which compiles a pattern at run time",
+            )),
+            Intrinsic::RegExpPrototypeExec
+            | Intrinsic::RegExpPrototypeTest
+            | Intrinsic::RegExpPrototypeToString => {
+                self.call_regexp_intrinsic(intrinsic, &call, units, heap, realm)
+            }
             // 20.4.1.1 makes a Symbol of its own, which needs a place for its
             // description and a registry 20.4.2.2 shares between Realms.
             Intrinsic::SymbolConstructor => Err(VMError::Unsupported(
@@ -2556,7 +2567,7 @@ impl RegisterVM {
         match self.convert_to_primitive(conversion, units, active_feedback, heap, realm)? {
             Conversion::Done(value) => {
                 self.write_reg(register, value)?;
-                self.finish_coerced(resume, heap, realm)
+                self.finish_coerced(resume, units, heap, realm)
             }
             Conversion::Suspended(code_id) => Ok(Some(code_id)),
         }
@@ -4473,7 +4484,7 @@ impl RegisterVM {
         };
         if let Some(value) = Self::primitive_answer(self.acc, step, heap, realm)? {
             self.write_reg(register, value)?;
-            return self.finish_coerced(resume, heap, realm);
+            return self.finish_coerced(resume, units, heap, realm);
         }
         // The method answered an Object, so 7.1.1.1 asks the next one. The
         // operand is still in its register, where the collector kept it.
@@ -4492,7 +4503,7 @@ impl RegisterVM {
         match self.convert_to_primitive(call, units, active_feedback, heap, realm)? {
             Conversion::Done(value) => {
                 self.write_reg(register, value)?;
-                self.finish_coerced(resume, heap, realm)
+                self.finish_coerced(resume, units, heap, realm)
             }
             Conversion::Suspended(code_id) => Ok(Some(code_id)),
         }
@@ -4505,6 +4516,7 @@ impl RegisterVM {
     fn finish_coerced(
         &mut self,
         resume: Resume,
+        units: CodeUnits<'_>,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Option<u32>, VMError> {
@@ -4532,7 +4544,7 @@ impl RegisterVM {
             caller_code_id: None,
         };
         heap.exit_scope();
-        self.acc = self.call_intrinsic(intrinsic, call, heap, realm)?;
+        self.acc = self.call_intrinsic(intrinsic, call, units, heap, realm)?;
         // 23.1.1.1 and 20.5.1.1 answer an object of their own, which the
         // instruction keeps where the collector sees it.
         if let Some(target) = construct {
@@ -4570,6 +4582,7 @@ impl RegisterVM {
             // reachable from no Script, so no conversion of them is owed.
             | ObjectKind::ArrayIteration { .. }
             | ObjectKind::Accessor { .. }
+            | ObjectKind::RegExp { .. }
             | ObjectKind::Reflect => None,
         }
     }
@@ -4705,6 +4718,10 @@ impl RegisterVM {
                     && super::realm::symbol_constructor_owns(name) =>
             {
                 Err(VMError::Unsupported("a property of %Symbol%"))
+            }
+            // 22.2.6 gives `%RegExp.prototype%` more than this Realm builds.
+            Some(ObjectKind::RegExp { .. }) if super::realm::regexp_prototype_owns(name) => {
+                Err(VMError::Unsupported("a property of %RegExp.prototype%"))
             }
             // 28.1 gives `%Reflect%` more than this Realm builds.
             Some(ObjectKind::Reflect) if super::realm::reflect_owns(name) => {
@@ -5064,6 +5081,9 @@ impl RegisterVM {
                 | ObjectKind::Accessor { .. }
                 | ObjectKind::Reflect
                 | ObjectKind::Math => "Object",
+                // 22.2.6.17 tags a RegExp through its own `toString`, and
+                // 20.1.3.6 gives it the builtin tag of 22.2.
+                ObjectKind::RegExp { .. } => "RegExp",
             }
         };
         let mut units: Vec<u16> = "[object ".encode_utf16().collect();
@@ -5462,6 +5482,198 @@ impl RegisterVM {
         self.allocate_string(heap, &[unit]).map(Some)
     }
 
+    /// The methods 22.2.6 gives `%RegExp.prototype%` that this Realm builds.
+    fn call_regexp_intrinsic(
+        &mut self,
+        intrinsic: Intrinsic,
+        call: &Call,
+        units: CodeUnits<'_>,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let receiver = call
+            .receiver
+            .as_object()
+            .ok_or_else(|| type_error(heap, realm, "this value is not a RegExp"))?;
+        let Some(pattern) = Self::regexp_pattern(receiver, heap, units).cloned() else {
+            return Err(type_error(heap, realm, "this value is not a RegExp"));
+        };
+        // 22.2.6.17 answers the text of the literal, which needs no match.
+        if intrinsic == Intrinsic::RegExpPrototypeToString {
+            let mut units: Vec<u16> = alloc::vec![0x2F];
+            units.extend_from_slice(&pattern.source);
+            units.push(0x2F);
+            units.extend(pattern.flags.encode_utf16());
+            if units.len() > self.string_units_limit {
+                return Err(VMError::StringLimit);
+            }
+            return self.allocate_string(heap, &units);
+        }
+        let text = property_name_units(self.call_argument(call, 0)?, heap)?;
+        let matched = self.regexp_exec(receiver, &pattern, &text, heap, realm)?;
+        if intrinsic == Intrinsic::RegExpPrototypeTest {
+            return Ok(Value::from_bool(matched.is_some()));
+        }
+        // 22.2.7.2 step 18 answers null where nothing matched, and otherwise
+        // the Array 22.2.7.2 builds.
+        let Some(matched) = matched else {
+            return Ok(VALUE_NULL);
+        };
+        self.match_array(&text, &matched, heap, realm)
+    }
+
+    /// `RegExpBuiltinExec` of 22.2.7.2, without the result it builds.
+    ///
+    /// A global or sticky pattern reads where to start from `lastIndex` and
+    /// writes where it stopped back to it.
+    fn regexp_exec(
+        &mut self,
+        receiver: ObjectRef,
+        pattern: &crate::regexp::RegExp,
+        text: &[u16],
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<audhsos_regex::Match>, VMError> {
+        let stateful = pattern.global || pattern.sticky;
+        let key = PropertyKey::String(heap.strings.intern("lastIndex")?);
+        let held = heap
+            .lookup_named(receiver, key)?
+            .map_or(VALUE_UNDEFINED, |property| property.value);
+        let index = integer_argument(held, heap)?;
+        let from = if !stateful || index <= 0 {
+            0
+        } else {
+            usize::try_from(index)
+                .unwrap_or(usize::MAX)
+                .min(text.len().saturating_add(1))
+        };
+        let limits = audhsos_regex::Limits {
+            input_units: self.string_units_limit,
+            work: self.fuel,
+            ..audhsos_regex::Limits::default()
+        };
+        let report = pattern
+            .regex
+            .find(text, from, pattern.sticky, limits)
+            .map_err(|_| VMError::Unsupported("a RegExp beyond the limits of the automaton"))?;
+        self.fuel = self.fuel.saturating_sub(report.work);
+        if stateful {
+            let end = report.matched.as_ref().map_or(0, |found| found.range.end);
+            let end = i32::try_from(end).map_err(|_| VMError::StringLimit)?;
+            let _ = realm;
+            heap.define_own_named(
+                receiver,
+                key,
+                Value::from_smi(end),
+                PropertyFlags {
+                    writable: true,
+                    enumerable: false,
+                    configurable: false,
+                    is_accessor: false,
+                },
+            )?;
+        }
+        Ok(report.matched)
+    }
+
+    /// The Array 22.2.7.2 answers: the whole match, then each capture, with an
+    /// own `index` and `input`.
+    fn match_array(
+        &self,
+        text: &[u16],
+        found: &audhsos_regex::Match,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let count = u32::try_from(found.captures.len().saturating_add(1))
+            .map_err(|_| VMError::PropertyLimit)?;
+        let array = realm.array(heap, count)?;
+        let whole = text
+            .get(found.range.clone())
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?
+            .to_vec();
+        let value = self.allocate_string(heap, &whole)?;
+        heap.set_array_element(array, 0, value)?;
+        for (position, capture) in found.captures.iter().enumerate() {
+            let index =
+                u32::try_from(position.saturating_add(1)).map_err(|_| VMError::PropertyLimit)?;
+            let value = match capture {
+                Some(range) => {
+                    let units = text
+                        .get(range.clone())
+                        .ok_or(VMError::Heap(HeapError::InvalidReference))?
+                        .to_vec();
+                    self.allocate_string(heap, &units)?
+                }
+                None => VALUE_UNDEFINED,
+            };
+            heap.set_array_element(array, index, value)?;
+        }
+        let start = i32::try_from(found.range.start).map_err(|_| VMError::StringLimit)?;
+        let key = PropertyKey::String(heap.strings.intern("index")?);
+        heap.define_own_named(
+            array,
+            key,
+            Value::from_smi(start),
+            PropertyFlags::ordinary_data(),
+        )?;
+        let input = self.allocate_string(heap, text)?;
+        let key = PropertyKey::String(heap.strings.intern("input")?);
+        heap.define_own_named(array, key, input, PropertyFlags::ordinary_data())?;
+        Ok(Value::from_object(array))
+    }
+
+    /// `RegExpCreate` of 22.2.4.1 for a pattern this unit compiled.
+    ///
+    /// 22.2.7 gives the instance a `lastIndex` of its own, which is where
+    /// 22.2.7.2 reads and writes the position a stateful match starts from.
+    fn create_regexp(
+        &self,
+        code: &BytecodeFunction,
+        index: u16,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if usize::from(index) >= code.regex_constants.len() {
+            return Err(VMError::InvalidRegister);
+        }
+        let prototype = realm.regexp_prototype(heap)?;
+        let shape = heap.shapes.root_shape();
+        let object = heap.allocate_object(shape, prototype)?;
+        heap.set_object_kind(
+            object,
+            ObjectKind::RegExp {
+                unit: self.unit,
+                index: u32::from(index),
+            },
+        )?;
+        let key = PropertyKey::String(heap.strings.intern("lastIndex")?);
+        heap.define_own_named(
+            object,
+            key,
+            Value::from_smi(0),
+            PropertyFlags {
+                writable: true,
+                enumerable: false,
+                configurable: false,
+                is_accessor: false,
+            },
+        )?;
+        Ok(Value::from_object(object))
+    }
+
+    /// The pattern a `RegExp` instance was made from.
+    fn regexp_pattern<'a>(
+        object: ObjectRef,
+        heap: &GenerationalHeap,
+        units: CodeUnits<'a>,
+    ) -> Option<&'a alloc::rc::Rc<crate::regexp::RegExp>> {
+        let ObjectKind::RegExp { unit, index } = heap.get_object(object)?.kind else {
+            return None;
+        };
+        units.table.root(unit)?.regex_constants.get(index as usize)
+    }
+
     /// `HasProperty` of 7.3.11: the own property, then the Prototype Chain.
     fn has_property(
         object: ObjectRef,
@@ -5541,6 +5753,7 @@ impl RegisterVM {
     fn iterator_next(
         &mut self,
         state: Reg,
+        units: CodeUnits<'_>,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
@@ -5574,6 +5787,7 @@ impl RegisterVM {
                 construct: None,
                 caller_code_id: None,
             },
+            units,
             heap,
             realm,
         )?;
@@ -7216,6 +7430,9 @@ impl RegisterVM {
                     self.acc = i32::try_from(length)
                         .map_or_else(|_| Value::from_f64(f64::from(length)), Value::from_smi);
                 }
+                Instruction::CreateRegExp(index) => {
+                    self.acc = self.create_regexp(active_code, index, heap, realm)?;
+                }
                 Instruction::CreateObject => {
                     let root_shape = heap.shapes.root_shape();
                     let oref = self.allocate_object(active_code, heap, realm, root_shape)?;
@@ -7348,7 +7565,7 @@ impl RegisterVM {
                             }
                             return Ok(None);
                         }
-                        self.acc = self.call_intrinsic(intrinsic, call, heap, realm)?;
+                        self.acc = self.call_intrinsic(intrinsic, call, units, heap, realm)?;
                         self.write_reg(target, self.acc)?;
                         return Ok(None);
                     }
@@ -7435,7 +7652,7 @@ impl RegisterVM {
                     }
                 }
                 Instruction::IteratorNext { state } => {
-                    self.acc = self.iterator_next(state, heap, realm)?;
+                    self.acc = self.iterator_next(state, units, heap, realm)?;
                 }
                 Instruction::ForInNext { state } => {
                     self.acc = self.for_in_next(active_code, state, heap, realm)?;
@@ -8960,6 +9177,8 @@ mod tests {
 
     #[test]
     fn iterator_next_refuses_what_it_cannot_step() {
+        let empty = BytecodeFunction::new(1, 1);
+        let roots = [&empty];
         let mut heap = GenerationalHeap::new();
         let realm = Realm::new(&mut heap).unwrap();
         let mut vm = RegisterVM::with_limits(1000, 8, 8);
@@ -8967,7 +9186,15 @@ mod tests {
         // A primitive is not an iterator.
         vm.write_reg(Reg(0), Value::from_smi(1)).unwrap();
         assert!(matches!(
-            vm.iterator_next(Reg(0), &mut heap, &realm),
+            vm.iterator_next(
+                Reg(0),
+                CodeUnits {
+                    table: CodeTable::new(&roots),
+                    active: &empty,
+                },
+                &mut heap,
+                &realm
+            ),
             Err(VMError::Thrown(
                 _,
                 Some((super::super::realm::NativeErrorKind::TypeError, _))
@@ -8978,7 +9205,15 @@ mod tests {
         let plain = realm.ordinary_object(&mut heap).unwrap();
         vm.write_reg(Reg(0), Value::from_object(plain)).unwrap();
         assert!(matches!(
-            vm.iterator_next(Reg(0), &mut heap, &realm),
+            vm.iterator_next(
+                Reg(0),
+                CodeUnits {
+                    table: CodeTable::new(&roots),
+                    active: &empty,
+                },
+                &mut heap,
+                &realm
+            ),
             Err(VMError::Thrown(
                 _,
                 Some((super::super::realm::NativeErrorKind::TypeError, _))
@@ -8993,7 +9228,15 @@ mod tests {
         heap.define_own_named(plain, key, next, PropertyFlags::ordinary_data())
             .unwrap();
         assert!(matches!(
-            vm.iterator_next(Reg(0), &mut heap, &realm),
+            vm.iterator_next(
+                Reg(0),
+                CodeUnits {
+                    table: CodeTable::new(&roots),
+                    active: &empty,
+                },
+                &mut heap,
+                &realm
+            ),
             Err(VMError::Thrown(
                 _,
                 Some((super::super::realm::NativeErrorKind::TypeError, _))

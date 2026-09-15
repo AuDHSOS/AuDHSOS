@@ -5495,3 +5495,47 @@ fn the_well_known_symbols_are_keys_of_their_own() -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[test]
+fn a_regular_expression_literal_makes_the_object_of_its_pattern() -> Result<(), Error> {
+    // 22.2.4.1 makes an object of a pattern the Script was compiled with, and
+    // 22.2.7.2 matches with it; 22.2.6.16 answers whether it matched and
+    // 22.2.6.17 the text of the literal.
+    for source in [
+        "typeof /a/",
+        "/a/.test('bab')",
+        "/a/.test('bbb')",
+        "/(a)(b)/.exec('xabz')[0]",
+        "/(a)(b)/.exec('xabz')[1]",
+        "/(a)(b)/.exec('xabz')[2]",
+        "/(a)(b)/.exec('xabz').index",
+        "/(a)(b)/.exec('xabz').input",
+        "/(a)(b)/.exec('xabz').length",
+        "/(a)|(b)/.exec('b')[1]",
+        "/z/.exec('ab')",
+        "String(/ab/g)",
+        "String(/ab/)",
+        "var r=/a/g;r.test('aa');r.lastIndex",
+        "var r=/a/g;r.test('aa');r.test('aa');r.lastIndex",
+        "var r=/a/;r.test('aa');r.lastIndex",
+        "var r=/a/g;r.lastIndex",
+        "var r=/b/g;r.test('aa');r.lastIndex",
+        "/a/ instanceof RegExp",
+        "Object.getPrototypeOf(/a/)===RegExp.prototype",
+        "Object.prototype.toString.call(/a/)",
+        "var r=/a/;r.exec('a')[0]",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // 22.2.6 gives `%RegExp.prototype%` more than this Realm builds, and
+    // 22.2.4.1 compiles a pattern at run time.
+    for source in ["/a/.source", "/a/.global", "typeof RegExp('a')"] {
+        let mut host = SilentHost;
+        let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+        assert!(
+            matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
+            "{source}"
+        );
+    }
+    Ok(())
+}

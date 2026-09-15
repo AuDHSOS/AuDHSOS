@@ -8,7 +8,7 @@
 //! and eliminates the stack push/pop dispatch overhead.
 
 use super::value::Value;
-use alloc::{collections::VecDeque, vec::Vec};
+use alloc::{collections::VecDeque, rc::Rc, vec::Vec};
 
 /// Virtual register index inside a function's call frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -480,6 +480,8 @@ pub enum Instruction {
     /// Throws a `TypeError` when `acc` is undefined or null, naming what the
     /// operation that asked needed of it.
     Require(RequireKind),
+    /// Creates the `RegExp` object of 22.2.4.1 for one pattern of this unit.
+    CreateRegExp(u16),
     /// Creates an empty object `{}` in `acc`.
     CreateObject,
     /// Creates an empty array `[]` in `acc` with initial capacity.
@@ -565,6 +567,11 @@ pub struct BytecodeFunction {
     pub constants: Vec<Value>,
     /// Heap-independent UTF-16 constants referenced by `LdaString`.
     pub string_constants: Vec<Vec<u16>>,
+    /// The patterns 22.2.4.1 compiled once, addressed by `CreateRegExp`.
+    ///
+    /// A pattern is compiled when the Script is, so a literal makes an object
+    /// of an automaton that already exists.
+    pub regex_constants: Vec<Rc<crate::regexp::RegExp>>,
     /// Heap-independent nested function code addressed by `CreateClosure`.
     pub functions: Vec<BytecodeFunction>,
     /// Number of local registers required in the stack frame.
@@ -618,6 +625,7 @@ impl BytecodeFunction {
             instructions: Vec::new(),
             constants: Vec::new(),
             string_constants: Vec::new(),
+            regex_constants: Vec::new(),
             functions: Vec::new(),
             register_count,
             parameter_count,
@@ -953,6 +961,7 @@ impl BytecodeFunction {
             | Instruction::LdaFalse
             | Instruction::Require(_)
             | Instruction::CreateObject
+            | Instruction::CreateRegExp(_)
             | Instruction::CreateArray(_)
             | Instruction::Throw
             | Instruction::Return => None,

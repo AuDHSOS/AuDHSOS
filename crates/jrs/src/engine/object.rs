@@ -117,6 +117,14 @@ pub enum ObjectKind {
         /// `[[Set]]`, undefined when the property has no setter.
         set: Value,
     },
+    /// `RegExp` instance, the slots of 22.2.7: the pattern it was compiled
+    /// from, named by the unit that holds it and its index there.
+    RegExp {
+        /// The code unit whose `regex_constants` hold the pattern.
+        unit: u32,
+        /// Index of the pattern in that unit.
+        index: u32,
+    },
     /// Bound function exotic object, the slots of 10.4.1.
     BoundFunction {
         /// `[[BoundTargetFunction]]`.

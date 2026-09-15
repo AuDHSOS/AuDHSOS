@@ -522,6 +522,14 @@ pub enum Intrinsic {
     ThrowTypeError,
     /// `Symbol`, 20.4.1.1.
     SymbolConstructor,
+    /// `RegExp`, 22.2.4.1.
+    RegExpConstructor,
+    /// `RegExp.prototype.exec`, 22.2.6.8.
+    RegExpPrototypeExec,
+    /// `RegExp.prototype.test`, 22.2.6.16.
+    RegExpPrototypeTest,
+    /// `RegExp.prototype.toString`, 22.2.6.17.
+    RegExpPrototypeToString,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -555,11 +563,13 @@ pub enum IntrinsicHolder {
     NumberPrototype,
     /// `%Boolean.prototype%`, which carries the methods 20.3.3 gives it.
     BooleanPrototype,
+    /// `%RegExp.prototype%`, which carries the methods 22.2.6 gives it.
+    RegExpPrototype,
 }
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 119] = [
+    pub const ALL: [Self; 123] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -679,6 +689,10 @@ impl Intrinsic {
         Self::StringPrototypeToString,
         Self::ThrowTypeError,
         Self::SymbolConstructor,
+        Self::RegExpConstructor,
+        Self::RegExpPrototypeExec,
+        Self::RegExpPrototypeTest,
+        Self::RegExpPrototypeToString,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -779,10 +793,14 @@ impl Intrinsic {
             Self::StringPrototypeValueOf | Self::StringPrototypeToString => {
                 IntrinsicHolder::StringPrototype
             }
+            Self::RegExpPrototypeExec
+            | Self::RegExpPrototypeTest
+            | Self::RegExpPrototypeToString => IntrinsicHolder::RegExpPrototype,
             // 10.2.4.1 stands on no object: the `callee` of a strict
             // arguments object is the only way to reach it, and nothing
             // installs it on the holder this names.
             Self::SymbolConstructor
+            | Self::RegExpConstructor
             | Self::ThrowTypeError
             | Self::ErrorConstructor
             | Self::EvalErrorConstructor
@@ -946,6 +964,10 @@ impl Intrinsic {
             Self::StringPrototypeToString => 116,
             Self::ThrowTypeError => 117,
             Self::SymbolConstructor => 118,
+            Self::RegExpConstructor => 119,
+            Self::RegExpPrototypeExec => 120,
+            Self::RegExpPrototypeTest => 121,
+            Self::RegExpPrototypeToString => 122,
         }
     }
 
@@ -1075,6 +1097,10 @@ impl Intrinsic {
             Self::StringPrototypeToString => 116,
             Self::ThrowTypeError => 117,
             Self::SymbolConstructor => 118,
+            Self::RegExpConstructor => 119,
+            Self::RegExpPrototypeExec => 120,
+            Self::RegExpPrototypeTest => 121,
+            Self::RegExpPrototypeToString => 122,
         }
     }
 
@@ -1205,6 +1231,10 @@ impl Intrinsic {
             116 => Some(Self::StringPrototypeToString),
             117 => Some(Self::ThrowTypeError),
             118 => Some(Self::SymbolConstructor),
+            119 => Some(Self::RegExpConstructor),
+            120 => Some(Self::RegExpPrototypeExec),
+            121 => Some(Self::RegExpPrototypeTest),
+            122 => Some(Self::RegExpPrototypeToString),
             _ => None,
         }
     }
@@ -1224,12 +1254,16 @@ impl Intrinsic {
             | Self::ArrayPrototypeToString
             | Self::NumberPrototypeToString
             | Self::BooleanPrototypeToString
+            | Self::RegExpPrototypeToString
             | Self::StringPrototypeToString => "toString",
             Self::NumberPrototypeValueOf
             | Self::BooleanPrototypeValueOf
             | Self::StringPrototypeValueOf => "valueOf",
             Self::ThrowTypeError => "",
             Self::SymbolConstructor => "Symbol",
+            Self::RegExpConstructor => "RegExp",
+            Self::RegExpPrototypeExec => "exec",
+            Self::RegExpPrototypeTest => "test",
             Self::ArrayConstructor => "Array",
             Self::ObjectConstructor => "Object",
             Self::FunctionConstructor => "Function",
@@ -1427,6 +1461,10 @@ impl Intrinsic {
             | Self::StringPrototypeToString
             | Self::ThrowTypeError
             | Self::SymbolConstructor
+            | Self::RegExpConstructor
+            | Self::RegExpPrototypeExec
+            | Self::RegExpPrototypeTest
+            | Self::RegExpPrototypeToString
             | Self::ObjectGetOwnPropertyNames => false,
             // 20.1.2.4, 20.1.2.8 and 20.1.2.13 apply ToPropertyKey to the
             // second argument.
@@ -1462,6 +1500,7 @@ impl Intrinsic {
         match self {
             Self::ThrowTypeError
             | Self::SymbolConstructor
+            | Self::RegExpPrototypeToString
             | Self::ObjectPrototypeToString
             | Self::NumberPrototypeValueOf
             | Self::BooleanPrototypeValueOf
@@ -1552,6 +1591,9 @@ impl Intrinsic {
             | Self::NumberIsNaN
             | Self::NumberIsSafeInteger
             | Self::BooleanConstructor
+            | Self::RegExpConstructor
+            | Self::RegExpPrototypeExec
+            | Self::RegExpPrototypeTest
             | Self::NumberPrototypeToString
             | Self::ReflectGetPrototypeOf
             | Self::ReflectIsExtensible
@@ -1873,6 +1915,32 @@ pub fn string_constructor_owns(name: &[u16]) -> bool {
             .any(|owned| owned.encode_utf16().eq(name.iter().copied()))
 }
 
+/// The property names 22.2.6 gives `%RegExp.prototype%`.
+pub const REGEXP_PROTOTYPE_PROPERTIES: [&str; 16] = [
+    "compile",
+    "constructor",
+    "dotAll",
+    "exec",
+    "flags",
+    "global",
+    "hasIndices",
+    "ignoreCase",
+    "multiline",
+    "source",
+    "sticky",
+    "test",
+    "toString",
+    "unicode",
+    "unicodeSets",
+    "lastIndex",
+];
+
+/// Whether `%RegExp.prototype%` owns a property of this name.
+#[must_use]
+pub fn regexp_prototype_owns(name: &[u16]) -> bool {
+    wrapper_prototype_owns(&REGEXP_PROTOTYPE_PROPERTIES, name)
+}
+
 /// The property names 20.3.3 gives `%Boolean.prototype%`.
 pub const BOOLEAN_PROTOTYPE_PROPERTIES: [&str; 3] = ["constructor", "toString", "valueOf"];
 
@@ -2084,6 +2152,7 @@ pub struct Realm {
     string_prototype: Root,
     number_prototype: Root,
     boolean_prototype: Root,
+    regexp_prototype: Root,
     array_iterator_prototype: Root,
     error_prototype: Root,
     native_error_prototypes: [Root; NATIVE_ERROR_COUNT],
@@ -2121,6 +2190,7 @@ struct Holders {
     reflect: Root,
     number_prototype: Root,
     boolean_prototype: Root,
+    regexp_prototype: Root,
 }
 
 /// Global Environment Record of 9.1.1.4.
@@ -2182,6 +2252,10 @@ impl Realm {
         let boolean_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
         let boolean_prototype = heap.push_root(Value::from_object(boolean_prototype))?;
 
+        // 22.2.6: %RegExp.prototype% is an ordinary object and not a RegExp.
+        let regexp_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
+        let regexp_prototype = heap.push_root(Value::from_object(regexp_prototype))?;
+
         // 23.1.5.2: %ArrayIteratorPrototype% inherits from %IteratorPrototype%,
         // which is an ordinary object of %Object.prototype% until the Iterator
         // intrinsics exist.
@@ -2238,6 +2312,7 @@ impl Realm {
                 reflect,
                 number_prototype,
                 boolean_prototype,
+                regexp_prototype,
             },
         )?;
 
@@ -2248,6 +2323,7 @@ impl Realm {
             (Intrinsic::StringConstructor, string_prototype),
             (Intrinsic::NumberConstructor, number_prototype),
             (Intrinsic::BooleanConstructor, boolean_prototype),
+            (Intrinsic::RegExpConstructor, regexp_prototype),
         ] {
             Self::pair_constructor_with_prototype(heap, &intrinsics, constructor, prototype)?;
         }
@@ -2292,6 +2368,7 @@ impl Realm {
             string_prototype,
             number_prototype,
             boolean_prototype,
+            regexp_prototype,
             array_iterator_prototype,
             error_prototype,
             native_error_prototypes,
@@ -2764,6 +2841,7 @@ impl Realm {
                 IntrinsicHolder::Reflect => Self::rooted(heap, holders.reflect)?,
                 IntrinsicHolder::NumberPrototype => Self::rooted(heap, holders.number_prototype)?,
                 IntrinsicHolder::BooleanPrototype => Self::rooted(heap, holders.boolean_prototype)?,
+                IntrinsicHolder::RegExpPrototype => Self::rooted(heap, holders.regexp_prototype)?,
                 IntrinsicHolder::ObjectConstructor => Self::rooted(
                     heap,
                     *intrinsics
@@ -2981,6 +3059,15 @@ impl Realm {
     /// Returns [`HeapError::InvalidReference`] when the root was discarded.
     pub fn boolean_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
         Self::rooted(heap, self.boolean_prototype)
+    }
+
+    /// %RegExp.prototype%.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`HeapError`] for a stale root.
+    pub fn regexp_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.regexp_prototype)
     }
 
     /// %`ArrayIteratorPrototype`%.

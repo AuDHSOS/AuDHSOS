@@ -1849,6 +1849,7 @@ impl RegisterLowerer {
             ExprKind::UpdateMember(target, add, prefix, _) => {
                 self.lower_member_update(target, *add, *prefix)?
             }
+            ExprKind::Regex(pattern, flags) => self.lower_regexp(pattern, flags)?,
             _ => return None,
         };
         Some(result)
@@ -4210,6 +4211,21 @@ impl RegisterLowerer {
         let value_type = self.emit_compound(operator, left_type, left_register, right_type)?;
         self.finish_member_assignment(prepared, value_type)?;
         Some(value_type)
+    }
+
+    /// A regular-expression literal, which 22.2.4.1 makes an object of.
+    ///
+    /// The pattern is compiled here, once, and the literal only makes the
+    /// object each time it is evaluated.
+    fn lower_regexp(&mut self, pattern: &str, flags: &str) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let compiled = crate::regexp::RegExp::compile(pattern.encode_utf16().collect(), flags)
+            .ok()
+            .map(alloc::rc::Rc::new)?;
+        let index = u16::try_from(self.code.regex_constants.len()).ok()?;
+        self.code.regex_constants.push(compiled);
+        self.code.emit(Instruction::CreateRegExp(index));
+        Some(RegisterType::Unknown)
     }
 
     /// `13.4.4.1` on a property reference: the base and the key are evaluated
@@ -7037,6 +7053,7 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ArrayPrototypeEvery
         | crate::engine::realm::Intrinsic::ArrayPrototypeSome
         | crate::engine::realm::Intrinsic::BooleanPrototypeValueOf
+        | crate::engine::realm::Intrinsic::RegExpPrototypeTest
         | crate::engine::realm::Intrinsic::ArrayIsArray => RegisterType::Boolean,
         // 22.1.1.1 answers a String whichever argument it took; `new` answers
         // no value at all, because the exotic object it would make is a gap.
@@ -7044,6 +7061,7 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ObjectPrototypeToString
         | crate::engine::realm::Intrinsic::NumberPrototypeToString
         | crate::engine::realm::Intrinsic::BooleanPrototypeToString
+        | crate::engine::realm::Intrinsic::RegExpPrototypeToString
         | crate::engine::realm::Intrinsic::StringPrototypeToString
         | crate::engine::realm::Intrinsic::StringPrototypeValueOf
         | crate::engine::realm::Intrinsic::StringPrototypeCharAt
@@ -7067,6 +7085,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // 10.2.4.1 answers nothing at all: it throws.
         crate::engine::realm::Intrinsic::ThrowTypeError
         | crate::engine::realm::Intrinsic::SymbolConstructor
+        | crate::engine::realm::Intrinsic::RegExpConstructor
+        | crate::engine::realm::Intrinsic::RegExpPrototypeExec
         | crate::engine::realm::Intrinsic::ArrayConstructor
         | crate::engine::realm::Intrinsic::ObjectConstructor
         | crate::engine::realm::Intrinsic::ObjectDefineProperty
@@ -7873,13 +7893,14 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
         ExprKind::Class(class) => register_class_writes_names(class, names)?,
         // `this` is resolved on the Function Environment Record, so it writes
         // and names no binding of this analysis.
-        ExprKind::Literal(_) | ExprKind::Name(_) | ExprKind::This => false,
+        // 22.2.4.1 makes an object of a pattern this unit compiled, and
+        // reaches no binding of this analysis.
+        ExprKind::Literal(_) | ExprKind::Name(_) | ExprKind::This | ExprKind::Regex(_, _) => false,
         ExprKind::Destructure(pattern, right) => {
             register_expression_writes_names(right, names)?
                 || register_assignment_pattern_writes_names(pattern, names)?
         }
-        ExprKind::Regex(_, _)
-        | ExprKind::Template(_, _)
+        ExprKind::Template(_, _)
         | ExprKind::Await(_)
         | ExprKind::Super
         | ExprKind::NewTarget
@@ -8185,13 +8206,12 @@ fn register_expression_references(
         ExprKind::Class(class) => register_class_references(class, names, nested_free_names)?,
         // `this` is resolved on the Function Environment Record, so it is free
         // of every name this analysis collects.
-        ExprKind::Literal(_) | ExprKind::This => {}
+        ExprKind::Literal(_) | ExprKind::This | ExprKind::Regex(_, _) => {}
         ExprKind::Destructure(pattern, right) => {
             register_expression_references(right, names, nested_free_names)?;
             register_assignment_pattern_references(pattern, names, nested_free_names)?;
         }
-        ExprKind::Regex(_, _)
-        | ExprKind::Template(_, _)
+        ExprKind::Template(_, _)
         | ExprKind::Await(_)
         | ExprKind::Super
         | ExprKind::NewTarget

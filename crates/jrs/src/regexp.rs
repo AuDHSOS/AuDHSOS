@@ -14,17 +14,17 @@ pub(crate) enum Field {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct RegExp {
-    pub(crate) regex: audhsos_regex::Regex,
-    pub(crate) source: Rc<[u16]>,
-    pub(crate) flags: String,
-    pub(crate) global: bool,
-    pub(crate) sticky: bool,
-    pub(crate) indices: bool,
+pub struct RegExp {
+    pub regex: audhsos_regex::Regex,
+    pub source: Rc<[u16]>,
+    pub flags: String,
+    pub global: bool,
+    pub sticky: bool,
+    pub indices: bool,
 }
 
 impl RegExp {
-    pub(crate) fn compile(source: Rc<[u16]>, flags: &str) -> Result<Self, Error> {
+    pub fn compile(source: Rc<[u16]>, flags: &str) -> Result<Self, Error> {
         let mut options = audhsos_regex::Options::default();
         let mut global = false;
         let mut sticky = false;
