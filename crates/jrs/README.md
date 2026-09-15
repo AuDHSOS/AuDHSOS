@@ -631,8 +631,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Function%` and its methods on the register engine (focused) | focused | `1516e27` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Function --summary` | 509 | 893 | 61 (6.83%) | 226 (25.31%) | 606 (67.86%) |
 | `%Math%` (focused) | focused | `65001ed` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Math --summary` | 327 | 654 | 306 (46.79%) | 344 (52.60%) | 4 (0.61%) |
 | `%Math%` on the register engine (focused) | focused | `65001ed` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Math --summary` | 327 | 654 | 2 (0.31%) | 10 (1.53%) | 642 (98.17%) |
-| Complete pinned suite, including staging and Intl | full | `65001ed` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `65001ed` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 6,197 (6.02%) | 16,438 (15.97%) | 80,290 (78.01%) |
+| The error constructors (focused) | focused | `a36aa89` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Error test/built-ins/NativeErrors --summary` | 187 | 374 | 226 (60.43%) | 128 (34.22%) | 20 (5.35%) |
+| The error constructors on the register engine (focused) | focused | `a36aa89` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Error test/built-ins/NativeErrors --summary` | 187 | 374 | 54 (14.44%) | 90 (24.06%) | 230 (61.50%) |
+| Complete pinned suite, including staging and Intl | full | `a36aa89` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `a36aa89` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 6,771 (6.58%) | 16,508 (16.04%) | 79,646 (77.38%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -739,6 +741,15 @@ step, because a variant that stopped at a harness which would not load now
 stops at a gap it names. Neither is a pass, and the stack backend is unchanged
 variant for variant across the step.
 
+The error constructors follow, which is the largest step of this migration so
+far: 574 more variants pass. The Realm built the prototype of every error and
+none of the constructors, so an error the engine threw could not be told apart
+from another by the Script that caught it. 20.5.1.1 and 20.5.6.1.1 now answer
+an error under the Prototype of the constructor that was called, `new` reaches
+the same function, and the errors this engine throws are made by that same
+operation, so `e instanceof TypeError` answers what it should and
+`assert.throws` does its work.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -780,9 +791,10 @@ were measured at tree `d98662e20789888cb180d99642144c95e6596f04`. The
 compound-assignment runs at tree `8183751cf4043881206e2a64a11ef3f5f0ad0aae`.
 The lexical-declaration runs were measured at tree
 `ea89126ff888b6994a0b25a69baf8b0845fa25ff`. The `%Function%` runs were measured at tree
-`94248adff3e44e88c2a52a671d1c38649b3e135e`. The `%Math%` runs and both full
-runs were measured at tree `ef4cd61875fba838eea55c5c337a3b2859ed4da4`, which is
-the tree of `65001ed`.
+`94248adff3e44e88c2a52a671d1c38649b3e135e`. The `%Math%` runs were measured at tree
+`ef4cd61875fba838eea55c5c337a3b2859ed4da4`. The error-constructor runs and both
+full runs were measured at tree `0d3fee5ef3592d9e2e77a9f9bc5c146b996afa81`,
+which is the tree of `a36aa89`.
 
 ### Historical Test262 baseline
 
