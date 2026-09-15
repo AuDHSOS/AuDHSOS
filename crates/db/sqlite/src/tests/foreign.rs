@@ -432,6 +432,48 @@ fn the_text_a_refusal_is_written_as() {
         Error::Recursion.message(),
         "recursive aggregate queries not supported"
     );
+    assert_eq!(
+        Error::NoTable(b"t9".to_vec()).message(),
+        "no such table: t9"
+    );
+    // A statement that names a table the schema does not hold says
+    // which name it named, whatever the statement does with it.
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        "UPDATE nosuch SET a=1",
+        "DELETE FROM nosuch",
+        "INSERT INTO nosuch VALUES(1)",
+        "ALTER TABLE nosuch ADD COLUMN c",
+    ] {
+        assert_eq!(
+            writer
+                .run(sql.as_bytes())
+                .err()
+                .map(|error| error.message()),
+            Some(alloc::string::String::from("no such table: nosuch")),
+            "{sql}"
+        );
+    }
+    assert_eq!(
+        Error::Eval(crate::eval::Error::NoFunction(b"xyzzy".to_vec())).message(),
+        "no such function: xyzzy"
+    );
+    assert_eq!(
+        Error::Eval(crate::eval::Error::WrongArguments(b"abs".to_vec())).message(),
+        "wrong number of arguments to function abs()"
+    );
+    assert_eq!(
+        Error::Eval(crate::eval::Error::NoColumn(b"t.a".to_vec())).message(),
+        "no such column: t.a"
+    );
+    assert_eq!(
+        Error::Eval(crate::eval::Error::NoCollation(b"zz".to_vec())).message(),
+        "no such collation sequence: zz"
+    );
     // A refusal this crate has no text for is written as its name.
-    assert_eq!(Error::NoTable.message(), "NoTable");
+    assert_eq!(Error::Having.message(), "Having");
+    assert_eq!(
+        Error::Eval(crate::eval::Error::Unsupported).message(),
+        "Unsupported"
+    );
 }

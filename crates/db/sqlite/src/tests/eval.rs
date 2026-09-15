@@ -98,25 +98,41 @@ fn refusal(sql: &str) -> Error {
 
 #[test]
 fn what_is_not_written_yet_refuses_rather_than_guessing() {
-    assert_eq!(refusal("a"), Error::NoColumn);
-    assert_eq!(refusal("t.a"), Error::NoColumn);
-    assert_eq!(refusal("nosuchfunction(1)"), Error::NoFunction);
-    assert_eq!(refusal("'a' REGEXP 'b'"), Error::NoFunction);
-    assert_eq!(refusal("'a' MATCH 'b'"), Error::NoFunction);
+    assert_eq!(refusal("a"), Error::NoColumn(b"a".to_vec()));
+    assert_eq!(refusal("t.a"), Error::NoColumn(b"t.a".to_vec()));
+    assert_eq!(
+        refusal("nosuchfunction(1)"),
+        Error::NoFunction(b"nosuchfunction".to_vec())
+    );
+    assert_eq!(
+        refusal("'a' REGEXP 'b'"),
+        Error::NoFunction(b"REGEXP".to_vec())
+    );
+    assert_eq!(
+        refusal("'a' MATCH 'b'"),
+        Error::NoFunction(b"MATCH".to_vec())
+    );
+    assert_eq!(
+        refusal("('a' COLLATE nosuch)='a'"),
+        Error::NoCollation(b"nosuch".to_vec())
+    );
     assert_eq!(refusal("random()"), Error::NoRandom);
     assert_eq!(refusal("randomblob(4)"), Error::NoRandom);
     assert_eq!(refusal("zeroblob(1000000001)"), Error::TooBig);
     assert_eq!(refusal("zeroblob(9223372036854775807)"), Error::TooBig);
-    assert_eq!(refusal("abs(1,2)"), Error::WrongArguments);
-    assert_eq!(refusal("substr('a')"), Error::WrongArguments);
+    assert_eq!(refusal("abs(1,2)"), Error::WrongArguments(b"abs".to_vec()));
+    assert_eq!(
+        refusal("substr('a')"),
+        Error::WrongArguments(b"substr".to_vec())
+    );
     assert_eq!(refusal("abs(-9223372036854775807-1)"), Error::Overflow);
     assert_eq!(refusal("'a' LIKE 'b' ESCAPE 'xy'"), Error::BadEscape);
     assert_eq!(refusal("unistr('\\xyz')"), Error::BadUnicode);
     assert_eq!(refusal("likelihood(1,0)"), Error::BadProbability);
     assert_eq!(refusal("count(*)"), Error::Unsupported);
     assert_eq!(refusal("count(DISTINCT 1)"), Error::Unsupported);
-    assert_eq!(refusal("'{}' -> 'a'"), Error::NoFunction);
-    assert_eq!(refusal("'{}' ->> 'a'"), Error::NoFunction);
+    assert_eq!(refusal("'{}' -> 'a'"), Error::NoFunction(b"->".to_vec()));
+    assert_eq!(refusal("'{}' ->> 'a'"), Error::NoFunction(b"->>".to_vec()));
     assert_eq!(refusal("CURRENT_TIME"), Error::Unsupported);
     assert_eq!(refusal("?"), Error::Unsupported);
     assert_eq!(refusal("(1,2)"), Error::RowValue);

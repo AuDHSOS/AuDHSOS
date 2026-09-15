@@ -293,7 +293,11 @@ No file of the suite stops at an undefined command.
 
 ## 17.15 T6. The messages the engine refuses with
 
-Status: open.
+Status: the names are carried, which D-229 records: `no such table`,
+`no such column`, `no such function`, `wrong number of arguments to
+function`, `no such collation sequence`, `row value misused` and the
+messages of the transactions and the foreign keys. The constraint
+messages, which name the table and the column, are open.
 Depends on: T3.
 Size: M.
 

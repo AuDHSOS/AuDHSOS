@@ -4864,6 +4864,20 @@ D-228, document 16 step Q8.
 - A statement written inside the `FROM` answers under its own name
   alone, and the tables it reads are not reachable through it.
 
+### 6.6.152 The name a refusal carries (`db-sqlite`)
+
+D-229, document 17 step T6.
+
+- A statement that names a table the schema does not hold answers `no
+  such table: NAME`, whatever the statement does with the table.
+- A name no table answers to is `no such column: NAME`, with the table
+  and the schema in front of it where the statement wrote them.
+- A function no name matches is `no such function: NAME`, and one
+  called with another number of arguments is `wrong number of
+  arguments to function NAME()`.
+- A `COLLATE` naming a collation the connection does not hold is `no
+  such collation sequence: NAME`.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

@@ -127,7 +127,7 @@ fn analyzed(database: &Database<'_>, named: Option<&[u8]>) -> Result<Analyzed, E
     let over = database
         .index(named)
         .map(|(index, _)| index.table.clone())
-        .ok_or(Error::NoTable)?;
+        .ok_or_else(|| Error::NoTable(named.to_vec()))?;
     Ok(Analyzed {
         tables: alloc::vec![over],
         only: Some(named.to_vec()),
@@ -328,8 +328,12 @@ impl Writer {
         let rowid = self.row_of(&name)?;
         let image = self.image();
         let database = Database::open(&image)?;
-        let root = database.table(&name).ok_or(Error::NoTable)?.1;
-        let (statement, add_at) = database.written_as(&name).ok_or(Error::NoTable)?;
+        // The row of the schema was found above, so the table and the
+        // text that wrote it are both there.
+        let root = database.table(&name).ok_or(Error::NoTable(Vec::new()))?.1;
+        let (statement, add_at) = database
+            .written_as(&name)
+            .ok_or(Error::NoTable(Vec::new()))?;
         // The column goes where `addColOffset` names: in front of the
         // comma the constraints begin after, and in front of the
         // bracket that closes the columns where the table has none.
@@ -373,7 +377,7 @@ impl Writer {
                 return Ok(row.rowid);
             }
         }
-        Err(Error::NoTable)
+        Err(Error::NoTable(name.to_vec()))
     }
 
     /// `DROP TABLE` and `DROP INDEX`: the rows of `sqlite_schema` that
@@ -396,7 +400,7 @@ impl Writer {
             return if asked.if_exists {
                 Ok(())
             } else {
-                Err(Error::NoTable)
+                Err(Error::NoTable(name.clone()))
             };
         }
         for rowid in rowids {
@@ -631,7 +635,7 @@ impl Writer {
         let (root, stats) = {
             let bytes = self.image();
             let database = Database::open(&bytes)?;
-            let (_, root) = database.table(STAT).ok_or(Error::NoTable)?;
+            let (_, root) = database.table(STAT).ok_or(Error::NoTable(Vec::new()))?;
             let mut stats = Vec::new();
             for table in &tables {
                 // `analyzeOneTable` counts no table of the system,
@@ -659,7 +663,7 @@ impl Writer {
         let (root, held) = {
             let bytes = self.image();
             let database = Database::open(&bytes)?;
-            let (_, root) = database.table(STAT).ok_or(Error::NoTable)?;
+            let (_, root) = database.table(STAT).ok_or(Error::NoTable(Vec::new()))?;
             let held: Vec<i64> = database
                 .rows_of(STAT)?
                 .iter()
@@ -1106,7 +1110,7 @@ impl Writer {
             let bytes = self.image();
             let database = Database::open(&bytes)?;
             if database.table(&over).is_none() {
-                return Err(Error::NoTable);
+                return Err(Error::NoTable(over));
             }
             if database.trigger(&name).is_some() {
                 if trigger.if_not_exists {
@@ -1364,7 +1368,9 @@ impl Writer {
     ) -> Result<Vec<(i64, Vec<Value>)>, Error> {
         let bytes = self.image();
         let database = Database::open(&bytes)?;
-        let (child, _) = database.table(&points.child).ok_or(Error::NoTable)?;
+        let (child, _) = database
+            .table(&points.child)
+            .ok_or(Error::NoTable(Vec::new()))?;
         let mut out = Vec::new();
         for (rowid, values) in database.rows_of(&points.child)? {
             let held: Vec<Value> = points
@@ -1472,14 +1478,14 @@ impl Writer {
     ) -> Result<(u32, Vec<Kept>, Table, Vec<Value>), Error> {
         let bytes = self.image();
         let database = Database::open(&bytes)?;
-        let (table, root) = database.table(name).ok_or(Error::NoTable)?;
+        let (table, root) = database.table(name).ok_or(Error::NoTable(Vec::new()))?;
         let kept = kept_indexes(&database, name);
         let values = database
             .rows_of(name)?
             .into_iter()
             .find(|(held, _)| *held == rowid)
             .map(|(_, values)| values)
-            .ok_or(Error::NoTable)?;
+            .ok_or(Error::NoTable(Vec::new()))?;
         Ok((root, kept, table.clone(), values))
     }
 
@@ -1776,7 +1782,9 @@ impl Writer {
         // two statements of one connection answer `randomblob`
         // differently.
         let database = Database::open(&bytes)?.seeded(self.random.word());
-        let (table, root) = database.table(name).ok_or(Error::Unsupported)?;
+        let (table, root) = database
+            .table(name)
+            .ok_or_else(|| Error::NoTable(name.to_vec()))?;
         if table.without_rowid {
             return Err(Error::Unsupported);
         }
@@ -1889,7 +1897,9 @@ impl Writer {
             Some(_) if collation.is_some() => None,
             Some(named) if database.table(named).is_some() => Some(named.to_vec()),
             Some(named) => {
-                let (index, root) = database.index(named).ok_or(Error::NoTable)?;
+                let (index, root) = database
+                    .index(named)
+                    .ok_or_else(|| Error::NoTable(named.to_vec()))?;
                 return Ok(alloc::vec![Rebuilt {
                     index: index.clone(),
                     root,
@@ -2100,7 +2110,7 @@ impl Writer {
         let (root, rowid) = {
             let bytes = self.image();
             let database = Database::open(&bytes)?;
-            let (_, root) = database.table(SEQUENCE).ok_or(Error::NoTable)?;
+            let (_, root) = database.table(SEQUENCE).ok_or(Error::NoTable(Vec::new()))?;
             let rowid = database
                 .rows_of(SEQUENCE)?
                 .iter()
@@ -2385,7 +2395,9 @@ impl Writer {
         let (root, keys, kept, table) = {
             let bytes = self.image();
             let database = Database::open(&bytes)?;
-            let (table, root) = database.table(&name).ok_or(Error::NoTable)?;
+            let (table, root) = database
+                .table(&name)
+                .ok_or_else(|| Error::NoTable(name.clone()))?;
             let kept = kept_indexes(&database, &name);
             let rows = database.rows_of(&name)?;
             let mut keys = Vec::new();
@@ -2466,7 +2478,9 @@ impl Writer {
         let sets = arena.sets(statement.sets);
         let bytes = self.image();
         let database = Database::open(&bytes)?;
-        let (table, root) = database.table(name).ok_or(Error::NoTable)?;
+        let (table, root) = database
+            .table(name)
+            .ok_or_else(|| Error::NoTable(name.to_vec()))?;
         let kept = kept_indexes(&database, name);
         let places: Vec<Option<usize>> = sets
             .iter()
@@ -2663,7 +2677,7 @@ impl Writer {
                 .rows_of(&table.name)?
                 .into_iter()
                 .find(|(key, _)| Value::Int(*key) == *found)
-                .ok_or(Error::NoTable)?
+                .ok_or(Error::NoTable(Vec::new()))?
         };
         let before = self.triggers_for(&table.name, TriggerEvent::Delete, TriggerTime::Before)?;
         let after = self.triggers_for(&table.name, TriggerEvent::Delete, TriggerTime::After)?;

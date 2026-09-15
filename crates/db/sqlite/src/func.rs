@@ -476,9 +476,9 @@ pub fn lookup(name: &[u8], count: usize) -> Result<Function, Error> {
         }
     }
     if found {
-        Err(Error::WrongArguments)
+        Err(Error::WrongArguments(name.to_vec()))
     } else {
-        Err(Error::NoFunction)
+        Err(Error::NoFunction(name.to_vec()))
     }
 }
 

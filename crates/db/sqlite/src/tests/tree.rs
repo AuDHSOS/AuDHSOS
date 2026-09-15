@@ -1016,7 +1016,7 @@ fn what_a_statement_that_changes_a_database_refuses() {
     // have, and a row of another width.
     assert!(matches!(
         refuse(&["INSERT INTO nowhere VALUES (1)"]),
-        Error::Unsupported
+        Error::NoTable(_)
     ));
     assert!(matches!(
         refuse(&["CREATE TABLE t(a)", "INSERT INTO t(b) VALUES (1)"]),
@@ -2339,7 +2339,7 @@ fn what_adding_a_column_refuses() {
     // A table the database does not hold.
     assert_eq!(
         writer.run(b"ALTER TABLE nosuch ADD COLUMN c"),
-        Err(Error::NoTable)
+        Err(Error::NoTable(b"nosuch".to_vec()))
     );
     // `sqlite3AlterFinishAddColumn` refuses a column that would need an
     // index over the rows the table already holds, and one that may not
@@ -3925,7 +3925,7 @@ fn what_analyze_refuses_and_what_it_passes_over() {
     // word written after the name.
     assert_eq!(
         writer.run(b"ANALYZE nosuch").err(),
-        Some(crate::db::Error::NoTable)
+        Some(crate::db::Error::NoTable(b"nosuch".to_vec()))
     );
     assert!(crate::parse::analyze(b"ANALYZE t junk").is_err());
     // `ANALYZE` makes `sqlite_stat1` whatever it counts, so a database
@@ -3967,7 +3967,7 @@ fn what_reindex_refuses_and_what_it_passes_over() {
     // refusal, and a word written after the name is one too.
     assert_eq!(
         writer.run(b"REINDEX nosuch").err(),
-        Some(crate::db::Error::NoTable)
+        Some(crate::db::Error::NoTable(b"nosuch".to_vec()))
     );
     assert!(crate::parse::reindex(b"REINDEX t junk").is_err());
     // A table with no index of its own is written again as it stands,

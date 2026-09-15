@@ -23,19 +23,20 @@ use crate::parse::MAX_DEPTH;
 use crate::value::{Affinity, Collation, Value, apply_comparison, cast, compare, compare_affinity};
 
 /// Why an expression could not be answered.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Error {
-    /// A name that is not a column of this row.
-    NoColumn,
-    /// A function this engine does not have.
-    NoFunction,
+    /// A name that is not a column of this row, as it was written.
+    NoColumn(Vec<u8>),
+    /// A function this engine does not have, by the name it was
+    /// called under.
+    NoFunction(Vec<u8>),
     /// A window function written where no window was worked out, which
     /// `sqlite3WindowRewrite` refuses as `misuse of window function`.
     NoWindow,
     /// A collation the connection does not hold, which is what a
     /// `COLLATE` naming one the C library would have been given
     /// through its API names.
-    NoCollation,
+    NoCollation(Vec<u8>),
     /// `random` or `randomblob` where the caller gave the connection no
     /// source of bytes to answer them from.
     NoRandom,
@@ -60,8 +61,9 @@ pub enum Error {
     /// A hex literal of more than sixteen digits, which SQLite refuses
     /// rather than reading as a real.
     HexTooBig,
-    /// A function called with a number of arguments it does not take.
-    WrongArguments,
+    /// A function called with a number of arguments it does not take,
+    /// by the name it was called under.
+    WrongArguments(Vec<u8>),
     /// A number that is not one: `abs` of the smallest integer, which
     /// has no positive, and a `sum` the integers stopped holding.
     Overflow,
@@ -78,6 +80,28 @@ pub enum Error {
     /// A blob or a string longer than `SQLITE_MAX_LENGTH`, which is what
     /// `zeroblob` of a large number asks for.
     TooBig,
+}
+
+impl Error {
+    /// The text the C library writes for this refusal, which is what a
+    /// `catchsql` of SQLite's own test files compares.
+    #[must_use]
+    pub fn message(&self) -> alloc::string::String {
+        use alloc::string::ToString as _;
+        let shown = |name: &[u8]| alloc::string::String::from_utf8_lossy(name).into_owned();
+        match self {
+            Error::NoColumn(name) => alloc::format!("no such column: {}", shown(name)),
+            Error::NoFunction(name) => alloc::format!("no such function: {}", shown(name)),
+            Error::NoCollation(name) => {
+                alloc::format!("no such collation sequence: {}", shown(name))
+            }
+            Error::WrongArguments(name) => {
+                alloc::format!("wrong number of arguments to function {}()", shown(name))
+            }
+            Error::RowValue => "row value misused".to_string(),
+            other => alloc::format!("{other:?}"),
+        }
+    }
 }
 
 /// A value, with what a comparison against it would do.
@@ -330,7 +354,8 @@ fn collated(
 ) -> Result<Answer, Error> {
     let mut inner = answer(arena, value, sql, row, deeper)?;
     let named = crate::schema::dequote(name.text(sql));
-    inner.collation = Some(Collation::of_name(&named).ok_or(Error::NoCollation)?);
+    inner.collation =
+        Some(Collation::of_name(&named).ok_or_else(|| Error::NoCollation(named.clone()))?);
     inner.written = true;
     Ok(inner)
 }
@@ -396,9 +421,18 @@ fn answer(
                 // to, written without quotes and without a table in
                 // front of it, is the number one where it is `true` and
                 // nought where it is `false`.
-                let truth = truth_of(named)
-                    .filter(|_| table.is_none())
-                    .ok_or(Error::NoColumn)?;
+                let truth = truth_of(named).filter(|_| table.is_none()).ok_or_else(|| {
+                    // The name as the statement wrote it, which is
+                    // what `sqlite3ErrorMsg` writes after `no such
+                    // column: `.
+                    let mut written = Vec::new();
+                    for part in [schema, table].into_iter().flatten() {
+                        written.extend_from_slice(part.text(sql));
+                        written.push(b'.');
+                    }
+                    written.extend_from_slice(named);
+                    Error::NoColumn(written)
+                })?;
                 return Ok(Answer::plain(Value::Int(i64::from(truth))));
             };
             Ok(Answer {
@@ -881,7 +915,8 @@ fn binary(
         | BinaryOp::Ge
         | BinaryOp::Is
         | BinaryOp::IsNot => comparison(op, &left, &right, row.collation()),
-        BinaryOp::Extract | BinaryOp::ExtractText => return Err(Error::NoFunction),
+        BinaryOp::Extract => return Err(Error::NoFunction(b"->".to_vec())),
+        BinaryOp::ExtractText => return Err(Error::NoFunction(b"->>".to_vec())),
     };
     // `sqlite3ExprCollSeq`: a `COLLATE` written under an operator is
     // the collation the operator answers with, the left operand before
@@ -1341,7 +1376,8 @@ fn like(
     let function = match op {
         LikeOp::Like => Function::Like,
         LikeOp::Glob => Function::Glob,
-        LikeOp::Regexp | LikeOp::Match => return Err(Error::NoFunction),
+        LikeOp::Regexp => return Err(Error::NoFunction(b"REGEXP".to_vec())),
+        LikeOp::Match => return Err(Error::NoFunction(b"MATCH".to_vec())),
     };
     // The pattern is the first argument and the value the second, which
     // is how `A LIKE B` is written as `like(B,A)`.

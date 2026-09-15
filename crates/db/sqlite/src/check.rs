@@ -161,7 +161,8 @@ fn chain_pages(
         if !mark(seen, page, found) {
             break;
         }
-        let next = crate::bytes::u32_at(image.page_bytes(page)?, 0).ok_or(Error::NoTable)?;
+        let next =
+            crate::bytes::u32_at(image.page_bytes(page)?, 0).ok_or(Error::NoTable(Vec::new()))?;
         number = (next != 0).then_some(next);
     }
     Ok(())
@@ -180,8 +181,8 @@ fn free_pages(image: &Image<'_>, seen: &mut [u8], found: &mut Found) -> Result<(
             break;
         }
         let bytes = image.page_bytes(trunk)?;
-        let next = crate::bytes::u32_at(bytes, 0).ok_or(Error::NoTable)?;
-        let leaves = crate::bytes::u32_at(bytes, 4).ok_or(Error::NoTable)?;
+        let next = crate::bytes::u32_at(bytes, 0).ok_or(Error::NoTable(Vec::new()))?;
+        let leaves = crate::bytes::u32_at(bytes, 4).ok_or(Error::NoTable(Vec::new()))?;
         // The array of leaves begins eight bytes in, so a trunk names
         // at most that many fewer than the page holds words.
         let most = usable.saturating_sub(8).saturating_div(4);

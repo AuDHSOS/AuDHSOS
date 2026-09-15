@@ -130,7 +130,10 @@ fn a_statement_that_is_not_one_is_refused_as_one() {
         database.query(b"SELECT FROM").unwrap_err(),
         Error::Parse(_)
     ));
-    assert_eq!(database.query(b"SELECT * FROM nosuch"), Err(Error::NoTable));
+    assert_eq!(
+        database.query(b"SELECT * FROM nosuch"),
+        Err(Error::NoTable(b"nosuch".to_vec()))
+    );
     assert_eq!(
         database.query(b"SELECT a FROM t ORDER BY 9"),
         Err(Error::OrderRange)
@@ -610,7 +613,9 @@ fn a_table_inside_brackets_answers_under_its_own_name() {
     );
     assert_eq!(
         database.query(b"SELECT t2.c FROM t1 JOIN (t2 AS y JOIN t3 USING(a)) USING(a)"),
-        Err(crate::db::Error::Eval(crate::eval::Error::NoColumn))
+        Err(crate::db::Error::Eval(crate::eval::Error::NoColumn(
+            b"t2.c".to_vec()
+        )))
     );
     // A `*` answers the column a `USING` matched once, whatever
     // brackets stand around the tables, and the brackets carrying a
@@ -648,7 +653,9 @@ fn a_table_inside_brackets_answers_under_its_own_name() {
     // and the tables it reads are not reachable through it.
     assert_eq!(
         database.query(b"SELECT t2.c FROM t1 JOIN (SELECT * FROM t2) USING(a)"),
-        Err(crate::db::Error::Eval(crate::eval::Error::NoColumn))
+        Err(crate::db::Error::Eval(crate::eval::Error::NoColumn(
+            b"t2.c".to_vec()
+        )))
     );
 }
 

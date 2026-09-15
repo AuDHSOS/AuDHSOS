@@ -48,7 +48,7 @@ use crate::window::{self, Which};
 use crate::{error, number};
 
 /// Why a database could not answer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
     /// The file is not one this crate reads.
     Image(error::Error),
@@ -58,8 +58,10 @@ pub enum Error {
     Schema(schema::Error),
     /// An expression could not be answered.
     Eval(eval::Error),
-    /// A table the statement names is not in the schema.
-    NoTable,
+    /// A table the statement names is not in the schema, by the name
+    /// it was named under, which is empty where the walk asked for a
+    /// side it had put there itself.
+    NoTable(Vec<u8>),
     /// An `ORDER BY` that counts to a column the answer does not have.
     OrderRange,
     /// An aggregate where there is nothing to aggregate over: in a
@@ -142,13 +144,17 @@ impl Error {
     pub fn message(&self) -> alloc::string::String {
         use alloc::string::ToString as _;
         match self {
+            Error::NoTable(name) => alloc::format!(
+                "no such table: {}",
+                alloc::string::String::from_utf8_lossy(name)
+            ),
             Error::Foreign => "FOREIGN KEY constraint failed".to_string(),
             Error::ForeignMismatch => "foreign key mismatch".to_string(),
             Error::Unique => "UNIQUE constraint failed".to_string(),
             Error::Nested => "cannot start a transaction within a transaction".to_string(),
             Error::NoTransaction => "cannot commit - no transaction is active".to_string(),
             Error::Recursion => "recursive aggregate queries not supported".to_string(),
-            Error::Eval(eval::Error::RowValue) => "row value misused".to_string(),
+            Error::Eval(error) => error.message(),
             other => alloc::format!("{other:?}"),
         }
     }
@@ -777,7 +783,7 @@ impl<'a> Database<'a> {
             .views
             .iter()
             .find(|view| view.name.eq_ignore_ascii_case(name))
-            .ok_or(Error::NoTable)?;
+            .ok_or_else(|| Error::NoTable(name.to_vec()))?;
         if scope.views >= VIEW_DEPTH {
             return Err(Error::Unsupported);
         }
@@ -985,7 +991,9 @@ impl<'a> Database<'a> {
     /// [`Error::Unsupported`] where the table keeps its rows in the
     /// key's own tree, and whatever reading a row of it refuses.
     pub fn rows_of(&self, name: &[u8]) -> Result<Vec<(i64, Vec<Value>)>, Error> {
-        let stored = self.find(name).ok_or(Error::NoTable)?;
+        // The name is one the schema holds wherever this is reached
+        // from, so the refusal carries no name to write into a message.
+        let stored = self.find(name).ok_or(Error::NoTable(Vec::new()))?;
         if stored.table.without_rowid {
             return Err(Error::Unsupported);
         }
@@ -1286,7 +1294,7 @@ impl<'a> Database<'a> {
             // answered over them before the statement answers.
             let mut kept = self.kept(arena, &select, sql, &sides, &calls, reach)?;
             for at in overed(arena, &select, sql, &mut kept, &overs)? {
-                let cursor = kept.get(at).ok_or(Error::NoTable)?;
+                let cursor = kept.get(at).ok_or(Error::NoTable(Vec::new()))?;
                 rows.push(sorted(arena, &select, sql, cursor, &keys)?);
             }
         } else if calls.is_empty() && select.group.is_empty() {
@@ -1339,11 +1347,14 @@ impl<'a> Database<'a> {
             let alias = source.alias.map(|span| dequote(span.text(sql)));
             let (shape, from, name) = match source.kind {
                 SourceKind::Table { schema, name, .. } => {
-                    if schema.is_some_and(|span| !is_main(&dequote(span.text(sql)))) {
+                    if let Some(span) = schema.filter(|span| !is_main(&dequote(span.text(sql)))) {
                         // Only the one schema a file holds is readable,
                         // and a name in front of it that is not it names
                         // no table rather than another database.
-                        return Err(Error::NoTable);
+                        let mut written = dequote(span.text(sql));
+                        written.push(b'.');
+                        written.extend_from_slice(&dequote(name.text(sql)));
+                        return Err(Error::NoTable(written));
                     }
                     let written = &dequote(name.text(sql));
                     // A `WITH` term is reached by its bare name; a name
@@ -1462,10 +1473,13 @@ impl<'a> Database<'a> {
                 )
             }
             Used::InTable(value, schema, table, negated) => {
+                let called = dequote(table.text(sql));
                 if schema.is_some_and(|span| !is_main(&dequote(span.text(sql)))) {
-                    return Err(Error::NoTable);
+                    return Err(Error::NoTable(called));
                 }
-                let stored = self.find(&dequote(table.text(sql))).ok_or(Error::NoTable)?;
+                let stored = self
+                    .find(&called)
+                    .ok_or_else(|| Error::NoTable(called.clone()))?;
                 let side = Side {
                     shape: shape_of(&stored.table),
                     source: Source::Table(stored),
@@ -3099,7 +3113,7 @@ fn grouped(
     match term {
         Term::Expr(expr) => Ok(evaluate_collated(arena, expr, sql, cursor)?),
         Term::Held(side, place) => {
-            let held = cursor.held.get(side).ok_or(Error::NoTable)?;
+            let held = cursor.held.get(side).ok_or(Error::NoTable(Vec::new()))?;
             let value = held.values.get(place).cloned().unwrap_or(Value::Null);
             let collation = held
                 .shape
@@ -3232,7 +3246,7 @@ fn shape(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> Resu
         match *result {
             ResultColumn::Star => {
                 if sides.is_empty() {
-                    return Err(Error::NoTable);
+                    return Err(Error::NoTable(Vec::new()));
                 }
                 for (at, side) in sides.iter().enumerate() {
                     // A `*` stands for every column named by its side,
@@ -3263,7 +3277,7 @@ fn shape(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> Resu
             ResultColumn::TableStar(span) => {
                 let called = dequote(span.text(sql));
                 let mut named = sides.iter().filter(|side| side.named(&called));
-                let side = named.next().ok_or(Error::NoTable)?;
+                let side = named.next().ok_or_else(|| Error::NoTable(called.clone()))?;
                 if named.next().is_some() {
                     return Err(Error::Ambiguous);
                 }
@@ -3902,7 +3916,8 @@ fn term_collation(arena: &Arena, id: ExprId, sql: &[u8]) -> Result<Option<Collat
         return Ok(None);
     };
     let named = crate::schema::dequote(name.text(sql));
-    let collation = Collation::of_name(&named).ok_or(eval::Error::NoCollation)?;
+    let collation =
+        Collation::of_name(&named).ok_or_else(|| eval::Error::NoCollation(named.clone()))?;
     Ok(Some(collation))
 }
 
@@ -4497,8 +4512,9 @@ fn gather_one(
     } = node
     {
         let count = if star { 0 } else { arena.children(args).len() };
-        let which = window::lookup(&dequote(name.text(sql)), count)
-            .ok_or(Error::Eval(eval::Error::NoFunction))?;
+        let called = dequote(name.text(sql));
+        let which = window::lookup(&called, count)
+            .ok_or_else(|| Error::Eval(eval::Error::NoFunction(called.clone())))?;
         // `sqlite3WindowRewrite` takes a `FILTER` for an aggregate and
         // refuses one for the eleven built-in window functions, and
         // refuses `DISTINCT` for every one of them.
@@ -4961,8 +4977,12 @@ fn offset_value(
 ) -> Result<Value, Error> {
     let args = arena.children(over.args);
     let expr = *args.first().ok_or(Error::Frame)?;
-    let place = part.rows.get(at).copied().ok_or(Error::NoTable)?;
-    let cursor = cursors.get(place).ok_or(Error::NoTable)?;
+    let place = part
+        .rows
+        .get(at)
+        .copied()
+        .ok_or(Error::NoTable(Vec::new()))?;
+    let cursor = cursors.get(place).ok_or(Error::NoTable(Vec::new()))?;
     let step = match args.get(1) {
         Some(id) => whole_of(&evaluate_row(arena, *id, sql, cursor)?).ok_or(Error::Frame)?,
         None => 1,
@@ -4978,7 +4998,7 @@ fn offset_value(
         .and_then(|row| part.rows.get(row))
         .copied();
     if let Some(found) = found {
-        let read = cursors.get(found).ok_or(Error::NoTable)?;
+        let read = cursors.get(found).ok_or(Error::NoTable(Vec::new()))?;
         return Ok(evaluate_row(arena, expr, sql, read)?);
     }
     // A row that far out of the partition answers the third argument,
@@ -4999,8 +5019,12 @@ fn framed_value(
     part: &Part<'_>,
     at: usize,
 ) -> Result<Value, Error> {
-    let place = part.rows.get(at).copied().ok_or(Error::NoTable)?;
-    let cursor = cursors.get(place).ok_or(Error::NoTable)?;
+    let place = part
+        .rows
+        .get(at)
+        .copied()
+        .ok_or(Error::NoTable(Vec::new()))?;
+    let cursor = cursors.get(place).ok_or(Error::NoTable(Vec::new()))?;
     let frame = frame_rows(arena, sql, cursor, part, at)?;
     let args = arena.children(over.args);
     // A frame that holds no row answers `NULL`, which is the value
@@ -5045,13 +5069,17 @@ fn accumulated(
     at: usize,
     which: Aggregate,
 ) -> Result<Value, Error> {
-    let place = part.rows.get(at).copied().ok_or(Error::NoTable)?;
-    let cursor = cursors.get(place).ok_or(Error::NoTable)?;
+    let place = part
+        .rows
+        .get(at)
+        .copied()
+        .ok_or(Error::NoTable(Vec::new()))?;
+    let cursor = cursors.get(place).ok_or(Error::NoTable(Vec::new()))?;
     let frame = frame_rows(arena, sql, cursor, part, at)?;
     let mut accumulator = Accumulator::new(which, false);
     for row in &frame {
         let place = part.rows.get(*row).copied().unwrap_or(0);
-        let read = cursors.get(place).ok_or(Error::NoTable)?;
+        let read = cursors.get(place).ok_or(Error::NoTable(Vec::new()))?;
         // A `FILTER` decides which rows of the frame are stepped, which
         // is `sqlite3WindowCodeStep` jumping over the step.
         if !keep(arena, over.filter, sql, read)? {
@@ -5091,8 +5119,12 @@ fn answered_over(
         Which::PercentRank => Ok(Value::Real(window::percent_rank(at, peers))),
         Which::CumeDist => Ok(Value::Real(window::cume_dist(at, peers))),
         Which::Ntile => {
-            let place = part.rows.get(at).copied().ok_or(Error::NoTable)?;
-            let cursor = cursors.get(place).ok_or(Error::NoTable)?;
+            let place = part
+                .rows
+                .get(at)
+                .copied()
+                .ok_or(Error::NoTable(Vec::new()))?;
+            let cursor = cursors.get(place).ok_or(Error::NoTable(Vec::new()))?;
             let id = *arena.children(over.args).first().ok_or(Error::Frame)?;
             let tiles = whole_of(&evaluate_row(arena, id, sql, cursor)?).ok_or(Error::Frame)?;
             if tiles < 1 {
