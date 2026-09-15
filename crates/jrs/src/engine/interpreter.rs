@@ -1594,6 +1594,12 @@ impl RegisterVM {
             }
             // 22.1.3.32 and 22.1.3.28 are `thisStringValue`, which answers a
             // String and the `[[StringData]]` of a wrapper.
+            // 10.2.4.1 throws whenever it is called, however it is reached.
+            Intrinsic::ThrowTypeError => Err(type_error(
+                heap,
+                realm,
+                "the callee of a strict arguments object cannot be read",
+            )),
             Intrinsic::StringPrototypeValueOf | Intrinsic::StringPrototypeToString => {
                 if call.receiver.is_string() {
                     return Ok(call.receiver);
@@ -4901,16 +4907,17 @@ impl RegisterVM {
                         "next called on a value that is not an Array Iterator",
                     ));
                 };
-                let value = target
-                    .as_object()
-                    .filter(|target| heap.array_length(*target).is_some_and(|len| index < len))
-                    .map(|target| {
-                        heap.get_object(target)
-                            .and_then(|object| object.elements)
-                            .and_then(|elements| heap.get_elements(elements))
-                            .and_then(|elements| elements.get(index))
-                            .unwrap_or(VALUE_UNDEFINED)
-                    });
+                // 23.1.5.2.1 reads the length of the array-like again at
+                // every step and takes the index out of it with 7.3.2, so an
+                // object that is no Array is walked the same way.
+                let value = match target.as_object() {
+                    Some(object)
+                        if i64::from(index) < Self::array_like_length(heap, object, realm)? =>
+                    {
+                        Some(Self::element_at(heap, object, index)?.unwrap_or(VALUE_UNDEFINED))
+                    }
+                    _ => None,
+                };
                 let next = match value {
                     Some(_) => ObjectKind::ArrayIterator {
                         target,
@@ -5541,6 +5548,35 @@ impl RegisterVM {
         let length = Value::from_f64(f64::from(arguments.count));
         let key = PropertyKey::String(heap.strings.intern_units(&LENGTH_NAME)?);
         self.define_own(target, key, PropertyFlags::constructor_data(), length, heap)?;
+        // 10.4.4 gives the object the iterator of 23.1.3.33.
+        let values = realm.intrinsic(heap, Intrinsic::ArrayPrototypeValues)?;
+        self.define_own(
+            target,
+            super::realm::WellKnownSymbol::Iterator.key(),
+            PropertyFlags::constructor_data(),
+            values,
+            heap,
+        )?;
+        // 10.4.4 step 7: a strict function's `callee` is the accessor of
+        // 10.2.4.1 on both halves, and nothing else can be read out of it.
+        if code.strict {
+            let throws = realm.intrinsic(heap, Intrinsic::ThrowTypeError)?;
+            let pair = Self::make_accessor(throws, throws, heap)?;
+            let key = PropertyKey::String(heap.strings.intern_units(&CALLEE_NAME)?);
+            self.define_own(
+                target,
+                key,
+                PropertyFlags {
+                    writable: false,
+                    enumerable: false,
+                    configurable: false,
+                    is_accessor: true,
+                },
+                pair,
+                heap,
+            )?;
+            return Ok(());
+        }
         let callee = outer(self, arguments.callee)?;
         let key = PropertyKey::String(heap.strings.intern_units(&CALLEE_NAME)?);
         self.define_own(target, key, PropertyFlags::constructor_data(), callee, heap)?;

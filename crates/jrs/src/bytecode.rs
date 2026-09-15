@@ -1741,8 +1741,15 @@ impl RegisterLowerer {
                         // property access: 10.4.4.7 maps its indices onto the
                         // parameters, and a body that could observe the
                         // mapping is not lowered.
+                        // 10.4.4.7 maps the indices of a sloppy function's
+                        // arguments object onto its parameters, which this
+                        // engine does not do, so there it is only read as the
+                        // base of a property access. A strict function has no
+                        // mapping to observe.
                         "arguments" if self.allow_return => {
-                            let binding = self.arguments_binding.filter(|_| member_base)?;
+                            let binding = self
+                                .arguments_binding
+                                .filter(|_| member_base || self.code.strict)?;
                             self.load_binding(binding);
                             RegisterType::Unknown
                         }
@@ -2552,6 +2559,9 @@ impl RegisterLowerer {
             code_id.checked_add(1)?,
         );
         child.allow_return = true;
+        // The body is lowered before the unit is finished, and 10.4.4 reads
+        // the strictness while it runs.
+        child.code.strict = function.strict;
         child.realm = self.realm;
         child.function_returns = self.function_returns.clone();
         child.function_parameters = self.function_parameters.clone();
@@ -2627,14 +2637,12 @@ impl RegisterLowerer {
         } else {
             None
         };
-        // 10.4.4 binds `arguments` in every ordinary function. The mapping of
-        // 10.4.4.7 is only unobservable while no parameter is assigned, and a
-        // strict function needs the accessor 10.4.4.6 poisons `callee` with,
-        // which this engine has no accessors for.
+        // 10.4.4 binds `arguments` in every ordinary function. A strict
+        // function's object carries no mapping at all; a sloppy one's mapping
+        // of 10.4.4.7 is only unobservable while no parameter is assigned.
         if !function.arrow
-            && !function.strict
             && register_body_reads_arguments(&function.body)?
-            && !register_body_writes_parameters(&function.body, function)?
+            && (function.strict || !register_body_writes_parameters(&function.body, function)?)
         {
             child.declare(ARGUMENTS, false)?;
             let RegisterBindingStorage::Register(register) = child.bindings.get(ARGUMENTS)?.storage
@@ -6863,7 +6871,9 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // whose type only the receiver's layout carries, so the call site
         // reads it there instead. 23.1.1.1 answers an Array whose elements
         // this lowering did not make and cannot name.
-        crate::engine::realm::Intrinsic::ArrayConstructor
+        // 10.2.4.1 answers nothing at all: it throws.
+        crate::engine::realm::Intrinsic::ThrowTypeError
+        | crate::engine::realm::Intrinsic::ArrayConstructor
         | crate::engine::realm::Intrinsic::ObjectConstructor
         | crate::engine::realm::Intrinsic::ObjectDefineProperty
         | crate::engine::realm::Intrinsic::ObjectGetOwnPropertyDescriptor

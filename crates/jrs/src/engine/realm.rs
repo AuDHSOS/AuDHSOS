@@ -497,6 +497,8 @@ pub enum Intrinsic {
     StringPrototypeValueOf,
     /// `String.prototype.toString`, 22.1.3.28.
     StringPrototypeToString,
+    /// `%ThrowTypeError%`, 10.2.4.1, which throws whenever it is called.
+    ThrowTypeError,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -534,7 +536,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 117] = [
+    pub const ALL: [Self; 118] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -652,6 +654,7 @@ impl Intrinsic {
         Self::BooleanPrototypeToString,
         Self::StringPrototypeValueOf,
         Self::StringPrototypeToString,
+        Self::ThrowTypeError,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -752,7 +755,11 @@ impl Intrinsic {
             Self::StringPrototypeValueOf | Self::StringPrototypeToString => {
                 IntrinsicHolder::StringPrototype
             }
-            Self::ErrorConstructor
+            // 10.2.4.1 stands on no object: the `callee` of a strict
+            // arguments object is the only way to reach it, and nothing
+            // installs it on the holder this names.
+            Self::ThrowTypeError
+            | Self::ErrorConstructor
             | Self::EvalErrorConstructor
             | Self::RangeErrorConstructor
             | Self::ReferenceErrorConstructor
@@ -912,6 +919,7 @@ impl Intrinsic {
             Self::BooleanPrototypeToString => 114,
             Self::StringPrototypeValueOf => 115,
             Self::StringPrototypeToString => 116,
+            Self::ThrowTypeError => 117,
         }
     }
 
@@ -1039,6 +1047,7 @@ impl Intrinsic {
             Self::BooleanPrototypeToString => 114,
             Self::StringPrototypeValueOf => 115,
             Self::StringPrototypeToString => 116,
+            Self::ThrowTypeError => 117,
         }
     }
 
@@ -1167,6 +1176,7 @@ impl Intrinsic {
             114 => Some(Self::BooleanPrototypeToString),
             115 => Some(Self::StringPrototypeValueOf),
             116 => Some(Self::StringPrototypeToString),
+            117 => Some(Self::ThrowTypeError),
             _ => None,
         }
     }
@@ -1190,6 +1200,7 @@ impl Intrinsic {
             Self::NumberPrototypeValueOf
             | Self::BooleanPrototypeValueOf
             | Self::StringPrototypeValueOf => "valueOf",
+            Self::ThrowTypeError => "",
             Self::ArrayConstructor => "Array",
             Self::ObjectConstructor => "Object",
             Self::FunctionConstructor => "Function",
@@ -1381,6 +1392,7 @@ impl Intrinsic {
             | Self::BooleanPrototypeToString
             | Self::StringPrototypeValueOf
             | Self::StringPrototypeToString
+            | Self::ThrowTypeError
             | Self::ObjectGetOwnPropertyNames => false,
             // 20.1.2.4, 20.1.2.8 and 20.1.2.13 apply ToPropertyKey to the
             // second argument.
@@ -1414,7 +1426,8 @@ impl Intrinsic {
     )]
     pub const fn length(self) -> u32 {
         match self {
-            Self::ObjectPrototypeToString
+            Self::ThrowTypeError
+            | Self::ObjectPrototypeToString
             | Self::NumberPrototypeValueOf
             | Self::BooleanPrototypeValueOf
             | Self::BooleanPrototypeToString
@@ -2704,6 +2717,10 @@ impl Realm {
             }
             .as_object()
             .ok_or(HeapError::InvalidReference)?;
+            // 10.2.4.1 stands on no object at all, so nothing installs it.
+            if intrinsic == Intrinsic::ThrowTypeError {
+                continue;
+            }
             // 27.1.2.1 is a Symbol-keyed property, so it takes no String name
             // on its holder.
             if intrinsic == Intrinsic::IteratorPrototypeIterator {

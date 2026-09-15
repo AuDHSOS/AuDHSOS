@@ -5339,3 +5339,39 @@ fn a_function_carries_the_name_it_was_given() -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[test]
+fn the_arguments_object_of_a_strict_function_is_a_value() -> Result<(), Error> {
+    // 10.4.4 makes an unmapped arguments object for a strict function, so
+    // nothing of it can be observed that this engine does not build. It is a
+    // value there and not only the base of a property access.
+    for source in [
+        "'use strict';function f(){return arguments}f(1,2).length",
+        "'use strict';function f(){var a=arguments;return a[0]+a[1]}f(1,2)",
+        "'use strict';function f(){return typeof arguments}f()",
+        "'use strict';function f(){var a=arguments;return a.length}f()",
+        "'use strict';function f(){var r=0;for(var i=0;i<arguments.length;i++)r=r+arguments[i];return r}f(1,2,3)",
+        // 10.4.4 step 7: reading `callee` is the accessor of 10.2.4.1.
+        "'use strict';function f(){var r=0;try{arguments.callee}catch(e){r=e instanceof TypeError}return r}f()",
+        "'use strict';function f(){return Object.getOwnPropertyDescriptor(arguments,'callee').configurable}f()",
+        // 10.4.4 gives it the iterator of 23.1.3.33.
+        "'use strict';function f(){var r=0;for(var v of arguments)r=r+v;return r}f(1,2,3)",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // A sloppy function's arguments object carries the mapping of 10.4.4.7,
+    // which this engine does not build, so there it is only the base of a
+    // property access.
+    let source = "function f(p){p=2;var a=arguments;return a[0]}f(1)";
+    let program = compile(source, Limits::default())?;
+    assert!(!program.uses_register_backend(), "{source}");
+    // 23.1.5.2.1 reads the length of the array-like again at every step, so
+    // an object that is no Array is walked the same way.
+    for source in [
+        "var o={length:2,0:'a',1:'b'};var r='';for(var v of Array.prototype.values.call(o))r=r+v;r",
+        "var a=[1,2,3];var r=0;for(var v of Array.prototype.values.call(a))r=r+v;r",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
