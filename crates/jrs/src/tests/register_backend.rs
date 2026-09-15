@@ -4892,3 +4892,37 @@ fn an_accessor_property_is_read_and_written_by_calling_it() -> Result<(), Error>
     }
     Ok(())
 }
+
+#[test]
+fn a_descriptor_for_an_index_reaches_the_element_store() -> Result<(), Error> {
+    // 10.4.2.1 defines an index against the element store, which holds a
+    // value and nothing else. An index that is anything but an ordinary data
+    // property leaves the store and becomes a property of the Shape, where a
+    // read finds it once the store answers a hole.
+    for source in [
+        "var a=[1,2,3];Object.defineProperty(a,'1',{value:9});a[1]",
+        "var a=[1,2,3];Object.defineProperty(a,'1',{value:9});a.length",
+        "var a=[1,2,3];Object.defineProperty(a,'1',{value:9,writable:false});a[1]",
+        "var a=[1,2,3];Object.defineProperty(a,'1',{value:9,writable:false});a.length",
+        "var a=[1,2,3];Object.defineProperty(a,'1',{enumerable:false});Object.keys(a).join(',')",
+        "var a=[1,2,3];Object.defineProperty(a,'1',{value:9,enumerable:false,configurable:false,writable:false});a[1]",
+        "var a=[1,2,3];Object.getOwnPropertyDescriptor(a,'1').value",
+        "var a=[1,2,3];Object.getOwnPropertyDescriptor(a,'1').writable",
+        "var a=[1,2,3];Object.defineProperty(a,'1',{value:9,writable:false});Object.getOwnPropertyDescriptor(a,'1').writable",
+        "var a=[1];Object.defineProperty(a,'0',{get:function(){return 7}});a[0]",
+        "var a=[1];Object.defineProperty(a,'0',{get:function(){return 7}});Object.getOwnPropertyDescriptor(a,'0').set",
+        // 10.4.2.1 step 3.g grows the Array to hold the index it defined.
+        "var a=[];Object.defineProperty(a,'3',{value:1});a.length",
+        "var a=[];Object.defineProperty(a,'3',{value:1,writable:true,enumerable:true,configurable:true});a.length",
+        // A read of a hole goes on over the Prototype Chain.
+        "var a=[1,2,3];delete a[1];typeof a[1]",
+        "var a=[1,2,3];delete a[1];a.length",
+        // A write finds the index the Shape took over.
+        "var a=[1,2,3];Object.defineProperty(a,'1',{value:9,configurable:true});a[1]=4;a[1]",
+        "var a=[1,2,3];Object.defineProperty(a,'1',{value:9,configurable:true});a[1]=4;a.length",
+        "var a=[1,2,3];Object.defineProperty(a,'1',{value:9,configurable:true});a[4]=5;a.length",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}

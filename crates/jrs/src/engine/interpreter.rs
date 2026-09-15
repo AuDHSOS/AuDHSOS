@@ -18,6 +18,7 @@
 use super::{
     bytecode::{BinaryOp, BytecodeFunction, Instruction, Reg, VerificationError},
     context::ContextRef,
+    elements::ElementsRef,
     feedback::{BinaryOpFeedback, FeedbackVector, NamedAccessCase},
     heap::{GenerationalHeap, HeapError, NamedProperty, Root},
     object::ObjectKind,
@@ -2090,9 +2091,8 @@ impl RegisterVM {
                     Self::absent_property(target, &units, heap, realm)?;
                     return Ok(VALUE_UNDEFINED);
                 };
-                let value = heap
-                    .lookup_named(object, name)?
-                    .map_or(VALUE_UNDEFINED, |property| property.value);
+                let indexed = Self::element_index_of(object, name, heap);
+                let value = Self::own_property_value(object, name, indexed, heap)?;
                 Self::from_property_descriptor(value, flags, heap, realm)
             }
             // 20.1.2.4: the descriptor 6.2.6.5 reads, defined on the object.
@@ -2366,7 +2366,8 @@ impl RegisterVM {
         descriptor: &PartialDescriptor,
         heap: &mut GenerationalHeap,
     ) -> Result<bool, VMError> {
-        Self::refuse_exotic_definition(object, name, heap)?;
+        Self::refuse_array_length(object, name, heap)?;
+        let indexed = Self::element_index_of(object, name, heap);
         let Some(current) = heap.own_named_flags(object, name)? else {
             // Step 2: the property does not exist, so the descriptor makes it.
             if !heap.is_extensible(object).unwrap_or(false) {
@@ -2379,16 +2380,14 @@ impl RegisterVM {
                 is_accessor: descriptor.is_accessor(),
             };
             let stored = Self::descriptor_slot(descriptor, VALUE_UNDEFINED, VALUE_UNDEFINED, heap)?;
-            heap.define_own_named(object, name, stored, flags)?;
+            Self::place_property(object, name, indexed, stored, flags, heap)?;
             return Ok(true);
         };
         // Step 4: a descriptor with no field changes nothing.
         if descriptor.is_empty() {
             return Ok(true);
         }
-        let held = heap
-            .lookup_named(object, name)?
-            .map_or(VALUE_UNDEFINED, |property| property.value);
+        let held = Self::own_property_value(object, name, indexed, heap)?;
         let (current_get, current_set) = if current.is_accessor {
             Self::accessor_parts(held, heap)?
         } else {
@@ -2464,8 +2463,97 @@ impl RegisterVM {
         } else {
             descriptor.value.unwrap_or(held)
         };
-        heap.define_own_named(object, name, stored, flags)?;
+        Self::place_property(object, name, indexed, stored, flags, heap)?;
         Ok(true)
+    }
+
+    /// The value of the own property a descriptor is about to redefine.
+    fn own_property_value(
+        object: ObjectRef,
+        name: PropertyKey,
+        indexed: Option<(ElementsRef, u32)>,
+        heap: &GenerationalHeap,
+    ) -> Result<Value, VMError> {
+        if let Some((elements, index)) = indexed
+            && let Some(value) = heap
+                .get_elements(elements)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?
+                .get(index)
+        {
+            return Ok(value);
+        }
+        Ok(heap
+            .lookup_named(object, name)?
+            .map_or(VALUE_UNDEFINED, |property| property.value))
+    }
+
+    /// Puts a property where the object keeps one of its kind, which 10.4.2.1
+    /// decides for an index.
+    ///
+    /// The element store holds a value and nothing else, so it carries exactly
+    /// the ordinary data properties. An index that is anything else leaves the
+    /// store and becomes a property of the Shape, where a read finds it once
+    /// the store answers a hole.
+    fn place_property(
+        object: ObjectRef,
+        name: PropertyKey,
+        indexed: Option<(ElementsRef, u32)>,
+        stored: Value,
+        flags: PropertyFlags,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        let Some((elements, index)) = indexed else {
+            heap.define_own_named(object, name, stored, flags)?;
+            return Ok(());
+        };
+        if flags == PropertyFlags::ordinary_data() {
+            heap.remove_own_named(object, name)?;
+            if heap.array_length(object).is_some() {
+                heap.set_array_element(object, index, stored)?;
+            } else {
+                heap.set_element(elements, index, stored)?;
+            }
+            return Ok(());
+        }
+        heap.delete_element(elements, index)?;
+        // 10.4.2.1 step 3.g grows the Array to hold the index it defined.
+        if let Some(length) = heap.array_length(object)
+            && index >= length
+        {
+            heap.set_array_length(object, index.saturating_add(1))?;
+        }
+        heap.define_own_named(object, name, stored, flags)?;
+        Ok(())
+    }
+
+    /// Whether the Shape of the object carries this name.
+    ///
+    /// An index is normally in the element store, and one 10.4.2.1 moved out
+    /// of it is here instead, where a read and a write have to look.
+    fn shape_holds(
+        object: ObjectRef,
+        name: PropertyKey,
+        heap: &GenerationalHeap,
+    ) -> Result<bool, VMError> {
+        let shape = heap
+            .get_object(object)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?
+            .shape_id;
+        Ok(heap.shapes.lookup(shape, name).is_some())
+    }
+
+    /// The element store and the index a name denotes on it, when 10.4.2.1
+    /// defines the name there rather than in the Shape.
+    fn element_index_of(
+        object: ObjectRef,
+        name: PropertyKey,
+        heap: &GenerationalHeap,
+    ) -> Option<(ElementsRef, u32)> {
+        let elements = heap.get_object(object)?.elements?;
+        let units = name
+            .as_string()
+            .and_then(|name| heap.strings.to_utf16(Value::from_string(name)))?;
+        Some((elements, array_index_units(&units)?))
     }
 
     /// The slot a descriptor gives a property that is being made.
@@ -2485,12 +2573,12 @@ impl RegisterVM {
         Ok(descriptor.value.unwrap_or(VALUE_UNDEFINED))
     }
 
-    /// The names 10.4.2.1 and 10.4.3.1 define somewhere other than a slot.
+    /// 10.4.2.4 sets an Array's `length` by deleting what is above the new
+    /// one, which this engine does not do.
     ///
-    /// An index of an object that holds an element store, and the `length` of
-    /// an Array, are not properties of its Shape, so a Shape that took one
-    /// would hold a second answer beside the one a read finds.
-    fn refuse_exotic_definition(
+    /// The length is a field of the object and no property of its Shape, so a
+    /// Shape that took the name would hold a second answer beside it.
+    fn refuse_array_length(
         object: ObjectRef,
         name: PropertyKey,
         heap: &GenerationalHeap,
@@ -2499,15 +2587,6 @@ impl RegisterVM {
             .as_string()
             .and_then(|name| heap.strings.to_utf16(Value::from_string(name)))
             .unwrap_or_default();
-        let holds_indices = heap
-            .get_object(object)
-            .and_then(|object| object.elements)
-            .is_some();
-        if holds_indices && array_index_units(&units).is_some() {
-            return Err(VMError::Unsupported(
-                "a descriptor for an index of an object that holds elements",
-            ));
-        }
         if units.as_slice() == LENGTH_NAME && heap.array_length(object).is_some() {
             return Err(VMError::Unsupported("a descriptor for an Array length"));
         }
@@ -5826,11 +5905,17 @@ impl RegisterVM {
                         .get(name_index as usize)
                         .ok_or(VMError::InvalidRegister)?;
                     let elements = heap.get_object(oref).ok_or(VMError::TypeError)?.elements;
+                    // A hole is not an answer: 10.1.8.1 reads on, over the
+                    // Shape and then the Prototype Chain, where 10.4.2.1 may
+                    // have put the index.
                     if let Some(eref) = elements
                         && let Some(index) = array_index_units(units)
+                        && let Some(element) = heap
+                            .get_elements(eref)
+                            .ok_or(VMError::TypeError)?
+                            .get(index)
                     {
-                        let element = heap.get_elements(eref).ok_or(VMError::TypeError)?;
-                        self.acc = element.get(index).unwrap_or(VALUE_UNDEFINED);
+                        self.acc = element;
                         return Ok(None);
                     }
                     if units.as_slice() == LENGTH_NAME
@@ -5920,8 +6005,10 @@ impl RegisterVM {
                     // so a name that is one is written there and not as a
                     // property of its own.
                     let elements = heap.get_object(oref).ok_or(VMError::TypeError)?.elements;
+                    let name = PropertyKey::String(heap.strings.intern_units(units)?);
                     if let Some(eref) = elements
                         && let Some(index) = array_index_units(units)
+                        && !Self::shape_holds(oref, name, heap)?
                     {
                         let stored = heap.get_elements(eref).ok_or(VMError::TypeError)?;
                         if stored.get(index).is_none()
@@ -5934,7 +6021,6 @@ impl RegisterVM {
                         heap.set_array_element(oref, index, value)?;
                         return Ok(None);
                     }
-                    let name = PropertyKey::String(heap.strings.intern_units(units)?);
                     let current_shape = heap.get_object(oref).ok_or(VMError::TypeError)?.shape_id;
                     let prototype_epoch = heap.shapes.prototype_epoch();
 
@@ -6028,10 +6114,16 @@ impl RegisterVM {
                     let js_obj = heap.get_object(oref).ok_or(VMError::TypeError)?;
                     let key_val = self.read_reg(key)?;
 
-                    if let (Some(idx), Some(eref)) = (array_index(key_val, heap)?, js_obj.elements)
-                    {
-                        let elem = heap.get_elements(eref).ok_or(VMError::TypeError)?;
-                        self.acc = elem.get(idx).unwrap_or(VALUE_UNDEFINED);
+                    let element = match (array_index(key_val, heap)?, js_obj.elements) {
+                        (Some(index), Some(eref)) => heap
+                            .get_elements(eref)
+                            .ok_or(VMError::TypeError)?
+                            .get(index),
+                        _ => None,
+                    };
+                    // A hole is not an answer, so the read goes on.
+                    if let Some(element) = element {
+                        self.acc = element;
                     } else {
                         let name = property_name_units(key_val, heap)?;
                         if name.as_slice() == [0x6C, 0x65, 0x6E, 0x67, 0x74, 0x68]
@@ -6122,8 +6214,25 @@ impl RegisterVM {
                     let key_val = self.read_reg(key)?;
                     let val = self.acc;
 
+                    let indexed = match array_index(key_val, heap)? {
+                        Some(index) => {
+                            let units = property_name_units(key_val, heap)?;
+                            let name = heap
+                                .strings
+                                .lookup_interned_units(&units)
+                                .map(PropertyKey::String);
+                            match name {
+                                // An index 10.4.2.1 moved out of the store is
+                                // a property of the Shape, and the write
+                                // belongs there.
+                                Some(name) if Self::shape_holds(oref, name, heap)? => None,
+                                _ => Some(index),
+                            }
+                        }
+                        None => None,
+                    };
                     if js_obj.elements.is_some()
-                        && let Some(index) = array_index(key_val, heap)?
+                        && let Some(index) = indexed
                     {
                         let elements_reference = js_obj.elements.ok_or(VMError::TypeError)?;
                         let elements = heap

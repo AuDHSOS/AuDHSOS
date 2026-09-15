@@ -667,11 +667,16 @@ impl GenerationalHeap {
             ObjectKind::Array { length } => Some(length),
             _ => None,
         };
-        let mut indices: Vec<u32> = match elements {
+        // An index the element store carries is an ordinary data property;
+        // one the Shape carries says for itself what it is.
+        let mut indices: Vec<(u32, bool)> = match elements {
             Some(elements) => self
                 .get_elements(elements)
                 .ok_or(HeapError::InvalidReference)?
-                .indices(),
+                .indices()
+                .into_iter()
+                .map(|index| (index, true))
+                .collect(),
             None => Vec::new(),
         };
         let mut named = Vec::new();
@@ -679,7 +684,7 @@ impl GenerationalHeap {
         for (name, flags, _) in self.shapes.own_properties(shape_id) {
             match name.as_string().map(|name| self.array_index_of(name)) {
                 Some(index) => match index? {
-                    Some(index) => indices.push(index),
+                    Some(index) => indices.push((index, flags.enumerable)),
                     None => named.push((name, flags.enumerable)),
                 },
                 // 10.1.11.1 lists every Symbol key after every String key.
@@ -687,10 +692,10 @@ impl GenerationalHeap {
             }
         }
         indices.sort_unstable();
-        indices.dedup();
+        indices.dedup_by_key(|(index, _)| *index);
         let mut keys = Vec::with_capacity(indices.len().saturating_add(named.len()));
-        for index in indices {
-            keys.push((PropertyKey::String(self.intern_index(index)?), true));
+        for (index, enumerable) in indices {
+            keys.push((PropertyKey::String(self.intern_index(index)?), enumerable));
         }
         keys.extend(named);
         keys.extend(symbols);
@@ -938,6 +943,52 @@ impl GenerationalHeap {
         };
         self.set_object_slot(reference, slot, value)?;
         Ok(slot)
+    }
+
+    /// Removes one own named property, keeping every other one and the order
+    /// they were added in.
+    ///
+    /// A name the object does not own leaves it unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale or invalid object.
+    pub fn remove_own_named(
+        &mut self,
+        reference: ObjectRef,
+        name: PropertyKey,
+    ) -> Result<(), HeapError> {
+        let shape_id = self
+            .get_object(reference)
+            .ok_or(HeapError::InvalidReference)?
+            .shape_id;
+        if self.shapes.lookup(shape_id, name).is_none() {
+            return Ok(());
+        }
+        let kept = self.shapes.own_properties(shape_id);
+        let mut held = Vec::with_capacity(kept.len());
+        for (key, flags, slot) in kept {
+            if key == name {
+                continue;
+            }
+            let value = self
+                .get_object(reference)
+                .and_then(|object| object.get_slot(slot))
+                .ok_or(HeapError::InvalidReference)?;
+            held.push((key, flags, value));
+        }
+        let mut rebuilt = self.shapes.root_shape();
+        let mut placed = Vec::with_capacity(held.len());
+        for (key, flags, value) in held {
+            let (next, slot) = self.shapes.transition(rebuilt, key, flags);
+            rebuilt = next;
+            placed.push((slot, value));
+        }
+        self.set_object_shape(reference, rebuilt)?;
+        for (slot, value) in placed {
+            self.set_object_slot(reference, slot, value)?;
+        }
+        Ok(())
     }
 
     /// Whether new properties can be added to this object (`[[Extensible]]`).
