@@ -4799,6 +4799,24 @@ D-223, document 17.
   the checkout `sh tools/sqlite.sh` brings, so it is never a step of
   `cargo xtask check`.
 
+### 6.6.147 The rows a foreign key holds (`db-sqlite`)
+
+D-224, document 16 step Q8.
+
+- A row whose key names no row of the table it points at is refused,
+  and a key any column of which is null is refused by nothing.
+- A key that names no columns points at the primary key of the table it
+  points at, in the order that primary key was written.
+- A key whose columns are neither the primary key nor a unique index of
+  the table it points at is a mismatch, whatever rows either table
+  holds.
+- `ON DELETE` and `ON UPDATE` run `CASCADE`, `SET NULL`, `SET DEFAULT`,
+  `RESTRICT` and `NO ACTION`, and a cascade reaches the rows that point
+  at the rows it wrote.
+- `PRAGMA foreign_key_list` answers the keys of a table newest first,
+  and `PRAGMA foreign_key_check` answers a row per orphan whatever
+  `PRAGMA foreign_keys` says.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

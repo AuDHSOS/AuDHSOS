@@ -643,10 +643,12 @@ do for the page size, the encoding and the reserved tail.
 Status: `CREATE TABLE`, `CREATE INDEX`, `CREATE VIEW`, `CREATE
 TRIGGER`, the four `DROP`s, `ALTER TABLE ... ADD COLUMN`, `PRAGMA`,
 `ANALYZE`, `REINDEX`, `BEGIN`, `COMMIT`, `ROLLBACK`, `INSERT`, `DELETE`
-and `UPDATE` are run from their text and write the files the shell wrote;
-the rest is open.
+and `UPDATE` are run from their text and write the files the shell wrote,
+and a foreign key holds the rows of both tables it names; the rest is
+open.
 Depends on: Q6. Recorded in D-172 to D-174, D-182, D-186, D-187, D-189,
-D-191, D-193, D-195, D-196, D-205 to D-211, D-216 to D-218 and D-219.
+D-191, D-193, D-195, D-196, D-205 to D-211, D-216 to D-218, D-219 and
+D-224.
 Size: L.
 
 ### Does
@@ -681,6 +683,9 @@ Size: L.
 8. `sqlite_schema` as a table a statement reads, and `sqlite_sequence`
    as the count a key that counts up is kept in. Built, which D-216
    and D-218 record.
+9. The rows a foreign key holds: the check on the row that points, the
+   check on the row pointed at, the five actions, and the two pragmas
+   that answer the keys and the orphans. Built, which D-224 records.
 
 ### Done when
 
@@ -690,11 +695,11 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 61 784 cases in 636 files, 41 970
-pass, 6517 answer differently, and 13 297 name something the engine
+under the `tclsh` of the machine. Of 63 280 cases in 637 files, 44 451
+pass, 4304 answer differently, and 14 525 name something the engine
 refuses or a command that needs the C library's internals.
-Depends on: Q7, Q8. Recorded in D-201, D-212, D-213, D-220, D-222 and
-D-223.
+Depends on: Q7, Q8. Recorded in D-201, D-212, D-213, D-220, D-222,
+D-223 and D-224.
 Size: M.
 
 ### Needs

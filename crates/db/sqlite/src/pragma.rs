@@ -53,6 +53,12 @@ pub enum Setting {
     /// `PRAGMA quick_check`, which is the same walk without holding an
     /// index to the rows it is over.
     Quick,
+    /// `PRAGMA foreign_key_list(table)`, which answers one row per
+    /// foreign key of that table.
+    ForeignKeyList,
+    /// `PRAGMA foreign_key_check`, which answers one row per row that
+    /// points at no row.
+    ForeignKeyCheck,
 }
 
 /// What a pragma the connection keeps a value for is written as.
@@ -343,6 +349,8 @@ pub fn of_name(name: &[u8]) -> Option<Setting> {
         b"count_changes" => Setting::CountChanges,
         b"integrity_check" => Setting::Integrity,
         b"quick_check" => Setting::Quick,
+        b"foreign_key_list" => Setting::ForeignKeyList,
+        b"foreign_key_check" => Setting::ForeignKeyCheck,
         b"legacy_file_format"
         | b"legacy_alter_table"
         | b"short_column_names"
@@ -409,7 +417,9 @@ impl Setting {
             | Setting::Held(_)
             | Setting::Ignored
             | Setting::Integrity
-            | Setting::Quick => return None,
+            | Setting::Quick
+            | Setting::ForeignKeyList
+            | Setting::ForeignKeyCheck => return None,
         })
     }
 }

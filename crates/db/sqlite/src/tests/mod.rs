@@ -15,6 +15,7 @@ mod db;
 mod definition;
 mod error;
 mod eval;
+mod foreign;
 mod fp;
 mod header;
 mod image;

@@ -128,6 +128,30 @@ pub struct Table {
     /// table's own holds the entries of, in the order they were
     /// written.
     pub keys: Vec<Keys>,
+    /// The foreign keys the rows are held to, in the order they were
+    /// written, which is the order `PRAGMA foreign_key_list` answers
+    /// them backwards in.
+    pub foreign: Vec<Foreign>,
+}
+
+/// One `REFERENCES` of a table: which of its columns point at which
+/// columns of which table, and what happens to a row of this table
+/// when the row they point at goes or changes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Foreign {
+    /// The columns of this table, by the place each takes in it.
+    pub columns: Vec<usize>,
+    /// The table they point at, with its quotes taken off.
+    pub table: Vec<u8>,
+    /// The columns of that table, by name; none where the statement
+    /// named none, which points at that table's primary key.
+    pub parent: Vec<Vec<u8>>,
+    /// What happens to this row when the one it points at goes.
+    pub on_delete: crate::ast::Action,
+    /// What happens to it when that row changes.
+    pub on_update: crate::ast::Action,
+    /// Whether the check waits for the end of the transaction.
+    pub deferred: bool,
 }
 
 /// One `PRIMARY KEY` or `UNIQUE` as the statement wrote it: the name
@@ -557,6 +581,7 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
         rowid_alias: None,
         autoincrement: false,
         keys: Vec::new(),
+        foreign: Vec::new(),
     };
     let mut key: Option<(Vec<usize>, Order, bool)> = None;
     // Every `PRIMARY KEY` and `UNIQUE`, in the order they were written,
@@ -564,6 +589,9 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
     // in: a column's own constraints as the columns run, then the
     // constraints of the table.
     let mut written_keys: Vec<Written> = Vec::new();
+    // Every `REFERENCES`, in the order they were written, each with the
+    // columns of this table that point.
+    let mut pointed: Vec<(Vec<Vec<u8>>, crate::ast::Foreign)> = Vec::new();
     for written in arena.columns(columns) {
         let name = dequote(written.name.text(sql));
         if table
@@ -633,6 +661,9 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
                     column.generated = generated_kind(kind, sql)?;
                     column.computed = Some(value);
                 }
+                ColumnConstraint::References(foreign) => {
+                    pointed.push((alloc::vec![named.clone()], foreign));
+                }
                 _ => {}
             }
         }
@@ -646,6 +677,13 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
         }
     }
     for constraint in arena.table_constraints(constraints) {
+        if let TableConstraint::ForeignKey { columns, foreign } = *constraint {
+            let mut named = Vec::new();
+            for column in arena.names(columns) {
+                named.push(dequote(column.text(sql)));
+            }
+            pointed.push((named, foreign));
+        }
         let (TableConstraint::PrimaryKey {
             columns, conflict, ..
         }
@@ -715,6 +753,7 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
     }
 
     table.keys = own_keys(&table, &written_keys)?;
+    table.foreign = pointing(arena, &table, &pointed, sql)?;
 
     if table.strict {
         for column in &mut table.columns {
@@ -794,4 +833,42 @@ fn index_of(table: &Table, name: Span, sql: &[u8]) -> Option<usize> {
         .columns
         .iter()
         .position(|column| column.name.eq_ignore_ascii_case(&name))
+}
+
+/// The foreign keys of a table, each with the places of the columns
+/// that point.
+///
+/// `sqlite3CreateForeignKey` takes the columns as they were written, so
+/// a name no column of the table carries is a refusal.
+fn pointing(
+    arena: &Arena,
+    table: &Table,
+    written: &[(Vec<Vec<u8>>, crate::ast::Foreign)],
+    sql: &[u8],
+) -> Result<Vec<Foreign>, Error> {
+    let mut out = Vec::new();
+    for (names, foreign) in written {
+        let mut columns = Vec::new();
+        for name in names {
+            let at = table
+                .columns
+                .iter()
+                .position(|column| column.name.eq_ignore_ascii_case(name))
+                .ok_or(Error::NoSuchColumn)?;
+            columns.push(at);
+        }
+        let mut parent = Vec::new();
+        for name in arena.names(foreign.columns) {
+            parent.push(dequote(name.text(sql)));
+        }
+        out.push(Foreign {
+            columns,
+            table: dequote(foreign.table.text(sql)),
+            parent,
+            on_delete: foreign.on_delete,
+            on_update: foreign.on_update,
+            deferred: foreign.deferred,
+        });
+    }
+    Ok(out)
 }

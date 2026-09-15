@@ -808,6 +808,19 @@ impl Writer {
             crate::pragma::Setting::Quick => Some(true),
             _ => None,
         };
+        if setting == crate::pragma::Setting::ForeignKeyList {
+            let named = asked
+                .value
+                .map(|value| crate::schema::dequote(value.text(sql)))
+                .unwrap_or_default();
+            return self.listed_keys(&named);
+        }
+        if setting == crate::pragma::Setting::ForeignKeyCheck {
+            let named = asked
+                .value
+                .map(|value| crate::schema::dequote(value.text(sql)));
+            return self.checked_keys(named.as_deref());
+        }
         if let Some(quick) = quick {
             let bytes = self.image();
             let database = Database::open(&bytes)?;
@@ -887,6 +900,87 @@ impl Writer {
             _ => return Err(Error::Unsupported),
         }
         Ok(Vec::new())
+    }
+
+    /// `PRAGMA foreign_key_list(table)`: one row per foreign key of the
+    /// table, newest first, which is the order `sqlite3Pragma` reads
+    /// the list it built in.
+    fn listed_keys(&self, name: &[u8]) -> Result<Vec<Vec<Value>>, Error> {
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        let Some((table, _)) = database.table(name) else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        for (id, key) in table.foreign.iter().rev().enumerate() {
+            for (seq, at) in key.columns.iter().enumerate() {
+                let child = table
+                    .columns
+                    .get(*at)
+                    .map_or_else(Vec::new, |column| column.name.clone());
+                // A key that named no columns of the table it points at
+                // answers nothing for them, which is what
+                // `sqlite3Pragma` writes where `pFK->aCol[j].zCol` is
+                // null.
+                let pointed = key.parent.get(seq).cloned();
+                out.push(alloc::vec![
+                    Value::Int(i64::try_from(id).unwrap_or(0)),
+                    Value::Int(i64::try_from(seq).unwrap_or(0)),
+                    Value::Text(key.table.clone()),
+                    Value::Text(child),
+                    pointed.map_or(Value::Null, Value::Text),
+                    Value::Text(action_text(key.on_update).to_vec()),
+                    Value::Text(action_text(key.on_delete).to_vec()),
+                    Value::Text(b"NONE".to_vec()),
+                ]);
+            }
+        }
+        Ok(out)
+    }
+
+    /// `PRAGMA foreign_key_check`: one row per row that points at no
+    /// row, whatever `PRAGMA foreign_keys` says.
+    ///
+    /// Reading one table costs O(n·m) in its rows and the rows of the
+    /// table each key points at.
+    fn checked_keys(&self, only: Option<&[u8]>) -> Result<Vec<Vec<Value>>, Error> {
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        let held: Vec<Table> = database
+            .tables()
+            .filter(|table| only.is_none_or(|only| table.name.eq_ignore_ascii_case(only)))
+            .cloned()
+            .collect();
+        let mut out = Vec::new();
+        for table in held {
+            let name = table.name.clone();
+            for (at, key) in table.foreign.iter().enumerate() {
+                let Some((parent, _)) = database.table(&key.table) else {
+                    continue;
+                };
+                let places = parent_places(key, parent)?;
+                for (rowid, values) in database.rows_of(&name)? {
+                    let wanted: Vec<Value> = key
+                        .columns
+                        .iter()
+                        .map(|place| at_place(&table, &values, rowid, *place))
+                        .collect();
+                    if wanted.contains(&Value::Null) {
+                        continue;
+                    }
+                    if found_parent(&database, &key.table, parent, &places, &wanted)? {
+                        continue;
+                    }
+                    out.push(alloc::vec![
+                        Value::Text(name.clone()),
+                        Value::Int(rowid),
+                        Value::Text(key.table.clone()),
+                        Value::Int(i64::try_from(at).unwrap_or(0)),
+                    ]);
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// What the connection answers for the pragma at `at` of
@@ -1111,6 +1205,281 @@ impl Writer {
             }
         }
         Ok(true)
+    }
+
+    /// Whether the connection holds its rows to the foreign keys they
+    /// carry, which `PRAGMA foreign_keys` turns on and which a
+    /// connection told nothing leaves off.
+    fn holding(&self) -> bool {
+        crate::pragma::HELD
+            .iter()
+            .position(|keeps| keeps.name == b"foreign_keys")
+            .and_then(|at| self.kept.get(at).copied().flatten())
+            .unwrap_or(0)
+            != 0
+    }
+
+    /// Whether every foreign key of a row points at a row that is
+    /// there, which is `I.1` of `src/fkey.c`.
+    ///
+    /// Looking one key up reads the rows of the table it points at, so
+    /// a statement that writes n rows into a table with a foreign key
+    /// over a table of m rows costs O(n·m).
+    fn parented(&self, table: &Table, values: &[Value], rowid: i64) -> Result<(), Error> {
+        if !self.holding() || table.foreign.is_empty() {
+            return Ok(());
+        }
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        for key in &table.foreign {
+            let mut wanted = Vec::new();
+            for at in &key.columns {
+                wanted.push(at_place(table, values, rowid, *at));
+            }
+            if wanted.contains(&Value::Null) {
+                continue;
+            }
+            let (parent, _) = database.table(&key.table).ok_or(Error::ForeignMismatch)?;
+            let places = parent_places(key, parent)?;
+            if !found_parent(&database, &key.table, parent, &places, &wanted)? {
+                return Err(Error::Foreign);
+            }
+        }
+        Ok(())
+    }
+
+    /// What happens to the rows that point at a row the statement takes
+    /// away or changes, which is `D.2` and the `UPDATE` half of
+    /// `src/fkey.c`.
+    ///
+    /// `NO ACTION` and `RESTRICT` refuse; `CASCADE` takes the rows away
+    /// with it or writes the new key into them; `SET NULL` and
+    /// `SET DEFAULT` write that into the columns that point. Reading
+    /// the rows that point costs O(m) in the rows of each table that
+    /// points at this one.
+    fn orphaned(
+        &mut self,
+        name: &[u8],
+        table: &Table,
+        old: &[Value],
+        rowid: i64,
+        new: Option<(&[Value], i64)>,
+    ) -> Result<(), Error> {
+        if !self.holding() {
+            return Ok(());
+        }
+        for points in self.pointing(name)? {
+            let places = {
+                let bytes = self.image();
+                let database = Database::open(&bytes)?;
+                let (parent, _) = database.table(name).ok_or(Error::ForeignMismatch)?;
+                parent_places(&points.key, parent)?
+            };
+            let mut wanted = Vec::new();
+            for at in &places {
+                wanted.push(at_place(table, old, rowid, *at));
+            }
+            if wanted.contains(&Value::Null) {
+                continue;
+            }
+            // An `UPDATE` that leaves the columns pointed at alone
+            // leaves the rows that point alone as well.
+            let after: Option<Vec<Value>> = new.map(|(values, key)| {
+                places
+                    .iter()
+                    .map(|at| at_place(table, values, key, *at))
+                    .collect()
+            });
+            if after.as_ref().is_some_and(|after| *after == wanted) {
+                continue;
+            }
+            let action = if new.is_some() {
+                points.key.on_update
+            } else {
+                points.key.on_delete
+            };
+            self.acted(&points, &wanted, after.as_deref(), action)?;
+        }
+        Ok(())
+    }
+
+    /// Every foreign key of every table that points at `name`.
+    fn pointing(&self, name: &[u8]) -> Result<Vec<Points>, Error> {
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        let mut out = Vec::new();
+        for table in database.tables() {
+            for key in &table.foreign {
+                if key.table.eq_ignore_ascii_case(name) {
+                    out.push(Points {
+                        child: table.name.clone(),
+                        key: key.clone(),
+                    });
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// What one foreign key says happens to the rows that point at a
+    /// row that goes or changes.
+    fn acted(
+        &mut self,
+        points: &Points,
+        wanted: &[Value],
+        after: Option<&[Value]>,
+        action: crate::ast::Action,
+    ) -> Result<(), Error> {
+        let rows = self.pointing_rows(points, wanted)?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        match action {
+            crate::ast::Action::Cascade => {
+                for (rowid, values) in rows {
+                    match after {
+                        None => self.taken_away(&points.child, rowid)?,
+                        Some(after) => self.written_over(points, rowid, &values, after)?,
+                    }
+                }
+                Ok(())
+            }
+            crate::ast::Action::SetNull | crate::ast::Action::SetDefault => {
+                let fallback = matches!(action, crate::ast::Action::SetDefault);
+                for (rowid, values) in rows {
+                    self.written_back(points, rowid, &values, fallback)?;
+                }
+                Ok(())
+            }
+            _ => Err(Error::Foreign),
+        }
+    }
+
+    /// The rows of the table that points whose key is `wanted`.
+    fn pointing_rows(
+        &self,
+        points: &Points,
+        wanted: &[Value],
+    ) -> Result<Vec<(i64, Vec<Value>)>, Error> {
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        let (child, _) = database.table(&points.child).ok_or(Error::NoTable)?;
+        let mut out = Vec::new();
+        for (rowid, values) in database.rows_of(&points.child)? {
+            let held: Vec<Value> = points
+                .key
+                .columns
+                .iter()
+                .map(|at| at_place(child, &values, rowid, *at))
+                .collect();
+            if held.contains(&Value::Null) {
+                continue;
+            }
+            if alike_values(&held, wanted, child, &points.key.columns) {
+                out.push((rowid, values));
+            }
+        }
+        Ok(out)
+    }
+
+    /// One row of the table that points, taken away with the row it
+    /// pointed at, which is `ON DELETE CASCADE`. The rows that point at
+    /// that row go with it.
+    fn taken_away(&mut self, name: &[u8], rowid: i64) -> Result<(), Error> {
+        let (root, kept, table, values) = self.one_row(name, rowid)?;
+        self.orphaned(name, &table, &values, rowid, None)?;
+        self.unindex_row(&kept, &values, rowid)?;
+        crate::tree::remove(&mut self.pages, root, rowid)?;
+        Ok(())
+    }
+
+    /// One row of the table that points, with the key of the row it
+    /// points at written into it, which is `ON UPDATE CASCADE`.
+    fn written_over(
+        &mut self,
+        points: &Points,
+        rowid: i64,
+        held: &[Value],
+        after: &[Value],
+    ) -> Result<(), Error> {
+        let mut values = held.to_vec();
+        for (at, value) in points.key.columns.iter().zip(after) {
+            for slot in values.iter_mut().skip(*at).take(1) {
+                *slot = value.clone();
+            }
+        }
+        self.rewrite(&points.child, rowid, &values)
+    }
+
+    /// One row of the table that points, with nothing or its fallback
+    /// written into the columns that point, which is `ON DELETE SET
+    /// NULL` and `ON DELETE SET DEFAULT`.
+    fn written_back(
+        &mut self,
+        points: &Points,
+        rowid: i64,
+        held: &[Value],
+        fallback: bool,
+    ) -> Result<(), Error> {
+        // The fallback of a column is the expression the statement that
+        // made the table wrote, which the schema holds beside the arena
+        // of that statement.
+        let falls_back = if fallback {
+            let bytes = self.image();
+            let database = Database::open(&bytes)?;
+            database.defaults(&points.child)?
+        } else {
+            Vec::new()
+        };
+        let mut values = held.to_vec();
+        for at in &points.key.columns {
+            let value = falls_back.get(*at).cloned().unwrap_or(Value::Null);
+            for slot in values.iter_mut().skip(*at).take(1) {
+                *slot = value.clone();
+            }
+        }
+        self.rewrite(&points.child, rowid, &values)
+    }
+
+    /// One row of a table, written again with the values given.
+    fn rewrite(&mut self, name: &[u8], rowid: i64, values: &[Value]) -> Result<(), Error> {
+        let (root, kept, table, held) = self.one_row(name, rowid)?;
+        let affinities: Vec<Affinity> =
+            table.columns.iter().map(|column| column.affinity).collect();
+        let mut stored = values.to_vec();
+        // The column the key is another name for takes no place in the
+        // record, which is what `sqlite3TableColumnToStorage` leaves.
+        for slot in stored
+            .iter_mut()
+            .skip(table.rowid_alias.unwrap_or(usize::MAX))
+            .take(1)
+        {
+            *slot = Value::Null;
+        }
+        self.unindex_row(&kept, &held, rowid)?;
+        self.index_row(&kept, values, rowid)?;
+        let record = crate::record::write(&stored, &affinities, 4);
+        crate::tree::update(&mut self.pages, root, rowid, &record)?;
+        Ok(())
+    }
+
+    /// The root, the indexes, the table and the values of one row.
+    fn one_row(
+        &self,
+        name: &[u8],
+        rowid: i64,
+    ) -> Result<(u32, Vec<Kept>, Table, Vec<Value>), Error> {
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        let (table, root) = database.table(name).ok_or(Error::NoTable)?;
+        let kept = kept_indexes(&database, name);
+        let values = database
+            .rows_of(name)?
+            .into_iter()
+            .find(|(held, _)| *held == rowid)
+            .map(|(_, values)| values)
+            .ok_or(Error::NoTable)?;
+        Ok((root, kept, table.clone(), values))
     }
 
     /// Whether a trigger of this name is running already and may not
@@ -1654,6 +2023,9 @@ impl Writer {
                 }
             }
             let record = crate::record::write(&values, &affinities, 4);
+            // `I.1` of `src/fkey.c`: a row whose foreign key points at
+            // no row is refused before it is written.
+            self.parented(&table, &named, rowid)?;
             // `sqlite3CompleteInsertion` writes the entry of every
             // index before the row, so the pages an entry runs onto
             // are taken before the pages the row runs onto.
@@ -2053,6 +2425,10 @@ impl Writer {
             if fires && !self.fire(&before, &[], &row)? {
                 continue;
             }
+            // `D.2` of `src/fkey.c`: a row that rows of another table
+            // point at is refused, or those rows are written, by what
+            // the key says happens.
+            self.orphaned(&name, &table, &values, key, None)?;
             self.unindex_row(&kept, &values, key)?;
             crate::tree::remove(&mut self.pages, root, key)?;
             taken = taken.saturating_add(1);
@@ -2223,6 +2599,11 @@ impl Writer {
                 }
             }
             let record = crate::record::write(&values, &affinities, 4);
+            // `I.1` of `src/fkey.c` over the row as it will stand, and
+            // `D.2` over the row as it stands: a row that points at no
+            // row is refused, and so is one that rows point at.
+            self.parented(&table, &named, key)?;
+            self.orphaned(&name, &table, &held, rowid, Some((&named, key)))?;
             // `sqlite3Update` removes the entries of the row, removes
             // the row itself where the key changes, and then writes
             // the new entries before the new row.
@@ -2429,5 +2810,149 @@ fn stored(value: &Value, encoding: Encoding) -> Value {
     match value {
         Value::Text(bytes) => Value::Text(crate::value::stored(bytes, encoding)),
         other => other.clone(),
+    }
+}
+
+/// One foreign key of a table that points at another, with the name of
+/// the table that points.
+struct Points {
+    /// The table the key is written on.
+    child: Vec<u8>,
+    /// The key itself.
+    key: crate::schema::Foreign,
+}
+
+/// The places the parent columns of a foreign key take in the table it
+/// points at, which is that table's primary key where the key names no
+/// columns.
+///
+/// `sqlite3FkLocateIndex` refuses a key whose columns are not the
+/// primary key and carry no unique index of their own.
+fn parent_places(key: &crate::schema::Foreign, parent: &Table) -> Result<Vec<usize>, Error> {
+    if key.parent.is_empty() {
+        let mut places: Vec<usize> = (0..parent.columns.len())
+            .filter(|at| parent.columns.get(*at).is_some_and(|column| column.key > 0))
+            .collect();
+        places.sort_by_key(|at| parent.columns.get(*at).map_or(0, |column| column.key));
+        if places.len() != key.columns.len() {
+            return Err(Error::ForeignMismatch);
+        }
+        return Ok(places);
+    }
+    let mut places = Vec::new();
+    for name in &key.parent {
+        let at = parent
+            .columns
+            .iter()
+            .position(|column| column.name.eq_ignore_ascii_case(name))
+            .ok_or(Error::ForeignMismatch)?;
+        places.push(at);
+    }
+    if places.len() != key.columns.len() {
+        return Err(Error::ForeignMismatch);
+    }
+    // The columns pointed at must be unique, which is the primary key
+    // or a `UNIQUE` over exactly those columns.
+    let whole = |named: &[Vec<u8>]| {
+        named.len() == places.len()
+            && named
+                .iter()
+                .zip(&key.parent)
+                .all(|(one, other)| one.eq_ignore_ascii_case(other))
+    };
+    let primary: Vec<Vec<u8>> = {
+        let mut held: Vec<(u16, Vec<u8>)> = parent
+            .columns
+            .iter()
+            .filter(|column| column.key > 0)
+            .map(|column| (column.key, column.name.clone()))
+            .collect();
+        held.sort_by_key(|(key, _)| *key);
+        held.into_iter().map(|(_, name)| name).collect()
+    };
+    if whole(&primary) {
+        return Ok(places);
+    }
+    let unique = parent.keys.iter().any(|held| {
+        let named: Vec<Vec<u8>> = held
+            .columns
+            .iter()
+            .filter_map(|keyed| parent.columns.get(keyed.column))
+            .map(|column| column.name.clone())
+            .collect();
+        whole(&named)
+    });
+    if unique {
+        return Ok(places);
+    }
+    Err(Error::ForeignMismatch)
+}
+
+/// The value a row answers for a place, which is the rowid where the
+/// place is the column the rowid is another name for.
+fn at_place(table: &Table, values: &[Value], rowid: i64, at: usize) -> Value {
+    if table.rowid_alias == Some(at) {
+        return Value::Int(rowid);
+    }
+    values.get(at).cloned().unwrap_or(Value::Null)
+}
+
+/// Whether the table `name` holds a row whose columns at `places`
+/// answer `wanted`, compared as the columns of that table compare.
+fn found_parent(
+    database: &Database<'_>,
+    name: &[u8],
+    parent: &Table,
+    places: &[usize],
+    wanted: &[Value],
+) -> Result<bool, Error> {
+    for (rowid, values) in database.rows_of(name)? {
+        let same = places.iter().zip(wanted).all(|(at, value)| {
+            let held = at_place(parent, &values, rowid, *at);
+            let collation = parent
+                .columns
+                .get(*at)
+                .map_or(Collation::Binary, |column| column.collation);
+            let mut one = held;
+            let mut other = value.clone();
+            let affinity = parent
+                .columns
+                .get(*at)
+                .map_or(Affinity::None, |column| column.affinity);
+            crate::value::apply_comparison(&mut one, &mut other, affinity);
+            crate::value::compare(&one, &other, collation) == core::cmp::Ordering::Equal
+        });
+        if same {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Whether two runs of values are the same under the affinities and
+/// collations of the columns they came from.
+fn alike_values(held: &[Value], wanted: &[Value], table: &Table, places: &[usize]) -> bool {
+    held.iter()
+        .zip(wanted)
+        .zip(places)
+        .all(|((one, other), at)| {
+            let column = table.columns.get(*at);
+            let affinity = column.map_or(Affinity::None, |column| column.affinity);
+            let collation = column.map_or(Collation::Binary, |column| column.collation);
+            let mut left = one.clone();
+            let mut right = other.clone();
+            crate::value::apply_comparison(&mut left, &mut right, affinity);
+            crate::value::compare(&left, &right, collation) == core::cmp::Ordering::Equal
+        })
+}
+
+/// What `PRAGMA foreign_key_list` writes for an action.
+const fn action_text(action: crate::ast::Action) -> &'static [u8] {
+    match action {
+        crate::ast::Action::SetNull => b"SET NULL",
+        crate::ast::Action::SetDefault => b"SET DEFAULT",
+        crate::ast::Action::Cascade => b"CASCADE",
+        crate::ast::Action::Restrict => b"RESTRICT",
+        crate::ast::Action::NoAction | crate::ast::Action::Unspecified => b"NO ACTION",
     }
 }

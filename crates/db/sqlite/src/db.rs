@@ -122,6 +122,35 @@ pub enum Error {
     /// An `OVER` naming a window no `WINDOW` clause defines, or one
     /// that carries a frame or terms the window over it also carries.
     Window,
+    /// A row whose foreign key points at no row, or a row that a
+    /// foreign key of another table points at and that the statement
+    /// would take away or change.
+    Foreign,
+    /// A foreign key whose parent columns are not the primary key of
+    /// the table it names and carry no unique index of their own,
+    /// which `sqlite3FkLocateIndex` refuses as `foreign key mismatch`.
+    ForeignMismatch,
+}
+
+impl Error {
+    /// The text the C library writes for this refusal, which is what a
+    /// `catchsql` of SQLite's own test files compares.
+    ///
+    /// A refusal the C library writes a name into is written here
+    /// without it, because this crate's refusals carry no names yet.
+    #[must_use]
+    pub fn message(&self) -> alloc::string::String {
+        use alloc::string::ToString as _;
+        match self {
+            Error::Foreign => "FOREIGN KEY constraint failed".to_string(),
+            Error::ForeignMismatch => "foreign key mismatch".to_string(),
+            Error::Unique => "UNIQUE constraint failed".to_string(),
+            Error::Nested => "cannot start a transaction within a transaction".to_string(),
+            Error::NoTransaction => "cannot commit - no transaction is active".to_string(),
+            Error::Recursion => "recursive aggregate queries not supported".to_string(),
+            other => alloc::format!("{other:?}"),
+        }
+    }
 }
 
 impl From<error::Error> for Error {

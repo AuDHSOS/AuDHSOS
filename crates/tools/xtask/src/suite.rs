@@ -527,12 +527,12 @@ fn run_one(writer: &mut Writer, text: &str) -> Result<Vec<Value>, String> {
         let log = writer.log().map(db_sqlite::wal::Wal::open);
         let opened = match &log {
             Some(Ok(log)) => Database::open_with_log(&bytes, log),
-            Some(Err(error)) => return Err(format!("{error:?}")),
+            Some(Err(error)) => return Err(format!("{error}")),
             None => Database::open(&bytes),
         };
         let answered = opened
             .and_then(|database| database.query(text.as_bytes()))
-            .map_err(|error| format!("{} {error:?}", first_words(text)))?;
+            .map_err(|error| error.message())?;
         for row in &answered.rows {
             out.extend(row.iter().cloned());
         }
@@ -540,7 +540,7 @@ fn run_one(writer: &mut Writer, text: &str) -> Result<Vec<Value>, String> {
     }
     let rows = writer
         .run(text.as_bytes())
-        .map_err(|error| format!("{} {error:?}", first_words(text)))?;
+        .map_err(|error| error.message())?;
     for row in &rows {
         out.extend(row.iter().cloned());
     }
