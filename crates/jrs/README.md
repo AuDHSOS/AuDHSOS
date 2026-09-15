@@ -649,10 +649,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Object%` and its methods, after the integrity levels, on the register engine (focused) | focused | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,530 (22.49%) | 18 (0.26%) | 5,254 (77.24%) |
 | `%Number%` (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 572 (84.12%) | 102 (15.00%) | 6 (0.88%) |
 | `%Number%` on the register engine (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 226 (33.24%) | 2 (0.29%) | 452 (66.47%) |
-| Object literals (focused) | focused | `8ab84e6` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/object --summary` | 1,170 | 2,252 | 684 (30.37%) | 54 (2.40%) | 1,514 (67.23%) |
-| Object literals on the register engine (focused) | focused | `8ab84e6` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/object --summary` | 1,170 | 2,252 | 227 (10.08%) | 69 (3.06%) | 1,956 (86.86%) |
-| Complete pinned suite, including staging and Intl | full | `8ab84e6` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `8ab84e6` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 13,774 (13.38%) | 18,091 (17.58%) | 71,060 (69.04%) |
+| Class bodies (focused) | focused | `d05f499` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/class test/language/expressions/class --summary` | 8,426 | 16,689 | 2,636 (15.79%) | 246 (1.47%) | 13,807 (82.73%) |
+| Class bodies on the register engine (focused) | focused | `d05f499` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/class test/language/expressions/class --summary` | 8,426 | 16,689 | 652 (3.91%) | 282 (1.69%) | 15,755 (94.40%) |
+| Complete pinned suite, including staging and Intl | full | `d05f499` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `d05f499` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 14,044 (13.64%) | 18,107 (17.59%) | 70,774 (68.76%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1086,6 +1086,16 @@ name stays a gap, because the two halves have to reach the same property and
 the key is only known at run time. 71 variants move to passed and none away
 from it.
 
+15.7.14 makes a constructor and the object it carries, and puts every method the
+body defines on one of the two. The lowering refused the whole class, and two of
+its scope analyses refused any Script that held one, which is why the refusal
+named the Script rather than the class. The body is now lowered: one instruction
+makes the constructor together with a `prototype` whose attributes no ordinary
+function's match, each method takes the attributes 7.3.5 gives one, and the
+constructor's `[[Call]]` throws, so the body runs only under `new`. A class that
+extends another and a computed name in a class body stay named gaps. 270
+variants move to passed and none away from it.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -1169,6 +1179,8 @@ The operator runs and both full runs beside the integer operators were measured
 at tree `c6b06778209374850329d3bf80f9e85707afcd94`, which is the tree of `5375042`.
 The object-literal runs and both full runs beside the accessors of a literal
 were measured at tree `897db95e9541cd60c08a909f3c43fdaa056c2280`, which is the tree of `8ab84e6`.
+The class runs and both full runs beside the class body were measured at tree
+`fc35d879c4d3183de699e2446724f8ad211d502b`, which is the tree of `d05f499`.
 
 ### Historical Test262 baseline
 
