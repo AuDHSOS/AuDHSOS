@@ -5370,7 +5370,7 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        let units = Self::receiver_units(call.receiver, heap, realm)?;
+        let units = self.receiver_units(call.receiver, heap, realm)?;
         match intrinsic {
             // 22.1.3.1: an index outside the String is the empty String.
             Intrinsic::StringPrototypeCharAt => {
@@ -5630,7 +5630,7 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        let text = Self::receiver_units(call.receiver, heap, realm)?;
+        let text = self.receiver_units(call.receiver, heap, realm)?;
         let separator = self.call_argument(call, 0)?;
         if let Some(reference) = separator.as_object()
             && let Some(pattern) = Self::regexp_pattern(reference, heap, units).cloned()
@@ -5817,6 +5817,7 @@ impl RegisterVM {
     /// primitive answers its text. An Object would need the `ToPrimitive` of
     /// 7.1.1, which names itself as a gap.
     fn receiver_units(
+        &self,
         receiver: Value,
         heap: &mut GenerationalHeap,
         realm: &Realm,
@@ -5828,7 +5829,64 @@ impl RegisterVM {
                 "String method called on null or undefined",
             ));
         }
+        if let Some(object) = receiver.as_object() {
+            return self.unframed_text_of(object, heap, realm);
+        }
         property_name_units(receiver, heap)
+    }
+
+    /// The text 7.1.17 gives an Object whose conversion needs no frame.
+    ///
+    /// 7.1.1 with the hint `string` asks `@@toPrimitive`, then `toString`. An
+    /// object that carries neither of the Script's own answers here; one that
+    /// carries either of them names the gap, because a native has no frame to
+    /// run a method in.
+    fn unframed_text_of(
+        &self,
+        object: ObjectRef,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Vec<u16>, VMError> {
+        let exotic = super::realm::WellKnownSymbol::ToPrimitive.key();
+        if heap.lookup_named(object, exotic)?.is_some() {
+            return Err(VMError::Unsupported("ToString of an Object"));
+        }
+        let key = PropertyKey::String(heap.strings.intern("toString")?);
+        let found = heap
+            .lookup_named(object, key)?
+            .map(Self::plain_value)
+            .transpose()?
+            .and_then(Value::as_object)
+            .and_then(|method| heap.get_object(method))
+            .map(|method| method.kind.clone());
+        let Some(ObjectKind::NativeFunction { id, .. }) = found else {
+            return Err(VMError::Unsupported("ToString of an Object"));
+        };
+        let intrinsic = Intrinsic::from_id(id).ok_or(VMError::TypeError)?;
+        let receiver = Value::from_object(object);
+        let text = match intrinsic {
+            Intrinsic::ObjectPrototypeToString => self.object_to_string(receiver, heap, realm)?,
+            // 22.1.4 keeps the text in `[[StringData]]`, which 22.1.3.29
+            // answers as it is.
+            Intrinsic::StringPrototypeToString => Self::string_data(object, heap)
+                .ok_or(VMError::Unsupported("ToString of an Object"))?,
+            Intrinsic::NumberPrototypeToString | Intrinsic::BooleanPrototypeToString => {
+                let call = Call {
+                    receiver,
+                    func: Reg(0),
+                    arg_start: Reg(0),
+                    arg_count: 0,
+                    slot: 0,
+                    resume: None,
+                    construct: None,
+                    return_pc: 0,
+                    caller_code_id: None,
+                };
+                self.wrapped_value(intrinsic, &call, heap, realm)?
+            }
+            _ => return Err(VMError::Unsupported("ToString of an Object")),
+        };
+        property_name_units(text, heap)
     }
 
     /// The value a String answers for one property name.
@@ -6280,7 +6338,7 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        let text = Self::receiver_units(call.receiver, heap, realm)?;
+        let text = self.receiver_units(call.receiver, heap, realm)?;
         let argument = self.call_argument(call, 0)?;
         let Some(receiver) = argument.as_object() else {
             return Err(VMError::Unsupported("a RegExp made at run time"));

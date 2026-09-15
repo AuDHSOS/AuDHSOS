@@ -1506,7 +1506,10 @@ impl Intrinsic {
             // 19.2.4 applies `ToString` to its argument.
             | Self::ParseFloat
             // 20.4.2.2 applies `ToString` to its key.
-            | Self::SymbolFor => TEXT,
+            | Self::SymbolFor
+            // 22.2.7.1 and 22.2.6.16 apply `ToString` to the text they search.
+            | Self::RegExpPrototypeExec
+            | Self::RegExpPrototypeTest => TEXT,
             // 22.1.3: one position, which `ToIntegerOrInfinity` converts.
             Self::StringPrototypeCharAt
             | Self::StringPrototypeCharCodeAt
@@ -1668,8 +1671,6 @@ impl Intrinsic {
             | Self::ThrowTypeError
             | Self::SymbolConstructor
             | Self::RegExpConstructor
-            | Self::RegExpPrototypeExec
-            | Self::RegExpPrototypeTest
             | Self::RegExpPrototypeToString
             | Self::JsonParse
             | Self::JsonStringify

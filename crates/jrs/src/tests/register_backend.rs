@@ -6052,3 +6052,37 @@ fn a_lexical_initializer_that_reads_its_own_binding_is_refused() -> Result<(), E
     }
     Ok(())
 }
+
+/// 7.1.17 of an Object is 7.1.1 with the hint `string`. An object carrying
+/// neither an `@@toPrimitive` nor a `toString` of the Script answers without a
+/// frame, which is what a native has.
+#[test]
+fn a_native_converts_a_receiver_whose_conversion_needs_no_frame() -> Result<(), Error> {
+    for source in [
+        "new String('abc').split('b').join('|')",
+        "String.prototype.charAt.call(new String('xy'),1)",
+        "String.prototype.trim.call(new String('  a  '))",
+        "''+String.prototype.split.call(new String('a,b'),',').length",
+        "String.prototype.charAt.call(new Boolean(true),0)",
+        "String.prototype.indexOf.call({},'o')",
+        "''+String.prototype.slice.call(new Number(1234),1)",
+        "/b/.exec(new String('abc'))[0]",
+        "/b/.test(new String('abc'))",
+        "''+/[0-9]/.exec(1234).index",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // A `toString` the Script wrote needs a frame the native does not have.
+    for source in [
+        "var o={toString:function(){return 'hi'}};String.prototype.charAt.call(o,0)",
+        "String.prototype.indexOf.call([1,2],'2')",
+    ] {
+        let mut host = SilentHost;
+        let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+        assert!(
+            matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
+            "{source}"
+        );
+    }
+    Ok(())
+}
