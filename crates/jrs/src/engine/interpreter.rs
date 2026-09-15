@@ -121,6 +121,13 @@ struct Call {
 /// stack backend rather than as a thrown object it cannot classify.
 pub const UNRESOLVABLE_SUFFIX: &str = " is not initialized or defined";
 
+/// How many indices a walk of 23.1.3 may pass over for one unit of fuel.
+///
+/// An index the object does not have costs a lookup and no more, so it is
+/// charged in batches; what this bounds is the walk of a `length` no object
+/// could fill.
+const HOLES_PER_FUEL_UNIT: u32 = 4;
+
 /// The hint 7.1.1 passes to `@@toPrimitive` for an operation that names none.
 const DEFAULT_HINT: [u16; 7] = [0x64, 0x65, 0x66, 0x61, 0x75, 0x6C, 0x74];
 
@@ -1194,7 +1201,7 @@ impl RegisterVM {
         reason = "one function names every intrinsic beside the one that runs it"
     )]
     fn call_intrinsic(
-        &self,
+        &mut self,
         intrinsic: Intrinsic,
         call: Call,
         heap: &mut GenerationalHeap,
@@ -2223,6 +2230,12 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Option<u32>, VMError> {
+        // An index the object does not have opens no frame, so nothing would
+        // charge for looking at it. A clause of 23.1.3 walks to the `length`
+        // 7.1.20 gave it, which a Script can make 2^32-1 while holding one
+        // element, so the walk charges for the indices it passes over, at the
+        // rate a batch of them costs.
+        let mut skipped: u32 = 0;
         loop {
             let mut walk = Self::read_iteration(state, heap)?;
             if let Some(answer) = answered.take()
@@ -2246,6 +2259,10 @@ impl RegisterVM {
             // the callback.
             let Some(element) = Self::element_at(heap, object, element_index)? else {
                 Self::write_iteration(state, &walk, heap)?;
+                skipped = skipped.saturating_add(1);
+                if skipped.is_multiple_of(HOLES_PER_FUEL_UNIT) {
+                    self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+                }
                 continue;
             };
             // 23.1.3.24 takes the first element it finds as the accumulator and
@@ -2468,6 +2485,28 @@ impl RegisterVM {
         Ok([element, index, target, VALUE_UNDEFINED])
     }
 
+    /// Charges the fuel a walk of this many indices costs.
+    ///
+    /// An index costs a lookup and no more, so a batch of them costs one unit;
+    /// what this bounds is the walk of a `length` no object could fill.
+    fn charge_for_scan(&mut self, indices: i64) -> Result<(), VMError> {
+        let indices = u64::try_from(indices.max(0)).unwrap_or(u64::MAX);
+        let units = indices
+            .checked_div(u64::from(HOLES_PER_FUEL_UNIT))
+            .unwrap_or(u64::MAX);
+        self.fuel = self.fuel.checked_sub(units).ok_or(VMError::OutOfFuel)?;
+        Ok(())
+    }
+
+    /// Charges for one index of a scan that stops where it finds what it
+    /// looks for, so that only what it looked at is paid for.
+    fn charge_for_one_of_a_scan(&mut self, index: u32) -> Result<(), VMError> {
+        if index.is_multiple_of(HOLES_PER_FUEL_UNIT) {
+            self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+        }
+        Ok(())
+    }
+
     /// The methods of 23.1.3 that move elements of the receiver, or copy it
     /// into an Array of their own.
     ///
@@ -2486,7 +2525,7 @@ impl RegisterVM {
         reason = "one function keeps each method beside the clause it implements"
     )]
     fn call_array_edit_intrinsic(
-        &self,
+        &mut self,
         intrinsic: Intrinsic,
         call: Call,
         heap: &mut GenerationalHeap,
@@ -2494,6 +2533,11 @@ impl RegisterVM {
     ) -> Result<Value, VMError> {
         let object = Self::coerce_object(call.receiver, heap, realm)?;
         let length = Self::array_like_length(heap, object, realm)?;
+        // Each of these walks the whole `length`, which a Script can make
+        // 2^32-1 without holding one element. The walk is charged before it
+        // starts, so a budget that cannot pay for it ends here rather than
+        // after four billion lookups.
+        self.charge_for_scan(length)?;
         // The range 7.1.25 makes of a relative index, clamped into the Array.
         let bounded = |value: Value, fallback: i64, heap: &mut GenerationalHeap| {
             if value.is_undefined() {
@@ -2804,7 +2848,7 @@ impl RegisterVM {
         reason = "one function keeps each method beside the clause it implements"
     )]
     fn call_array_intrinsic(
-        &self,
+        &mut self,
         intrinsic: Intrinsic,
         call: Call,
         heap: &mut GenerationalHeap,
@@ -2812,6 +2856,19 @@ impl RegisterVM {
     ) -> Result<Value, VMError> {
         let object = Self::coerce_object(call.receiver, heap, realm)?;
         let length = Self::array_like_length(heap, object, realm)?;
+        // A clause that walks the whole `length` is charged for it before it
+        // starts, because a Script can make one 2^32-1 without holding an
+        // element. 23.1.3.1 reads a single index, and the three that search
+        // stop at what they find, so those are charged where they look.
+        if !matches!(
+            intrinsic,
+            Intrinsic::ArrayPrototypeAt
+                | Intrinsic::ArrayPrototypeIncludes
+                | Intrinsic::ArrayPrototypeIndexOf
+                | Intrinsic::ArrayPrototypeLastIndexOf
+        ) {
+            self.charge_for_scan(length)?;
+        }
         let search = self.call_argument(&call, 0)?;
         match intrinsic {
             // 23.1.3.1: an index outside the Array is undefined.
@@ -2830,6 +2887,7 @@ impl RegisterVM {
                 let from = integer_argument(self.call_argument(&call, 1)?, heap)?;
                 let start = absolute_index(from, length).clamp(0, length);
                 for index in Self::scan_range(start, length) {
+                    self.charge_for_one_of_a_scan(index)?;
                     let element = Self::element_at(heap, object, index)?.unwrap_or(VALUE_UNDEFINED);
                     if same_value_zero(search, element, heap)? {
                         return Ok(VALUE_TRUE);
@@ -2842,6 +2900,7 @@ impl RegisterVM {
                 let from = integer_argument(self.call_argument(&call, 1)?, heap)?;
                 let start = absolute_index(from, length).clamp(0, length);
                 for index in Self::scan_range(start, length) {
+                    self.charge_for_one_of_a_scan(index)?;
                     let Some(element) = Self::element_at(heap, object, index)? else {
                         continue;
                     };
@@ -2997,6 +3056,7 @@ impl RegisterVM {
                     length.saturating_sub(1)
                 };
                 for index in Self::scan_range(0, from.saturating_add(1)).rev() {
+                    self.charge_for_one_of_a_scan(index)?;
                     let Some(element) = Self::element_at(heap, object, index)? else {
                         continue;
                     };

@@ -13,7 +13,7 @@ fn a_realm_on_the_engine_backend_refuses_what_it_cannot_lower() -> Result<(), Er
 
     // The two paths hold separate object models, so a Script the lowering does
     // not take is refused instead of running on the stack path.
-    let source = "{ let z = 3 }";
+    let source = "{ let z = {} }";
     assert!(
         matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
         "{source}"
@@ -103,7 +103,7 @@ fn a_realm_on_the_engine_backend_evaluates_and_refuses_without_poisoning() -> Re
     // A Script the lowering does not take is refused before anything runs, so
     // the realm stays usable.
     assert!(matches!(
-        realm.evaluate("{ let z = 3 }"),
+        realm.evaluate("{ let z = {} }"),
         Err(Error::Unsupported { .. })
     ));
     assert_eq!(realm.evaluate("1+1")?, Value::Number(2.0));
@@ -2783,7 +2783,19 @@ fn block_registers_count_towards_the_binding_budget() -> Result<(), Error> {
 }
 
 #[test]
-fn observable_block_scope_cases_stay_on_legacy_backend() -> Result<(), Error> {
+fn a_block_scope_is_taken_or_names_what_stops_it() -> Result<(), Error> {
+    // A block of `let` and `const` binds in registers of the frame, which the
+    // lowering has always done. What it does not take is named where it
+    // stands, and no longer refuses the whole Script around it.
+    for source in [
+        "{let x=1;x}",
+        "var r=0;{let x=1;r=x}r",
+        "{let x=1};typeof x",
+        "let y=1;{let y=2};y",
+        "{let x=1;let y=2;x+y}",
+    ] {
+        differential(source)?;
+    }
     for source in [
         "{let x=x;x}",
         "{let x=y,y=1;x}",
@@ -2797,11 +2809,6 @@ fn observable_block_scope_cases_stay_on_legacy_backend() -> Result<(), Error> {
         let _ = Runtime::with_backend(Limits::default(), Backend::Engine)
             .run(&program, &mut SilentHost);
     }
-    assert!(
-        !compile_script("{let x=1;x}", Limits::default())?
-            .program
-            .uses_register_backend()
-    );
     Ok(())
 }
 

@@ -7453,9 +7453,6 @@ fn register_script_features(body: &[Stmt], realm: bool) -> Option<(bool, bool)> 
     let mut saw_expression = false;
     let mut saw_declaration = false;
     let mut saw_function = false;
-    if realm && body.iter().any(register_statement_has_lexical_block) {
-        return None;
-    }
     for statement in body {
         match statement {
             // 16.1.7 puts a lexical declaration of a Realm Script on the
@@ -7505,57 +7502,6 @@ fn register_script_features(body: &[Stmt], realm: bool) -> Option<(bool, bool)> 
             .iter()
             .any(|statement| matches!(statement, Stmt::Var(_))))
     .then_some((saw_declaration, saw_function))
-}
-
-fn register_statement_has_lexical_block(statement: &Stmt) -> bool {
-    match statement {
-        Stmt::Switch(_, clauses) => clauses
-            .iter()
-            .any(|(_, body)| register_body_has_lexical_block(body)),
-        Stmt::Block(body) => register_body_has_lexical_block(body),
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            register_body_has_lexical_block(body)
-                || catch
-                    .as_ref()
-                    .is_some_and(|(_, body)| register_body_has_lexical_block(body))
-                || finally
-                    .as_ref()
-                    .is_some_and(|body| register_body_has_lexical_block(body))
-        }
-        Stmt::If(_, yes, no) => {
-            register_statement_has_lexical_block(yes)
-                || no
-                    .as_deref()
-                    .is_some_and(register_statement_has_lexical_block)
-        }
-        Stmt::While(_, body)
-        | Stmt::DoWhile(body, _)
-        | Stmt::For(_, _, _, body)
-        | Stmt::ForIn { body, .. }
-        | Stmt::ForOf { body, .. } => register_statement_has_lexical_block(body),
-        Stmt::Function(_, function) => function
-            .body
-            .iter()
-            .any(register_statement_has_lexical_block),
-        Stmt::Empty
-        | Stmt::Expr(_)
-        | Stmt::Declare(_)
-        | Stmt::Var(_)
-        | Stmt::Return(_)
-        | Stmt::Break
-        | Stmt::Continue
-        | Stmt::Throw(_) => false,
-    }
-}
-
-fn register_body_has_lexical_block(body: &[Stmt]) -> bool {
-    body.iter()
-        .any(|statement| matches!(statement, Stmt::Declare(_)))
-        || body.iter().any(register_statement_has_lexical_block)
 }
 
 fn prepare_register_bindings(
