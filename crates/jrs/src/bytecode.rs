@@ -1950,7 +1950,8 @@ impl RegisterLowerer {
 
     fn lower_function(&mut self, function: &Function) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
-        if !Self::register_function_supported(function) {
+        if let Some(refusal) = Self::function_refusal(function) {
+            self.refuse(refusal);
             return None;
         }
         let code_id = u32::try_from(self.code.functions.len())
@@ -1978,7 +1979,14 @@ impl RegisterLowerer {
         if child_constructible {
             child.constructible.insert(code_id);
         }
-        let return_type = Self::lower_function_body(&mut child, &function.body)?;
+        // The body is lowered in its own unit, so the construct it stopped at
+        // is recorded there and would be lost with it.
+        let Some(return_type) = Self::lower_function_body(&mut child, &function.body) else {
+            if let Some(refusal) = child.refusal {
+                self.refuse(refusal);
+            }
+            return None;
+        };
         let capture_effects = captures
             .iter()
             .map(|(name, captured)| {
@@ -2071,20 +2079,30 @@ impl RegisterLowerer {
         self.lower_function(function)
     }
 
-    fn register_function_supported(function: &Function) -> bool {
-        function.async_kind == parser::AsyncKind::Sync
-            && function.constructor_kind == parser::ConstructorKind::Ordinary
-            && function.parameters.iter().all(parser::Parameter::is_simple)
-            && function.parameters.iter().all(|parameter| {
-                function
-                    .parameters
-                    .iter()
-                    .filter(|candidate| {
-                        candidate.pattern.identifier() == parameter.pattern.identifier()
-                    })
-                    .count()
-                    == 1
-            })
+    /// What 10.2.11 would have to do for this function that the lowering does
+    /// not, so that the refusal names the parameter list or the kind and not
+    /// the expression the function was written as.
+    fn function_refusal(function: &Function) -> Option<&'static str> {
+        if function.async_kind != parser::AsyncKind::Sync {
+            return Some("an async function");
+        }
+        if function.constructor_kind != parser::ConstructorKind::Ordinary {
+            return Some("a class constructor");
+        }
+        if !function.parameters.iter().all(parser::Parameter::is_simple) {
+            return Some("a parameter list that is not simple");
+        }
+        let duplicated = !function.parameters.iter().all(|parameter| {
+            function
+                .parameters
+                .iter()
+                .filter(|candidate| {
+                    candidate.pattern.identifier() == parameter.pattern.identifier()
+                })
+                .count()
+                == 1
+        });
+        duplicated.then_some("a duplicated parameter name")
     }
 
     #[expect(

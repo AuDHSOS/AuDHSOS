@@ -4186,6 +4186,21 @@ fn a_script_the_lowering_refuses_says_what_it_holds() -> Result<(), Error> {
     for (source, feature) in [
         ("var o={get x(){return 1}}; o.x", "an object literal"),
         ("class C{}", "a declaration of the Script"),
+        // 10.2.11 does more for these parameter lists than the lowering does,
+        // and the body is lowered in a unit of its own, so both name what
+        // stopped them and not the expression the function was written as.
+        (
+            "var f=function(a=1){return a}; f()",
+            "a parameter list that is not simple",
+        ),
+        (
+            "var f=function(...r){return r}; f()",
+            "a parameter list that is not simple",
+        ),
+        (
+            "var f=function(){try{return 1}finally{}}; f()",
+            "a try statement",
+        ),
     ] {
         let program = compile(source, Limits::default())?;
         assert!(!program.uses_register_backend(), "{source}");
