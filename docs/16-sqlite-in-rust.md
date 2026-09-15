@@ -758,7 +758,16 @@ regular expression, `~/RE/` one that must not match, `#/A..B/` a range,
 is a number compared to fifteen significant digits. A case the engine
 refused a statement of is refused and not failed, because the rows a
 later case reads are then short. A file runs in a process of its own and
-is ended after sixty seconds, with the cases it ran counted.
+is ended after sixty seconds, with the cases it ran counted;
+`process::test_jobs` files run beside each other.
+
+The deadline is wall-clock, so the score of a file it ends is what that
+file reached in sixty seconds and not a fixed number. Twenty files reach
+it, and `alterdropcol.test`, `rowvalue2.test`, `savepoint6.test` and
+`with1.test` are cut at a different case each run: two runs one after
+another differ by 53 cases of 74 028. A total of the suite is therefore
+exact to about a tenth of a percent, which is what a comparison of two
+runs must allow for.
 
 `--why` counts what each refusal was for, by the first two words of the
 statement and what the engine answered, which is what says which missing
@@ -803,4 +812,4 @@ the port.
 | 5 | The matrix is a `for` loop copied into each test. | A dimension added in one test and forgotten in ten. | 16.11 puts the matrix in the test support and has the test name its dimensions. |
 | 5 | The fuzz corpora grow until the regression replay is slow. | The check takes longer than three minutes and is skipped. | `sh tools/xtask.sh fuzz --merge` keeps one input per feature. Hash-named files are not committed; named regression entries are. |
 | 6 | MC/DC never becomes measurable on the pinned toolchain. | Goal 5 of 16.2 cannot be met by reading a report. | D4 derives MC/DC from condition coverage and checks both of its premises with `cargo xtask mcdc`, so the goal is met by argument and by check rather than by a report the pin does not emit. |
-| 7 | A `RIGHT` or a `FULL` join reads every row of every side against every row of the sides before it, because a row of such a join is marked matched where the levels under it are read, so no term of the `WHERE` may be read above it. | The cases of `joinD.test` that write such a join take ten of the sixteen minutes the suite takes. | D-208 reads every other term on the level that answers it, and reads the side of an `ON` by an index. What is left is marking a row by its key rather than by where it stands, which lets such a side be read by an index as well. |
+| 7 | A `RIGHT` or a `FULL` join reads every row of every side against every row of the sides before it, because a row of such a join is marked matched where the levels under it are read, so no term of the `WHERE` may be read above it. | `joinD.test` reaches the sixty-second deadline and is counted with the cases it ran, as nineteen other files are. | D-208 reads every other term on the level that answers it, and reads the side of an `ON` by an index. What is left is marking a row by its key rather than by where it stands, which lets such a side be read by an index as well. |

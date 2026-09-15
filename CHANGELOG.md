@@ -21,7 +21,19 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   wrote and whether it ended by itself, and `suite::run` reads those on
   the thread that called it, in the order of the names, so the counters
   `--why` answers and the cases `--show` prints are what a run of one
-  file after another wrote.
+  file after another wrote. Over the 705 files that score, on four
+  cores, a run fell from 1859 to 490 seconds, which is 3.8 times.
+
+- The scores of the suite are not reproducible, which the deadline and
+  not the pool decides: twenty files reach the sixty seconds and are
+  counted with the cases they ran, and four of them — `alterdropcol`,
+  `rowvalue2`, `savepoint6` and `with1` — are cut at a different case
+  each run. Two runs of the sequential code differ from each other by
+  53 cases of 74 028, `with1` alone answering 19 passed in one and 7 in
+  the other; two runs of the pool differ by 55. The pool moves no count
+  in a direction of its own: `rowvalue2` answered 3283 and 3313 cases
+  under the sequential code and 3271 and 3327 under the pool, and the
+  highest of the four is the pool's.
 
 ### Added
 
