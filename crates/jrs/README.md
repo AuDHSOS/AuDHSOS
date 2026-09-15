@@ -649,10 +649,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Object%` and its methods, after the integrity levels, on the register engine (focused) | focused | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,530 (22.49%) | 18 (0.26%) | 5,254 (77.24%) |
 | `%Number%` (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 572 (84.12%) | 102 (15.00%) | 6 (0.88%) |
 | `%Number%` on the register engine (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 226 (33.24%) | 2 (0.29%) | 452 (66.47%) |
-| `for`-`in` and `for`-`of` (focused) | focused | `16d29ab` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/for-of test/language/statements/for-in --summary` | 870 | 1,648 | 1,230 (74.64%) | 86 (5.22%) | 332 (20.15%) |
-| `for`-`in` and `for`-`of` on the register engine (focused) | focused | `16d29ab` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/for-of test/language/statements/for-in --summary` | 870 | 1,648 | 441 (26.76%) | 36 (2.18%) | 1,171 (71.06%) |
-| Complete pinned suite, including staging and Intl | full | `16d29ab` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `16d29ab` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 19,545 (18.99%) | 17,936 (17.43%) | 65,444 (63.58%) |
+| `%JSON%` (focused) | focused | `bd95535` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/JSON --summary` | 165 | 330 | 282 (85.45%) | 32 (9.70%) | 16 (4.85%) |
+| `%JSON%` on the register engine (focused) | focused | `bd95535` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/JSON --summary` | 165 | 330 | 98 (29.70%) | 12 (3.64%) | 220 (66.67%) |
+| Complete pinned suite, including staging and Intl | full | `bd95535` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `bd95535` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 19,785 (19.22%) | 18,089 (17.57%) | 65,051 (63.20%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1217,6 +1217,15 @@ own, the body starts by binding the names 8.6.2 names out of it, and a lexical
 head declares those names and gives back the registers it took in the order the
 allocator wants them. 370 more variants move to passed.
 
+25.5 is an ordinary object like %Math%, and the engine had neither it nor its
+two functions. 25.5.1 parses with the arena the stack backend already uses: the
+arena is in postorder, so each value is built after everything it holds and each
+stays in a root of its own while the next is allocated. 25.5.2 answers the text
+of a value, taking the own enumerable String keys in the order 10.1.11 gives
+them. The reviver, the replacer, the space and `toJSON` are each a call a native
+has no frame to make, and each is a named gap. 240 more variants move to
+passed.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -1330,6 +1339,8 @@ The assignment runs and both full runs beside the write a property refuses were
 measured at tree `f4adc2a7be55c9ac1e585664ce125151c2d6d4fc`, which is the tree of `9e13fd0`.
 The `for`-`in` and `for`-`of` runs and both full runs beside the pattern head
 were measured at tree `adc01b94d068cb856613588cf190fbd7b8c858d3`, which is the tree of `16d29ab`.
+The `%JSON%` runs and both full runs beside it were measured at tree `74f4f240409c2bbb0c582ec3e149f48701f7706f`,
+which is the tree of `bd95535`.
 
 ### Historical Test262 baseline
 
