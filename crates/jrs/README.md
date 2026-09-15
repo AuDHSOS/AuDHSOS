@@ -639,8 +639,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Object%` and its methods, after 20.1.2, on the register engine (focused) | focused | `f123a15` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,142 (16.79%) | 18 (0.26%) | 5,642 (82.95%) |
 | `%Array%` and its methods, after 23.1.3 (focused) | focused | `14a8333` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 5,066 (82.82%) | 969 (15.84%) | 82 (1.34%) |
 | `%Array%` and its methods, after 23.1.3, on the register engine (focused) | focused | `14a8333` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 750 (12.26%) | 358 (5.85%) | 5,009 (81.89%) |
-| Complete pinned suite, including staging and Intl | full | `14a8333` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `14a8333` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 8,198 (7.97%) | 15,941 (15.49%) | 78,786 (76.55%) |
+| `%Math%`, after 21.3 (focused) | focused | `6fe4b67` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Math --summary` | 327 | 654 | 306 (46.79%) | 344 (52.60%) | 4 (0.61%) |
+| `%Math%`, after 21.3, on the register engine (focused) | focused | `6fe4b67` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Math --summary` | 327 | 654 | 118 (18.04%) | 0 (0.00%) | 536 (81.96%) |
+| Complete pinned suite, including staging and Intl | full | `6fe4b67` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `6fe4b67` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 8,355 (8.12%) | 15,945 (15.49%) | 78,625 (76.39%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -849,6 +851,17 @@ and `sort` — which needs the engine to enter a function of the Script from
 inside a native and resume where it left off, as 7.1.1 already does for a
 `valueOf`.
 
+`%Math%` follows. 21.3.1 gives it eight values, each the binary64 nearest the
+number the clause names, and 21.3.2 gives it functions of which this Realm
+builds those that need no library for a transcendental: the magnitude, the
+three roundings, the sign, the two extrema and the three that work on 32-bit
+integers, with `sin` answering through the one the math crate already had.
+6.1.6.1 tells the two zeroes apart and each clause says which it answers, so
+`Math.ceil(-0.5)` and `Math.min(0,-0)` are −0 where `Math.abs(-0)` is +0; the
+printed form does not show that, so 20.1.2.14 is what asks. Over
+`test/built-ins/Math` the engine passes 118 of 654 variants and fails none,
+where the stack backend fails 344 of them.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -902,7 +915,9 @@ of `b367caf`. The `%Object%` runs and both full runs beside them were measured
 at tree `32a160f59e6759ed3b30746a8eb7f024d49194a4`, which is the tree of
 `f123a15`. The `%Array%` runs and both full runs beside them were measured at
 tree `b01866f6404a7fdcb87da506795dcaca929665c5`, which is the tree of
-`14a8333`.
+`14a8333`. The `%Math%` runs and both full runs beside them were measured at
+tree `6a1ceed16ca5526f8fbcb1c08c6ff841d525978d`, which is the tree of
+`6fe4b67`.
 
 ### Historical Test262 baseline
 
