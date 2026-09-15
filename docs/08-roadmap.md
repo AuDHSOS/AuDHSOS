@@ -512,11 +512,14 @@ each refused with the alert the standard names.
 
 certificate revocation checking; virtio-gpu; virtio-input or
 `usb-tablet` for absolute pointer coordinates; a compositor with several
-windows; the `aarch64` port under HVF without a loader; SMP with per-CPU
-run queues; hardware port permission bitmaps; kernel-object memory
-donation; an interface definition language for protocols; recursive
-capability revocation; a tickless timer; long file names in the disk
-image writer.
+windows; the `aarch64` port under HVF without a loader; hardware port
+permission bitmaps; kernel-object memory donation; an interface
+definition language for protocols; recursive capability revocation; a
+tickless timer; long file names in the disk image writer.
+
+SMP with per-CPU run queues left this list and has a plan of its own:
+[document 16](16-more-than-one-processor.md) specifies it in eleven
+steps, off the phases the way document 15 is. Nothing of it is built.
 
 ## 8.19 Risks
 
