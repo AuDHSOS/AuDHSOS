@@ -1202,12 +1202,14 @@ fn iterator_and_dynamic_binding_patterns_stay_on_legacy_backend() -> Result<(), 
     differential(
         "let input={next(){return {done:true}},[Symbol.iterator](){return this}};let [x]=input;typeof x",
     )?;
-    // A rest element and a computed key of a pattern are named gaps, and an
-    // Array whose `@@iterator` the Script replaced is not a layout the
-    // lowering keeps.
+    // 8.6.2 collects a rest element of such an iterator too.
+    differential(
+        "let input={next(){return {done:true}},[Symbol.iterator](){return this}};let [...x]=input;x.length",
+    )?;
+    // A computed key of a pattern is a named gap, and an Array whose
+    // `@@iterator` the Script replaced is not a layout the lowering keeps.
     for source in [
         "let a=[1];a[Symbol.iterator]=function(){return {next(){return {value:42}}}};let [x]=a;x",
-        "let input={next(){return {done:true}},[Symbol.iterator](){return this}};let [...x]=input;x",
         "let key={toString(){return 'x'}};let {[key]:x,...rest}={x:1,y:2};rest.y",
     ] {
         let program = compile(source, Limits::default())?;
@@ -5229,15 +5231,20 @@ fn an_array_pattern_takes_its_elements_from_the_iterator() -> Result<(), Error> 
     ] {
         differential_scripts(&[source])?;
     }
-    // 8.6.2 collects a rest element by walking the iterator to its end.
-    let source = "function f(v){let [a,...r]=v;return r}f([1,2])";
-    let program = compile(source, Limits::default())?;
-    assert!(!program.uses_register_backend(), "{source}");
-    assert_eq!(
-        program.register_refusal,
-        Some("a rest element of an array pattern"),
-        "{source}"
-    );
+    // 8.6.2 collects a rest element by walking the iterator to its end into
+    // an Array of its own.
+    for source in [
+        "function f(v){let [a,...r]=v;return r.join()}f([1,2,3])",
+        "function f(v){let [...r]=v;return r.length}f([])",
+        "function f(v){let [a,b,...r]=v;return r.length}f([1])",
+        "function f(v){let [a,...r]=v;return r[0]}f([1,2])",
+        "function f(v){let [a,...[b,c]]=v;return b+','+c}f([1,2,3])",
+        "function f(v){let [a,...r]=v;return typeof r}f([1])",
+        "function f([a,...r]){return r.join()}f([1,2,3])",
+        "function f(v){let [a,...r]=v;return r.join()}f({})",
+    ] {
+        differential_scripts(&[source])?;
+    }
     Ok(())
 }
 

@@ -1155,12 +1155,6 @@ impl RegisterLowerer {
         array: &parser::ArrayBindingPattern,
     ) -> Option<()> {
         use crate::engine::bytecode::{FeedbackKind, Instruction};
-        // 8.6.2 collects a rest element by walking the iterator to its end,
-        // which is a loop this lowering does not emit here.
-        if array.rest.is_some() {
-            self.refuse("a rest element of an array pattern");
-            return None;
-        }
         let iterable = self.allocate_register()?;
         self.code.emit(Instruction::Star(iterable));
         let iterator_slot = self.feedback_slot(FeedbackKind::NamedAccess)?;
@@ -1259,6 +1253,78 @@ impl RegisterLowerer {
                 }
                 self.bind_pattern(element_type, pattern)?;
             }
+        }
+        // 8.6.2 collects a rest element by walking the iterator to its end
+        // into an Array of its own, whose indices 13.2.5.5 defines.
+        if let Some(rest) = &array.rest {
+            let collected = self.allocate_register()?;
+            self.code.emit(Instruction::CreateArray(0));
+            self.code.emit(Instruction::Star(collected));
+            let count = self.allocate_register()?;
+            self.code.emit(Instruction::LdaSmi(0));
+            self.code.emit(Instruction::Star(count));
+            let one = self.allocate_register()?;
+            self.code.emit(Instruction::LdaSmi(1));
+            self.code.emit(Instruction::Star(one));
+            let head = self.code.instructions.len();
+            self.code.emit(Instruction::Ldar(done));
+            let leave = self.code.emit(Instruction::JumpIfTrue(0));
+            let next_name = self.string_constant(&"next".encode_utf16().collect::<Vec<_>>())?;
+            let next_slot = self.feedback_slot(FeedbackKind::NamedAccess)?;
+            self.code.emit(Instruction::GetNamed {
+                obj: iterator,
+                name: next_name,
+                slot: next_slot,
+            });
+            self.code.emit(Instruction::Star(next));
+            let step_slot = self.feedback_slot(FeedbackKind::Call)?;
+            self.code.emit(Instruction::CallMethod {
+                receiver: iterator,
+                func: next,
+                arg_start: next,
+                arg_count: 0,
+                slot: step_slot,
+            });
+            self.code.emit(Instruction::Star(step));
+            let done_name = self.string_constant(&"done".encode_utf16().collect::<Vec<_>>())?;
+            let done_slot = self.feedback_slot(FeedbackKind::NamedAccess)?;
+            self.code.emit(Instruction::GetNamed {
+                obj: step,
+                name: done_name,
+                slot: done_slot,
+            });
+            let exhausted = self.code.emit(Instruction::JumpIfTrue(0));
+            let value_name = self.string_constant(&"value".encode_utf16().collect::<Vec<_>>())?;
+            let value_slot = self.feedback_slot(FeedbackKind::NamedAccess)?;
+            self.code.emit(Instruction::GetNamed {
+                obj: step,
+                name: value_name,
+                slot: value_slot,
+            });
+            let write_slot = self.feedback_slot(FeedbackKind::NamedAccess)?;
+            self.code.emit(Instruction::SetByValue {
+                obj: collected,
+                key: count,
+                slot: write_slot,
+                define: true,
+                strict: true,
+            });
+            self.code.emit(Instruction::Ldar(count));
+            self.code.emit(Instruction::Add(one));
+            self.code.emit(Instruction::Star(count));
+            let back_edge = self.code.emit(Instruction::Jump(0));
+            self.patch_jump(back_edge, head)?;
+            let mark = self.code.instructions.len();
+            self.patch_jump(exhausted, mark)?;
+            self.code.emit(Instruction::LdaTrue);
+            self.code.emit(Instruction::Star(done));
+            let end = self.code.instructions.len();
+            self.patch_jump(leave, end)?;
+            self.code.emit(Instruction::Ldar(collected));
+            self.bind_pattern(RegisterType::Unknown, rest)?;
+            self.release_register(one)?;
+            self.release_register(count)?;
+            self.release_register(collected)?;
         }
         // 7.4.9 closes an iterator that is not done, and an iterator with no
         // `return` is closed by doing nothing.
