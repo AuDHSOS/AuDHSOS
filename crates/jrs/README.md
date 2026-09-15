@@ -649,10 +649,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Object%` and its methods, after the integrity levels, on the register engine (focused) | focused | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,530 (22.49%) | 18 (0.26%) | 5,254 (77.24%) |
 | `%Number%` (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 572 (84.12%) | 102 (15.00%) | 6 (0.88%) |
 | `%Number%` on the register engine (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 226 (33.24%) | 2 (0.29%) | 452 (66.47%) |
-| `%Function%` and the function forms (focused) | focused | `915f61b` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Function test/language/expressions/function test/language/statements/function --summary` | 1,224 | 2,160 | 1,836 (85.00%) | 80 (3.70%) | 244 (11.30%) |
-| `%Function%` and the function forms on the register engine (focused) | focused | `915f61b` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Function test/language/expressions/function test/language/statements/function --summary` | 1,224 | 2,160 | 897 (41.53%) | 214 (9.91%) | 1,049 (48.56%) |
-| Complete pinned suite, including staging and Intl | full | `915f61b` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `915f61b` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 15,738 (15.29%) | 18,141 (17.63%) | 69,046 (67.08%) |
+| The arguments object (focused) | focused | `9e4966b` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/arguments-object --summary` | 263 | 460 | 188 (40.87%) | 2 (0.43%) | 270 (58.70%) |
+| The arguments object on the register engine (focused) | focused | `9e4966b` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/arguments-object --summary` | 263 | 460 | 97 (21.09%) | 0 (0.00%) | 363 (78.91%) |
+| Complete pinned suite, including staging and Intl | full | `9e4966b` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `9e4966b` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 16,043 (15.59%) | 18,225 (17.71%) | 68,657 (66.71%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1146,6 +1146,17 @@ function empty, where 13.2.5.5 and 10.2.10 name them — so their tests check th
 engine against the specification rather than against the other backend. 224 more
 variants move to passed.
 
+10.4.4 binds `arguments` in every ordinary function, and the lowering read it
+only as the base of a property access, because the mapping of 10.4.4.7 would
+show in the object otherwise. A strict function has no mapping, so there it is a
+value like any other: 10.2.4.1 is built as an intrinsic that stands on no object
+and throws whenever it is called, `callee` is that accessor on both halves, and
+the object carries the iterator of 23.1.3.33. That iterator was answering
+nothing for an object that is no Array — 23.1.5.2.1 reads the length of the
+array-like again at every step, and the engine read an element store instead, so
+an array-like iterated to zero elements silently. 305 more variants move to
+passed.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -1242,7 +1253,8 @@ the tree of `ab6b416`. The destructuring runs and both full runs beside the
 Initializer that makes an object were measured at tree `b81882bae18c737903ae0ea37c3e49ebf0f5102d`, which is the
 tree of `3f46a6f`. The `%Function%` runs and both full runs beside the name a
 function is given were measured at tree `81c5b8eb6bba2d95d8a62fde4ee817bc5b190f05`, which is the tree of
-`915f61b`.
+`915f61b`. The arguments-object runs and both full runs beside it were measured
+at tree `c426eda58af35211855c91d965cc318fd88778b1`, which is the tree of `9e4966b`.
 
 ### Historical Test262 baseline
 
