@@ -589,6 +589,7 @@ impl<'a> Parser<'a> {
         Ok(self.arena.push_select(Select {
             columns,
             from,
+            nested: true,
             ..Select::default()
         }))
     }

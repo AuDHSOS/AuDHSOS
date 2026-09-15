@@ -1130,6 +1130,11 @@ pub struct Select {
     pub having: Option<ExprId>,
     /// The rows of a `VALUES`, each of them a row node.
     pub values: Range,
+    /// Whether the statement stands for the tables written inside
+    /// brackets in a `FROM`, which is `SF_NestedFrom`: a column written
+    /// with the name of one of those tables in front of it reaches
+    /// that table through this statement.
+    pub nested: bool,
     /// What this statement is put together with, and how.
     pub compound: Option<(Compound, SelectId)>,
     /// The `ORDER BY` terms.

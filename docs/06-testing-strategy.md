@@ -4852,6 +4852,18 @@ D-227, document 16 step Q8.
 - A bracket holding one table answers the rows that table holds.
 - `joinB.test` runs every one of its 512 cases.
 
+### 6.6.151 The tables inside brackets answer under their own names (`db-sqlite`)
+
+D-228, document 16 step Q8.
+
+- A column written with the name of a table inside the brackets reaches
+  that table, and the name the brackets carry reaches the same columns.
+- A `*` answers the column a `USING` matched once, whatever brackets
+  stand around the tables.
+- A `GROUP BY` that counts to a column counts the ones a `*` answers.
+- A statement written inside the `FROM` answers under its own name
+  alone, and the tables it reads are not reachable through it.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

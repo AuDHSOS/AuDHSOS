@@ -213,6 +213,17 @@ struct Kept {
 struct Column {
     /// Its name.
     name: Vec<u8>,
+    /// The name of the side it came from, where the side it stands on
+    /// answers the columns of several: a statement written inside a
+    /// `FROM` for the tables inside brackets carries the name of each
+    /// of them, so `t2.a` reaches the column `a` of `t2` through it.
+    /// Empty where the side answers under a name of its own.
+    from: Vec<u8>,
+    /// Whether a `*` leaves the column out, which the column a `USING`
+    /// or a `NATURAL` matched is left out by. A statement that stands
+    /// for the tables inside brackets answers the column all the same,
+    /// so that `t3.a` reaches it.
+    hidden: bool,
     /// What is converted before it is compared.
     affinity: Affinity,
     /// How its text is compared, where anything was written about it.
@@ -232,6 +243,9 @@ struct Column {
 struct Shape {
     /// The columns, in the order the side answers them.
     columns: Vec<Column>,
+    /// Whether the side stands for the tables written inside brackets
+    /// in a `FROM`, which answer under their own names through it.
+    nested: bool,
     /// Whether a bare `rowid`, `oid` or `_rowid_` reaches the side.
     keyed: bool,
     /// The name the key is answered under, where a column of the side
@@ -433,23 +447,41 @@ impl Side<'_> {
         !self.name.is_empty() && self.name.eq_ignore_ascii_case(named)
     }
 
-    /// Whether a `*` leaves this side's column of that name out, which
-    /// it does for the side a `USING` or a `NATURAL` matched.
-    fn hides(&self, column: &[u8]) -> bool {
-        self.using
-            .iter()
-            .any(|name| name.eq_ignore_ascii_case(column))
+    /// One column of this side as the statement above it answers the
+    /// column: under this side's name where the side has one, and
+    /// under the name it already carries where the side is the tables
+    /// inside brackets, which answer under their own names.
+    fn answered_as(&self, column: &Column) -> Column {
+        let mut answered = column.clone();
+        if !self.name.is_empty() && !self.shape.nested {
+            answered.from.clone_from(&self.name);
+        }
+        answered
     }
+}
+
+/// Whether a `*` leaves the column out: the column a `USING` or a
+/// `NATURAL` matched, which the side that matched it hides, and the
+/// column a statement standing for the tables inside brackets answers
+/// under the name of the table it came from alone.
+fn left_out(column: &Column, using: &[Vec<u8>]) -> bool {
+    column.hidden
+        || using
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(&column.name))
 }
 
 /// The columns a table of the schema answers.
 fn shape_of(table: &Table) -> Shape {
     Shape {
+        nested: false,
         columns: table
             .columns
             .iter()
             .map(|column| Column {
                 name: column.name.clone(),
+                from: Vec::new(),
+                hidden: false,
                 affinity: column.affinity,
                 collation: Some(column.collation),
                 datatype: classes_of(column.affinity),
@@ -2001,6 +2033,8 @@ fn listed(
         name.extend_from_slice(&number::integer_text(i64::try_from(at).unwrap_or(0)));
         columns.push(Column {
             name: name.clone(),
+            from: Vec::new(),
+            hidden: false,
             affinity: Affinity::None,
             collation: None,
             datatype: NUMBER,
@@ -2011,6 +2045,7 @@ fn listed(
         answer: Answer { names, rows },
         shape: Shape {
             columns,
+            nested: false,
             keyed: false,
             key: None,
         },
@@ -2992,7 +3027,9 @@ fn answered(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> V
             ResultColumn::Star => {
                 for (at, side) in sides.iter().enumerate() {
                     for (place, column) in side.shape.columns.iter().enumerate() {
-                        if !side.hides(&column.name) {
+                        // A `GROUP BY` counts the columns a `*`
+                        // answers.
+                        if !left_out(column, &side.using) {
                             out.push(Term::Held(at, place));
                         }
                     }
@@ -3208,9 +3245,18 @@ fn shape(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> Resu
                     // answered once and not twice, which is the side
                     // that hides them leaving them out.
                     for column in &side.shape.columns {
-                        if !side.hides(&column.name) {
-                            columns.push(column.clone());
+                        // A statement that stands for the tables
+                        // inside brackets answers the column a `USING`
+                        // matched as well, under the name of the table
+                        // it came from, and says that a `*` leaves it
+                        // out.
+                        let hidden = left_out(column, &side.using);
+                        if hidden && !select.nested {
+                            continue;
                         }
+                        let mut answered = side.answered_as(column);
+                        answered.hidden = hidden;
+                        columns.push(answered);
                     }
                 }
             }
@@ -3221,7 +3267,12 @@ fn shape(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> Resu
                 if named.next().is_some() {
                     return Err(Error::Ambiguous);
                 }
-                columns.extend(side.shape.columns.iter().cloned());
+                columns.extend(
+                    side.shape
+                        .columns
+                        .iter()
+                        .map(|column| side.answered_as(column)),
+                );
             }
             ResultColumn::Expr { expr, alias, text } => {
                 let name = match alias {
@@ -3237,6 +3288,8 @@ fn shape(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> Resu
                 let (affinity, collation) = compared(arena, expr, sql, sides);
                 columns.push(Column {
                     name,
+                    from: Vec::new(),
+                    hidden: false,
                     affinity,
                     collation,
                     datatype: data_type(arena, expr, sql, sides),
@@ -3246,6 +3299,7 @@ fn shape(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> Resu
     }
     Ok(Shape {
         columns,
+        nested: select.nested,
         keyed: false,
         key: None,
     })
@@ -3263,10 +3317,26 @@ fn project(
         match *column {
             ResultColumn::Star => {
                 for (at, held) in cursor.held.iter().enumerate() {
-                    held.each(|name, value| {
-                        if !held.hides(name) {
-                            out.push(cursor.coalesced(at, name, value));
+                    held.each(|column, value| {
+                        if left_out(column, held.using) && !select.nested {
+                            return;
                         }
+                        // A statement standing for the tables inside
+                        // brackets answers each column as its own
+                        // table holds it, and the name a `USING`
+                        // matched is filled where a bare name reaches
+                        // it.
+                        if select.nested {
+                            out.push(value.clone());
+                            return;
+                        }
+                        // A bare name over the tables inside brackets
+                        // reaches the column one of them filled, and
+                        // then the sides after it fill what is left.
+                        let mine = held
+                            .filled(&column.name, cursor.collation)
+                            .map_or_else(|| value.clone(), |(value, ..)| value);
+                        out.push(cursor.coalesced(at, &column.name, &mine));
                     });
                 }
             }
@@ -4156,10 +4226,55 @@ impl<'a> Held<'a> {
             .any(|name| name.eq_ignore_ascii_case(column))
     }
 
-    /// Calls `each` with the name and the value of every column.
-    fn each(&self, mut each: impl FnMut(&[u8], &Value)) {
+    /// What a bare name reaches on a side standing for the tables
+    /// inside brackets: the first of the columns of that name that is
+    /// not nothing, which is the column a `RIGHT JOIN` inside the
+    /// brackets filled, and the first of them where every one is
+    /// nothing.
+    fn filled(&self, column: &[u8], default: Collation) -> Option<(Value, Affinity, Collation)> {
+        if !self.shape.nested {
+            return None;
+        }
+        let mut first: Option<(Value, Affinity, Collation)> = None;
+        for (at, held) in self.shape.columns.iter().enumerate() {
+            if !held.name.eq_ignore_ascii_case(column) {
+                continue;
+            }
+            let value = self.values.get(at).cloned().unwrap_or(Value::Null);
+            let answered = (value, held.affinity, held.collation.unwrap_or(default));
+            if answered.0 != Value::Null {
+                return Some(answered);
+            }
+            first = first.or(Some(answered));
+        }
+        first
+    }
+
+    /// What this side answers for the column `column` of the side
+    /// `from` it holds the columns of, or nothing where it holds none
+    /// of that side. A side with a name of its own answers nothing
+    /// here, because a name in front of a column names that side.
+    fn column_of(
+        &self,
+        from: &[u8],
+        column: &[u8],
+        default: Collation,
+    ) -> Option<(Value, Affinity, Collation)> {
+        if !self.shape.nested {
+            return None;
+        }
+        let at = self.shape.columns.iter().position(|held| {
+            held.from.eq_ignore_ascii_case(from) && held.name.eq_ignore_ascii_case(column)
+        })?;
+        let held = self.shape.columns.get(at)?;
+        let value = self.values.get(at).cloned().unwrap_or(Value::Null);
+        Some((value, held.affinity, held.collation.unwrap_or(default)))
+    }
+
+    /// Calls `each` with every column and the value it holds.
+    fn each(&self, mut each: impl FnMut(&Column, &Value)) {
         for (column, value) in self.shape.columns.iter().zip(&self.values) {
-            each(&column.name, value);
+            each(column, value);
         }
     }
 
@@ -4167,6 +4282,9 @@ impl<'a> Held<'a> {
     /// such column. `default` is the collation of a column nothing was
     /// written about.
     fn column(&self, column: &[u8], default: Collation) -> Option<(Value, Affinity, Collation)> {
+        if let Some(answered) = self.filled(column, default) {
+            return Some(answered);
+        }
         let Some(at) = self.shape.place(column) else {
             // The three names the rowid answers to, which a statement
             // inside the `FROM` and a table that keeps its rows in the
@@ -4286,14 +4404,17 @@ impl eval::Row for Cursor<'_> {
         }
         let mut found: Option<(usize, Value, Affinity, Collation)> = None;
         for (at, held) in self.held.iter().enumerate() {
-            match table {
-                Some(named) if !held.named(named) => continue,
+            // A name in front of a column names a side, or one of the
+            // tables inside brackets a side holds the columns of.
+            let answered = match table {
+                Some(named) if held.named(named) => held.column(column, self.collation),
+                Some(named) => held.column_of(named, column, self.collation),
                 // A bare name does not reach the side a `USING` or a
                 // `NATURAL` matched; the side before it answers.
                 None if held.hides(column) => continue,
-                _ => {}
-            }
-            let Some((value, affinity, collation)) = held.column(column, self.collation) else {
+                None => held.column(column, self.collation),
+            };
+            let Some((value, affinity, collation)) = answered else {
                 continue;
             };
             if found.is_some() {

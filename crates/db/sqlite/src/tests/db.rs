@@ -556,6 +556,103 @@ fn the_tables_inside_brackets_are_the_statement_the_join_is_against() {
 }
 
 #[test]
+fn a_table_inside_brackets_answers_under_its_own_name() {
+    // `SF_NestedFrom`: a column written with the name of a table
+    // inside the brackets reaches that table, and the name the
+    // brackets carry reaches the same columns.
+    use crate::change::Writer;
+    use crate::header::Encoding;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t1(a,b)".as_slice(),
+        b"CREATE TABLE t2(a,c)",
+        b"CREATE TABLE t3(a,d)",
+        b"INSERT INTO t1 VALUES(1,'B1'),(2,'B2')",
+        b"INSERT INTO t2 VALUES(1,'C1'),(3,'C3')",
+        b"INSERT INTO t3 VALUES(1,'D1'),(3,'D3')",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let bytes = writer.written();
+    let database = Database::open(&bytes).unwrap();
+    let answered = |sql: &[u8]| {
+        database
+            .query(sql)
+            .unwrap()
+            .rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|value| alloc::format!("{value:?}"))
+                    .collect::<Vec<String>>()
+                    .join(",")
+            })
+            .collect::<Vec<String>>()
+    };
+    assert_eq!(
+        answered(b"SELECT t2.c, t3.d FROM t1 JOIN (t2 JOIN t3 USING(a)) USING(a)"),
+        ["Text([67, 49]),Text([68, 49])"]
+    );
+    assert_eq!(
+        answered(b"SELECT t2.a, t3.a FROM t1 JOIN (t2 JOIN t3 USING(a)) USING(a)"),
+        ["Int(1),Int(1)"]
+    );
+    // The name the brackets carry reaches them as well, and a table
+    // inside them that carries a name of its own answers under that
+    // name alone.
+    assert_eq!(
+        answered(b"SELECT x.c FROM t1 JOIN (t2 JOIN t3 USING(a)) AS x USING(a)"),
+        ["Text([67, 49])"]
+    );
+    assert_eq!(
+        answered(b"SELECT y.c FROM t1 JOIN (t2 AS y JOIN t3 USING(a)) USING(a)"),
+        ["Text([67, 49])"]
+    );
+    assert_eq!(
+        database.query(b"SELECT t2.c FROM t1 JOIN (t2 AS y JOIN t3 USING(a)) USING(a)"),
+        Err(crate::db::Error::Eval(crate::eval::Error::NoColumn))
+    );
+    // A `*` answers the column a `USING` matched once, whatever
+    // brackets stand around the tables, and the brackets carrying a
+    // name of their own answer the same columns.
+    assert_eq!(
+        answered(b"SELECT * FROM (t2 JOIN t3 USING(a))"),
+        [
+            "Int(1),Text([67, 49]),Text([68, 49])",
+            "Int(3),Text([67, 51]),Text([68, 51])"
+        ]
+    );
+    assert_eq!(
+        answered(b"SELECT * FROM t1 JOIN (t2 JOIN t3 USING(a)) AS x USING(a)"),
+        ["Int(1),Text([66, 49]),Text([67, 49]),Text([68, 49])"]
+    );
+    assert_eq!(
+        answered(b"SELECT * FROM ((t2 JOIN t3 USING(a)) JOIN t1 USING(a))"),
+        ["Int(1),Text([67, 49]),Text([68, 49]),Text([66, 49])"]
+    );
+    assert_eq!(
+        answered(b"SELECT t2.a, t3.a FROM ((t2 JOIN t3 USING(a)) JOIN t1 USING(a))"),
+        ["Int(1),Int(1)"]
+    );
+    // A `GROUP BY` that counts to a column counts the ones a `*`
+    // answers.
+    assert_eq!(
+        answered(b"SELECT a, count(*) FROM (t2 JOIN t3 USING(a)) GROUP BY 1 ORDER BY 1"),
+        ["Int(1),Int(1)", "Int(3),Int(1)"]
+    );
+    assert_eq!(
+        answered(b"SELECT a, count(*) FROM t2 JOIN t3 USING(a) GROUP BY 1 ORDER BY 1"),
+        ["Int(1),Int(1)", "Int(3),Int(1)"]
+    );
+    // A statement written inside the `FROM` answers under its own name
+    // and the tables it reads are not reachable through it.
+    assert_eq!(
+        database.query(b"SELECT t2.c FROM t1 JOIN (SELECT * FROM t2) USING(a)"),
+        Err(crate::db::Error::Eval(crate::eval::Error::NoColumn))
+    );
+}
+
+#[test]
 fn the_column_a_using_names_is_the_one_the_join_filled_it_from() {
     // A `RIGHT JOIN` keeps a row of the side on the right with the
     // sides on its left empty, so the column the `USING` names stands
