@@ -644,6 +644,10 @@ pub struct BytecodeFunction {
     /// The `name` 10.2.10 gives the function, as an index into this unit's
     /// own string constants. A function 8.5.2 gives no name has none.
     pub name: Option<u16>,
+    /// The source text 20.2.3.5 answers, as an index into this unit's own
+    /// string constants. A unit no grammar node of a Script produced has
+    /// none.
+    pub source: Option<u16>,
     /// Own heap-context slot count, when this frame creates a lexical context.
     pub own_context_slot_count: Option<u16>,
     /// Slot counts expected in each captured outer lexical context.
@@ -679,6 +683,7 @@ impl BytecodeFunction {
             strict: false,
             class_constructor: false,
             name: None,
+            source: None,
             own_context_slot_count: None,
             outer_context_slot_counts: Vec::new(),
             feedback_slots: Vec::new(),

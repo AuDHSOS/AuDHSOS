@@ -366,6 +366,8 @@ pub enum Intrinsic {
     ObjectSetPrototypeOf,
     /// `Reflect.setPrototypeOf` (28.1.14).
     ReflectSetPrototypeOf,
+    /// `Function.prototype.toString` (20.2.3.5).
+    FunctionPrototypeToString,
     /// `Array.prototype.values`, which is also `%Array.prototype%[@@iterator]`
     /// (23.1.3.38 and 23.1.3.40).
     ArrayPrototypeValues,
@@ -618,7 +620,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 144] = [
+    pub const ALL: [Self; 145] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -763,6 +765,7 @@ impl Intrinsic {
         Self::ReflectApply,
         Self::ObjectSetPrototypeOf,
         Self::ReflectSetPrototypeOf,
+        Self::FunctionPrototypeToString,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -838,7 +841,8 @@ impl Intrinsic {
             }
             Self::FunctionPrototypeCall
             | Self::FunctionPrototypeBind
-            | Self::FunctionPrototypeApply => IntrinsicHolder::FunctionPrototype,
+            | Self::FunctionPrototypeApply
+            | Self::FunctionPrototypeToString => IntrinsicHolder::FunctionPrototype,
             Self::MathPow
             | Self::MathAbs
             | Self::MathCeil
@@ -1078,6 +1082,7 @@ impl Intrinsic {
             Self::ReflectApply => 141,
             Self::ObjectSetPrototypeOf => 142,
             Self::ReflectSetPrototypeOf => 143,
+            Self::FunctionPrototypeToString => 144,
         }
     }
 
@@ -1232,6 +1237,7 @@ impl Intrinsic {
             Self::ReflectApply => 141,
             Self::ObjectSetPrototypeOf => 142,
             Self::ReflectSetPrototypeOf => 143,
+            Self::FunctionPrototypeToString => 144,
         }
     }
 
@@ -1387,6 +1393,7 @@ impl Intrinsic {
             141 => Some(Self::ReflectApply),
             142 => Some(Self::ObjectSetPrototypeOf),
             143 => Some(Self::ReflectSetPrototypeOf),
+            144 => Some(Self::FunctionPrototypeToString),
             _ => None,
         }
     }
@@ -1408,6 +1415,7 @@ impl Intrinsic {
             | Self::BooleanPrototypeToString
             | Self::RegExpPrototypeToString
             | Self::SymbolPrototypeToString
+            | Self::FunctionPrototypeToString
             | Self::StringPrototypeToString => "toString",
             Self::NumberPrototypeValueOf
             | Self::BooleanPrototypeValueOf
@@ -1748,6 +1756,7 @@ impl Intrinsic {
             | Self::ParseFloat
             | Self::SymbolPrototypeToString
             | Self::SymbolPrototypeValueOf
+            | Self::FunctionPrototypeToString
             | Self::SymbolKeyFor => false,
             // 20.1.2.4, 20.1.2.8 and 20.1.2.13 apply ToPropertyKey to the
             // second argument.
@@ -1792,6 +1801,7 @@ impl Intrinsic {
             | Self::StringPrototypeToString
             | Self::SymbolPrototypeToString
             | Self::SymbolPrototypeValueOf
+            | Self::FunctionPrototypeToString
             | Self::StringPrototypeTrim
             | Self::StringPrototypeTrimEnd
             | Self::StringPrototypeTrimStart

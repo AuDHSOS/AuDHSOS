@@ -2671,6 +2671,16 @@ impl RegisterLowerer {
         if let Some(units) = own.as_deref().or(name) {
             child.code.name = Some(child.string_constant(units)?);
         }
+        // 20.2.3.5 answers the source text of the grammar node the function
+        // was written as, which the parser kept beside it.
+        if let Some(source) = &function.source {
+            let text: Vec<u16> = source
+                .text
+                .get(source.range.clone())?
+                .encode_utf16()
+                .collect();
+            child.code.source = Some(child.string_constant(&text)?);
+        }
         let nested_functions = core::mem::take(&mut child.code.functions);
         self.code.functions.push(child.code);
         self.code.functions.extend(nested_functions);
@@ -7710,6 +7720,7 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::StringPrototypeTrimStart
         | crate::engine::realm::Intrinsic::ArrayPrototypeJoin
         | crate::engine::realm::Intrinsic::SymbolPrototypeToString
+        | crate::engine::realm::Intrinsic::FunctionPrototypeToString
         | crate::engine::realm::Intrinsic::ArrayPrototypeToString => RegisterType::String,
 
         // 23.1.3.38 answers an Array Iterator and 23.1.5.2.1 a result object,

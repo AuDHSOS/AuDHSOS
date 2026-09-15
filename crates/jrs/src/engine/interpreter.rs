@@ -1554,7 +1554,7 @@ impl RegisterVM {
             | Intrinsic::StringPrototypeTrim
             | Intrinsic::StringPrototypeTrimEnd
             | Intrinsic::StringPrototypeTrimStart => {
-                self.call_string_intrinsic(intrinsic, call, heap, realm)
+                self.call_string_intrinsic(intrinsic, call, units, heap, realm)
             }
             Intrinsic::StringPrototypeSplit => self.call_split_intrinsic(&call, units, heap, realm),
             // 19.2.2 and 19.2.3 answer about the Number their argument is.
@@ -1728,6 +1728,12 @@ impl RegisterVM {
             | Intrinsic::RegExpPrototypeTest
             | Intrinsic::RegExpPrototypeToString => {
                 self.call_regexp_intrinsic(intrinsic, &call, units, heap, realm)
+            }
+            // 20.2.3.5 answers the source text of the grammar node a function
+            // was written as, and the NativeFunction string of 20.2.3.5 step 3
+            // for one this engine wrote.
+            Intrinsic::FunctionPrototypeToString => {
+                self.function_source(call.receiver, units, heap, realm)
             }
             // 20.4.1.1: `Symbol` is not a constructor, and its description
             // is undefined or the text of its argument.
@@ -5398,10 +5404,6 @@ impl RegisterVM {
     /// rather than a missing feature. Naming the gap keeps it a gap.
     const fn unimplemented_conversion(kind: &ObjectKind) -> Option<&'static str> {
         match kind {
-            // 20.2.3.5 answers the source text of the function.
-            ObjectKind::Function { .. }
-            | ObjectKind::NativeFunction { .. }
-            | ObjectKind::BoundFunction { .. } => Some("Function.prototype.toString"),
             // 20.5.3.4 answers "name: message".
             ObjectKind::Error => Some("Error.prototype.toString"),
             // 21.3 gives `%Math%` an @@toStringTag, which this Realm has not
@@ -5410,7 +5412,12 @@ impl RegisterVM {
 
             // 20.1.3.6 is the right answer for these, and 23.1.3.37 is
             // implemented.
-            ObjectKind::Ordinary
+            // 20.2.3.5 answers the source text of the function, which
+            // %Function.prototype% carries.
+            ObjectKind::Function { .. }
+            | ObjectKind::NativeFunction { .. }
+            | ObjectKind::BoundFunction { .. }
+            | ObjectKind::Ordinary
             | ObjectKind::NumberWrapper(_)
             | ObjectKind::BooleanWrapper(_)
             | ObjectKind::StringWrapper(_)
@@ -6016,10 +6023,11 @@ impl RegisterVM {
         &self,
         intrinsic: Intrinsic,
         call: Call,
+        code: CodeUnits<'_>,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        let units = self.receiver_units(call.receiver, heap, realm)?;
+        let units = self.receiver_units(call.receiver, code, heap, realm)?;
         match intrinsic {
             // 22.1.3.1: an index outside the String is the empty String.
             Intrinsic::StringPrototypeCharAt => {
@@ -6279,7 +6287,7 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        let text = self.receiver_units(call.receiver, heap, realm)?;
+        let text = self.receiver_units(call.receiver, units, heap, realm)?;
         let separator = self.call_argument(call, 0)?;
         if let Some(reference) = separator.as_object()
             && let Some(pattern) = Self::regexp_pattern(reference, heap, units).cloned()
@@ -6468,6 +6476,7 @@ impl RegisterVM {
     fn receiver_units(
         &self,
         receiver: Value,
+        code: CodeUnits<'_>,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Vec<u16>, VMError> {
@@ -6479,7 +6488,7 @@ impl RegisterVM {
             ));
         }
         if let Some(object) = receiver.as_object() {
-            return self.unframed_text_of(object, heap, realm);
+            return self.unframed_text_of(object, code, heap, realm);
         }
         property_name_units(receiver, heap)
     }
@@ -6493,6 +6502,7 @@ impl RegisterVM {
     fn unframed_text_of(
         &self,
         object: ObjectRef,
+        code: CodeUnits<'_>,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Vec<u16>, VMError> {
@@ -6515,6 +6525,10 @@ impl RegisterVM {
         let receiver = Value::from_object(object);
         let text = match intrinsic {
             Intrinsic::ObjectPrototypeToString => self.object_to_string(receiver, heap, realm)?,
+            // 20.2.3.5 answers the text the unit kept beside the code.
+            Intrinsic::FunctionPrototypeToString => {
+                self.function_source(receiver, code, heap, realm)?
+            }
             // 22.1.4 keeps the text in `[[StringData]]`, which 22.1.3.29
             // answers as it is.
             Intrinsic::StringPrototypeToString => Self::string_data(object, heap)
@@ -6987,7 +7001,7 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        let text = self.receiver_units(call.receiver, heap, realm)?;
+        let text = self.receiver_units(call.receiver, units, heap, realm)?;
         let argument = self.call_argument(call, 0)?;
         let Some(receiver) = argument.as_object() else {
             return Err(VMError::Unsupported("a RegExp made at run time"));
@@ -7070,6 +7084,59 @@ impl RegisterVM {
             },
         )?;
         Ok(())
+    }
+
+    /// `Function.prototype.toString` of 20.2.3.5.
+    ///
+    /// A function a Script wrote answers the text of the grammar node it was
+    /// written as, which the unit kept beside its code. Every other callable
+    /// answers the `NativeFunction` string of step 3.
+    fn function_source(
+        &self,
+        receiver: Value,
+        units: CodeUnits<'_>,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let Some(object) = receiver.as_object() else {
+            return Err(type_error(heap, realm, "value is not callable"));
+        };
+        let kind = heap
+            .get_object(object)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?
+            .kind
+            .clone();
+        if let ObjectKind::Function { unit, code_id, .. } = kind
+            && let Some(source) = units
+                .table
+                .root(unit)
+                .and_then(|root| root.functions.get(code_id as usize))
+                .and_then(|code| {
+                    code.source
+                        .and_then(|index| code.string_constants.get(index as usize))
+                })
+        {
+            let text = source.clone();
+            return self.allocate_string(heap, &text);
+        }
+        if !Self::is_callable(receiver, heap) {
+            return Err(type_error(heap, realm, "value is not callable"));
+        }
+        // Step 3: a function no grammar node of a Script produced answers a
+        // `NativeFunction` string, which carries its name where it has one.
+        let key = PropertyKey::String(heap.strings.intern("name")?);
+        let name = heap
+            .own_named_flags(object, key)?
+            .filter(|flags| !flags.is_accessor)
+            .and(heap.lookup_named(object, key)?)
+            .map(|property| property.value)
+            .filter(|value| value.is_string())
+            .and_then(|value| heap.strings.to_utf16(value))
+            .unwrap_or_default();
+        let mut text: Vec<u16> = "function ".encode_utf16().collect();
+        text.extend_from_slice(&name);
+        text.extend("() { [native code] }".encode_utf16());
+        self.allocate_string(heap, &text)
     }
 
     /// `RegExpBuiltinExec` of 22.2.7.2, without the result it builds.
@@ -10961,6 +11028,12 @@ mod tests {
         let mut heap = GenerationalHeap::new();
         let realm = Realm::new(&mut heap).unwrap();
         let vm = RegisterVM::new(100);
+        let empty = BytecodeFunction::new(1, 0);
+        let roots = alloc::vec![&empty];
+        let units = CodeUnits {
+            table: CodeTable::new(&roots),
+            active: &empty,
+        };
         let call = Call {
             receiver: VALUE_UNDEFINED,
             func: Reg(0),
@@ -10989,6 +11062,7 @@ mod tests {
             vm.call_string_intrinsic(
                 Intrinsic::ObjectPrototypeToString,
                 string_call,
+                units,
                 &mut heap,
                 &realm
             ),

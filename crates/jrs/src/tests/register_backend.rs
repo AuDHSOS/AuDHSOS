@@ -6363,3 +6363,29 @@ fn a_prototype_can_be_set_after_the_object_is_made() -> Result<(), Error> {
     );
     Ok(())
 }
+
+/// 20.2.3.5 answers the source text of the grammar node a function was written
+/// as, and the `NativeFunction` string of step 3 for one the engine wrote.
+#[test]
+fn a_function_answers_its_own_source_text() -> Result<(), Error> {
+    for source in [
+        "function f(a){return a};f.toString()",
+        "var f=function(){};f.toString()",
+        "var f=(x)=>x;f.toString()",
+        "class C{m(){}};C.prototype.m.toString()",
+        "class C{};C.toString()",
+        "Math.max.toString()",
+        "(function(){}).bind(null).toString()",
+        "var o={m(){}};o.m.toString()",
+        "String(function f(){})",
+        "''+function f(){}",
+        "`${function f(){}}`",
+        "''+Math.max",
+        "var f=function(){};typeof f.toString()",
+        "Function.prototype.toString.length",
+        "var r=0;try{Function.prototype.toString.call(1)}catch(e){r=e instanceof TypeError}r",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
