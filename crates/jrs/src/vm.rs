@@ -383,7 +383,9 @@ impl Runtime {
     pub fn run(&mut self, program: &Program, host: &mut impl Host) -> Result<Value, Error> {
         if self.backend == Backend::Engine && program.register_code.is_none() {
             return Err(Error::Unsupported {
-                feature: "a Script the register lowering does not take",
+                feature: program
+                    .register_refusal
+                    .unwrap_or("a Script the register lowering does not take"),
             });
         }
         let mut execution = Execution::new(host, self.limits);

@@ -4177,3 +4177,26 @@ fn the_string_constructor_answers_the_primitive_a_call_makes() -> Result<(), Err
     }
     Ok(())
 }
+
+#[test]
+fn a_script_the_lowering_refuses_says_what_it_holds() -> Result<(), Error> {
+    // A refusal that names nothing cannot be prioritised, and it reads as if
+    // the Script were at fault. Each one names the construct it stopped at.
+    // A refusal the passes before the lowering raise still has no name.
+    for (source, feature) in [
+        ("var o={get x(){return 1}}; o.x", "an object literal"),
+        ("class C{}", "a declaration of the Script"),
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(!program.uses_register_backend(), "{source}");
+        assert!(
+            matches!(
+                Runtime::with_backend(Limits::default(), Backend::Engine)
+                    .run(&program, &mut SilentHost),
+                Err(Error::Unsupported { feature: named }) if named == feature
+            ),
+            "{source}"
+        );
+    }
+    Ok(())
+}

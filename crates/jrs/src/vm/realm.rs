@@ -113,7 +113,9 @@ impl<'host> Realm<'host> {
     fn refuse_unlowered(&self, program: &Program) -> Result<(), Error> {
         if self.execution.backend == crate::Backend::Engine && program.register_code.is_none() {
             return Err(Error::Unsupported {
-                feature: "a Script the register lowering does not take",
+                feature: program
+                    .register_refusal
+                    .unwrap_or("a Script the register lowering does not take"),
             });
         }
         Ok(())

@@ -399,6 +399,8 @@ pub struct Program {
     total_instructions: usize,
     pub(crate) globals: Vec<GlobalDecl>,
     pub(crate) register_code: Option<Rc<crate::engine::bytecode::BytecodeFunction>>,
+    /// The construct the register lowering would not take, when it took none.
+    pub(crate) register_refusal: Option<&'static str>,
 }
 
 #[derive(Clone, Debug)]
@@ -421,6 +423,7 @@ impl Program {
             functions: Vec::new(),
             globals: Vec::new(),
             register_code: None,
+            register_refusal: None,
             total_instructions: 0,
         }
     }
@@ -455,6 +458,7 @@ impl Program {
     pub fn legacy_only(&self) -> Self {
         Self {
             register_code: None,
+            register_refusal: None,
             ..self.clone()
         }
     }
@@ -511,6 +515,7 @@ fn compile_parsed(body: &[Stmt], limits: Limits, realm: bool) -> Result<Program,
             total_instructions: 0,
             globals: Vec::new(),
             register_code: None,
+            register_refusal: None,
         },
         scopes: Vec::new(),
         loops: Vec::new(),
@@ -528,13 +533,14 @@ fn compile_parsed(body: &[Stmt], limits: Limits, realm: bool) -> Result<Program,
         compiler.root_body(body)?;
     }
     compiler.finish();
-    compiler.program.register_code = lower_register_script(
+    let (register_code, register_refusal) = lower_register_script(
         body,
         realm,
         u64::try_from(compiler.program.total_instructions).unwrap_or(u64::MAX),
         limits.properties,
-    )
-    .map(Rc::new);
+    );
+    compiler.program.register_code = register_code.map(Rc::new);
+    compiler.program.register_refusal = register_refusal;
     Ok(compiler.program)
 }
 
@@ -733,6 +739,10 @@ struct RegisterLowerer {
     /// Environment Record rather than to the unit. Only a Realm Script does;
     /// a function of one keeps its own var scope.
     script_globals: bool,
+    /// The innermost construct this lowering would not take. The first one
+    /// recorded is the one that stopped it; an enclosing node fails only
+    /// because this one did, so it does not overwrite the name.
+    refusal: Option<&'static str>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -866,6 +876,7 @@ impl RegisterLowerer {
             return_type: None,
             realm: false,
             script_globals: false,
+            refusal: None,
         }
     }
 
@@ -1363,11 +1374,26 @@ impl RegisterLowerer {
         self.return_type = snapshot.return_type;
     }
 
+    fn lower(&mut self, expression: &Expr) -> Option<RegisterType> {
+        let lowered = self.lower_kind(expression);
+        if lowered.is_none() {
+            self.refuse(expression_refusal(&expression.kind));
+        }
+        lowered
+    }
+
+    /// Records the construct that stopped this lowering, if none is recorded.
+    const fn refuse(&mut self, name: &'static str) {
+        if self.refusal.is_none() {
+            self.refusal = Some(name);
+        }
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "expression lowering keeps type propagation beside emitted operations"
     )]
-    fn lower(&mut self, expression: &Expr) -> Option<RegisterType> {
+    fn lower_kind(&mut self, expression: &Expr) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         // The flag covers this expression alone, so a base that is itself a
         // call or an assignment does not pass it on to what it contains.
@@ -3970,6 +3996,14 @@ impl RegisterLowerer {
     }
 
     fn lower_statement(&mut self, statement: &Stmt) -> Option<RegisterFlow> {
+        let lowered = self.lower_statement_kind(statement);
+        if lowered.is_none() {
+            self.refuse(statement_refusal(statement));
+        }
+        lowered
+    }
+
+    fn lower_statement_kind(&mut self, statement: &Stmt) -> Option<RegisterFlow> {
         let flow = match statement {
             Stmt::Expr(expression) => RegisterFlow::Value(self.lower(expression)?),
             Stmt::If(condition, yes, no) => self.lower_if(condition, yes, no.as_deref())?,
@@ -7422,29 +7456,114 @@ fn prepare_register_bindings(
     Some(())
 }
 
+/// The name a refused expression reports.
+///
+/// The names are of the grammar, not of the lowering, because a Script is
+/// refused for what it holds and not for how this file is written.
+const fn expression_refusal(kind: &ExprKind) -> &'static str {
+    match kind {
+        ExprKind::Sequence(..) => "a sequence expression",
+        ExprKind::Literal(_) => "a literal",
+        ExprKind::Regex(..) => "a regular-expression literal",
+        ExprKind::Template(..) => "a template literal",
+        ExprKind::Await(_) => "await",
+        ExprKind::Name(_) => "a name",
+        ExprKind::Group(_) => "a parenthesised expression",
+        ExprKind::Unary(..) => "a unary operator",
+        ExprKind::Binary(..) => "a binary operator",
+        ExprKind::Assign(..) => "an assignment to a name",
+        ExprKind::Destructure(..) => "a destructuring assignment",
+        ExprKind::Update(..) => "an update of a name",
+        ExprKind::Conditional(..) => "a conditional expression",
+        ExprKind::Call(..) => "a call",
+        ExprKind::Construct(..) => "new",
+        ExprKind::Function(_) => "a function expression",
+        ExprKind::Class(_) => "a class expression",
+        ExprKind::Super => "super",
+        ExprKind::NewTarget => "new.target",
+        ExprKind::DefaultSuper => "the default constructor of a derived class",
+        ExprKind::This => "this",
+        ExprKind::Object(_) => "an object literal",
+        ExprKind::Array(_) => "an array literal",
+        ExprKind::Spread(_) => "a spread element",
+        ExprKind::Member(..) => "a property read",
+        ExprKind::SetMember(..) => "a property write",
+        ExprKind::UpdateMember(..) => "an update of a property",
+    }
+}
+
+/// The name a refused statement reports.
+const fn statement_refusal(statement: &Stmt) -> &'static str {
+    match statement {
+        Stmt::Empty => "an empty statement",
+        Stmt::Expr(_) => "an expression statement",
+        Stmt::Block(_) => "a block",
+        Stmt::Declare(_) => "a lexical declaration",
+        Stmt::Var(_) => "a var declaration",
+        Stmt::If(..) => "an if statement",
+        Stmt::While(..) => "a while statement",
+        Stmt::DoWhile(..) => "a do-while statement",
+        Stmt::For(..) => "a for statement",
+        Stmt::Switch(..) => "a switch statement",
+        Stmt::ForIn { .. } => "a for-in statement",
+        Stmt::ForOf { .. } => "a for-of statement",
+        Stmt::Break => "break",
+        Stmt::Continue => "continue",
+        Stmt::Function(..) => "a function declaration",
+        Stmt::Return(_) => "return",
+        Stmt::Throw(_) => "throw",
+        Stmt::Try { .. } => "a try statement",
+    }
+}
+
+/// Lowers a Script, and names the construct it would not take when it takes
+/// none, so the gap reports what is missing rather than that something is.
 fn lower_register_script(
     body: &[Stmt],
     realm: bool,
     entry_fuel_cost: u64,
     property_limit: usize,
-) -> Option<crate::engine::bytecode::BytecodeFunction> {
+) -> (
+    Option<crate::engine::bytecode::BytecodeFunction>,
+    Option<&'static str>,
+) {
     if body
         .iter()
         .any(register_statement_has_unsupported_binding_pattern)
     {
-        return None;
+        return (None, Some("a binding pattern"));
     }
-    let (saw_declaration, saw_function) = register_script_features(body, realm)?;
+    let Some((saw_declaration, saw_function)) = register_script_features(body, realm) else {
+        return (None, Some("a declaration of the Script"));
+    };
     let stack_requirement = body.iter().fold(1usize, |maximum, statement| {
         maximum.max(register_statement_stack_requirement(statement))
     });
     let mut lowerer = RegisterLowerer::new(entry_fuel_cost, stack_requirement, property_limit, 0);
     lowerer.realm = realm;
     lowerer.script_globals = realm;
+    let code = lower_register_body(&mut lowerer, body, realm, saw_declaration, saw_function);
+    let refusal = code.is_none().then(|| {
+        lowerer
+            .refusal
+            .unwrap_or("a Script the register lowering does not take")
+    });
+    (code, refusal)
+}
+
+/// The body of [`lower_register_script`], so that the refusal it recorded
+/// survives the lowering that failed.
+fn lower_register_body(
+    lowerer: &mut RegisterLowerer,
+    body: &[Stmt],
+    realm: bool,
+    saw_declaration: bool,
+    saw_function: bool,
+) -> Option<crate::engine::bytecode::BytecodeFunction> {
     if realm {
         lowerer.instantiate_global_declarations(body)?;
     }
-    prepare_register_bindings(&mut lowerer, body, saw_declaration, saw_function)?;
+    prepare_register_bindings(lowerer, body, saw_declaration, saw_function)?;
     let result_register = lowerer.allocate_register()?;
     lowerer
         .code
@@ -7522,7 +7641,10 @@ fn lower_register_script(
     lowerer.code.register_count = lowerer.register_count;
     lowerer.code.binding_count = lowerer.max_binding_count;
     lowerer.code.verify().ok()?;
-    Some(lowerer.code)
+    Some(core::mem::replace(
+        &mut lowerer.code,
+        crate::engine::bytecode::BytecodeFunction::new(0, 0),
+    ))
 }
 
 fn register_statement_has_unsupported_binding_pattern(statement: &Stmt) -> bool {
@@ -9253,6 +9375,7 @@ impl Compiler {
                 total_instructions: 0,
                 globals: Vec::new(),
                 register_code: None,
+                register_refusal: None,
             },
             scopes: Vec::new(),
             loops: Vec::new(),
