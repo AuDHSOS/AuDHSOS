@@ -5744,13 +5744,24 @@ fn a_string_splits_at_a_string_separator() -> Result<(), Error> {
     ] {
         differential_scripts(&[source])?;
     }
-    // 22.2.6.14 gives a RegExp the `@@split` this engine has not built.
-    let mut host = SilentHost;
-    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
-    assert!(matches!(
-        realm.evaluate("'a1b'.split(/[0-9]/)"),
-        Err(Error::Unsupported { .. })
-    ));
+    // 22.2.6.14 splits at a RegExp, appending the captures of each match.
+    for source in [
+        "'a1b2c'.split(/[0-9]/).join('|')",
+        "'ab'.split(/x/).join('|')",
+        "''.split(/x/).length",
+        "''.split(/(?:)/).length",
+        "'a1b'.split(/([0-9])/).join('|')",
+        "'a1b'.split(/([0-9])/).length",
+        "'abc'.split(/(?:)/).join('|')",
+        "'A<B>b</B>c'.split(/<(\\/)?([^<>]+)>/).length",
+        "typeof 'A<B>b</B>c'.split(/<(\\/)?([^<>]+)>/)[1]",
+        "'a,b'.split(/,/,1).join('|')",
+        "'ab'.split(/a*?/).join('|')",
+        "'ab'.split(/a*/).join('|')",
+        "var r=/,/g;r.lastIndex=5;'a,b'.split(r).join('|')+','+r.lastIndex",
+    ] {
+        differential_scripts(&[source])?;
+    }
     Ok(())
 }
 

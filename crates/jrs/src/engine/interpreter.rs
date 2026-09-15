@@ -1483,10 +1483,10 @@ impl RegisterVM {
             | Intrinsic::StringPrototypePadStart
             | Intrinsic::StringPrototypeTrim
             | Intrinsic::StringPrototypeTrimEnd
-            | Intrinsic::StringPrototypeTrimStart
-            | Intrinsic::StringPrototypeSplit => {
+            | Intrinsic::StringPrototypeTrimStart => {
                 self.call_string_intrinsic(intrinsic, call, heap, realm)
             }
+            Intrinsic::StringPrototypeSplit => self.call_split_intrinsic(&call, units, heap, realm),
             Intrinsic::StringPrototypeMatch | Intrinsic::StringPrototypeSearch => {
                 self.call_string_regexp_intrinsic(intrinsic, &call, units, heap, realm)
             }
@@ -5458,17 +5458,123 @@ impl RegisterVM {
                 let trimmed = units.get(start..end.max(start)).unwrap_or_default();
                 self.allocate_string(heap, trimmed)
             }
-            Intrinsic::StringPrototypeSplit => self.string_split(&units, &call, heap, realm),
             _ => Err(VMError::InvalidFeedbackVector),
         }
     }
 
-    /// `String.prototype.split` of 22.1.3.23 for a separator that is not an
-    /// Object.
+    /// `String.prototype.split` of 22.1.3.23.
     ///
-    /// A separator that is an Object carries the `@@split` method 22.2.6.14
-    /// gives a `RegExp`, which this engine has not built; every other Object
-    /// reaches `ToString`, which names its own gap.
+    /// A separator that is a `RegExp` carries the `@@split` of 22.2.6.14;
+    /// every other Object reaches `ToString`, which names its own gap.
+    fn call_split_intrinsic(
+        &mut self,
+        call: &Call,
+        units: CodeUnits<'_>,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let text = Self::receiver_units(call.receiver, heap, realm)?;
+        let separator = self.call_argument(call, 0)?;
+        if let Some(reference) = separator.as_object()
+            && let Some(pattern) = Self::regexp_pattern(reference, heap, units).cloned()
+        {
+            return self.regexp_split(&text, &pattern, call, heap, realm);
+        }
+        self.string_split(&text, call, heap, realm)
+    }
+
+    /// `RegExp.prototype[@@split]` of 22.2.6.14.
+    ///
+    /// The splitter 22.2.6.14 constructs differs from the receiver only in
+    /// carrying `y`, so the walk matches stickily at each position instead of
+    /// building a second `RegExp`. `SpeciesConstructor` is the default one:
+    /// this Realm has no `@@species`.
+    ///
+    /// The parts are cut out of the text before anything is allocated, so no
+    /// String of a part is held unrooted while the next one is made.
+    fn regexp_split(
+        &mut self,
+        text: &[u16],
+        pattern: &crate::regexp::RegExp,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let limit = self.call_argument(call, 1)?;
+        let limit = if limit.is_undefined() {
+            u32::MAX
+        } else {
+            crate::value::number_uint32(primitive_number(limit, heap)?)
+        };
+        let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+        if limit == 0 {
+            return self.split_result(&[], heap, realm);
+        }
+        // Step 10: an empty text answers itself unless the pattern matches it.
+        if text.is_empty() {
+            let matched = self.sticky_match(pattern, text, 0)?.is_some();
+            let parts: &[Option<&[u16]>] = if matched { &[] } else { &[Some(text)] };
+            return self.split_result(parts, heap, realm);
+        }
+        let mut parts: Vec<Option<&[u16]>> = Vec::new();
+        let mut start = 0usize;
+        let mut at = 0usize;
+        while at < text.len() {
+            self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+            let Some(found) = self.sticky_match(pattern, text, at)? else {
+                at = at.saturating_add(1);
+                continue;
+            };
+            let end = found.range.end.min(text.len());
+            // A match that ends where the last part began makes no progress.
+            if end == start {
+                at = at.saturating_add(1);
+                continue;
+            }
+            parts.push(Some(text.get(start..at).unwrap_or_default()));
+            if parts.len() == limit {
+                return self.split_result(&parts, heap, realm);
+            }
+            start = end;
+            for capture in &found.captures {
+                parts.push(
+                    capture
+                        .clone()
+                        .map(|range| text.get(range).unwrap_or_default()),
+                );
+                if parts.len() == limit {
+                    return self.split_result(&parts, heap, realm);
+                }
+            }
+            at = start;
+        }
+        parts.push(Some(text.get(start..).unwrap_or_default()));
+        self.split_result(&parts, heap, realm)
+    }
+
+    /// One match of the pattern that has to begin exactly at `from`, which is
+    /// what the `y` of the splitter 22.2.6.14 builds asks for.
+    fn sticky_match(
+        &mut self,
+        pattern: &crate::regexp::RegExp,
+        text: &[u16],
+        from: usize,
+    ) -> Result<Option<audhsos_regex::Match>, VMError> {
+        let limits = audhsos_regex::Limits {
+            input_units: self.string_units_limit,
+            work: self.fuel,
+            ..audhsos_regex::Limits::default()
+        };
+        let report = pattern
+            .regex
+            .find(text, from, true, limits)
+            .map_err(|_| VMError::Unsupported("a RegExp beyond the limits of the automaton"))?;
+        self.fuel = self.fuel.saturating_sub(report.work);
+        Ok(report.matched)
+    }
+
+    /// `String.prototype.split` of 22.1.3.23 for a separator that is not a
+    /// `RegExp`.
     ///
     /// The parts are cut out of the text before anything is allocated, so no
     /// String of a part is held unrooted while the next one is made.
@@ -5480,15 +5586,6 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Value, VMError> {
         let separator = self.call_argument(call, 0)?;
-        if separator
-            .as_object()
-            .and_then(|reference| heap.get_object(reference))
-            .is_some_and(|object| matches!(object.kind, ObjectKind::RegExp { .. }))
-        {
-            return Err(VMError::Unsupported(
-                "the @@split method of %RegExp.prototype%",
-            ));
-        }
         let limit = self.call_argument(call, 1)?;
         let limit = if limit.is_undefined() {
             u32::MAX
@@ -5501,20 +5598,20 @@ impl RegisterVM {
             return self.split_result(&[], heap, realm);
         }
         if separator.is_undefined() {
-            return self.split_result(&[units], heap, realm);
+            return self.split_result(&[Some(units)], heap, realm);
         }
         let pattern = property_name_units(separator, heap)?;
         let limit = usize::try_from(limit).unwrap_or(usize::MAX);
         // An empty separator matches no empty substring, so it answers the code
         // units themselves, at most `limit` of them.
         if pattern.is_empty() {
-            let parts: Vec<&[u16]> = units.chunks(1).take(limit).collect();
+            let parts: Vec<Option<&[u16]>> = units.chunks(1).take(limit).map(Some).collect();
             return self.split_result(&parts, heap, realm);
         }
         if units.is_empty() {
-            return self.split_result(&[units], heap, realm);
+            return self.split_result(&[Some(units)], heap, realm);
         }
-        let mut parts: Vec<&[u16]> = Vec::new();
+        let mut parts: Vec<Option<&[u16]>> = Vec::new();
         let mut start = 0usize;
         let mut at = 0usize;
         while at.saturating_add(pattern.len()) <= units.len() {
@@ -5522,21 +5619,24 @@ impl RegisterVM {
                 at = at.saturating_add(1);
                 continue;
             }
-            parts.push(units.get(start..at).unwrap_or_default());
+            parts.push(Some(units.get(start..at).unwrap_or_default()));
             if parts.len() == limit {
                 return self.split_result(&parts, heap, realm);
             }
             at = at.saturating_add(pattern.len());
             start = at;
         }
-        parts.push(units.get(start..).unwrap_or_default());
+        parts.push(Some(units.get(start..).unwrap_or_default()));
         self.split_result(&parts, heap, realm)
     }
 
     /// `CreateArrayFromList` of 7.3.18 for the parts of a split.
+    ///
+    /// A part that is `None` is a capture of 22.2.6.14 that did not
+    /// participate, which is undefined.
     fn split_result(
         &self,
-        parts: &[&[u16]],
+        parts: &[Option<&[u16]>],
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
@@ -5544,7 +5644,10 @@ impl RegisterVM {
         let array = realm.array(heap, length)?;
         for (index, part) in parts.iter().enumerate() {
             let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
-            let value = self.allocate_string(heap, part)?;
+            let value = match part {
+                Some(part) => self.allocate_string(heap, part)?,
+                None => VALUE_UNDEFINED,
+            };
             heap.set_array_element(array, index, value)?;
         }
         Ok(Value::from_object(array))
@@ -5972,7 +6075,7 @@ impl RegisterVM {
         // the matched substrings alone. The ranges are collected before
         // anything is allocated, so no String is held unrooted.
         Self::set_last_index(receiver, Value::from_smi(0), heap)?;
-        let mut parts: Vec<&[u16]> = Vec::new();
+        let mut parts: Vec<Option<&[u16]>> = Vec::new();
         loop {
             self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
             let Some(matched) = self.regexp_exec(receiver, &pattern, &text, heap, realm)? else {
@@ -5981,7 +6084,7 @@ impl RegisterVM {
             let part = text
                 .get(matched.range.clone())
                 .ok_or(VMError::Heap(HeapError::InvalidReference))?;
-            parts.push(part);
+            parts.push(Some(part));
             if parts.len() > self.string_units_limit {
                 return Err(VMError::PropertyLimit);
             }
