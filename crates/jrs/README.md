@@ -637,8 +637,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%String%` and its methods on the register engine (focused) | focused | `86ba2e2` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/String --summary` | 1,223 | 2,443 | 566 (23.17%) | 8 (0.33%) | 1,869 (76.50%) |
 | `%Object%` and its methods, after 20.1.2 (focused) | focused | `f123a15` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 5,916 (86.97%) | 862 (12.67%) | 24 (0.35%) |
 | `%Object%` and its methods, after 20.1.2, on the register engine (focused) | focused | `f123a15` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,142 (16.79%) | 18 (0.26%) | 5,642 (82.95%) |
-| Complete pinned suite, including staging and Intl | full | `f123a15` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `f123a15` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 8,046 (7.82%) | 15,947 (15.49%) | 78,932 (76.69%) |
+| `%Array%` and its methods, after 23.1.3 (focused) | focused | `14a8333` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 5,066 (82.82%) | 969 (15.84%) | 82 (1.34%) |
+| `%Array%` and its methods, after 23.1.3, on the register engine (focused) | focused | `14a8333` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 750 (12.26%) | 358 (5.85%) | 5,009 (81.89%) |
+| Complete pinned suite, including staging and Intl | full | `14a8333` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `14a8333` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 8,198 (7.97%) | 15,941 (15.49%) | 78,786 (76.55%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -827,6 +829,26 @@ the heading of 20.1.2.19, where the stack backend answers zero as it does for
 `call`. The 40 variants that moved from a gap to a failure all read a global
 no Realm here builds, which the stack backend fails as well.
 
+`%Array.prototype%` owed the next most, and the eight methods of 23.1.3 that
+need no callback are built: 23.1.3.27 and 23.1.3.37 move every element by one,
+23.1.3.31 answers the removed elements and closes the distance its arguments
+leave, 23.1.3.7 fills a range and 23.1.3.4 copies one range of the Array over
+another, and 23.1.3.2, 23.1.3.39 and 23.1.3.33 copy into an Array of their own.
+A hole stays a hole where the clause reads through `HasProperty`, and becomes
+undefined where it reads every index. `shift` and `unshift` the stack backend
+does not have at all, so the engine answers more than it there. Two internal
+errors a forwarded call could reach are gaps now: this engine moves elements in
+the store 10.4.2 gives an Array, and a receiver without one reported a broken
+frame instead of the thing it cannot do, while its `length` is written the way
+7.3.4 writes any property. That is 152 more variants and six fewer failures,
+with no variant moving from a gap to a failure.
+
+What `%Array.prototype%` still owes is the family that calls back into the
+Script — `map`, `filter`, `forEach`, `every`, `some`, `reduce`, `reduceRight`
+and `sort` — which needs the engine to enter a function of the Script from
+inside a native and resume where it left off, as 7.1.1 already does for a
+`valueOf`.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -878,7 +900,9 @@ Both full runs beside the named refusals and the top-level `this` were
 measured at tree `950e1f858de5af48170d7517db5171da2957ccdb`, which is the tree
 of `b367caf`. The `%Object%` runs and both full runs beside them were measured
 at tree `32a160f59e6759ed3b30746a8eb7f024d49194a4`, which is the tree of
-`f123a15`.
+`f123a15`. The `%Array%` runs and both full runs beside them were measured at
+tree `b01866f6404a7fdcb87da506795dcaca929665c5`, which is the tree of
+`14a8333`.
 
 ### Historical Test262 baseline
 
