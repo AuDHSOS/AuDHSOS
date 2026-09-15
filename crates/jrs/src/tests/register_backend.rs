@@ -4669,17 +4669,13 @@ fn a_for_of_walks_an_iterable_by_the_protocol_of_7_4() -> Result<(), Error> {
             "{source}"
         );
     }
-    // A body that leaves by `break` or `return` would have to close the
-    // iterator (7.4.9), which the lowering does not emit.
-    for source in [
-        "for(var x of [1].values()){break}",
-        "function f(a){for(var x of a.values()){return x}}f([1])",
-    ] {
-        assert!(
-            !compile(source, Limits::default())?.uses_register_backend(),
-            "{source}"
-        );
-    }
+    // A body that leaves by `return` would have to close the iterator past
+    // the close the loop emits (7.4.9).
+    let source = "function f(a){for(var x of a.values()){return x}}f([1])";
+    assert!(
+        !compile(source, Limits::default())?.uses_register_backend(),
+        "{source}"
+    );
     Ok(())
 }
 
@@ -6420,5 +6416,38 @@ fn an_object_rest_element_copies_what_the_pattern_left() -> Result<(), Error> {
         realm.evaluate("function f(o){var {...r}=o;return r.a}f({get a(){return 1}})"),
         Err(Error::Unsupported { .. })
     ));
+    Ok(())
+}
+
+/// 7.4.9 closes an iterator a `break` left before its end; the normal exit
+/// reached that end and closes nothing.
+#[test]
+fn a_break_out_of_a_for_of_closes_its_iterator() -> Result<(), Error> {
+    for source in [
+        "var n=0;var it={};it[Symbol.iterator]=function(){return {\
+         next:function(){return {value:1,done:false}},return:function(){n++;return {}}}};\
+         for(var x of it){break}''+n",
+        "var n=0;var it={};it[Symbol.iterator]=function(){return {\
+         next:function(){return {done:true}},return:function(){n++;return {}}}};\
+         for(var x of it){}''+n",
+        "var r=0;for(var x of [1,2,3]){if(x===2)break;r+=x}''+r",
+        "var r='';for(var x of [1,2,3]){if(x===2)continue;r+=x}r",
+        "var r=0;for(var x of [1,2]){r+=x}''+r",
+        "var r=0;for(var x of [1,2,3]){for(var y of [1]){break}r+=x}''+r",
+        "var it={};it[Symbol.iterator]=function(){return {\
+         next:function(){return {value:1,done:false}}}};\
+         var r=0;for(var x of it){r=x;break}''+r",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // A `return` leaves the frame past the close this emits.
+    let source = "function f(a){for(var x of a.values()){return x}}f([1])";
+    let program = compile(source, Limits::default())?;
+    assert!(!program.uses_register_backend(), "{source}");
+    assert_eq!(
+        program.register_refusal,
+        Some("a return out of a for-of, which 7.4.9 closes"),
+        "{source}"
+    );
     Ok(())
 }

@@ -827,6 +827,9 @@ struct IterationHead<'a> {
     /// Layout the loop variable's type was read from, which the body may not
     /// change.
     guarded_layout: Option<u32>,
+    /// The iterator 7.4.9 closes where a `break` leaves the loop, and a
+    /// register the close reads the `return` method into.
+    close: Option<(crate::engine::bytecode::Reg, crate::engine::bytecode::Reg)>,
 }
 
 struct RegisterLoop {
@@ -6343,6 +6346,7 @@ impl RegisterLowerer {
                 result: result_register,
                 source: None,
                 guarded_layout: None,
+                close: None,
             },
             &bindings_at_head,
         )?;
@@ -6475,13 +6479,21 @@ impl RegisterLowerer {
             return None;
         }
         let back_edge = self.code.emit(Instruction::Jump(0));
+        // 7.4.9 closes an iterator a `break` left before its end; the normal
+        // exit reached that end and closes nothing.
+        let closing = self.code.instructions.len();
+        if let Some((iterator, scratch)) = loop_head.close
+            && !loop_state.breaks.is_empty()
+        {
+            self.lower_iterator_close(iterator, scratch)?;
+        }
         let done = self.code.instructions.len();
         self.code.emit(Instruction::Ldar(loop_head.result));
         self.patch_jump(loop_head.enter, body_start)?;
         self.patch_jump(loop_head.exit, done)?;
         self.patch_jump(back_edge, loop_head.head)?;
         for jump in loop_state.breaks {
-            self.patch_jump(jump, done)?;
+            self.patch_jump(jump, closing)?;
         }
         for jump in loop_state.continues {
             self.patch_jump(jump, loop_head.head)?;
@@ -6546,8 +6558,10 @@ impl RegisterLowerer {
         body: &Stmt,
     ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
-        if register_statement_transfers_control(body) {
-            self.refuse("a for-of a break or a return leaves, which 7.4.9 closes");
+        // 7.4.9 closes an iterator the loop leaves early. A `break` reaches
+        // the close this emits; a `return` leaves the frame past it.
+        if register_statement_returns(body) {
+            self.refuse("a return out of a for-of, which 7.4.9 closes");
             return None;
         }
         let iterable = self.allocate_register()?;
@@ -6651,6 +6665,7 @@ impl RegisterLowerer {
                 result: result_register,
                 source: None,
                 guarded_layout: None,
+                close: Some((iterator, next)),
             },
             &bindings_at_head,
         )?;
@@ -6666,6 +6681,39 @@ impl RegisterLowerer {
             RegisterFlow::Value(value_type) => RegisterType::Undefined.merge(value_type),
             RegisterFlow::Empty | RegisterFlow::Abrupt => RegisterType::Undefined,
         })
+    }
+
+    /// `IteratorClose` of 7.4.9: an iterator with no `return` is closed by
+    /// doing nothing, and one that has it is called with no argument.
+    fn lower_iterator_close(
+        &mut self,
+        iterator: crate::engine::bytecode::Reg,
+        scratch: crate::engine::bytecode::Reg,
+    ) -> Option<()> {
+        use crate::engine::bytecode::Instruction;
+        let return_name = self.string_constant(&"return".encode_utf16().collect::<Vec<_>>())?;
+        let return_slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetNamed {
+            obj: iterator,
+            name: return_name,
+            slot: return_slot,
+        });
+        self.code.emit(Instruction::Star(scratch));
+        let present = self.code.emit(Instruction::JumpIfNotNullish(0));
+        let skip = self.code.emit(Instruction::Jump(0));
+        let call = self.code.instructions.len();
+        self.patch_jump(present, call)?;
+        let close_slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
+        self.code.emit(Instruction::CallMethod {
+            receiver: iterator,
+            func: scratch,
+            arg_start: scratch,
+            arg_count: 0,
+            slot: close_slot,
+        });
+        let after = self.code.instructions.len();
+        self.patch_jump(skip, after)?;
+        Some(())
     }
 
     /// The register a `for`-`in` or `for`-`of` head writes each iteration.
@@ -6859,6 +6907,7 @@ impl RegisterLowerer {
                 result: result_register,
                 source: Some(value),
                 guarded_layout: Some(object_id),
+                close: None,
             },
             &bindings_at_head,
         )?;
@@ -8043,6 +8092,34 @@ fn try_statements<'a>(
 /// Whether the statement can transfer control past the Block it stands in.
 ///
 /// A nested function body is not scanned: its `return` leaves that function.
+/// Whether a statement returns out of the function it stands in.
+fn register_statement_returns(statement: &Stmt) -> bool {
+    match statement {
+        Stmt::Return(_) => true,
+        Stmt::Block(body) => body.iter().any(register_statement_returns),
+        Stmt::If(_, yes, no) => {
+            register_statement_returns(yes) || no.as_deref().is_some_and(register_statement_returns)
+        }
+        Stmt::While(_, body)
+        | Stmt::DoWhile(body, _)
+        | Stmt::For(_, _, _, body)
+        | Stmt::ForIn { body, .. }
+        | Stmt::ForOf { body, .. } => register_statement_returns(body),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            try_statements(body, catch.as_ref(), finally.as_deref()).any(register_statement_returns)
+        }
+        Stmt::Switch(_, clauses) => clauses
+            .iter()
+            .flat_map(|(_, body)| body)
+            .any(register_statement_returns),
+        _ => false,
+    }
+}
+
 fn register_statement_transfers_control(statement: &Stmt) -> bool {
     match statement {
         Stmt::Break | Stmt::Continue | Stmt::Return(_) => true,
