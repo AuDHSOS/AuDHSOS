@@ -649,10 +649,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Object%` and its methods, after the integrity levels, on the register engine (focused) | focused | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,530 (22.49%) | 18 (0.26%) | 5,254 (77.24%) |
 | `%Number%` (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 572 (84.12%) | 102 (15.00%) | 6 (0.88%) |
 | `%Number%` on the register engine (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 226 (33.24%) | 2 (0.29%) | 452 (66.47%) |
-| `for`-`in` and `for`-`of` (focused) | focused | `296962a` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/for-in test/language/statements/for-of --summary` | 870 | 1,648 | 1,230 (74.64%) | 86 (5.22%) | 332 (20.15%) |
-| `for`-`in` and `for`-`of` on the register engine (focused) | focused | `296962a` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/for-in test/language/statements/for-of --summary` | 870 | 1,648 | 219 (13.29%) | 32 (1.94%) | 1,397 (84.77%) |
-| Complete pinned suite, including staging and Intl | full | `296962a` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `296962a` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 17,130 (16.64%) | 18,368 (17.85%) | 67,427 (65.51%) |
+| The `in` operator (focused) | focused | `9161a72` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/in --summary` | 36 | 69 | 29 (42.03%) | 0 (0.00%) | 40 (57.97%) |
+| The `in` operator on the register engine (focused) | focused | `9161a72` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/in --summary` | 36 | 69 | 23 (33.33%) | 0 (0.00%) | 46 (66.67%) |
+| Complete pinned suite, including staging and Intl | full | `9161a72` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `9161a72` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 17,190 (16.70%) | 17,323 (16.83%) | 68,412 (66.47%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1179,6 +1179,13 @@ knows that shape now — the loop keeps the key or the element in a register of
 its own and writes the binding where 14.7.5.6 says it lives. 542 more variants
 move to passed.
 
+13.10.2 answers `HasProperty` of 7.3.11 on the key 7.1.19 makes, and the engine
+had no instruction for it, so every Script that used `in` was refused. 60 more
+variants move to passed, and 1,067 move the other way across the line between
+failed and unsupported: those Scripts used to be refused whole and now run until
+they reach the feature they actually need, which is `async`, `Promise` or a
+template literal.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -1283,6 +1290,8 @@ The update-operator runs and both full runs beside them were measured at tree
 `acd36f25f993be92bb6a73befb4917d1fae00a3f`, which is the tree of `0eec6d3`. The
 `for`-`in` and `for`-`of` runs and both full runs beside the var head were
 measured at tree `5171fcbc56893b889cbf004ecb90d08d50f25a2a`, which is the tree of `296962a`.
+The `in` runs and both full runs beside it were measured at tree `7566b356e8ed2ed32878328b146d71676841ba39`,
+which is the tree of `9161a72`.
 
 ### Historical Test262 baseline
 
