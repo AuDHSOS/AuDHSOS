@@ -909,3 +909,97 @@ fn a_key_that_counts_up_is_counted_in_the_table_of_sequences() {
     let database = Database::open(&written).unwrap();
     assert_eq!(database.tables().count(), 0);
 }
+
+#[test]
+fn a_column_of_a_compound_converts_what_every_core_of_it_leaves_it_converting() {
+    use crate::change::Writer;
+    use crate::header::Encoding;
+    // `sqlite3SubqueryColumnTypes`: the affinity is the first core's,
+    // or the first core after it that has one, and a core beyond that
+    // one which answers a class the affinity would convert takes the
+    // affinity away.
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE whole(id INT, n)".as_slice(),
+        b"CREATE TABLE more(id INT, n)",
+        b"CREATE TABLE words(id TEXT, n)",
+        b"CREATE TABLE plain(id, n)",
+        b"INSERT INTO whole VALUES(1,'a')",
+        b"INSERT INTO more VALUES(2,'b')",
+        b"INSERT INTO words VALUES('4','e')",
+        b"INSERT INTO plain VALUES(7,'g')",
+        // A compound of two cores that count in numbers keeps the
+        // type; one of a number and a text keeps none; one whose first
+        // core converts nothing keeps that, because a column with no
+        // type still has the affinity `BLOB`.
+        b"CREATE TABLE agree AS SELECT * FROM whole UNION SELECT * FROM more",
+        b"CREATE TABLE differ AS SELECT * FROM whole UNION SELECT * FROM words",
+        b"CREATE TABLE later AS SELECT * FROM plain UNION SELECT * FROM whole",
+        b"CREATE TABLE textual AS SELECT * FROM words UNION SELECT * FROM words",
+        b"CREATE TABLE spoilt AS SELECT id+0, n FROM words UNION SELECT id, n FROM words",
+        b"CREATE TABLE said AS SELECT 'x', 1 UNION SELECT id, n FROM words",
+        // The shapes of expression a class is read off: a `+`, a null,
+        // a blob and a `CASE`.
+        b"CREATE TABLE shapes AS SELECT +id, NULL, x'00', CASE WHEN n THEN 'a' ELSE 2 END           FROM words UNION SELECT id, n, n, n FROM words",
+        b"CREATE TABLE elseless AS SELECT CASE WHEN n THEN 'a' END FROM words UNION SELECT n FROM words",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    let statements: Vec<Vec<u8>> = database
+        .query(b"SELECT sql FROM sqlite_master WHERE type='table'")
+        .unwrap()
+        .rows
+        .iter()
+        .filter_map(|row| match row.first() {
+            Some(Value::Text(text)) => Some(text.clone()),
+            _ => None,
+        })
+        .skip(4)
+        .collect();
+    assert_eq!(
+        statements,
+        [
+            b"CREATE TABLE agree(id INT,n)".to_vec(),
+            b"CREATE TABLE differ(id,n)".to_vec(),
+            b"CREATE TABLE later(id,n)".to_vec(),
+            b"CREATE TABLE textual(id TEXT,n)".to_vec(),
+            b"CREATE TABLE spoilt(\"id+0\",n)".to_vec(),
+            b"CREATE TABLE said(\"'x'\" TEXT,\"1\")".to_vec(),
+            b"CREATE TABLE shapes(\n  \"+id\" TEXT,\n  \"NULL\",\n  \"x'00'\",\n  \"CASE WHEN n THEN 'a' ELSE 2 END\"\n)".to_vec(),
+            b"CREATE TABLE elseless(\"CASE WHEN n THEN 'a' END\")".to_vec(),
+        ]
+    );
+    // A column that converts nothing compares a number against text as
+    // the two classes sort and not as numbers, which is what the join
+    // of `affinity3.test` reads.
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE mi(id INT, name)".as_slice(),
+        b"CREATE TABLE mt(id TEXT, name)",
+        b"CREATE TABLE data(id TEXT, name)",
+        b"INSERT INTO mi VALUES(1,'a')",
+        b"INSERT INTO mt VALUES('4','e')",
+        b"INSERT INTO data VALUES(1,'abc'),('4','xyz')",
+        b"CREATE VIEW both AS SELECT * FROM mi UNION SELECT * FROM mt",
+        b"CREATE VIEW one AS SELECT * FROM mi",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    let rows = database
+        .query(b"SELECT data.name FROM data JOIN both USING(id)")
+        .unwrap()
+        .rows;
+    assert_eq!(rows, [[Value::Text(b"xyz".to_vec())]]);
+    // A view over one table keeps that table's affinity, so the same
+    // join there does convert.
+    let database = Database::open(&written).unwrap();
+    let rows = database
+        .query(b"SELECT data.name FROM data JOIN one USING(id)")
+        .unwrap()
+        .rows;
+    assert_eq!(rows, [[Value::Text(b"abc".to_vec())]]);
+}

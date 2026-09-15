@@ -220,7 +220,9 @@ fn tcl_case<'a>(rest: &'a str, out: &mut Vec<Step>) -> &'a str {
         .filter(|(_, over)| over.trim().is_empty());
     match read {
         Some((sql, _)) => push(out, name, sql, want),
-        None => out.push(Step::Opaque(true)),
+        // The body was read past, so the text of it is what says
+        // whether the step may have written.
+        None => out.push(Step::Opaque(false)),
     }
     after
 }
@@ -289,7 +291,7 @@ pub(crate) fn cases(text: &str) -> Vec<Step> {
             // not taken for setup.
             "do_catchsql_test" => {
                 rest = past(rest, 2);
-                out.push(Step::Opaque(true));
+                out.push(Step::Opaque(false));
             }
             // `do_test NAME { execsql { SQL } } { ANSWER }` is the
             // older way of writing `do_execsql_test`, and the only
@@ -314,14 +316,16 @@ pub(crate) fn cases(text: &str) -> Vec<Step> {
             }
         }
         // A step this harness cannot run stops the file only where the
-        // text it stands for may have changed the database.
+        // text it stands for may have changed the database. A step
+        // whose text was not read past says so itself, and the text
+        // read here only adds to what it says.
         let consumed = from
             .get(..from.len().saturating_sub(rest.len()))
             .unwrap_or("");
         let held = writes(consumed);
         for step in out.iter_mut().skip(at) {
-            if matches!(step, Step::Opaque(_)) {
-                *step = Step::Opaque(held);
+            if let Step::Opaque(stops) = step {
+                *stops = *stops || held;
             }
         }
     }
@@ -346,7 +350,7 @@ fn push(out: &mut Vec<Step>, name: &str, sql: &str, want: &str) {
         .iter()
         .any(|text| text.contains('$') || text.contains('['))
     {
-        out.push(Step::Opaque(true));
+        out.push(Step::Opaque(false));
         return;
     }
     out.push(Step::Case {

@@ -187,6 +187,10 @@ struct Column {
     affinity: Affinity,
     /// How its text is compared, where anything was written about it.
     collation: Option<Collation>,
+    /// Which classes the expression it came from may answer, which is
+    /// what `sqlite3ExprDataType` reads off it: one bit for a number,
+    /// one for text and one for a blob.
+    datatype: u8,
 }
 
 /// The columns a side of a `FROM` answers.
@@ -418,6 +422,7 @@ fn shape_of(table: &Table) -> Shape {
                 name: column.name.clone(),
                 affinity: column.affinity,
                 collation: Some(column.collation),
+                datatype: classes_of(column.affinity),
             })
             .collect(),
         keyed: !table.without_rowid,
@@ -1144,6 +1149,7 @@ impl<'a> Database<'a> {
                 column.collation = column.collation.or(mine.collation);
             }
         }
+        compounded(&mut shape, &others);
         let collations = self.collations(&shape);
         for (operator, right) in operators.into_iter().zip(others) {
             combine(operator, &mut answer, right.answer, &collations);
@@ -1946,6 +1952,7 @@ fn listed(
             name: name.clone(),
             affinity: Affinity::None,
             collation: None,
+            datatype: NUMBER,
         });
         names.push(name);
     }
@@ -3144,6 +3151,7 @@ fn shape(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> Resu
                     name,
                     affinity,
                     collation,
+                    datatype: data_type(arena, expr, sql, sides),
                 });
             }
         }
@@ -4975,4 +4983,119 @@ fn overed(
         )
     });
     Ok(order)
+}
+
+/// A class a column may answer, one bit each, which is what
+/// `sqlite3ExprDataType` of `src/expr.c` answers.
+const NUMBER: u8 = 0x01;
+/// Text.
+const TEXT: u8 = 0x02;
+/// A blob.
+const BLOB: u8 = 0x04;
+
+/// The classes a column of an affinity may answer, which is what a
+/// column of a table answers: a numeric affinity keeps a number or a
+/// blob, `TEXT` keeps text or a blob, and no affinity keeps anything.
+fn classes_of(affinity: Affinity) -> u8 {
+    if affinity.numeric() {
+        return NUMBER | BLOB;
+    }
+    if matches!(affinity, Affinity::Text) {
+        return TEXT | BLOB;
+    }
+    NUMBER | TEXT | BLOB
+}
+
+/// Which classes the expression at `id` may answer.
+///
+/// This is `sqlite3ExprDataType`, which reads the shape of the
+/// expression and not a row: a literal answers its own class, a call
+/// answers any of them, and a column answers what its affinity keeps.
+fn data_type(arena: &Arena, id: ExprId, sql: &[u8], sides: &[Side<'_>]) -> u8 {
+    arena
+        .node(id)
+        .map_or(0, |node| class_of(arena, id, node, sql, sides))
+}
+
+/// The same for one node the arena holds.
+fn class_of(arena: &Arena, id: ExprId, node: Node, sql: &[u8], sides: &[Side<'_>]) -> u8 {
+    match node {
+        Node::Collate { value, .. }
+        | Node::Unary {
+            op: UnaryOp::Identity,
+            operand: value,
+        } => data_type(arena, value, sql, sides),
+        Node::Literal(Literal::Null) => 0,
+        Node::Literal(Literal::Text(_)) => TEXT,
+        Node::Literal(Literal::Blob(_)) => BLOB,
+        Node::Binary {
+            op: BinaryOp::Concat,
+            ..
+        } => TEXT | BLOB,
+        Node::Variable(_) | Node::Call { .. } | Node::Over { .. } => NUMBER | TEXT | BLOB,
+        Node::Column { .. } | Node::Subquery(_) | Node::Cast { .. } | Node::Row(_) => {
+            classes_of(compared(arena, id, sql, sides).0)
+        }
+        Node::Case {
+            branches,
+            otherwise,
+            ..
+        } => {
+            // A `CASE` answers whatever one of its answers answers,
+            // which is every second child and the `ELSE`.
+            let mut held = 0;
+            for (at, child) in arena.children(branches).iter().enumerate() {
+                if at % 2 == 1 {
+                    held |= data_type(arena, *child, sql, sides);
+                }
+            }
+            match otherwise {
+                Some(child) => held | data_type(arena, child, sql, sides),
+                None => held,
+            }
+        }
+        _ => NUMBER,
+    }
+}
+
+/// What a column of a compound converts before it is compared.
+///
+/// This is `sqlite3SubqueryColumnTypes`: the affinity is the first
+/// core's, or the first core after it that has one, and a core beyond
+/// that one which answers a class the affinity would convert takes the
+/// affinity away, so a column whose cores are an integer one and a text
+/// one converts nothing.
+fn compounded(shape: &mut Shape, others: &[Answered]) {
+    for (at, column) in shape.columns.iter_mut().enumerate() {
+        let mut cores = alloc::vec![(column.affinity, column.datatype)];
+        cores.extend(
+            others
+                .iter()
+                .filter_map(|other| other.shape.columns.get(at))
+                .map(|held| (held.affinity, held.datatype)),
+        );
+        let mut classes = 0_u8;
+        let mut core = 0_usize;
+        let mut held = column.affinity;
+        while held == Affinity::None && core.saturating_add(1) < cores.len() {
+            classes |= cores.get(core).map_or(0, |(_, held)| *held);
+            core = core.saturating_add(1);
+            held = cores.get(core).map_or(Affinity::None, |(held, _)| *held);
+        }
+        column.affinity = held;
+        if held < Affinity::Text {
+            continue;
+        }
+        for (_, datatype) in cores.iter().skip(core.saturating_add(1)) {
+            classes |= *datatype;
+        }
+        let taken = if held == Affinity::Text {
+            classes & NUMBER != 0
+        } else {
+            classes & TEXT != 0
+        };
+        if taken {
+            column.affinity = Affinity::Blob;
+        }
+    }
 }

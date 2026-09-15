@@ -4762,6 +4762,24 @@ D-220, document 16 step Q9.
   it.
 - `do_execsql_test NAME { SQL }` with no answer after it expects no
   row, and an answer of one word needs no braces.
+- A step whose text the harness read past says for itself whether it
+  may have written, and `execsql` written as a quoted string stops the
+  file whatever stands around it.
+
+### 6.6.145 What a column of a compound converts (`db-sqlite`)
+
+D-221, document 16 step Q5.
+
+- A compound whose cores agree on a numeric affinity keeps it; one of a
+  numeric core and a text core converts nothing.
+- A compound whose first core has no affinity takes the affinity of the
+  first core after it that has one.
+- A table made from such a statement is written with the type the
+  affinity is written as, and with none where the affinity converts
+  nothing.
+- A join against such a column compares a number against text as the
+  classes sort, and a join against a view over one table converts as
+  that table's column does.
 
 ## 6.7 CI pipeline
 
