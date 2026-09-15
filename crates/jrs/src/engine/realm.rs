@@ -358,6 +358,10 @@ pub enum Intrinsic {
     ArrayPrototypeKeys,
     /// `Array.prototype.entries` (23.1.3.4).
     ArrayPrototypeEntries,
+    /// `Function.prototype.apply` (20.2.3.1).
+    FunctionPrototypeApply,
+    /// `Reflect.apply` (28.1.1).
+    ReflectApply,
     /// `Array.prototype.values`, which is also `%Array.prototype%[@@iterator]`
     /// (23.1.3.38 and 23.1.3.40).
     ArrayPrototypeValues,
@@ -610,7 +614,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 140] = [
+    pub const ALL: [Self; 142] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -751,6 +755,8 @@ impl Intrinsic {
         Self::ArrayPrototypeFindLastIndex,
         Self::ArrayPrototypeKeys,
         Self::ArrayPrototypeEntries,
+        Self::FunctionPrototypeApply,
+        Self::ReflectApply,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -824,9 +830,9 @@ impl Intrinsic {
             Self::ArrayConstructor | Self::ObjectConstructor | Self::FunctionConstructor => {
                 IntrinsicHolder::Global
             }
-            Self::FunctionPrototypeCall | Self::FunctionPrototypeBind => {
-                IntrinsicHolder::FunctionPrototype
-            }
+            Self::FunctionPrototypeCall
+            | Self::FunctionPrototypeBind
+            | Self::FunctionPrototypeApply => IntrinsicHolder::FunctionPrototype,
             Self::MathPow
             | Self::MathAbs
             | Self::MathCeil
@@ -840,7 +846,8 @@ impl Intrinsic {
             | Self::MathImul
             | Self::MathFround
             | Self::MathSin => IntrinsicHolder::Math,
-            Self::ReflectDefineProperty
+            Self::ReflectApply
+            | Self::ReflectDefineProperty
             | Self::ReflectDeleteProperty
             | Self::ReflectGet
             | Self::ReflectGetOwnPropertyDescriptor
@@ -1059,6 +1066,8 @@ impl Intrinsic {
             Self::ArrayPrototypeFindLastIndex => 137,
             Self::ArrayPrototypeKeys => 138,
             Self::ArrayPrototypeEntries => 139,
+            Self::FunctionPrototypeApply => 140,
+            Self::ReflectApply => 141,
         }
     }
 
@@ -1209,6 +1218,8 @@ impl Intrinsic {
             Self::ArrayPrototypeFindLastIndex => 137,
             Self::ArrayPrototypeKeys => 138,
             Self::ArrayPrototypeEntries => 139,
+            Self::FunctionPrototypeApply => 140,
+            Self::ReflectApply => 141,
         }
     }
 
@@ -1360,6 +1371,8 @@ impl Intrinsic {
             137 => Some(Self::ArrayPrototypeFindLastIndex),
             138 => Some(Self::ArrayPrototypeKeys),
             139 => Some(Self::ArrayPrototypeEntries),
+            140 => Some(Self::FunctionPrototypeApply),
+            141 => Some(Self::ReflectApply),
             _ => None,
         }
     }
@@ -1397,6 +1410,7 @@ impl Intrinsic {
             Self::ObjectConstructor => "Object",
             Self::FunctionConstructor => "Function",
             Self::FunctionPrototypeCall => "call",
+            Self::FunctionPrototypeApply | Self::ReflectApply => "apply",
             Self::FunctionPrototypeBind => "bind",
             Self::MathPow => "pow",
             Self::ErrorConstructor => "Error",
@@ -1633,6 +1647,8 @@ impl Intrinsic {
             | Self::FunctionConstructor
             | Self::FunctionPrototypeCall
             | Self::FunctionPrototypeBind
+            | Self::FunctionPrototypeApply
+            | Self::ReflectApply
             | Self::MathPow
             | Self::ErrorConstructor
             | Self::EvalErrorConstructor
@@ -1864,7 +1880,7 @@ impl Intrinsic {
             | Self::ReflectOwnKeys
             | Self::ReflectPreventExtensions
             | Self::ObjectGetOwnPropertyNames => 1,
-            Self::ObjectDefineProperty | Self::ReflectDefineProperty => 3,
+            Self::ObjectDefineProperty | Self::ReflectDefineProperty | Self::ReflectApply => 3,
             Self::MathPow
             | Self::ObjectGetOwnPropertyDescriptor
             | Self::ObjectCreate
@@ -1886,6 +1902,7 @@ impl Intrinsic {
             | Self::JsonStringify
             | Self::MathImul
             | Self::ParseInt
+            | Self::FunctionPrototypeApply
             | Self::StringPrototypeSplit => 2,
         }
     }

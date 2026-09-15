@@ -6166,3 +6166,43 @@ fn an_array_iterates_its_keys_and_its_entries() -> Result<(), Error> {
     }
     Ok(())
 }
+
+/// 20.2.3.1 and 28.1.1 call what they were given with the List 7.3.18 makes
+/// out of an array-like, which no frame of the caller holds.
+#[test]
+fn apply_calls_with_a_list_of_arguments() -> Result<(), Error> {
+    for source in [
+        "function f(a,b){return a+b};''+f.apply(null,[1,2])",
+        "function f(){return this.x};''+f.apply({x:5})",
+        "function f(a,b){return a+b};''+f.apply(null,{length:2,0:3,1:4})",
+        "function f(){return arguments.length};''+f.apply(null,[1,2,3])",
+        "function f(){return arguments[1]};''+f.apply(null,[7,8])",
+        "function f(a,b){return a+b};''+Reflect.apply(f,null,[1,2])",
+        "function f(a){return a};typeof f.apply(null)",
+        "function f(a){return a};typeof f.apply(null,[])",
+        "typeof Function.prototype.apply",
+        "function f(){return arguments.length};''+f.apply(null,{length:2})",
+        "var r=0;try{Reflect.apply(function(){},null,null)}catch(e){r=e instanceof TypeError}r",
+        "var r=0;try{Reflect.apply(1,null,[])}catch(e){r=e instanceof TypeError}r",
+        "function f(){'use strict';return this};typeof f.apply(undefined)",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // A callee written in Rust reads its arguments out of registers of the
+    // caller, which a List is not.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    assert!(matches!(
+        realm.evaluate("Math.max.apply(null,[1,5,2])"),
+        Err(Error::Unsupported { .. })
+    ));
+    // 20.2.3.1 gives `apply` two formal parameters; the stack backend gives it
+    // none, and this checks the engine against the specification.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    assert_eq!(
+        realm.evaluate("Function.prototype.apply.length")?,
+        Value::Number(2.0)
+    );
+    Ok(())
+}

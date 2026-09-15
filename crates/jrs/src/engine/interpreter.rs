@@ -393,6 +393,15 @@ pub enum Resume {
         /// Root naming the [`ObjectKind::ArrayIteration`] state.
         state: Root,
     },
+    /// The arguments of the call are a List and not registers of the caller.
+    ///
+    /// 20.2.3.1 and 28.1.1 make one out of an array-like, which no frame of
+    /// the caller holds, so the call carries the Array it was made into and
+    /// the frame takes its parameters from there.
+    Spread {
+        /// Root naming the Array the arguments were collected into.
+        arguments: Root,
+    },
     /// `[[Get]]` of 10.1.8.1 called the getter of an accessor property.
     ///
     /// The getter answers into the accumulator, which is where every
@@ -1284,6 +1293,21 @@ impl RegisterVM {
                         realm,
                     );
                 }
+                // 20.2.3.1 and 28.1.1 do not answer here either: they leave
+                // to call what they were given, with the List 7.3.18 makes.
+                if matches!(
+                    intrinsic,
+                    Intrinsic::FunctionPrototypeApply | Intrinsic::ReflectApply
+                ) {
+                    return self.begin_spread_call(
+                        intrinsic,
+                        call,
+                        units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    );
+                }
                 // A method of 23.1.3 that asks the Script about each element
                 // does not answer here: it leaves to make the first call and
                 // comes back through the frame that call opens.
@@ -1413,6 +1437,27 @@ impl RegisterVM {
                     .get_mut(next_frame)
                     .ok_or(VMError::StackOverflow)? =
                     heap.root_value(value).unwrap_or(VALUE_UNDEFINED);
+            }
+        } else if let Some(Resume::Spread { arguments }) = call.resume {
+            // 20.2.3.1 and 28.1.1 pass a List, which the Array the root names
+            // holds; the frame takes as many of them as it has parameters.
+            let list = heap
+                .root_value(arguments)
+                .and_then(Value::as_object)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let store = heap
+                .get_object(list)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?
+                .elements
+                .and_then(|elements| heap.get_elements(elements));
+            for index in 0..u32::from(call.arg_count.min(callee.parameter_count)) {
+                let argument = store
+                    .and_then(|store| store.get(index))
+                    .unwrap_or(VALUE_UNDEFINED);
+                *self
+                    .stack
+                    .get_mut(next_frame.saturating_add(index as usize))
+                    .ok_or(VMError::StackOverflow)? = argument;
             }
         } else if let Some(Resume::Iteration { state }) = call.resume {
             let arguments = Self::iteration_arguments(state, heap)?;
@@ -1601,6 +1646,11 @@ impl RegisterVM {
                 self.call_math_extremum(intrinsic, call, heap)
             }
             Intrinsic::FunctionPrototypeBind => self.bind_function(call, heap, realm),
+            // 20.2.3.1 and 28.1.1 leave to call what they were given, so they
+            // never answer here.
+            Intrinsic::FunctionPrototypeApply | Intrinsic::ReflectApply => {
+                Err(VMError::InvalidFeedbackVector)
+            }
             Intrinsic::ArrayConstructor => self.construct_array(call, heap, realm),
             Intrinsic::StringConstructor => Self::call_string_constructor(
                 call.construct.is_some(),
@@ -2720,6 +2770,80 @@ impl RegisterVM {
             }
             Conversion::Suspended(code_id) => Ok(Some(code_id)),
         }
+    }
+
+    /// `Function.prototype.apply` of 20.2.3.1 and `Reflect.apply` of 28.1.1.
+    ///
+    /// `CreateListFromArrayLike` of 7.3.18 collects the arguments into an
+    /// Array the call carries, because a frame of the caller holds none of
+    /// them. A callee written in Rust reads its arguments out of registers of
+    /// the caller, so one of those is a gap here.
+    fn begin_spread_call(
+        &mut self,
+        intrinsic: Intrinsic,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let reflect = intrinsic == Intrinsic::ReflectApply;
+        let (target, receiver, list) = if reflect {
+            (
+                self.call_argument(&call, 0)?,
+                self.call_argument(&call, 1)?,
+                self.call_argument(&call, 2)?,
+            )
+        } else {
+            (
+                call.receiver,
+                self.call_argument(&call, 0)?,
+                self.call_argument(&call, 1)?,
+            )
+        };
+        if !Self::is_script_function(target, heap) {
+            if !Self::is_callable(target, heap) {
+                return Err(type_error(heap, realm, "value is not callable"));
+            }
+            return Err(VMError::Unsupported("apply of a function written in Rust"));
+        }
+        // 7.3.18 step 2: undefined and null are an empty List for 20.2.3.1,
+        // and a `TypeError` for 28.1.1, which asks for an Object.
+        let arguments = if list.is_undefined() && !reflect {
+            Vec::new()
+        } else {
+            let Some(source) = list.as_object() else {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "the arguments of apply are not an object",
+                ));
+            };
+            let length = Self::array_like_length(heap, source, realm)?;
+            let length = u16::try_from(length).map_err(|_| {
+                VMError::Unsupported("a call of more arguments than a frame passes")
+            })?;
+            let mut collected = Vec::with_capacity(usize::from(length));
+            for index in 0..u32::from(length) {
+                self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+                collected.push(Self::element_at(heap, source, index)?.unwrap_or(VALUE_UNDEFINED));
+            }
+            collected
+        };
+        let arg_count = u16::try_from(arguments.len()).map_err(|_| VMError::TypeError)?;
+        let list = Self::array_of(arguments, heap, realm)?;
+        // The List outlives every frame the call opens, so it is a root of a
+        // scope of its own, which the return leaves.
+        heap.enter_scope();
+        let arguments = heap.push_root(list)?;
+        let call = Call {
+            receiver,
+            arg_count,
+            resume: Some(Resume::Spread { arguments }),
+            construct: None,
+            ..call
+        };
+        self.enter_call_value(target, units, active_feedback, heap, realm, call)
     }
 
     /// Whether the value is a function a Script wrote, which answers through a
@@ -6931,18 +7055,46 @@ impl RegisterVM {
         if count.saturating_add(2) > self.property_limit {
             return Err(VMError::PropertyLimit);
         }
+        // The values are taken before anything is allocated: 20.2.3.1 and
+        // 28.1.1 passed a List no register of the caller holds, and every
+        // other call passed registers the allocation below does not move.
+        let mut passed: Vec<Value> = Vec::with_capacity(count);
+        if let Some(Resume::Spread { arguments: list }) = frame.resume {
+            let list = heap
+                .root_value(list)
+                .and_then(Value::as_object)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let store = heap
+                .get_object(list)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?
+                .elements
+                .and_then(|elements| heap.get_elements(elements));
+            for index in 0..arguments.count {
+                passed.push(
+                    store
+                        .and_then(|store| store.get(u32::from(index)))
+                        .unwrap_or(VALUE_UNDEFINED),
+                );
+            }
+        } else {
+            for index in 0..arguments.count {
+                let slot = frame
+                    .caller_fp
+                    .checked_add(arguments.start.0 as usize)
+                    .and_then(|start| start.checked_add(index as usize))
+                    .ok_or(VMError::InvalidRegister)?;
+                passed.push(
+                    self.stack
+                        .get(slot)
+                        .copied()
+                        .ok_or(VMError::InvalidRegister)?,
+                );
+            }
+        }
         let root_shape = heap.shapes.root_shape();
         let object = self.allocate_object(code, heap, realm, root_shape)?;
         self.write_reg(target, Value::from_object(object))?;
-        let outer = |vm: &Self, register: Reg| -> Result<Value, VMError> {
-            let slot = frame
-                .caller_fp
-                .checked_add(register.0 as usize)
-                .ok_or(VMError::InvalidRegister)?;
-            vm.stack.get(slot).copied().ok_or(VMError::InvalidRegister)
-        };
-        for index in 0..arguments.count {
-            let argument = outer(self, Reg(arguments.start.0.saturating_add(index)))?;
+        for (index, argument) in passed.into_iter().enumerate() {
             let name = alloc::format!("{index}");
             let key = PropertyKey::String(
                 heap.strings
@@ -6982,7 +7134,18 @@ impl RegisterVM {
             )?;
             return Ok(());
         }
-        let callee = outer(self, arguments.callee)?;
+        // 10.4.4 step 8 gives a sloppy function's object the callee itself,
+        // which the caller kept in a register of its own.
+        let callee = self
+            .stack
+            .get(
+                frame
+                    .caller_fp
+                    .checked_add(arguments.callee.0 as usize)
+                    .ok_or(VMError::InvalidRegister)?,
+            )
+            .copied()
+            .ok_or(VMError::InvalidRegister)?;
         let key = PropertyKey::String(heap.strings.intern_units(&CALLEE_NAME)?);
         self.define_own(target, key, PropertyFlags::constructor_data(), callee, heap)?;
         Ok(())
@@ -8863,6 +9026,7 @@ impl RegisterVM {
                                 | Resume::Coercion { register, .. } => register,
                                 Resume::Iteration { .. }
                                 | Resume::Getter
+                                | Resume::Spread { .. }
                                 | Resume::Setter { .. } => Reg(0),
                             };
                             let call = Call {
@@ -8896,6 +9060,12 @@ impl RegisterVM {
                                 // The getter answered the value of the
                                 // property, and the accumulator holds it.
                                 Resume::Getter => None,
+                                // The call answered, and the List its
+                                // arguments were is no longer reachable.
+                                Resume::Spread { .. } => {
+                                    heap.exit_scope();
+                                    None
+                                }
                                 // 13.15.2 answers the value assigned, not what
                                 // the setter answered.
                                 Resume::Setter { value } => {
