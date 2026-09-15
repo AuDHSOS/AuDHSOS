@@ -649,10 +649,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Object%` and its methods, after the integrity levels, on the register engine (focused) | focused | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,530 (22.49%) | 18 (0.26%) | 5,254 (77.24%) |
 | `%Number%` (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 572 (84.12%) | 102 (15.00%) | 6 (0.88%) |
 | `%Number%` on the register engine (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 226 (33.24%) | 2 (0.29%) | 452 (66.47%) |
-| Destructuring (focused) | focused | `f85a432` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/assignment/dstr test/language/statements/function/dstr --summary` | 554 | 1,012 | 762 (75.30%) | 0 (0.00%) | 250 (24.70%) |
-| Destructuring on the register engine (focused) | focused | `f85a432` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/assignment/dstr test/language/statements/function/dstr --summary` | 554 | 1,012 | 142 (14.03%) | 0 (0.00%) | 870 (85.97%) |
-| Complete pinned suite, including staging and Intl | full | `ab6b416` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `ab6b416` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 14,792 (14.37%) | 18,143 (17.63%) | 69,990 (68.00%) |
+| Destructuring of literals and class bodies (focused) | focused | `3f46a6f` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/object/dstr test/language/statements/class/dstr test/language/expressions/class/dstr --summary` | 4,401 | 8,802 | 1,580 (17.95%) | 6 (0.07%) | 7,216 (81.98%) |
+| Destructuring of literals and class bodies on the register engine (focused) | focused | `3f46a6f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/object/dstr test/language/statements/class/dstr test/language/expressions/class/dstr --summary` | 4,401 | 8,802 | 920 (10.45%) | 0 (0.00%) | 7,882 (89.55%) |
+| Complete pinned suite, including staging and Intl | full | `3f46a6f` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `3f46a6f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 15,514 (15.07%) | 18,143 (17.63%) | 69,268 (67.30%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1128,6 +1128,14 @@ been emitted; the lowering rejected the whole enclosing body for it. A captured
 read of it takes the generic path and there is nothing to invalidate. 6 more
 variants move to passed.
 
+8.6.2 and 14.3.3.3 run an Initializer only where the value is undefined, and the
+lowering asked every one of them to answer a primitive and to leave its layouts
+untouched. A value that is known undefined always takes the Initializer, so what
+it made keeps its layout; a value that may be defined takes it on one path only,
+so a layout it made is dropped and the answer is the type the lowering cannot
+name. A layout an Initializer *changed* is still a refusal. 722 more variants
+move to passed.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -1220,7 +1228,9 @@ at tree `4c551f2b918796cf23f17d6665e79fc5f5ecd6a5`, which is the tree of `eded9b
 The destructuring runs and both full runs beside the array pattern were measured
 at tree `3a9b434d676073eb8148c6e5865cf8ef0c75ebb7`, which is the tree of `f85a432`.
 Both full runs beside the captured var were measured at tree `f81ca2e9a54ae3a0d186b1efade5eb88714e88c1`, which is
-the tree of `ab6b416`.
+the tree of `ab6b416`. The destructuring runs and both full runs beside the
+Initializer that makes an object were measured at tree `b81882bae18c737903ae0ea37c3e49ebf0f5102d`, which is the
+tree of `3f46a6f`.
 
 ### Historical Test262 baseline
 
