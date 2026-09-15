@@ -649,10 +649,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Object%` and its methods, after the integrity levels, on the register engine (focused) | focused | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,530 (22.49%) | 18 (0.26%) | 5,254 (77.24%) |
 | `%Number%` (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 572 (84.12%) | 102 (15.00%) | 6 (0.88%) |
 | `%Number%` on the register engine (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 226 (33.24%) | 2 (0.29%) | 452 (66.47%) |
-| `%RegExp%` and its literals (focused) | focused | `f3ee748` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/RegExp test/language/literals/regexp --summary` | 2,119 | 4,236 | 1,572 (37.11%) | 100 (2.36%) | 2,564 (60.53%) |
-| `%RegExp%` and its literals on the register engine (focused) | focused | `f3ee748` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/RegExp test/language/literals/regexp --summary` | 2,119 | 4,236 | 656 (15.49%) | 671 (15.84%) | 2,909 (68.67%) |
-| Complete pinned suite, including staging and Intl | full | `f3ee748` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `f3ee748` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 18,226 (17.71%) | 18,368 (17.85%) | 66,331 (64.45%) |
+| Assignments and 20.1.2.4 (focused) | focused | `9e13fd0` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/assignment test/built-ins/Object/defineProperty --summary` | 1,616 | 3,100 | 2,722 (87.81%) | 82 (2.65%) | 296 (9.55%) |
+| Assignments and 20.1.2.4 on the register engine (focused) | focused | `9e13fd0` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/assignment test/built-ins/Object/defineProperty --summary` | 1,616 | 3,100 | 1,813 (58.48%) | 100 (3.23%) | 1,187 (38.29%) |
+| Complete pinned suite, including staging and Intl | full | `9e13fd0` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `9e13fd0` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 19,175 (18.63%) | 17,902 (17.39%) | 65,848 (63.98%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1202,6 +1202,14 @@ backend already uses, charging the work it reports to the fuel of the call. The
 constructor, which compiles at run time, and the accessors of 22.2.6 stay named
 gaps. 708 more variants move to passed.
 
+10.1.9.1 refuses a write to a property that is not writable, wherever on the
+Prototype Chain it sits, and the engine wrote the slot regardless, so the
+lowering guarded the three names it knew of by refusing every write of them.
+The two store instructions carry the strictness of the Reference now and consult
+the property before they write; they also carry whether the write defines rather
+than assigns, because 13.2.5.5 defines the properties of a literal and reaches
+no Prototype. 949 more variants move to passed.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -1311,6 +1319,8 @@ which is the tree of `9161a72`. The `%Symbol%` runs and both full runs beside
 the well-known Symbols were measured at tree `063dd5f1f751852170a46382cf38652a70be0fa7`, which is the tree of
 `0f9693b`. The `%RegExp%` runs and both full runs beside the literal were
 measured at tree `33b4f21bcf4ad4e3dd7ce0f89f6659253ffe3f6b`, which is the tree of `f3ee748`.
+The assignment runs and both full runs beside the write a property refuses were
+measured at tree `f4adc2a7be55c9ac1e585664ce125151c2d6d4fc`, which is the tree of `9e13fd0`.
 
 ### Historical Test262 baseline
 
