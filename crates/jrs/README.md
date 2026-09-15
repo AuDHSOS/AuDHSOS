@@ -649,10 +649,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Object%` and its methods, after the integrity levels, on the register engine (focused) | focused | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,530 (22.49%) | 18 (0.26%) | 5,254 (77.24%) |
 | `%Number%` (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 572 (84.12%) | 102 (15.00%) | 6 (0.88%) |
 | `%Number%` on the register engine (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 226 (33.24%) | 2 (0.29%) | 452 (66.47%) |
-| `%Array%` length and prototype (focused) | focused | `78ba3e1` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/length test/built-ins/Array/prototype --summary` | 2,841 | 5,643 | 4,800 (85.06%) | 811 (14.37%) | 32 (0.57%) |
-| `%Array%` length and prototype on the register engine (focused) | focused | `78ba3e1` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/length test/built-ins/Array/prototype --summary` | 2,841 | 5,643 | 2,178 (38.60%) | 390 (6.91%) | 3,075 (54.49%) |
-| Complete pinned suite, including staging and Intl | full | `78ba3e1` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `78ba3e1` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 16,057 (15.60%) | 18,258 (17.74%) | 68,610 (66.66%) |
+| The update operators (focused) | focused | `0eec6d3` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/postfix-increment test/language/expressions/postfix-decrement test/language/expressions/prefix-increment test/language/expressions/prefix-decrement --summary` | 142 | 246 | 182 (73.98%) | 16 (6.50%) | 48 (19.51%) |
+| The update operators on the register engine (focused) | focused | `0eec6d3` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/postfix-increment test/language/expressions/postfix-decrement test/language/expressions/prefix-increment test/language/expressions/prefix-decrement --summary` | 142 | 246 | 74 (30.08%) | 0 (0.00%) | 172 (69.92%) |
+| Complete pinned suite, including staging and Intl | full | `0eec6d3` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `0eec6d3` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 16,588 (16.12%) | 18,366 (17.84%) | 67,971 (66.04%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1165,6 +1165,13 @@ put a property in the Shape beside the length a read answers — and it is built
 An index the Shape took over in 10.4.2.1 stays a named gap there. 14 more
 variants move to passed.
 
+13.4.4.1 reads a Reference, takes `ToNumeric` of what it held and writes the sum
+back, and the lowering did that only for a binding of its own frame: a name the
+Global Environment Record binds — in a Realm, every top-level `var` — was
+refused, and so was every update of a property. Both are lowered now, the
+property Reference evaluated once so the read and the write reach the same
+property. 531 more variants move to passed.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -1265,6 +1272,8 @@ function is given were measured at tree `81c5b8eb6bba2d95d8a62fde4ee817bc5b190f0
 at tree `c426eda58af35211855c91d965cc318fd88778b1`, which is the tree of `9e4966b`.
 The `%Array%` runs and both full runs beside the Array length were measured at
 tree `2967dd64190cdfd228e7aec38c932c7aefe40099`, which is the tree of `78ba3e1`.
+The update-operator runs and both full runs beside them were measured at tree
+`acd36f25f993be92bb6a73befb4917d1fae00a3f`, which is the tree of `0eec6d3`.
 
 ### Historical Test262 baseline
 
