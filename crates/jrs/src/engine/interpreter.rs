@@ -132,6 +132,9 @@ const HOLES_PER_FUEL_UNIT: u32 = 4;
 /// The hint 7.1.1 passes to `@@toPrimitive` for an operation that names none.
 const DEFAULT_HINT: [u16; 7] = [0x64, 0x65, 0x66, 0x61, 0x75, 0x6C, 0x74];
 
+/// The `"string"` hint 7.1.17 passes to 7.1.1.
+const STRING_HINT: [u16; 6] = [0x73, 0x74, 0x72, 0x69, 0x6E, 0x67];
+
 /// The state of one walk of 23.1.3, read out of the object that holds it.
 ///
 /// A plain record, so the walk can be reasoned about in one place; it is
@@ -335,6 +338,32 @@ pub enum Resume {
         register: Reg,
         /// The method of 7.1.1 whose answer this is.
         step: PrimitiveStep,
+        /// The hint 7.1.1 was given, which decides the order of the methods.
+        hint: PrimitiveHint,
+    },
+    /// A native operation asked the Script for a primitive argument.
+    ///
+    /// The native has no frame, and the caller's registers still hold the
+    /// arguments it was called with, so the operation runs again from the
+    /// beginning once the argument they name is a primitive. Only an
+    /// operation that converts before it changes anything asks this way.
+    Coercion {
+        /// The intrinsic that asked, by [`Intrinsic::id`].
+        intrinsic: u32,
+        /// Root holding the `this` value of the call.
+        receiver: Root,
+        /// The argument register the primitive is written to.
+        register: Reg,
+        /// First argument register of the call.
+        arg_start: Reg,
+        /// Number of arguments the call passed.
+        arg_count: u16,
+        /// Register `new` keeps its object in, when this was a construct.
+        construct: Option<Reg>,
+        /// The method of 7.1.1 whose answer this is.
+        step: PrimitiveStep,
+        /// The hint 7.1.1 was given.
+        hint: PrimitiveHint,
     },
     /// A method of 23.1.3 called the callback for one element.
     ///
@@ -360,6 +389,89 @@ pub enum Resume {
         /// Root holding the value written.
         value: Root,
     },
+}
+
+impl Resume {
+    /// The conversion of 7.1.1 this is waiting for, if it is one.
+    const fn conversion(self) -> Option<(Reg, PrimitiveStep, PrimitiveHint)> {
+        match self {
+            Self::Primitive {
+                register,
+                step,
+                hint,
+            }
+            | Self::Coercion {
+                register,
+                step,
+                hint,
+                ..
+            } => Some((register, step, hint)),
+            _ => None,
+        }
+    }
+
+    /// The same conversion, waiting for the next method of 7.1.1.
+    const fn with_step(self, next: PrimitiveStep) -> Self {
+        match self {
+            Self::Primitive { register, hint, .. } => Self::Primitive {
+                register,
+                step: next,
+                hint,
+            },
+            Self::Coercion {
+                intrinsic,
+                receiver,
+                register,
+                arg_start,
+                arg_count,
+                construct,
+                hint,
+                ..
+            } => Self::Coercion {
+                intrinsic,
+                receiver,
+                register,
+                arg_start,
+                arg_count,
+                construct,
+                step: next,
+                hint,
+            },
+            other => other,
+        }
+    }
+}
+
+/// The hint 7.1.1 takes, which decides the order of the methods 7.1.1.1 asks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrimitiveHint {
+    /// 7.1.1 with no hint, and 7.1.3: `valueOf` before `toString`.
+    Default,
+    /// 7.1.17: `toString` before `valueOf`.
+    String,
+}
+
+impl PrimitiveHint {
+    /// The text `@@toPrimitive` is passed.
+    const fn units(self) -> &'static [u16] {
+        match self {
+            Self::Default => &DEFAULT_HINT,
+            Self::String => &STRING_HINT,
+        }
+    }
+
+    /// The method 7.1.1 asks after this one, and none after the last.
+    const fn after(self, step: PrimitiveStep) -> Option<PrimitiveStep> {
+        match (self, step) {
+            (Self::Default, PrimitiveStep::Exotic) | (Self::String, PrimitiveStep::ToString) => {
+                Some(PrimitiveStep::ValueOf)
+            }
+            (Self::Default, PrimitiveStep::ValueOf) | (Self::String, PrimitiveStep::Exotic) => {
+                Some(PrimitiveStep::ToString)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Which method of 7.1.1 a conversion has already asked.
@@ -1060,6 +1172,10 @@ impl RegisterVM {
     ///
     /// Returns [`VMError::Thrown`] for a callee that is not callable, and the
     /// frame, binding and fuel limits of the caller.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function names every way a call is entered"
+    )]
     fn enter_call_value(
         &mut self,
         function: Value,
@@ -1091,6 +1207,22 @@ impl RegisterVM {
                     active_feedback
                         .record_call(call.slot, NATIVE_CALL_TARGET | u64::from(id))
                         .ok_or(VMError::InvalidFeedbackVector)?;
+                }
+                // 7.1.17 of an Object argument is a call of a method of the
+                // object, and the native has no frame to make it from: it
+                // leaves and runs again with the primitive in its place.
+                if let Some(index) = Self::coerces_argument(intrinsic)
+                    && self.call_argument(&call, index)?.as_object().is_some()
+                {
+                    return self.begin_coercion(
+                        intrinsic,
+                        index,
+                        call,
+                        units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    );
                 }
                 // A method of 23.1.3 that asks the Script about each element
                 // does not answer here: it leaves to make the first call and
@@ -2166,6 +2298,75 @@ impl RegisterVM {
             heap.define_own_named(descriptor, key, entry, PropertyFlags::ordinary_data())?;
         }
         Ok(Value::from_object(descriptor))
+    }
+
+    /// The argument an intrinsic sends through 7.1.17 before it does anything
+    /// else, and which it therefore may be run again for.
+    ///
+    /// Only an operation whose conversion comes before every effect it has
+    /// belongs here: the native runs from the beginning once the argument is a
+    /// primitive.
+    const fn coerces_argument(intrinsic: Intrinsic) -> Option<u16> {
+        match intrinsic {
+            // 22.1.1.1 step 2, and 20.5.1.1 step 3 with 20.5.6.1.1 beside it.
+            Intrinsic::StringConstructor
+            | Intrinsic::ErrorConstructor
+            | Intrinsic::EvalErrorConstructor
+            | Intrinsic::RangeErrorConstructor
+            | Intrinsic::ReferenceErrorConstructor
+            | Intrinsic::SyntaxErrorConstructor
+            | Intrinsic::TypeErrorConstructor
+            | Intrinsic::UriErrorConstructor => Some(0),
+            _ => None,
+        }
+    }
+
+    /// Leaves a native operation to convert one of its arguments (7.1.17).
+    ///
+    /// The receiver travels in a root, because the argument registers belong
+    /// to the caller and the collector sees them, but the `this` value of a
+    /// native call is a value of its own.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a conversion runs where a call does, with what a call has"
+    )]
+    fn begin_coercion(
+        &mut self,
+        intrinsic: Intrinsic,
+        index: u16,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let register = Reg(call.arg_start.0.saturating_add(index));
+        let argument = self.read_reg(register)?;
+        heap.enter_scope();
+        let receiver = heap.push_root(call.receiver)?;
+        let resume = Resume::Coercion {
+            intrinsic: intrinsic.id(),
+            receiver,
+            register,
+            arg_start: call.arg_start,
+            arg_count: call.arg_count,
+            construct: call.construct,
+            step: PrimitiveStep::Exotic,
+            hint: PrimitiveHint::String,
+        };
+        let conversion = Call {
+            receiver: argument,
+            resume: Some(resume),
+            construct: None,
+            ..call
+        };
+        match self.convert_to_primitive(conversion, units, active_feedback, heap, realm)? {
+            Conversion::Done(value) => {
+                self.write_reg(register, value)?;
+                self.finish_coerced(resume, heap, realm)
+            }
+            Conversion::Suspended(code_id) => Ok(Some(code_id)),
+        }
     }
 
     /// Calls the getter or the setter of an accessor property, as 10.1.8.1
@@ -3871,11 +4072,10 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Conversion, VMError> {
         let object = call.receiver.as_object().ok_or(VMError::TypeError)?;
-        let Some(Resume::Primitive {
-            register,
-            step: first,
-        }) = call.resume
-        else {
+        let Some(resume) = call.resume else {
+            return Err(VMError::TypeError);
+        };
+        let Some((register, first, hint)) = resume.conversion() else {
             return Err(VMError::TypeError);
         };
         let kind = heap
@@ -3904,10 +4104,10 @@ impl RegisterVM {
                 // where the collector can see it.
                 call.arg_count = u16::from(step == PrimitiveStep::Exotic);
                 if step == PrimitiveStep::Exotic {
-                    let hint = self.allocate_string(heap, &DEFAULT_HINT)?;
-                    self.write_reg(register, hint)?;
+                    let text = self.allocate_string(heap, hint.units())?;
+                    self.write_reg(register, text)?;
                 }
-                call.resume = Some(Resume::Primitive { register, step });
+                call.resume = Some(resume.with_step(step));
                 if let Some(code_id) =
                     self.enter_call_value(method, units, active_feedback, heap, realm, call)?
                 {
@@ -3918,13 +4118,10 @@ impl RegisterVM {
                     return Ok(Conversion::Done(value));
                 }
             }
-            step = match step {
-                PrimitiveStep::Exotic => PrimitiveStep::ValueOf,
-                PrimitiveStep::ValueOf => PrimitiveStep::ToString,
-                PrimitiveStep::ToString => {
-                    return Err(type_error(heap, realm, "an object has no primitive value"));
-                }
+            let Some(next) = hint.after(step) else {
+                return Err(type_error(heap, realm, "an object has no primitive value"));
             };
+            step = next;
         }
     }
 
@@ -3945,21 +4142,20 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Option<u32>, VMError> {
-        let Some(Resume::Primitive { register, step }) = call.resume else {
+        let Some(resume) = call.resume else {
+            return Err(VMError::TypeError);
+        };
+        let Some((register, step, hint)) = resume.conversion() else {
             return Err(VMError::TypeError);
         };
         if let Some(value) = Self::primitive_answer(self.acc, step, heap, realm)? {
             self.write_reg(register, value)?;
-            return Ok(None);
+            return self.finish_coerced(resume, heap, realm);
         }
         // The method answered an Object, so 7.1.1.1 asks the next one. The
         // operand is still in its register, where the collector kept it.
-        let next = match step {
-            PrimitiveStep::Exotic => PrimitiveStep::ValueOf,
-            PrimitiveStep::ValueOf => PrimitiveStep::ToString,
-            PrimitiveStep::ToString => {
-                return Err(type_error(heap, realm, "an object has no primitive value"));
-            }
+        let Some(next) = hint.after(step) else {
+            return Err(type_error(heap, realm, "an object has no primitive value"));
         };
         let object = self
             .read_reg(register)?
@@ -3967,19 +4163,59 @@ impl RegisterVM {
             .ok_or(VMError::TypeError)?;
         let call = Call {
             receiver: Value::from_object(object),
-            resume: Some(Resume::Primitive {
-                register,
-                step: next,
-            }),
+            resume: Some(resume.with_step(next)),
             ..call
         };
         match self.convert_to_primitive(call, units, active_feedback, heap, realm)? {
             Conversion::Done(value) => {
                 self.write_reg(register, value)?;
-                Ok(None)
+                self.finish_coerced(resume, heap, realm)
             }
             Conversion::Suspended(code_id) => Ok(Some(code_id)),
         }
+    }
+
+    /// Runs the native operation again once its argument is a primitive.
+    ///
+    /// A conversion an instruction asked for answers into the register the
+    /// instruction reads, and there is nothing left to do.
+    fn finish_coerced(
+        &mut self,
+        resume: Resume,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let Resume::Coercion {
+            intrinsic,
+            receiver,
+            arg_start,
+            arg_count,
+            construct,
+            ..
+        } = resume
+        else {
+            return Ok(None);
+        };
+        let intrinsic = Intrinsic::from_id(intrinsic).ok_or(VMError::TypeError)?;
+        let call = Call {
+            receiver: heap.root_value(receiver).unwrap_or(VALUE_UNDEFINED),
+            func: arg_start,
+            arg_start,
+            arg_count,
+            slot: 0,
+            resume: None,
+            construct,
+            return_pc: 0,
+            caller_code_id: None,
+        };
+        heap.exit_scope();
+        self.acc = self.call_intrinsic(intrinsic, call, heap, realm)?;
+        // 23.1.1.1 and 20.5.1.1 answer an object of their own, which the
+        // instruction keeps where the collector sees it.
+        if let Some(target) = construct {
+            self.write_reg(target, self.acc)?;
+        }
+        Ok(None)
     }
 
     /// The method of 7.1.1.1 this Realm still owes an object of this kind.
@@ -5681,6 +5917,8 @@ impl RegisterVM {
                             resume: Some(Resume::Primitive {
                                 register,
                                 step: PrimitiveStep::Exotic,
+                                // 13.15.3 and 7.1.3 take no hint.
+                                hint: PrimitiveHint::Default,
                             }),
                             return_pc: pc.saturating_sub(1),
                             caller_code_id: current_code_id,
@@ -6424,22 +6662,36 @@ impl RegisterVM {
                     // was reached, so a native constructor takes the arguments
                     // and none of 10.1.13, whose object it would not use.
                     if let Some(intrinsic) = self.native_constructor(func, heap) {
-                        self.acc = self.call_intrinsic(
-                            intrinsic,
-                            Call {
-                                receiver: VALUE_UNDEFINED,
-                                func,
-                                arg_start,
-                                arg_count,
-                                slot,
-                                return_pc: pc,
-                                resume: None,
-                                caller_code_id: current_code_id,
-                                construct: Some(target),
-                            },
-                            heap,
-                            realm,
-                        )?;
+                        let call = Call {
+                            receiver: VALUE_UNDEFINED,
+                            func,
+                            arg_start,
+                            arg_count,
+                            slot,
+                            return_pc: pc,
+                            resume: None,
+                            caller_code_id: current_code_id,
+                            construct: Some(target),
+                        };
+                        // The same conversion a call of the native asks for.
+                        if let Some(index) = Self::coerces_argument(intrinsic)
+                            && self.call_argument(&call, index)?.as_object().is_some()
+                        {
+                            if let Some(code_id) = self.begin_coercion(
+                                intrinsic,
+                                index,
+                                call,
+                                units,
+                                active_feedback,
+                                heap,
+                                realm,
+                            )? {
+                                current_code_id = Some(code_id);
+                                pc = 0;
+                            }
+                            return Ok(None);
+                        }
+                        self.acc = self.call_intrinsic(intrinsic, call, heap, realm)?;
                         self.write_reg(target, self.acc)?;
                         return Ok(None);
                     }
@@ -6572,7 +6824,8 @@ impl RegisterVM {
                             // walk of 23.1.3 names a root instead, so it has
                             // no register of the caller to name here.
                             let register = match resume {
-                                Resume::Primitive { register, .. } => register,
+                                Resume::Primitive { register, .. }
+                                | Resume::Coercion { register, .. } => register,
                                 Resume::Iteration { .. }
                                 | Resume::Getter
                                 | Resume::Setter { .. } => Reg(0),
@@ -6593,7 +6846,7 @@ impl RegisterVM {
                                 active: caller,
                             };
                             let resumed = match resume {
-                                Resume::Primitive { .. } => {
+                                Resume::Primitive { .. } | Resume::Coercion { .. } => {
                                     self.finish_conversion(call, units, feedback, heap, realm)?
                                 }
                                 Resume::Iteration { state } => self.step_array_iteration(

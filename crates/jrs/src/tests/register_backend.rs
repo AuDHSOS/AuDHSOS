@@ -4163,6 +4163,14 @@ fn the_string_constructor_answers_the_primitive_a_call_makes() -> Result<(), Err
         "String.prototype.charAt.call(42,0)",
         "String.prototype.charAt.call(true,1)",
         "var r=0;try{String.prototype.charAt.call(null,0)}catch(e){r=e instanceof TypeError}r",
+        // 22.1.1.1 step 2 is 7.1.17, which for an Object asks the object.
+        "String({})",
+        "String([1,2])",
+        "String({toString:function(){return 'made'}})",
+        "String({valueOf:function(){return 'wrong'},toString:function(){return 'right'}})",
+        "String({toString:function(){return {}},valueOf:function(){return 'fallback'}})",
+        "var e=new Error({toString:function(){return 'why'}});e.message",
+        "var e=new TypeError({toString:function(){return 'why'}});e.message",
     ] {
         differential(source)?;
     }
@@ -4179,8 +4187,6 @@ fn the_string_constructor_answers_the_primitive_a_call_makes() -> Result<(), Err
         "String.prototype.anchor",
         "String.prototype.trimLeft",
         "'abc'.split",
-        // ToString of an Object would run a method of the Script.
-        "String({})",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
