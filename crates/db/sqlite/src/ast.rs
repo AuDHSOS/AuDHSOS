@@ -258,7 +258,8 @@ pub enum Node {
         /// The collation's name.
         name: Span,
     },
-    /// `name(args)`, `count(*)`, `count(DISTINCT x)`.
+    /// `name(args)`, `count(*)`, `count(DISTINCT x)`, with the
+    /// `FILTER (WHERE ...)` an aggregate may carry.
     Call {
         /// The function's name.
         name: Span,
@@ -268,6 +269,9 @@ pub enum Node {
         distinct: bool,
         /// Whether the argument list is `*`.
         star: bool,
+        /// The `FILTER (WHERE ...)`, which holds which rows an
+        /// aggregate reads.
+        filter: Option<ExprId>,
     },
     /// `CASE operand WHEN a THEN b ... ELSE c END`, with the whens in
     /// pairs.
@@ -281,6 +285,23 @@ pub enum Node {
     },
     /// `(a, b, c)`, which is a row and not a parenthesis.
     Row(Range),
+    /// `name(args) FILTER (WHERE x) OVER window`, which reads the rows
+    /// of a window rather than the one row the walk stands on.
+    Over {
+        /// The function's name.
+        name: Span,
+        /// Its arguments.
+        args: Range,
+        /// Whether `DISTINCT` precedes them.
+        distinct: bool,
+        /// Whether the argument list is `*`.
+        star: bool,
+        /// The `FILTER (WHERE ...)`, which holds which rows the
+        /// function reads.
+        filter: Option<ExprId>,
+        /// The window it reads.
+        window: WindowId,
+    },
     /// `RAISE(IGNORE)` and `RAISE(action, message)`, which only a
     /// trigger's body may write.
     Raise {
@@ -926,6 +947,98 @@ pub enum Nulls {
     Last,
 }
 
+/// Which rows of a partition the frame of a window is measured in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Frame {
+    /// `ROWS`: the frame is counted in rows.
+    #[default]
+    Rows,
+    /// `RANGE`: the frame holds the rows whose order terms lie within
+    /// the bound of the row's own.
+    Range,
+    /// `GROUPS`: the frame is counted in groups of rows that share
+    /// their order terms.
+    Groups,
+}
+
+/// Where a frame begins or ends.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Bound {
+    /// `UNBOUNDED PRECEDING`.
+    #[default]
+    UnboundedPreceding,
+    /// `<expr> PRECEDING`.
+    Preceding(ExprId),
+    /// `CURRENT ROW`.
+    CurrentRow,
+    /// `<expr> FOLLOWING`.
+    Following(ExprId),
+    /// `UNBOUNDED FOLLOWING`.
+    UnboundedFollowing,
+}
+
+/// Which rows of the frame a window function passes over.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Exclude {
+    /// `EXCLUDE NO OTHERS`, which is what writing none means.
+    #[default]
+    NoOthers,
+    /// `EXCLUDE CURRENT ROW`.
+    CurrentRow,
+    /// `EXCLUDE GROUP`: the row and every row that shares its order
+    /// terms.
+    Group,
+    /// `EXCLUDE TIES`: every row that shares its order terms but the
+    /// row itself.
+    Ties,
+}
+
+/// The frame of a window, which says which rows of the partition a
+/// window function over it reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Frames {
+    /// What the bounds are measured in.
+    pub kind: Frame,
+    /// Where the frame begins.
+    pub start: Bound,
+    /// Where it ends.
+    pub end: Bound,
+    /// Which of its rows are passed over.
+    pub exclude: Exclude,
+}
+
+/// One window in the arena.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct WindowId(u32);
+
+/// A window: how the rows are partitioned and ordered, and which of
+/// them a function over it reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Window {
+    /// The window this one is written on top of, where `OVER` names
+    /// one before its own clauses.
+    pub base: Option<Span>,
+    /// Whether the window is the named one and nothing else, which
+    /// `OVER name` writes and `OVER (name)` does not: the first takes
+    /// the named window's frame and the second may write its own.
+    pub named: bool,
+    /// The `PARTITION BY` terms.
+    pub partition: Range,
+    /// The `ORDER BY` terms.
+    pub order: Range,
+    /// The frame, where the window wrote one.
+    pub frame: Option<Frames>,
+}
+
+/// One window a `WINDOW` clause names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct NamedWindow {
+    /// What the clause calls it.
+    pub name: Span,
+    /// The window itself.
+    pub window: WindowId,
+}
+
 /// One term of an `ORDER BY`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct OrderTerm {
@@ -1002,6 +1115,8 @@ pub struct Select {
     pub filter: Option<ExprId>,
     /// The `GROUP BY` terms.
     pub group: Range,
+    /// The windows a `WINDOW` clause names.
+    pub windows: Range,
     /// The `HAVING` clause.
     pub having: Option<ExprId>,
     /// The rows of a `VALUES`, each of them a row node.
@@ -1047,6 +1162,10 @@ pub struct Arena {
     column_constraints: Vec<ColumnConstraint>,
     /// What follows the columns of a table, in runs.
     table_constraints: Vec<TableConstraint>,
+    /// Every window a statement writes.
+    windows: Vec<Window>,
+    /// The windows the `WINDOW` clauses name, in runs.
+    named_windows: Vec<NamedWindow>,
 }
 
 impl Arena {
@@ -1066,6 +1185,8 @@ impl Arena {
             names: Vec::new(),
             ctes: Vec::new(),
             columns: Vec::new(),
+            windows: Vec::new(),
+            named_windows: Vec::new(),
             column_constraints: Vec::new(),
             table_constraints: Vec::new(),
         }
@@ -1123,6 +1244,9 @@ impl Arena {
                     under(id);
                 }
             }
+            // The arguments of a window function and the `FILTER` that
+            // holds which rows it reads are read against the row; the
+            // window itself is a clause and not an expression.
             // A leaf names none.
             Node::Literal(_)
             | Node::Column { .. }
@@ -1159,9 +1283,12 @@ impl Arena {
                     under(escape);
                 }
             }
-            Node::Call { args, .. } => {
+            Node::Call { args, filter, .. } | Node::Over { args, filter, .. } => {
                 for arg in self.children(args) {
                     under(*arg);
+                }
+                if let Some(id) = filter {
+                    under(id);
                 }
             }
             Node::Case {
@@ -1311,6 +1438,39 @@ impl Arena {
         let start = usize::try_from(range.start).unwrap_or(usize::MAX);
         let end = start.saturating_add(range.len());
         self.names.get(start..end).unwrap_or_default()
+    }
+
+    /// Appends one window and answers where it went.
+    pub fn push_window(&mut self, window: Window) -> WindowId {
+        let at = u32::try_from(self.windows.len()).unwrap_or(u32::MAX);
+        self.windows.push(window);
+        WindowId(at)
+    }
+
+    /// The window `id` names.
+    #[must_use]
+    pub fn window(&self, id: WindowId) -> Option<Window> {
+        self.windows
+            .get(usize::try_from(id.0).unwrap_or(usize::MAX))
+            .copied()
+    }
+
+    /// Appends a run of named windows and answers where it went.
+    pub fn push_named_windows(&mut self, windows: &[NamedWindow]) -> Range {
+        let start = u32::try_from(self.named_windows.len()).unwrap_or(u32::MAX);
+        self.named_windows.extend_from_slice(windows);
+        Range {
+            start,
+            len: u32::try_from(windows.len()).unwrap_or(u32::MAX),
+        }
+    }
+
+    /// The named windows of a run.
+    #[must_use]
+    pub fn named_windows(&self, range: Range) -> &[NamedWindow] {
+        let start = usize::try_from(range.start).unwrap_or(usize::MAX);
+        let end = start.saturating_add(range.len());
+        self.named_windows.get(start..end).unwrap_or_default()
     }
 
     /// Appends a run of columns and answers where it went.

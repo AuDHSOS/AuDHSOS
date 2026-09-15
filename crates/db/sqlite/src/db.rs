@@ -31,16 +31,20 @@ use alloc::vec::Vec;
 
 use crate::agg::{self, Accumulator, Aggregate};
 use crate::ast::{
-    Arena, BinaryOp, Compound, Distinct, ExprId, JoinKind, Literal, Node, Order, Range,
-    ResultColumn, Select, SelectId, SourceKind, Span, UnaryOp,
+    Arena, BinaryOp, Bound as Edge, Compound, Distinct, Exclude, ExprId, Frame, Frames, JoinKind,
+    Literal, Node, Nulls, Order, OrderTerm, Range, ResultColumn, Select, SelectId, SourceKind,
+    Span, UnaryOp, WindowId,
 };
-use crate::eval::{self, Used, evaluate_collated, evaluate_compared, evaluate_row};
+use crate::eval::{self, Used, arithmetic, evaluate_collated, evaluate_compared, evaluate_row};
 use crate::header::Encoding;
 use crate::image::Image;
 use crate::parse;
 use crate::record;
 use crate::schema::{self, Generated, Table, dequote};
-use crate::value::{Affinity, Collation, Value, apply_comparison, compare, compare_affinity};
+use crate::value::{
+    Affinity, Collation, Value, apply_comparison, apply_numeric, compare, compare_affinity,
+};
+use crate::window::{self, Which};
 use crate::{error, number};
 
 /// Why a database could not answer.
@@ -110,6 +114,14 @@ pub enum Error {
     /// term that reads itself under an operator other than `UNION`, a
     /// table-valued function.
     Unsupported,
+    /// A window written in a way `sqlite3WindowAlloc` refuses: a frame
+    /// offset that is not a whole number of no sign, a `RANGE` offset
+    /// where the window orders by other than one term, an `ntile` or an
+    /// `nth_value` whose count is not one or more.
+    Frame,
+    /// An `OVER` naming a window no `WINDOW` clause defines, or one
+    /// that carries a frame or terms the window over it also carries.
+    Window,
 }
 
 impl From<error::Error> for Error {
@@ -1197,8 +1209,18 @@ impl<'a> Database<'a> {
             Vec::new()
         };
         let calls = aggregates(arena, &select, sql)?;
+        let overs = overs(arena, &select, sql)?;
         let mut rows: Vec<Sorted> = Vec::new();
-        if calls.is_empty() && select.group.is_empty() {
+        if !overs.is_empty() {
+            // A window function reads the rows a statement has already
+            // filtered and grouped, so the rows are kept and the window
+            // answered over them before the statement answers.
+            let mut kept = self.kept(arena, &select, sql, &sides, &calls, reach)?;
+            for at in overed(arena, &select, sql, &mut kept, &overs)? {
+                let cursor = kept.get(at).ok_or(Error::NoTable)?;
+                rows.push(sorted(arena, &select, sql, cursor, &keys)?);
+            }
+        } else if calls.is_empty() && select.group.is_empty() {
             self.scan(&sides, arena, sql, reach, &mut |cursor: &Cursor<'_>| {
                 if keep(arena, select.filter, sql, cursor)? {
                     rows.push(sorted(arena, &select, sql, cursor, &keys)?);
@@ -1786,6 +1808,37 @@ impl<'a> Database<'a> {
         Ok(())
     }
 
+    /// Every row a statement answers over, kept so that a window
+    /// function can read them all: one cursor per group where the
+    /// statement groups, and one per row where it does not.
+    fn kept<'b>(
+        &self,
+        arena: &Arena,
+        select: &Select,
+        sql: &[u8],
+        sides: &'b [Side<'b>],
+        calls: &[Call],
+        reach: Reach<'b>,
+    ) -> Result<Vec<Cursor<'b>>, Error> {
+        if !calls.is_empty() || !select.group.is_empty() {
+            return self.groups(arena, select, sql, sides, calls, reach);
+        }
+        let mut out = Vec::new();
+        self.scan(sides, arena, sql, reach, &mut |cursor: &Cursor<'b>| {
+            if keep(arena, select.filter, sql, cursor)? {
+                out.push(Cursor {
+                    held: cursor.held.clone(),
+                    collation: cursor.collation,
+                    encoding: cursor.encoding,
+                    aggregates: cursor.aggregates.clone(),
+                    reach,
+                });
+            }
+            Ok(())
+        })?;
+        Ok(out)
+    }
+
     /// The groups a statement that aggregates answers: one cursor each,
     /// in the order the `GROUP BY` terms collate in, which is the order
     /// the sorter of `src/select.c` puts them in.
@@ -2018,6 +2071,7 @@ fn answerable(arena: &Arena, id: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Opti
             | Node::Row(_) => {}
             Node::Variable(_)
             | Node::Call { .. }
+            | Node::Over { .. }
             | Node::Subquery(_)
             | Node::Exists(_)
             | Node::InSelect { .. }
@@ -2746,6 +2800,8 @@ struct Call {
     distinct: bool,
     /// Its arguments.
     args: Range,
+    /// The `FILTER`, which holds which rows it reads.
+    filter: Option<ExprId>,
 }
 
 /// One group of rows while it is being accumulated.
@@ -2789,6 +2845,11 @@ impl<'a> Group<'a> {
         let first = self.magnet.is_none();
         let mut magnet = None;
         for (call, accumulator) in calls.iter().zip(&mut self.accumulators) {
+            // A `FILTER` decides which rows the aggregate is stepped
+            // with, which is `sqlite3ExprIfFalse` jumping over the step.
+            if !keep(arena, call.filter, sql, cursor)? {
+                continue;
+            }
             let mut values = Vec::new();
             let mut collation = cursor.collation;
             for (at, id) in arena.children(call.args).iter().enumerate() {
@@ -3002,6 +3063,7 @@ fn collect(
         args,
         distinct,
         star,
+        filter,
     } = node
     {
         let count = if star { 0 } else { arena.children(args).len() };
@@ -3016,6 +3078,7 @@ fn collect(
                 which,
                 distinct,
                 args,
+                filter,
             });
             under = true;
         }
@@ -3136,15 +3199,15 @@ fn sorted(
     let values = project(arena, select, sql, cursor)?;
     let mut sort = Vec::new();
     for key in keys {
-        sort.push(match key {
+        sort.push(match &key.of {
             // The collation of a column the answer holds is the one
             // the column was declared with, which is what
             // `sqlite3ExprCollSeq` reads off the expression the answer
             // came from.
-            Key::Place(at, _, collation) => {
+            Keyed::Place(at, collation) => {
                 (values.get(*at).cloned().unwrap_or(Value::Null), *collation)
             }
-            Key::Expr(expr, _) => evaluate_collated(arena, *expr, sql, cursor)?,
+            Keyed::Expr(expr) => evaluate_collated(arena, *expr, sql, cursor)?,
         });
     }
     Ok(Sorted { values, keys: sort })
@@ -3162,6 +3225,7 @@ fn keys(
     let mut keys = Vec::new();
     for term in arena.orders(select.order) {
         let descending = term.order == Order::Descending;
+        let nulls = term.nulls;
         // A whole number counts the answered columns from one; a
         // name that is one of them names it; anything else is read
         // against the row.
@@ -3170,7 +3234,11 @@ fn keys(
             if at >= names.len() {
                 return Err(Error::OrderRange);
             }
-            keys.push(Key::Place(at, descending, collation_at(collations, at)));
+            keys.push(Key {
+                of: Keyed::Place(at, collation_at(collations, at)),
+                descending,
+                nulls,
+            });
             continue;
         }
         // `resolveOrderGroupBy` matches the term against the answered
@@ -3187,11 +3255,19 @@ fn keys(
                 // uses, whatever the column was declared with.
                 let written = term_collation(arena, term.expr, sql)?;
                 let collation = written.unwrap_or_else(|| collation_at(collations, at));
-                keys.push(Key::Place(at, descending, collation));
+                keys.push(Key {
+                    of: Keyed::Place(at, collation),
+                    descending,
+                    nulls,
+                });
                 continue;
             }
         }
-        keys.push(Key::Expr(term.expr, descending));
+        keys.push(Key {
+            of: Keyed::Expr(term.expr),
+            descending,
+            nulls,
+        });
     }
     Ok(keys)
 }
@@ -3431,6 +3507,7 @@ fn arrange(rows: &mut [Vec<Value>], collations: &[Collation]) {
             at,
             descending: false,
             collation: *collation,
+            nulls: Nulls::Unspecified,
         })
         .collect();
     sort_by_keys(rows, &every);
@@ -3447,6 +3524,8 @@ struct Ordered {
     /// What the values compare under, which is what the term was
     /// written with where it was written with a `COLLATE`.
     collation: Collation,
+    /// Where its nulls go.
+    nulls: Nulls,
 }
 
 /// Sorts the rows of an answer under terms that each count to a column
@@ -3461,13 +3540,9 @@ fn order_of_rows(left: &[Value], right: &[Value], terms: &[Ordered]) -> core::cm
     for term in terms {
         let first = left.get(term.at).unwrap_or(&Value::Null);
         let second = right.get(term.at).unwrap_or(&Value::Null);
-        let order = compare(first, second, term.collation);
+        let order = order_under(first, second, term.collation, term.descending, term.nulls);
         if order != core::cmp::Ordering::Equal {
-            return if term.descending {
-                order.reverse()
-            } else {
-                order
-            };
+            return order;
         }
     }
     core::cmp::Ordering::Equal
@@ -3485,16 +3560,17 @@ fn matched(
 ) -> Result<Vec<Ordered>, Error> {
     let mut out = Vec::new();
     for key in keys(arena, select, sql, names, collations)? {
-        match key {
+        match key.of {
             // A `COLLATE` on the term is what the sort compares under,
             // which `multiSelectOrderBy` reads off the term and not off
             // the column it counts to.
-            Key::Place(at, descending, collation) => out.push(Ordered {
+            Keyed::Place(at, collation) => out.push(Ordered {
                 at,
-                descending,
+                descending: key.descending,
                 collation,
+                nulls: key.nulls,
             }),
-            Key::Expr(..) => return Err(Error::OrderMatch),
+            Keyed::Expr(_) => return Err(Error::OrderMatch),
         }
     }
     Ok(out)
@@ -3691,13 +3767,52 @@ struct Sorted {
 }
 
 /// What an `ORDER BY` term sorts by.
-enum Key {
-    /// The column of the answer at this place, backwards where the flag
-    /// says so, compared under the collation that column was declared
-    /// with.
-    Place(usize, bool, Collation),
+struct Key {
+    /// What it reads.
+    of: Keyed,
+    /// Whether it sorts backwards.
+    descending: bool,
+    /// Where its nulls go.
+    nulls: Nulls,
+}
+
+/// What an `ORDER BY` term reads.
+enum Keyed {
+    /// The column of the answer at this place, compared under the
+    /// collation that column was declared with.
+    Place(usize, Collation),
     /// An expression over the row.
-    Expr(ExprId, bool),
+    Expr(ExprId),
+}
+
+/// Where two values stand under one term, a written `NULLS` deciding
+/// where a null goes before the term's direction does.
+fn order_under(
+    left: &Value,
+    right: &Value,
+    collation: Collation,
+    descending: bool,
+    nulls: Nulls,
+) -> core::cmp::Ordering {
+    let order = compare(left, right, collation);
+    if order == core::cmp::Ordering::Equal {
+        return order;
+    }
+    let first = match nulls {
+        Nulls::First => Some(true),
+        Nulls::Last => Some(false),
+        Nulls::Unspecified => None,
+    };
+    if let Some(first) = first
+        && (*left == Value::Null || *right == Value::Null)
+    {
+        return if (*left == Value::Null) == first {
+            core::cmp::Ordering::Less
+        } else {
+            core::cmp::Ordering::Greater
+        };
+    }
+    if descending { order.reverse() } else { order }
 }
 
 /// The collation of the answered column at `at`, which is `BINARY`
@@ -3713,12 +3828,9 @@ fn order_of(
     keys: &[Key],
 ) -> core::cmp::Ordering {
     for ((first, second), key) in left.iter().zip(right).zip(keys) {
-        let descending = match key {
-            Key::Place(_, descending, _) | Key::Expr(_, descending) => *descending,
-        };
-        let order = compare(&first.0, &second.0, first.1);
+        let order = order_under(&first.0, &second.0, first.1, key.descending, key.nulls);
         if order != core::cmp::Ordering::Equal {
-            return if descending { order.reverse() } else { order };
+            return order;
         }
     }
     core::cmp::Ordering::Equal
@@ -4101,4 +4213,766 @@ impl eval::Row for Cursor<'_> {
         };
         Some((value, affinity, collation))
     }
+}
+
+/// One window function call of a statement.
+struct Over {
+    /// The node it was written as, which is what answers it: two
+    /// `row_number()` in one statement are one column each.
+    id: ExprId,
+    /// Which window function.
+    which: Which,
+    /// Its arguments.
+    args: Range,
+    /// The `FILTER`, which only an aggregate may carry.
+    filter: Option<ExprId>,
+    /// The window it reads.
+    window: WindowId,
+}
+
+/// Every window function call a statement answers with.
+fn overs(arena: &Arena, select: &Select, sql: &[u8]) -> Result<Vec<Over>, Error> {
+    let mut out = Vec::new();
+    for column in arena.results(select.columns) {
+        if let ResultColumn::Expr { expr, .. } = *column {
+            gather_overs(arena, expr, sql, &mut out)?;
+        }
+    }
+    for term in arena.orders(select.order) {
+        gather_overs(arena, term.expr, sql, &mut out)?;
+    }
+    Ok(out)
+}
+
+/// The same for one expression and everything under it.
+fn gather_overs(arena: &Arena, id: ExprId, sql: &[u8], out: &mut Vec<Over>) -> Result<(), Error> {
+    arena
+        .node(id)
+        .map_or(Ok(()), |node| gather_one(arena, id, node, sql, out))
+}
+
+/// The same for one node the arena holds.
+fn gather_one(
+    arena: &Arena,
+    id: ExprId,
+    node: Node,
+    sql: &[u8],
+    out: &mut Vec<Over>,
+) -> Result<(), Error> {
+    if let Node::Over {
+        name,
+        args,
+        distinct,
+        star,
+        filter,
+        window,
+    } = node
+    {
+        let count = if star { 0 } else { arena.children(args).len() };
+        let which = window::lookup(&dequote(name.text(sql)), count)
+            .ok_or(Error::Eval(eval::Error::NoFunction))?;
+        // `sqlite3WindowRewrite` takes a `FILTER` for an aggregate and
+        // refuses one for the eleven built-in window functions, and
+        // refuses `DISTINCT` for every one of them.
+        if distinct || (filter.is_some() && !which.filtered()) {
+            return Err(Error::Aggregate);
+        }
+        out.push(Over {
+            id,
+            which,
+            args,
+            filter,
+            window,
+        });
+    }
+    let mut deeper = Ok(());
+    arena.under(node, |child| {
+        if deeper.is_ok() {
+            deeper = gather_overs(arena, child, sql, out);
+        }
+    });
+    deeper
+}
+
+/// How many windows an `OVER` may name before the chain is read as one
+/// that names itself.
+const WINDOW_CHAIN: usize = 32;
+
+/// The frame a window with no frame clause reads, which is
+/// `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`.
+const WHOLE: Frames = Frames {
+    kind: Frame::Range,
+    start: Edge::UnboundedPreceding,
+    end: Edge::CurrentRow,
+    exclude: Exclude::NoOthers,
+};
+
+/// A window with every window it names folded into it.
+struct Framed {
+    /// The `PARTITION BY` terms.
+    partition: Range,
+    /// The `ORDER BY` terms.
+    order: Range,
+    /// The frame.
+    frame: Frames,
+}
+
+/// The window an `OVER` names, with the windows it builds on folded in.
+///
+/// `sqlite3WindowAssemble`: a window that names another takes that
+/// window's partition, takes its order where it writes none of its own,
+/// and may write a frame only where the named one writes none.
+fn framed(arena: &Arena, select: &Select, sql: &[u8], id: WindowId) -> Result<Framed, Error> {
+    let window = arena.window(id).ok_or(Error::Window)?;
+    let mut partition = window.partition;
+    let mut order = window.order;
+    let mut frame = window.frame;
+    let mut base = window.base;
+    let mut whole = window.named;
+    let mut chain = 0_usize;
+    while let Some(name) = base {
+        chain = chain.saturating_add(1);
+        if chain > WINDOW_CHAIN {
+            return Err(Error::Window);
+        }
+        let named = dequote(name.text(sql));
+        let found = arena
+            .named_windows(select.windows)
+            .iter()
+            .find(|held| dequote(held.name.text(sql)).eq_ignore_ascii_case(&named))
+            .ok_or(Error::Window)?;
+        let under = arena.window(found.window).ok_or(Error::Window)?;
+        // `OVER name` is the named window itself, frame and all, which
+        // is `sqlite3WindowUpdate`; `OVER (name ...)` builds on it, and
+        // `sqlite3WindowChain` refuses a window that overrides the
+        // named one's partition, order or frame.
+        if whole {
+            partition = under.partition;
+            order = under.order;
+            frame = under.frame;
+        } else {
+            if !partition.is_empty() || under.frame.is_some() {
+                return Err(Error::Window);
+            }
+            partition = under.partition;
+            if order.is_empty() {
+                order = under.order;
+            } else if !under.order.is_empty() {
+                return Err(Error::Window);
+            }
+        }
+        whole = under.named;
+        base = under.base;
+    }
+    Ok(Framed {
+        partition,
+        order,
+        frame: frame.unwrap_or(WHOLE),
+    })
+}
+
+/// Where two rows stand against each other under a window's order
+/// terms.
+fn order_of_window(
+    left: &[(Value, Collation)],
+    right: &[(Value, Collation)],
+    terms: &[OrderTerm],
+) -> core::cmp::Ordering {
+    for ((first, second), term) in left.iter().zip(right).zip(terms) {
+        let order = order_under(
+            &first.0,
+            &second.0,
+            first.1,
+            term.order == Order::Descending,
+            term.nulls,
+        );
+        if order != core::cmp::Ordering::Equal {
+            return order;
+        }
+    }
+    core::cmp::Ordering::Equal
+}
+
+/// What a window's terms answer for one row.
+fn keyed(
+    arena: &Arena,
+    sql: &[u8],
+    cursor: &Cursor<'_>,
+    terms: Range,
+) -> Result<Vec<(Value, Collation)>, Error> {
+    let mut key = Vec::new();
+    for term in arena.children(terms) {
+        key.push(evaluate_collated(arena, *term, sql, cursor)?);
+    }
+    Ok(key)
+}
+
+/// What one row of a partition sorted by, one value per term of the
+/// window, each with what it compares under.
+type Terms = Vec<(Value, Collation)>;
+
+/// One partition of a window: which cursor each of its rows is, in the
+/// order the window's terms sort them, and what those terms answered.
+type Partition = (Vec<usize>, Vec<Terms>);
+
+/// One partition while its rows are being gathered.
+struct Gathered {
+    /// What the `PARTITION BY` terms answered for it.
+    key: Terms,
+    /// Its rows, each with what the order terms answered.
+    rows: Vec<(usize, Terms)>,
+}
+
+/// The rows of each partition of a window, each run in the order the
+/// window's terms sort it, with the key each row sorted by.
+///
+/// Sorting one partition costs O(n log n) in its rows.
+fn partitioned(
+    arena: &Arena,
+    sql: &[u8],
+    cursors: &[Cursor<'_>],
+    framed: &Framed,
+) -> Result<Vec<Partition>, Error> {
+    let terms = arena.orders(framed.order);
+    let mut parts: Vec<Gathered> = Vec::new();
+    for (at, cursor) in cursors.iter().enumerate() {
+        let key = keyed(arena, sql, cursor, framed.partition)?;
+        let mut sorts = Vec::new();
+        for term in terms {
+            sorts.push(evaluate_collated(arena, term.expr, sql, cursor)?);
+        }
+        let found = parts.iter().position(|held| alike(&held.key, &key));
+        match found.and_then(|place| parts.get_mut(place)) {
+            Some(held) => held.rows.push((at, sorts)),
+            None => parts.push(Gathered {
+                key,
+                rows: alloc::vec![(at, sorts)],
+            }),
+        }
+    }
+    let mut out = Vec::new();
+    for mut part in parts {
+        part.rows
+            .sort_by(|left, right| order_of_window(&left.1, &right.1, terms));
+        let places = part.rows.iter().map(|(at, _)| *at).collect();
+        let keys = part.rows.into_iter().map(|(_, key)| key).collect();
+        out.push((places, keys));
+    }
+    Ok(out)
+}
+
+/// A frame offset counted in rows or in groups, which SQLite refuses
+/// unless it is a whole number of no sign.
+fn offset_of(arena: &Arena, sql: &[u8], cursor: &Cursor<'_>, expr: ExprId) -> Result<usize, Error> {
+    let value = whole_of(&evaluate_row(arena, expr, sql, cursor)?).ok_or(Error::Frame)?;
+    usize::try_from(value).map_err(|_| Error::Frame)
+}
+
+/// A value as the whole number `OP_MustBeInt` would make of it, or
+/// nothing where it is not one.
+///
+/// `applyAffinity` under `SQLITE_AFF_NUMERIC` converts text that is a
+/// number whole and leaves every other text alone, which `OP_MustBeInt`
+/// then refuses along with a real that stands for no whole number.
+fn whole_of(value: &Value) -> Option<i64> {
+    let mut numeric = value.clone();
+    apply_numeric(&mut numeric, true);
+    match numeric {
+        Value::Int(number) => Some(number),
+        Value::Real(number) => {
+            let whole = crate::value::real_as_integer(number);
+            let same = Value::Real(crate::value::integer_as_real(whole)) == Value::Real(number);
+            same.then_some(whole)
+        }
+        _ => None,
+    }
+}
+
+/// One end of a frame counted in rows or in groups.
+fn edge_of(
+    arena: &Arena,
+    sql: &[u8],
+    cursor: &Cursor<'_>,
+    bound: Edge,
+) -> Result<window::Edge, Error> {
+    Ok(match bound {
+        Edge::UnboundedPreceding => window::Edge::Start,
+        Edge::CurrentRow => window::Edge::Current,
+        Edge::UnboundedFollowing => window::Edge::End,
+        Edge::Preceding(expr) => window::Edge::Preceding(offset_of(arena, sql, cursor, expr)?),
+        Edge::Following(expr) => window::Edge::Following(offset_of(arena, sql, cursor, expr)?),
+    })
+}
+
+/// Where a `RANGE` frame that counts by an offset begins or ends.
+///
+/// `windowCodeRangeTest` counts the offset onto the term of one row and
+/// compares it against the term of the other, and leaves a term that is
+/// text or a blob alone, which makes such a term frame its peers and
+/// nothing else. A term that sorts downwards counts the offset the
+/// other way and compares the other way round. The first row the
+/// comparison holds for is where the frame reaches, which is the row
+/// the C library's cursor stops on.
+///
+/// Halving the rows costs O(log n), which a term whose nulls sort after
+/// its values gives up: the comparison is not ordered over such a term,
+/// so the rows are read one after another at O(n).
+fn range_edge(
+    terms: &[(Value, Collation)],
+    at: usize,
+    offset: &Value,
+    part: &Part<'_>,
+    back: bool,
+    strict: bool,
+) -> usize {
+    let here = terms.get(at).cloned().unwrap_or(NO_TERM);
+    let descending = part.descending;
+    let op = if descending {
+        BinaryOp::Subtract
+    } else {
+        BinaryOp::Add
+    };
+    let collation = here.1;
+    // A frame that counts backwards counts onto each row it looks at; a
+    // frame that counts forwards counts onto the row it frames.
+    let moved = if back {
+        None
+    } else {
+        Some(shifted(op, &here.0, offset))
+    };
+    // `KEYINFO_ORDER_BIGNULL`: a term whose nulls sort after its values
+    // answers a comparison against a null by rule and not by order.
+    let big = match part.nulls {
+        Nulls::Last => !descending,
+        Nulls::First => descending,
+        Nulls::Unspecified => false,
+    };
+    let holds = |row: usize| -> bool {
+        let value = terms.get(row).cloned().unwrap_or(NO_TERM);
+        let (first, second) = if back {
+            (&value.0, &here.0)
+        } else {
+            (&here.0, &value.0)
+        };
+        if big && let Some(answer) = by_rule(back != descending, strict, first, second) {
+            return answer;
+        }
+        let (left, right) = match &moved {
+            Some(target) => (value.0.clone(), target.clone()),
+            None => (shifted(op, &value.0, offset), here.0.clone()),
+        };
+        let order = compare(&left, &right, collation);
+        let order = if descending { order.reverse() } else { order };
+        if strict {
+            order == core::cmp::Ordering::Greater
+        } else {
+            order != core::cmp::Ordering::Less
+        }
+    };
+    if big {
+        return (0..terms.len())
+            .find(|row| holds(*row))
+            .unwrap_or(terms.len());
+    }
+    window::first_true(terms.len(), holds)
+}
+
+/// The term of a row that a window orders by nothing, which no `RANGE`
+/// frame that counts by an offset reads: such a frame is refused
+/// unless the window orders by exactly one term.
+const NO_TERM: (Value, Collation) = (Value::Null, Collation::Binary);
+
+/// What a comparison of a term whose nulls sort after its values
+/// answers where either side is null, and nothing where neither is.
+///
+/// This is the `BIGNULL` block of `windowCodeRangeTest`, where
+/// `greater` says the comparison reads `>=` or `>` and `strict` says it
+/// reads `>` or `<`.
+fn by_rule(greater: bool, strict: bool, first: &Value, second: &Value) -> Option<bool> {
+    if *first == Value::Null {
+        return Some(match (greater, strict) {
+            (true, false) => true,
+            (true, true) => *second != Value::Null,
+            (false, false) => *second == Value::Null,
+            (false, true) => false,
+        });
+    }
+    if *second == Value::Null {
+        return Some(!greater);
+    }
+    None
+}
+
+/// A term with a frame offset counted onto it, which is the term itself
+/// where the term is text or a blob.
+fn shifted(op: BinaryOp, value: &Value, offset: &Value) -> Value {
+    match *value {
+        Value::Text(_) | Value::Blob(_) => value.clone(),
+        _ => arithmetic(op, value, offset),
+    }
+}
+
+/// The frame of the row at `at`, measured in the one term the window
+/// orders by.
+///
+/// The parser refuses a frame that begins unbounded forwards or ends
+/// unbounded backwards, so neither bound is read here.
+fn range_span(keys: &[Vec<(Value, Collation)>], part: &Part<'_>, at: usize) -> window::Span {
+    let frame = &part.framed.frame;
+    let peers = part.peers;
+    let group = peers.of_row(at);
+    let (low, high) = &part.offsets;
+    let terms: Vec<(Value, Collation)> = keys
+        .iter()
+        .map(|key| key.first().cloned().unwrap_or(NO_TERM))
+        .collect();
+    let start = match (frame.start, low) {
+        (Edge::UnboundedPreceding, _) => 0,
+        (Edge::Preceding(_), Some(offset)) => range_edge(&terms, at, offset, part, true, false),
+        (Edge::Following(_), Some(offset)) => range_edge(&terms, at, offset, part, false, false),
+        _ => group.start,
+    };
+    let end = match (frame.end, high) {
+        (Edge::UnboundedFollowing, _) => peers.rows(),
+        (Edge::Preceding(_), Some(offset)) => range_edge(&terms, at, offset, part, true, true),
+        (Edge::Following(_), Some(offset)) => range_edge(&terms, at, offset, part, false, true),
+        _ => group.end,
+    };
+    window::Span::of(start, end)
+}
+
+/// What the offsets of a `RANGE` frame answer, which are read once for
+/// the window and not once per row.
+fn range_offsets(
+    arena: &Arena,
+    sql: &[u8],
+    cursor: &Cursor<'_>,
+    frame: &Frames,
+) -> Result<(Option<Value>, Option<Value>), Error> {
+    let mut out = (None, None);
+    for (bound, slot) in [(frame.start, false), (frame.end, true)] {
+        let value = match bound {
+            Edge::Preceding(expr) | Edge::Following(expr) => {
+                let mut numeric = evaluate_row(arena, expr, sql, cursor)?;
+                // `RANGE` counts in the term's own values, so the offset
+                // has to be a number and may not be negative.
+                apply_numeric(&mut numeric, true);
+                match numeric {
+                    Value::Int(count) if count >= 0 => Some(Value::Int(count)),
+                    Value::Real(count) if count >= 0.0 => Some(Value::Real(count)),
+                    _ => return Err(Error::Frame),
+                }
+            }
+            _ => None,
+        };
+        if slot {
+            out.1 = value;
+        } else {
+            out.0 = value;
+        }
+    }
+    Ok(out)
+}
+
+/// One partition of a window while its rows are answered.
+struct Part<'a> {
+    /// The window the rows are read under.
+    framed: &'a Framed,
+    /// Which cursor each row of the partition is, in the order the
+    /// window's terms sort them.
+    rows: &'a [usize],
+    /// What those terms answered for each of those rows.
+    keys: &'a [Vec<(Value, Collation)>],
+    /// Where the rows that share their terms begin and end.
+    peers: &'a window::Peers,
+    /// Whether the window's first order term sorts downwards.
+    descending: bool,
+    /// Where that term's nulls go.
+    nulls: Nulls,
+    /// What a `RANGE` frame's offsets answered.
+    offsets: (Option<Value>, Option<Value>),
+}
+
+/// The rows of the frame of the row at `at`, as places in the
+/// partition, with the rows `EXCLUDE` leaves out taken away.
+fn frame_rows(
+    arena: &Arena,
+    sql: &[u8],
+    cursor: &Cursor<'_>,
+    part: &Part<'_>,
+    at: usize,
+) -> Result<Vec<usize>, Error> {
+    let frame = &part.framed.frame;
+    let span = match frame.kind {
+        Frame::Rows => window::rows_frame(
+            edge_of(arena, sql, cursor, frame.start)?,
+            edge_of(arena, sql, cursor, frame.end)?,
+            at,
+            part.peers.rows(),
+        ),
+        Frame::Groups => window::groups_frame(
+            edge_of(arena, sql, cursor, frame.start)?,
+            edge_of(arena, sql, cursor, frame.end)?,
+            at,
+            part.peers,
+        ),
+        Frame::Range => range_span(part.keys, part, at),
+    };
+    Ok(window::kept(span, frame.exclude, at, part.peers))
+}
+
+/// What `lag` or `lead` answers for the row at `at`.
+fn offset_value(
+    arena: &Arena,
+    sql: &[u8],
+    cursors: &[Cursor<'_>],
+    over: &Over,
+    part: &Part<'_>,
+    at: usize,
+    ahead: bool,
+) -> Result<Value, Error> {
+    let args = arena.children(over.args);
+    let expr = *args.first().ok_or(Error::Frame)?;
+    let place = part.rows.get(at).copied().ok_or(Error::NoTable)?;
+    let cursor = cursors.get(place).ok_or(Error::NoTable)?;
+    let step = match args.get(1) {
+        Some(id) => whole_of(&evaluate_row(arena, *id, sql, cursor)?).ok_or(Error::Frame)?,
+        None => 1,
+    };
+    let here = i64::try_from(at).unwrap_or(i64::MAX);
+    let target = if ahead {
+        here.checked_add(step)
+    } else {
+        here.checked_sub(step)
+    };
+    let found = target
+        .and_then(|row| usize::try_from(row).ok())
+        .and_then(|row| part.rows.get(row))
+        .copied();
+    if let Some(found) = found {
+        let read = cursors.get(found).ok_or(Error::NoTable)?;
+        return Ok(evaluate_row(arena, expr, sql, read)?);
+    }
+    // A row that far out of the partition answers the third argument,
+    // and `NULL` where none was written.
+    match args.get(2) {
+        Some(id) => Ok(evaluate_row(arena, *id, sql, cursor)?),
+        None => Ok(Value::Null),
+    }
+}
+
+/// What `first_value`, `last_value` or `nth_value` answers for the row
+/// at `at`.
+fn framed_value(
+    arena: &Arena,
+    sql: &[u8],
+    cursors: &[Cursor<'_>],
+    over: &Over,
+    part: &Part<'_>,
+    at: usize,
+) -> Result<Value, Error> {
+    let place = part.rows.get(at).copied().ok_or(Error::NoTable)?;
+    let cursor = cursors.get(place).ok_or(Error::NoTable)?;
+    let frame = frame_rows(arena, sql, cursor, part, at)?;
+    let args = arena.children(over.args);
+    // A frame that holds no row answers `NULL`, which is the value
+    // function reading past its end.
+    let read = |row: Option<&usize>| -> Result<Value, Error> {
+        let held = row
+            .and_then(|row| part.rows.get(*row))
+            .and_then(|place| cursors.get(*place));
+        let expr = *args.first().ok_or(Error::Frame)?;
+        held.map_or(Ok(Value::Null), |held| {
+            Ok(evaluate_row(arena, expr, sql, held)?)
+        })
+    };
+    let row = match over.which {
+        Which::FirstValue => frame.first(),
+        Which::LastValue => frame.last(),
+        // `nth_value` is the one of the three left, and it counts its
+        // rows from one.
+        _ => {
+            let id = *args.get(1).ok_or(Error::Frame)?;
+            let nth = whole_of(&evaluate_row(arena, id, sql, cursor)?).ok_or(Error::Frame)?;
+            let place = usize::try_from(nth).map_err(|_| Error::Frame)?;
+            if place < 1 {
+                return Err(Error::Frame);
+            }
+            frame.get(place.saturating_sub(1))
+        }
+    };
+    read(row)
+}
+
+/// What an aggregate over the rows of a frame answers.
+///
+/// Stepping it costs O(m) in the rows of the frame, so a moving frame
+/// costs O(n·m) over a partition.
+fn accumulated(
+    arena: &Arena,
+    sql: &[u8],
+    cursors: &[Cursor<'_>],
+    over: &Over,
+    part: &Part<'_>,
+    at: usize,
+    which: Aggregate,
+) -> Result<Value, Error> {
+    let place = part.rows.get(at).copied().ok_or(Error::NoTable)?;
+    let cursor = cursors.get(place).ok_or(Error::NoTable)?;
+    let frame = frame_rows(arena, sql, cursor, part, at)?;
+    let mut accumulator = Accumulator::new(which, false);
+    for row in &frame {
+        let place = part.rows.get(*row).copied().unwrap_or(0);
+        let read = cursors.get(place).ok_or(Error::NoTable)?;
+        // A `FILTER` decides which rows of the frame are stepped, which
+        // is `sqlite3WindowCodeStep` jumping over the step.
+        if !keep(arena, over.filter, sql, read)? {
+            continue;
+        }
+        let mut values = Vec::new();
+        let mut collation = read.collation;
+        for (at, id) in arena.children(over.args).iter().enumerate() {
+            if at == 0 {
+                let (value, written) = evaluate_collated(arena, *id, sql, read)?;
+                collation = written;
+                values.push(value);
+            } else {
+                values.push(evaluate_row(arena, *id, sql, read)?);
+            }
+        }
+        accumulator.step(&values, collation);
+    }
+    Ok(accumulator.finish()?)
+}
+
+/// What one window function call answers for the row at `at` of its
+/// partition.
+fn answered_over(
+    arena: &Arena,
+    sql: &[u8],
+    cursors: &[Cursor<'_>],
+    over: &Over,
+    part: &Part<'_>,
+    at: usize,
+) -> Result<Value, Error> {
+    let peers = part.peers;
+    match over.which {
+        Which::RowNumber => Ok(Value::Int(window::row_number(at))),
+        Which::Rank => Ok(Value::Int(window::rank(at, peers))),
+        Which::DenseRank => Ok(Value::Int(window::dense_rank(at, peers))),
+        Which::PercentRank => Ok(Value::Real(window::percent_rank(at, peers))),
+        Which::CumeDist => Ok(Value::Real(window::cume_dist(at, peers))),
+        Which::Ntile => {
+            let place = part.rows.get(at).copied().ok_or(Error::NoTable)?;
+            let cursor = cursors.get(place).ok_or(Error::NoTable)?;
+            let id = *arena.children(over.args).first().ok_or(Error::Frame)?;
+            let tiles = whole_of(&evaluate_row(arena, id, sql, cursor)?).ok_or(Error::Frame)?;
+            if tiles < 1 {
+                return Err(Error::Frame);
+            }
+            let tiles = usize::try_from(tiles).map_err(|_| Error::Frame)?;
+            Ok(Value::Int(window::ntile(at, peers.rows(), tiles)))
+        }
+        Which::Lag => offset_value(arena, sql, cursors, over, part, at, false),
+        Which::Lead => offset_value(arena, sql, cursors, over, part, at, true),
+        Which::Aggregate(which) => accumulated(arena, sql, cursors, over, part, at, which),
+        _ => framed_value(arena, sql, cursors, over, part, at),
+    }
+}
+
+/// What every window function call of a statement answers for every
+/// row, written into the rows so that the walk over an expression looks
+/// each answer up, and the order the rows are answered in.
+///
+/// `sqlite3WindowRewrite` answers the rows out of a sorter over the
+/// window's partition and order terms, so a statement that writes no
+/// `ORDER BY` of its own answers its rows in that order; a statement
+/// that writes more than one window nests one sorter inside the next,
+/// which the terms of the windows read in order come to.
+fn overed(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    cursors: &mut [Cursor<'_>],
+    overs: &[Over],
+) -> Result<Vec<usize>, Error> {
+    let mut sorting: Vec<OrderTerm> = Vec::new();
+    for over in overs {
+        let framed = framed(arena, select, sql, over.window)?;
+        let mut values = alloc::vec![Value::Null; cursors.len()];
+        let terms = arena.orders(framed.order);
+        for term in arena.children(framed.partition) {
+            sorting.push(OrderTerm {
+                expr: *term,
+                order: Order::Unspecified,
+                nulls: Nulls::Unspecified,
+            });
+        }
+        sorting.extend_from_slice(terms);
+        let descending = terms
+            .first()
+            .is_some_and(|term| term.order == Order::Descending);
+        let nulls = terms.first().map_or(Nulls::Unspecified, |term| term.nulls);
+        // A `RANGE` frame counts in the one term the window orders by,
+        // and `sqlite3WindowAlloc` refuses an offset where the window
+        // orders by any other number of terms.
+        let counted = matches!(framed.frame.start, Edge::Preceding(_) | Edge::Following(_))
+            || matches!(framed.frame.end, Edge::Preceding(_) | Edge::Following(_));
+        if framed.frame.kind == Frame::Range && counted && terms.len() != 1 {
+            return Err(Error::Frame);
+        }
+        for (rows, keys) in partitioned(arena, sql, cursors, &framed)? {
+            let peers = window::Peers::new(rows.len(), |at| {
+                keys.get(at)
+                    .zip(keys.get(at.saturating_add(1)))
+                    .is_some_and(|(left, right)| alike(left, right))
+            });
+            // Only a `RANGE` frame counts in the term's own values, so
+            // only one reads an offset.
+            let first = rows.first().and_then(|at| cursors.get(*at));
+            let offsets = match (framed.frame.kind, first) {
+                (Frame::Range, Some(cursor)) => range_offsets(arena, sql, cursor, &framed.frame)?,
+                _ => (None, None),
+            };
+            let part = Part {
+                framed: &framed,
+                rows: &rows,
+                keys: &keys,
+                peers: &peers,
+                descending,
+                nulls,
+                offsets,
+            };
+            for (at, place) in rows.iter().enumerate() {
+                let value = answered_over(arena, sql, cursors, over, &part, at)?;
+                for slot in values.iter_mut().skip(*place).take(1) {
+                    *slot = value.clone();
+                }
+            }
+        }
+        for (cursor, value) in cursors.iter_mut().zip(values) {
+            cursor.aggregates.push((over.id, value));
+        }
+    }
+    let mut order: Vec<usize> = (0..cursors.len()).collect();
+    if sorting.is_empty() {
+        return Ok(order);
+    }
+    let mut keys = Vec::new();
+    for cursor in cursors.iter() {
+        let mut key = Vec::new();
+        for term in &sorting {
+            key.push(evaluate_collated(arena, term.expr, sql, cursor)?);
+        }
+        keys.push(key);
+    }
+    let empty = Vec::new();
+    order.sort_by(|left, right| {
+        order_of_window(
+            keys.get(*left).unwrap_or(&empty),
+            keys.get(*right).unwrap_or(&empty),
+            &sorting,
+        )
+    });
+    Ok(order)
 }

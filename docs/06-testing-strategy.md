@@ -4726,6 +4726,43 @@ D-216, D-217 and D-218, document 16 step Q8.
   smaller than the count leaves it; and a `DROP TABLE` takes the count
   away.
 
+### 6.6.143 Window functions (`db-sqlite`)
+
+D-219, document 16 steps Q4 and Q8.
+
+- `FILTER (WHERE x)` and `OVER` follow the closing bracket of a call,
+  and `WINDOW name AS (...)` follows a `HAVING`; each of the three
+  words is a name anywhere else.
+- A window names its partition, its order and its frame, and a window
+  that names another takes that window's partition and order.
+- A frame is counted in `ROWS`, in `RANGE` or in `GROUPS`, between two
+  of the five bounds, with the rows one of the four `EXCLUDE` words
+  leaves out taken away.
+- A frame that ends before it begins is refused, and so is `UNBOUNDED
+  FOLLOWING` where a frame begins and `UNBOUNDED PRECEDING` where one
+  ends.
+- The eleven built-in window functions and every aggregate answer over
+  a window; `DISTINCT` is refused and `FILTER` is taken for an
+  aggregate alone.
+- A statement that writes no `ORDER BY` of its own answers its rows in
+  the order the first window's terms sort them.
+- 13 667 statements over one table, each written in both engines,
+  answer the same rows: every function over every frame over six
+  windows, and the refusals as well.
+
+### 6.6.144 What a step the harness cannot run stands for (`db-sqlite`)
+
+D-220, document 16 step Q9.
+
+- A bracketed command the harness knows reads — `db eval`, `execsql`,
+  `catchsql`, and the list and string commands — leaves the step
+  reading alone, so the file runs on.
+- A variable no longer stops a file on its own: the text it stands for
+  was written by a step of the same file, and that step is what stops
+  it.
+- `do_execsql_test NAME { SQL }` with no answer after it expects no
+  row, and an answer of one word needs no braces.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

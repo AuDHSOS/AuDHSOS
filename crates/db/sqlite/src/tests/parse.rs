@@ -190,6 +190,7 @@ fn write(arena: &Arena, id: ExprId, sql: &[u8], out: &mut String) {
             args,
             distinct,
             star,
+            filter,
         } => {
             out.push_str("(call ");
             out.push_str(&text(name));
@@ -203,6 +204,38 @@ fn write(arena: &Arena, id: ExprId, sql: &[u8], out: &mut String) {
                 out.push(' ');
                 write(arena, *arg, sql, out);
             }
+            if let Some(id) = filter {
+                out.push_str(" filter ");
+                write(arena, id, sql, out);
+            }
+            out.push(')');
+        }
+        Node::Over {
+            name,
+            args,
+            distinct,
+            star,
+            filter,
+            window,
+        } => {
+            out.push_str("(over ");
+            out.push_str(&text(name));
+            if distinct {
+                out.push_str(" distinct");
+            }
+            if star {
+                out.push_str(" *");
+            }
+            for arg in arena.children(args) {
+                out.push(' ');
+                write(arena, *arg, sql, out);
+            }
+            if let Some(id) = filter {
+                out.push_str(" filter ");
+                write(arena, id, sql, out);
+            }
+            out.push(' ');
+            window_of(arena, window, sql, out);
             out.push(')');
         }
         Node::Case {
@@ -596,28 +629,14 @@ fn what_sqlite_refuses_this_parser_refuses_too() {
     let answers: Vec<&str> = golden.lines().collect();
     assert_eq!(cases.len(), answers.len());
 
-    // What the parser cannot read yet: the two window clauses.
-    // `RAISE(...)` is not among them — it reads as a call, which is what
-    // it looks like, and only the resolver will care that it is not one.
-    let not_yet: [&str; 2] = ["count(*) OVER ()", "count(*) FILTER (WHERE 1)"];
-
-    let mut waiting = 0;
     for (case, answer) in cases.iter().zip(&answers) {
         let sql = String::from_utf8_lossy(case).into_owned();
         let read = tree(&sql);
         match *answer {
-            "accept" => {
-                if not_yet.contains(&sql.as_str()) {
-                    assert!(read.is_err(), "`{sql}` reads, and was on the waiting list");
-                    waiting += 1;
-                } else {
-                    assert!(read.is_ok(), "`{sql}` is SQL and was refused: {read:?}");
-                }
-            }
+            "accept" => assert!(read.is_ok(), "`{sql}` is SQL and was refused: {read:?}"),
             _ => assert!(read.is_err(), "`{sql}` is not SQL and was read as {read:?}"),
         }
     }
-    assert_eq!(waiting, not_yet.len(), "the waiting list is out of date");
 }
 
 #[test]
@@ -1103,4 +1122,55 @@ fn raise_is_one_of_four_words_and_the_three_that_are_not_ignore_carry_a_message(
     ] {
         assert_eq!(tree(sql).as_deref(), Ok(written), "{sql}");
     }
+}
+
+/// One window, written out so that a test can say what it expects.
+fn window_of(arena: &Arena, id: crate::ast::WindowId, sql: &[u8], out: &mut String) {
+    let Some(window) = arena.window(id) else {
+        out.push('?');
+        return;
+    };
+    out.push_str("(window");
+    if let Some(base) = window.base {
+        out.push(' ');
+        out.push_str(&String::from_utf8_lossy(base.text(sql)));
+    }
+    for term in arena.children(window.partition) {
+        out.push_str(" partition ");
+        write(arena, *term, sql, out);
+    }
+    for term in arena.orders(window.order) {
+        out.push_str(" order ");
+        write(arena, term.expr, sql, out);
+    }
+    if let Some(frame) = window.frame {
+        out.push_str(match frame.kind {
+            crate::ast::Frame::Rows => " rows",
+            crate::ast::Frame::Range => " range",
+            crate::ast::Frame::Groups => " groups",
+        });
+        for bound in [frame.start, frame.end] {
+            out.push(' ');
+            match bound {
+                crate::ast::Bound::UnboundedPreceding => out.push_str("unbounded-preceding"),
+                crate::ast::Bound::Preceding(id) => {
+                    out.push_str("preceding ");
+                    write(arena, id, sql, out);
+                }
+                crate::ast::Bound::CurrentRow => out.push_str("current"),
+                crate::ast::Bound::Following(id) => {
+                    out.push_str("following ");
+                    write(arena, id, sql, out);
+                }
+                crate::ast::Bound::UnboundedFollowing => out.push_str("unbounded-following"),
+            }
+        }
+        out.push_str(match frame.exclude {
+            crate::ast::Exclude::NoOthers => "",
+            crate::ast::Exclude::CurrentRow => " exclude-current",
+            crate::ast::Exclude::Group => " exclude-group",
+            crate::ast::Exclude::Ties => " exclude-ties",
+        });
+    }
+    out.push(')');
 }

@@ -29,6 +29,9 @@ pub enum Error {
     NoColumn,
     /// A function this engine does not have.
     NoFunction,
+    /// A window function written where no window was worked out, which
+    /// `sqlite3WindowRewrite` refuses as `misuse of window function`.
+    NoWindow,
     /// A collation the connection does not hold, which is what a
     /// `COLLATE` naming one the C library would have been given
     /// through its API names.
@@ -252,6 +255,40 @@ pub fn evaluate_compared(
 }
 
 /// One node.
+/// `CAST(x AS type)`.
+fn converted(
+    arena: &Arena,
+    value: ExprId,
+    ty: crate::ast::Span,
+    sql: &[u8],
+    row: &dyn Row,
+    deeper: u32,
+) -> Result<Answer, Error> {
+    let mut inner = answer(arena, value, sql, row, deeper)?;
+    let affinity = Affinity::of_type(&crate::schema::dequote(ty.text(sql)));
+    cast(&mut inner.value, affinity, row.encoding());
+    inner.affinity = affinity;
+    Ok(inner)
+}
+
+/// `x COLLATE name`, which refuses a name no collation of this crate
+/// answers as `sqlite3GetCollSeq` refuses one the connection was never
+/// given.
+fn collated(
+    arena: &Arena,
+    value: ExprId,
+    name: crate::ast::Span,
+    sql: &[u8],
+    row: &dyn Row,
+    deeper: u32,
+) -> Result<Answer, Error> {
+    let mut inner = answer(arena, value, sql, row, deeper)?;
+    let named = crate::schema::dequote(name.text(sql));
+    inner.collation = Some(Collation::of_name(&named).ok_or(Error::NoCollation)?);
+    inner.written = true;
+    Ok(inner)
+}
+
 fn answer(
     arena: &Arena,
     id: ExprId,
@@ -279,23 +316,8 @@ fn answer(
             list,
             negated,
         } => listed(arena, value, list, negated, sql, row, deeper),
-        Node::Cast { value, ty } => {
-            let mut inner = answer(arena, value, sql, row, deeper)?;
-            let affinity = Affinity::of_type(&crate::schema::dequote(ty.text(sql)));
-            cast(&mut inner.value, affinity, row.encoding());
-            inner.affinity = affinity;
-            Ok(inner)
-        }
-        Node::Collate { value, name } => {
-            let mut inner = answer(arena, value, sql, row, deeper)?;
-            // A name no collation of this crate answers is refused, as
-            // `sqlite3GetCollSeq` refuses one the connection was never
-            // given.
-            let named = crate::schema::dequote(name.text(sql));
-            inner.collation = Some(Collation::of_name(&named).ok_or(Error::NoCollation)?);
-            inner.written = true;
-            Ok(inner)
-        }
+        Node::Cast { value, ty } => converted(arena, value, ty, sql, row, deeper),
+        Node::Collate { value, name } => collated(arena, value, name, sql, row, deeper),
         Node::Case {
             operand,
             branches,
@@ -340,15 +362,24 @@ fn answer(
                 written: false,
             })
         }
+        // An aggregate and a window function are both answered once
+        // per group or per row before the row is read, so the walk
+        // looks the answer up rather than working it out; a window
+        // function no window was worked out for is a misuse of one,
+        // and so is a scalar function carrying a `FILTER`, which only
+        // an aggregate reads.
         Node::Call {
             name,
             args,
             distinct,
             star,
+            filter,
         } => match row.aggregate(id) {
             Some(value) => Ok(Answer::plain(value)),
+            None if filter.is_some() => Err(Error::NoWindow),
             None => called(arena, name, args, distinct, star, sql, row, deeper),
         },
+        Node::Over { .. } => row.aggregate(id).map(Answer::plain).ok_or(Error::NoWindow),
         Node::Like {
             op,
             value,
@@ -762,7 +793,8 @@ fn binary(
 
 /// `+`, `-`, `*`, `/` and `%`, which count in integers where both sides
 /// are integers and in doubles where either is not.
-fn arithmetic(op: BinaryOp, left: &Value, right: &Value) -> Value {
+#[must_use]
+pub fn arithmetic(op: BinaryOp, left: &Value, right: &Value) -> Value {
     if let (Value::Int(left), Value::Int(right)) = (left, right) {
         return integer_arithmetic(op, *left, *right)
             .unwrap_or_else(|| real_arithmetic(op, &Value::Int(*left), &Value::Int(*right)));

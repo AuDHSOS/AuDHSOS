@@ -16,11 +16,11 @@
 use alloc::vec::Vec;
 
 use crate::ast::{
-    Action, Arena, BinaryOp, Change, ColumnConstraint, ColumnDef, Compound, Conflict, CreateIndex,
-    CreateTable, Cte, CurrentTime, Definition, Delete, Distinct, ExprId, Foreign, Indexed, Insert,
-    Join, JoinKind, LikeOp, Limit, Literal, Materialized, Node, Nulls, Order, OrderTerm, Range,
-    ResultColumn, Select, SelectId, Set, Source, SourceKind, Span, TableBody, TableConstraint,
-    TableOptions, UnaryOp, Update,
+    Action, Arena, BinaryOp, Bound, Change, ColumnConstraint, ColumnDef, Compound, Conflict,
+    CreateIndex, CreateTable, Cte, CurrentTime, Definition, Delete, Distinct, Exclude, ExprId,
+    Foreign, Frame, Frames, Indexed, Insert, Join, JoinKind, LikeOp, Limit, Literal, Materialized,
+    NamedWindow, Node, Nulls, Order, OrderTerm, Range, ResultColumn, Select, SelectId, Set, Source,
+    SourceKind, Span, TableBody, TableConstraint, TableOptions, UnaryOp, Update, Window, WindowId,
 };
 use crate::keyword::Keyword;
 use crate::token::{Kind, Lexer, Token};
@@ -120,6 +120,12 @@ pub enum Expected {
     Transaction,
     /// `ADD`, after the table of an `ALTER TABLE`.
     Add,
+    /// `WHERE`, in the `FILTER` of a window function.
+    Where,
+    /// Where a frame begins or ends.
+    Bound,
+    /// What a frame excludes, after `EXCLUDE`.
+    Exclude,
 }
 
 /// Where the parser stopped, and what it wanted there.
@@ -152,6 +158,8 @@ pub struct Parser<'a> {
     arena: Arena,
     /// How deep the walk stands.
     depth: u32,
+    /// The kind of the token last taken, which three words are read by.
+    last: Option<Kind>,
 }
 
 impl<'a> Parser<'a> {
@@ -165,6 +173,7 @@ impl<'a> Parser<'a> {
             end: 0,
             arena: Arena::new(),
             depth: 0,
+            last: None,
         };
         parser.ahead = [parser.read(), parser.read(), parser.read()];
         parser
@@ -344,12 +353,14 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        let windows = self.window_clause()?;
         Ok(Select {
             distinct,
             columns,
             from,
             filter,
             group,
+            windows,
             having,
             ..Select::default()
         })
@@ -2154,12 +2165,200 @@ impl<'a> Parser<'a> {
         }
         self.expect(Kind::Rp, Expected::CloseParen)?;
         let args = self.arena.push_children(&args);
+        let filter = if self.eat_keyword(Keyword::Filter) {
+            self.expect(Kind::Lp, Expected::OpenParen)?;
+            self.expect_keyword(Keyword::Where, Expected::Where)?;
+            let held = self.expression()?;
+            self.expect(Kind::Rp, Expected::CloseParen)?;
+            Some(held)
+        } else {
+            None
+        };
+        if self.eat_keyword(Keyword::Over) {
+            let window = self.over()?;
+            return self.node(Node::Over {
+                name,
+                args,
+                distinct,
+                star,
+                filter,
+                window,
+            });
+        }
         self.node(Node::Call {
             name,
             args,
             distinct,
             star,
+            filter,
         })
+    }
+
+    /// What follows `OVER`: the name of a window a `WINDOW` clause
+    /// defines, or a window written out in brackets.
+    fn over(&mut self) -> Result<WindowId, Error> {
+        if !self.at(Kind::Lp) {
+            let base = self.name()?;
+            return Ok(self.arena.push_window(Window {
+                base: Some(base),
+                named: true,
+                partition: Range::default(),
+                order: Range::default(),
+                frame: None,
+            }));
+        }
+        self.bump();
+        self.window_definition()
+    }
+
+    /// The body of a window, the `(` of it already taken:
+    /// `[name] [PARTITION BY exprs] [ORDER BY terms] [frame]`.
+    fn window_definition(&mut self) -> Result<WindowId, Error> {
+        // A window written in brackets may name one to build on, and
+        // the name is told from `PARTITION` and `ORDER` by being
+        // neither.
+        let base = if self.at(Kind::Rp)
+            || self.at_keyword(Keyword::Partition)
+            || self.at_keyword(Keyword::Order)
+            || self.at_keyword(Keyword::Rows)
+            || self.at_keyword(Keyword::Range)
+            || self.at_keyword(Keyword::Groups)
+        {
+            None
+        } else {
+            Some(self.name()?)
+        };
+        let partition = if self.eat_keyword(Keyword::Partition) {
+            self.expect_keyword(Keyword::By, Expected::By)?;
+            let mut terms = Vec::new();
+            loop {
+                terms.push(self.expression()?);
+                if !self.eat(Kind::Comma) {
+                    break;
+                }
+            }
+            self.arena.push_children(&terms)
+        } else {
+            Range::default()
+        };
+        let order = self.order_by()?;
+        let frame = self.frame()?;
+        self.expect(Kind::Rp, Expected::CloseParen)?;
+        Ok(self.arena.push_window(Window {
+            base,
+            named: false,
+            partition,
+            order,
+            frame,
+        }))
+    }
+
+    /// `(ROWS|RANGE|GROUPS) (BETWEEN bound AND bound | bound)
+    /// [EXCLUDE ...]`, or none of it.
+    fn frame(&mut self) -> Result<Option<Frames>, Error> {
+        let kind = if self.eat_keyword(Keyword::Rows) {
+            Frame::Rows
+        } else if self.eat_keyword(Keyword::Range) {
+            Frame::Range
+        } else if self.eat_keyword(Keyword::Groups) {
+            Frame::Groups
+        } else {
+            return Ok(None);
+        };
+        let (start, end) = if self.eat_keyword(Keyword::Between) {
+            let start = self.bound(true)?;
+            self.expect_keyword(Keyword::And, Expected::And)?;
+            (start, self.bound(false)?)
+        } else {
+            // One bound written alone is where the frame begins, and
+            // the frame ends at the row the walk stands on.
+            (self.bound(true)?, Bound::CurrentRow)
+        };
+        // `sqlite3WindowAlloc` refuses a frame that ends before it
+        // begins, which is `unsupported frame specification`.
+        let backwards = matches!(
+            (start, end),
+            (Bound::CurrentRow, Bound::Preceding(_))
+                | (Bound::Following(_), Bound::Preceding(_) | Bound::CurrentRow)
+        );
+        if backwards {
+            return Err(self.error(self.peek(), Expected::Bound));
+        }
+        let exclude = if self.eat_keyword(Keyword::Exclude) {
+            self.exclude()?
+        } else {
+            Exclude::NoOthers
+        };
+        Ok(Some(Frames {
+            kind,
+            start,
+            end,
+            exclude,
+        }))
+    }
+
+    /// One end of a frame, `begins` saying whether it is the end the
+    /// frame begins at.
+    ///
+    /// `frame_bound_s` takes `UNBOUNDED PRECEDING` and `frame_bound_e`
+    /// takes `UNBOUNDED FOLLOWING`, so a frame that begins unbounded
+    /// forwards or ends unbounded backwards is a refusal of the
+    /// grammar.
+    fn bound(&mut self, begins: bool) -> Result<Bound, Error> {
+        if self.eat_keyword(Keyword::Unbounded) {
+            if begins {
+                self.expect_keyword(Keyword::Preceding, Expected::Bound)?;
+                return Ok(Bound::UnboundedPreceding);
+            }
+            self.expect_keyword(Keyword::Following, Expected::Bound)?;
+            return Ok(Bound::UnboundedFollowing);
+        }
+        if self.eat_keyword(Keyword::Current) {
+            self.expect_keyword(Keyword::Row, Expected::Row)?;
+            return Ok(Bound::CurrentRow);
+        }
+        let count = self.expression()?;
+        if self.eat_keyword(Keyword::Preceding) {
+            return Ok(Bound::Preceding(count));
+        }
+        self.expect_keyword(Keyword::Following, Expected::Bound)?;
+        Ok(Bound::Following(count))
+    }
+
+    /// What follows `EXCLUDE`.
+    fn exclude(&mut self) -> Result<Exclude, Error> {
+        if self.eat_keyword(Keyword::No) {
+            self.expect_keyword(Keyword::Others, Expected::Exclude)?;
+            return Ok(Exclude::NoOthers);
+        }
+        if self.eat_keyword(Keyword::Current) {
+            self.expect_keyword(Keyword::Row, Expected::Row)?;
+            return Ok(Exclude::CurrentRow);
+        }
+        if self.eat_keyword(Keyword::Group) {
+            return Ok(Exclude::Group);
+        }
+        self.expect_keyword(Keyword::Ties, Expected::Exclude)?;
+        Ok(Exclude::Ties)
+    }
+
+    /// `WINDOW name AS (window), name AS (window)`, or none of it.
+    fn window_clause(&mut self) -> Result<Range, Error> {
+        if !self.eat_keyword(Keyword::Window) {
+            return Ok(Range::default());
+        }
+        let mut windows = Vec::new();
+        loop {
+            let name = self.name()?;
+            self.expect_keyword(Keyword::As, Expected::As)?;
+            self.expect(Kind::Lp, Expected::OpenParen)?;
+            let window = self.window_definition()?;
+            windows.push(NamedWindow { name, window });
+            if !self.eat(Kind::Comma) {
+                break;
+            }
+        }
+        Ok(self.arena.push_named_windows(&windows))
     }
 
     /// `CAST(x AS type)`.
@@ -2348,8 +2547,49 @@ impl<'a> Parser<'a> {
     }
 
     /// The next token that means something.
-    const fn peek(&self) -> Option<Token> {
-        self.ahead.first().copied().flatten()
+    fn peek(&self) -> Option<Token> {
+        self.ahead
+            .first()
+            .copied()
+            .flatten()
+            .map(|token| self.reclassified(token))
+    }
+
+    /// `WINDOW`, `OVER` and `FILTER` are keywords only where the words
+    /// around them allow no other reading, which is
+    /// `analyzeWindowKeyword`, `analyzeOverKeyword` and
+    /// `analyzeFilterKeyword` of `tokenize.c`; anywhere else each of
+    /// the three is a name.
+    fn reclassified(&self, token: Token) -> Token {
+        let Kind::Keyword(word @ (Keyword::Window | Keyword::Over | Keyword::Filter)) = token.kind
+        else {
+            return token;
+        };
+        let next = self.ahead.get(1).copied().flatten().map(|ahead| ahead.kind);
+        let held = match word {
+            // `WINDOW name AS` names a window, and the words are read
+            // as they come out of the lexer, so a name that is itself a
+            // keyword ends the clause.
+            Keyword::Window => {
+                next == Some(Kind::Id)
+                    && self.ahead.get(2).copied().flatten().map(|ahead| ahead.kind)
+                        == Some(Kind::Keyword(Keyword::As))
+            }
+            // `OVER` takes a window or its name, and both follow the
+            // bracket of a call.
+            Keyword::Over => {
+                self.last == Some(Kind::Rp) && matches!(next, Some(Kind::Lp | Kind::Id))
+            }
+            _ => self.last == Some(Kind::Rp) && next == Some(Kind::Lp),
+        };
+        if held {
+            token
+        } else {
+            Token {
+                kind: Kind::Id,
+                ..token
+            }
+        }
     }
 
     /// Whether the next token is of this kind.
@@ -2366,6 +2606,12 @@ impl<'a> Parser<'a> {
     fn bump(&mut self) -> Option<Token> {
         let token = self.peek();
         self.end = token.map_or(self.end, |token| token.start.saturating_add(token.len));
+        self.last = self
+            .ahead
+            .first()
+            .copied()
+            .flatten()
+            .map(|ahead| ahead.kind);
         self.ahead = [
             self.ahead.get(1).copied().flatten(),
             self.ahead.get(2).copied().flatten(),

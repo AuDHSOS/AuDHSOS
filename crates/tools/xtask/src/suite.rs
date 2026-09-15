@@ -176,6 +176,55 @@ fn files(dir: &Path) -> Result<Vec<PathBuf>, Error> {
 ///
 /// A case carrying `$` or `[` needs the TCL interpreter to say what it
 /// runs, so it is passed over rather than guessed at.
+/// `do_execsql_test NAME { SQL } ANSWER`, the name already read.
+///
+/// An answer of one word needs no braces, and what stands on the line
+/// the case ends on is that word; a case with nothing after it expects
+/// no row, which is what the interpreter reads an answer it was not
+/// given as.
+fn execsql_case<'a>(rest: &'a str, out: &mut Vec<Step>) -> &'a str {
+    let Some((name, after)) = word(rest) else {
+        return rest;
+    };
+    let Some((sql, after)) = braced(after) else {
+        out.push(Step::Opaque(true));
+        return after;
+    };
+    let (want, over) =
+        braced(after).unwrap_or_else(|| (after.split('\n').next().unwrap_or("").trim(), after));
+    push(out, name, sql, want);
+    over
+}
+
+/// `do_test NAME { execsql { SQL } } { ANSWER }`, the older way of
+/// writing a case, the name already read.
+///
+/// The only body this reads is one `execsql` and nothing else; every
+/// other body is TCL this harness cannot run.
+fn tcl_case<'a>(rest: &'a str, out: &mut Vec<Step>) -> &'a str {
+    let Some((name, after)) = word(rest) else {
+        return rest;
+    };
+    let Some((body, after)) = braced(after) else {
+        out.push(Step::Opaque(true));
+        return after;
+    };
+    let Some((want, after)) = braced(after) else {
+        out.push(Step::Opaque(true));
+        return after;
+    };
+    let read = body
+        .trim()
+        .strip_prefix("execsql")
+        .and_then(braced)
+        .filter(|(_, over)| over.trim().is_empty());
+    match read {
+        Some((sql, _)) => push(out, name, sql, want),
+        None => out.push(Step::Opaque(true)),
+    }
+    after
+}
+
 pub(crate) fn cases(text: &str) -> Vec<Step> {
     let mut out = Vec::new();
     let mut rest = text;
@@ -233,6 +282,7 @@ pub(crate) fn cases(text: &str) -> Vec<Step> {
                 // database that is short of them.
                 None => out.push(Step::Opaque(true)),
             },
+            "do_execsql_test" => rest = execsql_case(rest, &mut out),
             // A case that expects a refusal says so as a pair of a
             // code and a message, which this does not answer; the
             // block is read past so that the `execsql` inside it is
@@ -244,31 +294,7 @@ pub(crate) fn cases(text: &str) -> Vec<Step> {
             // `do_test NAME { execsql { SQL } } { ANSWER }` is the
             // older way of writing `do_execsql_test`, and the only
             // body this reads is one `execsql` and nothing else.
-            "do_test" => {
-                let Some((name, after)) = word(rest) else {
-                    continue;
-                };
-                let Some((body, after)) = braced(after) else {
-                    rest = after;
-                    out.push(Step::Opaque(true));
-                    continue;
-                };
-                let Some((want, after)) = braced(after) else {
-                    rest = after;
-                    out.push(Step::Opaque(true));
-                    continue;
-                };
-                rest = after;
-                let read = body
-                    .trim()
-                    .strip_prefix("execsql")
-                    .and_then(braced)
-                    .filter(|(_, over)| over.trim().is_empty());
-                match read {
-                    Some((sql, _)) => push(&mut out, name, sql, want),
-                    None => out.push(Step::Opaque(true)),
-                }
-            }
+            "do_test" => rest = tcl_case(rest, &mut out),
             _ => {
                 let Some((name, after)) = word(rest) else {
                     continue;
@@ -586,13 +612,39 @@ fn first_words(sql: &str) -> String {
         .join(" ")
 }
 
+/// The commands a bracketed substitution may name for the text around
+/// it still to count as one that writes nothing.
+const READING: [&str; 18] = [
+    "db", "execsql", "catchsql", "expr", "set", "format", "list", "lappend", "lindex", "llength",
+    "lrange", "lsort", "lsearch", "concat", "join", "split", "string", "incr",
+];
+
+/// Whether every bracketed substitution of `text` names a command that
+/// reads.
+///
+/// Reading the text costs O(n) in its bytes.
+fn substitutes(text: &str) -> bool {
+    text.split('[').skip(1).all(|after| {
+        let word = after
+            .trim_start()
+            .split(|byte: char| !byte.is_ascii_alphanumeric() && byte != '_')
+            .next()
+            .unwrap_or("");
+        READING
+            .iter()
+            .any(|reading| word.eq_ignore_ascii_case(reading))
+    })
+}
+
 /// Whether a step this harness cannot run may have changed the
 /// database.
 ///
 /// A word that names a statement that writes, a command that opens or
-/// closes a connection, and a substitution, which stands for a command
-/// this cannot read, all say it may have. Reading the text costs O(n)
-/// in its bytes.
+/// closes a connection, and a bracketed command that is not one of the
+/// few that only read, all say it may have. A text that a variable
+/// stands in for is read where the file wrote it, so the step that
+/// wrote it is the step that stops the file. Reading the text costs
+/// O(n) in its bytes.
 fn writes(text: &str) -> bool {
     const WRITING: [&str; 24] = [
         "insert",
@@ -620,7 +672,7 @@ fn writes(text: &str) -> bool {
         "copy",
         "crash",
     ];
-    if text.contains('[') || text.contains('$') {
+    if !substitutes(text) {
         return true;
     }
     let words = words(text);

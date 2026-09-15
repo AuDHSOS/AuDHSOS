@@ -35,6 +35,7 @@ pub mod tree;
 pub mod utf8;
 pub mod value;
 pub mod wal;
+pub mod window;
 
 #[cfg(test)]
 mod tests;

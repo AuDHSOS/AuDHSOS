@@ -108,7 +108,8 @@ Each rule is checkable, and each makes a later thing possible.
 | A `WHERE` that holds an indexed column equal to a value, which the walk reads out of the index | answered |
 | A statement inside a `FROM`, a `WITH` that is not `RECURSIVE` | answered |
 | `(SELECT ...)` as a value, `EXISTS`, `IN (SELECT ...)`, `IN table`, correlated or not | answered |
-| A window clause, a table-valued function | refused by name |
+| A window clause: `OVER`, a `WINDOW` clause, a `FILTER` | answered |
+| A table-valued function | refused by name |
 
 ### What the tests hold it to
 
@@ -143,11 +144,10 @@ of lines and 100 percent of branches, in both instrumentations.
 | 2 | The virtual machine and the code generator that replaces the tree walker. | Q6 |
 | 3 | Writing past the record: the b-tree writer, transactions, the journal in four modes, the WAL. `changes`, `total_changes` and `last_insert_rowid` answer nought until then, which is what a connection that has written nothing answers. | Q7 |
 | 4 | The rest of the language: `INSERT`, `UPDATE`, `DELETE`, `CREATE`, `ALTER`, `DROP`, triggers, views, a `WITH` written `RECURSIVE`. | Q8 |
-| 5 | The window clauses, which the parser refuses. | Q8 |
-| 6 | The functions whose answers are not exact: `sqrt`, `exp`, `ln`, `log`, `pow` and the trigonometric set. See D-160. | Q8 |
-| 7 | An adapter that speaks the commands SQLite's TCL suite drives. | Q9 |
-| 8 | The matrix run across every level of the suite rather than the format alone. | Q9 |
-| 9 | A report that names MC/DC pairs, which the pinned toolchain does not emit. D4 (16.10) derives MC/DC from condition coverage and `cargo xtask mcdc` instead. | Q10 |
+| 5 | The functions whose answers are not exact: `sqrt`, `exp`, `ln`, `log`, `pow` and the trigonometric set. See D-160. | Q8 |
+| 6 | An adapter that speaks the commands SQLite's TCL suite drives. | Q9 |
+| 7 | The matrix run across every level of the suite rather than the format alone. | Q9 |
+| 8 | A report that names MC/DC pairs, which the pinned toolchain does not emit. D4 (16.10) derives MC/DC from condition coverage and `cargo xtask mcdc` instead. | Q10 |
 
 ## 16.7 Decision D1: the engine is a port of the routines
 
@@ -368,7 +368,7 @@ CI has no SQLite.
 | L1 | The format | Header, b-tree pages, cells, overflow chains, records. | built |
 | L2 | The pager | Pages in and out of a file, the journal in five modes, the WAL, locking, the free list. | built but for locking and the checkpoint |
 | L3 | The b-tree writer | Insert, delete, balance, the pointer maps auto-vacuum needs. | built |
-| L4 | The tokenizer and parser | SQL text to a tree. | built but for the window clauses |
+| L4 | The tokenizer and parser | SQL text to a tree. | built |
 | L5 | The code generator and virtual machine | The tree to opcodes, and the register machine that runs them. | missing |
 | L6 | The semantics | Affinity, comparison, collation, the built-in functions, `NULL`. | built for the read half |
 | L7 | The interface | Prepare, step, bind, column, and a shell to type at. | missing |
@@ -380,7 +380,7 @@ CI has no SQLite.
 | Q1 | The format, read | built | nothing | L |
 | Q2 | The schema as types | built | Q1 | M |
 | Q3 | The pager and the index trees | built | Q1 | L |
-| Q4 | The tokenizer and the parser | built but for the window clauses | nothing | L |
+| Q4 | The tokenizer and the parser | built | nothing | L |
 | Q5 | Values, and a statement answered by walking | built | Q2, Q4 | L |
 | Q6 | The virtual machine | open | Q5 | L |
 | Q7 | Writing | the record is written | Q3, Q5 | L |
@@ -497,8 +497,8 @@ meets D4.
 
 ## 16.18 Q4. The tokenizer and the parser
 
-Status: built but for the window clauses.
-Depends on: nothing.
+Status: built.
+Depends on: nothing. The window clauses are recorded in D-219.
 Size: L.
 
 ### Needs
@@ -513,6 +513,8 @@ Size: L.
 2. Parse an expression, with the precedence of `parse.y`.
 3. Parse a `SELECT`, a `CREATE TABLE` and a `CREATE INDEX` into an arena
    the walk of which is bounded.
+4. Parse a `FILTER`, an `OVER` and a `WINDOW` clause, reading each of
+   the three words as a name where the words around it leave no window.
 
 ### Produces
 
@@ -645,7 +647,7 @@ TRIGGER`, the four `DROP`s, `ALTER TABLE ... ADD COLUMN`, `PRAGMA`,
 and `UPDATE` are run from their text and write the files the shell wrote;
 the rest is open.
 Depends on: Q6. Recorded in D-172 to D-174, D-182, D-186, D-187, D-189,
-D-191, D-193, D-195, D-196, D-205 to D-211 and D-216 to D-218.
+D-191, D-193, D-195, D-196, D-205 to D-211, D-216 to D-218 and D-219.
 Size: L.
 
 ### Does
@@ -665,9 +667,9 @@ Size: L.
    which D-191 records, and `CREATE TRIGGER` and `DROP TRIGGER`, which
    D-204 records. `ALTER TABLE ... ADD COLUMN` is built, which
    D-196 records; `RENAME` is open.
-3. Subqueries, `WITH`, and the window clauses the parser refuses. A
-   `WITH` term that reads itself is built, which D-198 records; the
-   window clauses are open.
+3. Subqueries, `WITH`, and the window clauses. A `WITH` term that reads
+   itself is built, which D-198 records, and the window clauses are
+   built, which D-219 records.
 4. The functions that need a clock or a random source. `random` and
    `randomblob` are built, which D-199 records; the clock is open.
 5. `ANALYZE`, which counts the tables and their indexes into
@@ -786,6 +788,6 @@ the port.
 | 3 | A refusal is added to reach a green check rather than because SQLite refuses. | The engine answers less and the count of refusals hides it. | The count in `tests/db.rs` is asserted and may only fall. |
 | 4 | Coverage is met by deleting a test's reach rather than by reaching. | A branch counted covered by one input that no file produces. | D4 forbids exemptions. A branch no input reaches is deleted, which shows in the diff as deleted code. |
 | 5 | The matrix is a `for` loop copied into each test. | A dimension added in one test and forgotten in ten. | 16.11 puts the matrix in the test support and has the test name its dimensions. |
-| 6 | The fuzz corpora grow until the regression replay is slow. | The check takes longer than three minutes and is skipped. | `sh tools/xtask.sh fuzz --merge` keeps one input per feature. Hash-named files are not committed; named regression entries are. |
-| 7 | MC/DC never becomes measurable on the pinned toolchain. | Goal 5 of 16.2 cannot be met by reading a report. | D4 derives MC/DC from condition coverage and checks both of its premises with `cargo xtask mcdc`, so the goal is met by argument and by check rather than by a report the pin does not emit. |
-| 8 | A `RIGHT` or a `FULL` join reads every row of every side against every row of the sides before it, because a row of such a join is marked matched where the levels under it are read, so no term of the `WHERE` may be read above it. | The cases of `joinD.test` that write such a join take ten of the sixteen minutes the suite takes. | D-208 reads every other term on the level that answers it, and reads the side of an `ON` by an index. What is left is marking a row by its key rather than by where it stands, which lets such a side be read by an index as well. |
+| 5 | The fuzz corpora grow until the regression replay is slow. | The check takes longer than three minutes and is skipped. | `sh tools/xtask.sh fuzz --merge` keeps one input per feature. Hash-named files are not committed; named regression entries are. |
+| 6 | MC/DC never becomes measurable on the pinned toolchain. | Goal 5 of 16.2 cannot be met by reading a report. | D4 derives MC/DC from condition coverage and checks both of its premises with `cargo xtask mcdc`, so the goal is met by argument and by check rather than by a report the pin does not emit. |
+| 7 | A `RIGHT` or a `FULL` join reads every row of every side against every row of the sides before it, because a row of such a join is marked matched where the levels under it are read, so no term of the `WHERE` may be read above it. | The cases of `joinD.test` that write such a join take ten of the sixteen minutes the suite takes. | D-208 reads every other term on the level that answers it, and reads the side of an `ON` by an index. What is left is marking a row by its key rather than by where it stands, which lets such a side be read by an index as well. |

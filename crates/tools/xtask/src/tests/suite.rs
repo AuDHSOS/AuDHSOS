@@ -44,7 +44,9 @@ fn the_older_way_of_writing_a_case_is_read_as_one() {
             "do_test a {\n  execsql {INSERT INTO t VALUES(1)}\n  set x 1\n} {}",
             true,
         ),
-        ("do_test a {\n  set x [db eval {SELECT 1}]\n} {1}", true),
+        ("do_test a {\n  set x [db eval {SELECT 1}]\n} {1}", false),
+        ("do_test a {\n  set x [sqlite3 db2 test.db]\n} {1}", true),
+        ("do_test a {\n  set x [forcedelete test.db]\n} {1}", true),
     ] {
         let steps = cases(text);
         assert_eq!(steps.len(), 1, "{text}");
@@ -80,12 +82,21 @@ fn a_case_whose_text_is_left_to_the_interpreter_is_passed_over() {
     for text in [
         "do_execsql_test a {SELECT $x} {1}",
         "do_execsql_test a {SELECT 1} {[expr 1]}",
-        "do_execsql_test a {SELECT 1}\n",
     ] {
         let steps = cases(text);
         assert_eq!(steps.len(), 1, "{text}");
         assert!(matches!(steps[0], Step::Opaque(_)), "{text}");
     }
+    // A case with no answer after it expects no row, and one whose
+    // answer is a single word needs no braces around it.
+    let steps = cases("do_execsql_test a {SELECT 1}\n");
+    assert_eq!(read(&steps[0]).unwrap().2, Vec::<String>::new());
+    assert_eq!(
+        read(&cases("do_execsql_test a {SELECT 1} 1\n")[0])
+            .unwrap()
+            .2,
+        ["1"]
+    );
     assert!(cases("do_execsql_test\n").is_empty());
 }
 

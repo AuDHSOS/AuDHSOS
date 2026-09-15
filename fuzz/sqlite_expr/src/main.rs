@@ -199,6 +199,28 @@ fn walk_select(arena: &Arena, id: SelectId, depth: u32) {
     for term in arena.orders(select.order) {
         walk(arena, term.expr, 0);
     }
+    // A `WINDOW` clause names windows, and a window names terms and may
+    // bound its frame by expressions.
+    for named in arena.named_windows(select.windows) {
+        let Some(window) = arena.window(named.window) else {
+            continue;
+        };
+        for term in arena.children(window.partition) {
+            walk(arena, *term, 0);
+        }
+        for term in arena.orders(window.order) {
+            walk(arena, term.expr, 0);
+        }
+        if let Some(frame) = window.frame {
+            for bound in [frame.start, frame.end] {
+                if let db_sqlite::ast::Bound::Preceding(id)
+                | db_sqlite::ast::Bound::Following(id) = bound
+                {
+                    walk(arena, id, 0);
+                }
+            }
+        }
+    }
     if let Some((_, next)) = select.compound {
         walk_select(arena, next, deeper);
     }
@@ -245,9 +267,12 @@ fn walk(arena: &Arena, id: ExprId, depth: u32) {
             }
         }
         Node::Cast { value, .. } | Node::Collate { value, .. } => child(value),
-        Node::Call { args, .. } => {
+        Node::Call { args, filter, .. } | Node::Over { args, filter, .. } => {
             for arg in arena.children(args) {
                 child(*arg);
+            }
+            if let Some(id) = filter {
+                child(id);
             }
         }
         Node::Case {
