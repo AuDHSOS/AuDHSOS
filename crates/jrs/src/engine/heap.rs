@@ -1709,9 +1709,7 @@ impl<'heap> Evacuator<'heap> {
                 self.evacuate_value(value)?;
             }
         }
-        if let ObjectKind::StringWrapper(value) | ObjectKind::ArrayIterator { target: value, .. } =
-            &mut object.kind
-        {
+        for value in object.kind.values_mut().into_iter().flatten() {
             self.evacuate_value(value)?;
         }
         if let ObjectKind::Function { context, .. } = &mut object.kind
@@ -1915,11 +1913,12 @@ fn object_contains_young(object: &JSObject) -> bool {
             .out_of_line_slots
             .as_ref()
             .is_some_and(|slots| slots.iter().copied().any(value_is_young))
-        || matches!(
-            &object.kind,
-            ObjectKind::StringWrapper(value) | ObjectKind::ArrayIterator { target: value, .. }
-                if value_is_young(*value)
-        )
+        || object
+            .kind
+            .values()
+            .into_iter()
+            .flatten()
+            .any(value_is_young)
         || matches!(&object.kind, ObjectKind::Function { context: Some(context), .. } if context.is_young())
         || object.elements.is_some_and(ElementsRef::is_young)
 }
@@ -1973,10 +1972,8 @@ fn trace_object_work(object: &JSObject, work: &mut Vec<Work>) {
             push_value_work(work, *value);
         }
     }
-    if let ObjectKind::StringWrapper(value) | ObjectKind::ArrayIterator { target: value, .. } =
-        &object.kind
-    {
-        push_value_work(work, *value);
+    for value in object.kind.values().into_iter().flatten() {
+        push_value_work(work, value);
     }
     if let ObjectKind::Function {
         context: Some(context),

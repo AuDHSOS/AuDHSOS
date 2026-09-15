@@ -665,9 +665,13 @@ impl RegisterVM {
             let object = heap
                 .get_object(reference)
                 .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            // 13.5.3 answers "function" for everything 7.2.3 calls callable,
+            // which 10.4.1 makes a bound function one of.
             if matches!(
                 object.kind,
-                ObjectKind::Function { .. } | ObjectKind::NativeFunction { .. }
+                ObjectKind::Function { .. }
+                    | ObjectKind::NativeFunction { .. }
+                    | ObjectKind::BoundFunction { .. }
             ) {
                 b"function"
             } else {
@@ -1169,6 +1173,7 @@ impl RegisterVM {
             Intrinsic::FunctionConstructor | Intrinsic::FunctionPrototypeCall => {
                 Self::call_function_intrinsic(intrinsic)
             }
+            Intrinsic::FunctionPrototypeBind => self.bind_function(call, heap, realm),
             Intrinsic::ObjectConstructor
             | Intrinsic::ObjectDefineProperty
             | Intrinsic::ObjectGetOwnPropertyDescriptor
@@ -1179,6 +1184,45 @@ impl RegisterVM {
                 Self::call_object_intrinsic(intrinsic, target, key, attributes, heap, realm)
             }
         }
+    }
+
+    /// `Function.prototype.bind` of 20.2.3.2: the bound function exotic object
+    /// of 10.4.1.
+    ///
+    /// `[[BoundArguments]]` is empty here. A bound argument would have to be
+    /// put in front of the arguments the call passes, which lie in the
+    /// registers of the caller and cannot be pushed apart, so a `bind` that
+    /// carries one names that instead of dropping it.
+    fn bind_function(
+        &self,
+        call: Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if call.arg_count > 1 {
+            return Err(VMError::Unsupported("bind with a bound argument"));
+        }
+        let target = call.receiver;
+        if !Self::is_callable(target, heap) {
+            return Err(type_error(
+                heap,
+                realm,
+                "bind called on a value that is not callable",
+            ));
+        }
+        let receiver = if call.arg_count == 0 {
+            VALUE_UNDEFINED
+        } else {
+            self.read_reg(call.arg_start)?
+        };
+        // 10.4.1.3 gives the bound function the Prototype of its target and
+        // the `length` and `name` 20.2.3.2 derives from it. The two values it
+        // binds travel in the object, so they are written after it exists.
+        let prototype = realm.function_prototype(heap)?;
+        let shape = heap.shapes.root_shape();
+        let bound = heap.allocate_object(shape, prototype)?;
+        heap.set_object_kind(bound, ObjectKind::BoundFunction { target, receiver })?;
+        Ok(Value::from_object(bound))
     }
 
     /// The object a call finally reaches, and the call that reaches it.
@@ -1209,6 +1253,17 @@ impl RegisterVM {
                 ObjectKind::NativeFunction { id, .. }
                     if id == Intrinsic::FunctionPrototypeCall.id()
             );
+            // 10.4.1.1 calls the target with the `this` value the bind gave
+            // it, whatever the call site passed.
+            if let ObjectKind::BoundFunction { target, receiver } = heap
+                .get_object(function_ref)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?
+                .kind
+            {
+                function = target;
+                call.receiver = receiver;
+                continue;
+            }
             if !forwards {
                 return Ok(function_ref);
             }
@@ -1852,9 +1907,9 @@ impl RegisterVM {
     const fn unimplemented_conversion(kind: &ObjectKind) -> Option<&'static str> {
         match kind {
             // 20.2.3.5 answers the source text of the function.
-            ObjectKind::Function { .. } | ObjectKind::NativeFunction { .. } => {
-                Some("Function.prototype.toString")
-            }
+            ObjectKind::Function { .. }
+            | ObjectKind::NativeFunction { .. }
+            | ObjectKind::BoundFunction { .. } => Some("Function.prototype.toString"),
             // 20.5.3.4 answers "name: message".
             ObjectKind::Error => Some("Error.prototype.toString"),
             // 22.1.3.28, 21.1.3.7 and 20.3.3.3 answer the wrapped primitive.
@@ -1937,7 +1992,9 @@ impl RegisterVM {
             heap.get_object(reference).is_some_and(|object| {
                 matches!(
                     object.kind,
-                    ObjectKind::Function { .. } | ObjectKind::NativeFunction { .. }
+                    ObjectKind::Function { .. }
+                        | ObjectKind::NativeFunction { .. }
+                        | ObjectKind::BoundFunction { .. }
                 )
             })
         })
@@ -2180,7 +2237,9 @@ impl RegisterVM {
             let object = Self::coerce_object(receiver, heap, realm)?;
             match heap.get_object(object).ok_or(VMError::TypeError)?.kind {
                 ObjectKind::Array { .. } => "Array",
-                ObjectKind::Function { .. } | ObjectKind::NativeFunction { .. } => "Function",
+                ObjectKind::Function { .. }
+                | ObjectKind::NativeFunction { .. }
+                | ObjectKind::BoundFunction { .. } => "Function",
                 ObjectKind::Error => "Error",
                 ObjectKind::BooleanWrapper(_) => "Boolean",
                 ObjectKind::NumberWrapper(_) => "Number",

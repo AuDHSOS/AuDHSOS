@@ -67,6 +67,42 @@ pub enum ObjectKind {
         /// `[[ArrayLikeNextIndex]]`.
         index: u32,
     },
+    /// Bound function exotic object, the slots of 10.4.1.
+    BoundFunction {
+        /// `[[BoundTargetFunction]]`.
+        target: Value,
+        /// `[[BoundThis]]`.
+        receiver: Value,
+    },
+}
+
+impl ObjectKind {
+    /// Every `Value` this kind holds.
+    ///
+    /// The collector follows what it can see, so a kind that holds a
+    /// reference says so here and nowhere else: a new one that forgets to
+    /// would leave a reference behind a scavenge.
+    #[must_use]
+    pub const fn values(&self) -> [Option<Value>; 2] {
+        match self {
+            Self::StringWrapper(value) | Self::ArrayIterator { target: value, .. } => {
+                [Some(*value), None]
+            }
+            Self::BoundFunction { target, receiver } => [Some(*target), Some(*receiver)],
+            _ => [None, None],
+        }
+    }
+
+    /// Every `Value` this kind holds, to be forwarded by a collection.
+    pub const fn values_mut(&mut self) -> [Option<&mut Value>; 2] {
+        match self {
+            Self::StringWrapper(value) | Self::ArrayIterator { target: value, .. } => {
+                [Some(value), None]
+            }
+            Self::BoundFunction { target, receiver } => [Some(target), Some(receiver)],
+            _ => [None, None],
+        }
+    }
 }
 
 /// Compact representation of a JavaScript object in the heap.

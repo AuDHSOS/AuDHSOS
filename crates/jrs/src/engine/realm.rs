@@ -347,6 +347,8 @@ pub enum Intrinsic {
     FunctionConstructor,
     /// `Function.prototype.call` (20.2.3.3).
     FunctionPrototypeCall,
+    /// `Function.prototype.bind` (20.2.3.2).
+    FunctionPrototypeBind,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -374,7 +376,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 43] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -417,6 +419,7 @@ impl Intrinsic {
         Self::ObjectGetOwnPropertyNames,
         Self::FunctionConstructor,
         Self::FunctionPrototypeCall,
+        Self::FunctionPrototypeBind,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -460,7 +463,9 @@ impl Intrinsic {
             Self::ArrayConstructor | Self::ObjectConstructor | Self::FunctionConstructor => {
                 IntrinsicHolder::Global
             }
-            Self::FunctionPrototypeCall => IntrinsicHolder::FunctionPrototype,
+            Self::FunctionPrototypeCall | Self::FunctionPrototypeBind => {
+                IntrinsicHolder::FunctionPrototype
+            }
             Self::ArrayIsArray => IntrinsicHolder::ArrayConstructor,
             Self::ObjectDefineProperty
             | Self::ObjectGetOwnPropertyDescriptor
@@ -514,6 +519,7 @@ impl Intrinsic {
             Self::ObjectGetOwnPropertyNames => 39,
             Self::FunctionConstructor => 40,
             Self::FunctionPrototypeCall => 41,
+            Self::FunctionPrototypeBind => 42,
         }
     }
 
@@ -562,6 +568,7 @@ impl Intrinsic {
             Self::ObjectGetOwnPropertyNames => 39,
             Self::FunctionConstructor => 40,
             Self::FunctionPrototypeCall => 41,
+            Self::FunctionPrototypeBind => 42,
         }
     }
 
@@ -611,6 +618,7 @@ impl Intrinsic {
             39 => Some(Self::ObjectGetOwnPropertyNames),
             40 => Some(Self::FunctionConstructor),
             41 => Some(Self::FunctionPrototypeCall),
+            42 => Some(Self::FunctionPrototypeBind),
             _ => None,
         }
     }
@@ -627,6 +635,7 @@ impl Intrinsic {
             Self::ObjectConstructor => "Object",
             Self::FunctionConstructor => "Function",
             Self::FunctionPrototypeCall => "call",
+            Self::FunctionPrototypeBind => "bind",
             Self::ObjectDefineProperty => "defineProperty",
             Self::ObjectGetOwnPropertyDescriptor => "getOwnPropertyDescriptor",
             Self::ObjectGetOwnPropertyNames => "getOwnPropertyNames",
@@ -682,6 +691,7 @@ impl Intrinsic {
             | Self::ObjectConstructor
             | Self::FunctionConstructor
             | Self::FunctionPrototypeCall
+            | Self::FunctionPrototypeBind
             | Self::ObjectGetOwnPropertyNames => false,
             // 20.1.2.4 and 20.1.2.8 apply ToPropertyKey to the second argument.
             Self::ObjectDefineProperty | Self::ObjectGetOwnPropertyDescriptor => index == 1,
@@ -739,6 +749,7 @@ impl Intrinsic {
             | Self::ObjectConstructor
             | Self::FunctionConstructor
             | Self::FunctionPrototypeCall
+            | Self::FunctionPrototypeBind
             | Self::ObjectGetOwnPropertyNames => 1,
             Self::ObjectDefineProperty => 3,
             Self::ObjectGetOwnPropertyDescriptor

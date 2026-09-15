@@ -475,6 +475,30 @@ fn a_call_reaches_the_function_it_was_found_on() -> Result<(), Error> {
         Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost)?,
         Value::Number(1.0)
     );
+    // 20.2.3.2 answers the bound function exotic object of 10.4.1, which
+    // 10.4.1.1 calls with the `this` value the bind gave it, and 7.2.3 counts
+    // as callable.
+    for source in [
+        "function f(){return this.v}var g=f.bind({v:5});g()",
+        "function f(a){return this.v+a}var g=f.bind({v:1});g(2)",
+        "function f(){return 1}typeof f.bind({})",
+        "typeof Function.prototype.bind",
+        // A second bind cannot replace the `this` the first one fixed.
+        "function f(){return this.v}f.bind({v:1}).bind({v:2})()",
+        // The idiom that takes a method off its receiver.
+        "var j=Function.prototype.call.bind(Array.prototype.join);j([1,2,3],'-')",
+    ] {
+        differential(source)?;
+    }
+    // `[[BoundArguments]]` would have to go in front of the arguments the call
+    // passes, which lie in the registers of the caller, so a bound argument is
+    // named rather than dropped.
+    let program = compile("function f(){}f.bind({},1)", Limits::default())?;
+    assert!(program.uses_register_backend());
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
     // 20.2.1.1 compiles a body at run time, which this engine names as a gap
     // rather than answering a function that would not be the one asked for.
     let program = compile("Function('return 1')", Limits::default())?;
