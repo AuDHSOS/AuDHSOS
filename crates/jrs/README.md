@@ -649,10 +649,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Object%` and its methods, after the integrity levels, on the register engine (focused) | focused | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,530 (22.49%) | 18 (0.26%) | 5,254 (77.24%) |
 | `%Number%` (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 572 (84.12%) | 102 (15.00%) | 6 (0.88%) |
 | `%Number%` on the register engine (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 226 (33.24%) | 2 (0.29%) | 452 (66.47%) |
-| The String exotic object (focused) | focused | `7f92bfc` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/String --summary` | 1,223 | 2,443 | 1,928 (78.92%) | 448 (18.34%) | 67 (2.74%) |
-| The String exotic object on the register engine (focused) | focused | `7f92bfc` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/String --summary` | 1,223 | 2,443 | 658 (26.93%) | 38 (1.56%) | 1,747 (71.51%) |
-| Complete pinned suite, including staging and Intl | full | `7f92bfc` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `7f92bfc` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 13,277 (12.90%) | 18,039 (17.53%) | 71,609 (69.57%) |
+| The integer operators and loose equality (focused) | focused | `5375042` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/bitwise-and test/language/expressions/bitwise-or test/language/expressions/bitwise-xor test/language/expressions/left-shift test/language/expressions/right-shift test/language/expressions/unsigned-right-shift test/language/expressions/equals test/language/expressions/does-not-equals test/language/expressions/compound-assignment --summary` | 756 | 1,382 | 1,083 (78.36%) | 55 (3.98%) | 244 (17.66%) |
+| The integer operators and loose equality on the register engine (focused) | focused | `5375042` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/bitwise-and test/language/expressions/bitwise-or test/language/expressions/bitwise-xor test/language/expressions/left-shift test/language/expressions/right-shift test/language/expressions/unsigned-right-shift test/language/expressions/equals test/language/expressions/does-not-equals test/language/expressions/compound-assignment --summary` | 756 | 1,382 | 835 (60.42%) | 0 (0.00%) | 547 (39.58%) |
+| Complete pinned suite, including staging and Intl | full | `5375042` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `5375042` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 13,703 (13.31%) | 18,055 (17.54%) | 71,167 (69.14%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1068,6 +1068,16 @@ called on a wrapper stays a gap: 7.1.17 of the receiver is a call, and the
 conversion a native leaves for names an argument register, which a receiver is
 not. 334 variants move to passed and none away from it.
 
+13.12, 13.9 and 13.11.1 read their operands through 6.1.6.1.2 and 7.2.14, which
+for an Object is a call. They now take the same instruction the arithmetic and
+relational operators take, in an expression and in a compound assignment alike,
+and 7.2.14 keeps what it does not convert: two values of one type are compared
+as they are, and an Object against null or undefined is false without asking
+the object anything. A type the lowering does not know may be an Object, so
+`Unknown` no longer counts as a primitive when the typed form is chosen — that
+was why `new Number(1) | true` still reached the gap after the wrapper objects
+were built. 426 variants move to passed and none away from it.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -1147,6 +1157,8 @@ The `%Number%` and `%Boolean%` runs and both full runs beside the wrapper
 objects were measured at tree `2d685ff819853b5e1481e5499c88caaf6ab176ee`, which is the tree of `22b642a`.
 The `%String%` runs and both full runs beside the String exotic object were
 measured at tree `e938d192c95e51d5340fa2d275c3c4c1765f69dd`, which is the tree of `7f92bfc`.
+The operator runs and both full runs beside the integer operators were measured
+at tree `c6b06778209374850329d3bf80f9e85707afcd94`, which is the tree of `5375042`.
 
 ### Historical Test262 baseline
 
