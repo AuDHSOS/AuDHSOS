@@ -395,6 +395,30 @@ pub enum Intrinsic {
     ArrayPrototypeWith,
     /// `Array.prototype.toReversed` (23.1.3.33).
     ArrayPrototypeToReversed,
+    /// `Math.abs` (21.3.2.1).
+    MathAbs,
+    /// `Math.ceil` (21.3.2.10).
+    MathCeil,
+    /// `Math.floor` (21.3.2.16).
+    MathFloor,
+    /// `Math.trunc` (21.3.2.35).
+    MathTrunc,
+    /// `Math.round` (21.3.2.28).
+    MathRound,
+    /// `Math.sign` (21.3.2.29).
+    MathSign,
+    /// `Math.max` (21.3.2.24).
+    MathMax,
+    /// `Math.min` (21.3.2.25).
+    MathMin,
+    /// `Math.clz32` (21.3.2.11).
+    MathClz32,
+    /// `Math.imul` (21.3.2.19).
+    MathImul,
+    /// `Math.fround` (21.3.2.17).
+    MathFround,
+    /// `Math.sin` (21.3.2.30).
+    MathSin,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -424,7 +448,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 66] = [
+    pub const ALL: [Self; 78] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -491,6 +515,18 @@ impl Intrinsic {
         Self::ArrayPrototypeConcat,
         Self::ArrayPrototypeWith,
         Self::ArrayPrototypeToReversed,
+        Self::MathAbs,
+        Self::MathCeil,
+        Self::MathFloor,
+        Self::MathTrunc,
+        Self::MathRound,
+        Self::MathSign,
+        Self::MathMax,
+        Self::MathMin,
+        Self::MathClz32,
+        Self::MathImul,
+        Self::MathFround,
+        Self::MathSin,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -545,7 +581,19 @@ impl Intrinsic {
             Self::FunctionPrototypeCall | Self::FunctionPrototypeBind => {
                 IntrinsicHolder::FunctionPrototype
             }
-            Self::MathPow => IntrinsicHolder::Math,
+            Self::MathPow
+            | Self::MathAbs
+            | Self::MathCeil
+            | Self::MathFloor
+            | Self::MathTrunc
+            | Self::MathRound
+            | Self::MathSign
+            | Self::MathMax
+            | Self::MathMin
+            | Self::MathClz32
+            | Self::MathImul
+            | Self::MathFround
+            | Self::MathSin => IntrinsicHolder::Math,
             Self::ErrorConstructor
             | Self::EvalErrorConstructor
             | Self::RangeErrorConstructor
@@ -637,6 +685,18 @@ impl Intrinsic {
             Self::ArrayPrototypeConcat => 63,
             Self::ArrayPrototypeWith => 64,
             Self::ArrayPrototypeToReversed => 65,
+            Self::MathAbs => 66,
+            Self::MathCeil => 67,
+            Self::MathFloor => 68,
+            Self::MathTrunc => 69,
+            Self::MathRound => 70,
+            Self::MathSign => 71,
+            Self::MathMax => 72,
+            Self::MathMin => 73,
+            Self::MathClz32 => 74,
+            Self::MathImul => 75,
+            Self::MathFround => 76,
+            Self::MathSin => 77,
         }
     }
 
@@ -709,6 +769,18 @@ impl Intrinsic {
             Self::ArrayPrototypeConcat => 63,
             Self::ArrayPrototypeWith => 64,
             Self::ArrayPrototypeToReversed => 65,
+            Self::MathAbs => 66,
+            Self::MathCeil => 67,
+            Self::MathFloor => 68,
+            Self::MathTrunc => 69,
+            Self::MathRound => 70,
+            Self::MathSign => 71,
+            Self::MathMax => 72,
+            Self::MathMin => 73,
+            Self::MathClz32 => 74,
+            Self::MathImul => 75,
+            Self::MathFround => 76,
+            Self::MathSin => 77,
         }
     }
 
@@ -782,6 +854,18 @@ impl Intrinsic {
             63 => Some(Self::ArrayPrototypeConcat),
             64 => Some(Self::ArrayPrototypeWith),
             65 => Some(Self::ArrayPrototypeToReversed),
+            66 => Some(Self::MathAbs),
+            67 => Some(Self::MathCeil),
+            68 => Some(Self::MathFloor),
+            69 => Some(Self::MathTrunc),
+            70 => Some(Self::MathRound),
+            71 => Some(Self::MathSign),
+            72 => Some(Self::MathMax),
+            73 => Some(Self::MathMin),
+            74 => Some(Self::MathClz32),
+            75 => Some(Self::MathImul),
+            76 => Some(Self::MathFround),
+            77 => Some(Self::MathSin),
             _ => None,
         }
     }
@@ -821,6 +905,18 @@ impl Intrinsic {
             Self::ArrayPrototypeCopyWithin => "copyWithin",
             Self::ArrayPrototypeWith => "with",
             Self::ArrayPrototypeToReversed => "toReversed",
+            Self::MathAbs => "abs",
+            Self::MathCeil => "ceil",
+            Self::MathFloor => "floor",
+            Self::MathTrunc => "trunc",
+            Self::MathRound => "round",
+            Self::MathSign => "sign",
+            Self::MathMax => "max",
+            Self::MathMin => "min",
+            Self::MathClz32 => "clz32",
+            Self::MathImul => "imul",
+            Self::MathFround => "fround",
+            Self::MathSin => "sin",
             Self::ObjectDefineProperty => "defineProperty",
             Self::ObjectGetOwnPropertyDescriptor => "getOwnPropertyDescriptor",
             Self::ObjectGetOwnPropertyNames => "getOwnPropertyNames",
@@ -899,6 +995,18 @@ impl Intrinsic {
             | Self::ArrayPrototypeConcat
             | Self::ArrayPrototypeWith
             | Self::ArrayPrototypeToReversed
+            | Self::MathAbs
+            | Self::MathCeil
+            | Self::MathFloor
+            | Self::MathTrunc
+            | Self::MathRound
+            | Self::MathSign
+            | Self::MathMax
+            | Self::MathMin
+            | Self::MathClz32
+            | Self::MathImul
+            | Self::MathFround
+            | Self::MathSin
             | Self::ObjectGetOwnPropertyNames => false,
             // 20.1.2.4, 20.1.2.8 and 20.1.2.13 apply ToPropertyKey to the
             // second argument.
@@ -975,6 +1083,15 @@ impl Intrinsic {
             | Self::ArrayPrototypeUnshift
             | Self::ArrayPrototypeFill
             | Self::ArrayPrototypeConcat
+            | Self::MathAbs
+            | Self::MathCeil
+            | Self::MathFloor
+            | Self::MathTrunc
+            | Self::MathRound
+            | Self::MathSign
+            | Self::MathClz32
+            | Self::MathFround
+            | Self::MathSin
             | Self::ObjectGetOwnPropertyNames => 1,
             Self::ObjectDefineProperty => 3,
             Self::MathPow
@@ -988,7 +1105,10 @@ impl Intrinsic {
             | Self::ArrayPrototypeSlice
             | Self::ArrayPrototypeSplice
             | Self::ArrayPrototypeCopyWithin
-            | Self::ArrayPrototypeWith => 2,
+            | Self::ArrayPrototypeWith
+            | Self::MathMax
+            | Self::MathMin
+            | Self::MathImul => 2,
         }
     }
 }
@@ -1525,6 +1645,7 @@ impl Realm {
         // and the functions it carries are installed on it like any other.
         let math = heap.allocate_immortal_object(root_shape, ordinary)?;
         heap.set_object_kind(math, super::object::ObjectKind::Math)?;
+        Self::define_math_constants(heap, math)?;
         let math = heap.push_root(Value::from_object(math))?;
         let intrinsics = Self::install_intrinsics(
             heap,
@@ -1916,6 +2037,37 @@ impl Realm {
     /// # Errors
     ///
     /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    /// The values 21.3.1 gives `%Math%`, each of them not writable, not
+    /// enumerable and not configurable.
+    ///
+    /// Every one is the binary64 nearest the number the clause names, which is
+    /// what a decimal literal of that many digits parses to.
+    fn define_math_constants(
+        heap: &mut GenerationalHeap,
+        math: ObjectRef,
+    ) -> Result<(), HeapError> {
+        let flags = PropertyFlags {
+            writable: false,
+            enumerable: false,
+            configurable: false,
+            is_accessor: false,
+        };
+        for (name, value) in [
+            ("E", core::f64::consts::E),
+            ("LN10", core::f64::consts::LN_10),
+            ("LN2", core::f64::consts::LN_2),
+            ("LOG10E", core::f64::consts::LOG10_E),
+            ("LOG2E", core::f64::consts::LOG2_E),
+            ("PI", core::f64::consts::PI),
+            ("SQRT1_2", core::f64::consts::FRAC_1_SQRT_2),
+            ("SQRT2", core::f64::consts::SQRT_2),
+        ] {
+            let key = intern(heap, name)?;
+            heap.define_own_named(math, key, Value::from_f64(value), flags)?;
+        }
+        Ok(())
+    }
+
     fn install_intrinsics(
         heap: &mut GenerationalHeap,
         holders: &Holders,

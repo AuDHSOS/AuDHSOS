@@ -495,7 +495,7 @@ fn the_math_namespace_answers_what_its_realm_built() -> Result<(), Error> {
     }
     // A name 21.3 gives it and this Realm has not built is a gap, because
     // answering undefined would say the namespace does not have it.
-    for source in ["Math.abs", "Math.PI", "Math.max"] {
+    for source in ["Math.sqrt", "Math.log", "Math.hypot"] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
         assert!(
@@ -4345,6 +4345,75 @@ fn the_array_methods_that_move_elements_answer_what_23_1_3_asks() -> Result<(), 
         ("var a=[]; a.shift(); a.length", Value::Number(0.0)),
         ("var a=[1]; a.unshift(9,8)", Value::Number(3.0)),
         ("var a=[1]; a.unshift(); a.length", Value::Number(1.0)),
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        assert_eq!(
+            Runtime::with_backend(Limits::default(), Backend::Engine)
+                .run(&program, &mut SilentHost)?,
+            expected,
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn the_math_functions_of_21_3_2_that_need_no_library() -> Result<(), Error> {
+    // 21.3.1 gives %Math% eight values, and 21.3.2 the functions that need
+    // nothing transcendental: the magnitude, the three roundings, the sign,
+    // the two extrema and the three that work on 32-bit integers.
+    for source in [
+        "Math.PI",
+        "Math.E",
+        "Math.LN10",
+        "Math.LN2",
+        "Math.LOG10E",
+        "Math.LOG2E",
+        "Math.SQRT1_2",
+        "Math.SQRT2",
+        "Math.abs(-3)",
+        "Math.floor(-1.5)",
+        "Math.ceil(-1.5)",
+        "Math.trunc(-1.7)",
+        "Math.round(-0.5)",
+        "Math.round(0.5)",
+        "Math.round(2.5)",
+        "Math.round(-2.5)",
+        "Math.sign(-3)",
+        "Math.max(1,2,3)",
+        "Math.max()",
+        "Math.min()",
+        "Math.max(1,NaN)",
+        "Math.min('2',3)",
+        "Math.clz32(1)",
+        "Math.clz32(0)",
+        "Math.sin(0)",
+        "Math.abs.length",
+        "Math.max.length",
+    ] {
+        differential(source)?;
+    }
+    // 6.1.6.1 tells the two zeroes apart, and 21.3.2 says which one each of
+    // these answers. The printed form does not, so 20.1.2.14 is asked.
+    for source in [
+        "Object.is(Math.ceil(-0.5),-0)",
+        "Object.is(Math.round(-0.2),-0)",
+        "Object.is(Math.min(0,-0),-0)",
+        "Object.is(Math.max(-0,0),0)",
+        "Object.is(Math.abs(-0),0)",
+        "Object.is(Math.trunc(-0.5),-0)",
+        "Object.is(Math.sign(-0),-0)",
+    ] {
+        differential(source)?;
+    }
+    // 21.3.2.19 and 21.3.2.17 the stack backend does not have, so these are
+    // asserted against the clause instead of compared.
+    for (source, expected) in [
+        ("Math.imul(3,4)", Value::Number(12.0)),
+        ("Math.imul(-5,12)", Value::Number(-60.0)),
+        ("Math.fround(5.5)", Value::Number(5.5)),
+        ("Math.fround(5.05)", Value::Number(5.050_000_190_734_863)),
     ] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");

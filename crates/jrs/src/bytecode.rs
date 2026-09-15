@@ -6086,7 +6086,20 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ArrayPrototypeIndexOf
         | crate::engine::realm::Intrinsic::ArrayPrototypeLastIndexOf
         | crate::engine::realm::Intrinsic::ArrayPrototypePush
-        | crate::engine::realm::Intrinsic::ArrayPrototypeUnshift => RegisterType::Number,
+        | crate::engine::realm::Intrinsic::ArrayPrototypeUnshift
+        // 21.3.2 answers a Number for every one of these.
+        | crate::engine::realm::Intrinsic::MathAbs
+        | crate::engine::realm::Intrinsic::MathCeil
+        | crate::engine::realm::Intrinsic::MathFloor
+        | crate::engine::realm::Intrinsic::MathTrunc
+        | crate::engine::realm::Intrinsic::MathRound
+        | crate::engine::realm::Intrinsic::MathSign
+        | crate::engine::realm::Intrinsic::MathMax
+        | crate::engine::realm::Intrinsic::MathMin
+        | crate::engine::realm::Intrinsic::MathClz32
+        | crate::engine::realm::Intrinsic::MathImul
+        | crate::engine::realm::Intrinsic::MathFround
+        | crate::engine::realm::Intrinsic::MathSin => RegisterType::Number,
         // 22.1.3.1 and 22.1.3.4 answer undefined for an index outside the String.
         crate::engine::realm::Intrinsic::StringPrototypeAt
         | crate::engine::realm::Intrinsic::StringPrototypeCodePointAt => RegisterType::Primitive,

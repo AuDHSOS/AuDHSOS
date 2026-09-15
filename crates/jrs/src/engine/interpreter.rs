@@ -1072,6 +1072,10 @@ impl RegisterVM {
     ///
     /// Returns [`VMError::Thrown`] for the exceptions the intrinsic's algorithm
     /// specifies, and a heap error when a value cannot be materialized.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function names every intrinsic beside the one that runs it"
+    )]
     fn call_intrinsic(
         &self,
         intrinsic: Intrinsic,
@@ -1136,12 +1140,25 @@ impl RegisterVM {
             Intrinsic::ArrayIsArray
             | Intrinsic::FunctionConstructor
             | Intrinsic::FunctionPrototypeCall
-            | Intrinsic::MathPow => Self::call_plain_intrinsic(
+            | Intrinsic::MathPow
+            | Intrinsic::MathAbs
+            | Intrinsic::MathCeil
+            | Intrinsic::MathFloor
+            | Intrinsic::MathTrunc
+            | Intrinsic::MathRound
+            | Intrinsic::MathSign
+            | Intrinsic::MathClz32
+            | Intrinsic::MathImul
+            | Intrinsic::MathFround
+            | Intrinsic::MathSin => Self::call_plain_intrinsic(
                 intrinsic,
                 self.call_argument(&call, 0)?,
                 self.call_argument(&call, 1)?,
                 heap,
             ),
+            Intrinsic::MathMax | Intrinsic::MathMin => {
+                self.call_math_extremum(intrinsic, call, heap)
+            }
             Intrinsic::FunctionPrototypeBind => self.bind_function(call, heap, realm),
             Intrinsic::ArrayConstructor => self.construct_array(call, heap, realm),
             Intrinsic::StringConstructor => Self::call_string_constructor(
@@ -1685,8 +1702,153 @@ impl RegisterVM {
             // 23.1.2.3 answers IsArray, which 7.2.2 answers for an Array
             // exotic object and, for a Proxy, for what it wraps.
             Intrinsic::ArrayIsArray => Ok(Value::from_bool(Self::is_array(first, heap))),
-            _ => Err(VMError::TypeError),
+            // 21.3.2.19 multiplies the two as 32-bit integers and answers the
+            // low half, which 6.1.6.1.4 wraps.
+            Intrinsic::MathImul => {
+                let left = number_to_i32(primitive_number(first, heap)?);
+                let right = number_to_i32(primitive_number(second, heap)?);
+                Ok(Value::from_smi(left.wrapping_mul(right)))
+            }
+            // 21.3.2.30 is the only transcendental this Realm has built.
+            Intrinsic::MathSin => Ok(Value::from_f64(audhsos_math::sin(primitive_number(
+                first, heap,
+            )?))),
+            _ => Ok(Value::from_f64(Self::math_of_one(
+                intrinsic,
+                primitive_number(first, heap)?,
+            )?)),
         }
+    }
+
+    /// The functions of 21.3.2 that take one Number and need no library of
+    /// their own.
+    ///
+    /// Each one answers NaN for NaN, because 6.1.6.1 propagates it, and each
+    /// keeps the sign of a zero where the clause says so.
+    fn math_of_one(intrinsic: Intrinsic, value: f64) -> Result<f64, VMError> {
+        if value.is_nan() {
+            return Ok(f64::NAN);
+        }
+        Ok(match intrinsic {
+            // 21.3.2.1: the magnitude, so -0 becomes +0.
+            Intrinsic::MathAbs => {
+                if value < 0.0 || (value == 0.0 && value.is_sign_negative()) {
+                    -value
+                } else {
+                    value
+                }
+            }
+            // 21.3.2.16 and 21.3.2.10 are each other's negation, and 21.3.2.10
+            // answers -0 for an argument in (-1, 0).
+            Intrinsic::MathFloor => Self::round_toward(value, true),
+            Intrinsic::MathCeil => -Self::round_toward(-value, true),
+            // 21.3.2.35 drops the fraction and keeps the sign.
+            Intrinsic::MathTrunc => {
+                if value < 0.0 {
+                    -Self::round_toward(-value, true)
+                } else {
+                    Self::round_toward(value, true)
+                }
+            }
+            // 21.3.2.28 is floor(x + 0.5), except that it keeps the sign of a
+            // zero and of every argument in [-0.5, 0).
+            Intrinsic::MathRound => {
+                let rounded = Self::round_toward(value + 0.5, true);
+                if rounded == 0.0 && (value < 0.0 || value.is_sign_negative()) {
+                    -0.0
+                } else {
+                    rounded
+                }
+            }
+            // 21.3.2.29 answers the argument itself for either zero.
+            Intrinsic::MathSign => {
+                if value == 0.0 {
+                    value
+                } else if value < 0.0 {
+                    -1.0
+                } else {
+                    1.0
+                }
+            }
+            // 21.3.2.11 counts the leading zeroes of the 32-bit integer
+            // 7.1.6 makes of the argument.
+            Intrinsic::MathClz32 => f64::from(number_to_i32(value).leading_zeros()),
+            // 21.3.2.17 is the binary32 nearest the argument, back as a
+            // binary64.
+            Intrinsic::MathFround => {
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "21.3.2.17 is that rounding, not an accident of it"
+                )]
+                let narrowed = value as f32;
+                f64::from(narrowed)
+            }
+            _ => return Err(VMError::TypeError),
+        })
+    }
+
+    /// The integer part of a finite, non-negative-rounded value.
+    ///
+    /// `floor` of an f64 without a library: a magnitude at or above 2^52 is
+    /// already an integer, and below it the round trip through i64 is exact.
+    fn round_toward(value: f64, down: bool) -> f64 {
+        if !value.is_finite() || value.abs() >= 4_503_599_627_370_496.0 {
+            return value;
+        }
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the magnitude is below 2^52, which i64 holds exactly"
+        )]
+        let truncated = value as i64;
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "the magnitude is below 2^52, which binary64 holds exactly"
+        )]
+        let mut integral = truncated as f64;
+        if down && integral > value {
+            integral -= 1.0;
+        }
+        // 21.3.2.16 answers -0 for an argument in (-1, 0), which the round
+        // trip through i64 loses.
+        if integral == 0.0 && value.is_sign_negative() {
+            return -0.0;
+        }
+        integral
+    }
+
+    /// `Math.max` of 21.3.2.24 and `Math.min` of 21.3.2.25.
+    ///
+    /// Every argument goes through `ToNumber` before any comparison, a NaN
+    /// among them makes the answer NaN, and +0 is larger than -0.
+    fn call_math_extremum(
+        &self,
+        intrinsic: Intrinsic,
+        call: Call,
+        heap: &GenerationalHeap,
+    ) -> Result<Value, VMError> {
+        let highest = intrinsic == Intrinsic::MathMax;
+        let mut answer = if highest {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        };
+        let mut saw_nan = false;
+        for index in 0..call.arg_count {
+            let value = primitive_number(self.call_argument(&call, index)?, heap)?;
+            if value.is_nan() {
+                saw_nan = true;
+                continue;
+            }
+            let wins = if highest {
+                value > answer || (value == 0.0 && answer == 0.0 && value.is_sign_positive())
+            } else {
+                value < answer || (value == 0.0 && answer == 0.0 && value.is_sign_negative())
+            };
+            if wins {
+                answer = value;
+            }
+        }
+        Ok(Value::from_f64(if saw_nan { f64::NAN } else { answer }))
     }
 
     /// What 20.1.3.2 and 20.1.3.4 answer about an own property.
