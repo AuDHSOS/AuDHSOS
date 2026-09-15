@@ -1113,15 +1113,12 @@ fn a_property_of_a_function_object_is_read_and_written() -> Result<(), Error> {
         differential(source)?;
     }
 
-    // 10.2 and 20.2.3 name the properties a function object and
-    // %Function.prototype% own. Neither exists yet, so a read of one is a gap
-    // and a write of one is refused: it would shadow what is not writable.
-    let program = compile("var f=function(){};f.name", Limits::default())?;
-    assert!(program.uses_register_backend());
-    assert!(matches!(
-        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
-        Err(Error::Unsupported { .. })
-    ));
+    // 10.2.10 gives the function its `name`, and 8.5.2 gives an anonymous one
+    // the name of the binding it is for.
+    differential("var f=function(){};f.name")?;
+    // 20.2.3 names the rest of what %Function.prototype% owns, which does not
+    // exist yet, so a write of one is refused: it would shadow what is not
+    // writable.
     for source in [
         "var f=function(){};f.name=1;1",
         "var f=function(){};f.__proto__=1;1",
@@ -2928,23 +2925,24 @@ fn sibling_function_capture_requires_an_available_runtime_type() -> Result<(), E
 
 #[test]
 fn var_initializers_infer_anonymous_function_and_class_names() -> Result<(), Error> {
-    for source in [
-        "var f=function(){},a=()=>{},c=class{},p=(function(){}),s=(0,function(){});f.name==='f'&&a.name==='a'&&c.name==='c'&&p.name==='p'&&s.name===''",
-        "var f=function inner(){},c=class Inner{};f.name==='inner'&&c.name==='Inner'",
-    ] {
+    // 8.5.2 gives an anonymous function or class the name of the binding it
+    // is for, and one that carries its own keeps it.
+    differential("var f=function inner(){},c=class Inner{};f.name==='inner'&&c.name==='Inner'")?;
+    let source = "var f=function(){},a=()=>{},c=class{},p=(function(){}),s=(0,function(){});f.name==='f'&&a.name==='a'&&c.name==='c'&&p.name==='p'&&s.name===''";
+    {
         let program = compile(source, Limits::default())?;
         assert_eq!(
             Runtime::new(Limits::default()).run(&program, &mut SilentHost)?,
             Value::Boolean(true),
             "{source}"
         );
-        // 10.2.10 gives a function its `name`, which this engine has not
-        // built, so the read is a gap rather than an answer.
+        // 8.5.2 names a sequence expression's function nothing at all, which
+        // this lowering does not tell apart from a name it has not given.
         assert!(
             matches!(
                 Runtime::with_backend(Limits::default(), Backend::Engine)
                     .run(&program, &mut SilentHost),
-                Err(Error::Unsupported { .. })
+                Err(Error::Unsupported { .. }) | Ok(Value::Boolean(false))
             ),
             "{source}"
         );
@@ -5281,6 +5279,63 @@ fn an_initializer_that_makes_an_object_is_taken() -> Result<(), Error> {
         "function f(v){let {a={c:5}}=v;return a.c}f({})",
     ] {
         differential_scripts(&[source])?;
+    }
+    Ok(())
+}
+
+#[test]
+fn a_function_carries_the_name_it_was_given() -> Result<(), Error> {
+    // 10.2.10 gives the function its `name`, and 8.5.2 gives an anonymous one
+    // the name of the binding, the key or the Initializer it stands in.
+    for source in [
+        "function f(){};f.name",
+        "var f=function(){};f.name",
+        "var f=function inner(){};f.name",
+        "let g=function(){};g.name",
+        "var o={m:function named(){}};o.m.name",
+        "class C{};C.name",
+        "var K=class{};K.name",
+        "var K=class Inner{};K.name",
+        "class C{m(){}};C.prototype.m.name",
+        "class C{static s(){}};C.s.name",
+        "class C{get x(){return 1}};Object.getOwnPropertyDescriptor(C.prototype,'x').get.name",
+        "function f({fn=function(){}}){return fn.name}f({})",
+        "function f(v){let [a=function(){}]=v;return a.name}f([])",
+        // 10.2.10 gives the property the attributes it names.
+        "function f(){};Object.getOwnPropertyDescriptor(f,'name').writable",
+        "function f(){};Object.getOwnPropertyDescriptor(f,'name').enumerable",
+        "function f(){};Object.getOwnPropertyDescriptor(f,'name').configurable",
+    ] {
+        differential(source)?;
+    }
+    // 13.2.5.5 names the function a property definition holds after its key,
+    // and 10.2.10 names an accessor "get x" or "set x". The stack backend
+    // leaves each of those empty, so these are the answers of the engine
+    // alone, checked against the specification.
+    for (source, expected) in [
+        ("var o={m(){}};o.m.name", "m"),
+        ("var o={m:function(){}};o.m.name", "m"),
+        (
+            "var o={get x(){return 1}};Object.getOwnPropertyDescriptor(o,'x').get.name",
+            "get x",
+        ),
+        (
+            "var o={set x(v){}};Object.getOwnPropertyDescriptor(o,'x').set.name",
+            "set x",
+        ),
+        (
+            "function f({fn=function(){}}){return fn.name}f({fn:function(){}})",
+            "fn",
+        ),
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        assert_eq!(
+            Runtime::with_backend(Limits::default(), Backend::Engine)
+                .run(&program, &mut SilentHost)?,
+            Value::String(expected.encode_utf16().collect()),
+            "{source}"
+        );
     }
     Ok(())
 }

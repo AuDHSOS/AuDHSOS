@@ -590,6 +590,9 @@ pub struct BytecodeFunction {
     /// Whether this function is the constructor of a class, which 15.7.14
     /// gives a `[[Call]]` that throws.
     pub class_constructor: bool,
+    /// The `name` 10.2.10 gives the function, as an index into this unit's
+    /// own string constants. A function 8.5.2 gives no name has none.
+    pub name: Option<u16>,
     /// Own heap-context slot count, when this frame creates a lexical context.
     pub own_context_slot_count: Option<u16>,
     /// Slot counts expected in each captured outer lexical context.
@@ -623,6 +626,7 @@ impl BytecodeFunction {
             constructible: false,
             strict: false,
             class_constructor: false,
+            name: None,
             own_context_slot_count: None,
             outer_context_slot_counts: Vec::new(),
             feedback_slots: Vec::new(),

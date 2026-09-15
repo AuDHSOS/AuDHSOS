@@ -950,7 +950,7 @@ impl RegisterLowerer {
                 }
                 let units: Vec<u16> = name.encode_utf16().collect();
                 let constant = self.string_constant(&units)?;
-                self.lower(expression)?;
+                self.lower_named(expression, &units)?;
                 self.code
                     .emit(crate::engine::bytecode::Instruction::StaGlobal {
                         name: constant,
@@ -961,7 +961,8 @@ impl RegisterLowerer {
             if binding.stable_function_identity {
                 return None;
             }
-            let value_type = self.lower(expression)?;
+            let units: Vec<u16> = name.encode_utf16().collect();
+            let value_type = self.lower_named(expression, &units)?;
             self.store_binding(binding);
             self.bindings.get_mut(name)?.value_type = Some(value_type);
             return Some(());
@@ -970,6 +971,10 @@ impl RegisterLowerer {
         self.bind_pattern(value_type, pattern)
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function names every shape a binding pattern takes"
+    )]
     fn bind_pattern(
         &mut self,
         value_type: RegisterType,
@@ -1035,7 +1040,15 @@ impl RegisterLowerer {
                         )?
                     };
                     if let Some(initializer) = &property.initializer {
-                        property_type = self.lower_binding_default(property_type, initializer)?;
+                        let bound: Option<Vec<u16>> = property
+                            .pattern
+                            .identifier()
+                            .map(|name| name.encode_utf16().collect());
+                        property_type = self.lower_binding_default_named(
+                            property_type,
+                            initializer,
+                            bound.as_deref(),
+                        )?;
                     }
                     self.bind_pattern(property_type, &property.pattern)?;
                 }
@@ -1067,7 +1080,14 @@ impl RegisterLowerer {
                     let mut element_type =
                         self.lower_array_index_from_register(source, value_type, index)?;
                     if let Some(initializer) = initializer {
-                        element_type = self.lower_binding_default(element_type, initializer)?;
+                        let bound: Option<Vec<u16>> = pattern
+                            .identifier()
+                            .map(|name| name.encode_utf16().collect());
+                        element_type = self.lower_binding_default_named(
+                            element_type,
+                            initializer,
+                            bound.as_deref(),
+                        )?;
                     }
                     self.bind_pattern(element_type, pattern)?;
                 }
@@ -1193,7 +1213,14 @@ impl RegisterLowerer {
             {
                 let mut element_type = RegisterType::Unknown;
                 if let Some(initializer) = initializer {
-                    element_type = self.lower_binding_default(element_type, initializer)?;
+                    let bound: Option<Vec<u16>> = pattern
+                        .identifier()
+                        .map(|name| name.encode_utf16().collect());
+                    element_type = self.lower_binding_default_named(
+                        element_type,
+                        initializer,
+                        bound.as_deref(),
+                    )?;
                 }
                 self.bind_pattern(element_type, pattern)?;
             }
@@ -1239,12 +1266,35 @@ impl RegisterLowerer {
         value_type: RegisterType,
         initializer: &Expr,
     ) -> Option<RegisterType> {
+        self.lower_binding_default_named(value_type, initializer, None)
+    }
+
+    /// The Initializer itself, named after its binding where 8.5.2 names it.
+    fn lower_default_value(
+        &mut self,
+        initializer: &Expr,
+        name: Option<&[u16]>,
+    ) -> Option<RegisterType> {
+        match name {
+            Some(name) => self.lower_named(initializer, name),
+            None => self.lower(initializer),
+        }
+    }
+
+    /// The Initializer of one element of a pattern, which 8.5.2 names after
+    /// the binding it is for when that binding is a single name.
+    fn lower_binding_default_named(
+        &mut self,
+        value_type: RegisterType,
+        initializer: &Expr,
+        name: Option<&[u16]>,
+    ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         // A value that is undefined always takes the Initializer, so what the
         // Initializer made is there on every path and keeps its layout.
         if value_type == RegisterType::Undefined {
             let bindings_without_default = self.bindings.clone();
-            let default_type = self.lower(initializer)?;
+            let default_type = self.lower_default_value(initializer, name)?;
             return register_context_bindings_unchanged(&bindings_without_default, &self.bindings)
                 .then_some(default_type);
         }
@@ -1259,7 +1309,7 @@ impl RegisterLowerer {
         let present = self.code.emit(Instruction::JumpIfNotUndefined(0));
         let bindings_without_default = self.bindings.clone();
         let layouts_without_default = self.object_layouts.clone();
-        let default_type = self.lower(initializer)?;
+        let default_type = self.lower_default_value(initializer, name)?;
         // The Initializer runs on one path only, so a layout it changed would
         // be wrong on the other.
         if !layouts_without_default
@@ -2028,7 +2078,8 @@ impl RegisterLowerer {
                 }
                 let name = Self::static_property_name(&property.key)?.to_vec();
                 let constant = self.string_constant(&name)?;
-                self.lower(&property.value)?;
+                // 10.2.10 names a getter "get x" and a setter "set x".
+                self.lower_named(&property.value, &accessor_name(setter, &name))?;
                 self.code.emit(Instruction::DefineAccessor {
                     obj: object,
                     name: constant,
@@ -2056,7 +2107,15 @@ impl RegisterLowerer {
                     name,
                 }
             };
-            let value_type = self.lower(&property.value)?;
+            // 13.2.5.5 names the function a property definition holds after
+            // the key it is given (8.5.2).
+            let value_type = match &key {
+                RegisterMemberKey::Named { name, .. } => {
+                    let name = name.clone();
+                    self.lower_named(&property.value, &name)?
+                }
+                _ => self.lower(&property.value)?,
+            };
             if matches!(value_type, RegisterType::NativeFunction(_)) {
                 return None;
             }
@@ -2178,7 +2237,20 @@ impl RegisterLowerer {
     }
 
     fn lower_function(&mut self, function: &Function) -> Option<RegisterType> {
-        self.lower_callable(function, false)
+        self.lower_callable(function, false, None)
+    }
+
+    /// `NamedEvaluation` of 8.5.2: an anonymous function or class takes the
+    /// name the expression is being given.
+    fn lower_named(&mut self, expression: &Expr, name: &[u16]) -> Option<RegisterType> {
+        match &expression.kind {
+            ExprKind::Group(inner) => self.lower_named(inner, name),
+            ExprKind::Function(function) if function.name.is_none() => {
+                self.lower_callable(function, false, Some(name))
+            }
+            ExprKind::Class(class) if class.name.is_none() => self.lower_class_named(class, name),
+            _ => self.lower(expression),
+        }
     }
 
     /// Lowers a function body into a unit of its own and leaves the closure
@@ -2190,7 +2262,12 @@ impl RegisterLowerer {
         clippy::too_many_lines,
         reason = "one function carries a body from its scope to its unit"
     )]
-    fn lower_callable(&mut self, function: &Function, class: bool) -> Option<RegisterType> {
+    fn lower_callable(
+        &mut self,
+        function: &Function,
+        class: bool,
+        name: Option<&[u16]>,
+    ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         if let Some(refusal) = Self::function_refusal(function, class) {
             self.refuse(refusal);
@@ -2273,6 +2350,15 @@ impl RegisterLowerer {
         child.code.constructible = child_constructible;
         child.code.strict = function.strict;
         child.code.class_constructor = class;
+        // 10.2.10 gives the function the name it carries, and 8.5.2 the one
+        // the expression it stands in is being given.
+        let own: Option<Vec<u16>> = function
+            .name
+            .as_ref()
+            .map(|name| name.encode_utf16().collect());
+        if let Some(units) = own.as_deref().or(name) {
+            child.code.name = Some(child.string_constant(units)?);
+        }
         let nested_functions = core::mem::take(&mut child.code.functions);
         self.code.functions.push(child.code);
         self.code.functions.extend(nested_functions);
@@ -2306,6 +2392,23 @@ impl RegisterLowerer {
     /// Lowers a class body (15.7.14), leaving its constructor in the
     /// accumulator.
     fn lower_class(&mut self, class: &parser::Class) -> Option<RegisterType> {
+        let name: Option<Vec<u16>> = class
+            .name
+            .as_ref()
+            .map(|name| name.encode_utf16().collect());
+        self.lower_class_with(class, name.as_deref())
+    }
+
+    /// A class expression 8.5.2 gives a name it does not carry itself.
+    fn lower_class_named(&mut self, class: &parser::Class, name: &[u16]) -> Option<RegisterType> {
+        self.lower_class_with(class, Some(name))
+    }
+
+    fn lower_class_with(
+        &mut self,
+        class: &parser::Class,
+        name: Option<&[u16]>,
+    ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         // 15.7 derives a class from another through `super`, which needs the
         // [[HomeObject]] of every method.
@@ -2319,7 +2422,7 @@ impl RegisterLowerer {
             self.refuse("a computed name in a class body");
             return None;
         }
-        let value_type = self.lower_callable(&class.constructor, true)?;
+        let value_type = self.lower_callable(&class.constructor, true, name)?;
         let constructor = self.allocate_register()?;
         self.code.emit(Instruction::Star(constructor));
         // 15.7.14 puts every method the body defines on the prototype the
@@ -2337,7 +2440,11 @@ impl RegisterLowerer {
             let target = if *is_static { constructor } else { prototype };
             let name = Self::static_property_name(&method.key)?.to_vec();
             let constant = self.string_constant(&name)?;
-            self.lower(&method.value)?;
+            let given = match method.accessor {
+                Some(setter) => accessor_name(setter, &name),
+                None => name.clone(),
+            };
+            self.lower_named(&method.value, &given)?;
             self.code.emit(match method.accessor {
                 Some(setter) => Instruction::DefineAccessor {
                     obj: target,
@@ -2386,7 +2493,9 @@ impl RegisterLowerer {
                 self.constructible.insert(code_id);
             }
         }
-        self.lower_function(function)
+        // 10.2.10 names a declaration after the binding it makes.
+        let units: Vec<u16> = name.encode_utf16().collect();
+        self.lower_callable(function, false, Some(&units))
     }
 
     /// What 10.2.11 would have to do for this function that the lowering does
@@ -7704,6 +7813,12 @@ struct RegisterFunctionScope {
 
 /// The name the lowering gives the register a pattern parameter's argument
 /// arrives in, which no identifier of a Script can be.
+/// The name 10.2.10 gives an accessor: the key behind `get ` or `set `.
+fn accessor_name(setter: bool, key: &[u16]) -> Vec<u16> {
+    let prefix = if setter { "set " } else { "get " };
+    prefix.encode_utf16().chain(key.iter().copied()).collect()
+}
+
 fn register_argument_name(index: usize) -> String {
     alloc::format!("argument {index}")
 }

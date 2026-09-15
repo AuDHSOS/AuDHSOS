@@ -3610,6 +3610,46 @@ impl RegisterVM {
 
     /// `SetFunctionLength` of 10.2.9: not writable, not enumerable and
     /// configurable.
+    /// `SetFunctionName` of 10.2.10, which 8.5.2 gives a name a function or a
+    /// class does not carry itself.
+    ///
+    /// The accumulator holds the function, because defining the name may
+    /// allocate and the collector only follows what it can see.
+    fn set_function_name(
+        &self,
+        code: &BytecodeFunction,
+        code_id: u32,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        let target = code
+            .functions
+            .get(code_id as usize)
+            .ok_or(VMError::InvalidRegister)?;
+        let Some(index) = target.name else {
+            return Ok(());
+        };
+        let units = target
+            .string_constants
+            .get(index as usize)
+            .ok_or(VMError::InvalidRegister)?
+            .clone();
+        let text = self.allocate_string(heap, &units)?;
+        let function = self.acc.as_object().ok_or(VMError::TypeError)?;
+        let key = PropertyKey::String(heap.strings.intern("name")?);
+        heap.define_own_named(
+            function,
+            key,
+            text,
+            PropertyFlags {
+                writable: false,
+                enumerable: false,
+                configurable: true,
+                is_accessor: false,
+            },
+        )?;
+        Ok(())
+    }
+
     fn set_function_length(
         function: ObjectRef,
         parameters: u16,
@@ -7011,6 +7051,7 @@ impl RegisterVM {
                     )?;
                     self.acc = Value::from_object(function);
                     Self::set_function_length(function, expected_arguments, heap)?;
+                    self.set_function_name(code, code_id, heap)?;
                     // 15.7.14 step 12 gives the `prototype` attributes no
                     // ordinary function's has. The accumulator carries the
                     // constructor through the allocation.
@@ -7056,6 +7097,7 @@ impl RegisterVM {
                     // 10.2.9 gives the function the `ExpectedArgumentCount` of
                     // 15.1.5 as its `length`.
                     Self::set_function_length(function, expected_arguments, heap)?;
+                    self.set_function_name(code, code_id, heap)?;
                     // 10.2.5 gives an ordinary function its `prototype`; a
                     // method and an arrow have none and no `[[Construct]]`.
                     // The accumulator carries the function through it, because
