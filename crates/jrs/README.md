@@ -649,10 +649,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Object%` and its methods, after the integrity levels, on the register engine (focused) | focused | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,530 (22.49%) | 18 (0.26%) | 5,254 (77.24%) |
 | `%Number%` (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 572 (84.12%) | 102 (15.00%) | 6 (0.88%) |
 | `%Number%` on the register engine (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 226 (33.24%) | 2 (0.29%) | 452 (66.47%) |
-| Property descriptors (focused) | focused | `602329f` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object/defineProperty test/built-ins/Object/defineProperties test/built-ins/Object/getOwnPropertyDescriptor test/built-ins/Object/create test/built-ins/Reflect --summary` | 2,546 | 5,080 | 4,738 (93.27%) | 336 (6.61%) | 6 (0.12%) |
-| Property descriptors on the register engine (focused) | focused | `602329f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object/defineProperty test/built-ins/Object/defineProperties test/built-ins/Object/getOwnPropertyDescriptor test/built-ins/Object/create test/built-ins/Reflect --summary` | 2,546 | 5,080 | 1,650 (32.48%) | 16 (0.31%) | 3,414 (67.20%) |
-| Complete pinned suite, including staging and Intl | full | `602329f` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `602329f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 11,466 (11.14%) | 17,334 (16.84%) | 74,125 (72.02%) |
+| Property descriptors (focused) | focused | `e378c5a` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object/defineProperty test/built-ins/Object/defineProperties test/built-ins/Object/getOwnPropertyDescriptor test/built-ins/Object/create test/built-ins/Reflect --summary` | 2,546 | 5,080 | 4,738 (93.27%) | 336 (6.61%) | 6 (0.12%) |
+| Property descriptors on the register engine (focused) | focused | `e378c5a` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object/defineProperty test/built-ins/Object/defineProperties test/built-ins/Object/getOwnPropertyDescriptor test/built-ins/Object/create test/built-ins/Reflect --summary` | 2,546 | 5,080 | 1,706 (33.58%) | 23 (0.45%) | 3,351 (65.96%) |
+| Complete pinned suite, including staging and Intl | full | `e378c5a` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `e378c5a` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 11,564 (11.24%) | 17,339 (16.85%) | 74,022 (71.92%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1033,10 +1033,13 @@ raising the same errors under the same names.
 Three gaps are named rather than answered. A native operation that finds an
 accessor cannot call it, because it has no frame to call from. A setter written
 in Rust would take its argument from registers of the caller that hold
-something else. And 10.4.2.1 defines an index or an Array `length` against the
-element store, which this engine does not do, so a Shape that took one would
-hold a second answer beside the one a read finds: 26 variants passed on that
-missing operation and are unsupported now.
+something else. 10.4.2.1 defines an index against the element store, and the store
+holds a value and nothing else: an index that comes out as an ordinary data
+property is written there, and every other one leaves the store and becomes a
+property of the Shape, which says for itself what it is. A read passes a hole
+rather than answering undefined at it, which is what 10.1.8.1 says anyway, and
+a write looks at the Shape first. The Array `length` stays a gap, because
+10.4.2.4 sets it by deleting what is above the new one.
 
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
@@ -1109,6 +1112,8 @@ at tree `53bfb8150e68ec98d035eece875f5ec1ed4d2351`, which is the tree of
 tree `23f63f95c8ebb94a88f32d50d6a089da885a06da`, which is the tree of `7342613`.
 The descriptor runs and both full runs beside them were measured at tree
 `91cbf2c4a87389bfa6621938c5f05a31127e21f9`, which is the tree of `602329f`.
+The descriptor runs and both full runs beside the indexed descriptors were
+measured at tree `f83b656d82cfc1b7a4cba114facdc6e329ff69f6`, which is the tree of `e378c5a`.
 
 ### Historical Test262 baseline
 
