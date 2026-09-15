@@ -651,8 +651,8 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Number%` on the register engine (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 226 (33.24%) | 2 (0.29%) | 452 (66.47%) |
 | Destructuring (focused) | focused | `f85a432` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/assignment/dstr test/language/statements/function/dstr --summary` | 554 | 1,012 | 762 (75.30%) | 0 (0.00%) | 250 (24.70%) |
 | Destructuring on the register engine (focused) | focused | `f85a432` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/assignment/dstr test/language/statements/function/dstr --summary` | 554 | 1,012 | 142 (14.03%) | 0 (0.00%) | 870 (85.97%) |
-| Complete pinned suite, including staging and Intl | full | `f85a432` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `f85a432` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 14,786 (14.37%) | 18,139 (17.62%) | 70,000 (68.01%) |
+| Complete pinned suite, including staging and Intl | full | `ab6b416` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `ab6b416` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 14,792 (14.37%) | 18,143 (17.63%) | 69,990 (68.00%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1121,6 +1121,13 @@ undefined before it calls anything, so both backends raise the same error for th
 same reason. A rest element stays a named gap. 452 variants move to passed and
 none away from it.
 
+A captured reader is compiled against the type its binding carries, and an
+assignment anywhere can make that type wrong after the closure's bytecode has
+been emitted; the lowering rejected the whole enclosing body for it. A captured
+`var` a write reaches now carries the type the lowering cannot name, so every
+read of it takes the generic path and there is nothing to invalidate. 6 more
+variants move to passed.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -1212,6 +1219,8 @@ The function runs and both full runs beside the pattern parameters were measured
 at tree `4c551f2b918796cf23f17d6665e79fc5f5ecd6a5`, which is the tree of `eded9bc`.
 The destructuring runs and both full runs beside the array pattern were measured
 at tree `3a9b434d676073eb8148c6e5865cf8ef0c75ebb7`, which is the tree of `f85a432`.
+Both full runs beside the captured var were measured at tree `f81ca2e9a54ae3a0d186b1efade5eb88714e88c1`, which is
+the tree of `ab6b416`.
 
 ### Historical Test262 baseline
 
