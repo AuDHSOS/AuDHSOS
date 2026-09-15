@@ -687,8 +687,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Array.prototype%`, after the find clauses, on the register engine (focused) | focused | `b8b6da1` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/prototype --summary` | 2,811 | 5,583 | 3,480 (62.33%) | 683 (12.23%) | 1,420 (25.43%) |
 | `%Function.prototype%`, after `apply` (focused) | focused | `f2e46b9` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Function/prototype --summary` | 309 | 602 | 507 (84.22%) | 45 (7.48%) | 50 (8.31%) |
 | `%Function.prototype%`, after `apply`, on the register engine (focused) | focused | `f2e46b9` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Function/prototype --summary` | 309 | 602 | 184 (30.56%) | 188 (31.23%) | 230 (38.21%) |
-| Complete pinned suite, including staging and Intl | full | `f2e46b9` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `f2e46b9` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 24,194 (23.51%) | 18,832 (18.30%) | 59,899 (58.20%) |
+| `%Array.prototype%`, after the length getter (focused) | focused | `8898794` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/prototype --summary` | 2,811 | 5,583 | 4,744 (84.97%) | 809 (14.49%) | 30 (0.54%) |
+| `%Array.prototype%`, after the length getter, on the register engine (focused) | focused | `8898794` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/prototype --summary` | 2,811 | 5,583 | 3,680 (65.91%) | 687 (12.31%) | 1,216 (21.78%) |
+| Complete pinned suite, including staging and Intl | full | `8898794` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `8898794` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 24,394 (23.70%) | 18,836 (18.30%) | 59,695 (58.00%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1412,7 +1414,9 @@ which is the tree of `23fa2a0`. The `%Array.prototype%` runs and both full runs
 beside the find clauses were measured at tree `723fbdc1a1091b6b165429c1195d918c650a3221`,
 which is the tree of `b8b6da1`. The `%Function.prototype%` runs and both full
 runs beside `apply` were measured at tree `a546adbd5b3d3a51ace8937430df6f99dc8ceb92`,
-which is the tree of `f2e46b9`. `RegExp.prototype[@@split]` landed in `fe5797c`
+which is the tree of `f2e46b9`. The `%Array.prototype%` runs and both full runs
+beside the length getter were measured at tree `18c4e4bd705494935cfcf8bdce97aabd978d71ae`,
+which is the tree of `8898794`. `RegExp.prototype[@@split]` landed in `fe5797c`
 between them and moved no variant of the suite.
 
 ### Historical Test262 baseline
