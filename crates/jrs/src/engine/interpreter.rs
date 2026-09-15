@@ -1292,6 +1292,15 @@ impl RegisterVM {
                     index: code_id,
                 },
             ))?;
+        // 15.7.14 gives a class constructor a `[[Call]]` that throws, so the
+        // body only ever runs under `new`.
+        if callee.class_constructor && call.construct.is_none() {
+            return Err(type_error(
+                heap,
+                realm,
+                "a class constructor cannot be called without new",
+            ));
+        }
         if self.frames.len() >= self.call_frame_limit || self.frames.len() == self.frames.capacity()
         {
             return Err(VMError::CallStackOverflow);
@@ -6891,7 +6900,24 @@ impl RegisterVM {
                     let name = PropertyKey::String(heap.strings.intern_units(&units)?);
                     self.acc = delete_reference(target, name, index, strict, heap, realm)?;
                 }
-                Instruction::DefineAccessor { obj, name, setter } => {
+                Instruction::DefineMethod { obj, name } => {
+                    let units = active_code
+                        .string_constants
+                        .get(name as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    let name = PropertyKey::String(heap.strings.intern_units(units)?);
+                    let method = self.acc;
+                    let target = self.read_reg(obj)?.as_object().ok_or(VMError::TypeError)?;
+                    // 7.3.5 makes a method writable and configurable and not
+                    // enumerable, which 15.7.14 relies on.
+                    heap.define_own_named(target, name, method, PropertyFlags::constructor_data())?;
+                }
+                Instruction::DefineAccessor {
+                    obj,
+                    name,
+                    setter,
+                    enumerable,
+                } => {
                     let units = active_code
                         .string_constants
                         .get(name as usize)
@@ -6925,7 +6951,7 @@ impl RegisterVM {
                         pair,
                         PropertyFlags {
                             writable: false,
-                            enumerable: true,
+                            enumerable,
                             configurable: true,
                             is_accessor: true,
                         },
@@ -6952,6 +6978,48 @@ impl RegisterVM {
                     }
                     let oref = self.allocate_array(active_code, heap, realm, length)?;
                     self.acc = Value::from_object(oref);
+                }
+                Instruction::CreateClass(code_id) => {
+                    let target =
+                        code.functions
+                            .get(code_id as usize)
+                            .ok_or(VMError::InvalidBytecode(
+                                VerificationError::FunctionOutOfBounds {
+                                    pc: pc.saturating_sub(1),
+                                    index: code_id,
+                                },
+                            ))?;
+                    let captures_context = !target.outer_context_slot_counts.is_empty();
+                    let expected_arguments = target.expected_arguments;
+                    let function = self.allocate_function(
+                        active_code,
+                        heap,
+                        realm,
+                        code_id,
+                        captures_context,
+                    )?;
+                    self.acc = Value::from_object(function);
+                    Self::set_function_length(function, expected_arguments, heap)?;
+                    // 15.7.14 step 12 gives the `prototype` attributes no
+                    // ordinary function's has. The accumulator carries the
+                    // constructor through the allocation.
+                    self.make_constructor(active_code, heap, realm)?;
+                    let function = self.acc.as_object().ok_or(VMError::TypeError)?;
+                    let name = PropertyKey::String(heap.strings.intern("prototype")?);
+                    let prototype = heap
+                        .lookup_named(function, name)?
+                        .map_or(VALUE_UNDEFINED, |property| property.value);
+                    heap.define_own_named(
+                        function,
+                        name,
+                        prototype,
+                        PropertyFlags {
+                            writable: false,
+                            enumerable: false,
+                            configurable: false,
+                            is_accessor: false,
+                        },
+                    )?;
                 }
                 Instruction::CreateClosure(code_id) => {
                     let target =

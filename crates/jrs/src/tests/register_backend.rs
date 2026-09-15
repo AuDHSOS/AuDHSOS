@@ -2909,10 +2909,19 @@ fn var_initializers_infer_anonymous_function_and_class_names() -> Result<(), Err
         "var f=function inner(){},c=class Inner{};f.name==='inner'&&c.name==='Inner'",
     ] {
         let program = compile(source, Limits::default())?;
-        assert!(!program.uses_register_backend(), "{source}");
         assert_eq!(
             Runtime::new(Limits::default()).run(&program, &mut SilentHost)?,
             Value::Boolean(true),
+            "{source}"
+        );
+        // 10.2.10 gives a function its `name`, which this engine has not
+        // built, so the read is a gap rather than an answer.
+        assert!(
+            matches!(
+                Runtime::with_backend(Limits::default(), Backend::Engine)
+                    .run(&program, &mut SilentHost),
+                Err(Error::Unsupported { .. })
+            ),
             "{source}"
         );
     }
@@ -5049,6 +5058,49 @@ fn an_object_literal_defines_accessor_properties() -> Result<(), Error> {
         "var o={get x(){return 1}};o.x=9;o.x",
     ] {
         differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn a_class_body_builds_its_constructor_and_its_prototype() -> Result<(), Error> {
+    // 15.7.14 makes the constructor and the object it carries, and puts every
+    // method the body defines on one of the two.
+    for source in [
+        "class C{};typeof C",
+        "class C{constructor(a){this.a=a}};new C(3).a",
+        "class C{m(){return 7}};new C().m()",
+        "class C{m(){return this.a}constructor(){this.a=2}};new C().m()",
+        "class C{static m(){return 9}};C.m()",
+        "class C{get x(){return 4}};new C().x",
+        "class C{set x(v){this.n=v+1}};var o=new C();o.x=1;o.n",
+        "class C{static get x(){return 6}};C.x",
+        // 15.7.14 step 12 and 7.3.5: neither the prototype nor a method is
+        // enumerable, and the prototype cannot be replaced.
+        "class C{m(){}};Object.keys(C.prototype).length",
+        "class C{m(){}};Object.getOwnPropertyDescriptor(C.prototype,'m').enumerable",
+        "class C{m(){}};Object.getOwnPropertyDescriptor(C.prototype,'m').writable",
+        "class C{};Object.getOwnPropertyDescriptor(C,'prototype').writable",
+        "class C{};Object.getOwnPropertyDescriptor(C,'prototype').configurable",
+        "class C{};C.prototype.constructor===C",
+        "class C{};new C() instanceof C",
+        "class C{};Object.getPrototypeOf(new C())===C.prototype",
+        // An expression form binds nothing.
+        "var K=class{m(){return 1}};new K().m()",
+    ] {
+        differential(source)?;
+    }
+    // 15.7.14 gives the constructor a `[[Call]]` that throws.
+    differential_scripts(&["class C{};var r=0;try{C()}catch(e){r=e instanceof TypeError};r"])?;
+    // 15.7 derives a class through `super`, which needs every method's
+    // [[HomeObject]], and a computed name is only known at run time.
+    for (source, feature) in [
+        ("class C extends Object{};0", "a class that extends another"),
+        ("class C{['m'](){}};0", "a computed name in a class body"),
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(!program.uses_register_backend(), "{source}");
+        assert_eq!(program.register_refusal, Some(feature), "{source}");
     }
     Ok(())
 }

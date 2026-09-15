@@ -422,6 +422,20 @@ pub enum Instruction {
         name: u16,
         /// Whether the function is the `[[Set]]` rather than the `[[Get]]`.
         setter: bool,
+        /// Whether the property is enumerable, which a literal gives it and a
+        /// class body does not.
+        enumerable: bool,
+    },
+    /// Defines a method of a class body (15.7.14), taking the function in
+    /// `acc` as its value.
+    ///
+    /// The property is writable and configurable and not enumerable, which is
+    /// what `CreateMethodProperty` of 7.3.5 gives it.
+    DefineMethod {
+        /// Register of the object the method belongs to.
+        obj: Reg,
+        /// Property-name index in the heap-independent UTF-16 constant pool.
+        name: u16,
     },
     /// Load indexed element: `acc = obj_reg[key_reg]` (uses feedback slot).
     GetByValue {
@@ -456,6 +470,12 @@ pub enum Instruction {
     CreateArray(u32),
     /// Creates a callable closure for one entry in the shared function table.
     CreateClosure(u32),
+    /// Creates the constructor of a class and the prototype it carries
+    /// (15.7.14), leaving the constructor in `acc`.
+    ///
+    /// The `prototype` a class gives its constructor is neither writable nor
+    /// configurable, which no ordinary function's is.
+    CreateClass(u32),
     /// Calls a method: `acc = func(args...)` with `receiver` as the `this`
     /// value the callee sees (13.3.6.1).
     CallMethod {
@@ -554,6 +574,9 @@ pub struct BytecodeFunction {
     /// Whether this function is strict, which 10.2.1.2 reads to decide what a
     /// call without a receiver binds `this` to.
     pub strict: bool,
+    /// Whether this function is the constructor of a class, which 15.7.14
+    /// gives a `[[Call]]` that throws.
+    pub class_constructor: bool,
     /// Own heap-context slot count, when this frame creates a lexical context.
     pub own_context_slot_count: Option<u16>,
     /// Slot counts expected in each captured outer lexical context.
@@ -586,6 +609,7 @@ impl BytecodeFunction {
             arguments_register: None,
             constructible: false,
             strict: false,
+            class_constructor: false,
             own_context_slot_count: None,
             outer_context_slot_counts: Vec::new(),
             feedback_slots: Vec::new(),
@@ -813,6 +837,7 @@ impl BytecodeFunction {
                 Some(key)
             }
             Instruction::DeleteNamed { obj, name, .. }
+            | Instruction::DefineMethod { obj, name }
             | Instruction::DefineAccessor { obj, name, .. } => {
                 self.verify_string_constant(pc, name)?;
                 Some(obj)
@@ -875,7 +900,7 @@ impl BytecodeFunction {
                 }
                 None
             }
-            Instruction::CreateClosure(index) => {
+            Instruction::CreateClosure(index) | Instruction::CreateClass(index) => {
                 let target = usize::try_from(index)
                     .ok()
                     .and_then(|index| functions.get(index))

@@ -842,6 +842,9 @@ struct RegisterSnapshot {
     return_type: Option<RegisterType>,
 }
 
+/// The name 10.2.5 gives the object a constructor carries.
+const PROTOTYPE_UNITS: [u16; 9] = [0x70, 0x72, 0x6F, 0x74, 0x6F, 0x74, 0x79, 0x70, 0x65];
+
 impl RegisterLowerer {
     const fn new(
         entry_fuel_cost: u64,
@@ -1573,6 +1576,7 @@ impl RegisterLowerer {
             ExprKind::Object(properties) => self.lower_object(properties)?,
             ExprKind::Array(items) => self.lower_array(items)?,
             ExprKind::Function(function) => self.lower_function(function)?,
+            ExprKind::Class(class) => self.lower_class(class)?,
             ExprKind::Call(callee, arguments) => self.lower_call(callee, arguments)?,
             ExprKind::Member(base, key) => self.lower_member(base, key)?,
             ExprKind::Construct(callee, arguments) => self.lower_construct(callee, arguments)?,
@@ -1829,6 +1833,7 @@ impl RegisterLowerer {
                     obj: object,
                     name: constant,
                     setter,
+                    enumerable: true,
                 });
                 // A read of the property is a call of its getter, so the
                 // layout knows the name and not what it answers.
@@ -1973,8 +1978,21 @@ impl RegisterLowerer {
     }
 
     fn lower_function(&mut self, function: &Function) -> Option<RegisterType> {
+        self.lower_callable(function, false)
+    }
+
+    /// Lowers a function body into a unit of its own and leaves the closure
+    /// 10.2.4 makes of it in the accumulator.
+    ///
+    /// `class` says the body is the constructor of a class, which 15.7.14
+    /// gives a `prototype` no ordinary function's attributes match.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function carries a body from its scope to its unit"
+    )]
+    fn lower_callable(&mut self, function: &Function, class: bool) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
-        if let Some(refusal) = Self::function_refusal(function) {
+        if let Some(refusal) = Self::function_refusal(function, class) {
             self.refuse(refusal);
             return None;
         }
@@ -2054,6 +2072,7 @@ impl RegisterLowerer {
         child.code.self_register = self_register;
         child.code.constructible = child_constructible;
         child.code.strict = function.strict;
+        child.code.class_constructor = class;
         let nested_functions = core::mem::take(&mut child.code.functions);
         self.code.functions.push(child.code);
         self.code.functions.extend(nested_functions);
@@ -2076,8 +2095,66 @@ impl RegisterLowerer {
         self.function_capture_effects
             .insert(code_id, capture_effects);
         self.function_layout_effects.insert(code_id, layout_effects);
-        self.code.emit(Instruction::CreateClosure(code_id));
+        self.code.emit(if class {
+            Instruction::CreateClass(code_id)
+        } else {
+            Instruction::CreateClosure(code_id)
+        });
         Some(RegisterType::Function(code_id))
+    }
+
+    /// Lowers a class body (15.7.14), leaving its constructor in the
+    /// accumulator.
+    fn lower_class(&mut self, class: &parser::Class) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        // 15.7 derives a class from another through `super`, which needs the
+        // [[HomeObject]] of every method.
+        if class.heritage.is_some() {
+            self.refuse("a class that extends another");
+            return None;
+        }
+        // A computed name is only known at run time, and the two halves of an
+        // accessor have to reach one property.
+        if class.methods.iter().any(|(_, method)| method.computed) {
+            self.refuse("a computed name in a class body");
+            return None;
+        }
+        let value_type = self.lower_callable(&class.constructor, true)?;
+        let constructor = self.allocate_register()?;
+        self.code.emit(Instruction::Star(constructor));
+        // 15.7.14 puts every method the body defines on the prototype the
+        // constructor carries, and a static one on the constructor itself.
+        let prototype = self.allocate_register()?;
+        let name = self.string_constant(&PROTOTYPE_UNITS)?;
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetNamed {
+            obj: constructor,
+            name,
+            slot,
+        });
+        self.code.emit(Instruction::Star(prototype));
+        for (is_static, method) in &class.methods {
+            let target = if *is_static { constructor } else { prototype };
+            let name = Self::static_property_name(&method.key)?.to_vec();
+            let constant = self.string_constant(&name)?;
+            self.lower(&method.value)?;
+            self.code.emit(match method.accessor {
+                Some(setter) => Instruction::DefineAccessor {
+                    obj: target,
+                    name: constant,
+                    setter,
+                    enumerable: false,
+                },
+                None => Instruction::DefineMethod {
+                    obj: target,
+                    name: constant,
+                },
+            });
+        }
+        self.code.emit(Instruction::Ldar(constructor));
+        self.release_register(prototype)?;
+        self.release_register(constructor)?;
+        Some(value_type)
     }
 
     fn lower_function_declaration(
@@ -2115,11 +2192,16 @@ impl RegisterLowerer {
     /// What 10.2.11 would have to do for this function that the lowering does
     /// not, so that the refusal names the parameter list or the kind and not
     /// the expression the function was written as.
-    fn function_refusal(function: &Function) -> Option<&'static str> {
+    fn function_refusal(function: &Function, class: bool) -> Option<&'static str> {
         if function.async_kind != parser::AsyncKind::Sync {
             return Some("an async function");
         }
-        if function.constructor_kind != parser::ConstructorKind::Ordinary {
+        let kind_allowed = match function.constructor_kind {
+            parser::ConstructorKind::Ordinary => true,
+            parser::ConstructorKind::BaseClass => class,
+            parser::ConstructorKind::DerivedClass => false,
+        };
+        if !kind_allowed {
             return Some("a class constructor");
         }
         // 10.2.11 instantiates each of these differently, and they are three
@@ -7211,6 +7293,9 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
                 || register_expression_writes_names(value, names)?
         }
         ExprKind::Function(function) => register_function_writes_names(function, names)?,
+        // 15.7.14 is the heritage and one function for each member, so a class
+        // writes what any of those writes.
+        ExprKind::Class(class) => register_class_writes_names(class, names)?,
         // `this` is resolved on the Function Environment Record, so it writes
         // and names no binding of this analysis.
         ExprKind::Literal(_) | ExprKind::Name(_) | ExprKind::This => false,
@@ -7221,7 +7306,6 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
         ExprKind::Regex(_, _)
         | ExprKind::Template(_, _)
         | ExprKind::Await(_)
-        | ExprKind::Class(_)
         | ExprKind::Super
         | ExprKind::NewTarget
         | ExprKind::DefaultSuper
@@ -7286,6 +7370,47 @@ fn register_assignment_pattern_writes_names(
             })
         }
     }
+}
+
+/// Whether any part of a class body writes one of these names (15.7.14).
+fn register_class_writes_names(class: &parser::Class, names: &BTreeSet<String>) -> Option<bool> {
+    if let Some(heritage) = &class.heritage
+        && register_expression_writes_names(heritage, names)?
+    {
+        return Some(true);
+    }
+    // 15.7 derives a class through `super`, which the lowering refuses by
+    // name; its constructor is not a body this analysis walks.
+    if class.heritage.is_none() && register_function_writes_names(&class.constructor, names)? {
+        return Some(true);
+    }
+    for (_, method) in &class.methods {
+        if register_expression_writes_names(&method.key, names)?
+            || register_expression_writes_names(&method.value, names)?
+        {
+            return Some(true);
+        }
+    }
+    Some(false)
+}
+
+/// The names a class body reads, and the free names of the functions it holds.
+fn register_class_references(
+    class: &parser::Class,
+    names: &mut BTreeSet<String>,
+    nested_free_names: &mut BTreeSet<String>,
+) -> Option<()> {
+    if let Some(heritage) = &class.heritage {
+        register_expression_references(heritage, names, nested_free_names)?;
+    }
+    if class.heritage.is_none() {
+        nested_free_names.extend(register_function_scope(&class.constructor)?.free_names);
+    }
+    for (_, method) in &class.methods {
+        register_expression_references(&method.key, names, nested_free_names)?;
+        register_expression_references(&method.value, names, nested_free_names)?;
+    }
+    Some(())
 }
 
 fn register_function_writes_names(function: &Function, names: &BTreeSet<String>) -> Option<bool> {
@@ -7467,6 +7592,7 @@ fn register_expression_references(
         ExprKind::Function(function) => {
             nested_free_names.extend(register_function_scope(function)?.free_names);
         }
+        ExprKind::Class(class) => register_class_references(class, names, nested_free_names)?,
         // `this` is resolved on the Function Environment Record, so it is free
         // of every name this analysis collects.
         ExprKind::Literal(_) | ExprKind::This => {}
@@ -7477,7 +7603,6 @@ fn register_expression_references(
         ExprKind::Regex(_, _)
         | ExprKind::Template(_, _)
         | ExprKind::Await(_)
-        | ExprKind::Class(_)
         | ExprKind::Super
         | ExprKind::NewTarget
         | ExprKind::DefaultSuper
