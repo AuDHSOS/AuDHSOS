@@ -349,6 +349,8 @@ pub enum Intrinsic {
     FunctionPrototypeCall,
     /// `Function.prototype.bind` (20.2.3.2).
     FunctionPrototypeBind,
+    /// `Math.pow` (21.3.2.26).
+    MathPow,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -372,11 +374,13 @@ pub enum IntrinsicHolder {
     /// `%Function.prototype%`, which carries the methods 20.2.3 gives every
     /// function.
     FunctionPrototype,
+    /// `%Math%`, the namespace object of 21.3.
+    Math,
 }
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 43] = [
+    pub const ALL: [Self; 44] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -420,6 +424,7 @@ impl Intrinsic {
         Self::FunctionConstructor,
         Self::FunctionPrototypeCall,
         Self::FunctionPrototypeBind,
+        Self::MathPow,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -466,6 +471,7 @@ impl Intrinsic {
             Self::FunctionPrototypeCall | Self::FunctionPrototypeBind => {
                 IntrinsicHolder::FunctionPrototype
             }
+            Self::MathPow => IntrinsicHolder::Math,
             Self::ArrayIsArray => IntrinsicHolder::ArrayConstructor,
             Self::ObjectDefineProperty
             | Self::ObjectGetOwnPropertyDescriptor
@@ -520,6 +526,7 @@ impl Intrinsic {
             Self::FunctionConstructor => 40,
             Self::FunctionPrototypeCall => 41,
             Self::FunctionPrototypeBind => 42,
+            Self::MathPow => 43,
         }
     }
 
@@ -569,6 +576,7 @@ impl Intrinsic {
             Self::FunctionConstructor => 40,
             Self::FunctionPrototypeCall => 41,
             Self::FunctionPrototypeBind => 42,
+            Self::MathPow => 43,
         }
     }
 
@@ -619,6 +627,7 @@ impl Intrinsic {
             40 => Some(Self::FunctionConstructor),
             41 => Some(Self::FunctionPrototypeCall),
             42 => Some(Self::FunctionPrototypeBind),
+            43 => Some(Self::MathPow),
             _ => None,
         }
     }
@@ -636,6 +645,7 @@ impl Intrinsic {
             Self::FunctionConstructor => "Function",
             Self::FunctionPrototypeCall => "call",
             Self::FunctionPrototypeBind => "bind",
+            Self::MathPow => "pow",
             Self::ObjectDefineProperty => "defineProperty",
             Self::ObjectGetOwnPropertyDescriptor => "getOwnPropertyDescriptor",
             Self::ObjectGetOwnPropertyNames => "getOwnPropertyNames",
@@ -692,6 +702,7 @@ impl Intrinsic {
             | Self::FunctionConstructor
             | Self::FunctionPrototypeCall
             | Self::FunctionPrototypeBind
+            | Self::MathPow
             | Self::ObjectGetOwnPropertyNames => false,
             // 20.1.2.4 and 20.1.2.8 apply ToPropertyKey to the second argument.
             Self::ObjectDefineProperty | Self::ObjectGetOwnPropertyDescriptor => index == 1,
@@ -752,7 +763,8 @@ impl Intrinsic {
             | Self::FunctionPrototypeBind
             | Self::ObjectGetOwnPropertyNames => 1,
             Self::ObjectDefineProperty => 3,
-            Self::ObjectGetOwnPropertyDescriptor
+            Self::MathPow
+            | Self::ObjectGetOwnPropertyDescriptor
             | Self::StringPrototypeSlice
             | Self::StringPrototypeSubstring
             | Self::ArrayPrototypeSlice => 2,
@@ -966,6 +978,25 @@ pub const OBJECT_CONSTRUCTOR_PROPERTIES: [&str; 24] = [
     "values",
 ];
 
+/// The property names 21.3 gives `%Math%`.
+///
+/// This Realm builds `pow` of them; a read of one of the others is a gap,
+/// because answering undefined would say the namespace does not have it.
+pub const MATH_PROPERTIES: [&str; 44] = [
+    "E", "LN10", "LN2", "LOG10E", "LOG2E", "PI", "SQRT1_2", "SQRT2", "abs", "acos", "acosh",
+    "asin", "asinh", "atan", "atan2", "atanh", "cbrt", "ceil", "clz32", "cos", "cosh", "exp",
+    "expm1", "floor", "f16round", "fround", "hypot", "imul", "log", "log10", "log1p", "log2",
+    "max", "min", "pow", "random", "round", "sign", "sin", "sinh", "sqrt", "tan", "tanh", "trunc",
+];
+
+/// Whether `%Math%` owns a property of this name.
+#[must_use]
+pub fn math_owns(name: &[u16]) -> bool {
+    MATH_PROPERTIES
+        .into_iter()
+        .any(|owned| owned.encode_utf16().eq(name.iter().copied()))
+}
+
 /// Whether `%Object%` owns a property of this name.
 #[must_use]
 pub fn object_constructor_owns(name: &[u16]) -> bool {
@@ -1101,6 +1132,7 @@ struct Holders {
     array_prototype: Root,
     array_iterator_prototype: Root,
     global_object: Root,
+    math: Root,
 }
 
 /// Global Environment Record of 9.1.1.4.
@@ -1180,6 +1212,11 @@ impl Realm {
         // installed on it.
         let global_object = heap.allocate_immortal_object(root_shape, ordinary)?;
         let global_object = heap.push_root(Value::from_object(global_object))?;
+        // 21.3 is an ordinary object and not a constructor, so it is made here
+        // and the functions it carries are installed on it like any other.
+        let math = heap.allocate_immortal_object(root_shape, ordinary)?;
+        heap.set_object_kind(math, super::object::ObjectKind::Math)?;
+        let math = heap.push_root(Value::from_object(math))?;
         let intrinsics = Self::install_intrinsics(
             heap,
             &Holders {
@@ -1189,6 +1226,7 @@ impl Realm {
                 array_prototype,
                 array_iterator_prototype,
                 global_object,
+                math,
             },
         )?;
 
@@ -1210,6 +1248,14 @@ impl Realm {
             Intrinsic::FunctionConstructor,
             function_prototype,
         )?;
+        // 19.1 gives the global object `Math` with the attributes 17 gives
+        // every value of clause 19 that is not a constant.
+        let global = Self::rooted(heap, global_object)?
+            .as_object()
+            .ok_or(HeapError::InvalidReference)?;
+        let name = PropertyKey::String(heap.strings.intern("Math")?);
+        let value = Self::rooted(heap, math)?;
+        heap.define_own_named(global, name, value, builtin_data())?;
 
         // 9.1.1.4: the Global Environment Record binds the global object and
         // the declarations of every Script of this Realm. 19.1.1: `globalThis`
@@ -1610,6 +1656,7 @@ impl Realm {
                 IntrinsicHolder::FunctionPrototype => {
                     Self::rooted(heap, holders.function_prototype)?
                 }
+                IntrinsicHolder::Math => Self::rooted(heap, holders.math)?,
                 IntrinsicHolder::ObjectConstructor => Self::rooted(
                     heap,
                     *intrinsics

@@ -67,6 +67,10 @@ pub enum ObjectKind {
         /// `[[ArrayLikeNextIndex]]`.
         index: u32,
     },
+    /// The `%Math%` namespace object of 21.3, which is ordinary in every way
+    /// but one: a name it should own and this Realm has not built is a gap
+    /// rather than the undefined an ordinary object answers.
+    Math,
     /// Bound function exotic object, the slots of 10.4.1.
     BoundFunction {
         /// `[[BoundTargetFunction]]`.

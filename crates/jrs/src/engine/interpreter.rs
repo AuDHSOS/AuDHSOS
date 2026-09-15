@@ -1163,15 +1163,15 @@ impl RegisterVM {
             | Intrinsic::ArrayPrototypeToString => {
                 self.call_array_intrinsic(intrinsic, call, heap, realm)
             }
-            Intrinsic::ArrayIsArray => {
-                Ok(Value::from_bool(Self::is_array(argument(self, 0)?, heap)))
-            }
             // 23.1.1.1, for the `%Array%` that is its own NewTarget: one
             // argument that is a Number is the length, and every other list of
             // them is the elements.
             Intrinsic::ArrayConstructor => self.construct_array(call, heap, realm),
-            Intrinsic::FunctionConstructor | Intrinsic::FunctionPrototypeCall => {
-                Self::call_function_intrinsic(intrinsic)
+            Intrinsic::ArrayIsArray
+            | Intrinsic::FunctionConstructor
+            | Intrinsic::FunctionPrototypeCall
+            | Intrinsic::MathPow => {
+                Self::call_plain_intrinsic(intrinsic, argument(self, 0)?, argument(self, 1)?, heap)
             }
             Intrinsic::FunctionPrototypeBind => self.bind_function(call, heap, realm),
             Intrinsic::ObjectConstructor
@@ -1457,17 +1457,31 @@ impl RegisterVM {
         ))
     }
 
-    /// The functions of 20.2 that reach `call_intrinsic`.
+    /// The intrinsics that need nothing of the call but its arguments.
     ///
     /// 20.2.1.1 compiles its arguments into a function body, which needs the
     /// parser at run time. 20.2.3.3 never reaches here at all, because
     /// [`Self::enter_call_value`] answers it by entering the call it forwards
     /// to rather than by answering a value.
-    const fn call_function_intrinsic(intrinsic: Intrinsic) -> Result<Value, VMError> {
+    fn call_plain_intrinsic(
+        intrinsic: Intrinsic,
+        first: Value,
+        second: Value,
+        heap: &GenerationalHeap,
+    ) -> Result<Value, VMError> {
         match intrinsic {
             Intrinsic::FunctionConstructor => Err(VMError::Unsupported(
                 "the Function constructor, which compiles a body at run time",
             )),
+            // 21.3.2.26 is Number::exponentiate of 6.1.6.1.3 on the two
+            // arguments, after 7.1.4 has made numbers of them.
+            Intrinsic::MathPow => Ok(Value::from_f64(audhsos_math::pow(
+                primitive_number(first, heap)?,
+                primitive_number(second, heap)?,
+            ))),
+            // 23.1.2.3 answers IsArray, which 7.2.2 answers for an Array
+            // exotic object and, for a Proxy, for what it wraps.
+            Intrinsic::ArrayIsArray => Ok(Value::from_bool(Self::is_array(first, heap))),
             _ => Err(VMError::TypeError),
         }
     }
@@ -1912,6 +1926,9 @@ impl RegisterVM {
             | ObjectKind::BoundFunction { .. } => Some("Function.prototype.toString"),
             // 20.5.3.4 answers "name: message".
             ObjectKind::Error => Some("Error.prototype.toString"),
+            // 21.3 gives `%Math%` an @@toStringTag, which this Realm has not
+            // built, so `[object Math]` is not an answer it can give.
+            ObjectKind::Math => Some("the @@toStringTag of %Math%"),
             // 22.1.3.28, 21.1.3.7 and 20.3.3.3 answer the wrapped primitive.
             ObjectKind::StringWrapper(_) => Some("String.prototype.toString"),
             ObjectKind::NumberWrapper(_) => Some("Number.prototype.toString"),
@@ -1956,6 +1973,8 @@ impl RegisterVM {
             {
                 Err(GAP)
             }
+            // 21.3 gives `%Math%` more than this Realm builds.
+            Some(ObjectKind::Math) if super::realm::math_owns(name) => Err(GAP),
             // 20.1.2 gives `%Object%` more than 17 gives a built-in function,
             // and this Realm builds only some of them.
             Some(ObjectKind::NativeFunction { id, .. })
@@ -2246,7 +2265,9 @@ impl RegisterVM {
                 ObjectKind::StringWrapper(_) => "String",
                 // 23.1.5.2.2 tags the Array Iterator through @@toStringTag, so
                 // its builtin tag is the ordinary one.
-                ObjectKind::Ordinary | ObjectKind::ArrayIterator { .. } => "Object",
+                ObjectKind::Ordinary | ObjectKind::ArrayIterator { .. } | ObjectKind::Math => {
+                    "Object"
+                }
             }
         };
         let mut units: Vec<u16> = "[object ".encode_utf16().collect();

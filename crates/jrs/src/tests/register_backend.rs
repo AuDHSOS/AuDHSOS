@@ -26,7 +26,7 @@ fn a_realm_on_the_engine_backend_refuses_what_it_cannot_lower() -> Result<(), Er
     // never an answer. It shows only once the Script has run, which is fatal
     // like every other unsupported feature.
     assert!(matches!(
-        realm.evaluate("typeof Math"),
+        realm.evaluate("typeof JSON"),
         Err(Error::Unsupported { .. })
     ));
     assert!(realm.evaluate("1").is_err());
@@ -442,6 +442,40 @@ fn a_property_of_a_primitive_names_the_object_it_would_need() -> Result<(), Erro
         let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
             .run(&program, &mut SilentHost);
         assert_eq!(format!("{actual:?}"), format!("{expected:?}"), "{source}");
+    }
+    Ok(())
+}
+
+#[test]
+fn the_math_namespace_answers_what_its_realm_built() -> Result<(), Error> {
+    // 21.3 is an ordinary object that 19.1 gives the global object, and
+    // 21.3.2.26 is Number::exponentiate on two arguments 7.1.4 has made
+    // numbers of.
+    for source in [
+        "typeof Math",
+        "Math.pow(2,32)-1",
+        "Math.pow(2,10)",
+        "Math.pow('3',2)",
+        "Math.pow(2)",
+        "typeof Math.pow",
+        // A name 21.3 does not give it is undefined like any other miss.
+        "typeof Math.notAName",
+    ] {
+        differential(source)?;
+    }
+    // A name 21.3 gives it and this Realm has not built is a gap, because
+    // answering undefined would say the namespace does not have it.
+    for source in ["Math.abs", "Math.PI", "Math.max"] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        assert!(
+            matches!(
+                Runtime::with_backend(Limits::default(), Backend::Engine)
+                    .run(&program, &mut SilentHost),
+                Err(Error::Unsupported { .. })
+            ),
+            "{source}"
+        );
     }
     Ok(())
 }
