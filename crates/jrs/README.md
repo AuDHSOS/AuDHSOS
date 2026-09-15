@@ -649,10 +649,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Object%` and its methods, after the integrity levels, on the register engine (focused) | focused | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,530 (22.49%) | 18 (0.26%) | 5,254 (77.24%) |
 | `%Number%` (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 572 (84.12%) | 102 (15.00%) | 6 (0.88%) |
 | `%Number%` on the register engine (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 226 (33.24%) | 2 (0.29%) | 452 (66.47%) |
-| `%Reflect%` (focused) | focused | `7342613` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Reflect --summary` | 153 | 306 | 260 (84.97%) | 46 (15.03%) | 0 (0.00%) |
-| `%Reflect%` on the register engine (focused) | focused | `7342613` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Reflect --summary` | 153 | 306 | 48 (15.69%) | 4 (1.31%) | 254 (83.01%) |
-| Complete pinned suite, including staging and Intl | full | `7342613` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `7342613` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 10,594 (10.29%) | 17,754 (17.25%) | 74,577 (72.46%) |
+| Property descriptors (focused) | focused | `602329f` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object/defineProperty test/built-ins/Object/defineProperties test/built-ins/Object/getOwnPropertyDescriptor test/built-ins/Object/create test/built-ins/Reflect --summary` | 2,546 | 5,080 | 4,738 (93.27%) | 336 (6.61%) | 6 (0.12%) |
+| Property descriptors on the register engine (focused) | focused | `602329f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object/defineProperty test/built-ins/Object/defineProperties test/built-ins/Object/getOwnPropertyDescriptor test/built-ins/Object/create test/built-ins/Reflect --summary` | 2,546 | 5,080 | 1,650 (32.48%) | 16 (0.31%) | 3,414 (67.20%) |
+| Complete pinned suite, including staging and Intl | full | `602329f` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `602329f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 11,466 (11.14%) | 17,334 (16.84%) | 74,125 (72.02%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1012,6 +1012,32 @@ swallowed it, and every `not-a-constructor.js` concluded what it wanted to
 conclude. A test that passes because a feature is missing is what the
 procedure forbids, so those variants are unsupported now and say why.
 
+Accessor properties are 6.1.7.1: a property that holds a getter and a setter
+instead of a value. The Shape already said which of its properties are
+accessors and nothing ever set it, so the engine had none. The slot of one now
+holds the pair, and 10.1.8.1 and 10.1.9.2 call it where a data property is read
+or written, leaving the instruction the way a conversion of 7.1.1 does. A
+getter answers into the accumulator, which is where every read leaves its
+value; a setter answers nothing and 13.15.2 answers the value assigned, so that
+value waits in a root until the setter returns. Neither is cached, because an
+inline cache holds a slot and this is a call.
+
+10.1.6.3 is now the operation the specification writes rather than a merge of
+attributes. It answers whether the descriptor can be applied, which 7.3.8 turns
+into a `TypeError` and 28.1.3 answers as it is, and it rejects what a
+non-configurable property does not allow. Over the descriptor clauses the
+engine passes 1,650 of 5,080 variants and fails 16, where it passed 1,004 and
+failed 434 before; the stack backend passes 4,738 and fails 336, with both
+raising the same errors under the same names.
+
+Three gaps are named rather than answered. A native operation that finds an
+accessor cannot call it, because it has no frame to call from. A setter written
+in Rust would take its argument from registers of the caller that hold
+something else. And 10.4.2.1 defines an index or an Array `length` against the
+element store, which this engine does not do, so a Shape that took one would
+hold a second answer beside the one a read finds: 26 variants passed on that
+missing operation and are unsupported now.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -1081,6 +1107,8 @@ tree `5e2ec2f08ae7a18f55f1b4c0fe079e7de807efdd`, which is the tree of
 at tree `53bfb8150e68ec98d035eece875f5ec1ed4d2351`, which is the tree of
 `aff55ba`. The `%Reflect%` runs and both full runs beside them were measured at
 tree `23f63f95c8ebb94a88f32d50d6a089da885a06da`, which is the tree of `7342613`.
+The descriptor runs and both full runs beside them were measured at tree
+`91cbf2c4a87389bfa6621938c5f05a31127e21f9`, which is the tree of `602329f`.
 
 ### Historical Test262 baseline
 
