@@ -657,8 +657,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | Destructuring declarations, after the rest element, on the register engine (focused) | focused | `9c9533a` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/variable/dstr --summary` | 97 | 194 | 144 (74.23%) | 2 (1.03%) | 48 (24.74%) |
 | Destructuring assignment, after the value with no layout (focused) | focused | `2dd0728` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/assignment/dstr --summary` | 368 | 640 | 446 (69.69%) | 0 (0.00%) | 194 (30.31%) |
 | Destructuring assignment, after the value with no layout, on the register engine (focused) | focused | `2dd0728` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/assignment/dstr --summary` | 368 | 640 | 287 (44.84%) | 10 (1.56%) | 343 (53.59%) |
-| Complete pinned suite, including staging and Intl | full | `2dd0728` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `2dd0728` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 21,022 (20.42%) | 18,141 (17.63%) | 63,762 (61.95%) |
+| `String.prototype.split` (focused) | focused | `594df30` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/String/prototype/split --summary` | 120 | 240 | 236 (98.33%) | 0 (0.00%) | 4 (1.67%) |
+| `String.prototype.split` on the register engine (focused) | focused | `594df30` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/String/prototype/split --summary` | 120 | 240 | 34 (14.17%) | 27 (11.25%) | 179 (74.58%) |
+| Complete pinned suite, including staging and Intl | full | `594df30` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `594df30` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 21,060 (20.46%) | 18,148 (17.63%) | 63,717 (61.91%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1352,7 +1354,9 @@ which is the tree of `6948012`. The destructuring runs and both full runs
 beside the rest element were measured at tree `5293484ca0ebc0c2c38ab39515215735e24eb0f6`,
 which is the tree of `9c9533a`. The destructuring runs and both full runs
 beside the value with no layout were measured at tree `365cada8e608b5c44c290628407ef7c96a2e845d`,
-which is the tree of `2dd0728`.
+which is the tree of `2dd0728`. The `String.prototype.split` runs and both
+full runs beside it were measured at tree `20cbb30e9ac96a2331c8bd98b5d5bd53cc3013d3`,
+which is the tree of `594df30`.
 
 ### Historical Test262 baseline
 
