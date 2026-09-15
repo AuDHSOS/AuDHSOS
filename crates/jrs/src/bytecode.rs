@@ -1812,8 +1812,28 @@ impl RegisterLowerer {
         let object = self.allocate_register()?;
         self.code.emit(Instruction::Star(object));
         for property in properties {
-            if property.prototype || property.accessor.is_some() {
+            if property.prototype {
                 return None;
+            }
+            // 13.2.5.1 defines an accessor property, whose two halves meet on
+            // the object. A computed name would have to reach the same
+            // property, which needs the key at run time.
+            if let Some(setter) = property.accessor {
+                if property.computed {
+                    return None;
+                }
+                let name = Self::static_property_name(&property.key)?.to_vec();
+                let constant = self.string_constant(&name)?;
+                self.lower(&property.value)?;
+                self.code.emit(Instruction::DefineAccessor {
+                    obj: object,
+                    name: constant,
+                    setter,
+                });
+                // A read of the property is a call of its getter, so the
+                // layout knows the name and not what it answers.
+                self.record_ordinary_property_write(object_id, Some(name), RegisterType::Unknown)?;
+                continue;
             }
             let key = if property.computed {
                 let static_name = Self::static_property_key_units(&property.key);

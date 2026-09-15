@@ -1201,7 +1201,6 @@ fn iterator_and_dynamic_binding_patterns_stay_on_legacy_backend() -> Result<(), 
         "let input={next(){return {done:true}},[Symbol.iterator](){return this}};let [x]=input;x",
         "let a=[1];a[Symbol.iterator]=function(){return {next(){return {value:42}}}};let [x]=a;x",
         "let input={next(){return {done:true}},[Symbol.iterator](){return this}};let [...x]=input;x",
-        "let source={get x(){return 1},y:2};let {x,...rest}=source;rest.y",
         "let key={toString(){return 'x'}};let {[key]:x,...rest}={x:1,y:2};rest.y",
     ] {
         let program = compile(source, Limits::default())?;
@@ -4236,7 +4235,6 @@ fn a_script_the_lowering_refuses_says_what_it_holds() -> Result<(), Error> {
     // the Script were at fault. Each one names the construct it stopped at.
     // A refusal the passes before the lowering raise still has no name.
     for (source, feature) in [
-        ("var o={get x(){return 1}}; o.x", "an object literal"),
         ("class C{}", "a declaration of the Script"),
         // 10.2.11 does more for these parameter lists than the lowering does,
         // and the body is lowered in a unit of its own, so both name what
@@ -5025,6 +5023,30 @@ fn the_integer_operators_convert_an_object_operand() -> Result<(), Error> {
         "let x=1;x<<={valueOf(){return 4}};x",
         "let o={toString(){return '5'}};o|0",
         "let x={valueOf(){return 3}};x**=2;x",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn an_object_literal_defines_accessor_properties() -> Result<(), Error> {
+    // 13.2.5.1 gives the property a getter or a setter, and the two clauses
+    // of one name meet on the object.
+    for source in [
+        "var o={get x(){return 5}};o.x",
+        "var o={set x(v){this.n=v*2}};o.x=4;o.n",
+        "var o={get x(){return this.n},set x(v){this.n=v+1}};o.x=1;o.x",
+        "var o={get x(){return 1}};typeof Object.getOwnPropertyDescriptor(o,'x').get",
+        "var o={get x(){return 1}};Object.getOwnPropertyDescriptor(o,'x').enumerable",
+        "var o={get x(){return 1}};Object.getOwnPropertyDescriptor(o,'x').configurable",
+        "var o={a:1,get x(){return 2},b:3};o.a+o.x+o.b",
+        "var o={get x(){return 1}};Object.keys(o).join(',')",
+        "var o={get x(){return 1},y:2};Object.keys(o).join(',')",
+        // A getter that is not there reads undefined, and a setter that is
+        // not there takes nothing.
+        "var o={set x(v){}};typeof o.x",
+        "var o={get x(){return 1}};o.x=9;o.x",
     ] {
         differential(source)?;
     }

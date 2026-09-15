@@ -410,6 +410,19 @@ pub enum Instruction {
         /// Feedback vector slot for inline caching.
         slot: u16,
     },
+    /// Defines an accessor property of an object literal (13.2.5.1), taking
+    /// the function in `acc` as one half of it.
+    ///
+    /// The other half is whatever the property already holds, so the two
+    /// clauses of one name meet on the object.
+    DefineAccessor {
+        /// Object register.
+        obj: Reg,
+        /// Property-name index in the heap-independent UTF-16 constant pool.
+        name: u16,
+        /// Whether the function is the `[[Set]]` rather than the `[[Get]]`.
+        setter: bool,
+    },
     /// Load indexed element: `acc = obj_reg[key_reg]` (uses feedback slot).
     GetByValue {
         /// Object register.
@@ -799,7 +812,8 @@ impl BytecodeFunction {
                 self.verify_feedback(pc, slot, FeedbackKind::NamedAccess)?;
                 Some(key)
             }
-            Instruction::DeleteNamed { obj, name, .. } => {
+            Instruction::DeleteNamed { obj, name, .. }
+            | Instruction::DefineAccessor { obj, name, .. } => {
                 self.verify_string_constant(pc, name)?;
                 Some(obj)
             }

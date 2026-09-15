@@ -6891,6 +6891,46 @@ impl RegisterVM {
                     let name = PropertyKey::String(heap.strings.intern_units(&units)?);
                     self.acc = delete_reference(target, name, index, strict, heap, realm)?;
                 }
+                Instruction::DefineAccessor { obj, name, setter } => {
+                    let units = active_code
+                        .string_constants
+                        .get(name as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    let name = PropertyKey::String(heap.strings.intern_units(units)?);
+                    let target = self.read_reg(obj)?;
+                    let oref = target.as_object().ok_or(VMError::TypeError)?;
+                    // 13.2.5.1 leaves the other half of the property as it is,
+                    // so `get` and `set` of one name meet on the object.
+                    let (get, set) = match heap.own_named_flags(oref, name)? {
+                        Some(flags) if flags.is_accessor => {
+                            let held = heap
+                                .lookup_named(oref, name)?
+                                .map_or(VALUE_UNDEFINED, |property| property.value);
+                            Self::accessor_parts(held, heap)?
+                        }
+                        _ => (VALUE_UNDEFINED, VALUE_UNDEFINED),
+                    };
+                    let function = self.acc;
+                    let (get, set) = if setter {
+                        (get, function)
+                    } else {
+                        (function, set)
+                    };
+                    let pair = Self::make_accessor(get, set, heap)?;
+                    // The pair was allocated, which may have moved the object.
+                    let oref = self.read_reg(obj)?.as_object().ok_or(VMError::TypeError)?;
+                    heap.define_own_named(
+                        oref,
+                        name,
+                        pair,
+                        PropertyFlags {
+                            writable: false,
+                            enumerable: true,
+                            configurable: true,
+                            is_accessor: true,
+                        },
+                    )?;
+                }
                 Instruction::GetArrayLength { obj } => {
                     let target = self.read_reg(obj)?;
                     let object = target.as_object().ok_or(VMError::TypeError)?;
