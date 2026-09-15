@@ -1202,8 +1202,24 @@ fn same_value(left: &Value, right: &Value) -> bool {
 
 #[test]
 fn iterator_and_dynamic_binding_patterns_stay_on_legacy_backend() -> Result<(), Error> {
+    // An iterator the Script wrote reaches 8.6.2 on the engine now, and stops
+    // where 20.4 does: this Realm has not built `%Symbol%`.
+    let source =
+        "let input={next(){return {done:true}},[Symbol.iterator](){return this}};let [x]=input;x";
+    let program = compile(source, Limits::default())?;
+    assert!(program.uses_register_backend(), "{source}");
+    assert!(
+        matches!(
+            Runtime::with_backend(Limits::default(), Backend::Engine)
+                .run(&program, &mut SilentHost),
+            Err(Error::Unsupported { .. })
+        ),
+        "{source}"
+    );
+    // A rest element and a computed key of a pattern are named gaps, and an
+    // Array whose `@@iterator` the Script replaced is not a layout the
+    // lowering keeps.
     for source in [
-        "let input={next(){return {done:true}},[Symbol.iterator](){return this}};let [x]=input;x",
         "let a=[1];a[Symbol.iterator]=function(){return {next(){return {value:42}}}};let [x]=a;x",
         "let input={next(){return {done:true}},[Symbol.iterator](){return this}};let [...x]=input;x",
         "let key={toString(){return 'x'}};let {[key]:x,...rest}={x:1,y:2};rest.y",
@@ -4255,10 +4271,6 @@ fn a_script_the_lowering_refuses_says_what_it_holds() -> Result<(), Error> {
         // stopped them and not the expression the function was written as.
         ("var f=function(...r){return r}; f()", "a rest parameter"),
         (
-            "var f=function([a]){return a}; f([1])",
-            "a parameter that is an array binding pattern",
-        ),
-        (
             "var f=function(){try{return 1}finally{}}; f()",
             "a try statement",
         ),
@@ -5174,14 +5186,39 @@ fn a_parameter_that_is_an_object_pattern_binds_its_names() -> Result<(), Error> 
     ] {
         differential_scripts(&[source])?;
     }
-    // 8.6.2 takes the elements of an array pattern from the iterator of the
-    // argument, which the lowering does not emit.
-    let source = "function f([a]){return a};f([1])";
+    Ok(())
+}
+
+#[test]
+fn an_array_pattern_takes_its_elements_from_the_iterator() -> Result<(), Error> {
+    // 8.6.2 opens the iterator of the value (7.4.2), takes one step of 7.4.6
+    // per element, and closes what it did not exhaust (7.4.9).
+    for source in [
+        "function f(v){let [a]=v;return a}f([1])",
+        "function f(v){let [a,b]=v;return a+b}f([1,2])",
+        "function f(v){let [,b]=v;return b}f([1,2])",
+        "function f(v){let [a,b]=v;return b}f([1])",
+        "function f(v){let [a=5]=v;return a}f([])",
+        "function f(v){let [[a]]=v;return a}f([[3]])",
+        "function f(v){let [{a}]=v;return a}f([{a:4}])",
+        "function f([a]){return a}f([7])",
+        "function f([a,b=2]){return a+b}f([1])",
+        "function f([a]=[8]){return a}f()",
+        // A value with no iterator is a TypeError.
+        // 7.4.9 closes an iterator the pattern left unfinished; the Array
+        // iterator of 23.1.5 has no `return`, so closing it calls nothing.
+        "function f(v){let [a]=v;return a}f([1,2,3])",
+        "function f(v){let [a]=v;return a}f({})",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // 8.6.2 collects a rest element by walking the iterator to its end.
+    let source = "function f(v){let [a,...r]=v;return r}f([1,2])";
     let program = compile(source, Limits::default())?;
     assert!(!program.uses_register_backend(), "{source}");
     assert_eq!(
         program.register_refusal,
-        Some("a parameter that is an array binding pattern"),
+        Some("a rest element of an array pattern"),
         "{source}"
     );
     Ok(())

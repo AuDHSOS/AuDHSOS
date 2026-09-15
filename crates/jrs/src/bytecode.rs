@@ -1008,7 +1008,9 @@ impl RegisterLowerer {
                     return None;
                 }
                 if !tracked {
-                    self.code.emit(Instruction::RequireObjectCoercible);
+                    self.code.emit(Instruction::Require(
+                        crate::engine::bytecode::RequireKind::ObjectCoercible,
+                    ));
                 }
                 let source = self.allocate_register()?;
                 self.code.emit(Instruction::Star(source));
@@ -1048,10 +1050,8 @@ impl RegisterLowerer {
             }
             parser::BindingPattern::Array(array) => {
                 if !matches!(value_type, RegisterType::Array(_)) {
-                    // 8.6.2 takes the elements from the iterator of the value,
-                    // and closes it (7.4.9) when the pattern stops early.
-                    self.refuse("an array pattern on a value with no known layout");
-                    return None;
+                    // 8.6.2 takes the elements from the iterator of the value.
+                    return self.bind_array_pattern_by_iterator(array);
                 }
                 let source = self.allocate_register()?;
                 self.code.emit(Instruction::Star(source));
@@ -1082,6 +1082,155 @@ impl RegisterLowerer {
                 self.release_register(source)?;
             }
         }
+        Some(())
+    }
+
+    /// `IteratorBindingInitialization` of 8.6.2 for an array pattern over a
+    /// value whose layout the lowering does not know.
+    ///
+    /// 7.4.2 opens the iterator, each element takes one step of 7.4.6, and an
+    /// element the iterator no longer answers is undefined. 7.4.9 closes an
+    /// iterator the pattern did not exhaust.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function emits the whole of 8.6.2 for one pattern"
+    )]
+    fn bind_array_pattern_by_iterator(
+        &mut self,
+        array: &parser::ArrayBindingPattern,
+    ) -> Option<()> {
+        use crate::engine::bytecode::{FeedbackKind, Instruction};
+        // 8.6.2 collects a rest element by walking the iterator to its end,
+        // which is a loop this lowering does not emit here.
+        if array.rest.is_some() {
+            self.refuse("a rest element of an array pattern");
+            return None;
+        }
+        let iterable = self.allocate_register()?;
+        self.code.emit(Instruction::Star(iterable));
+        let iterator_slot = self.feedback_slot(FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetWellKnown {
+            obj: iterable,
+            symbol: u16::try_from(WELL_KNOWN_ITERATOR).ok()?,
+            slot: iterator_slot,
+        });
+        // 7.4.2 refuses a value whose `@@iterator` is undefined before it
+        // calls anything.
+        self.code.emit(Instruction::Require(
+            crate::engine::bytecode::RequireKind::Iterable,
+        ));
+        let method = self.allocate_register()?;
+        self.code.emit(Instruction::Star(method));
+        let open = self.feedback_slot(FeedbackKind::Call)?;
+        self.code.emit(Instruction::CallMethod {
+            receiver: iterable,
+            func: method,
+            arg_start: method,
+            arg_count: 0,
+            slot: open,
+        });
+        let iterator = self.allocate_register()?;
+        self.code.emit(Instruction::Star(iterator));
+        // `[[Done]]` of the Iterator Record, which 8.6.2 reads before each
+        // element and 7.4.9 reads at the end.
+        let done = self.allocate_register()?;
+        self.code.emit(Instruction::LdaFalse);
+        self.code.emit(Instruction::Star(done));
+        let step = self.allocate_register()?;
+        let next = self.allocate_register()?;
+        for element in &array.elements {
+            self.code.emit(Instruction::Ldar(done));
+            let finished = self.code.emit(Instruction::JumpIfTrue(0));
+            let next_name = self.string_constant(&"next".encode_utf16().collect::<Vec<_>>())?;
+            let next_slot = self.feedback_slot(FeedbackKind::NamedAccess)?;
+            self.code.emit(Instruction::GetNamed {
+                obj: iterator,
+                name: next_name,
+                slot: next_slot,
+            });
+            self.code.emit(Instruction::Star(next));
+            let step_slot = self.feedback_slot(FeedbackKind::Call)?;
+            self.code.emit(Instruction::CallMethod {
+                receiver: iterator,
+                func: next,
+                arg_start: next,
+                arg_count: 0,
+                slot: step_slot,
+            });
+            self.code.emit(Instruction::Star(step));
+            let done_name = self.string_constant(&"done".encode_utf16().collect::<Vec<_>>())?;
+            let done_slot = self.feedback_slot(FeedbackKind::NamedAccess)?;
+            self.code.emit(Instruction::GetNamed {
+                obj: step,
+                name: done_name,
+                slot: done_slot,
+            });
+            let exhausted = self.code.emit(Instruction::JumpIfTrue(0));
+            let value_name = self.string_constant(&"value".encode_utf16().collect::<Vec<_>>())?;
+            let value_slot = self.feedback_slot(FeedbackKind::NamedAccess)?;
+            self.code.emit(Instruction::GetNamed {
+                obj: step,
+                name: value_name,
+                slot: value_slot,
+            });
+            let bound = self.code.emit(Instruction::Jump(0));
+            // The iterator answered done, so the record says so and the
+            // element is undefined, which is also where a pattern that was
+            // already finished lands.
+            let mark = self.code.instructions.len();
+            self.patch_jump(exhausted, mark)?;
+            self.code.emit(Instruction::LdaTrue);
+            self.code.emit(Instruction::Star(done));
+            let absent = self.code.instructions.len();
+            self.patch_jump(finished, absent)?;
+            self.code.emit(Instruction::LdaUndefined);
+            let after = self.code.instructions.len();
+            self.patch_jump(bound, after)?;
+            if let parser::ArrayBindingElement::Element {
+                pattern,
+                initializer,
+            } = element
+            {
+                let mut element_type = RegisterType::Unknown;
+                if let Some(initializer) = initializer {
+                    element_type = self.lower_binding_default(element_type, initializer)?;
+                }
+                self.bind_pattern(element_type, pattern)?;
+            }
+        }
+        // 7.4.9 closes an iterator that is not done, and an iterator with no
+        // `return` is closed by doing nothing.
+        self.code.emit(Instruction::Ldar(done));
+        let closed = self.code.emit(Instruction::JumpIfTrue(0));
+        let return_name = self.string_constant(&"return".encode_utf16().collect::<Vec<_>>())?;
+        let return_slot = self.feedback_slot(FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetNamed {
+            obj: iterator,
+            name: return_name,
+            slot: return_slot,
+        });
+        self.code.emit(Instruction::Star(next));
+        let present = self.code.emit(Instruction::JumpIfNotNullish(0));
+        let skip = self.code.emit(Instruction::Jump(0));
+        let call = self.code.instructions.len();
+        self.patch_jump(present, call)?;
+        let close_slot = self.feedback_slot(FeedbackKind::Call)?;
+        self.code.emit(Instruction::CallMethod {
+            receiver: iterator,
+            func: next,
+            arg_start: next,
+            arg_count: 0,
+            slot: close_slot,
+        });
+        let end = self.code.instructions.len();
+        self.patch_jump(closed, end)?;
+        self.patch_jump(skip, end)?;
+        self.release_register(next)?;
+        self.release_register(step)?;
+        self.release_register(done)?;
+        self.release_register(iterator)?;
+        self.release_register(method)?;
+        self.release_register(iterable)?;
         Some(())
     }
 
@@ -2239,15 +2388,6 @@ impl RegisterLowerer {
         // pieces of work, so the refusal says which one it stands on.
         if function.parameters.iter().any(|parameter| parameter.rest) {
             return Some("a rest parameter");
-        }
-        // 8.6.2 takes the elements of an array pattern from the iterator of
-        // the argument, and closes it (7.4.9) when the pattern stops early.
-        if function
-            .parameters
-            .iter()
-            .any(|parameter| matches!(parameter.pattern, parser::BindingPattern::Array(_)))
-        {
-            return Some("a parameter that is an array binding pattern");
         }
         let duplicated = !function.parameters.iter().all(|parameter| {
             let Some(name) = parameter.pattern.identifier() else {

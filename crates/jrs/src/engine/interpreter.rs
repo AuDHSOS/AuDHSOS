@@ -6900,13 +6900,15 @@ impl RegisterVM {
                     let name = PropertyKey::String(heap.strings.intern_units(&units)?);
                     self.acc = delete_reference(target, name, index, strict, heap, realm)?;
                 }
-                Instruction::RequireObjectCoercible => {
+                Instruction::Require(kind) => {
                     if self.acc.is_undefined() || self.acc.is_null() {
-                        return Err(type_error(
-                            heap,
-                            realm,
-                            "cannot destructure null or undefined",
-                        ));
+                        let message = match kind {
+                            super::bytecode::RequireKind::ObjectCoercible => {
+                                "cannot destructure null or undefined"
+                            }
+                            super::bytecode::RequireKind::Iterable => "value is not iterable",
+                        };
+                        return Err(type_error(heap, realm, message));
                     }
                 }
                 Instruction::DefineMethod { obj, name } => {

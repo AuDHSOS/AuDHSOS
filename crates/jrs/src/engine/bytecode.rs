@@ -64,6 +64,16 @@ pub enum BinaryOp {
     Equals,
 }
 
+/// What an operation needed of a value that was undefined or null.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RequireKind {
+    /// `RequireObjectCoercible` of 7.2.1, which 14.3.3.3 asks before it reads
+    /// any property of the source.
+    ObjectCoercible,
+    /// `GetIterator` of 7.4.2, whose `@@iterator` must not be undefined.
+    Iterable,
+}
+
 /// Structural verification failure in register bytecode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VerificationError {
@@ -464,9 +474,9 @@ pub enum Instruction {
         /// Array object register.
         obj: Reg,
     },
-    /// `RequireObjectCoercible` of 7.2.1 on `acc`, which 14.3.3.3 does before
-    /// it reads any property of the source.
-    RequireObjectCoercible,
+    /// Throws a `TypeError` when `acc` is undefined or null, naming what the
+    /// operation that asked needed of it.
+    Require(RequireKind),
     /// Creates an empty object `{}` in `acc`.
     CreateObject,
     /// Creates an empty array `[]` in `acc` with initial capacity.
@@ -933,7 +943,7 @@ impl BytecodeFunction {
             | Instruction::LdaNull
             | Instruction::LdaTrue
             | Instruction::LdaFalse
-            | Instruction::RequireObjectCoercible
+            | Instruction::Require(_)
             | Instruction::CreateObject
             | Instruction::CreateArray(_)
             | Instruction::Throw
