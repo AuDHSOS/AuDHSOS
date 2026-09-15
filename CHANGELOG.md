@@ -59,11 +59,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   `server-net`, gets through the key exchange, the host key, `publickey`
   and one `session` channel, runs a command, reads both of its streams,
   and takes its exit status. `sh tools/xtask.sh test --e2e` runs that
-  handshake last and `test --ssh` runs it alone: it generates an Ed25519
-  host key and client key into `keys/ssh/` where there are none, starts
-  an `sshd` on a free port of the loopback with every algorithm of 14.5
-  named, and writes the trust file, the seed and the port onto a scratch
-  disk of its own (D-146). No key of this repository is tracked.
+  handshake before the TLS run and `test --ssh` runs it alone: it
+  generates an Ed25519 host key and client key into `keys/ssh/` where
+  there are none, starts an `sshd` on a free port of the loopback with
+  every algorithm of 14.5 named, and writes the trust file, the seed and
+  the port onto a scratch disk of its own (D-146). No key of this
+  repository is tracked.
 
 - `audhsos-ssh`: `hostkey::Fingerprints`, a trust rule over a slice of
   SHA-256 digests that compares every one of them, so a program can be

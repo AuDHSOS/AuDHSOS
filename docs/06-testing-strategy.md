@@ -2422,7 +2422,7 @@ what the kernel dispatches on, so the check is what the kernel saw.
   the directory `anchors/` held when the image was written, and one line
   per anchor with the length of its subject and of its key. This is the
   part of the item the anchors are, built under D-148; the bullet below
-  it is the root of the run, built under D-150, and the four after that
+  it is the root of the run, built under D-150, and the five after that
   are the handshake and are Phase 15.
 - The root of the run reaches the same program over the scratch volume
   (D-150), which `sh tools/xtask.sh test --tls` performs alone and
@@ -3230,8 +3230,9 @@ The key material, host-tested in `xtask`:
   fixtures are built from the document, because no key of this repository
   is tracked (D-146).
 
-The run, which `sh tools/xtask.sh test --e2e` performs last and
-`sh tools/xtask.sh test --ssh` performs alone:
+The run, which `sh tools/xtask.sh test --e2e` performs second to last,
+before the TLS run of 6.6.65, and `sh tools/xtask.sh test --ssh` performs
+alone:
 
 - `sshd` starts on a free port of the loopback with every algorithm of
   14.5 named, so the run cannot pass on a set the two sides happened to
