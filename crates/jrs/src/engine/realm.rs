@@ -327,6 +327,8 @@ pub enum Intrinsic {
     StringPrototypeTrimEnd,
     /// `String.prototype.trimStart` (22.1.3.34).
     StringPrototypeTrimStart,
+    /// `String.prototype.split` (22.1.3.23).
+    StringPrototypeSplit,
     /// `Array.prototype.values`, which is also `%Array.prototype%[@@iterator]`
     /// (23.1.3.38 and 23.1.3.40).
     ArrayPrototypeValues,
@@ -575,7 +577,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 125] = [
+    pub const ALL: [Self; 126] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -701,6 +703,7 @@ impl Intrinsic {
         Self::RegExpPrototypeToString,
         Self::JsonParse,
         Self::JsonStringify,
+        Self::StringPrototypeSplit,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -732,7 +735,8 @@ impl Intrinsic {
             | Self::StringPrototypePadStart
             | Self::StringPrototypeTrim
             | Self::StringPrototypeTrimEnd
-            | Self::StringPrototypeTrimStart => IntrinsicHolder::StringPrototype,
+            | Self::StringPrototypeTrimStart
+            | Self::StringPrototypeSplit => IntrinsicHolder::StringPrototype,
             Self::ArrayPrototypeValues
             | Self::ArrayPrototypeAt
             | Self::ArrayPrototypeIncludes
@@ -979,6 +983,7 @@ impl Intrinsic {
             Self::RegExpPrototypeToString => 122,
             Self::JsonParse => 123,
             Self::JsonStringify => 124,
+            Self::StringPrototypeSplit => 125,
         }
     }
 
@@ -1114,6 +1119,7 @@ impl Intrinsic {
             Self::RegExpPrototypeToString => 122,
             Self::JsonParse => 123,
             Self::JsonStringify => 124,
+            Self::StringPrototypeSplit => 125,
         }
     }
 
@@ -1250,6 +1256,7 @@ impl Intrinsic {
             122 => Some(Self::RegExpPrototypeToString),
             123 => Some(Self::JsonParse),
             124 => Some(Self::JsonStringify),
+            125 => Some(Self::StringPrototypeSplit),
             _ => None,
         }
     }
@@ -1370,6 +1377,7 @@ impl Intrinsic {
             Self::StringPrototypeTrim => "trim",
             Self::StringPrototypeTrimEnd => "trimEnd",
             Self::StringPrototypeTrimStart => "trimStart",
+            Self::StringPrototypeSplit => "split",
             Self::ArrayPrototypeValues | Self::ObjectValues => "values",
             Self::ArrayIteratorPrototypeNext => "next",
             Self::ArrayPrototypeJoin => "join",
@@ -1640,7 +1648,8 @@ impl Intrinsic {
             | Self::MathMax
             | Self::MathMin
             | Self::JsonStringify
-            | Self::MathImul => 2,
+            | Self::MathImul
+            | Self::StringPrototypeSplit => 2,
         }
     }
 }

@@ -5716,3 +5716,40 @@ fn destructuring_assignment_over_an_unknown_value() -> Result<(), Error> {
     }
     Ok(())
 }
+
+/// 22.1.3.23 splits at every occurrence of a separator that is not an Object.
+#[test]
+fn a_string_splits_at_a_string_separator() -> Result<(), Error> {
+    for source in [
+        "'a,b,c'.split(',').join('|')",
+        "'abc'.split('').join('|')",
+        "'abc'.split('').length",
+        "''.split(',').length",
+        "''.split('').length",
+        "'a,b'.split(',',1).join('|')",
+        "'a,b'.split(',',0).length",
+        "'abc'.split(undefined).length",
+        "'abc'.split(undefined)[0]",
+        "'a,,b'.split(',').length",
+        "',a,'.split(',').length",
+        "'abc'.split('b').join('|')",
+        "'aaa'.split('aa').join('|')",
+        "'abc'.split('',2).join('|')",
+        "'abc'.split('x').join('|')",
+        "'a1b'.split(1).join('|')",
+        "'atrueb'.split(true).join('|')",
+        "typeof ''.split",
+        "''.split.length",
+        "'a,b'.split(',',-1).length",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // 22.2.6.14 gives a RegExp the `@@split` this engine has not built.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    assert!(matches!(
+        realm.evaluate("'a1b'.split(/[0-9]/)"),
+        Err(Error::Unsupported { .. })
+    ));
+    Ok(())
+}

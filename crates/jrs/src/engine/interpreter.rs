@@ -1483,7 +1483,8 @@ impl RegisterVM {
             | Intrinsic::StringPrototypePadStart
             | Intrinsic::StringPrototypeTrim
             | Intrinsic::StringPrototypeTrimEnd
-            | Intrinsic::StringPrototypeTrimStart => {
+            | Intrinsic::StringPrototypeTrimStart
+            | Intrinsic::StringPrototypeSplit => {
                 self.call_string_intrinsic(intrinsic, call, heap, realm)
             }
             // 27.1.2.1 answers the object it was called on.
@@ -5454,8 +5455,96 @@ impl RegisterVM {
                 let trimmed = units.get(start..end.max(start)).unwrap_or_default();
                 self.allocate_string(heap, trimmed)
             }
+            Intrinsic::StringPrototypeSplit => self.string_split(&units, &call, heap, realm),
             _ => Err(VMError::InvalidFeedbackVector),
         }
+    }
+
+    /// `String.prototype.split` of 22.1.3.23 for a separator that is not an
+    /// Object.
+    ///
+    /// A separator that is an Object carries the `@@split` method 22.2.6.14
+    /// gives a `RegExp`, which this engine has not built; every other Object
+    /// reaches `ToString`, which names its own gap.
+    ///
+    /// The parts are cut out of the text before anything is allocated, so no
+    /// String of a part is held unrooted while the next one is made.
+    fn string_split(
+        &self,
+        units: &[u16],
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let separator = self.call_argument(call, 0)?;
+        if separator
+            .as_object()
+            .and_then(|reference| heap.get_object(reference))
+            .is_some_and(|object| matches!(object.kind, ObjectKind::RegExp { .. }))
+        {
+            return Err(VMError::Unsupported(
+                "the @@split method of %RegExp.prototype%",
+            ));
+        }
+        let limit = self.call_argument(call, 1)?;
+        let limit = if limit.is_undefined() {
+            u32::MAX
+        } else {
+            crate::value::number_uint32(primitive_number(limit, heap)?)
+        };
+        // 22.1.3.23 answers an empty Array for a limit of zero before it reads
+        // the separator's text at all.
+        if limit == 0 {
+            return self.split_result(&[], heap, realm);
+        }
+        if separator.is_undefined() {
+            return self.split_result(&[units], heap, realm);
+        }
+        let pattern = property_name_units(separator, heap)?;
+        let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+        // An empty separator matches no empty substring, so it answers the code
+        // units themselves, at most `limit` of them.
+        if pattern.is_empty() {
+            let parts: Vec<&[u16]> = units.chunks(1).take(limit).collect();
+            return self.split_result(&parts, heap, realm);
+        }
+        if units.is_empty() {
+            return self.split_result(&[units], heap, realm);
+        }
+        let mut parts: Vec<&[u16]> = Vec::new();
+        let mut start = 0usize;
+        let mut at = 0usize;
+        while at.saturating_add(pattern.len()) <= units.len() {
+            if units.get(at..at.saturating_add(pattern.len())) != Some(pattern.as_slice()) {
+                at = at.saturating_add(1);
+                continue;
+            }
+            parts.push(units.get(start..at).unwrap_or_default());
+            if parts.len() == limit {
+                return self.split_result(&parts, heap, realm);
+            }
+            at = at.saturating_add(pattern.len());
+            start = at;
+        }
+        parts.push(units.get(start..).unwrap_or_default());
+        self.split_result(&parts, heap, realm)
+    }
+
+    /// `CreateArrayFromList` of 7.3.18 for the parts of a split.
+    fn split_result(
+        &self,
+        parts: &[&[u16]],
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let length = u32::try_from(parts.len()).map_err(|_| VMError::PropertyLimit)?;
+        let array = realm.array(heap, length)?;
+        for (index, part) in parts.iter().enumerate() {
+            let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+            let value = self.allocate_string(heap, part)?;
+            heap.set_array_element(array, index, value)?;
+        }
+        Ok(Value::from_object(array))
     }
 
     /// The code units of the `this` value of a `%String.prototype%` method.
