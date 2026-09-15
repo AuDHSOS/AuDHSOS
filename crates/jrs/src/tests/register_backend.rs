@@ -1123,7 +1123,7 @@ fn a_read_that_reaches_an_unbuilt_prototype_is_a_gap() -> Result<(), Error> {
     // computed one reaches the engine and used to answer undefined.
     for source in [
         "let o={a:1};let k='valueOf';typeof o[k]",
-        "let a=[1];let k='concat';typeof a[k]",
+        "let a=[1];let k='flat';typeof a[k]",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
@@ -4299,5 +4299,61 @@ fn the_object_constructor_answers_what_20_1_2_asks_of_it() -> Result<(), Error> 
         "try{Object.defineProperties(o,s)}catch(e){caught=1}",
         "caught+(o.a===undefined)",
     ])?;
+    Ok(())
+}
+
+#[test]
+fn the_array_methods_that_move_elements_answer_what_23_1_3_asks() -> Result<(), Error> {
+    // 23.1.3.31 answers the removed elements and closes the distance the
+    // arguments leave, 23.1.3.7 fills a range, 23.1.3.4 copies one range of
+    // the Array over another, 23.1.3.2 flattens one level, and 23.1.3.39 and
+    // 23.1.3.33 copy instead of moving.
+    for source in [
+        "var a=[1,2,3,4]; a.splice(1,2).join(',')+'|'+a.join(',')",
+        "var a=[1,2,3]; a.splice(1,0,9).length+'|'+a.join(',')",
+        "var a=[1,2,3,4]; a.splice(1,1,7,8).join(',')+'|'+a.join(',')",
+        "var a=[1,2,3]; a.splice(1).join(',')+'|'+a.join(',')",
+        "var a=[1,2,3]; a.splice(-1).join(',')+'|'+a.join(',')",
+        "var a=[1,2,3]; a.splice(0,0).length+'|'+a.join(',')",
+        "[1,2,3].fill(0,1).join(',')",
+        "[1,2,3].fill(7).join(',')",
+        "[1,2,3].fill(7,-2,-1).join(',')",
+        "[1,2,3,4,5].copyWithin(0,3).join(',')",
+        "[1,2,3,4,5].copyWithin(1,3,4).join(',')",
+        "[1,2].concat([3,4],5).join(',')",
+        "[1].concat().length",
+        "[1,2,3].with(1,9).join(',')",
+        "[1,2,3].with(-1,9).join(',')",
+        "[1,2,3].toReversed().join(',')",
+        "[].toReversed().length",
+    ] {
+        differential(source)?;
+    }
+    // 23.1.3.39 step 5 refuses an index outside the Array. The lowering does
+    // not take a `try` that holds an array literal, so this runs as Scripts
+    // of one realm instead.
+    differential_scripts(&[
+        "var a=[1,2];var r=0;",
+        "try{a.with(5,0)}catch(e){r=e instanceof RangeError}",
+        "r",
+    ])?;
+    // 23.1.3.27 and 23.1.3.37 move every element of the Array, and the stack
+    // backend has neither, so these are asserted against the clause instead.
+    for (source, expected) in [
+        ("var a=[1,2,3]; a.shift()", Value::Number(1.0)),
+        ("var a=[1,2,3]; a.shift(); a.length", Value::Number(2.0)),
+        ("var a=[]; a.shift(); a.length", Value::Number(0.0)),
+        ("var a=[1]; a.unshift(9,8)", Value::Number(3.0)),
+        ("var a=[1]; a.unshift(); a.length", Value::Number(1.0)),
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        assert_eq!(
+            Runtime::with_backend(Limits::default(), Backend::Engine)
+                .run(&program, &mut SilentHost)?,
+            expected,
+            "{source}"
+        );
+    }
     Ok(())
 }

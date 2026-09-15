@@ -379,6 +379,22 @@ pub enum Intrinsic {
     ObjectIs,
     /// `Object.hasOwn` (20.1.2.13).
     ObjectHasOwn,
+    /// `Array.prototype.shift` (23.1.3.27).
+    ArrayPrototypeShift,
+    /// `Array.prototype.unshift` (23.1.3.37).
+    ArrayPrototypeUnshift,
+    /// `Array.prototype.splice` (23.1.3.31).
+    ArrayPrototypeSplice,
+    /// `Array.prototype.fill` (23.1.3.7).
+    ArrayPrototypeFill,
+    /// `Array.prototype.copyWithin` (23.1.3.4).
+    ArrayPrototypeCopyWithin,
+    /// `Array.prototype.concat` (23.1.3.2).
+    ArrayPrototypeConcat,
+    /// `Array.prototype.with` (23.1.3.39).
+    ArrayPrototypeWith,
+    /// `Array.prototype.toReversed` (23.1.3.33).
+    ArrayPrototypeToReversed,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -408,7 +424,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 58] = [
+    pub const ALL: [Self; 66] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -467,6 +483,14 @@ impl Intrinsic {
         Self::ObjectKeys,
         Self::ObjectIs,
         Self::ObjectHasOwn,
+        Self::ArrayPrototypeShift,
+        Self::ArrayPrototypeUnshift,
+        Self::ArrayPrototypeSplice,
+        Self::ArrayPrototypeFill,
+        Self::ArrayPrototypeCopyWithin,
+        Self::ArrayPrototypeConcat,
+        Self::ArrayPrototypeWith,
+        Self::ArrayPrototypeToReversed,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -505,7 +529,15 @@ impl Intrinsic {
             | Self::ArrayPrototypePush
             | Self::ArrayPrototypeReverse
             | Self::ArrayPrototypeSlice
-            | Self::ArrayPrototypeToString => IntrinsicHolder::ArrayPrototype,
+            | Self::ArrayPrototypeToString
+            | Self::ArrayPrototypeShift
+            | Self::ArrayPrototypeUnshift
+            | Self::ArrayPrototypeSplice
+            | Self::ArrayPrototypeFill
+            | Self::ArrayPrototypeCopyWithin
+            | Self::ArrayPrototypeConcat
+            | Self::ArrayPrototypeWith
+            | Self::ArrayPrototypeToReversed => IntrinsicHolder::ArrayPrototype,
             Self::ArrayIteratorPrototypeNext => IntrinsicHolder::ArrayIteratorPrototype,
             Self::ArrayConstructor | Self::ObjectConstructor | Self::FunctionConstructor => {
                 IntrinsicHolder::Global
@@ -597,6 +629,14 @@ impl Intrinsic {
             Self::ObjectKeys => 55,
             Self::ObjectIs => 56,
             Self::ObjectHasOwn => 57,
+            Self::ArrayPrototypeShift => 58,
+            Self::ArrayPrototypeUnshift => 59,
+            Self::ArrayPrototypeSplice => 60,
+            Self::ArrayPrototypeFill => 61,
+            Self::ArrayPrototypeCopyWithin => 62,
+            Self::ArrayPrototypeConcat => 63,
+            Self::ArrayPrototypeWith => 64,
+            Self::ArrayPrototypeToReversed => 65,
         }
     }
 
@@ -661,6 +701,14 @@ impl Intrinsic {
             Self::ObjectKeys => 55,
             Self::ObjectIs => 56,
             Self::ObjectHasOwn => 57,
+            Self::ArrayPrototypeShift => 58,
+            Self::ArrayPrototypeUnshift => 59,
+            Self::ArrayPrototypeSplice => 60,
+            Self::ArrayPrototypeFill => 61,
+            Self::ArrayPrototypeCopyWithin => 62,
+            Self::ArrayPrototypeConcat => 63,
+            Self::ArrayPrototypeWith => 64,
+            Self::ArrayPrototypeToReversed => 65,
         }
     }
 
@@ -726,6 +774,14 @@ impl Intrinsic {
             55 => Some(Self::ObjectKeys),
             56 => Some(Self::ObjectIs),
             57 => Some(Self::ObjectHasOwn),
+            58 => Some(Self::ArrayPrototypeShift),
+            59 => Some(Self::ArrayPrototypeUnshift),
+            60 => Some(Self::ArrayPrototypeSplice),
+            61 => Some(Self::ArrayPrototypeFill),
+            62 => Some(Self::ArrayPrototypeCopyWithin),
+            63 => Some(Self::ArrayPrototypeConcat),
+            64 => Some(Self::ArrayPrototypeWith),
+            65 => Some(Self::ArrayPrototypeToReversed),
             _ => None,
         }
     }
@@ -758,6 +814,13 @@ impl Intrinsic {
             Self::ObjectKeys => "keys",
             Self::ObjectIs => "is",
             Self::ObjectHasOwn => "hasOwn",
+            Self::ArrayPrototypeShift => "shift",
+            Self::ArrayPrototypeUnshift => "unshift",
+            Self::ArrayPrototypeSplice => "splice",
+            Self::ArrayPrototypeFill => "fill",
+            Self::ArrayPrototypeCopyWithin => "copyWithin",
+            Self::ArrayPrototypeWith => "with",
+            Self::ArrayPrototypeToReversed => "toReversed",
             Self::ObjectDefineProperty => "defineProperty",
             Self::ObjectGetOwnPropertyDescriptor => "getOwnPropertyDescriptor",
             Self::ObjectGetOwnPropertyNames => "getOwnPropertyNames",
@@ -766,7 +829,7 @@ impl Intrinsic {
             Self::StringPrototypeCharCodeAt => "charCodeAt",
             Self::StringPrototypeIndexOf | Self::ArrayPrototypeIndexOf => "indexOf",
             Self::StringPrototypeAt | Self::ArrayPrototypeAt => "at",
-            Self::StringPrototypeConcat => "concat",
+            Self::StringPrototypeConcat | Self::ArrayPrototypeConcat => "concat",
             Self::StringPrototypeEndsWith => "endsWith",
             Self::StringPrototypeIncludes | Self::ArrayPrototypeIncludes => "includes",
             Self::StringPrototypeLastIndexOf | Self::ArrayPrototypeLastIndexOf => "lastIndexOf",
@@ -828,6 +891,14 @@ impl Intrinsic {
             | Self::ObjectGetPrototypeOf
             | Self::ObjectKeys
             | Self::ObjectIs
+            | Self::ArrayPrototypeShift
+            | Self::ArrayPrototypeUnshift
+            | Self::ArrayPrototypeSplice
+            | Self::ArrayPrototypeFill
+            | Self::ArrayPrototypeCopyWithin
+            | Self::ArrayPrototypeConcat
+            | Self::ArrayPrototypeWith
+            | Self::ArrayPrototypeToReversed
             | Self::ObjectGetOwnPropertyNames => false,
             // 20.1.2.4, 20.1.2.8 and 20.1.2.13 apply ToPropertyKey to the
             // second argument.
@@ -860,7 +931,9 @@ impl Intrinsic {
             | Self::ArrayIteratorPrototypeNext
             | Self::ArrayPrototypePop
             | Self::ArrayPrototypeReverse
-            | Self::ArrayPrototypeToString => 0,
+            | Self::ArrayPrototypeToString
+            | Self::ArrayPrototypeShift
+            | Self::ArrayPrototypeToReversed => 0,
             Self::ObjectPrototypeHasOwnProperty
             | Self::ObjectPrototypeIsPrototypeOf
             | Self::ObjectPrototypePropertyIsEnumerable
@@ -899,6 +972,9 @@ impl Intrinsic {
             | Self::StringConstructor
             | Self::ObjectGetPrototypeOf
             | Self::ObjectKeys
+            | Self::ArrayPrototypeUnshift
+            | Self::ArrayPrototypeFill
+            | Self::ArrayPrototypeConcat
             | Self::ObjectGetOwnPropertyNames => 1,
             Self::ObjectDefineProperty => 3,
             Self::MathPow
@@ -909,7 +985,10 @@ impl Intrinsic {
             | Self::ObjectHasOwn
             | Self::StringPrototypeSlice
             | Self::StringPrototypeSubstring
-            | Self::ArrayPrototypeSlice => 2,
+            | Self::ArrayPrototypeSlice
+            | Self::ArrayPrototypeSplice
+            | Self::ArrayPrototypeCopyWithin
+            | Self::ArrayPrototypeWith => 2,
         }
     }
 }

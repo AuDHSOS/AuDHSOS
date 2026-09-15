@@ -1079,24 +1079,13 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        let argument = |vm: &Self, index: u16| -> Result<Value, VMError> {
-            if index >= call.arg_count {
-                return Ok(VALUE_UNDEFINED);
-            }
-            let slot = vm
-                .fp
-                .checked_add(call.arg_start.0 as usize)
-                .and_then(|start| start.checked_add(index as usize))
-                .ok_or(VMError::InvalidRegister)?;
-            vm.stack.get(slot).copied().ok_or(VMError::InvalidRegister)
-        };
         match intrinsic {
             Intrinsic::ObjectPrototypeIsPrototypeOf => {
-                Self::is_prototype_of(argument(self, 0)?, call.receiver, heap, realm)
+                Self::is_prototype_of(self.call_argument(&call, 0)?, call.receiver, heap, realm)
             }
             Intrinsic::ObjectPrototypeHasOwnProperty
             | Intrinsic::ObjectPrototypePropertyIsEnumerable => {
-                Self::own_property_test(intrinsic, argument(self, 0)?, call, heap, realm)
+                Self::own_property_test(intrinsic, self.call_argument(&call, 0)?, call, heap, realm)
             }
             Intrinsic::ObjectPrototypeToString => self.object_to_string(call.receiver, heap, realm),
             Intrinsic::StringPrototypeCharAt
@@ -1134,17 +1123,32 @@ impl RegisterVM {
             | Intrinsic::ArrayPrototypeToString => {
                 self.call_array_intrinsic(intrinsic, call, heap, realm)
             }
+            Intrinsic::ArrayPrototypeShift
+            | Intrinsic::ArrayPrototypeUnshift
+            | Intrinsic::ArrayPrototypeSplice
+            | Intrinsic::ArrayPrototypeFill
+            | Intrinsic::ArrayPrototypeCopyWithin
+            | Intrinsic::ArrayPrototypeConcat
+            | Intrinsic::ArrayPrototypeWith
+            | Intrinsic::ArrayPrototypeToReversed => {
+                self.call_array_edit_intrinsic(intrinsic, call, heap, realm)
+            }
             Intrinsic::ArrayIsArray
             | Intrinsic::FunctionConstructor
             | Intrinsic::FunctionPrototypeCall
-            | Intrinsic::MathPow => {
-                Self::call_plain_intrinsic(intrinsic, argument(self, 0)?, argument(self, 1)?, heap)
-            }
+            | Intrinsic::MathPow => Self::call_plain_intrinsic(
+                intrinsic,
+                self.call_argument(&call, 0)?,
+                self.call_argument(&call, 1)?,
+                heap,
+            ),
             Intrinsic::FunctionPrototypeBind => self.bind_function(call, heap, realm),
             Intrinsic::ArrayConstructor => self.construct_array(call, heap, realm),
-            Intrinsic::StringConstructor => {
-                Self::call_string_constructor(call.construct.is_some(), argument(self, 0)?, heap)
-            }
+            Intrinsic::StringConstructor => Self::call_string_constructor(
+                call.construct.is_some(),
+                self.call_argument(&call, 0)?,
+                heap,
+            ),
             Intrinsic::ErrorConstructor
             | Intrinsic::EvalErrorConstructor
             | Intrinsic::RangeErrorConstructor
@@ -1163,13 +1167,30 @@ impl RegisterVM {
             | Intrinsic::ObjectHasOwn
             | Intrinsic::ObjectGetOwnPropertyNames => Self::call_object_intrinsic(
                 intrinsic,
-                argument(self, 0)?,
-                argument(self, 1)?,
-                argument(self, 2)?,
+                self.call_argument(&call, 0)?,
+                self.call_argument(&call, 1)?,
+                self.call_argument(&call, 2)?,
                 heap,
                 realm,
             ),
         }
+    }
+
+    /// The argument at this position, or undefined when the call passed
+    /// fewer, which 10.2.11 binds for a parameter the caller left out.
+    fn call_argument(&self, call: &Call, index: u16) -> Result<Value, VMError> {
+        if index >= call.arg_count {
+            return Ok(VALUE_UNDEFINED);
+        }
+        let slot = self
+            .fp
+            .checked_add(call.arg_start.0 as usize)
+            .and_then(|start| start.checked_add(index as usize))
+            .ok_or(VMError::InvalidRegister)?;
+        self.stack
+            .get(slot)
+            .copied()
+            .ok_or(VMError::InvalidRegister)
     }
 
     /// `Function.prototype.bind` of 20.2.3.2: the bound function exotic object
@@ -1754,19 +1775,8 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        let argument = |vm: &Self, index: u16| -> Result<Value, VMError> {
-            if index >= call.arg_count {
-                return Ok(VALUE_UNDEFINED);
-            }
-            let slot = vm
-                .fp
-                .checked_add(call.arg_start.0 as usize)
-                .and_then(|start| start.checked_add(index as usize))
-                .ok_or(VMError::InvalidRegister)?;
-            vm.stack.get(slot).copied().ok_or(VMError::InvalidRegister)
-        };
         if call.arg_count == 1 {
-            let length = argument(self, 0)?;
+            let length = self.call_argument(&call, 0)?;
             let Some(number) = length.as_f64() else {
                 let array = realm.array(heap, 1)?;
                 heap.set_array_element(array, 0, length)?;
@@ -1789,7 +1799,7 @@ impl RegisterVM {
         let count = u32::from(call.arg_count);
         let array = realm.array(heap, count)?;
         for index in 0..call.arg_count {
-            let value = argument(self, index)?;
+            let value = self.call_argument(&call, index)?;
             heap.set_array_element(array, u32::from(index), value)?;
         }
         Ok(Value::from_object(array))
@@ -1803,6 +1813,313 @@ impl RegisterVM {
     /// skip and `includes` reads as undefined, as it reads the absent index
     /// the bounded scan already visits.
     ///
+    /// The methods of 23.1.3 that move elements of the receiver, or copy it
+    /// into an Array of their own.
+    ///
+    /// None of them calls back into the Script, so each one runs to its end
+    /// here. Every one reads through `element_at`, which answers an index the
+    /// Elements store holds and the Prototype Chain for the rest, so a sparse
+    /// Array keeps its holes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] for a receiver that is not an Object and
+    /// for the `RangeError` 23.1.3.39 raises, and a heap error when an index
+    /// name cannot be interned.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function keeps each method beside the clause it implements"
+    )]
+    fn call_array_edit_intrinsic(
+        &self,
+        intrinsic: Intrinsic,
+        call: Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let object = Self::coerce_object(call.receiver, heap, realm)?;
+        let length = Self::array_like_length(heap, object)?;
+        // The range 7.1.25 makes of a relative index, clamped into the Array.
+        let bounded = |value: Value, fallback: i64, heap: &mut GenerationalHeap| {
+            if value.is_undefined() {
+                return Ok(fallback);
+            }
+            Ok::<i64, VMError>(
+                absolute_index(integer_argument(value, heap)?, length).clamp(0, length),
+            )
+        };
+        match intrinsic {
+            // 23.1.3.27: the first element leaves, the rest move down by one,
+            // and the Array is one shorter.
+            Intrinsic::ArrayPrototypeShift => {
+                if length <= 0 {
+                    Self::set_array_like_length(object, 0, heap)?;
+                    return Ok(VALUE_UNDEFINED);
+                }
+                let first = Self::element_at(heap, object, 0)?.unwrap_or(VALUE_UNDEFINED);
+                let elements = Self::array_elements(heap, object)?;
+                for index in 1..Self::scan_range(0, length).end {
+                    let moved = Self::element_at(heap, object, index)?;
+                    Self::place_element(heap, object, elements, index.saturating_sub(1), moved)?;
+                }
+                let last = u32::try_from(length.saturating_sub(1)).unwrap_or(u32::MAX);
+                heap.delete_element(elements, last)?;
+                Self::set_array_like_length(object, last, heap)?;
+                Ok(first)
+            }
+            // 23.1.3.37: the arguments go in front, so every element moves up
+            // by as many as there are.
+            Intrinsic::ArrayPrototypeUnshift => {
+                let count = i64::from(call.arg_count);
+                if count > 0 {
+                    let elements = Self::array_elements(heap, object)?;
+                    for index in Self::scan_range(0, length).rev() {
+                        let moved = Self::element_at(heap, object, index)?;
+                        let target = u32::try_from(i64::from(index).saturating_add(count))
+                            .map_err(|_| VMError::PropertyLimit)?;
+                        Self::place_element(heap, object, elements, target, moved)?;
+                    }
+                    for offset in 0..call.arg_count {
+                        heap.set_array_element(
+                            object,
+                            u32::from(offset),
+                            self.call_argument(&call, offset)?,
+                        )?;
+                    }
+                }
+                Ok(index_value(length.saturating_add(count)))
+            }
+            // 23.1.3.31: the removed elements answer as an Array of their own,
+            // and the tail closes the distance the arguments leave.
+            Intrinsic::ArrayPrototypeSplice => {
+                let start = bounded(self.call_argument(&call, 0)?, 0, heap)?;
+                let removed = if call.arg_count == 0 {
+                    0
+                } else if call.arg_count == 1 {
+                    length.saturating_sub(start)
+                } else {
+                    integer_argument(self.call_argument(&call, 1)?, heap)?
+                        .clamp(0, length.saturating_sub(start))
+                };
+                let inserted = i64::from(call.arg_count.saturating_sub(2));
+                let result = realm.array(
+                    heap,
+                    u32::try_from(removed).map_err(|_| VMError::PropertyLimit)?,
+                )?;
+                let mut target = 0u32;
+                for index in Self::scan_range(start, start.saturating_add(removed)) {
+                    if let Some(value) = Self::element_at(heap, object, index)? {
+                        heap.set_array_element(result, target, value)?;
+                    }
+                    target = target.saturating_add(1);
+                }
+                Self::splice_tail(object, start, removed, inserted, length, heap)?;
+                for offset in 2..call.arg_count {
+                    let index = start.saturating_add(i64::from(offset.saturating_sub(2)));
+                    let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+                    heap.set_array_element(object, index, self.call_argument(&call, offset)?)?;
+                }
+                let final_length = length.saturating_sub(removed).saturating_add(inserted);
+                Self::set_array_like_length(
+                    object,
+                    u32::try_from(final_length).map_err(|_| VMError::PropertyLimit)?,
+                    heap,
+                )?;
+                Ok(Value::from_object(result))
+            }
+            // 23.1.3.7: one value fills the range, and answers the receiver.
+            Intrinsic::ArrayPrototypeFill => {
+                let value = self.call_argument(&call, 0)?;
+                let start = bounded(self.call_argument(&call, 1)?, 0, heap)?;
+                let end = bounded(self.call_argument(&call, 2)?, length, heap)?;
+                for index in Self::scan_range(start, end) {
+                    heap.set_array_element(object, index, value)?;
+                }
+                Ok(call.receiver)
+            }
+            // 23.1.3.4: a range of the Array is copied over another range of
+            // it, and the length does not change.
+            Intrinsic::ArrayPrototypeCopyWithin => {
+                let target = bounded(self.call_argument(&call, 0)?, 0, heap)?;
+                let start = bounded(self.call_argument(&call, 1)?, 0, heap)?;
+                let end = bounded(self.call_argument(&call, 2)?, length, heap)?;
+                let count = end
+                    .saturating_sub(start)
+                    .min(length.saturating_sub(target))
+                    .max(0);
+                let elements = Self::array_elements(heap, object)?;
+                // The ranges may overlap, so the copy reads every element
+                // before it writes any of them.
+                let mut taken = Vec::new();
+                for index in Self::scan_range(start, start.saturating_add(count)) {
+                    taken.push(Self::element_at(heap, object, index)?);
+                }
+                for (offset, value) in taken.into_iter().enumerate() {
+                    let index = target.saturating_add(i64::try_from(offset).unwrap_or(i64::MAX));
+                    let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+                    Self::place_element(heap, object, elements, index, value)?;
+                }
+                Ok(call.receiver)
+            }
+            // 23.1.3.2: the receiver and then each argument, an Array of them
+            // one level flat. 23.1.3.2.1 asks @@isConcatSpreadable first, and
+            // this Realm builds no Symbol, so IsArray decides alone.
+            Intrinsic::ArrayPrototypeConcat => {
+                let mut values = Vec::new();
+                Self::spread_into(&mut values, call.receiver, object, length, heap)?;
+                for offset in 0..call.arg_count {
+                    let item = self.call_argument(&call, offset)?;
+                    match item.as_object().filter(|_| Self::is_array(item, heap)) {
+                        Some(part) => {
+                            let part_length = Self::array_like_length(heap, part)?;
+                            Self::spread_into(&mut values, item, part, part_length, heap)?;
+                        }
+                        None => values.push(Some(item)),
+                    }
+                }
+                Self::array_from_holes(values, heap, realm)
+            }
+            // 23.1.3.39: a copy with one index replaced, which 23.1.3.39 step
+            // 5 refuses for an index outside the Array.
+            Intrinsic::ArrayPrototypeWith => {
+                let relative = integer_argument(self.call_argument(&call, 0)?, heap)?;
+                let index = absolute_index(relative, length);
+                if index < 0 || index >= length {
+                    return Err(raise(
+                        heap,
+                        realm,
+                        super::realm::NativeErrorKind::RangeError,
+                        "index is outside the Array",
+                    ));
+                }
+                let replacement = self.call_argument(&call, 1)?;
+                let mut values = Vec::new();
+                for position in Self::scan_range(0, length) {
+                    let value = if i64::from(position) == index {
+                        Some(replacement)
+                    } else {
+                        // 23.1.3.39 reads every index, so a hole of the source
+                        // is undefined in the copy rather than a hole.
+                        Some(Self::element_at(heap, object, position)?.unwrap_or(VALUE_UNDEFINED))
+                    };
+                    values.push(value);
+                }
+                Self::array_from_holes(values, heap, realm)
+            }
+            // 23.1.3.33: a copy in the other order, which reads every index.
+            _ => {
+                let mut values = Vec::new();
+                for position in Self::scan_range(0, length).rev() {
+                    values.push(Some(
+                        Self::element_at(heap, object, position)?.unwrap_or(VALUE_UNDEFINED),
+                    ));
+                }
+                Self::array_from_holes(values, heap, realm)
+            }
+        }
+    }
+
+    /// `Set(O, "length", 𝔽(length), true)` of 7.3.4.
+    ///
+    /// An Array keeps its length where 10.4.2 puts it; any other array-like
+    /// keeps it as an ordinary property, which is where 23.1.3 writes it.
+    fn set_array_like_length(
+        object: ObjectRef,
+        length: u32,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        if heap.array_length(object).is_some() {
+            heap.set_array_length(object, length)?;
+            return Ok(());
+        }
+        let name = PropertyKey::String(heap.strings.intern_units(&LENGTH_NAME)?);
+        let length = i32::try_from(length).map_err(|_| VMError::PropertyLimit)?;
+        heap.define_own_named(
+            object,
+            name,
+            Value::from_smi(length),
+            PropertyFlags::ordinary_data(),
+        )?;
+        Ok(())
+    }
+
+    /// Moves the tail of 23.1.3.31 over the elements it removed, in the
+    /// direction that does not overwrite what it has still to read.
+    fn splice_tail(
+        object: ObjectRef,
+        start: i64,
+        removed: i64,
+        inserted: i64,
+        length: i64,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        if inserted == removed {
+            return Ok(());
+        }
+        let elements = Self::array_elements(heap, object)?;
+        let shift = |index: u32, heap: &mut GenerationalHeap| -> Result<(), VMError> {
+            let from = i64::from(index);
+            let moved = Self::element_at(heap, object, index)?;
+            let to = from.saturating_sub(removed).saturating_add(inserted);
+            let to = u32::try_from(to).map_err(|_| VMError::PropertyLimit)?;
+            Self::place_element(heap, object, elements, to, moved)
+        };
+        let tail = Self::scan_range(start.saturating_add(removed), length);
+        if inserted < removed {
+            for index in tail {
+                shift(index, heap)?;
+            }
+            // The Array is shorter, so the indices past its new end are gone.
+            for index in Self::scan_range(
+                length.saturating_sub(removed).saturating_add(inserted),
+                length,
+            ) {
+                heap.delete_element(elements, index)?;
+            }
+        } else {
+            for index in tail.rev() {
+                shift(index, heap)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Appends every index of an array-like, a hole as a hole.
+    fn spread_into(
+        values: &mut Vec<Option<Value>>,
+        source: Value,
+        object: ObjectRef,
+        length: i64,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        if source.as_object().is_none() {
+            values.push(Some(source));
+            return Ok(());
+        }
+        for index in Self::scan_range(0, length) {
+            values.push(Self::element_at(heap, object, index)?);
+        }
+        Ok(())
+    }
+
+    /// An Array of the Realm holding these values, where a `None` stays the
+    /// hole 10.4.2 lets an Array have.
+    fn array_from_holes(
+        values: Vec<Option<Value>>,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let count = u32::try_from(values.len()).map_err(|_| VMError::PropertyLimit)?;
+        let array = realm.array(heap, count)?;
+        for (index, value) in values.into_iter().enumerate() {
+            let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+            if let Some(value) = value {
+                heap.set_array_element(array, index, value)?;
+            }
+        }
+        Ok(Value::from_object(array))
+    }
+
     /// # Errors
     ///
     /// Returns [`VMError::Thrown`] for a receiver that is not an Object, and a
@@ -1818,20 +2135,9 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        let argument = |vm: &Self, index: u16| -> Result<Value, VMError> {
-            if index >= call.arg_count {
-                return Ok(VALUE_UNDEFINED);
-            }
-            let slot = vm
-                .fp
-                .checked_add(call.arg_start.0 as usize)
-                .and_then(|start| start.checked_add(index as usize))
-                .ok_or(VMError::InvalidRegister)?;
-            vm.stack.get(slot).copied().ok_or(VMError::InvalidRegister)
-        };
         let object = Self::coerce_object(call.receiver, heap, realm)?;
         let length = Self::array_like_length(heap, object)?;
-        let search = argument(self, 0)?;
+        let search = self.call_argument(&call, 0)?;
         match intrinsic {
             // 23.1.3.1: an index outside the Array is undefined.
             Intrinsic::ArrayPrototypeAt => {
@@ -1846,7 +2152,7 @@ impl RegisterVM {
             }
             // 23.1.3.16: SameValueZero, and a missing index reads as undefined.
             Intrinsic::ArrayPrototypeIncludes => {
-                let from = integer_argument(argument(self, 1)?, heap)?;
+                let from = integer_argument(self.call_argument(&call, 1)?, heap)?;
                 let start = absolute_index(from, length).clamp(0, length);
                 for index in Self::scan_range(start, length) {
                     let element = Self::element_at(heap, object, index)?.unwrap_or(VALUE_UNDEFINED);
@@ -1858,7 +2164,7 @@ impl RegisterVM {
             }
             // 23.1.3.17: IsStrictlyEqual, and a missing index is skipped.
             Intrinsic::ArrayPrototypeIndexOf => {
-                let from = integer_argument(argument(self, 1)?, heap)?;
+                let from = integer_argument(self.call_argument(&call, 1)?, heap)?;
                 let start = absolute_index(from, length).clamp(0, length);
                 for index in Self::scan_range(start, length) {
                     let Some(element) = Self::element_at(heap, object, index)? else {
@@ -1943,7 +2249,7 @@ impl RegisterVM {
                 let mut next = length;
                 for offset in 0..call.arg_count {
                     let index = u32::try_from(next).map_err(|_| VMError::PropertyLimit)?;
-                    heap.set_array_element(object, index, argument(self, offset)?)?;
+                    heap.set_array_element(object, index, self.call_argument(&call, offset)?)?;
                     next = next.saturating_add(1);
                 }
                 Ok(index_value(next))
@@ -1983,7 +2289,7 @@ impl RegisterVM {
             Intrinsic::ArrayPrototypeSlice => {
                 let start =
                     absolute_index(integer_argument(search, heap)?, length).clamp(0, length);
-                let last = argument(self, 1)?;
+                let last = self.call_argument(&call, 1)?;
                 let end = if last.is_undefined() {
                     length
                 } else {
@@ -2007,8 +2313,11 @@ impl RegisterVM {
             // when no second argument is present.
             _ => {
                 let from = if call.arg_count > 1 {
-                    absolute_index(integer_argument(argument(self, 1)?, heap)?, length)
-                        .min(length.saturating_sub(1))
+                    absolute_index(
+                        integer_argument(self.call_argument(&call, 1)?, heap)?,
+                        length,
+                    )
+                    .min(length.saturating_sub(1))
                 } else {
                     length.saturating_sub(1)
                 };
@@ -2371,16 +2680,21 @@ impl RegisterVM {
 
     /// The Elements store of an Array receiver.
     ///
-    /// The methods of 23.1.3 that move elements reach the engine only through
-    /// a call whose receiver the lowering typed as an Array, and an Array
-    /// always carries a store.
+    /// A receiver `Function.prototype.call` brought here need not be one, so
+    /// the absence is named where it is found.
     fn array_elements(
         heap: &GenerationalHeap,
         object: ObjectRef,
     ) -> Result<super::elements::ElementsRef, VMError> {
         heap.get_object(object)
             .and_then(|object| object.elements)
-            .ok_or(VMError::TypeError)
+            // 23.1.3 is generic over an array-like, which it reads and writes
+            // through 7.3.2 and 7.3.4. This engine moves elements in the store
+            // 10.4.2 gives an Array, and a receiver without one has none to
+            // move, which it names rather than reporting a broken frame.
+            .ok_or(VMError::Unsupported(
+                "an Array method that moves elements, on a receiver that is not an Array",
+            ))
     }
 
     /// `Set(O, ! ToString(𝔽(index)), value, true)` of 7.3.4, or
@@ -2605,22 +2919,11 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        let argument = |vm: &Self, index: u16| -> Result<Value, VMError> {
-            if index >= call.arg_count {
-                return Ok(VALUE_UNDEFINED);
-            }
-            let slot = vm
-                .fp
-                .checked_add(call.arg_start.0 as usize)
-                .and_then(|start| start.checked_add(index as usize))
-                .ok_or(VMError::InvalidRegister)?;
-            vm.stack.get(slot).copied().ok_or(VMError::InvalidRegister)
-        };
         let units = Self::receiver_units(call.receiver, heap, realm)?;
         match intrinsic {
             // 22.1.3.1: an index outside the String is the empty String.
             Intrinsic::StringPrototypeCharAt => {
-                let position = integer_argument(argument(self, 0)?, heap)?;
+                let position = integer_argument(self.call_argument(&call, 0)?, heap)?;
                 let unit = usize::try_from(position)
                     .ok()
                     .and_then(|position| units.get(position).copied());
@@ -2631,7 +2934,7 @@ impl RegisterVM {
             }
             // 22.1.3.2: an index outside the String is NaN.
             Intrinsic::StringPrototypeCharCodeAt => {
-                let position = integer_argument(argument(self, 0)?, heap)?;
+                let position = integer_argument(self.call_argument(&call, 0)?, heap)?;
                 Ok(usize::try_from(position)
                     .ok()
                     .and_then(|position| units.get(position).copied())
@@ -2640,8 +2943,8 @@ impl RegisterVM {
             // 22.1.3.9: the search starts at the clamped position and -1 says
             // the String does not occur.
             Intrinsic::StringPrototypeIndexOf => {
-                let search = property_name_units(argument(self, 0)?, heap)?;
-                let start = integer_argument(argument(self, 1)?, heap)?
+                let search = property_name_units(self.call_argument(&call, 0)?, heap)?;
+                let start = integer_argument(self.call_argument(&call, 1)?, heap)?
                     .clamp(0, i64::try_from(units.len()).unwrap_or(i64::MAX));
                 let start = usize::try_from(start).unwrap_or(0);
                 let found = (start..=units.len().saturating_sub(search.len()))
@@ -2657,7 +2960,7 @@ impl RegisterVM {
             // 22.1.3.1: a negative index counts from the end, and an index
             // outside the String is undefined.
             Intrinsic::StringPrototypeAt => {
-                let relative = integer_argument(argument(self, 0)?, heap)?;
+                let relative = integer_argument(self.call_argument(&call, 0)?, heap)?;
                 let length = i64::try_from(units.len()).unwrap_or(i64::MAX);
                 let index = if relative < 0 {
                     length.saturating_add(relative)
@@ -2676,14 +2979,17 @@ impl RegisterVM {
             Intrinsic::StringPrototypeConcat => {
                 let mut result = units;
                 for index in 0..call.arg_count {
-                    result.extend(property_name_units(argument(self, index)?, heap)?);
+                    result.extend(property_name_units(
+                        self.call_argument(&call, index)?,
+                        heap,
+                    )?);
                 }
                 self.allocate_string(heap, &result)
             }
             // 22.1.3.7: the search ends at the clamped position.
             Intrinsic::StringPrototypeEndsWith => {
-                let search = property_name_units(argument(self, 0)?, heap)?;
-                let end = match argument(self, 1)? {
+                let search = property_name_units(self.call_argument(&call, 0)?, heap)?;
+                let end = match self.call_argument(&call, 1)? {
                     value if value.is_undefined() => units.len(),
                     value => clamped_index(integer_argument(value, heap)?, units.len()),
                 };
@@ -2694,16 +3000,19 @@ impl RegisterVM {
             }
             // 22.1.3.8: the search starts at the clamped position.
             Intrinsic::StringPrototypeIncludes => {
-                let search = property_name_units(argument(self, 0)?, heap)?;
-                let start = clamped_index(integer_argument(argument(self, 1)?, heap)?, units.len());
+                let search = property_name_units(self.call_argument(&call, 0)?, heap)?;
+                let start = clamped_index(
+                    integer_argument(self.call_argument(&call, 1)?, heap)?,
+                    units.len(),
+                );
                 Ok(Value::from_bool(
                     find_units(&units, &search, start).is_some(),
                 ))
             }
             // 22.1.3.10: the last occurrence at or before the clamped position.
             Intrinsic::StringPrototypeLastIndexOf => {
-                let search = property_name_units(argument(self, 0)?, heap)?;
-                let position = argument(self, 1)?;
+                let search = property_name_units(self.call_argument(&call, 0)?, heap)?;
+                let position = self.call_argument(&call, 1)?;
                 let last = units.len().saturating_sub(search.len());
                 let end = if position.is_undefined() || primitive_number(position, heap)?.is_nan() {
                     last
@@ -2725,12 +3034,12 @@ impl RegisterVM {
             Intrinsic::StringPrototypeRepeat => {
                 // 22.1.3.17 steps 3 and 4: a negative or infinite count is a
                 // RangeError, before the String's own length is looked at.
-                if primitive_number(argument(self, 0)?, heap)? == f64::INFINITY {
+                if primitive_number(self.call_argument(&call, 0)?, heap)? == f64::INFINITY {
                     return Err(range_error(heap, realm, "repeat count is out of range"));
                 }
                 // ToIntegerOrInfinity truncates toward zero, so -0.5 is 0 and
                 // only a count that is negative after that is out of range.
-                let count = integer_argument(argument(self, 0)?, heap)?;
+                let count = integer_argument(self.call_argument(&call, 0)?, heap)?;
                 if count < 0 {
                     return Err(range_error(heap, realm, "repeat count is out of range"));
                 }
@@ -2751,9 +3060,11 @@ impl RegisterVM {
             // 22.1.3.22: both ends count from the end when negative, and an
             // inverted range is the empty String.
             Intrinsic::StringPrototypeSlice => {
-                let start =
-                    relative_index(integer_argument(argument(self, 0)?, heap)?, units.len());
-                let end = match argument(self, 1)? {
+                let start = relative_index(
+                    integer_argument(self.call_argument(&call, 0)?, heap)?,
+                    units.len(),
+                );
+                let end = match self.call_argument(&call, 1)? {
                     value if value.is_undefined() => units.len(),
                     value => relative_index(integer_argument(value, heap)?, units.len()),
                 };
@@ -2762,8 +3073,11 @@ impl RegisterVM {
             }
             // 22.1.3.24: the search starts at the clamped position.
             Intrinsic::StringPrototypeStartsWith => {
-                let search = property_name_units(argument(self, 0)?, heap)?;
-                let start = clamped_index(integer_argument(argument(self, 1)?, heap)?, units.len());
+                let search = property_name_units(self.call_argument(&call, 0)?, heap)?;
+                let start = clamped_index(
+                    integer_argument(self.call_argument(&call, 1)?, heap)?,
+                    units.len(),
+                );
                 let end = start.saturating_add(search.len());
                 Ok(Value::from_bool(
                     units.get(start..end) == Some(search.as_slice()),
@@ -2771,8 +3085,11 @@ impl RegisterVM {
             }
             // 22.1.3.25: both ends are clamped and then ordered.
             Intrinsic::StringPrototypeSubstring => {
-                let first = clamped_index(integer_argument(argument(self, 0)?, heap)?, units.len());
-                let second = match argument(self, 1)? {
+                let first = clamped_index(
+                    integer_argument(self.call_argument(&call, 0)?, heap)?,
+                    units.len(),
+                );
+                let second = match self.call_argument(&call, 1)? {
                     value if value.is_undefined() => units.len(),
                     value => clamped_index(integer_argument(value, heap)?, units.len()),
                 };
@@ -2784,7 +3101,7 @@ impl RegisterVM {
             // 22.1.3.4: the code point at an index, which pairs a surrogate
             // with the one after it.
             Intrinsic::StringPrototypeCodePointAt => {
-                let position = integer_argument(argument(self, 0)?, heap)?;
+                let position = integer_argument(self.call_argument(&call, 0)?, heap)?;
                 let Ok(position) = usize::try_from(position) else {
                     return Ok(VALUE_UNDEFINED);
                 };
@@ -2796,9 +3113,9 @@ impl RegisterVM {
             // 22.1.3.15 and 22.1.3.16: the filler is repeated and cut to the
             // width the String is short of, and an empty filler pads nothing.
             Intrinsic::StringPrototypePadStart | Intrinsic::StringPrototypePadEnd => {
-                let width = integer_argument(argument(self, 0)?, heap)?;
+                let width = integer_argument(self.call_argument(&call, 0)?, heap)?;
                 let width = usize::try_from(width).unwrap_or(0);
-                let filler = match argument(self, 1)? {
+                let filler = match self.call_argument(&call, 1)? {
                     value if value.is_undefined() => alloc::vec![0x20],
                     value => property_name_units(value, heap)?,
                 };

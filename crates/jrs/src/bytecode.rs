@@ -6072,13 +6072,21 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ArrayPrototypeAt
         | crate::engine::realm::Intrinsic::ArrayPrototypePop
         | crate::engine::realm::Intrinsic::ArrayPrototypeReverse
-        | crate::engine::realm::Intrinsic::ArrayPrototypeSlice => RegisterType::Unknown,
+        | crate::engine::realm::Intrinsic::ArrayPrototypeSlice
+        | crate::engine::realm::Intrinsic::ArrayPrototypeShift
+        | crate::engine::realm::Intrinsic::ArrayPrototypeSplice
+        | crate::engine::realm::Intrinsic::ArrayPrototypeFill
+        | crate::engine::realm::Intrinsic::ArrayPrototypeCopyWithin
+        | crate::engine::realm::Intrinsic::ArrayPrototypeConcat
+        | crate::engine::realm::Intrinsic::ArrayPrototypeWith
+        | crate::engine::realm::Intrinsic::ArrayPrototypeToReversed => RegisterType::Unknown,
         crate::engine::realm::Intrinsic::StringPrototypeCharCodeAt
         | crate::engine::realm::Intrinsic::StringPrototypeIndexOf
         | crate::engine::realm::Intrinsic::StringPrototypeLastIndexOf
         | crate::engine::realm::Intrinsic::ArrayPrototypeIndexOf
         | crate::engine::realm::Intrinsic::ArrayPrototypeLastIndexOf
-        | crate::engine::realm::Intrinsic::ArrayPrototypePush => RegisterType::Number,
+        | crate::engine::realm::Intrinsic::ArrayPrototypePush
+        | crate::engine::realm::Intrinsic::ArrayPrototypeUnshift => RegisterType::Number,
         // 22.1.3.1 and 22.1.3.4 answer undefined for an index outside the String.
         crate::engine::realm::Intrinsic::StringPrototypeAt
         | crate::engine::realm::Intrinsic::StringPrototypeCodePointAt => RegisterType::Primitive,
