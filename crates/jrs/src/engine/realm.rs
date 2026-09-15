@@ -365,6 +365,8 @@ pub enum Intrinsic {
     TypeErrorConstructor,
     /// The `URIError` constructor (20.5.6.1.1).
     UriErrorConstructor,
+    /// The `String` constructor `%String%` (22.1.1.1).
+    StringConstructor,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -394,7 +396,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 51] = [
+    pub const ALL: [Self; 52] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -446,6 +448,7 @@ impl Intrinsic {
         Self::SyntaxErrorConstructor,
         Self::TypeErrorConstructor,
         Self::UriErrorConstructor,
+        Self::StringConstructor,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -499,7 +502,8 @@ impl Intrinsic {
             | Self::ReferenceErrorConstructor
             | Self::SyntaxErrorConstructor
             | Self::TypeErrorConstructor
-            | Self::UriErrorConstructor => IntrinsicHolder::Global,
+            | Self::UriErrorConstructor
+            | Self::StringConstructor => IntrinsicHolder::Global,
             Self::ArrayIsArray => IntrinsicHolder::ArrayConstructor,
             Self::ObjectDefineProperty
             | Self::ObjectGetOwnPropertyDescriptor
@@ -562,6 +566,7 @@ impl Intrinsic {
             Self::SyntaxErrorConstructor => 48,
             Self::TypeErrorConstructor => 49,
             Self::UriErrorConstructor => 50,
+            Self::StringConstructor => 51,
         }
     }
 
@@ -619,6 +624,7 @@ impl Intrinsic {
             Self::SyntaxErrorConstructor => 48,
             Self::TypeErrorConstructor => 49,
             Self::UriErrorConstructor => 50,
+            Self::StringConstructor => 51,
         }
     }
 
@@ -677,6 +683,7 @@ impl Intrinsic {
             48 => Some(Self::SyntaxErrorConstructor),
             49 => Some(Self::TypeErrorConstructor),
             50 => Some(Self::UriErrorConstructor),
+            51 => Some(Self::StringConstructor),
             _ => None,
         }
     }
@@ -702,6 +709,7 @@ impl Intrinsic {
             Self::SyntaxErrorConstructor => "SyntaxError",
             Self::TypeErrorConstructor => "TypeError",
             Self::UriErrorConstructor => "URIError",
+            Self::StringConstructor => "String",
             Self::ObjectDefineProperty => "defineProperty",
             Self::ObjectGetOwnPropertyDescriptor => "getOwnPropertyDescriptor",
             Self::ObjectGetOwnPropertyNames => "getOwnPropertyNames",
@@ -766,6 +774,7 @@ impl Intrinsic {
             | Self::SyntaxErrorConstructor
             | Self::TypeErrorConstructor
             | Self::UriErrorConstructor
+            | Self::StringConstructor
             | Self::ObjectGetOwnPropertyNames => false,
             // 20.1.2.4 and 20.1.2.8 apply ToPropertyKey to the second argument.
             Self::ObjectDefineProperty | Self::ObjectGetOwnPropertyDescriptor => index == 1,
@@ -831,6 +840,7 @@ impl Intrinsic {
             | Self::SyntaxErrorConstructor
             | Self::TypeErrorConstructor
             | Self::UriErrorConstructor
+            | Self::StringConstructor
             | Self::ObjectGetOwnPropertyNames => 1,
             Self::ObjectDefineProperty => 3,
             Self::MathPow
@@ -916,7 +926,7 @@ pub const ARRAY_PROTOTYPE_PROPERTIES: [&str; 39] = [
 ///
 /// It serves the purpose [`OBJECT_PROTOTYPE_PROPERTIES`] serves: a String read
 /// of one of these names is answered by the Prototype Chain.
-pub const STRING_PROTOTYPE_PROPERTIES: [&str; 49] = [
+pub const STRING_PROTOTYPE_PROPERTIES: [&str; 51] = [
     "at",
     "charAt",
     "charCodeAt",
@@ -953,6 +963,8 @@ pub const STRING_PROTOTYPE_PROPERTIES: [&str; 49] = [
     "trimStart",
     "valueOf",
     "substr",
+    "trimLeft",
+    "trimRight",
     "anchor",
     "big",
     "blink",
@@ -1052,12 +1064,71 @@ pub const OBJECT_CONSTRUCTOR_PROPERTIES: [&str; 24] = [
 ///
 /// This Realm builds `pow` of them; a read of one of the others is a gap,
 /// because answering undefined would say the namespace does not have it.
-pub const MATH_PROPERTIES: [&str; 44] = [
-    "E", "LN10", "LN2", "LOG10E", "LOG2E", "PI", "SQRT1_2", "SQRT2", "abs", "acos", "acosh",
-    "asin", "asinh", "atan", "atan2", "atanh", "cbrt", "ceil", "clz32", "cos", "cosh", "exp",
-    "expm1", "floor", "f16round", "fround", "hypot", "imul", "log", "log10", "log1p", "log2",
-    "max", "min", "pow", "random", "round", "sign", "sin", "sinh", "sqrt", "tan", "tanh", "trunc",
+pub const MATH_PROPERTIES: [&str; 45] = [
+    "E",
+    "LN10",
+    "LN2",
+    "LOG10E",
+    "LOG2E",
+    "PI",
+    "SQRT1_2",
+    "SQRT2",
+    "abs",
+    "acos",
+    "acosh",
+    "asin",
+    "asinh",
+    "atan",
+    "atan2",
+    "atanh",
+    "cbrt",
+    "ceil",
+    "clz32",
+    "cos",
+    "cosh",
+    "exp",
+    "expm1",
+    "floor",
+    "f16round",
+    "fround",
+    "hypot",
+    "imul",
+    "log",
+    "log10",
+    "log1p",
+    "log2",
+    "max",
+    "min",
+    "pow",
+    "random",
+    "round",
+    "sign",
+    "sin",
+    "sinh",
+    "sqrt",
+    "sumPrecise",
+    "tan",
+    "tanh",
+    "trunc",
 ];
+
+/// The property names 22.1.2 gives `%String%`, beside the ones 17 gives every
+/// built-in function.
+///
+/// This Realm builds `prototype` of them; a read of one of the others is a
+/// gap, because answering undefined would say the constructor does not have
+/// it.
+pub const STRING_CONSTRUCTOR_PROPERTIES: [&str; 4] =
+    ["fromCharCode", "fromCodePoint", "prototype", "raw"];
+
+/// Whether `%String%` owns a property of this name.
+#[must_use]
+pub fn string_constructor_owns(name: &[u16]) -> bool {
+    function_prototype_owns(name)
+        || STRING_CONSTRUCTOR_PROPERTIES
+            .into_iter()
+            .any(|owned| owned.encode_utf16().eq(name.iter().copied()))
+}
 
 /// Whether `%Math%` owns a property of this name.
 #[must_use]
@@ -1327,24 +1398,14 @@ impl Realm {
             },
         )?;
 
-        Self::pair_constructor_with_prototype(
-            heap,
-            &intrinsics,
-            Intrinsic::ArrayConstructor,
-            array_prototype,
-        )?;
-        Self::pair_constructor_with_prototype(
-            heap,
-            &intrinsics,
-            Intrinsic::ObjectConstructor,
-            object_prototype,
-        )?;
-        Self::pair_constructor_with_prototype(
-            heap,
-            &intrinsics,
-            Intrinsic::FunctionConstructor,
-            function_prototype,
-        )?;
+        for (constructor, prototype) in [
+            (Intrinsic::ArrayConstructor, array_prototype),
+            (Intrinsic::ObjectConstructor, object_prototype),
+            (Intrinsic::FunctionConstructor, function_prototype),
+            (Intrinsic::StringConstructor, string_prototype),
+        ] {
+            Self::pair_constructor_with_prototype(heap, &intrinsics, constructor, prototype)?;
+        }
         Self::pair_errors_with_their_prototypes(
             heap,
             &intrinsics,

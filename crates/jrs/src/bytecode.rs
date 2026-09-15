@@ -3103,7 +3103,9 @@ impl RegisterLowerer {
     ///
     /// 10.4.3 gives the String exotic object `ToObject` produces an own
     /// `"length"` and an own property per code unit; every other name is
-    /// resolved on %String.prototype%, whose methods do not exist yet.
+    /// resolved on %String.prototype%, which the instruction walks. A name
+    /// that Prototype owns answers whatever it carries, so the type is not
+    /// known here.
     fn lower_string_member(&mut self, key: &Expr) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         let object = self.allocate_register()?;
@@ -3113,9 +3115,11 @@ impl RegisterLowerer {
             .or_else(|| self.static_key_units(key));
         let result_type = match static_name.as_deref() {
             Some(name) if Self::is_length(name) => RegisterType::Number,
-            Some(name) if crate::engine::realm::string_prototype_owns(name) => return None,
+            Some(name) if crate::engine::realm::string_prototype_owns(name) => {
+                RegisterType::Unknown
+            }
             // A run-time key can name a method of %String.prototype%.
-            None if self.key_reaches_prototype(key) => return None,
+            None if self.key_reaches_prototype(key) => RegisterType::Unknown,
             // A name that is neither "length" nor an index is undefined, and an
             // index is a one-unit String or undefined past the end.
             Some(_) | None => RegisterType::Primitive,
@@ -5955,7 +5959,10 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::StringPrototypeStartsWith
         | crate::engine::realm::Intrinsic::ArrayPrototypeIncludes
         | crate::engine::realm::Intrinsic::ArrayIsArray => RegisterType::Boolean,
-        crate::engine::realm::Intrinsic::ObjectPrototypeToString
+        // 22.1.1.1 answers a String whichever argument it took; `new` answers
+        // no value at all, because the exotic object it would make is a gap.
+        crate::engine::realm::Intrinsic::StringConstructor
+        | crate::engine::realm::Intrinsic::ObjectPrototypeToString
         | crate::engine::realm::Intrinsic::StringPrototypeCharAt
         | crate::engine::realm::Intrinsic::StringPrototypeConcat
         | crate::engine::realm::Intrinsic::StringPrototypeRepeat

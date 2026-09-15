@@ -1091,25 +1091,8 @@ impl RegisterVM {
             vm.stack.get(slot).copied().ok_or(VMError::InvalidRegister)
         };
         match intrinsic {
-            // 20.1.3.3: a non-Object argument is false without coercing `this`.
             Intrinsic::ObjectPrototypeIsPrototypeOf => {
-                let Some(mut value) = argument(self, 0)?.as_object() else {
-                    return Ok(VALUE_FALSE);
-                };
-                let object = Self::coerce_object(call.receiver, heap, realm)?;
-                loop {
-                    let prototype = heap
-                        .get_object(value)
-                        .ok_or(VMError::Heap(HeapError::InvalidReference))?
-                        .prototype;
-                    let Some(prototype) = prototype.as_object() else {
-                        return Ok(VALUE_FALSE);
-                    };
-                    if prototype == object {
-                        return Ok(VALUE_TRUE);
-                    }
-                    value = prototype;
-                }
+                Self::is_prototype_of(argument(self, 0)?, call.receiver, heap, realm)
             }
             Intrinsic::ObjectPrototypeHasOwnProperty
             | Intrinsic::ObjectPrototypePropertyIsEnumerable => {
@@ -1159,6 +1142,9 @@ impl RegisterVM {
             }
             Intrinsic::FunctionPrototypeBind => self.bind_function(call, heap, realm),
             Intrinsic::ArrayConstructor => self.construct_array(call, heap, realm),
+            Intrinsic::StringConstructor => {
+                Self::call_string_constructor(call.construct.is_some(), argument(self, 0)?, heap)
+            }
             Intrinsic::ErrorConstructor
             | Intrinsic::EvalErrorConstructor
             | Intrinsic::RangeErrorConstructor
@@ -1289,8 +1275,9 @@ impl RegisterVM {
     ///
     /// `%Array%` answers an Array of its own, so the object
     /// `OrdinaryCreateFromConstructor` would make is never the value `new`
-    /// takes. Every other native of this Realm has no `[[Construct]]`, and
-    /// 7.3.15 refuses it where it is reached.
+    /// takes; the same holds for an error and for `%String%`, which names the
+    /// exotic object it would have to make. Every other native of this Realm
+    /// has no `[[Construct]]`, and 7.3.15 refuses it where it is reached.
     fn native_constructor(&self, func: Reg, heap: &GenerationalHeap) -> Option<Intrinsic> {
         let object = self.read_reg(func).ok()?.as_object()?;
         let ObjectKind::NativeFunction { id, .. } = heap.get_object(object)?.kind else {
@@ -1308,8 +1295,61 @@ impl RegisterVM {
                     | Intrinsic::SyntaxErrorConstructor
                     | Intrinsic::TypeErrorConstructor
                     | Intrinsic::UriErrorConstructor
+                    | Intrinsic::StringConstructor
             )
         })
+    }
+
+    /// `Object.prototype.isPrototypeOf` of 20.1.3.3.
+    ///
+    /// A non-Object argument is false without coercing `this`.
+    fn is_prototype_of(
+        value: Value,
+        receiver: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let Some(mut value) = value.as_object() else {
+            return Ok(VALUE_FALSE);
+        };
+        let object = Self::coerce_object(receiver, heap, realm)?;
+        loop {
+            let prototype = heap
+                .get_object(value)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?
+                .prototype;
+            let Some(prototype) = prototype.as_object() else {
+                return Ok(VALUE_FALSE);
+            };
+            if prototype == object {
+                return Ok(VALUE_TRUE);
+            }
+            value = prototype;
+        }
+    }
+
+    /// `%String%` of 22.1.1.1.
+    ///
+    /// A call with no argument is the empty String, and every other value
+    /// goes through `ToString`. `new` makes the String exotic object of
+    /// 10.4.3, whose `[[StringData]]` and index properties this engine has
+    /// not built, so it names that instead of answering the primitive a call
+    /// answers.
+    fn call_string_constructor(
+        construct: bool,
+        target: Value,
+        heap: &mut GenerationalHeap,
+    ) -> Result<Value, VMError> {
+        if construct {
+            return Err(VMError::Unsupported("a String exotic object"));
+        }
+        let units = if target.is_undefined() {
+            alloc::vec::Vec::new()
+        } else {
+            property_name_units(target, heap)?
+        };
+        let text = heap.strings.allocate_units(&units)?;
+        Ok(Value::from_string(text))
     }
 
     /// The functions 20.1.2 gives `%Object%` that this Realm builds.
@@ -1365,6 +1405,13 @@ impl RegisterVM {
                 let object = Self::coerce_object(target, heap, realm)?;
                 let name = property_key(key, heap)?;
                 let Some(flags) = heap.own_named_flags(object, name)? else {
+                    // A name this Realm owes the object has no descriptor to
+                    // answer, and undefined would say the object has none.
+                    let units = name
+                        .as_string()
+                        .and_then(|name| heap.strings.to_utf16(Value::from_string(name)))
+                        .unwrap_or_default();
+                    Self::absent_property(target, &units, heap, realm)?;
                     return Ok(VALUE_UNDEFINED);
                 };
                 if flags.is_accessor {
@@ -2006,6 +2053,26 @@ impl RegisterVM {
         }
     }
 
+    /// Whether this object is an intrinsic Prototype that owns the name and
+    /// this Realm has not built it.
+    fn prototype_owes(
+        target: Value,
+        name: &[u16],
+        heap: &GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<bool, VMError> {
+        let Some(object) = target.as_object() else {
+            return Ok(false);
+        };
+        let is = |prototype: Value| prototype.as_object() == Some(object);
+        Ok(
+            is(realm.string_prototype(heap)?) && super::realm::string_prototype_owns(name)
+                || is(realm.array_prototype(heap)?) && super::realm::array_prototype_owns(name)
+                || is(realm.function_prototype(heap)?)
+                    && super::realm::function_prototype_owns(name),
+        )
+    }
+
     /// The answer 10.1.8.1 gives when no object of the Prototype Chain has the
     /// name.
     ///
@@ -2016,6 +2083,7 @@ impl RegisterVM {
         target: Value,
         name: &[u16],
         heap: &GenerationalHeap,
+        realm: &Realm,
     ) -> Result<Value, VMError> {
         const GAP: VMError = VMError::Unsupported("a property of an unbuilt Prototype");
         if target.is_string() {
@@ -2023,6 +2091,11 @@ impl RegisterVM {
                 return Err(GAP);
             }
             return Ok(VALUE_UNDEFINED);
+        }
+        // The Prototype itself owns the names its instances resolve on it, so
+        // a miss there is the same gap read one object earlier.
+        if Self::prototype_owes(target, name, heap, realm)? {
+            return Err(GAP);
         }
         let kind = target
             .as_object()
@@ -2035,6 +2108,13 @@ impl RegisterVM {
             Some(ObjectKind::NativeFunction { id, .. })
                 if id == Intrinsic::ArrayConstructor.id()
                     && super::realm::array_constructor_owns(name) =>
+            {
+                Err(GAP)
+            }
+            // 22.1.2 gives `%String%` more than 17 gives a built-in function.
+            Some(ObjectKind::NativeFunction { id, .. })
+                if id == Intrinsic::StringConstructor.id()
+                    && super::realm::string_constructor_owns(name) =>
             {
                 Err(GAP)
             }
@@ -2616,26 +2696,25 @@ impl RegisterVM {
         }
     }
 
-    /// The code units of a String receiver.
+    /// The code units of the `this` value of a `%String.prototype%` method.
     ///
-    /// Every `%String.prototype%` method begins with `RequireObjectCoercible`
-    /// and `ToString` of the `this` value (22.1.3). The lowering only emits a
-    /// call on a String, so this refuses anything else rather than guessing.
+    /// Every one of them begins with `RequireObjectCoercible` and `ToString`
+    /// (22.1.3), so undefined and null are a `TypeError` and every other
+    /// primitive answers its text. An Object would need the `ToPrimitive` of
+    /// 7.1.1, which names itself as a gap.
     fn receiver_units(
         receiver: Value,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Vec<u16>, VMError> {
-        if !receiver.is_string() {
+        if receiver.is_undefined() || receiver.is_null() {
             return Err(type_error(
                 heap,
                 realm,
-                "String method called on a value that is not a String",
+                "String method called on null or undefined",
             ));
         }
-        heap.strings
-            .to_utf16(receiver)
-            .ok_or(VMError::Heap(HeapError::InvalidReference))
+        property_name_units(receiver, heap)
     }
 
     /// The value a String answers for one property name.
@@ -2671,7 +2750,7 @@ impl RegisterVM {
                 .ok_or(VMError::Heap(HeapError::InvalidReference))?;
             return match heap.lookup_named(prototype, name)? {
                 Some(property) => Ok(property.value),
-                None => Self::absent_property(value, &units, heap),
+                None => Self::absent_property(value, &units, heap, realm),
             };
         };
         let Some(unit) = usize::try_from(index)
@@ -3739,7 +3818,7 @@ impl RegisterVM {
                             .string_constants
                             .get(name_index as usize)
                             .ok_or(VMError::InvalidRegister)?;
-                        self.acc = Self::absent_property(target, units, heap)?;
+                        self.acc = Self::absent_property(target, units, heap, realm)?;
                     }
                 }
                 Instruction::SetNamed {
@@ -3867,7 +3946,7 @@ impl RegisterVM {
                             // A name no String of the Agent carries is owned by
                             // no object, but a Prototype the Realm has not built
                             // would have carried it.
-                            self.acc = Self::absent_property(target, &units, heap)?;
+                            self.acc = Self::absent_property(target, &units, heap, realm)?;
                             return Ok(None);
                         };
                         let shape_id = heap.get_object(oref).ok_or(VMError::TypeError)?.shape_id;
@@ -3901,7 +3980,7 @@ impl RegisterVM {
                             }
                             self.acc = property.value;
                         } else {
-                            self.acc = Self::absent_property(target, &units, heap)?;
+                            self.acc = Self::absent_property(target, &units, heap, realm)?;
                         }
                     }
                 }
@@ -4582,7 +4661,11 @@ fn property_key(value: Value, heap: &mut GenerationalHeap) -> Result<PropertyKey
     if let Some(symbol) = value.as_symbol() {
         return Ok(PropertyKey::Symbol(symbol));
     }
-    if let Some(name) = value.as_heap_string() {
+    // A Shape looks its names up by reference, so a String the Script made is
+    // not the key the Shape holds until it is interned.
+    if let Some(name) = value.as_heap_string()
+        && heap.strings.is_interned(name)
+    {
         return Ok(PropertyKey::String(name));
     }
     let units = property_name_units(value, heap)?;
@@ -4768,6 +4851,11 @@ fn string_index(units: &[u16]) -> Option<u32> {
     Some(value)
 }
 
+/// `ToString` of 7.1.17 for a value that needs no method of the Script.
+///
+/// An Object would go through `ToPrimitive` (7.1.1), which runs a `valueOf` or
+/// a `toString` this function cannot enter, so it names that as a gap rather
+/// than answering the text of an object it did not ask.
 fn property_name_units(value: Value, heap: &GenerationalHeap) -> Result<Vec<u16>, VMError> {
     if value.is_string() {
         return heap
@@ -4791,7 +4879,7 @@ fn property_name_units(value: Value, heap: &GenerationalHeap) -> Result<Vec<u16>
     if value.is_undefined() {
         return Ok("undefined".encode_utf16().collect());
     }
-    Err(VMError::TypeError)
+    Err(VMError::Unsupported("ToString of an Object"))
 }
 
 #[cfg(test)]
@@ -5508,11 +5596,12 @@ mod tests {
                 expected
             );
         }
-        // An Object key needs ToPrimitive, which the engine cannot run yet.
+        // An Object key needs ToPrimitive, which this function cannot run, so
+        // it names the gap rather than answering a text it did not ask for.
         let object = realm.ordinary_object(&mut heap).unwrap();
         assert_eq!(
             property_key(Value::from_object(object), &mut heap),
-            Err(VMError::TypeError)
+            Err(VMError::Unsupported("ToString of an Object"))
         );
     }
 

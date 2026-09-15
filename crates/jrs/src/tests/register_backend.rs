@@ -4115,17 +4115,63 @@ fn register_string_methods_run_as_native_intrinsics() -> Result<(), Error> {
 }
 
 #[test]
-fn register_lowering_rejects_string_methods_that_do_not_exist_yet() -> Result<(), Error> {
+fn the_string_constructor_answers_the_primitive_a_call_makes() -> Result<(), Error> {
+    // 22.1.1.1: a call with no argument is the empty String, and every other
+    // value goes through ToString. A method read off a String resolves on
+    // %String.prototype% (10.4.3), which the instruction walks.
     for source in [
-        // 22.1.3 names %String.prototype% owns whose intrinsic is missing.
-        "'abc'.slice",
-        "'abc'.toString",
-        "'abc'['slice']",
-        // A String key can name one of them.
+        "typeof String",
+        "String(42)",
+        "String()",
+        "String(true)",
+        "String(null)",
+        "String.length",
+        "String('a')+String(1)",
+        "\"\".constructor===String",
+        "String.prototype.constructor===String",
+        "typeof ''.charAt",
+        "String.prototype.charAt===''.charAt",
+        "var m='abc'.charAt; typeof m",
+        "'abc'['charAt'](1)",
+        "typeof ''.notAName",
+        // 22.1.3 names %String.prototype% owns, read rather than called, and
+        // a String key that names one of them.
+        "typeof 'abc'.slice",
+        "typeof 'abc'['slice']",
+        "typeof 'abc'.toString",
         "let s='abc';let k='length';s[k]",
+        // 22.1.3 begins every method with RequireObjectCoercible and
+        // ToString, so the receiver need not already be a String.
+        "String.prototype.charAt.call(42,0)",
+        "String.prototype.charAt.call(true,1)",
+        "var r=0;try{String.prototype.charAt.call(null,0)}catch(e){r=e instanceof TypeError}r",
     ] {
+        differential(source)?;
+    }
+    // `new` makes the String exotic object of 10.4.3, and 22.1.2 gives
+    // `%String%` statics this Realm has not built. Both are gaps, because an
+    // answer here would be the wrong one.
+    for source in [
+        "new String('x')",
+        "String.fromCharCode",
+        "String.raw",
+        "''.valueOf",
+        // A name %String.prototype% owns and this Realm has not built is the
+        // same gap read on the Prototype itself as read on a String.
+        "String.prototype.anchor",
+        "String.prototype.trimLeft",
+        "'abc'.split",
+        // ToString of an Object would run a method of the Script.
+        "String({})",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
         assert!(
-            !compile(source, Limits::default())?.uses_register_backend(),
+            matches!(
+                Runtime::with_backend(Limits::default(), Backend::Engine)
+                    .run(&program, &mut SilentHost),
+                Err(Error::Unsupported { .. })
+            ),
             "{source}"
         );
     }

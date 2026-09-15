@@ -191,6 +191,16 @@ impl StringArena {
         Ok(reference)
     }
 
+    /// Whether this String is a permanent property-name atom.
+    ///
+    /// A Shape holds its property names by reference, so only an interned one
+    /// can be looked up in it; any other has to be interned first.
+    #[must_use]
+    pub fn is_interned(&self, reference: StringRef) -> bool {
+        self.record(reference)
+            .is_some_and(|record| record.is_interned)
+    }
+
     /// Returns an existing permanent property-name atom without allocating one.
     #[must_use]
     pub fn lookup_interned_units(&self, units: &[u16]) -> Option<StringRef> {
