@@ -649,10 +649,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Object%` and its methods, after the integrity levels, on the register engine (focused) | focused | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,530 (22.49%) | 18 (0.26%) | 5,254 (77.24%) |
 | `%Number%` (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 572 (84.12%) | 102 (15.00%) | 6 (0.88%) |
 | `%Number%` on the register engine (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 226 (33.24%) | 2 (0.29%) | 452 (66.47%) |
-| Property descriptors (focused) | focused | `e378c5a` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object/defineProperty test/built-ins/Object/defineProperties test/built-ins/Object/getOwnPropertyDescriptor test/built-ins/Object/create test/built-ins/Reflect --summary` | 2,546 | 5,080 | 4,738 (93.27%) | 336 (6.61%) | 6 (0.12%) |
-| Property descriptors on the register engine (focused) | focused | `e378c5a` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object/defineProperty test/built-ins/Object/defineProperties test/built-ins/Object/getOwnPropertyDescriptor test/built-ins/Object/create test/built-ins/Reflect --summary` | 2,546 | 5,080 | 1,706 (33.58%) | 23 (0.45%) | 3,351 (65.96%) |
-| Complete pinned suite, including staging and Intl | full | `e378c5a` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `e378c5a` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 11,564 (11.24%) | 17,339 (16.85%) | 74,022 (71.92%) |
+| `%String%` and the error constructors (focused) | focused | `d8a42a6` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/String test/built-ins/Error test/built-ins/NativeErrors --summary` | 1,410 | 2,817 | 2,154 (76.46%) | 576 (20.45%) | 87 (3.09%) |
+| `%String%` and the error constructors on the register engine (focused) | focused | `d8a42a6` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/String test/built-ins/Error test/built-ins/NativeErrors --summary` | 1,410 | 2,817 | 758 (26.91%) | 146 (5.18%) | 1,913 (67.91%) |
+| Complete pinned suite, including staging and Intl | full | `d8a42a6` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `d8a42a6` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 12,406 (12.05%) | 17,910 (17.40%) | 72,609 (70.55%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1041,6 +1041,16 @@ rather than answering undefined at it, which is what 10.1.8.1 says anyway, and
 a write looks at the Shape first. The Array `length` stays a gap, because
 10.4.2.4 sets it by deleting what is above the new one.
 
+7.1.17 of an Object is a call of a method of the object, and a native
+operation has no frame to make one from. A native that converts an argument
+before it does anything else now leaves the way a conversion of 7.1.1 leaves
+an instruction: the caller's registers still hold the arguments, so the native
+runs again from the beginning once the register holds a primitive, and only
+the `this` value travels, in a root. `%String%` (22.1.1.1) and the seven error
+constructors (20.5.1.1, 20.5.6.1.1) ask this way. 7.1.1 also takes its hint for
+the first time, so 7.1.17 asks `toString` before `valueOf` where 7.1.3 keeps
+the order it had. 842 variants move to passed and none away from it.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -1114,6 +1124,8 @@ The descriptor runs and both full runs beside them were measured at tree
 `91cbf2c4a87389bfa6621938c5f05a31127e21f9`, which is the tree of `602329f`.
 The descriptor runs and both full runs beside the indexed descriptors were
 measured at tree `f83b656d82cfc1b7a4cba114facdc6e329ff69f6`, which is the tree of `e378c5a`.
+The `%String%` runs and both full runs beside the argument a native converts
+were measured at tree `9aa17e0b5ae6295479ba787755d90d849690a7b1`, which is the tree of `d8a42a6`.
 
 ### Historical Test262 baseline
 
