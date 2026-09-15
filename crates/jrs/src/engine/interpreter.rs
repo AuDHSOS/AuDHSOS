@@ -2539,11 +2539,30 @@ impl RegisterVM {
                 let units: Vec<u16> = text.encode_utf16().collect();
                 self.allocate_string(heap, &units)
             }
-            // 21.1.3.6 takes a radix, and only 10 is 6.1.6.1.20.
+            // 21.1.3.6 takes a radix between 2 and 36; 10 is 6.1.6.1.20 and
+            // every other one is `Number::toString` with that radix.
             _ => {
                 let radix = self.call_argument(call, 0)?;
-                if !radix.is_undefined() && integer_argument(radix, heap)? != 10 {
-                    return Err(VMError::Unsupported("Number.prototype.toString(radix)"));
+                if !radix.is_undefined() {
+                    let radix = integer_argument(radix, heap)?;
+                    if !(2..=36).contains(&radix) {
+                        return Err(raise(
+                            heap,
+                            realm,
+                            super::realm::NativeErrorKind::RangeError,
+                            "invalid number radix",
+                        ));
+                    }
+                    if radix != 10 {
+                        let radix = u32::try_from(radix).map_err(|_| VMError::TypeError)?;
+                        let units: Vec<u16> = crate::number::format_with_radix(held, radix)
+                            .encode_utf16()
+                            .collect();
+                        if units.len() > self.string_units_limit {
+                            return Err(VMError::StringLimit);
+                        }
+                        return self.allocate_string(heap, &units);
+                    }
                 }
                 let units: Vec<u16> = crate::number::decimal_string(held).encode_utf16().collect();
                 self.allocate_string(heap, &units)
@@ -5812,6 +5831,36 @@ impl RegisterVM {
         self.allocate_string(heap, &[unit])
     }
 
+    /// The value a Number or a Boolean answers for one property name.
+    ///
+    /// 7.1.18 would produce a wrapper whose own properties are none at all, so
+    /// every name is resolved on the Prototype 21.1.3 or 20.3.3 names.
+    fn primitive_member(
+        value: Value,
+        name: PropertyKey,
+        heap: &GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<Value>, VMError> {
+        let prototype = if value.as_boolean().is_some() {
+            realm.boolean_prototype(heap)?
+        } else if value.as_f64().is_some() {
+            realm.number_prototype(heap)?
+        } else {
+            return Ok(None);
+        };
+        let prototype = prototype
+            .as_object()
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let units = name
+            .as_string()
+            .and_then(|name| heap.strings.to_utf16(Value::from_string(name)))
+            .unwrap_or_default();
+        Ok(Some(match heap.lookup_named(prototype, name)? {
+            Some(property) => Self::plain_value(property)?,
+            None => Self::absent_property(value, &units, heap, realm)?,
+        }))
+    }
+
     /// Whether 10.4.3.1 gives this object this name out of its
     /// `[[StringData]]` rather than out of its Shape.
     fn owns_string_exotic(
@@ -7556,6 +7605,10 @@ impl RegisterVM {
                     // exotic object ToObject would produce, without producing it.
                     if target.is_string() {
                         self.acc = self.string_member(target, name, heap, realm)?;
+                        return Ok(None);
+                    }
+                    if let Some(member) = Self::primitive_member(target, name, heap, realm)? {
+                        self.acc = member;
                         return Ok(None);
                     }
                     let Some(oref) = target.as_object() else {

@@ -3058,6 +3058,9 @@ impl RegisterLowerer {
         for statement in body {
             flow = match statement {
                 Stmt::Declare(bindings) => {
+                    if register_lexical_dead_zone_read(bindings)? {
+                        return None;
+                    }
                     for (pattern, _, initializer) in bindings {
                         if let Some(initializer) = initializer {
                             child.initialize_pattern(pattern, initializer)?;
@@ -3401,8 +3404,17 @@ impl RegisterLowerer {
     ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         let base_type = self.lower(base)?;
+        // 13.3.6.1 sends a primitive base through 7.1.18, whose Prototype
+        // carries the method. The engine does that at run time, so the
+        // lowering only has to name which Prototype it is.
+        let primitive_holder = match base_type {
+            RegisterType::String => Some(crate::engine::realm::IntrinsicHolder::StringPrototype),
+            RegisterType::Number => Some(crate::engine::realm::IntrinsicHolder::NumberPrototype),
+            RegisterType::Boolean => Some(crate::engine::realm::IntrinsicHolder::BooleanPrototype),
+            _ => None,
+        };
         if !base_type.is_object()
-            && base_type != RegisterType::String
+            && primitive_holder.is_none()
             && base_type != RegisterType::Unknown
         {
             return None;
@@ -3418,15 +3430,13 @@ impl RegisterLowerer {
             self.release_register(receiver)?;
             return Some(result);
         }
-        let intrinsic = if base_type == RegisterType::String {
-            // 22.1.3: the method is resolved on %String.prototype%.
+        let intrinsic = if let Some(holder) = primitive_holder {
+            // 22.1.3, 21.1.3 and 20.3.3: the method is resolved on the
+            // Prototype of the primitive.
             let name = Self::static_property_name(key)
                 .map(<[u16]>::to_vec)
                 .or_else(|| self.static_key_units(key))?;
-            let intrinsic = crate::engine::realm::holder_intrinsic(
-                crate::engine::realm::IntrinsicHolder::StringPrototype,
-                &name,
-            )?;
+            let intrinsic = crate::engine::realm::holder_intrinsic(holder, &name)?;
             let constant = self.string_constant(&name)?;
             let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
             self.code.emit(Instruction::GetNamed {
@@ -5353,6 +5363,9 @@ impl RegisterLowerer {
         for statement in body {
             flow = match statement {
                 Stmt::Declare(bindings) => {
+                    if register_lexical_dead_zone_read(bindings)? {
+                        return None;
+                    }
                     for (pattern, _, initializer) in bindings {
                         if let Some(initializer) = initializer {
                             self.initialize_pattern(pattern, initializer)?;
@@ -5810,6 +5823,9 @@ impl RegisterLowerer {
                         );
                         scoped_registers.push((name, register));
                     }
+                }
+                if register_lexical_dead_zone_read(bindings)? {
+                    return None;
                 }
                 for (pattern, _, expression) in bindings {
                     if let Some(expression) = expression {
@@ -9325,6 +9341,9 @@ fn lower_register_body(
                         lowerer.initialize_global_lexical(pattern, initializer.as_ref())?;
                     }
                 } else {
+                    if register_lexical_dead_zone_read(bindings)? {
+                        return None;
+                    }
                     for (pattern, _, initializer) in bindings {
                         if let Some(initializer) = initializer {
                             lowerer.initialize_pattern(pattern, initializer)?;
@@ -9469,6 +9488,37 @@ fn register_binding_pattern_supported(pattern: &parser::BindingPattern) -> bool 
 
 /// Whether the head of a `for`-`of` or `for`-`in` that declares nothing names
 /// a Reference this lowering writes.
+/// Whether an Initializer of a lexical declaration reads a name the
+/// declaration binds and has not initialized yet.
+///
+/// 9.1.1.1.1 leaves such a name in its temporal dead zone, where a read is a
+/// `ReferenceError`. The lowering writes the binding's register directly and
+/// has no zone to check, so it does not take the declaration at all. A name a
+/// nested function reads is read when that function runs, which is after the
+/// declaration.
+fn register_lexical_dead_zone_read(
+    bindings: &[(BindingPattern, bool, Option<Expr>)],
+) -> Option<bool> {
+    for (at, (_, _, initializer)) in bindings.iter().enumerate() {
+        let Some(initializer) = initializer else {
+            continue;
+        };
+        let mut pending = BTreeSet::new();
+        for (pattern, _, _) in bindings.get(at..)? {
+            let mut names = Vec::new();
+            pattern.names(&mut names);
+            pending.extend(names);
+        }
+        let mut direct = BTreeSet::new();
+        let mut nested = BTreeSet::new();
+        register_expression_references(initializer, &mut direct, &mut nested)?;
+        if direct.intersection(&pending).next().is_some() {
+            return Some(true);
+        }
+    }
+    Some(false)
+}
+
 fn register_assignment_target_supported(target: &parser::AssignmentTarget) -> bool {
     match target {
         parser::AssignmentTarget::Reference(reference) => {

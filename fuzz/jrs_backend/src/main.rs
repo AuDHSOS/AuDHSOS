@@ -85,6 +85,13 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
         expected.is_ok(),
         "backends disagree on completion: {source}"
     );
+    // A thrown Object of the engine has no identity the embedding can hold, so
+    // the two paths say that the Script threw and not what it threw.
+    if matches!(actual, Err(Error::ThrownUnrepresentable))
+        || matches!(expected, Err(Error::ThrownUnrepresentable))
+    {
+        return;
+    }
     match (describe(&actual), describe(&expected)) {
         (Some(actual), Some(expected)) => assert!(
             same_value(&actual, &expected),

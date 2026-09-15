@@ -425,25 +425,25 @@ fn a_value_the_embedding_cannot_hold_leaves_the_realm_usable() -> Result<(), Err
 #[test]
 fn a_property_of_a_primitive_names_the_object_it_would_need() -> Result<(), Error> {
     // 7.3.2 sends the base of a property access through ToObject, which 7.1.18
-    // refuses for undefined and null alone. Every other primitive gets a
-    // wrapper Object this engine has not built, so the access names that
-    // instead of the TypeError only the first two deserve.
-    for source in [
-        "[x=>h=>x,3,3,22,5][-3,3,2][-2]+1",
-        "let f=function(o){return o.x};f(3)",
-        "let f=function(o){return o[0]};f(true)",
-    ] {
-        let program = compile(source, Limits::default())?;
-        assert!(program.uses_register_backend(), "{source}");
-        assert!(
-            matches!(
-                Runtime::with_backend(Limits::default(), Backend::Engine)
-                    .run(&program, &mut SilentHost),
-                Err(Error::Unsupported { .. })
-            ),
-            "{source}"
-        );
-    }
+    // refuses for undefined and null alone. A Number and a Boolean answer from
+    // the Prototype 21.1.3 and 20.3.3 name, without producing the wrapper.
+    differential("let f=function(o){return o.x};f(3)")?;
+    differential("let f=function(o){return o[0]};f(true)")?;
+    differential("let f=function(o){return typeof o.toString};f(3)")?;
+    // Every other primitive gets a wrapper Object this engine has not built,
+    // so the access names that instead of the TypeError only undefined and
+    // null deserve.
+    let source = "[x=>h=>x,3,3,22,5][-3,3,2][-2]+1";
+    let program = compile(source, Limits::default())?;
+    assert!(program.uses_register_backend(), "{source}");
+    assert!(
+        matches!(
+            Runtime::with_backend(Limits::default(), Backend::Engine)
+                .run(&program, &mut SilentHost),
+            Err(Error::Unsupported { .. })
+        ),
+        "{source}"
+    );
     // 10.4.3 answers a String without producing the Object, and undefined and
     // null keep the TypeError.
     differential("let f=function(o){return o.length};f('ab')")?;
@@ -5042,19 +5042,8 @@ fn new_number_and_new_boolean_make_the_wrapper_objects() -> Result<(), Error> {
     ] {
         differential(source)?;
     }
-    // 21.1.3.6 with a radix other than 10 is 6.1.6.1.20 for another base,
-    // which this engine has not built.
-    let source = "new Number(255).toString(16)";
-    let program = compile(source, Limits::default())?;
-    assert!(program.uses_register_backend(), "{source}");
-    assert!(
-        matches!(
-            Runtime::with_backend(Limits::default(), Backend::Engine)
-                .run(&program, &mut SilentHost),
-            Err(Error::Unsupported { .. })
-        ),
-        "{source}"
-    );
+    // 21.1.3.6 takes a radix other than 10 as well.
+    differential("new Number(255).toString(16)")?;
     Ok(())
 }
 
@@ -5971,6 +5960,59 @@ fn a_for_head_that_declares_nothing_writes_its_target() -> Result<(), Error> {
         "var a;for(a in {x:1}){}a",
         "var o={};for(o.k in {x:1,y:2}){}o.k",
         "var a;var n=0;for(a of [1,2]){n+=a}''+a+','+n",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
+
+/// 21.1.3 and 20.3.3: a method call on a Number or a Boolean resolves on the
+/// Prototype 7.1.18 would give the wrapper, and 21.1.3.6 takes a radix.
+#[test]
+fn a_number_or_boolean_answers_its_prototype() -> Result<(), Error> {
+    for source in [
+        "(5).toString()",
+        "(255).toString(16)",
+        "(5).toString(2)",
+        "(-5).toString(2)",
+        "(0.5).toString(2)",
+        "(5).valueOf()",
+        "true.toString()",
+        "false.valueOf()",
+        "var n=5;n.toString(8)",
+        "var x=1.5;x.toString()",
+        "(0).toString(36)",
+        "(1e21).toString()",
+        "try{(5).toString(1)}catch(e){e instanceof RangeError}",
+        "try{(5).toString(37)}catch(e){e instanceof RangeError}",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
+
+/// 9.1.1.1.1 leaves a lexical binding in its temporal dead zone until the
+/// declaration initializes it, and the lowering has no zone to check.
+#[test]
+fn a_lexical_initializer_that_reads_its_own_binding_is_refused() -> Result<(), Error> {
+    for source in [
+        "let i=i++;i++",
+        "let a=b,b=1;a",
+        "let a=[a];a",
+        "function f(){let x=x;return x}f()",
+    ] {
+        assert!(
+            !compile(source, Limits::default())?.uses_register_backend(),
+            "{source}"
+        );
+    }
+    // A name a nested function reads is read when that function runs, and a
+    // `var` has no dead zone at all.
+    for source in [
+        "let f=function(){return 1};f()",
+        "let a=1,b=a;b",
+        "var i=i++;''+i",
+        "let x=1;x",
     ] {
         differential_scripts(&[source])?;
     }
