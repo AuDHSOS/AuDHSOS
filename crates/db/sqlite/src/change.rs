@@ -711,6 +711,7 @@ impl Writer {
             return Ok(0);
         }
         let (arena, change) = crate::parse::change(sql)?;
+        crate::eval::rows_placed(&arena)?;
         match change {
             Change::Insert(statement) => self.insert(&arena, &statement, sql, None),
             Change::Delete(statement) => self.delete(&arena, &statement, sql, None),

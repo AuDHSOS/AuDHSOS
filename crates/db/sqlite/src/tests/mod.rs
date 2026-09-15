@@ -26,6 +26,7 @@ mod number;
 mod page;
 mod parse;
 mod record;
+mod rowvalue;
 mod schema;
 mod token;
 mod tree;

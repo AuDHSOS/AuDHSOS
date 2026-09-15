@@ -647,8 +647,8 @@ and `UPDATE` are run from their text and write the files the shell wrote,
 and a foreign key holds the rows of both tables it names; the rest is
 open.
 Depends on: Q6. Recorded in D-172 to D-174, D-182, D-186, D-187, D-189,
-D-191, D-193, D-195, D-196, D-205 to D-211, D-216 to D-218, D-219 and
-D-224.
+D-191, D-193, D-195, D-196, D-205 to D-211, D-216 to D-218, D-219,
+D-224 and D-225.
 Size: L.
 
 ### Does
@@ -686,6 +686,10 @@ Size: L.
 9. The rows a foreign key holds: the check on the row that points, the
    check on the row pointed at, the five actions, and the two pragmas
    that answer the keys and the orphans. Built, which D-224 records.
+10. Rows of values: the comparisons, `BETWEEN`, `IN`, a statement that
+    stands for a row, and the refusal of a row written anywhere else.
+    Built, which D-225 records; reading an index for such a comparison
+    is open.
 
 ### Done when
 

@@ -4817,6 +4817,22 @@ D-224, document 16 step Q8.
   and `PRAGMA foreign_key_check` answers a row per orphan whatever
   `PRAGMA foreign_keys` says.
 
+### 6.6.148 The rows a statement compares (`db-sqlite`)
+
+D-225, document 16 step Q8.
+
+- A row compared against a row answers what the C library answers for
+  every operator that takes one, nulls included.
+- A row looked for among rows, and a row compared against a statement
+  that answers as many columns, answer the same.
+- A row written where one value belongs is refused before a row of a
+  table is read, so a statement over a table of no rows refuses as
+  well.
+- A row misused in the body of a view is refused where a statement
+  names the view.
+- A statement used as one value compares under the affinity of the
+  column it answers.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

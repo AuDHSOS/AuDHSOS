@@ -47,6 +47,15 @@ impl Span {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ExprId(u32);
 
+impl ExprId {
+    /// Where the node lies in the arena, which is what a walk holding
+    /// one flag per node counts with.
+    #[must_use]
+    pub fn place(self) -> usize {
+        usize::try_from(self.0).unwrap_or(usize::MAX)
+    }
+}
+
 /// A run of nodes: the arguments of a call, the list of an `IN`, the
 /// branches of a `CASE`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -1198,6 +1207,14 @@ impl Arena {
         self.nodes.len()
     }
 
+    /// Every node, with where it lies, in the order they were written.
+    pub fn all(&self) -> impl Iterator<Item = (ExprId, Node)> {
+        self.nodes
+            .iter()
+            .enumerate()
+            .map(|(at, node)| (ExprId(u32::try_from(at).unwrap_or(u32::MAX)), *node))
+    }
+
     /// Whether it holds none.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
@@ -1360,6 +1377,12 @@ impl Arena {
         self.selects
             .get(usize::try_from(id.0).unwrap_or(usize::MAX))
             .copied()
+    }
+
+    /// Every statement the arena holds, in the order they were
+    /// written.
+    pub fn all_selects(&self) -> impl Iterator<Item = Select> {
+        self.selects.iter().copied()
     }
 
     /// How many statements the arena holds.

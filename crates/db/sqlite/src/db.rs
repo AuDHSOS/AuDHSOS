@@ -148,6 +148,7 @@ impl Error {
             Error::Nested => "cannot start a transaction within a transaction".to_string(),
             Error::NoTransaction => "cannot commit - no transaction is active".to_string(),
             Error::Recursion => "recursive aggregate queries not supported".to_string(),
+            Error::Eval(eval::Error::RowValue) => "row value misused".to_string(),
             other => alloc::format!("{other:?}"),
         }
     }
@@ -1063,6 +1064,7 @@ impl<'a> Database<'a> {
             return self.pragma(&asked, sql);
         }
         let (arena, root) = parse::statement(sql)?;
+        eval::rows_placed(&arena)?;
         let scope = Scope {
             terms: &[],
             outer: None,
@@ -1411,33 +1413,19 @@ impl<'a> Database<'a> {
             views: scope.views,
         };
         match used {
-            Used::Value(select) => {
-                let answered = self.statement(arena, select, sql, inner)?;
-                one(&answered.shape)?;
-                // A statement that answers no row answers `NULL`, and
-                // one that answers several answers its first.
-                Ok(answered
-                    .answer
-                    .rows
-                    .first()
-                    .and_then(|first| first.first())
-                    .cloned()
-                    .unwrap_or(Value::Null))
-            }
             Used::Exists(select) => {
                 let answered = self.statement(arena, select, sql, inner)?;
                 Ok(Value::Int(i64::from(!answered.answer.rows.is_empty())))
             }
             Used::In(value, select, negated) => {
                 let answered = self.statement(arena, select, sql, inner)?;
-                let column = one(&answered.shape)?;
                 contained(
                     arena,
                     value,
                     sql,
                     row,
                     &answered.answer.rows,
-                    column,
+                    &answered.shape.columns,
                     negated,
                 )
             }
@@ -1456,14 +1444,48 @@ impl<'a> Database<'a> {
                     plan: Plan::Rows(None, None),
                     pushed: Vec::new(),
                 };
-                let column = one(&side.shape)?;
+                let columns = side.shape.columns.clone();
                 let mut rows = Vec::new();
                 for step in self.scanned(&side, stored) {
                     rows.push(step?.1);
                 }
-                contained(arena, value, sql, row, &rows, column, negated)
+                contained(arena, value, sql, row, &rows, &columns, negated)
             }
         }
+    }
+
+    /// The first row the statement `select` answers, each value with
+    /// the affinity and the collation of the column it stands in,
+    /// which is what a row compared against `(SELECT a, b)` compares
+    /// against.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what it could not answer and why.
+    fn answer_items(
+        &self,
+        arena: &Arena,
+        sql: &[u8],
+        select: SelectId,
+        scope: Scope<'_>,
+        row: &dyn eval::Row,
+    ) -> Result<Vec<(Value, Affinity, Option<Collation>)>, Error> {
+        let inner = Scope {
+            terms: scope.terms,
+            outer: Some(row),
+            views: scope.views,
+        };
+        let answered = self.statement(arena, select, sql, inner)?;
+        let first = answered.answer.rows.first();
+        let mut out = Vec::new();
+        for (at, column) in answered.shape.columns.iter().enumerate() {
+            let value = first
+                .and_then(|held| held.get(at))
+                .cloned()
+                .unwrap_or(Value::Null);
+            out.push((value, column.affinity, column.collation));
+        }
+        Ok(out)
     }
 
     /// The `WITH` terms of a statement, each answered once.
@@ -2418,15 +2440,6 @@ fn narrow(range: &mut Option<i64>, past: &mut Option<i64>, op: BinaryOp, bound: 
     }
 }
 
-/// The one column a statement used as a value answers, which is a
-/// refusal where it answers any other number.
-const fn one(shape: &Shape) -> Result<&Column, Error> {
-    match shape.columns.as_slice() {
-        [column] => Ok(column),
-        _ => Err(Error::Columns),
-    }
-}
-
 /// Whether a value is among the rows a statement answered.
 ///
 /// The answer is three-valued: a `NULL` on either side is neither in
@@ -2441,29 +2454,58 @@ fn contained(
     sql: &[u8],
     row: &dyn eval::Row,
     rows: &[Vec<Value>],
-    column: &Column,
+    columns: &[Column],
     negated: bool,
 ) -> Result<Value, Error> {
-    let (left, left_affinity, written) = evaluate_compared(arena, value, sql, row)?;
-    let collation = written.or(column.collation).unwrap_or(row.collation());
-    let affinity = compare_affinity(left_affinity, column.affinity);
+    let left = if eval::is_row_value(arena, value) {
+        eval::evaluate_items(arena, value, sql, row)?
+    } else {
+        alloc::vec![evaluate_compared(arena, value, sql, row)?]
+    };
+    if left.len() != columns.len() {
+        return Err(Error::Columns);
+    }
     let mut unknown = false;
     for held in rows {
-        let mut mine = left.clone();
-        let mut theirs = held.first().cloned().unwrap_or(Value::Null);
-        if mine == Value::Null || theirs == Value::Null {
-            unknown = true;
-            continue;
-        }
-        apply_comparison(&mut mine, &mut theirs, affinity);
-        if compare(&mine, &theirs, collation) == core::cmp::Ordering::Equal {
-            return Ok(Value::Int(i64::from(!negated)));
+        match same_values(&left, held, columns, row.collation()) {
+            Some(true) => return Ok(Value::Int(i64::from(!negated))),
+            Some(false) => {}
+            None => unknown = true,
         }
     }
     if unknown {
         return Ok(Value::Null);
     }
     Ok(Value::Int(i64::from(negated)))
+}
+
+/// Whether one row a statement answered is the row looked for, which
+/// is unknown where a null stands in a pair no other pair settles.
+fn same_values(
+    left: &[(Value, Affinity, Option<Collation>)],
+    held: &[Value],
+    columns: &[Column],
+    default: Collation,
+) -> Option<bool> {
+    let mut unknown = false;
+    for (at, ((mine, affinity, written), column)) in left.iter().zip(columns).enumerate() {
+        let mut one = mine.clone();
+        let mut other = held.get(at).cloned().unwrap_or(Value::Null);
+        if one == Value::Null || other == Value::Null {
+            unknown = true;
+            continue;
+        }
+        apply_comparison(
+            &mut one,
+            &mut other,
+            compare_affinity(*affinity, column.affinity),
+        );
+        let collation = written.or(column.collation).unwrap_or(default);
+        if compare(&one, &other, collation) != core::cmp::Ordering::Equal {
+            return Some(false);
+        }
+    }
+    if unknown { None } else { Some(true) }
 }
 
 /// Whether the row the walk just read attaches to the ones above it:
@@ -4202,6 +4244,17 @@ impl eval::Row for Cursor<'_> {
         reach
             .database
             .answer(reach.arena, reach.sql, used, reach.scope, self)
+            .ok()
+    }
+
+    fn answered_items(
+        &self,
+        select: SelectId,
+    ) -> Option<Vec<(Value, Affinity, Option<Collation>)>> {
+        let reach = self.reach;
+        reach
+            .database
+            .answer_items(reach.arena, reach.sql, select, reach.scope, self)
             .ok()
     }
 

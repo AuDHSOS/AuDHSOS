@@ -119,7 +119,7 @@ fn what_is_not_written_yet_refuses_rather_than_guessing() {
     assert_eq!(refusal("'{}' ->> 'a'"), Error::NoFunction);
     assert_eq!(refusal("CURRENT_TIME"), Error::Unsupported);
     assert_eq!(refusal("?"), Error::Unsupported);
-    assert_eq!(refusal("(1,2)"), Error::Unsupported);
+    assert_eq!(refusal("(1,2)"), Error::RowValue);
     assert_eq!(refusal("(SELECT 1)"), Error::Unsupported);
     assert_eq!(refusal("EXISTS (SELECT 1)"), Error::Unsupported);
     assert_eq!(refusal("1 IN (SELECT 1)"), Error::Unsupported);
