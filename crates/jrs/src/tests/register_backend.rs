@@ -3972,12 +3972,9 @@ fn register_lowering_rejects_for_in_heads_it_cannot_model() -> Result<(), Error>
         // An assignment head writes an existing reference.
         "let k;for(k in {a:1}){}",
         // A destructuring head is not lowered.
-        "for(const [k] in {a:1}){}",
         // A captured per-iteration binding needs a context of its own.
         "for(const k in {a:1}){(()=>k)}",
         "let k;for(k of [1]){}",
-        // A destructuring head is not lowered.
-        "for(const [a] of [[1]]){}",
         // A per-iteration binding captured by a closure needs a context.
         "for(const x of [1]){(()=>x)}",
         // A head that shadows a binding of the enclosing scope is not lowered.
@@ -3990,6 +3987,21 @@ fn register_lowering_rejects_for_in_heads_it_cannot_model() -> Result<(), Error>
             "{source}"
         );
     }
+    // 8.6.2 binds the names a pattern head names out of the value of each
+    // step, in a `for`-`in` as in a `for`-`of`. A `for`-`in` key is a String,
+    // whose iterator 22.1.3.34 gives is not built, so that one names the gap.
+    differential("for(const [a] of [[1]]){}")?;
+    let source = "for(const [k] in {a:1}){}";
+    let program = compile(source, Limits::default())?;
+    assert!(program.uses_register_backend(), "{source}");
+    assert!(
+        matches!(
+            Runtime::with_backend(Limits::default(), Backend::Engine)
+                .run(&program, &mut SilentHost),
+            Err(Error::Unsupported { .. })
+        ),
+        "{source}"
+    );
     Ok(())
 }
 
@@ -5558,6 +5570,27 @@ fn a_write_a_property_refuses_says_so_where_it_runs() -> Result<(), Error> {
         // holds the name and refuses a write does not reach them.
         "Object.defineProperty(Object.prototype,'p',{value:1,writable:false,configurable:true});var o={p:2};o.p",
         "Object.defineProperty(Object.prototype,'p',{value:1,writable:false,configurable:true});var o={p:2};o.hasOwnProperty('p')",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
+
+#[test]
+fn a_head_that_is_a_pattern_binds_each_step() -> Result<(), Error> {
+    // 8.6.2 binds the names a pattern head names out of the value of each
+    // step, and 14.7.5.5 makes one binding per iteration for a lexical head.
+    for source in [
+        "var r=0;for(var [a,b] of [[1,2],[3,4]]){r=r+a+b};r",
+        "var r=0;for(const [a,b] of [[1,2],[3,4]]){r=r+a+b};r",
+        "var r=0;for(let [a] of [[5]]){r=r+a};r",
+        "var r=0;for(var {x} of [{x:1},{x:2}]){r=r+x};r",
+        "var r=0;for(const {x,y} of [{x:1,y:2}]){r=r+x+y};r",
+        "var r=0;for(const {x:{y}} of [{x:{y:7}}]){r=r+y};r",
+        "var r=0;for(const [a=9] of [[]]){r=r+a};r",
+        "var r=0;for(const {x=3} of [{}]){r=r+x};r",
+        "var r=0;for(var [a] of [[1]]){r=r+a};r+a",
+        "var r='';for(const [a,b] of [[1,2]]){r=r+a+'-'+b};r",
     ] {
         differential_scripts(&[source])?;
     }

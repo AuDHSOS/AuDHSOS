@@ -782,11 +782,19 @@ enum ForInHead<'a> {
     /// A `var` head of a Realm Script, whose binding 16.1.7 made on the
     /// Global Environment Record.
     Global { name: &'a str },
+    /// A head that is a binding pattern, which 8.6.2 binds out of the value
+    /// of each step.
+    Pattern {
+        /// The pattern the head declared.
+        pattern: &'a BindingPattern,
+        /// Whether the head is lexical, and if so whether it is mutable.
+        lexical: Option<bool>,
+    },
 }
 
 /// What a `for`-`in` or `for`-`of` head leaves for its body.
 #[derive(Clone, Copy)]
-struct IterationHead {
+struct IterationHead<'a> {
     /// Offset the back edge returns to.
     head: usize,
     /// Jump taken when the step produced a value.
@@ -796,6 +804,9 @@ struct IterationHead {
     /// Name of the Global Environment Record the loop variable is written to
     /// as well, when the head declared one there.
     global: Option<u16>,
+    /// The pattern the head declared, which 8.6.2 binds out of the value of
+    /// each step.
+    pattern: Option<&'a BindingPattern>,
     /// Register the loop variable is written to.
     variable: crate::engine::bytecode::Reg,
     /// Register holding the loop's completion value.
@@ -993,7 +1004,21 @@ impl RegisterLowerer {
         use crate::engine::bytecode::Instruction;
         match pattern {
             parser::BindingPattern::Name(name) => {
-                let binding = *self.bindings.get(name)?;
+                let Some(binding) = self.bindings.get(name).copied() else {
+                    // 16.1.7 made the binding on the Global Environment
+                    // Record, so 8.6.2 writes it there.
+                    if !self.realm {
+                        return None;
+                    }
+                    let units: Vec<u16> = name.encode_utf16().collect();
+                    let constant = self.string_constant(&units)?;
+                    self.code
+                        .emit(crate::engine::bytecode::Instruction::StaGlobal {
+                            name: constant,
+                            strict: false,
+                        });
+                    return Some(());
+                };
                 if binding.stable_function_identity {
                     return None;
                 }
@@ -5607,13 +5632,22 @@ impl RegisterLowerer {
         target: Option<&parser::AssignmentTarget>,
         body: &Stmt,
     ) -> Option<ForInHead<'a>> {
-        let (pattern, None) = binding? else {
+        if target.is_some() {
+            return None;
+        }
+        let (pattern, lexical) = binding?;
+        // 8.6.2 binds the names a pattern head names out of the value of each
+        // step; every other head names one binding.
+        if !matches!(pattern, BindingPattern::Name(_)) {
+            return Some(ForInHead::Pattern {
+                pattern,
+                lexical: *lexical,
+            });
+        }
+        if lexical.is_some() {
             return self
                 .iteration_binding(binding, target, body)
                 .map(|(name, mutable)| ForInHead::PerIteration { name, mutable });
-        };
-        if target.is_some() {
-            return None;
         }
         let name = pattern.identifier()?;
         let mut direct = BTreeSet::new();
@@ -5641,6 +5675,59 @@ impl RegisterLowerer {
             register,
             declared_type: declared.value_type?,
         })
+    }
+
+    /// Declares the names a pattern head binds, which 14.7.5.5 makes one of
+    /// per iteration for a lexical head and 14.7.5.6 leaves to the
+    /// declaration for a `var`.
+    fn declare_iteration_pattern(
+        &mut self,
+        pattern: &BindingPattern,
+        lexical: Option<bool>,
+    ) -> Option<()> {
+        let Some(mutable) = lexical else {
+            return Some(());
+        };
+        let mut names = Vec::new();
+        pattern.names(&mut names);
+        for name in names {
+            self.active_binding_count = self.active_binding_count.checked_add(1)?;
+            self.max_binding_count = self.max_binding_count.max(self.active_binding_count);
+            let register = self.allocate_register()?;
+            self.bindings.insert(
+                name,
+                RegisterBinding {
+                    storage: RegisterBindingStorage::Register(register),
+                    value_type: Some(RegisterType::Unknown),
+                    mutable,
+                    stable_function_identity: false,
+                },
+            );
+        }
+        Some(())
+    }
+
+    /// Gives back what a pattern head took.
+    fn close_iteration_pattern(
+        &mut self,
+        pattern: &BindingPattern,
+        lexical: Option<bool>,
+    ) -> Option<()> {
+        if lexical.is_none() {
+            return Some(());
+        }
+        let mut names = Vec::new();
+        pattern.names(&mut names);
+        // The registers were taken in the order the names came, so they are
+        // given back in the other one.
+        for name in names.into_iter().rev() {
+            let binding = self.bindings.remove(&name)?;
+            self.active_binding_count = self.active_binding_count.checked_sub(1)?;
+            if let RegisterBindingStorage::Register(register) = binding.storage {
+                self.release_register(register)?;
+            }
+        }
+        Some(())
     }
 
     fn iteration_binding<'a>(
@@ -5674,6 +5761,10 @@ impl RegisterLowerer {
     /// `ForInNext` advances: the object of the current Prototype Chain level,
     /// that level's own-key Array, the index reached in it, and the object
     /// recording the keys already visited.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function emits the whole of a loop head and its close"
+    )]
     fn lower_for_in(
         &mut self,
         binding: Option<&(BindingPattern, Option<bool>)>,
@@ -5724,15 +5815,25 @@ impl RegisterLowerer {
                 self.bindings.get_mut(name)?.value_type = Some(RegisterType::String);
                 register
             }
-            // The binding is a property of the global object, and the loop
-            // keeps the key in a register of its own to write it from.
+            // The binding is a property of the global object, or the names a
+            // pattern binds, and the loop keeps the step in a register of its
+            // own to write it from.
             ForInHead::Global { .. } => self.allocate_register()?,
+            ForInHead::Pattern { pattern, lexical } => {
+                let register = self.allocate_register()?;
+                self.declare_iteration_pattern(pattern, lexical)?;
+                register
+            }
         };
         let head_global = match head_binding {
             ForInHead::Global { name } => {
                 let units: Vec<u16> = name.encode_utf16().collect();
                 Some(self.string_constant(&units)?)
             }
+            _ => None,
+        };
+        let head_pattern = match head_binding {
+            ForInHead::Pattern { pattern, .. } => Some(pattern),
             _ => None,
         };
 
@@ -5755,6 +5856,7 @@ impl RegisterLowerer {
                 exit,
                 variable: key_register,
                 global: head_global,
+                pattern: head_pattern,
                 result: result_register,
                 source: None,
                 guarded_layout: None,
@@ -5778,9 +5880,14 @@ impl RegisterLowerer {
                 self.bindings.get_mut(name)?.value_type =
                     Some(declared_type.merge(RegisterType::String));
             }
-            // The binding lives on the Global Environment Record, so nothing
-            // of this frame holds it after the loop.
+            // The binding lives on the Global Environment Record, or is the
+            // names a pattern bound, so nothing of this frame holds the step
+            // after the loop.
             ForInHead::Global { .. } => {
+                self.release_register(key_register)?;
+            }
+            ForInHead::Pattern { pattern, lexical } => {
+                self.close_iteration_pattern(pattern, lexical)?;
                 self.release_register(key_register)?;
             }
         }
@@ -5805,7 +5912,7 @@ impl RegisterLowerer {
     fn lower_iteration_body(
         &mut self,
         body: &Stmt,
-        loop_head: IterationHead,
+        loop_head: IterationHead<'_>,
         bindings_at_head: &BTreeMap<String, RegisterBinding>,
     ) -> Option<RegisterFlow> {
         use crate::engine::bytecode::Instruction;
@@ -5818,12 +5925,17 @@ impl RegisterLowerer {
         }
         self.code.emit(Instruction::Star(loop_head.variable));
         // 14.7.5.6 writes the binding the head declared, which for a `var` of
-        // a Realm Script is a property of the global object.
+        // a Realm Script is a property of the global object and for a pattern
+        // is whatever 8.6.2 binds out of the value.
         if let Some(name) = loop_head.global {
             self.code.emit(Instruction::StaGlobal {
                 name,
                 strict: false,
             });
+        }
+        if let Some(pattern) = loop_head.pattern {
+            self.code.emit(Instruction::Ldar(loop_head.variable));
+            self.bind_pattern(RegisterType::Unknown, pattern)?;
         }
         self.code.emit(Instruction::Ldar(loop_head.result));
         self.loops.push(RegisterLoop {
@@ -5975,6 +6087,10 @@ impl RegisterLowerer {
             }
             _ => None,
         };
+        let head_pattern = match head_binding {
+            ForInHead::Pattern { pattern, .. } => Some(pattern),
+            _ => None,
+        };
 
         let mut bindings_at_head = self.bindings.clone();
         infer_register_var_types_to_fixed_point(
@@ -6028,6 +6144,7 @@ impl RegisterLowerer {
                 exit,
                 variable,
                 global: head_global,
+                pattern: head_pattern,
                 result: result_register,
                 source: None,
                 guarded_layout: None,
@@ -6076,9 +6193,15 @@ impl RegisterLowerer {
                 self.bindings.get_mut(name)?.value_type = Some(element_type);
                 Some(register)
             }
-            // The binding is a property of the global object, and the loop
-            // keeps the element in a register of its own to write it from.
+            // The binding is a property of the global object, or the names a
+            // pattern binds, and the loop keeps the element in a register of
+            // its own to write it from.
             ForInHead::Global { .. } => self.allocate_register(),
+            ForInHead::Pattern { pattern, lexical } => {
+                let register = self.allocate_register()?;
+                self.declare_iteration_pattern(pattern, lexical)?;
+                Some(register)
+            }
         }
     }
 
@@ -6103,9 +6226,11 @@ impl RegisterLowerer {
             } => {
                 self.bindings.get_mut(name)?.value_type = Some(declared_type.merge(element_type));
             }
-            // The binding lives on the Global Environment Record, so nothing
-            // of this frame holds it after the loop.
             ForInHead::Global { .. } => {
+                self.release_register(variable)?;
+            }
+            ForInHead::Pattern { pattern, lexical } => {
+                self.close_iteration_pattern(pattern, lexical)?;
                 self.release_register(variable)?;
             }
         }
@@ -6174,12 +6299,21 @@ impl RegisterLowerer {
                 register
             }
             ForInHead::Global { .. } => self.allocate_register()?,
+            ForInHead::Pattern { pattern, lexical } => {
+                let register = self.allocate_register()?;
+                self.declare_iteration_pattern(pattern, lexical)?;
+                register
+            }
         };
         let head_global = match head_binding {
             ForInHead::Global { name } => {
                 let units: Vec<u16> = name.encode_utf16().collect();
                 Some(self.string_constant(&units)?)
             }
+            _ => None,
+        };
+        let head_pattern = match head_binding {
+            ForInHead::Pattern { pattern, .. } => Some(pattern),
             _ => None,
         };
 
@@ -6203,6 +6337,7 @@ impl RegisterLowerer {
                 exit,
                 variable: key_register,
                 global: head_global,
+                pattern: head_pattern,
                 result: result_register,
                 source: Some(value),
                 guarded_layout: Some(object_id),
@@ -6225,9 +6360,14 @@ impl RegisterLowerer {
             } => {
                 self.bindings.get_mut(name)?.value_type = Some(declared_type.merge(element_type));
             }
-            // The binding lives on the Global Environment Record, so nothing
-            // of this frame holds it after the loop.
+            // The binding lives on the Global Environment Record, or is the
+            // names a pattern bound, so nothing of this frame holds the step
+            // after the loop.
             ForInHead::Global { .. } => {
+                self.release_register(key_register)?;
+            }
+            ForInHead::Pattern { pattern, lexical } => {
+                self.close_iteration_pattern(pattern, lexical)?;
                 self.release_register(key_register)?;
             }
         }
