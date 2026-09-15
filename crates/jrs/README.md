@@ -649,8 +649,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Object%` and its methods, after the integrity levels, on the register engine (focused) | focused | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,530 (22.49%) | 18 (0.26%) | 5,254 (77.24%) |
 | `%Number%` (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 572 (84.12%) | 102 (15.00%) | 6 (0.88%) |
 | `%Number%` on the register engine (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 226 (33.24%) | 2 (0.29%) | 452 (66.47%) |
-| Complete pinned suite, including staging and Intl | full | `aff55ba` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `aff55ba` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 10,478 (10.18%) | 17,739 (17.23%) | 74,708 (72.58%) |
+| `%Reflect%` (focused) | focused | `7342613` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Reflect --summary` | 153 | 306 | 260 (84.97%) | 46 (15.03%) | 0 (0.00%) |
+| `%Reflect%` on the register engine (focused) | focused | `7342613` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Reflect --summary` | 153 | 306 | 48 (15.69%) | 4 (1.31%) | 254 (83.01%) |
+| Complete pinned suite, including staging and Intl | full | `7342613` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `7342613` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 10,594 (10.29%) | 17,754 (17.25%) | 74,577 (72.46%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -994,6 +996,22 @@ unsupported to failed — where they belonged. The engine passes the same number
 as before; what changed is that the measurement stopped calling its own
 failures gaps.
 
+`%Boolean%` is 20.3.1.1, `ToBoolean` of the argument, with `new` naming the
+Boolean exotic object of 20.3.3 that this engine has not built.
+
+`%Reflect%` is 19.4.4, an ordinary object like `%Math%`, and 28.1 gives it the
+operations of clause 20.1.2 without their coercion: step 1 of each refuses a
+target that is not an Object, and the answer says whether the operation worked
+where 20.1.2 throws. Nine are built, and 28.1.1, 28.1.2, 28.1.12 and 28.1.13
+are named as gaps.
+
+Naming that last gap costs 206 passes, and they were not passes. The harness
+`isConstructor` asks `try { Reflect.construct(...) } catch { return false }`.
+With `Reflect.construct` absent the call threw a `TypeError`, the harness
+swallowed it, and every `not-a-constructor.js` concluded what it wanted to
+conclude. A test that passes because a feature is missing is what the
+procedure forbids, so those variants are unsupported now and say why.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -1061,7 +1079,8 @@ tree `0d446537428a6d1d20eb3a6ad1ebae9a2240b8f3`, which is the tree of
 tree `5e2ec2f08ae7a18f55f1b4c0fe079e7de807efdd`, which is the tree of
 `a011601`. Both full runs beside the throw that reached its end were measured
 at tree `53bfb8150e68ec98d035eece875f5ec1ed4d2351`, which is the tree of
-`aff55ba`.
+`aff55ba`. The `%Reflect%` runs and both full runs beside them were measured at
+tree `23f63f95c8ebb94a88f32d50d6a089da885a06da`, which is the tree of `7342613`.
 
 ### Historical Test262 baseline
 
