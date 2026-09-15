@@ -642,7 +642,7 @@ TRIGGER`, the four `DROP`s, `ALTER TABLE ... ADD COLUMN`, `PRAGMA`,
 and `UPDATE` are run from their text and write the files the shell wrote;
 the rest is open.
 Depends on: Q6. Recorded in D-172 to D-174, D-182, D-186, D-187, D-189,
-D-191, D-193, D-195, D-196 and D-205 to D-209.
+D-191, D-193, D-195, D-196 and D-205 to D-211.
 Size: L.
 
 ### Does
@@ -671,6 +671,9 @@ Size: L.
    `sqlite_stat1`. Built, which D-207 records.
 6. `REINDEX`, which writes the entries of an index again out of the
    rows they belong to. Built, which D-209 records.
+7. `PRAGMA integrity_check` and `PRAGMA quick_check`, which walk the
+   file and answer what it holds against what it says. Built, which
+   D-210 records.
 
 ### Done when
 
@@ -681,7 +684,7 @@ library accepts or refuses it, with no count of what is waiting.
 
 Status: `sh tools/xtask.sh sqlite-suite` runs the part of SQLite's own
 test files that needs no TCL interpreter. Of 15 364 cases in 1 171
-files, 2157 pass, 7 answer differently, and 13 200 name something the
+files, 2182 pass, 8 answer differently, and 13 174 name something the
 engine refuses or something the harness cannot run.
 Depends on: Q7, Q8.
 Size: M.
@@ -726,11 +729,12 @@ list it answers is the list the file writes, element for element.
 statement and what the engine answered, which is what says which missing
 feature stops the most files.
 
-### The seven that answer differently
+### The eight that answer differently
 
 | File | Cases | What it shows |
 |------|-------|---------------|
 | `fpconv1.test` | 3 | `sqlite3_db_config db FP_DIGITS 15`, which the interpreter sets between two cases; the pinned shell answers what this engine answers for the third. |
+| `numindex1.test` | 1 | A real written with fifteen digits, which is what `testfixture` is configured to write and not what the pinned shell writes; the shell answers what this engine answers. |
 | `collate1.test` | 1 | A collation the file registers through the interpreter, which this harness cannot run. |
 | `gencol1.test` | 1 | `INSERT INTO t1 SELECT * FROM t0` where both hold a computed column: the values are placed over every column and the computed one is written again. |
 | `autoindex4.test` | 1 | The order of rows an `ORDER BY` leaves equal, which SQLite settles by the automatic index it builds. |

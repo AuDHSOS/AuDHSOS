@@ -58,6 +58,15 @@ const fn is_text(value: Option<crate::record::Value<'_>>, wanted: &[u8]) -> bool
 /// The table `ANALYZE` writes its counts into.
 const STAT: &[u8] = b"sqlite_stat1";
 
+/// Whether the schema already names a table, an index or a view, which
+/// are one namespace; a trigger is named in its own, so a trigger and
+/// an index may share a name.
+fn names(database: &Database<'_>, name: &[u8]) -> bool {
+    database.table(name).is_some()
+        || database.index(name).is_some()
+        || database.view(name).is_some()
+}
+
 /// One index a `REINDEX` writes again.
 struct Rebuilt {
     /// The index, as the schema describes it.
@@ -764,6 +773,21 @@ impl Writer {
     fn pragma(&mut self, asked: &crate::ast::Pragma, sql: &[u8]) -> Result<Vec<Vec<Value>>, Error> {
         let name = crate::schema::dequote(asked.name.text(sql));
         let setting = crate::pragma::of_name(&name).ok_or(Error::Unsupported)?;
+        // The two pragmas that walk the file rather than read its
+        // header answer the same rows on either connection.
+        let quick = match setting {
+            crate::pragma::Setting::Integrity => Some(false),
+            crate::pragma::Setting::Quick => Some(true),
+            _ => None,
+        };
+        if let Some(quick) = quick {
+            let bytes = self.image();
+            let database = Database::open(&bytes)?;
+            return Ok(crate::check::integrity(&database, quick)?
+                .into_iter()
+                .map(|text| alloc::vec![Value::Text(text)])
+                .collect());
+        }
         let Some(value) = asked.value else {
             // A connection answers a pragma out of what it holds and
             // not out of the file, because a file with no table holds
@@ -887,6 +911,9 @@ impl Writer {
         sql: &[u8],
     ) -> Result<(), Error> {
         let name = crate::schema::dequote(table.name.text(sql));
+        if self.already(&name, table.if_not_exists)? {
+            return Ok(());
+        }
         let (answer, affinities) = {
             let bytes = self.image();
             let database = Database::open(&bytes)?.seeded(self.random.word());
@@ -962,7 +989,7 @@ impl Writer {
                 if trigger.if_not_exists {
                     return Ok(());
                 }
-                return Err(Error::Nested);
+                return Err(Error::Exists);
             }
         }
         let mut written = b"CREATE TRIGGER ".to_vec();
@@ -1134,7 +1161,7 @@ impl Writer {
     /// `CREATE TABLE`: a page for the tree of the table and a row of
     /// `sqlite_schema` that names it.
     fn define(&mut self, arena: &Arena, definition: Definition, sql: &[u8]) -> Result<(), Error> {
-        let (kind, name, over) = match definition {
+        let (kind, name, over, already) = match definition {
             Definition::Drop(asked) => return self.drop_object(&asked, sql),
             Definition::AddColumn(asked) => return self.add_column(arena, &asked, sql),
             Definition::Trigger(trigger) => return self.create_trigger(&trigger, sql),
@@ -1143,20 +1170,29 @@ impl Writer {
                     return self.create_as(arena, &table, select, sql);
                 }
                 let name = crate::schema::dequote(table.name.text(sql));
-                (Some(Kind::LeafTable), name.clone(), name)
+                (
+                    Some(Kind::LeafTable),
+                    name.clone(),
+                    name,
+                    table.if_not_exists,
+                )
             }
             Definition::Index(index) => (
                 Some(Kind::LeafIndex),
                 crate::schema::dequote(index.name.text(sql)),
                 crate::schema::dequote(index.table.text(sql)),
+                index.if_not_exists,
             ),
             // A view holds no row of its own: it names a statement, and
             // the rows are the ones that statement answers.
             Definition::View(view) => {
                 let name = crate::schema::dequote(view.name.text(sql));
-                (None, name.clone(), name)
+                (None, name.clone(), name, view.if_not_exists)
             }
         };
+        if self.already(&name, already)? {
+            return Ok(());
+        }
         let root = match kind {
             Some(kind) => {
                 let root = self.pages.add(kind, 0)?;
@@ -1214,6 +1250,22 @@ impl Writer {
             }
         }
         self.schema_written(rowid, &row)
+    }
+
+    /// Whether a `CREATE` of `name` writes nothing, because the schema
+    /// already holds the name and the statement wrote `IF NOT EXISTS`.
+    ///
+    /// Reading the schema costs O(n) in its rows.
+    fn already(&self, name: &[u8], if_not_exists: bool) -> Result<bool, Error> {
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        if !names(&database, name) {
+            return Ok(false);
+        }
+        if if_not_exists {
+            return Ok(true);
+        }
+        Err(Error::Exists)
     }
 
     /// One index of a table's own, written: a page for its tree and a

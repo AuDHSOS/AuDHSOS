@@ -47,6 +47,12 @@ pub enum Setting {
     /// A pragma the file does not hold and the connection answers
     /// nothing for, which is accepted and changes nothing.
     Ignored,
+    /// `PRAGMA integrity_check`, which answers one row per problem the
+    /// file holds and one row of `ok` where it holds none.
+    Integrity,
+    /// `PRAGMA quick_check`, which is the same walk without holding an
+    /// index to the rows it is over.
+    Quick,
 }
 
 /// What a pragma the connection keeps a value for is written as.
@@ -335,6 +341,8 @@ pub fn of_name(name: &[u8]) -> Option<Setting> {
         b"application_id" => Setting::ApplicationId,
         b"schema_format" => Setting::SchemaFormat,
         b"count_changes" => Setting::CountChanges,
+        b"integrity_check" => Setting::Integrity,
+        b"quick_check" => Setting::Quick,
         b"legacy_file_format"
         | b"legacy_alter_table"
         | b"short_column_names"
@@ -394,9 +402,14 @@ impl Setting {
             Setting::UserVersion => number(header.user_version),
             Setting::ApplicationId => number(header.application_id),
             Setting::SchemaFormat => number(header.schema_format),
-            // A pragma the file does not hold, and the ones the
-            // connection holds, have no answer out of a header.
-            Setting::CountChanges | Setting::Held(_) | Setting::Ignored => return None,
+            // A pragma the file does not hold, the ones the connection
+            // holds, and the two that walk the file rather than read
+            // its header have no answer out of a header.
+            Setting::CountChanges
+            | Setting::Held(_)
+            | Setting::Ignored
+            | Setting::Integrity
+            | Setting::Quick => return None,
         })
     }
 }

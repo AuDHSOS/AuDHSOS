@@ -4004,3 +4004,317 @@ fn analyze_counts_no_table_of_the_system_and_refuses_no_name_of_one() {
         [[Value::Int(0)]]
     );
 }
+
+#[test]
+fn what_the_integrity_check_answers_for_a_file_it_finds_nothing_in() {
+    use crate::change::Writer;
+    use crate::db::Database;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a PRIMARY KEY, b NOT NULL)".as_slice(),
+        b"CREATE INDEX i ON t(b)",
+        b"INSERT INTO t VALUES(1,'x'),(2,'y'),(3,hex(zeroblob(400)))",
+        b"DELETE FROM t WHERE a=2",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let ok = [[Value::Text(b"ok".to_vec())]];
+    assert_eq!(writer.run(b"PRAGMA integrity_check").unwrap(), ok);
+    assert_eq!(writer.run(b"PRAGMA quick_check").unwrap(), ok);
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    assert_eq!(database.query(b"PRAGMA integrity_check").unwrap().rows, ok);
+    assert_eq!(database.query(b"PRAGMA quick_check").unwrap().rows, ok);
+}
+
+#[test]
+fn the_integrity_check_reaches_the_pages_of_a_file_that_vacuums_itself() {
+    use crate::change::Writer;
+    // A file with pointer maps holds a map page every so many pages,
+    // and a file with a free list holds pages no tree names: the check
+    // reaches both and finds nothing.
+    let ok = [[Value::Text(b"ok".to_vec())]];
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.vacuuming(false);
+    for sql in [
+        b"CREATE TABLE t(a PRIMARY KEY,b)".as_slice(),
+        b"CREATE INDEX i ON t(b)",
+        b"INSERT INTO t VALUES(1,'x'),(2,'y')",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    assert_eq!(writer.run(b"PRAGMA integrity_check").unwrap(), ok);
+
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a)".as_slice(),
+        b"INSERT INTO t VALUES(hex(zeroblob(2000)))",
+        b"DELETE FROM t",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    assert_eq!(writer.run(b"PRAGMA integrity_check").unwrap(), ok);
+}
+
+#[test]
+fn what_the_integrity_check_finds_in_a_file_written_over() {
+    use crate::change::Writer;
+    use crate::db::Database;
+    let found = |bytes: &[u8]| -> Vec<Vec<u8>> {
+        let database = Database::open(bytes).expect("a database");
+        database
+            .query(b"PRAGMA integrity_check")
+            .unwrap()
+            .rows
+            .iter()
+            .filter_map(|row| match row.first() {
+                Some(Value::Text(text)) => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a, b NOT NULL)".as_slice(),
+        b"CREATE UNIQUE INDEX i ON t(a)",
+        b"INSERT INTO t VALUES(1,'x'),(2,'y')",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let sound = writer.written();
+    assert_eq!(found(&sound), [b"ok".to_vec()]);
+
+    // The file says it holds one page more than any tree names.
+    let mut grown = sound.clone();
+    grown.extend_from_slice(&[0; 512]);
+    grown[28] = 0;
+    grown[29] = 0;
+    grown[30] = 0;
+    grown[31] = u8::try_from(sound.len() / 512).unwrap() + 1;
+    assert_eq!(
+        found(&grown),
+        [alloc::format!("Page {}: never used", sound.len() / 512 + 1).into_bytes()]
+    );
+
+    // A column that may not be nothing holding nothing: the record of
+    // the second row is written over with one of two noughts.
+    let mut null = sound;
+    let at = null
+        .windows(5)
+        .position(|window| window == b"\x03\x01\x0f\x02y")
+        .expect("the record of the second row");
+    null[at + 2] = 0;
+    assert_eq!(found(&null), [b"NULL value in t.b".to_vec()]);
+}
+
+/// What `PRAGMA integrity_check` answers over `bytes`, one text per
+/// row.
+fn checked(bytes: &[u8]) -> Vec<Vec<u8>> {
+    let database = crate::db::Database::open(bytes).expect("a database");
+    database
+        .query(b"PRAGMA integrity_check")
+        .unwrap()
+        .rows
+        .iter()
+        .filter_map(|row| match row.first() {
+            Some(Value::Text(text)) => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn what_the_integrity_check_finds_in_an_index_written_over() {
+    use crate::change::Writer;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a)".as_slice(),
+        b"CREATE UNIQUE INDEX i ON t(a)",
+        b"INSERT INTO t VALUES(1),(2)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let sound = writer.written();
+    assert_eq!(checked(&sound), [b"ok".to_vec()]);
+
+    // The index says it holds one entry where it holds two, so the row
+    // the entry it no longer counts belongs to is missing from it.
+    let mut fewer = sound.clone();
+    fewer[2 * 512 + 3] = 0;
+    fewer[2 * 512 + 4] = 1;
+    assert_eq!(
+        checked(&fewer),
+        [
+            b"row 2 missing from index i".to_vec(),
+            b"wrong # of entries in index i".to_vec()
+        ]
+    );
+
+    // Both entries of a unique index hold one value.
+    let mut same = sound;
+    let at = same
+        .windows(5)
+        .rposition(|window| window == b"\x03\x01\x01\x02\x02")
+        .expect("the entry of the second row");
+    same[at + 3] = 1;
+    assert_eq!(
+        checked(&same),
+        [
+            b"row 2 missing from index i".to_vec(),
+            b"non-unique entry in index i".to_vec()
+        ]
+    );
+}
+
+#[test]
+fn the_integrity_check_answers_a_hundred_problems_and_no_more() {
+    use crate::change::Writer;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    writer.run(b"CREATE TABLE u(b)").unwrap();
+    let sound = writer.written();
+    let held = u32::try_from(sound.len() / 512).unwrap();
+
+    // A hundred and one pages no tree, no map and no free list names:
+    // the check answers the first hundred problems it found.
+    let mut grown = sound.clone();
+    grown.extend(core::iter::repeat_n(0, 101 * 512));
+    grown[28..32].copy_from_slice(&(held + 101).to_be_bytes());
+    let found = checked(&grown);
+    assert_eq!(found.len(), 100);
+    assert_eq!(
+        found.first().map(Vec::as_slice),
+        Some(alloc::format!("Page {}: never used", held + 1).as_bytes())
+    );
+
+    // Two tables whose rows lie in one tree: the second walk of it
+    // reaches every page a walk reached already.
+    let mut shared = sound;
+    // The record of a row of `sqlite_schema` holds the page its tree
+    // begins at after the three names it holds, so the row of `u` is
+    // given the page the row of `t` names.
+    let root_at = |bytes: &[u8], name: u8| {
+        let mut wanted = b"\x06\x17\x0f\x0f\x01\x2ftable".to_vec();
+        wanted.push(name);
+        wanted.push(name);
+        let at = bytes
+            .windows(wanted.len())
+            .position(|window| window == wanted)
+            .expect("the row of a table");
+        at + wanted.len()
+    };
+    let root = shared[root_at(&shared, b't')];
+    let second = root_at(&shared, b'u');
+    shared[second] = root;
+    assert_eq!(
+        checked(&shared),
+        [
+            alloc::format!("2nd reference to page {root}").into_bytes(),
+            alloc::format!("Page {}: never used", root + 1).into_bytes()
+        ]
+    );
+}
+
+#[test]
+fn the_integrity_check_walks_a_tree_of_levels_and_a_file_that_names_a_page_twice() {
+    use crate::change::Writer;
+    let ok = [b"ok".to_vec()];
+
+    // A tree of more than one page, whose interior pages name children,
+    // and an index over values of every class.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a,b)").unwrap();
+    writer.run(b"CREATE INDEX i ON t(b)").unwrap();
+    for at in 0..60 {
+        let sql = alloc::format!("INSERT INTO t VALUES({at}, {at}.5)");
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    writer.run(b"INSERT INTO t VALUES(99,'text')").unwrap();
+    writer.run(b"INSERT INTO t VALUES(98,x'00ff')").unwrap();
+    writer.run(b"INSERT INTO t VALUES(97,NULL)").unwrap();
+    assert_eq!(checked(&writer.written()), ok);
+
+    // A chain that runs onto itself: the walk reaches the page a second
+    // time and goes no further round.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    writer
+        .run(b"INSERT INTO t VALUES(hex(zeroblob(2000)))")
+        .unwrap();
+    let mut ring = writer.written();
+    let head = 3_u32;
+    let at = (usize::try_from(head).unwrap() - 1) * 512;
+    ring[at..at + 4].copy_from_slice(&head.to_be_bytes());
+    let found = checked(&ring);
+    assert_eq!(
+        found.first().map(Vec::as_slice),
+        Some(alloc::format!("2nd reference to page {head}").as_bytes())
+    );
+
+    // A free list that names its own trunk again.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    writer
+        .run(b"INSERT INTO t VALUES(hex(zeroblob(2000)))")
+        .unwrap();
+    writer.run(b"DELETE FROM t").unwrap();
+    let mut listed = writer.written();
+    let trunk = u32::from_be_bytes([listed[32], listed[33], listed[34], listed[35]]);
+    assert!(trunk > 0);
+    let at = (usize::try_from(trunk).unwrap() - 1) * 512;
+    listed[at..at + 4].copy_from_slice(&trunk.to_be_bytes());
+    assert_eq!(
+        checked(&listed).first().map(Vec::as_slice),
+        Some(alloc::format!("2nd reference to page {trunk}").as_bytes())
+    );
+}
+
+#[test]
+fn a_name_the_schema_holds_is_refused_unless_the_statement_allows_it() {
+    use crate::change::Writer;
+    use crate::db::Error;
+    // `sqlite3StartTable` and `sqlite3CreateIndex` hold a table, an
+    // index and a view to one namespace, and a trigger to its own.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a)".as_slice(),
+        b"CREATE INDEX i ON t(a)",
+        b"CREATE VIEW v AS SELECT a FROM t",
+        b"CREATE TRIGGER g AFTER INSERT ON t BEGIN SELECT 1; END",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    for sql in [
+        b"CREATE TABLE t(b)".as_slice(),
+        b"CREATE TABLE i(b)",
+        b"CREATE TABLE v(b)",
+        b"CREATE INDEX t ON t(a)",
+        b"CREATE INDEX i ON t(a)",
+        b"CREATE VIEW t AS SELECT 1",
+        b"CREATE TABLE t AS SELECT 1",
+        b"CREATE TRIGGER g AFTER INSERT ON t BEGIN SELECT 1; END",
+    ] {
+        assert_eq!(
+            writer.run(sql).err(),
+            Some(Error::Exists),
+            "{}",
+            alloc::string::String::from_utf8_lossy(sql)
+        );
+    }
+    // `IF NOT EXISTS` writes nothing rather than refusing, and a
+    // trigger may share a name with an index.
+    let before = writer.written();
+    for sql in [
+        b"CREATE TABLE IF NOT EXISTS t(b)".as_slice(),
+        b"CREATE INDEX IF NOT EXISTS i ON t(a)",
+        b"CREATE VIEW IF NOT EXISTS v AS SELECT 1",
+        b"CREATE TABLE IF NOT EXISTS t AS SELECT 1",
+        b"CREATE TRIGGER IF NOT EXISTS g AFTER INSERT ON t BEGIN SELECT 1; END",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    assert_eq!(writer.written(), before);
+    writer
+        .run(b"CREATE TRIGGER i AFTER DELETE ON t BEGIN SELECT 1; END")
+        .unwrap();
+}

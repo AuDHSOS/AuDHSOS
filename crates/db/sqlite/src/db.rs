@@ -90,6 +90,10 @@ pub enum Error {
     /// A `BEGIN` on a connection that already has a transaction open,
     /// which `sqlite3BeginTransaction` refuses.
     Nested,
+    /// A `CREATE` of a name the schema already holds, which
+    /// `sqlite3StartTable` and `sqlite3CreateIndex` refuse unless the
+    /// statement writes `IF NOT EXISTS`.
+    Exists,
     /// A `COMMIT` or a `ROLLBACK` on a connection with no transaction
     /// open.
     NoTransaction,
@@ -824,6 +828,12 @@ impl<'a> Database<'a> {
         self.tables.iter().map(|stored| &stored.table)
     }
 
+    /// The file the database is read out of.
+    #[must_use]
+    pub const fn image(&self) -> &Image<'a> {
+        &self.image
+    }
+
     /// The table of `name` and the page its tree begins at, where the
     /// database holds one.
     #[must_use]
@@ -1033,6 +1043,25 @@ impl<'a> Database<'a> {
     fn pragma(&self, asked: &crate::ast::Pragma, sql: &[u8]) -> Result<Answer, Error> {
         let name = crate::schema::dequote(asked.name.text(sql));
         let setting = crate::pragma::of_name(&name).ok_or(Error::Unsupported)?;
+        // `PRAGMA integrity_check` and `PRAGMA quick_check` answer a
+        // row per problem the file holds, and a number after them says
+        // how many problems to answer at most, which this crate bounds
+        // on its own.
+        let quick = match setting {
+            crate::pragma::Setting::Integrity => Some(false),
+            crate::pragma::Setting::Quick => Some(true),
+            _ => None,
+        };
+        if let Some(quick) = quick {
+            let rows = crate::check::integrity(self, quick)?
+                .into_iter()
+                .map(|text| alloc::vec![Value::Text(text)])
+                .collect();
+            return Ok(Answer {
+                names: alloc::vec![name],
+                rows,
+            });
+        }
         // A file being read is not being configured, and a pragma the
         // file does not hold has no answer to read out of it.
         if asked.value.is_some() {

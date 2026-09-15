@@ -4294,7 +4294,7 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
   by its first word, read with the comments taken out, and a `WITH`
   clause stands in front of a statement that writes as well, so the
   words after it say which.
-- 2157 pass, 7 answer differently and 13 200 are refused or stopped.
+- 2182 pass, 8 answer differently and 13 174 are refused or stopped.
   Document 16, section 16.23 groups the seven. Earlier runs answered
   14, then 27, then 17, then 13, then 16 differently; twenty-five were
   defects, which D-181, D-184, D-189, D-197 and D-205 record and
@@ -4663,6 +4663,35 @@ D-209, document 16 step Q8.
   carries, and a word written after the name.
 - A table with no index of its own, and a schema with no index at all,
   are left as they stand.
+
+### 6.6.139 What the integrity check answers (`db-sqlite`)
+
+D-210, document 16 step Q8.
+
+- A file the check finds nothing in answers the one word `ok`: a
+  table with a key and an index, a row taken out again, a row that
+  runs onto a chain, a tree of more than one level, an index over a
+  value of every class, a file that vacuums itself, and a file with a
+  free list.
+- A file written over answers what it holds: a page no tree names, a
+  page two trees name, a column that may not be nothing holding
+  nothing, a row no index holds an entry for, an index whose count of
+  entries is not the count of rows, and two entries of a unique index
+  that hold one value.
+- A chain that runs onto itself and a free list that names its own
+  trunk are each walked once round and no further.
+- A hundred and one pages no tree names answer a hundred problems.
+
+### 6.6.140 A name the schema already holds (`db-sqlite`)
+
+D-211, document 16 step Q8.
+
+- A table, an index and a view are one namespace: a `CREATE` of any
+  of the three over a name any of the three holds is refused.
+- A trigger is named in its own namespace: a trigger and an index may
+  share a name.
+- `IF NOT EXISTS` writes nothing rather than refusing, for all four
+  and for a table made from a statement.
 
 ## 6.7 CI pipeline
 
