@@ -118,10 +118,20 @@ pub(super) fn run(
     let mut paths = Vec::new();
     let mut all = false;
     let mut summary = false;
-    for arg in args {
+    let mut jobs = None;
+    let mut args = args.peekable();
+    while let Some(arg) = args.next() {
         match arg.as_str() {
             "--all" => all = true,
             "--summary" => summary = true,
+            "--jobs" => {
+                let value = args.next().ok_or("--jobs requires a count")?;
+                let count: usize = value.parse().map_err(|_| format!("bad --jobs {value}"))?;
+                if count == 0 {
+                    return Err("--jobs must be at least one".into());
+                }
+                jobs = Some(count);
+            }
             _ if arg.starts_with('-') => return Err(format!("unknown Test262 option {arg}")),
             _ => paths.push(arg),
         }
@@ -151,54 +161,40 @@ pub(super) fn run(
     if files.is_empty() {
         return Err("no JavaScript test inputs selected".into());
     }
-    let mut runner = Runner {
-        root,
-        limits,
-        backend,
-        harness: BTreeMap::new(),
-        harness_bytes: 0,
-    };
+    // Every file gets a realm of its own, so files share nothing and are run
+    // on as many threads as the machine has. The answers are merged in the
+    // order the files were discovered, so the report does not depend on which
+    // thread finished first.
+    let files: Vec<PathBuf> = files.into_iter().collect();
+    let jobs = jobs
+        .or_else(|| std::thread::available_parallelism().ok().map(Into::into))
+        .unwrap_or(1)
+        .min(files.len().max(1));
+    let judged = judge_in_parallel(&files, &root, limits, backend, jobs);
     let mut counts = Counts::default();
-    for file in files {
-        if file
-            .file_name()
-            .is_some_and(|s| s.to_string_lossy().contains("_FIXTURE"))
-        {
-            counts.fixtures = counts.fixtures.saturating_add(1);
-            continue;
-        }
-        counts.files = counts.files.saturating_add(1);
-        let label = file
-            .strip_prefix(&runner.root)
-            .unwrap_or(&file)
-            .to_string_lossy();
-        let source = read(&file, limits.source_bytes);
-        let meta = source
-            .as_ref()
-            .map_err(Clone::clone)
-            .and_then(|s| metadata::parse(s));
-        match (source, meta) {
-            (Ok(source), Ok(meta)) => {
-                for variant in meta.variants() {
-                    let outcome = runner.execute(&source, &meta, variant);
-                    record(
-                        output,
-                        &mut counts,
-                        &label,
-                        variant.name(),
-                        &outcome,
-                        summary,
-                    )?;
+    for (label, judgement) in judged {
+        match judgement {
+            Judgement::Fixture => {
+                counts.fixtures = counts.fixtures.saturating_add(1);
+                continue;
+            }
+            Judgement::Metadata(error) => {
+                counts.files = counts.files.saturating_add(1);
+                record(
+                    output,
+                    &mut counts,
+                    &label,
+                    "metadata",
+                    &Outcome::Fail(error),
+                    summary,
+                )?;
+            }
+            Judgement::Variants(outcomes) => {
+                counts.files = counts.files.saturating_add(1);
+                for (variant, outcome) in outcomes {
+                    record(output, &mut counts, &label, variant, &outcome, summary)?;
                 }
             }
-            (_, Err(error)) | (Err(error), _) => record(
-                output,
-                &mut counts,
-                &label,
-                "metadata",
-                &Outcome::Fail(error),
-                summary,
-            )?,
         }
         if summary && counts.files % 1000 == 0 {
             writeln!(
@@ -217,6 +213,96 @@ pub(super) fn run(
         Ok(())
     }
 }
+/// What one file answered, before any of it is counted or printed.
+enum Judgement {
+    /// A `_FIXTURE` file, which is not a test of its own.
+    Fixture,
+    /// The file could not be read, or its metadata could not be parsed.
+    Metadata(String),
+    /// One outcome per variant the metadata names.
+    Variants(Vec<(&'static str, Outcome)>),
+}
+
+/// Runs every file, spreading them over `jobs` threads.
+///
+/// A worker takes every `jobs`-th file rather than a block of them, because
+/// neighbouring files are alike in cost and a block of cheap ones would finish
+/// while a block of expensive ones was still running. Each worker keeps its
+/// own harness cache: a compiled Script is reference-counted and belongs to
+/// the thread that made it.
+fn judge_in_parallel(
+    files: &[PathBuf],
+    root: &Path,
+    limits: Limits,
+    backend: Backend,
+    jobs: usize,
+) -> Vec<(String, Judgement)> {
+    let mut answers: Vec<Option<(String, Judgement)>> = (0..files.len()).map(|_| None).collect();
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..jobs)
+            .map(|worker| {
+                scope.spawn(move || {
+                    let mut runner = Runner {
+                        root: root.to_path_buf(),
+                        limits,
+                        backend,
+                        harness: BTreeMap::new(),
+                        harness_bytes: 0,
+                    };
+                    files
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| index.checked_rem(jobs) == Some(worker))
+                        .map(|(index, file)| (index, judge_one(&mut runner, file, limits)))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        for handle in handles {
+            let Ok(part) = handle.join() else {
+                continue;
+            };
+            for (index, answer) in part {
+                if let Some(slot) = answers.get_mut(index) {
+                    *slot = Some(answer);
+                }
+            }
+        }
+    });
+    answers.into_iter().flatten().collect()
+}
+
+/// Reads one file, parses its metadata and runs every variant it names.
+fn judge_one(runner: &mut Runner, file: &Path, limits: Limits) -> (String, Judgement) {
+    let label = file
+        .strip_prefix(&runner.root)
+        .unwrap_or(file)
+        .to_string_lossy()
+        .into_owned();
+    if file
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().contains("_FIXTURE"))
+    {
+        return (label, Judgement::Fixture);
+    }
+    let source = read(file, limits.source_bytes);
+    let meta = source
+        .as_ref()
+        .map_err(Clone::clone)
+        .and_then(|text| metadata::parse(text));
+    match (source, meta) {
+        (Ok(source), Ok(meta)) => {
+            let outcomes = meta
+                .variants()
+                .into_iter()
+                .map(|variant| (variant.name(), runner.execute(&source, &meta, variant)))
+                .collect();
+            (label, Judgement::Variants(outcomes))
+        }
+        (_, Err(error)) | (Err(error), _) => (label, Judgement::Metadata(error)),
+    }
+}
+
 fn record(
     output: &mut impl Write,
     c: &mut Counts,

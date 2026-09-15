@@ -13,7 +13,7 @@ use std::{
 
 const USAGE: &str = "usage: jrs [--fuel N] [--stats] [--bench N] (-e SOURCE | FILE | -)\n\
        jrs --wpt ROOT TEST_FILE...\n\
-       jrs [--fuel N] [--engine] --test262 ROOT (--all | TEST_PATH...) [--summary]\n\
+       jrs [--fuel N] [--engine] --test262 ROOT (--all | TEST_PATH...) [--summary] [--jobs N]\n\
        jrs [--fuel N] [--engine] --realm FILE...\n\
 Initial JavaScript subset; no browser APIs. '-' reads standard input.\n\
 --engine evaluates every Script on the register engine and refuses the ones\n\
