@@ -329,7 +329,7 @@ fn after<'a>(line: &'a [u8], prefix: &[u8]) -> Option<&'a [u8]> {
         .and_then(|_| line.get(prefix.len()..))
 }
 
-/// The line without the carriage return and the spaces around it.
+/// The line without the carriage return and the spaces at its end.
 const fn trim(line: &[u8]) -> &[u8] {
     let mut bytes = line;
     while let Some((last, rest)) = bytes.split_last() {
