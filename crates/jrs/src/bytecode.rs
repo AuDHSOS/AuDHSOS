@@ -2240,20 +2240,23 @@ impl RegisterLowerer {
         if function.parameters.iter().any(|parameter| parameter.rest) {
             return Some("a rest parameter");
         }
+        // 8.6.2 takes the elements of an array pattern from the iterator of
+        // the argument, and closes it (7.4.9) when the pattern stops early.
         if function
             .parameters
             .iter()
-            .any(|parameter| !matches!(parameter.pattern, parser::BindingPattern::Name(_)))
+            .any(|parameter| matches!(parameter.pattern, parser::BindingPattern::Array(_)))
         {
-            return Some("a parameter that is a binding pattern");
+            return Some("a parameter that is an array binding pattern");
         }
         let duplicated = !function.parameters.iter().all(|parameter| {
+            let Some(name) = parameter.pattern.identifier() else {
+                return true;
+            };
             function
                 .parameters
                 .iter()
-                .filter(|candidate| {
-                    candidate.pattern.identifier() == parameter.pattern.identifier()
-                })
+                .filter(|candidate| candidate.pattern.identifier() == Some(name))
                 .count()
                 == 1
         });
@@ -2307,12 +2310,28 @@ impl RegisterLowerer {
                 },
             );
         }
+        // 10.2.11 binds the argument itself, whatever it is, so a parameter
+        // has the type of a value the lowering cannot name. A parameter that
+        // is a pattern needs a binding for the argument as well, because the
+        // call fills the register and no name of the Script reaches it.
+        for (index, parameter) in function.parameters.iter().enumerate() {
+            let name = match &parameter.pattern {
+                parser::BindingPattern::Name(name) => name.clone(),
+                _ => register_argument_name(index),
+            };
+            child.declare(&name, true)?;
+            child.bindings.get_mut(&name)?.value_type = Some(RegisterType::Unknown);
+        }
         for parameter in &function.parameters {
-            let name = parameter.pattern.identifier()?;
-            child.declare(name, true)?;
-            // 10.2.11 binds the argument itself, whatever it is, so a
-            // parameter has the type of a value the lowering cannot name.
-            child.bindings.get_mut(name)?.value_type = Some(RegisterType::Unknown);
+            if matches!(parameter.pattern, parser::BindingPattern::Name(_)) {
+                continue;
+            }
+            let mut bound = Vec::new();
+            parameter.pattern.names(&mut bound);
+            for name in bound {
+                child.declare(&name, true)?;
+                child.bindings.get_mut(&name)?.value_type = Some(RegisterType::Unknown);
+            }
         }
         let self_register = if let Some(name) = &function.name {
             if function
@@ -2457,24 +2476,39 @@ impl RegisterLowerer {
     /// They run left to right, so a later one reads what an earlier one bound.
     fn initialize_parameter_defaults(&mut self, function: &Function) -> Option<()> {
         use crate::engine::bytecode::Instruction;
-        for parameter in &function.parameters {
-            let Some(default) = &parameter.default else {
+        for (index, parameter) in function.parameters.iter().enumerate() {
+            let named = matches!(parameter.pattern, parser::BindingPattern::Name(_));
+            // A parameter that is a name and takes no Initializer holds the
+            // argument as it arrived, wherever its binding lives.
+            if named && parameter.default.is_none() {
                 continue;
+            }
+            let name = match &parameter.pattern {
+                parser::BindingPattern::Name(name) => name.clone(),
+                _ => register_argument_name(index),
             };
-            let name = parameter.pattern.identifier()?;
-            let binding = *self.bindings.get(name)?;
+            let binding = *self.bindings.get(&name)?;
             let RegisterBindingStorage::Register(register) = binding.storage else {
                 return None;
             };
-            self.code.emit(Instruction::Ldar(register));
-            let present = self.code.emit(Instruction::JumpIfNotUndefined(0));
-            let value_type = self.lower(default)?;
-            self.code.emit(Instruction::Star(register));
-            let after = self.code.instructions.len();
-            self.patch_jump(present, after)?;
-            // The parameter holds either the argument, whose type the lowering
-            // cannot name, or the Initializer's answer.
-            self.bindings.get_mut(name)?.value_type = Some(RegisterType::Unknown.merge(value_type));
+            if let Some(default) = &parameter.default {
+                self.code.emit(Instruction::Ldar(register));
+                let present = self.code.emit(Instruction::JumpIfNotUndefined(0));
+                let value_type = self.lower(default)?;
+                self.code.emit(Instruction::Star(register));
+                let after = self.code.instructions.len();
+                self.patch_jump(present, after)?;
+                // The parameter holds either the argument, whose type the
+                // lowering cannot name, or the Initializer's answer.
+                self.bindings.get_mut(&name)?.value_type =
+                    Some(RegisterType::Unknown.merge(value_type));
+            }
+            // 8.6.2 then binds the names the pattern names, out of the
+            // argument the register holds.
+            if !named {
+                self.code.emit(Instruction::Ldar(register));
+                self.bind_pattern(RegisterType::Unknown, &parameter.pattern)?;
+            }
         }
         Some(())
     }
@@ -7508,6 +7542,12 @@ struct RegisterFunctionScope {
     captured_names: BTreeSet<String>,
 }
 
+/// The name the lowering gives the register a pattern parameter's argument
+/// arrives in, which no identifier of a Script can be.
+fn register_argument_name(index: usize) -> String {
+    alloc::format!("argument {index}")
+}
+
 fn register_function_local_names(function: &Function) -> Option<BTreeSet<String>> {
     let mut names = BTreeSet::new();
     for parameter in &function.parameters {
@@ -7572,6 +7612,7 @@ fn register_function_scope(function: &Function) -> Option<RegisterFunctionScope>
         if let Some(default) = &parameter.default {
             register_expression_references(default, &mut direct, &mut nested)?;
         }
+        register_binding_pattern_references(&parameter.pattern, &mut direct, &mut nested)?;
     }
     for name in direct.into_iter().chain(nested) {
         if local_names.contains(&name) {

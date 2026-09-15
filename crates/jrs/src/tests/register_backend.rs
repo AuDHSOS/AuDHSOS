@@ -4256,7 +4256,7 @@ fn a_script_the_lowering_refuses_says_what_it_holds() -> Result<(), Error> {
         ("var f=function(...r){return r}; f()", "a rest parameter"),
         (
             "var f=function([a]){return a}; f([1])",
-            "a parameter that is a binding pattern",
+            "a parameter that is an array binding pattern",
         ),
         (
             "var f=function(){try{return 1}finally{}}; f()",
@@ -5149,5 +5149,40 @@ fn an_object_pattern_reads_a_value_with_no_known_layout() -> Result<(), Error> {
         assert!(!program.uses_register_backend(), "{source}");
         assert_eq!(program.register_refusal, Some(feature), "{source}");
     }
+    Ok(())
+}
+
+#[test]
+fn a_parameter_that_is_an_object_pattern_binds_its_names() -> Result<(), Error> {
+    // 10.2.11 binds the argument, and 8.6.2 then binds the names the pattern
+    // names out of it.
+    for source in [
+        "function f({a}){return a};f({a:1})",
+        "function f({a,b}){return a+b};f({a:1,b:2})",
+        "function f({a:x}){return x};f({a:5})",
+        "function f({a=3}){return a};f({})",
+        "function f({a}={a:9}){return a};f()",
+        "function f({a:{b}}){return b};f({a:{b:4}})",
+        "function f(p,{a}){return p+a};f(1,{a:2})",
+        "function f({a},q){return a+q};f({a:1},2)",
+        "function f({a}){return function(){return a}()};f({a:6})",
+        "function f({a}){return a};f({get a(){return 7}})",
+        // 7.2.1 refuses a source that is neither undefined nor null only
+        // after the Initializer has had its turn.
+        "function f({a}){return a};f(null)",
+        "function f({a}){return a};f()",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // 8.6.2 takes the elements of an array pattern from the iterator of the
+    // argument, which the lowering does not emit.
+    let source = "function f([a]){return a};f([1])";
+    let program = compile(source, Limits::default())?;
+    assert!(!program.uses_register_backend(), "{source}");
+    assert_eq!(
+        program.register_refusal,
+        Some("a parameter that is an array binding pattern"),
+        "{source}"
+    );
     Ok(())
 }
