@@ -635,8 +635,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The error constructors on the register engine (focused) | focused | `a36aa89` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Error test/built-ins/NativeErrors --summary` | 187 | 374 | 54 (14.44%) | 90 (24.06%) | 230 (61.50%) |
 | `%String%` and its methods (focused) | focused | `86ba2e2` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/String --summary` | 1,223 | 2,443 | 1,928 (78.92%) | 448 (18.34%) | 67 (2.74%) |
 | `%String%` and its methods on the register engine (focused) | focused | `86ba2e2` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/String --summary` | 1,223 | 2,443 | 566 (23.17%) | 8 (0.33%) | 1,869 (76.50%) |
-| Complete pinned suite, including staging and Intl | full | `b367caf` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `b367caf` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 7,532 (7.32%) | 15,907 (15.45%) | 79,486 (77.23%) |
+| `%Object%` and its methods, after 20.1.2 (focused) | focused | `f123a15` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 5,916 (86.97%) | 862 (12.67%) | 24 (0.35%) |
+| `%Object%` and its methods, after 20.1.2, on the register engine (focused) | focused | `f123a15` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,142 (16.79%) | 18 (0.26%) | 5,642 (82.95%) |
+| Complete pinned suite, including staging and Intl | full | `f123a15` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `f123a15` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 8,046 (7.82%) | 15,947 (15.49%) | 78,932 (76.69%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -802,6 +804,29 @@ not a constructor. That costs one pass: `15.3.5.4_2-59gs` asserted that
 was given was the refusal of `new` rather than the one it describes. A pass
 that rests on the wrong error is not one.
 
+A read that reached a Prototype this Realm has not finished building said so
+and no more, and 6,230 variants stood on that one sentence. Each gap now names
+the object that owes the property, which is what decides what to build next:
+2,671 `%Object%`, 1,706 `%Array.prototype%`, 648 `%Math%`, 504
+`%String.prototype%`, 175 `%Function.prototype%`, 164 `%Object.prototype%`,
+120 `%String%`, 95 the global object, 72 `%Array%`, 71
+`%ArrayIteratorPrototype%` and 4 `%Error.prototype%`. Naming them changed
+nothing that runs: the full run answers the same result for all 102,925
+variants, variant for variant.
+
+`%Object%` owed the most, and six of its functions are built. 20.1.2.2 makes
+an ordinary object under the Prototype it is given, with the properties of
+20.1.2.3 when a second argument names any; 20.1.2.3.2 reads every descriptor
+before it defines one, so a source whose second entry is no descriptor leaves
+the object untouched. 20.1.2.12 answers the `[[Prototype]]` of what `ToObject`
+made, 20.1.2.19 the own enumerable String keys in the order 10.1.11 gives
+them, 20.1.2.14 `SameValue` of 7.2.11, which tells the two zeroes apart where
+strict equality does not, and 20.1.2.13 `HasOwnProperty` without the Prototype
+Chain. That is 514 more variants, and `Object.keys.length` is 1 as 17 counts
+the heading of 20.1.2.19, where the stack backend answers zero as it does for
+`call`. The 40 variants that moved from a gap to a failure all read a global
+no Realm here builds, which the stack backend fails as well.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -851,7 +876,9 @@ them were measured at tree
 `54864a06604bd2b5f1d9f81f232e8e5d64939692`, which is the tree of `86ba2e2`.
 Both full runs beside the named refusals and the top-level `this` were
 measured at tree `950e1f858de5af48170d7517db5171da2957ccdb`, which is the tree
-of `b367caf`.
+of `b367caf`. The `%Object%` runs and both full runs beside them were measured
+at tree `32a160f59e6759ed3b30746a8eb7f024d49194a4`, which is the tree of
+`f123a15`.
 
 ### Historical Test262 baseline
 
