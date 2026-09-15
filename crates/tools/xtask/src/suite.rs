@@ -23,6 +23,9 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::AtomicUsize;
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use db_sqlite::change::Writer;
@@ -170,7 +173,14 @@ const MISSING: [&str; 21] = [
 /// Each file runs in a process of its own, because a statement the
 /// engine answers slowly cannot be stopped from inside: the process is
 /// ended when the deadline passes and the file is counted with what it
-/// scored up to there.
+/// scored up to there. `process::test_jobs` many of those processes run
+/// beside each other, since a file collides with no other one: each
+/// binds a port the system hands out and writes under a directory its
+/// own name keys.
+///
+/// What the processes wrote is read here, on this thread and in the
+/// order of the names, so that `WHY`, `SHAPES` and what `--show` prints
+/// are what a run of one file after another wrote.
 ///
 /// # Errors
 ///
@@ -190,16 +200,18 @@ pub(crate) fn run(root: &Path, only: Option<&str>) -> Result<BTreeMap<String, Sc
     }
     let me = std::env::current_exe()
         .map_err(|source| Error::io("reading the path of this program", source))?;
+    let wanted: Vec<PathBuf> = files(&dir)?
+        .into_iter()
+        .filter(|path| only.is_none_or(|wanted| wanted == named(path)))
+        .collect();
+    let asides = beside(&me, &wanted, crate::process::test_jobs()?)?;
     let mut scores = BTreeMap::new();
-    for path in files(&dir)? {
-        let name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        if only.is_some_and(|wanted| wanted != name) {
-            continue;
+    for (path, aside) in wanted.iter().zip(asides) {
+        let name = named(path);
+        if !aside.ended {
+            refused(&format!("{name} took longer than the deadline"));
         }
-        let score = apart(&me, &path, &name)?;
+        let score = read_score(&name, &aside.text);
         if score.ran() != 0 {
             scores.insert(name, score);
         }
@@ -207,8 +219,83 @@ pub(crate) fn run(root: &Path, only: Option<&str>) -> Result<BTreeMap<String, Sc
     Ok(scores)
 }
 
+/// The name a score is keyed by, which is the name of the file.
+fn named(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// What the process of one file wrote, and how that process ended.
+pub(crate) struct Aside {
+    /// What the run wrote on its standard output.
+    pub(crate) text: String,
+    /// Whether the process ended by itself rather than at the deadline.
+    pub(crate) ended: bool,
+}
+
+/// Every file in a process of its own, at most `jobs` of them at once,
+/// answered in the order the files were given.
+///
+/// The workers read one work index and the completions are collected
+/// here, which is the shape [`crate::process::run_parallel_report`]
+/// runs a step's commands in. That runner is not reused, because it
+/// waits on a child for as long as the child runs and this one ends a
+/// child at the deadline.
+///
+/// # Errors
+///
+/// The errors of starting a worker or of running one file.
+pub(crate) fn beside(me: &Path, files: &[PathBuf], jobs: usize) -> Result<Vec<Aside>, Error> {
+    let jobs = jobs.max(1).min(files.len());
+    let next = AtomicUsize::new(0);
+    let (sender, receiver) = mpsc::sync_channel(jobs.max(1));
+    let mut done: Vec<(usize, Aside)> = thread::scope(|scope| {
+        let mut failure = None;
+        let mut done = Vec::with_capacity(files.len());
+        for _ in 0..jobs {
+            let sender = sender.clone();
+            let next = &next;
+            let worker = thread::Builder::new().spawn_scoped(scope, move || {
+                loop {
+                    let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(path) = files.get(at) else {
+                        break;
+                    };
+                    if sender.send((at, apart(me, path))).is_err() {
+                        break;
+                    }
+                }
+            });
+            if let Err(source) = worker {
+                failure = Some(Error::io("starting a worker for the suite", source));
+                break;
+            }
+        }
+        drop(sender);
+        for (at, result) in receiver {
+            match result {
+                Ok(aside) => done.push((at, aside)),
+                Err(error) => {
+                    if failure.is_none() {
+                        failure = Some(error);
+                    }
+                }
+            }
+        }
+        failure.map_or(Ok(done), Err)
+    })?;
+    done.sort_by_key(|(at, _)| *at);
+    Ok(done.into_iter().map(|(_, aside)| aside).collect())
+}
+
 /// One file in a process of its own, ended where the deadline passes.
-fn apart(me: &Path, path: &Path, name: &str) -> Result<Score, Error> {
+///
+/// The standard output is read after the process ended and not while it
+/// runs, because a file that writes more than the pipe holds is one the
+/// deadline ends, and reading along would score cases that a run of one
+/// file after another never counted.
+fn apart(me: &Path, path: &Path) -> Result<Aside, Error> {
     let mut child = Command::new(me)
         .arg("sqlite-suite")
         .arg("--one")
@@ -228,12 +315,11 @@ fn apart(me: &Path, path: &Path, name: &str) -> Result<Score, Error> {
         if over.elapsed() > DEADLINE {
             break false;
         }
-        std::thread::sleep(Duration::from_millis(20));
+        thread::sleep(Duration::from_millis(20));
     };
     if !ended {
         let _ = child.kill();
         let _ = child.wait();
-        refused(&format!("{name} took longer than the deadline"));
     }
     // What the run wrote before it was ended is still in the pipe, so a
     // file the deadline ended is counted with the cases it ran.
@@ -241,12 +327,12 @@ fn apart(me: &Path, path: &Path, name: &str) -> Result<Score, Error> {
     if let Some(mut out) = child.stdout.take() {
         let _ = out.read_to_string(&mut text);
     }
-    Ok(read_score(name, &text))
+    Ok(Aside { text, ended })
 }
 
 /// What a run of one file wrote about itself: one line per case, one
 /// per refusal, and one per case that answered differently.
-fn read_score(name: &str, text: &str) -> Score {
+pub(crate) fn read_score(name: &str, text: &str) -> Score {
     let mut score = Score::default();
     let mut lines = text.lines();
     while let Some(line) = lines.next() {
@@ -283,11 +369,7 @@ fn read_score(name: &str, text: &str) -> Score {
 /// The errors of the line.
 pub(crate) fn one(root: &Path, path: &Path) -> Result<(), Error> {
     let runner = root.join("tools").join("suite").join("runner.tcl");
-    let name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    alone(&runner, path, &name)?;
+    alone(&runner, path, &named(path))?;
     Ok(())
 }
 
