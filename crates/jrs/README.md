@@ -649,8 +649,8 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Object%` and its methods, after the integrity levels, on the register engine (focused) | focused | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,530 (22.49%) | 18 (0.26%) | 5,254 (77.24%) |
 | `%Number%` (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 572 (84.12%) | 102 (15.00%) | 6 (0.88%) |
 | `%Number%` on the register engine (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 226 (33.24%) | 2 (0.29%) | 452 (66.47%) |
-| Complete pinned suite, including staging and Intl | full | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 10,478 (10.18%) | 16,425 (15.96%) | 76,022 (73.86%) |
+| Complete pinned suite, including staging and Intl | full | `aff55ba` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `aff55ba` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 10,478 (10.18%) | 17,739 (17.23%) | 74,708 (72.58%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -984,6 +984,16 @@ that is not a Number, where the `isFinite` and `isNaN` of 19.2 take `ToNumber`
 first. Over `test/built-ins/Number` the engine passes 226 of 680 variants and
 fails 2, where the stack backend fails 102.
 
+An uncaught throw of an Object the embedding cannot hold was reported as an
+unsupported feature, and it is not one: the Script ran to a `throw`, which is a
+completion of the language. `assert.throws` builds a `Test262Error`, an
+ordinary object and not a native error, so every assertion that failed inside
+one left the engine claiming a missing feature. The boundary now answers that
+the Script threw and not what it threw, which moves 1,314 variants from
+unsupported to failed — where they belonged. The engine passes the same number
+as before; what changed is that the measurement stopped calling its own
+failures gaps.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -1049,7 +1059,9 @@ tree `a6e6f7c4ceb2326595e511ff0ad4887d85b14b0e`, which is the tree of
 tree `0d446537428a6d1d20eb3a6ad1ebae9a2240b8f3`, which is the tree of
 `16f268e`. The `%Number%` runs and both full runs beside them were measured at
 tree `5e2ec2f08ae7a18f55f1b4c0fe079e7de807efdd`, which is the tree of
-`a011601`.
+`a011601`. Both full runs beside the throw that reached its end were measured
+at tree `53bfb8150e68ec98d035eece875f5ec1ed4d2351`, which is the tree of
+`aff55ba`.
 
 ### Historical Test262 baseline
 
