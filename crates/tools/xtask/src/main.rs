@@ -44,7 +44,7 @@ subcommands:
   check-layering   dependency edges, forbid(unsafe_code), assembly files
   check-deps       no dependency outside the workspace
   unsafe-budget    unsafe blocks and asm! sites per adapter crate
-  test [--host] [--qemu] [--e2e] [--ssh] [--release]
+  test [--host] [--qemu] [--e2e] [--ssh] [--tls] [--release]
                    run the selected test levels (default: host);
                    --release builds the end-to-end run from the release
                    profile

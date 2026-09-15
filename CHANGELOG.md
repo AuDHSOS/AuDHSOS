@@ -7,6 +7,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The root of the acceptance run reaches the guest (D-150). `xtask::tls`
+  writes two files onto the run's scratch volume — `TLSCONF.TXT` with the
+  port the server took and the name its certificate carries, and
+  `TLSROOT.DER` with the root of its chain — and `app-tls` reads them and
+  holds that root behind the anchors of the boot volume, so the trust set
+  of that run is one larger than the table of the image and every other
+  boot is unchanged. `cargo xtask test --tls` is the run that checks it,
+  and `--e2e` performs it last. The anchor table stays what an operator
+  put in `anchors/`, which is what D-148 decided; what the run still
+  needs is the handshake of Phase 15.
+
 - A TLS server to reach (D-149). `audhsos-tls` gains the module `server`
   behind the feature `test-server`: the other half of one connection,
   sans-I/O like the client and written against the same record layer and
