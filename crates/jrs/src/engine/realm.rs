@@ -329,6 +329,10 @@ pub enum Intrinsic {
     StringPrototypeTrimStart,
     /// `String.prototype.split` (22.1.3.23).
     StringPrototypeSplit,
+    /// `String.prototype.match` (22.1.3.14).
+    StringPrototypeMatch,
+    /// `String.prototype.search` (22.1.3.20).
+    StringPrototypeSearch,
     /// `Array.prototype.values`, which is also `%Array.prototype%[@@iterator]`
     /// (23.1.3.38 and 23.1.3.40).
     ArrayPrototypeValues,
@@ -577,7 +581,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 126] = [
+    pub const ALL: [Self; 128] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -704,6 +708,8 @@ impl Intrinsic {
         Self::JsonParse,
         Self::JsonStringify,
         Self::StringPrototypeSplit,
+        Self::StringPrototypeMatch,
+        Self::StringPrototypeSearch,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -736,7 +742,9 @@ impl Intrinsic {
             | Self::StringPrototypeTrim
             | Self::StringPrototypeTrimEnd
             | Self::StringPrototypeTrimStart
-            | Self::StringPrototypeSplit => IntrinsicHolder::StringPrototype,
+            | Self::StringPrototypeSplit
+            | Self::StringPrototypeMatch
+            | Self::StringPrototypeSearch => IntrinsicHolder::StringPrototype,
             Self::ArrayPrototypeValues
             | Self::ArrayPrototypeAt
             | Self::ArrayPrototypeIncludes
@@ -984,6 +992,8 @@ impl Intrinsic {
             Self::JsonParse => 123,
             Self::JsonStringify => 124,
             Self::StringPrototypeSplit => 125,
+            Self::StringPrototypeMatch => 126,
+            Self::StringPrototypeSearch => 127,
         }
     }
 
@@ -1120,6 +1130,8 @@ impl Intrinsic {
             Self::JsonParse => 123,
             Self::JsonStringify => 124,
             Self::StringPrototypeSplit => 125,
+            Self::StringPrototypeMatch => 126,
+            Self::StringPrototypeSearch => 127,
         }
     }
 
@@ -1257,6 +1269,8 @@ impl Intrinsic {
             123 => Some(Self::JsonParse),
             124 => Some(Self::JsonStringify),
             125 => Some(Self::StringPrototypeSplit),
+            126 => Some(Self::StringPrototypeMatch),
+            127 => Some(Self::StringPrototypeSearch),
             _ => None,
         }
     }
@@ -1378,6 +1392,8 @@ impl Intrinsic {
             Self::StringPrototypeTrimEnd => "trimEnd",
             Self::StringPrototypeTrimStart => "trimStart",
             Self::StringPrototypeSplit => "split",
+            Self::StringPrototypeMatch => "match",
+            Self::StringPrototypeSearch => "search",
             Self::ArrayPrototypeValues | Self::ObjectValues => "values",
             Self::ArrayIteratorPrototypeNext => "next",
             Self::ArrayPrototypeJoin => "join",
@@ -1548,6 +1564,8 @@ impl Intrinsic {
             Self::ObjectPrototypeHasOwnProperty
             | Self::ObjectPrototypeIsPrototypeOf
             | Self::ObjectPrototypePropertyIsEnumerable
+            | Self::StringPrototypeMatch
+            | Self::StringPrototypeSearch
             | Self::StringPrototypeCharAt
             | Self::StringPrototypeCharCodeAt
             | Self::StringPrototypeIndexOf

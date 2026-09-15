@@ -1487,6 +1487,9 @@ impl RegisterVM {
             | Intrinsic::StringPrototypeSplit => {
                 self.call_string_intrinsic(intrinsic, call, heap, realm)
             }
+            Intrinsic::StringPrototypeMatch | Intrinsic::StringPrototypeSearch => {
+                self.call_string_regexp_intrinsic(intrinsic, &call, units, heap, realm)
+            }
             // 27.1.2.1 answers the object it was called on.
             Intrinsic::IteratorPrototypeIterator => Ok(call.receiver),
             Intrinsic::ArrayPrototypeValues | Intrinsic::ArrayIteratorPrototypeNext => {
@@ -5918,6 +5921,104 @@ impl RegisterVM {
             return Ok(VALUE_NULL);
         };
         self.match_array(&text, &matched, heap, realm)
+    }
+
+    /// `String.prototype.match` of 22.1.3.14 and `String.prototype.search` of
+    /// 22.1.3.20, both through the method 22.2.6 gives a `RegExp`.
+    ///
+    /// The argument has to be a `RegExp` already: 22.2.3.1 would compile a
+    /// pattern at run time, which this engine has not built.
+    fn call_string_regexp_intrinsic(
+        &mut self,
+        intrinsic: Intrinsic,
+        call: &Call,
+        units: CodeUnits<'_>,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let text = Self::receiver_units(call.receiver, heap, realm)?;
+        let argument = self.call_argument(call, 0)?;
+        let Some(receiver) = argument.as_object() else {
+            return Err(VMError::Unsupported("a RegExp made at run time"));
+        };
+        let Some(pattern) = Self::regexp_pattern(receiver, heap, units).cloned() else {
+            return Err(VMError::Unsupported("a RegExp made at run time"));
+        };
+        if intrinsic == Intrinsic::StringPrototypeSearch {
+            // 22.2.6.12 searches from the start and leaves `lastIndex` as it
+            // found it.
+            let key = PropertyKey::String(heap.strings.intern("lastIndex")?);
+            let held = heap
+                .lookup_named(receiver, key)?
+                .map_or(VALUE_UNDEFINED, |property| property.value);
+            Self::set_last_index(receiver, Value::from_smi(0), heap)?;
+            let matched = self.regexp_exec(receiver, &pattern, &text, heap, realm)?;
+            Self::set_last_index(receiver, held, heap)?;
+            let Some(matched) = matched else {
+                return Ok(Value::from_smi(-1));
+            };
+            let start = i32::try_from(matched.range.start).map_err(|_| VMError::StringLimit)?;
+            return Ok(Value::from_smi(start));
+        }
+        // 22.2.6.8: a pattern without `g` answers what 22.2.7.2 answers.
+        if !pattern.global {
+            let matched = self.regexp_exec(receiver, &pattern, &text, heap, realm)?;
+            let Some(matched) = matched else {
+                return Ok(VALUE_NULL);
+            };
+            return self.match_array(&text, &matched, heap, realm);
+        }
+        // A global pattern walks the whole text from index zero and answers
+        // the matched substrings alone. The ranges are collected before
+        // anything is allocated, so no String is held unrooted.
+        Self::set_last_index(receiver, Value::from_smi(0), heap)?;
+        let mut parts: Vec<&[u16]> = Vec::new();
+        loop {
+            self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+            let Some(matched) = self.regexp_exec(receiver, &pattern, &text, heap, realm)? else {
+                break;
+            };
+            let part = text
+                .get(matched.range.clone())
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            parts.push(part);
+            if parts.len() > self.string_units_limit {
+                return Err(VMError::PropertyLimit);
+            }
+            // 22.2.6.8 step 8.f.iii: an empty match advances by one code unit,
+            // which `AdvanceStringIndex` of 22.2.7.3 does.
+            if matched.range.is_empty() {
+                let next = i32::try_from(matched.range.end.saturating_add(1))
+                    .map_err(|_| VMError::StringLimit)?;
+                Self::set_last_index(receiver, Value::from_smi(next), heap)?;
+            }
+        }
+        if parts.is_empty() {
+            return Ok(VALUE_NULL);
+        }
+        self.split_result(&parts, heap, realm)
+    }
+
+    /// Writes `lastIndex`, which 22.2.6.1 keeps writable and neither
+    /// enumerable nor configurable.
+    fn set_last_index(
+        receiver: ObjectRef,
+        value: Value,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        let key = PropertyKey::String(heap.strings.intern("lastIndex")?);
+        heap.define_own_named(
+            receiver,
+            key,
+            value,
+            PropertyFlags {
+                writable: true,
+                enumerable: false,
+                configurable: false,
+                is_accessor: false,
+            },
+        )?;
+        Ok(())
     }
 
     /// `RegExpBuiltinExec` of 22.2.7.2, without the result it builds.

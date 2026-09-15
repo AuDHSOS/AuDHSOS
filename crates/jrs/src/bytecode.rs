@@ -7400,6 +7400,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::RegExpPrototypeExec
         | crate::engine::realm::Intrinsic::JsonParse
         | crate::engine::realm::Intrinsic::StringPrototypeSplit
+        | crate::engine::realm::Intrinsic::StringPrototypeMatch
+        | crate::engine::realm::Intrinsic::StringPrototypeSearch
         | crate::engine::realm::Intrinsic::ArrayConstructor
         | crate::engine::realm::Intrinsic::ObjectConstructor
         | crate::engine::realm::Intrinsic::ObjectDefineProperty

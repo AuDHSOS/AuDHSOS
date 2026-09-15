@@ -5753,3 +5753,39 @@ fn a_string_splits_at_a_string_separator() -> Result<(), Error> {
     ));
     Ok(())
 }
+
+/// 22.1.3.14 and 22.1.3.20 go through the methods 22.2.6 gives a `RegExp`.
+#[test]
+fn a_string_matches_and_searches_a_regexp() -> Result<(), Error> {
+    for source in [
+        "'a1b2c'.search(/[0-9]/)",
+        "'abc'.search(/x/)",
+        "'abc'.search(/^/)",
+        "'a1b2'.match(/[0-9]/)[0]",
+        "'a1b2'.match(/[0-9]/).index",
+        "'a1b2'.match(/[0-9]/g).join('|')",
+        "'abc'.match(/x/g)===null",
+        "'abc'.match(/x/)===null",
+        "'aaa'.match(/a*?/g).length",
+        "'a1b'.match(/(a)(1)/)[1]",
+        "'abc'.match(/b/).input",
+        "var r=/a/g;r.lastIndex=2;''+'aaa'.search(r)+','+r.lastIndex",
+        "var r=/a/g;''+'aaa'.match(r).length+','+r.lastIndex",
+        "typeof ''.match",
+        "''.match.length",
+        "''.search.length",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // 22.2.3.1 would compile a pattern at run time, which this engine has not
+    // built, so an argument that is not already a `RegExp` is a gap.
+    for source in ["'abc'.match('b')", "'abc'.search('b')", "'abc'.match()"] {
+        let mut host = SilentHost;
+        let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+        assert!(
+            matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
+            "{source}"
+        );
+    }
+    Ok(())
+}
