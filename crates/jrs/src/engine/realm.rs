@@ -334,6 +334,14 @@ pub enum Intrinsic {
     StringPrototypeMatch,
     /// `String.prototype.search` (22.1.3.20).
     StringPrototypeSearch,
+    /// `isNaN` (19.2.3).
+    IsNaN,
+    /// `isFinite` (19.2.2).
+    IsFinite,
+    /// `parseInt` (19.2.5).
+    ParseInt,
+    /// `parseFloat` (19.2.4).
+    ParseFloat,
     /// `Array.prototype.values`, which is also `%Array.prototype%[@@iterator]`
     /// (23.1.3.38 and 23.1.3.40).
     ArrayPrototypeValues,
@@ -582,7 +590,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 128] = [
+    pub const ALL: [Self; 132] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -711,6 +719,10 @@ impl Intrinsic {
         Self::StringPrototypeSplit,
         Self::StringPrototypeMatch,
         Self::StringPrototypeSearch,
+        Self::IsNaN,
+        Self::IsFinite,
+        Self::ParseInt,
+        Self::ParseFloat,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -833,7 +845,11 @@ impl Intrinsic {
             | Self::UriErrorConstructor
             | Self::StringConstructor
             | Self::NumberConstructor
-            | Self::BooleanConstructor => IntrinsicHolder::Global,
+            | Self::BooleanConstructor
+            | Self::IsNaN
+            | Self::IsFinite
+            | Self::ParseInt
+            | Self::ParseFloat => IntrinsicHolder::Global,
             Self::ArrayIsArray => IntrinsicHolder::ArrayConstructor,
             Self::ObjectDefineProperty
             | Self::ObjectGetOwnPropertyDescriptor
@@ -995,6 +1011,10 @@ impl Intrinsic {
             Self::StringPrototypeSplit => 125,
             Self::StringPrototypeMatch => 126,
             Self::StringPrototypeSearch => 127,
+            Self::IsNaN => 128,
+            Self::IsFinite => 129,
+            Self::ParseInt => 130,
+            Self::ParseFloat => 131,
         }
     }
 
@@ -1133,6 +1153,10 @@ impl Intrinsic {
             Self::StringPrototypeSplit => 125,
             Self::StringPrototypeMatch => 126,
             Self::StringPrototypeSearch => 127,
+            Self::IsNaN => 128,
+            Self::IsFinite => 129,
+            Self::ParseInt => 130,
+            Self::ParseFloat => 131,
         }
     }
 
@@ -1272,6 +1296,10 @@ impl Intrinsic {
             125 => Some(Self::StringPrototypeSplit),
             126 => Some(Self::StringPrototypeMatch),
             127 => Some(Self::StringPrototypeSearch),
+            128 => Some(Self::IsNaN),
+            129 => Some(Self::IsFinite),
+            130 => Some(Self::ParseInt),
+            131 => Some(Self::ParseFloat),
             _ => None,
         }
     }
@@ -1360,9 +1388,9 @@ impl Intrinsic {
             Self::ObjectIsFrozen => "isFrozen",
             Self::ObjectEntries => "entries",
             Self::NumberConstructor => "Number",
-            Self::NumberIsFinite => "isFinite",
+            Self::NumberIsFinite | Self::IsFinite => "isFinite",
             Self::NumberIsInteger => "isInteger",
-            Self::NumberIsNaN => "isNaN",
+            Self::NumberIsNaN | Self::IsNaN => "isNaN",
             Self::NumberIsSafeInteger => "isSafeInteger",
             Self::BooleanConstructor => "Boolean",
             Self::ReflectDeleteProperty => "deleteProperty",
@@ -1395,6 +1423,8 @@ impl Intrinsic {
             Self::StringPrototypeSplit => "split",
             Self::StringPrototypeMatch => "match",
             Self::StringPrototypeSearch => "search",
+            Self::ParseInt => "parseInt",
+            Self::ParseFloat => "parseFloat",
             Self::ArrayPrototypeValues | Self::ObjectValues => "values",
             Self::ArrayIteratorPrototypeNext => "next",
             Self::ArrayPrototypeJoin => "join",
@@ -1436,7 +1466,9 @@ impl Intrinsic {
             | Self::TypeErrorConstructor
             | Self::UriErrorConstructor
             // 23.1.3.18: the separator, which `ToString` converts.
-            | Self::ArrayPrototypeJoin => TEXT,
+            | Self::ArrayPrototypeJoin
+            // 19.2.4 applies `ToString` to its argument.
+            | Self::ParseFloat => TEXT,
             // 22.1.3: one position, which `ToIntegerOrInfinity` converts.
             Self::StringPrototypeCharAt
             | Self::StringPrototypeCharCodeAt
@@ -1453,7 +1485,10 @@ impl Intrinsic {
             | Self::MathSign
             | Self::MathClz32
             | Self::MathFround
-            | Self::MathSin => NUMBER,
+            | Self::MathSin
+            // 19.2.2 and 19.2.3 apply `ToNumber` to their argument.
+            | Self::IsNaN
+            | Self::IsFinite => NUMBER,
             // 22.1.3.9, 22.1.3.11, 22.1.3.7, 22.1.3.8 and 22.1.3.24: the text
             // to search for, then where to start.
             Self::StringPrototypeIndexOf
@@ -1471,6 +1506,8 @@ impl Intrinsic {
             Self::StringPrototypePadStart | Self::StringPrototypePadEnd => {
                 &[(0, PrimitiveHint::Number), (1, PrimitiveHint::String)]
             }
+            // 19.2.5 applies `ToString` to the text and `ToInt32` to the radix.
+            Self::ParseInt => &[(0, PrimitiveHint::String), (1, PrimitiveHint::Number)],
             // 23.1.3.17, 23.1.3.20 and 23.1.3.14: the element is compared as
             // it is, and only the index is converted.
             Self::ArrayPrototypeIndexOf
@@ -1598,7 +1635,11 @@ impl Intrinsic {
             | Self::RegExpPrototypeToString
             | Self::JsonParse
             | Self::JsonStringify
-            | Self::ObjectGetOwnPropertyNames => false,
+            | Self::ObjectGetOwnPropertyNames
+            | Self::IsNaN
+            | Self::IsFinite
+            | Self::ParseInt
+            | Self::ParseFloat => false,
             // 20.1.2.4, 20.1.2.8 and 20.1.2.13 apply ToPropertyKey to the
             // second argument.
             Self::ObjectDefineProperty
@@ -1656,6 +1697,9 @@ impl Intrinsic {
             | Self::ObjectPrototypePropertyIsEnumerable
             | Self::StringPrototypeMatch
             | Self::StringPrototypeSearch
+            | Self::IsNaN
+            | Self::IsFinite
+            | Self::ParseFloat
             | Self::StringPrototypeCharAt
             | Self::StringPrototypeCharCodeAt
             | Self::StringPrototypeIndexOf
@@ -1757,6 +1801,7 @@ impl Intrinsic {
             | Self::MathMin
             | Self::JsonStringify
             | Self::MathImul
+            | Self::ParseInt
             | Self::StringPrototypeSplit => 2,
         }
     }

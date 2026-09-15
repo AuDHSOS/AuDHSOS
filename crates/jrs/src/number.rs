@@ -237,6 +237,111 @@ fn float_floor(n: f64) -> f64 {
     }
 }
 
+/// `parseInt` of 19.2.5 over the code units of its first argument.
+///
+/// `radix` is the `ToInt32` of its second one; zero means the clause picks it.
+pub(crate) fn parse_integer(units: &[u16], radix: i32) -> f64 {
+    if radix != 0 && !(2..=36).contains(&radix) {
+        return f64::NAN;
+    }
+    let mut text = units;
+    while text.first().is_some_and(|unit| space(*unit)) {
+        text = text.get(1..).unwrap_or(&[]);
+    }
+    let negative = text.first() == Some(&45);
+    if matches!(text.first(), Some(43 | 45)) {
+        text = text.get(1..).unwrap_or(&[]);
+    }
+    let mut radix = u32::try_from(radix).unwrap_or(0);
+    if (radix == 0 || radix == 16) && matches!(text.get(..2), Some([48, 88 | 120])) {
+        text = text.get(2..).unwrap_or(&[]);
+        radix = 16;
+    }
+    if radix == 0 {
+        radix = 10;
+    }
+    let Some(mut integer) = audhsos_math::RadixInteger::new(radix) else {
+        return f64::NAN;
+    };
+    let mut found = false;
+    for unit in text {
+        let Some(digit) = char::from_u32(u32::from(*unit)).and_then(|c| c.to_digit(radix)) else {
+            break;
+        };
+        integer.push(digit);
+        found = true;
+    }
+    let value = if found { integer.to_f64() } else { f64::NAN };
+    if negative { -value } else { value }
+}
+
+/// `parseFloat` of 19.2.4 over the code units of its argument.
+pub(crate) fn parse_float(units: &[u16]) -> f64 {
+    let mut text = units;
+    while text.first().is_some_and(|unit| space(*unit)) {
+        text = text.get(1..).unwrap_or(&[]);
+    }
+    let mut end = usize::from(matches!(text.first(), Some(43 | 45)));
+    let infinity = [73, 110, 102, 105, 110, 105, 116, 121];
+    if text
+        .get(end..)
+        .is_some_and(|rest| rest.starts_with(&infinity))
+    {
+        return if text.first() == Some(&45) {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        };
+    }
+    let start = end;
+    while text.get(end).is_some_and(|unit| digit(*unit)) {
+        end = end.saturating_add(1);
+    }
+    let mut digits = end.saturating_sub(start);
+    if text.get(end) == Some(&46) {
+        end = end.saturating_add(1);
+        let start = end;
+        while text.get(end).is_some_and(|unit| digit(*unit)) {
+            end = end.saturating_add(1);
+        }
+        digits = digits.saturating_add(end.saturating_sub(start));
+    }
+    if digits == 0 {
+        return f64::NAN;
+    }
+    if matches!(text.get(end), Some(69 | 101)) {
+        let mark = end;
+        end = end.saturating_add(1);
+        if matches!(text.get(end), Some(43 | 45)) {
+            end = end.saturating_add(1);
+        }
+        let start = end;
+        while text.get(end).is_some_and(|unit| digit(*unit)) {
+            end = end.saturating_add(1);
+        }
+        if start == end {
+            end = mark;
+        }
+    }
+    let ascii: String = text
+        .get(..end)
+        .unwrap_or(&[])
+        .iter()
+        .map(|unit| char::from(u8::try_from(*unit).unwrap_or(0)))
+        .collect();
+    ascii.parse().unwrap_or(f64::NAN)
+}
+
+/// The white space and line terminators 19.2.4 and 19.2.5 skip.
+fn space(unit: u16) -> bool {
+    char::from_u32(u32::from(unit))
+        .is_some_and(|c| crate::value::whitespace(c) || crate::value::line_terminator(c))
+}
+
+fn digit(unit: u16) -> bool {
+    (48..=57).contains(&unit)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{decimal_string, format_with_radix};

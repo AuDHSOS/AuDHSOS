@@ -5865,3 +5865,45 @@ fn a_catch_parameter_is_bound_by_a_pattern() -> Result<(), Error> {
     }
     Ok(())
 }
+
+/// 19.2.2 to 19.2.5: the four value properties of the global object that read
+/// a Number out of their argument.
+#[test]
+fn the_global_number_functions_answer_on_the_engine() -> Result<(), Error> {
+    for source in [
+        "isNaN(NaN)",
+        "isNaN('x')",
+        "isNaN('1')",
+        "isNaN()",
+        "isFinite(1/0)",
+        "isFinite('2')",
+        "''+parseInt('42')",
+        "''+parseInt('0x1f')",
+        "''+parseInt('ff',16)",
+        "''+parseInt('  -7px')",
+        "''+parseInt('z',36)",
+        "''+parseInt('10',1)",
+        "''+parseInt('')",
+        "''+parseInt('11',2)",
+        "''+parseFloat('3.14abc')",
+        "''+parseFloat('  -Infinity')",
+        "''+parseFloat('.5e2')",
+        "''+parseFloat('x')",
+        "typeof isNaN",
+        "parseInt.length",
+        "parseInt.name",
+        "isNaN({valueOf:function(){return NaN}})",
+        "''+parseInt({toString:function(){return '12'}})",
+        "''+parseInt('12',{valueOf:function(){return 8}})",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // 19.2.3 gives `isNaN` one formal parameter; the stack backend gives it
+    // none, and these check the engine against the specification.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    assert_eq!(realm.evaluate("isNaN.length")?, Value::Number(1.0));
+    assert_eq!(realm.evaluate("isFinite.length")?, Value::Number(1.0));
+    assert_eq!(realm.evaluate("parseFloat.length")?, Value::Number(1.0));
+    Ok(())
+}

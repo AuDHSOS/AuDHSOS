@@ -7444,6 +7444,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ObjectIsExtensible
         | crate::engine::realm::Intrinsic::ObjectIsSealed
         | crate::engine::realm::Intrinsic::ObjectIsFrozen
+        | crate::engine::realm::Intrinsic::IsNaN
+        | crate::engine::realm::Intrinsic::IsFinite
         // 28.1.3, 28.1.4, 28.1.8, 28.1.9 and 28.1.11 answer whether the
         // operation they name succeeded.
         | crate::engine::realm::Intrinsic::ReflectDefineProperty
@@ -7500,6 +7502,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::StringPrototypeSplit
         | crate::engine::realm::Intrinsic::StringPrototypeMatch
         | crate::engine::realm::Intrinsic::StringPrototypeSearch
+        | crate::engine::realm::Intrinsic::ParseInt
+        | crate::engine::realm::Intrinsic::ParseFloat
         | crate::engine::realm::Intrinsic::ArrayConstructor
         | crate::engine::realm::Intrinsic::ObjectConstructor
         | crate::engine::realm::Intrinsic::ObjectDefineProperty

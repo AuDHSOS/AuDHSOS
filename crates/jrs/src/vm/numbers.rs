@@ -3,7 +3,6 @@
 //! Numeric text builtins with shared intrinsic identity and ordered coercions.
 use super::Execution;
 use crate::{Error, Value, bytecode::Builtin, heap::HostBehavior, object::Property};
-use alloc::string::String;
 
 impl Execution<'_> {
     #[expect(
@@ -214,103 +213,16 @@ impl Execution<'_> {
     pub(super) fn parse_integer(&mut self, input: &Value, radix: &Value) -> Result<Value, Error> {
         let units = self.string_units(input)?;
         let radix = Value::Number(self.numeric(radix)?).to_int32();
-        if radix != 0 && !(2..=36).contains(&radix) {
-            return Ok(Value::Number(f64::NAN));
-        }
         self.charge(u64::try_from(units.len()).unwrap_or(u64::MAX))?;
-        let mut text = units.as_ref();
-        while text.first().is_some_and(|u| space(*u)) {
-            text = text.get(1..).unwrap_or(&[]);
-        }
-        let negative = text.first() == Some(&45);
-        if matches!(text.first(), Some(43 | 45)) {
-            text = text.get(1..).unwrap_or(&[]);
-        }
-        let mut radix = u32::try_from(radix).unwrap_or(0);
-        if (radix == 0 || radix == 16) && matches!(text.get(..2), Some([48, 88 | 120])) {
-            text = text.get(2..).unwrap_or(&[]);
-            radix = 16;
-        }
-        if radix == 0 {
-            radix = 10;
-        }
-        let mut integer = audhsos_math::RadixInteger::new(radix).ok_or(Error::InvalidBytecode)?;
-        let mut found = false;
-        for unit in text {
-            let Some(digit) = char::from_u32(u32::from(*unit)).and_then(|c| c.to_digit(radix))
-            else {
-                break;
-            };
-            integer.push(digit);
-            found = true;
-        }
-        let n = if found { integer.to_f64() } else { f64::NAN };
-        Ok(Value::Number(if negative { -n } else { n }))
+        Ok(Value::Number(crate::number::parse_integer(&units, radix)))
     }
 
     pub(super) fn parse_float(&mut self, input: &Value) -> Result<Value, Error> {
         let units = self.string_units(input)?;
         self.charge(u64::try_from(units.len()).unwrap_or(u64::MAX))?;
-        let mut text = units.as_ref();
-        while text.first().is_some_and(|u| space(*u)) {
-            text = text.get(1..).unwrap_or(&[]);
-        }
-        let mut end = usize::from(matches!(text.first(), Some(43 | 45)));
-        let infinity = [73, 110, 102, 105, 110, 105, 116, 121];
-        if text.get(end..).is_some_and(|t| t.starts_with(&infinity)) {
-            return Ok(Value::Number(if text.first() == Some(&45) {
-                f64::NEG_INFINITY
-            } else {
-                f64::INFINITY
-            }));
-        }
-        let start = end;
-        while text.get(end).is_some_and(|u| digit(*u)) {
-            end = end.saturating_add(1);
-        }
-        let mut digits = end.saturating_sub(start);
-        if text.get(end) == Some(&46) {
-            end = end.saturating_add(1);
-            let start = end;
-            while text.get(end).is_some_and(|u| digit(*u)) {
-                end = end.saturating_add(1);
-            }
-            digits = digits.saturating_add(end.saturating_sub(start));
-        }
-        if digits == 0 {
-            return Ok(Value::Number(f64::NAN));
-        }
-        if matches!(text.get(end), Some(69 | 101)) {
-            let mark = end;
-            end = end.saturating_add(1);
-            if matches!(text.get(end), Some(43 | 45)) {
-                end = end.saturating_add(1);
-            }
-            let start = end;
-            while text.get(end).is_some_and(|u| digit(*u)) {
-                end = end.saturating_add(1);
-            }
-            if start == end {
-                end = mark;
-            }
-        }
-        let ascii: String = text
-            .get(..end)
-            .unwrap_or(&[])
-            .iter()
-            .map(|u| char::from(u8::try_from(*u).unwrap_or(0)))
-            .collect();
-        Ok(Value::Number(ascii.parse().unwrap_or(f64::NAN)))
+        Ok(Value::Number(crate::number::parse_float(&units)))
     }
 }
-fn space(unit: u16) -> bool {
-    char::from_u32(u32::from(unit))
-        .is_some_and(|c| crate::value::whitespace(c) || crate::value::line_terminator(c))
-}
-fn digit(unit: u16) -> bool {
-    (48..=57).contains(&unit)
-}
-
 /// Number predicates never coerce: wrappers, Symbols and objects are false.
 pub(super) fn predicate(kind: Builtin, value: &Value) -> Value {
     let Value::Number(n) = value else {

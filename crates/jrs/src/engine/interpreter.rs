@@ -1490,6 +1490,34 @@ impl RegisterVM {
                 self.call_string_intrinsic(intrinsic, call, heap, realm)
             }
             Intrinsic::StringPrototypeSplit => self.call_split_intrinsic(&call, units, heap, realm),
+            // 19.2.2 and 19.2.3 answer about the Number their argument is.
+            Intrinsic::IsNaN | Intrinsic::IsFinite => {
+                let number = primitive_number(self.call_argument(&call, 0)?, heap)?;
+                Ok(Value::from_bool(if intrinsic == Intrinsic::IsNaN {
+                    number.is_nan()
+                } else {
+                    number.is_finite()
+                }))
+            }
+            // 19.2.5 and 19.2.4 read a Number out of the text of their first
+            // argument. The walk charges for the text it passes over.
+            Intrinsic::ParseInt | Intrinsic::ParseFloat => {
+                let text = property_name_units(self.call_argument(&call, 0)?, heap)?;
+                self.fuel = self
+                    .fuel
+                    .checked_sub(u64::try_from(text.len()).unwrap_or(u64::MAX))
+                    .ok_or(VMError::OutOfFuel)?;
+                let number = if intrinsic == Intrinsic::ParseFloat {
+                    crate::number::parse_float(&text)
+                } else {
+                    let radix = crate::value::number_uint32(primitive_number(
+                        self.call_argument(&call, 1)?,
+                        heap,
+                    )?);
+                    crate::number::parse_integer(&text, i32::from_ne_bytes(radix.to_ne_bytes()))
+                };
+                Ok(Value::from_f64(number))
+            }
             Intrinsic::StringPrototypeMatch | Intrinsic::StringPrototypeSearch => {
                 self.call_string_regexp_intrinsic(intrinsic, &call, units, heap, realm)
             }
