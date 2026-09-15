@@ -585,9 +585,17 @@ fn test_the_tls_client(machine: &Machine, path: &Path, root: &Path) -> Result<()
     Error::from_violations(violations)
 }
 
-/// What the program of the image has to report in the TLS run, in this
-/// order: the anchors of the boot volume, where the run's server is, the
+/// What the TLS run has to see, in this order: three lines of the boot,
+/// then the anchors of the boot volume, where the run's server is, the
 /// root of its chain, and one trust set holding both.
+///
+/// The three boot lines are checkpoints and not assertions of their own.
+/// Each line of this list gets [`E2E_TIMEOUT`] to itself, and `app-tls`
+/// is the second to last program the root task starts: without them one
+/// timeout would have to cover the firmware, the kernel, and the loading
+/// of fifteen programs off the volume, one message of two kibibytes at a
+/// time (D-92). The run that failed in CI reached `app-ssh` and lost the
+/// budget there.
 ///
 /// # Errors
 ///
@@ -595,6 +603,18 @@ fn test_the_tls_client(machine: &Machine, path: &Path, root: &Path) -> Result<()
 fn tls_lines(port: u16, root: &Path) -> Result<Vec<(String, String)>, Error> {
     let carried = anchors::of(root)?.len();
     Ok(vec![
+        (
+            "[init] started server-net".to_owned(),
+            "the machine did not get as far as the network server".to_owned(),
+        ),
+        (
+            "[init] started app-ssh".to_owned(),
+            "the machine did not get as far as the program before `app-tls`".to_owned(),
+        ),
+        (
+            "[init] started app-tls".to_owned(),
+            "the root task did not start the program that holds the anchors".to_owned(),
+        ),
         (
             format!("[tls-app] anchors={carried}"),
             "the program did not read the anchor table of the boot volume".to_owned(),
