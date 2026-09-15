@@ -34,15 +34,24 @@ fn the_older_way_of_writing_a_case_is_read_as_one() {
     assert_eq!(name, "two-1");
     assert_eq!(sql.trim(), "SELECT 2;");
     assert_eq!(want, ["2"]);
-    // A body that runs more than the statements is not a case, and
-    // stops the file, because what it wrote is not written.
-    for text in [
-        "do_test a {\n  execsql {SELECT 1}\n  set x 1\n} {1}",
-        "do_test a {\n  catchsql {SELECT 1}\n} {1}",
+    // A body that runs more than the statements is not a case. One
+    // that reads alone leaves the database as the cases after it read
+    // it; one that may have written stops the file.
+    for (text, writes) in [
+        ("do_test a {\n  execsql {SELECT 1}\n  set x 1\n} {1}", false),
+        ("do_test a {\n  catchsql {SELECT 1}\n} {1}", false),
+        (
+            "do_test a {\n  execsql {INSERT INTO t VALUES(1)}\n  set x 1\n} {}",
+            true,
+        ),
+        ("do_test a {\n  set x [db eval {SELECT 1}]\n} {1}", true),
     ] {
         let steps = cases(text);
-        assert_eq!(steps.len(), 1);
-        assert!(matches!(steps[0], Step::Opaque));
+        assert_eq!(steps.len(), 1, "{text}");
+        assert!(
+            matches!(steps[0], Step::Opaque(held) if held == writes),
+            "{text}"
+        );
     }
 }
 
@@ -59,7 +68,7 @@ fn statements_outside_a_case_are_the_file_setting_itself_up() {
     // file, because this harness does not run it.
     let steps = cases("do_catchsql_test a {SELECT 1} {1 {oops}}\nexecsql {SELECT 2}");
     assert_eq!(steps.len(), 2);
-    assert!(matches!(steps[0], Step::Opaque));
+    assert!(matches!(steps[0], Step::Opaque(false)));
     assert!(matches!(&steps[1], Step::Setup(sql) if sql.trim() == "SELECT 2"));
 }
 
@@ -75,7 +84,7 @@ fn a_case_whose_text_is_left_to_the_interpreter_is_passed_over() {
     ] {
         let steps = cases(text);
         assert_eq!(steps.len(), 1, "{text}");
-        assert!(matches!(steps[0], Step::Opaque), "{text}");
+        assert!(matches!(steps[0], Step::Opaque(_)), "{text}");
     }
     assert!(cases("do_execsql_test\n").is_empty());
 }

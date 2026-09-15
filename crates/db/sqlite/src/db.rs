@@ -1147,7 +1147,7 @@ impl<'a> Database<'a> {
         }
         let keys = matched(arena, &first, sql, &answer.names, &collations)?;
         if !keys.is_empty() {
-            sort_by_keys(&mut answer.rows, &keys, &collations);
+            sort_by_keys(&mut answer.rows, &keys);
         }
         let reach = Reach {
             database: self,
@@ -1487,19 +1487,7 @@ impl<'a> Database<'a> {
         {
             return Err(Error::Unsupported);
         }
-        let mut answered = Answered::default();
-        for (at, link) in links.get(..first).unwrap_or_default().iter().enumerate() {
-            let mine = self.core(arena, link.id, sql, false, scope)?;
-            let Some(operator) = before(&links, at) else {
-                answered = mine;
-                continue;
-            };
-            if answered.answer.names.len() != mine.answer.names.len() {
-                return Err(Error::Compound);
-            }
-            let collations = self.collations(&answered.shape);
-            combine(operator, &mut answered.answer, mine.answer, &collations);
-        }
+        let mut answered = self.started(arena, &links, first, sql, scope)?;
         renamed(arena, cte.columns, sql, &mut answered)?;
         let collations = self.collations(&answered.shape);
         let width = answered.answer.names.len();
@@ -1507,9 +1495,51 @@ impl<'a> Database<'a> {
         for row in core::mem::take(&mut answered.answer.rows) {
             add(&mut rows, row, split == Compound::Union, &collations);
         }
-        let mut at = 0usize;
-        while let Some(row) = rows.get(at).cloned() {
-            at = at.saturating_add(1);
+        // `generateWithRecursiveQuery`: the rows of the term wait in a
+        // queue, the `ORDER BY` of the term says which of them is taken
+        // next, and the `LIMIT` says how many are taken at all. A row
+        // the walk takes is answered and then read by the cores that
+        // read the term.
+        let head = arena.select(cte.select).ok_or(Error::Unsupported)?;
+        let order = matched(arena, &head, sql, &answered.answer.names, &collations)?;
+        let reach = Reach {
+            database: self,
+            arena,
+            sql,
+            scope,
+        };
+        let cursor = Cursor::new(self.collation(), self.encoding, reach);
+        let (skip, most) = bounds(arena, &head, sql, &cursor)?;
+        let mut taken: Vec<bool> = Vec::new();
+        let mut out: Vec<Vec<Value>> = Vec::new();
+        let mut passed = 0_usize;
+        let mut next = 0_usize;
+        loop {
+            // A term that wrote no `ORDER BY` takes its rows in the
+            // order they were written, so the walk steps through the
+            // queue rather than reading it whole for the smallest.
+            let found = if order.is_empty() {
+                rows.get(next).cloned().map(|row| (next, row))
+            } else {
+                taken.resize(rows.len(), false);
+                waiting(&rows, &taken, &order)
+                    .and_then(|at| rows.get(at).cloned().map(|row| (at, row)))
+            };
+            let Some((at, row)) = found else {
+                break;
+            };
+            next = at.saturating_add(1);
+            for slot in taken.iter_mut().skip(at).take(1) {
+                *slot = true;
+            }
+            if passed < skip {
+                passed = passed.saturating_add(1);
+            } else {
+                out.push(row.clone());
+                if most.is_some_and(|most| out.len() >= most) {
+                    break;
+                }
+            }
             let mut terms = scope.terms.to_vec();
             terms.push((
                 name.to_vec(),
@@ -1540,8 +1570,36 @@ impl<'a> Database<'a> {
                 }
             }
         }
-        answered.answer.rows = rows;
+        answered.answer.rows = out;
         Ok(Some(answered))
+    }
+
+    /// The rows a recursive term begins with, which are the cores
+    /// before the first one that reads the term, combined.
+    ///
+    /// Answering them costs what those cores cost.
+    fn started(
+        &self,
+        arena: &Arena,
+        links: &[Link],
+        first: usize,
+        sql: &[u8],
+        scope: Scope<'_>,
+    ) -> Result<Answered, Error> {
+        let mut answered = Answered::default();
+        for (at, link) in links.get(..first).unwrap_or_default().iter().enumerate() {
+            let mine = self.core(arena, link.id, sql, false, scope)?;
+            let Some(operator) = before(links, at) else {
+                answered = mine;
+                continue;
+            };
+            if answered.answer.names.len() != mine.answer.names.len() {
+                return Err(Error::Compound);
+            }
+            let collations = self.collations(&answered.shape);
+            combine(operator, &mut answered.answer, mine.answer, &collations);
+        }
+        Ok(answered)
     }
 
     /// Walks the rows a statement reads, once, and hands each to `each`.
@@ -3147,6 +3205,46 @@ fn keys(
     Ok(keys)
 }
 
+/// Which row of the queue of a recursive term is taken next, which is
+/// the smallest of the rows waiting in it under `order`.
+///
+/// Reading the queue costs O(n) in the rows waiting in it.
+fn waiting(rows: &[Vec<Value>], taken: &[bool], order: &[Ordered]) -> Option<usize> {
+    let mut best: Option<usize> = None;
+    for (at, row) in rows.iter().enumerate() {
+        if taken.get(at).copied().unwrap_or(false) {
+            continue;
+        }
+        let smaller = best
+            .and_then(|held| rows.get(held))
+            .is_none_or(|held| order_of_rows(row, held, order) == core::cmp::Ordering::Less);
+        if smaller {
+            best = Some(at);
+        }
+    }
+    best
+}
+
+/// How many rows a `LIMIT` on a recursive term passes over and how many
+/// it takes, which is nothing where it takes them all.
+fn bounds(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    row: &dyn eval::Row,
+) -> Result<(usize, Option<usize>), Error> {
+    let Some(limit) = select.limit else {
+        return Ok((0, None));
+    };
+    let count = evaluate_row(arena, limit.count, sql, row)?.to_integer();
+    let skip = match limit.offset {
+        None => 0,
+        Some(offset) => evaluate_row(arena, offset, sql, row)?.to_integer(),
+    };
+    let most = (count >= 0).then(|| usize::try_from(count).unwrap_or(0));
+    Ok((usize::try_from(skip).unwrap_or(0), most))
+}
+
 /// Drops the rows a `LIMIT` leaves out.
 fn limit(
     arena: &Arena,
@@ -3335,25 +3433,53 @@ fn ordered(rows: &mut Vec<Vec<Value>>, collations: &[Collation]) {
 /// Sorts rows by every column, which is the order a set operator
 /// answers in.
 fn arrange(rows: &mut [Vec<Value>], collations: &[Collation]) {
-    let every: Vec<(usize, bool)> = (0..collations.len()).map(|at| (at, false)).collect();
-    sort_by_keys(rows, &every, collations);
+    let every: Vec<Ordered> = collations
+        .iter()
+        .enumerate()
+        .map(|(at, collation)| Ordered {
+            at,
+            descending: false,
+            collation: *collation,
+        })
+        .collect();
+    sort_by_keys(rows, &every);
+}
+
+/// One term of the `ORDER BY` of a compound: which column of the
+/// answer it counts to, which way it runs, and what it compares under.
+#[derive(Clone, Copy)]
+struct Ordered {
+    /// Which column of the answer.
+    at: usize,
+    /// Whether it runs backwards.
+    descending: bool,
+    /// What the values compare under, which is what the term was
+    /// written with where it was written with a `COLLATE`.
+    collation: Collation,
 }
 
 /// Sorts the rows of an answer under terms that each count to a column
-/// of it, backwards where the flag says so.
-fn sort_by_keys(rows: &mut [Vec<Value>], terms: &[(usize, bool)], collations: &[Collation]) {
-    rows.sort_by(|left, right| {
-        for (at, descending) in terms.iter().copied() {
-            let collation = collations.get(at).copied().unwrap_or(Collation::Binary);
-            let first = left.get(at).unwrap_or(&Value::Null);
-            let second = right.get(at).unwrap_or(&Value::Null);
-            let order = compare(first, second, collation);
-            if order != core::cmp::Ordering::Equal {
-                return if descending { order.reverse() } else { order };
-            }
+/// of it, backwards where the term says so.
+fn sort_by_keys(rows: &mut [Vec<Value>], terms: &[Ordered]) {
+    rows.sort_by(|left, right| order_of_rows(left, right, terms));
+}
+
+/// Where one row stands against another under terms that each count to
+/// a column of the answer.
+fn order_of_rows(left: &[Value], right: &[Value], terms: &[Ordered]) -> core::cmp::Ordering {
+    for term in terms {
+        let first = left.get(term.at).unwrap_or(&Value::Null);
+        let second = right.get(term.at).unwrap_or(&Value::Null);
+        let order = compare(first, second, term.collation);
+        if order != core::cmp::Ordering::Equal {
+            return if term.descending {
+                order.reverse()
+            } else {
+                order
+            };
         }
-        core::cmp::Ordering::Equal
-    });
+    }
+    core::cmp::Ordering::Equal
 }
 
 /// The `ORDER BY` of a compound, whose every term has to count or name
@@ -3365,11 +3491,18 @@ fn matched(
     sql: &[u8],
     names: &[Vec<u8>],
     collations: &[Collation],
-) -> Result<Vec<(usize, bool)>, Error> {
+) -> Result<Vec<Ordered>, Error> {
     let mut out = Vec::new();
     for key in keys(arena, select, sql, names, collations)? {
         match key {
-            Key::Place(at, descending, _) => out.push((at, descending)),
+            // A `COLLATE` on the term is what the sort compares under,
+            // which `multiSelectOrderBy` reads off the term and not off
+            // the column it counts to.
+            Key::Place(at, descending, collation) => out.push(Ordered {
+                at,
+                descending,
+                collation,
+            }),
             Key::Expr(..) => return Err(Error::OrderMatch),
         }
     }

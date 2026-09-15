@@ -603,3 +603,110 @@ fn a_term_of_a_where_is_read_on_the_level_that_answers_it() {
         ["Int(1)"]
     );
 }
+
+#[test]
+fn the_order_by_of_a_compound_compares_under_what_the_term_was_written_with() {
+    use crate::change::Writer;
+    use crate::header::Encoding;
+    // `multiSelectOrderBy` reads the collation off the term and not off
+    // the column it counts to, so a `COLLATE` on the term is what the
+    // whole compound is ordered under.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t1(b TEXT COLLATE NOCASE)".as_slice(),
+        b"INSERT INTO t1 VALUES('a'),('B')",
+        b"CREATE TABLE t2(y TEXT COLLATE NOCASE)",
+        b"INSERT INTO t2 VALUES('C'),('d')",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    let ordered = |sql: &[u8]| -> Vec<Vec<u8>> {
+        database
+            .query(sql)
+            .unwrap()
+            .rows
+            .iter()
+            .filter_map(|row| match row.first() {
+                Some(Value::Text(text)) => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let text = |held: &[&str]| -> Vec<Vec<u8>> {
+        held.iter().map(|one| one.as_bytes().to_vec()).collect()
+    };
+    let core = b"SELECT b FROM t1 UNION ALL SELECT y FROM t2 ORDER BY ".as_slice();
+    let ask = |rest: &str| -> Vec<u8> {
+        let mut sql = core.to_vec();
+        sql.extend_from_slice(rest.as_bytes());
+        sql
+    };
+    assert_eq!(
+        ordered(&ask("b COLLATE BINARY")),
+        text(&["B", "C", "a", "d"])
+    );
+    assert_eq!(ordered(&ask("b")), text(&["a", "B", "C", "d"]));
+    assert_eq!(ordered(&ask("1 DESC")), text(&["d", "C", "B", "a"]));
+}
+
+#[test]
+fn the_order_by_of_a_recursive_term_says_which_row_is_taken_next() {
+    use crate::change::Writer;
+    use crate::header::Encoding;
+    // `generateWithRecursiveQuery` keeps the rows of the term in a
+    // queue: the `ORDER BY` says which is taken next and the `LIMIT`
+    // how many are taken at all.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE link(aa,bb)").unwrap();
+    writer
+        .run(b"INSERT INTO link VALUES(1,3),(3,5),(5,7),(7,9),(9,11)")
+        .unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    let held = |sql: &[u8]| -> Vec<i64> {
+        database
+            .query(sql)
+            .unwrap()
+            .rows
+            .iter()
+            .filter_map(|row| match row.first() {
+                Some(Value::Int(number)) => Some(*number),
+                _ => None,
+            })
+            .collect()
+    };
+    let closure = b"WITH RECURSIVE closure(x) AS (SELECT 1 AS x UNION \
+                    SELECT bb FROM link JOIN closure ON aa=x "
+        .as_slice();
+    let ask = |rest: &str| -> Vec<u8> {
+        let mut sql = closure.to_vec();
+        sql.extend_from_slice(rest.as_bytes());
+        sql.extend_from_slice(b") SELECT * FROM closure");
+        sql
+    };
+    assert_eq!(held(&ask("")), [1, 3, 5, 7, 9, 11]);
+    assert_eq!(held(&ask("ORDER BY x LIMIT 4")), [1, 3, 5, 7]);
+    assert_eq!(held(&ask("ORDER BY x DESC LIMIT 3")), [1, 3, 5]);
+    assert_eq!(held(&ask("ORDER BY x LIMIT 3 OFFSET 2")), [5, 7, 9]);
+    assert_eq!(held(&ask("LIMIT -1")), [1, 3, 5, 7, 9, 11]);
+
+    // A row that reaches two takes the smaller of them first, so the
+    // queue holds more than one row waiting and the walk reads it for
+    // the smallest.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE link(aa,bb)").unwrap();
+    writer
+        .run(b"INSERT INTO link VALUES(1,5),(1,3),(3,9),(5,7)")
+        .unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    let rows = database
+        .query(
+            b"WITH RECURSIVE closure(x) AS (SELECT 1 AS x UNION               SELECT bb FROM link JOIN closure ON aa=x ORDER BY x LIMIT 3)               SELECT * FROM closure",
+        )
+        .unwrap()
+        .rows;
+    assert_eq!(rows, [[Value::Int(1)], [Value::Int(3)], [Value::Int(5)]]);
+}

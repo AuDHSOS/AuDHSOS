@@ -527,7 +527,7 @@ refused as the C library does, but for the 36 the parser counts;
 ## 16.19 Q5. Values, and a statement answered by walking
 
 Status: built.
-Depends on: Q2, Q4. Recorded in D-208.
+Depends on: Q2, Q4. Recorded in D-208, D-214 and D-215.
 Size: L.
 
 ### Needs
@@ -552,6 +552,9 @@ Size: L.
 7. Read a term of the `WHERE` on the level that answers it, and read
    the side of an `ON` by an index that names its key, which D-208
    records.
+8. Order a compound under the `COLLATE` its `ORDER BY` was written
+   with, and take the rows of a recursive term off a queue its own
+   `ORDER BY` and `LIMIT` bound, which D-214 and D-215 record.
 
 ### Produces
 
@@ -684,7 +687,7 @@ library accepts or refuses it, with no count of what is waiting.
 
 Status: `sh tools/xtask.sh sqlite-suite` runs the part of SQLite's own
 test files that needs no TCL interpreter. Of 15 364 cases in 1 171
-files, 2184 pass, 6 answer differently, and 13 174 name something the
+files, 2322 pass, 6 answer differently, and 13 036 name something the
 engine refuses or something the harness cannot run.
 Depends on: Q7, Q8.
 Size: M.
@@ -720,7 +723,9 @@ significant digits `tcl_precision` holds.
 
 An `execsql` outside a case is the file setting itself up: it runs so that the cases after it read what it
 wrote, and it is counted only by stopping the file where the engine
-refuses it. The cases run in the order they are written, because each
+refuses it. A step this harness cannot run stops the file only where
+the text it stands for may have changed the database, which D-213
+records. The cases run in the order they are written, because each
 builds on the ones before it. A case the engine refuses stops the file,
 and the cases after it are refused with it, because the database is then
 short of what they read. A case that runs is counted passed where the

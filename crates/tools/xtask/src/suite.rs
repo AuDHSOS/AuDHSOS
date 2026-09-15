@@ -72,9 +72,12 @@ pub(crate) enum Step {
     Null(String),
     /// Something the file runs that this harness cannot: a body that
     /// runs more than statements, or statements a substitution stands
-    /// in. It leaves the database short of what the cases after it
-    /// read, so it stops the file the way a refusal does.
-    Opaque,
+    /// in. Where it may have changed the database it leaves the
+    /// database short of what the cases after it read and stops the
+    /// file the way a refusal does; where it reads alone the cases
+    /// after it read what the file wrote, so the file runs on and the
+    /// step itself is counted refused.
+    Opaque(bool),
 }
 
 /// What the engine refused, counted by the first word of the statement
@@ -177,7 +180,9 @@ pub(crate) fn cases(text: &str) -> Vec<Step> {
     let mut out = Vec::new();
     let mut rest = text;
     while let Some((command, after)) = next_command(rest) {
+        let from = rest;
         rest = after;
+        let at = out.len();
         match command {
             // `execsql` and `db eval` outside a case are the file
             // setting itself up, and the cases after them read what
@@ -226,7 +231,7 @@ pub(crate) fn cases(text: &str) -> Vec<Step> {
                 // writes are rows this harness cannot write. The file
                 // stops there rather than running its cases against a
                 // database that is short of them.
-                None => out.push(Step::Opaque),
+                None => out.push(Step::Opaque(true)),
             },
             // A case that expects a refusal says so as a pair of a
             // code and a message, which this does not answer; the
@@ -234,7 +239,7 @@ pub(crate) fn cases(text: &str) -> Vec<Step> {
             // not taken for setup.
             "do_catchsql_test" => {
                 rest = past(rest, 2);
-                out.push(Step::Opaque);
+                out.push(Step::Opaque(true));
             }
             // `do_test NAME { execsql { SQL } } { ANSWER }` is the
             // older way of writing `do_execsql_test`, and the only
@@ -245,12 +250,12 @@ pub(crate) fn cases(text: &str) -> Vec<Step> {
                 };
                 let Some((body, after)) = braced(after) else {
                     rest = after;
-                    out.push(Step::Opaque);
+                    out.push(Step::Opaque(true));
                     continue;
                 };
                 let Some((want, after)) = braced(after) else {
                     rest = after;
-                    out.push(Step::Opaque);
+                    out.push(Step::Opaque(true));
                     continue;
                 };
                 rest = after;
@@ -261,7 +266,7 @@ pub(crate) fn cases(text: &str) -> Vec<Step> {
                     .filter(|(_, over)| over.trim().is_empty());
                 match read {
                     Some((sql, _)) => push(&mut out, name, sql, want),
-                    None => out.push(Step::Opaque),
+                    None => out.push(Step::Opaque(true)),
                 }
             }
             _ => {
@@ -270,16 +275,27 @@ pub(crate) fn cases(text: &str) -> Vec<Step> {
                 };
                 let Some((sql, after)) = braced(after) else {
                     rest = after;
-                    out.push(Step::Opaque);
+                    out.push(Step::Opaque(true));
                     continue;
                 };
                 let Some((want, after)) = braced(after) else {
                     rest = after;
-                    out.push(Step::Opaque);
+                    out.push(Step::Opaque(true));
                     continue;
                 };
                 rest = after;
                 push(&mut out, name, sql, want);
+            }
+        }
+        // A step this harness cannot run stops the file only where the
+        // text it stands for may have changed the database.
+        let consumed = from
+            .get(..from.len().saturating_sub(rest.len()))
+            .unwrap_or("");
+        let held = writes(consumed);
+        for step in out.iter_mut().skip(at) {
+            if matches!(step, Step::Opaque(_)) {
+                *step = Step::Opaque(held);
             }
         }
     }
@@ -289,7 +305,7 @@ pub(crate) fn cases(text: &str) -> Vec<Step> {
     let mut seen = std::collections::BTreeSet::new();
     out.retain(|step| match step {
         Step::Case { name, .. } => seen.insert(name.clone()),
-        Step::Setup(_) | Step::Null(_) | Step::Opaque => true,
+        Step::Setup(_) | Step::Null(_) | Step::Opaque(_) => true,
     });
     out
 }
@@ -304,7 +320,7 @@ fn push(out: &mut Vec<Step>, name: &str, sql: &str, want: &str) {
         .iter()
         .any(|text| text.contains('$') || text.contains('['))
     {
-        out.push(Step::Opaque);
+        out.push(Step::Opaque(true));
         return;
     }
     out.push(Step::Case {
@@ -422,8 +438,8 @@ fn score(file: &str, cases: &[Step]) -> Score {
     let mut null = String::new();
     for step in cases {
         let (name, sql, want) = match step {
-            Step::Opaque => {
-                stopped = true;
+            Step::Opaque(changes) => {
+                stopped = stopped || *changes;
                 continue;
             }
             Step::Null(text) => {
@@ -568,6 +584,51 @@ fn first_words(sql: &str) -> String {
         .map(str::to_uppercase)
         .collect::<Vec<String>>()
         .join(" ")
+}
+
+/// Whether a step this harness cannot run may have changed the
+/// database.
+///
+/// A word that names a statement that writes, a command that opens or
+/// closes a connection, and a substitution, which stands for a command
+/// this cannot read, all say it may have. Reading the text costs O(n)
+/// in its bytes.
+fn writes(text: &str) -> bool {
+    const WRITING: [&str; 24] = [
+        "insert",
+        "update",
+        "delete",
+        "replace",
+        "create",
+        "drop",
+        "alter",
+        "pragma",
+        "begin",
+        "commit",
+        "rollback",
+        "analyze",
+        "reindex",
+        "vacuum",
+        "attach",
+        "detach",
+        "savepoint",
+        "release",
+        "close",
+        "sqlite3",
+        "restore",
+        "backup",
+        "copy",
+        "crash",
+    ];
+    if text.contains('[') || text.contains('$') {
+        return true;
+    }
+    let words = words(text);
+    words.iter().any(|word| {
+        WRITING
+            .iter()
+            .any(|written| word.eq_ignore_ascii_case(written))
+    })
 }
 
 /// Whether the statement answers rows rather than changing them.

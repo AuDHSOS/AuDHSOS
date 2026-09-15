@@ -4297,7 +4297,9 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
 - A real is written with fifteen significant digits, which is what
   `tester.tcl` sets `tcl_precision` to and what the interpreter wrote
   into the answers the files hold, which D-212 records.
-- 2184 pass, 6 answer differently and 13 174 are refused or stopped.
+- A step this harness cannot run stops the file only where the text it
+  stands for may have changed the database, which D-213 records.
+- 2322 pass, 6 answer differently and 13 036 are refused or stopped.
   Document 16, section 16.23 groups the seven. Earlier runs answered
   14, then 27, then 17, then 13, then 16 differently; twenty-five were
   defects, which D-181, D-184, D-189, D-197 and D-205 record and
@@ -4695,6 +4697,20 @@ D-211, document 16 step Q8.
   share a name.
 - `IF NOT EXISTS` writes nothing rather than refusing, for all four
   and for a table made from a statement.
+
+### 6.6.141 What a compound and a recursive term are ordered by (`db-sqlite`)
+
+D-214 and D-215, document 16 step Q5.
+
+- The `ORDER BY` of a compound compares under the `COLLATE` its term
+  was written with, under the collation of the column where the term
+  wrote none, and backwards where the term counts to a column and says
+  `DESC`.
+- A recursive term takes its rows in the order they were written where
+  it wrote no `ORDER BY`, and smallest first where it wrote one.
+- The `LIMIT` of a recursive term bounds the rows it answers, an
+  `OFFSET` passes the first over, and a count below nought bounds
+  nothing.
 
 ## 6.7 CI pipeline
 
