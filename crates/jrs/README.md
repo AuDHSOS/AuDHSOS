@@ -667,8 +667,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `try` statements, after the catch pattern, on the register engine (focused) | focused | `bce813f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/try --summary` | 201 | 388 | 187 (48.20%) | 3 (0.77%) | 198 (51.03%) |
 | The global Number functions (focused) | focused | `91aba35` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/isNaN test/built-ins/isFinite test/built-ins/parseInt test/built-ins/parseFloat --summary` | 139 | 278 | 270 (97.12%) | 8 (2.88%) | 0 (0.00%) |
 | The global Number functions on the register engine (focused) | focused | `91aba35` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/isNaN test/built-ins/isFinite test/built-ins/parseInt test/built-ins/parseFloat --summary` | 139 | 278 | 230 (82.73%) | 8 (2.88%) | 40 (14.39%) |
-| Complete pinned suite, including staging and Intl | full | `91aba35` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `91aba35` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 21,836 (21.22%) | 17,796 (17.29%) | 63,293 (61.49%) |
+| Template literals (focused) | focused | `5cdf8b3` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/template-literal --summary` | 57 | 114 | 80 (70.18%) | 0 (0.00%) | 34 (29.82%) |
+| Template literals on the register engine (focused) | focused | `5cdf8b3` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/template-literal --summary` | 57 | 114 | 78 (68.42%) | 0 (0.00%) | 36 (31.58%) |
+| Complete pinned suite, including staging and Intl | full | `5cdf8b3` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `5cdf8b3` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 21,890 (21.27%) | 18,572 (18.04%) | 62,463 (60.69%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1372,7 +1374,9 @@ which is the tree of `3825637`. The `try` runs and both full runs beside the
 catch pattern were measured at tree `b45adcde7aacc737c6920083cc31f7831c5f9523`,
 which is the tree of `bce813f`. The global Number function runs and both full
 runs beside them were measured at tree `8091ce89534b99963ab6a867abd6f3efefcb01fa`,
-which is the tree of `91aba35`. `RegExp.prototype[@@split]` landed in `fe5797c`
+which is the tree of `91aba35`. The template-literal runs and both full runs
+beside them were measured at tree `cb9dc9fe7f409501a68a9afa010a219e9d858e90`,
+which is the tree of `5cdf8b3`. `RegExp.prototype[@@split]` landed in `fe5797c`
 between them and moved no variant of the suite.
 
 ### Historical Test262 baseline
