@@ -1523,10 +1523,11 @@ fn dynamic_object_writes_keep_subsequent_reads_conservative() -> Result<(), Erro
 
 #[test]
 fn observable_destructuring_assignments_stay_on_legacy_backend() -> Result<(), Error> {
+    // 13.15.5.5 takes the elements from the iterator of the value, so a
+    // pattern over an object without one throws where it used to be refused.
+    differential("let x=0;[x]={0:42,length:1}")?;
     for source in [
         "const x=0;[x]=[1]",
-        "let x=0;[x]={0:42,length:1}",
-        "let x=0;let input=[1];input[Symbol.iterator]=function(){return {next(){return {value:42}}}};[x]=input;x",
         "let target={},key={toString(){return 'x'}};[target[key]]=[42];target.x",
         "let target={x:1},key='y',x=0,rest={};target[key]=2;({x,...rest}=target);rest.y",
     ] {
@@ -5682,6 +5683,34 @@ fn walks_over_accessor_elements() -> Result<(), Error> {
         // throwing callback does.
         "var a=[1,2];Object.defineProperty(a,0,{get:function(){throw 1},enumerable:true});\
          try{a.forEach(function(){});0}catch(e){e}",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
+
+/// 13.15.5.5 over a value whose layout the lowering does not know: an array
+/// pattern walks the iterator of 7.4.2, an object pattern reads properties
+/// after 7.3.5 refused undefined and null.
+#[test]
+fn destructuring_assignment_over_an_unknown_value() -> Result<(), Error> {
+    for source in [
+        "function f(v){var a,b;[a,b]=v;return a+','+b}f([1,2])",
+        "function f(v){var a,b;[a,...b]=v;return a+':'+b.join()}f([1,2,3])",
+        "function f(v){var a;[,a]=v;return a}f([1,2])",
+        "function f(v){var a;[a=7]=v;return a}f([])",
+        "function f(v){var o={};[o.p]=v;return o.p}f([9])",
+        "function f(v){var a,b;[[a,b]]=v;return a+b}f([[1,2]])",
+        "function f(v){var a;[a]=v;return a}f({})",
+        "function f(v){var a;({a}=v);return a}f({a:5})",
+        "function f(v){var a;({a=7}=v);return a}f({})",
+        "function f(v){var a;({a}=v);return a}f(null)",
+        "function f(v){var a;({a}=v);return a}f(undefined)",
+        "function f(v){var k='a',a;({[k]:a}=v);return a}f({a:3})",
+        "function f(v){var a,b;({a,b=a}=v);return a+','+b}f({a:1})",
+        "function f(v){var o={};({p:o.q}=v);return o.q}f({p:4})",
+        // 13.15.5.5 writes each target as the iterator answers it.
+        "function f(v){var s='';var t={set p(x){s+=x}};[t.p,t.p]=v;return s}f([1,2])",
     ] {
         differential_scripts(&[source])?;
     }

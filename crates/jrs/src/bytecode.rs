@@ -1099,7 +1099,8 @@ impl RegisterLowerer {
             parser::BindingPattern::Array(array) => {
                 if !matches!(value_type, RegisterType::Array(_)) {
                     // 8.6.2 takes the elements from the iterator of the value.
-                    return self.bind_array_pattern_by_iterator(array);
+                    return self
+                        .lower_array_pattern_by_iterator(&RegisterArrayPattern::Binding(array));
                 }
                 let source = self.allocate_register()?;
                 self.code.emit(Instruction::Star(source));
@@ -1140,20 +1141,19 @@ impl RegisterLowerer {
         Some(())
     }
 
-    /// `IteratorBindingInitialization` of 8.6.2 for an array pattern over a
-    /// value whose layout the lowering does not know.
+    /// `IteratorBindingInitialization` of 8.6.2 and
+    /// `DestructuringAssignmentEvaluation` of 13.15.5.5 for an array pattern
+    /// over a value whose layout the lowering does not know.
     ///
     /// 7.4.2 opens the iterator, each element takes one step of 7.4.6, and an
     /// element the iterator no longer answers is undefined. 7.4.9 closes an
-    /// iterator the pattern did not exhaust.
+    /// iterator the pattern did not exhaust. The two forms differ only in what
+    /// one element does with the value, so they share the walk.
     #[expect(
         clippy::too_many_lines,
-        reason = "one function emits the whole of 8.6.2 for one pattern"
+        reason = "one function emits the whole of the walk for one pattern"
     )]
-    fn bind_array_pattern_by_iterator(
-        &mut self,
-        array: &parser::ArrayBindingPattern,
-    ) -> Option<()> {
+    fn lower_array_pattern_by_iterator(&mut self, array: &RegisterArrayPattern<'_>) -> Option<()> {
         use crate::engine::bytecode::{FeedbackKind, Instruction};
         let iterable = self.allocate_register()?;
         self.code.emit(Instruction::Star(iterable));
@@ -1187,7 +1187,20 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Star(done));
         let step = self.allocate_register()?;
         let next = self.allocate_register()?;
-        for element in &array.elements {
+        for index in 0..array.len() {
+            // 13.15.5.5 evaluates the target of an element before the
+            // iterator steps, which 8.6.2 has no reference to evaluate.
+            let prepared = match array {
+                RegisterArrayPattern::Assignment(assignment) => {
+                    match assignment.elements.get(index) {
+                        Some(parser::AssignmentArrayElement::Element { target, .. }) => {
+                            Some(self.prepare_assignment_pattern_target(target)?)
+                        }
+                        _ => None,
+                    }
+                }
+                RegisterArrayPattern::Binding(_) => None,
+            };
             self.code.emit(Instruction::Ldar(done));
             let finished = self.code.emit(Instruction::JumpIfTrue(0));
             let next_name = self.string_constant(&"next".encode_utf16().collect::<Vec<_>>())?;
@@ -1235,28 +1248,53 @@ impl RegisterLowerer {
             self.code.emit(Instruction::LdaUndefined);
             let after = self.code.instructions.len();
             self.patch_jump(bound, after)?;
-            if let parser::ArrayBindingElement::Element {
-                pattern,
-                initializer,
-            } = element
-            {
-                let mut element_type = RegisterType::Unknown;
-                if let Some(initializer) = initializer {
-                    let bound: Option<Vec<u16>> = pattern
-                        .identifier()
-                        .map(|name| name.encode_utf16().collect());
-                    element_type = self.lower_binding_default_named(
-                        element_type,
+            match array {
+                RegisterArrayPattern::Binding(binding) => {
+                    if let Some(parser::ArrayBindingElement::Element {
+                        pattern,
                         initializer,
-                        bound.as_deref(),
-                    )?;
+                    }) = binding.elements.get(index)
+                    {
+                        let mut element_type = RegisterType::Unknown;
+                        if let Some(initializer) = initializer {
+                            let bound: Option<Vec<u16>> = pattern
+                                .identifier()
+                                .map(|name| name.encode_utf16().collect());
+                            element_type = self.lower_binding_default_named(
+                                element_type,
+                                initializer,
+                                bound.as_deref(),
+                            )?;
+                        }
+                        self.bind_pattern(element_type, pattern)?;
+                    }
                 }
-                self.bind_pattern(element_type, pattern)?;
+                RegisterArrayPattern::Assignment(assignment) => {
+                    if let Some(parser::AssignmentArrayElement::Element {
+                        target,
+                        initializer,
+                    }) = assignment.elements.get(index)
+                    {
+                        let mut element_type = RegisterType::Unknown;
+                        if let Some(initializer) = initializer {
+                            element_type = self.lower_binding_default(element_type, initializer)?;
+                        }
+                        self.finish_assignment_pattern_target(element_type, target, prepared?)?;
+                    }
+                }
             }
         }
         // 8.6.2 collects a rest element by walking the iterator to its end
         // into an Array of its own, whose indices 13.2.5.5 defines.
-        if let Some(rest) = &array.rest {
+        if array.has_rest() {
+            // 13.15.5.5 evaluates the target of the rest element before it
+            // collects anything into the Array.
+            let prepared = match array {
+                RegisterArrayPattern::Assignment(assignment) => {
+                    Some(self.prepare_assignment_pattern_target(assignment.rest.as_deref()?)?)
+                }
+                RegisterArrayPattern::Binding(_) => None,
+            };
             let collected = self.allocate_register()?;
             self.code.emit(Instruction::CreateArray(0));
             self.code.emit(Instruction::Star(collected));
@@ -1321,7 +1359,18 @@ impl RegisterLowerer {
             let end = self.code.instructions.len();
             self.patch_jump(leave, end)?;
             self.code.emit(Instruction::Ldar(collected));
-            self.bind_pattern(RegisterType::Unknown, rest)?;
+            match array {
+                RegisterArrayPattern::Binding(binding) => {
+                    self.bind_pattern(RegisterType::Unknown, binding.rest.as_deref()?)?;
+                }
+                RegisterArrayPattern::Assignment(assignment) => {
+                    self.finish_assignment_pattern_target(
+                        RegisterType::Unknown,
+                        assignment.rest.as_deref()?,
+                        prepared?,
+                    )?;
+                }
+            }
             self.release_register(one)?;
             self.release_register(count)?;
             self.release_register(collected)?;
@@ -1962,7 +2011,10 @@ impl RegisterLowerer {
             return None;
         }
         let value_type = self.lower(right)?;
-        if !value_type.is_object() {
+        // 13.15.5.2 takes the value as it is; an array pattern reaches it
+        // through 7.4.2 and an object pattern through 7.3.5, both of which
+        // run on a value the lowering could not name.
+        if !value_type.is_object() && value_type != RegisterType::Unknown {
             return None;
         }
         let result = self.allocate_register()?;
@@ -1981,12 +2033,14 @@ impl RegisterLowerer {
         use crate::engine::bytecode::Instruction;
         match pattern {
             parser::AssignmentPattern::Target(target) => {
-                let name = target.reference_name()?;
-                self.assign_name(value_type, name)?;
+                self.assign_name(value_type, target)?;
             }
             parser::AssignmentPattern::Array(array) => {
                 if !matches!(value_type, RegisterType::Array(_)) {
-                    return None;
+                    // 13.15.5.5 takes the elements from the iterator of the
+                    // value.
+                    return self
+                        .lower_array_pattern_by_iterator(&RegisterArrayPattern::Assignment(array));
                 }
                 let source = self.allocate_register()?;
                 self.code.emit(Instruction::Star(source));
@@ -2019,10 +2073,15 @@ impl RegisterLowerer {
                 self.release_register(source)?;
             }
             parser::AssignmentPattern::Object(object) => {
-                if !value_type.is_object()
-                    || object.rest.is_some() && !matches!(value_type, RegisterType::Object(_))
-                {
+                if object.rest.is_some() && !matches!(value_type, RegisterType::Object(_)) {
                     return None;
+                }
+                if !value_type.is_object() {
+                    // 13.15.5.5 step 1 refuses undefined and null before it
+                    // reads any property.
+                    self.code.emit(Instruction::Require(
+                        crate::engine::bytecode::RequireKind::ObjectCoercible,
+                    ));
                 }
                 let source = self.allocate_register()?;
                 self.code.emit(Instruction::Star(source));
@@ -2032,13 +2091,18 @@ impl RegisterLowerer {
                     if object.rest.is_some() {
                         excluded.push(Self::static_property_key_units(&property.key)?);
                     }
-                    let mut property_type = self.lower_property_from_register(
-                        source,
-                        value_type,
-                        &property.key,
-                        Self::static_property_name(&property.key).is_none(),
-                        true,
-                    )?;
+                    let keyed = Self::static_property_name(&property.key).is_none();
+                    let mut property_type = if value_type.is_object() {
+                        self.lower_property_from_register(
+                            source,
+                            value_type,
+                            &property.key,
+                            keyed,
+                            true,
+                        )?
+                    } else {
+                        self.lower_unknown_property_from_register(source, &property.key, keyed)?
+                    };
                     if let Some(initializer) = &property.initializer {
                         property_type = self.lower_binding_default(property_type, initializer)?;
                     }
@@ -2101,11 +2165,14 @@ impl RegisterLowerer {
         target: &Expr,
     ) -> Option<RegisterPreparedAssignment> {
         if target.reference_name().is_some() {
-            Some(RegisterPreparedAssignment::Name)
-        } else {
-            self.prepare_member_assignment(target)
-                .map(RegisterPreparedAssignment::Member)
+            return Some(RegisterPreparedAssignment::Name);
         }
+        // 10.1.9.1 reads the strictness of the Reference a member target is,
+        // which is the strictness of the target and not of whatever assignment
+        // was lowered before it.
+        self.assignment_strict = target.strict;
+        self.prepare_member_assignment(target)
+            .map(RegisterPreparedAssignment::Member)
     }
 
     fn finish_assignment_reference(
@@ -2115,9 +2182,7 @@ impl RegisterLowerer {
         prepared: RegisterPreparedAssignment,
     ) -> Option<()> {
         match prepared {
-            RegisterPreparedAssignment::Name => {
-                self.assign_name(value_type, target.reference_name()?)
-            }
+            RegisterPreparedAssignment::Name => self.assign_name(value_type, target),
             RegisterPreparedAssignment::Member(prepared) => {
                 target.member()?;
                 self.finish_member_assignment(prepared, value_type)
@@ -2126,8 +2191,27 @@ impl RegisterLowerer {
         }
     }
 
-    fn assign_name(&mut self, value_type: RegisterType, name: &str) -> Option<()> {
-        let binding = *self.bindings.get(name)?;
+    /// Writes the accumulator to the Reference a name of a pattern is.
+    fn assign_name(&mut self, value_type: RegisterType, target: &Expr) -> Option<()> {
+        let name = target.reference_name()?;
+        let Some(binding) = self.bindings.get(name).copied() else {
+            // 9.1.1.4.5 writes a name no binding of this Script covers on the
+            // Global Environment Record. Outside a Realm there is no such
+            // Record to write to.
+            if !self.realm {
+                return None;
+            }
+            let constant = self.global_name(target)?;
+            self.code
+                .emit(crate::engine::bytecode::Instruction::StaGlobal {
+                    name: constant,
+                    strict: target.strict,
+                });
+            // Every later call can read the name from the Global Environment
+            // Record, so the value is no longer only this Script's.
+            self.escape(&[value_type]);
+            return Some(());
+        };
         if !binding.mutable || binding.value_type.is_none() || binding.stable_function_identity {
             return None;
         }
@@ -8828,6 +8912,30 @@ fn prepare_register_bindings(
         }
     }
     Some(())
+}
+
+/// An array pattern the iterator walk takes: the Binding form of 8.6.2 or the
+/// Assignment form of 13.15.5.5.
+enum RegisterArrayPattern<'a> {
+    Binding(&'a parser::ArrayBindingPattern),
+    Assignment(&'a parser::AssignmentArrayPattern),
+}
+
+impl RegisterArrayPattern<'_> {
+    /// How many elements the walk steps over before the rest element.
+    const fn len(&self) -> usize {
+        match self {
+            Self::Binding(binding) => binding.elements.len(),
+            Self::Assignment(assignment) => assignment.elements.len(),
+        }
+    }
+
+    const fn has_rest(&self) -> bool {
+        match self {
+            Self::Binding(binding) => binding.rest.is_some(),
+            Self::Assignment(assignment) => assignment.rest.is_some(),
+        }
+    }
 }
 
 /// The name a refused expression reports.
