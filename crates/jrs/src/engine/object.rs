@@ -67,6 +67,37 @@ pub enum ObjectKind {
         /// `[[ArrayLikeNextIndex]]`.
         index: u32,
     },
+    /// The state of one call of a method of 23.1.3 that calls back into the
+    /// Script (23.1.3.5, .8, .11, .12, .15, .21, .24, .25).
+    ///
+    /// Each element is a call, and the engine leaves the method to make it, so
+    /// what the walk has reached cannot live in the frame of the caller. It
+    /// lives here, where the collector traces it like any other object, and
+    /// the callback takes its arguments from here too: the operation has no
+    /// frame whose registers could hold them.
+    ArrayIteration {
+        /// The intrinsic this state belongs to.
+        intrinsic: u32,
+        /// `O` of the clause, which is also the third argument of every
+        /// callback.
+        target: Value,
+        /// The callback, and the `this` value it is called with.
+        callback: Value,
+        /// `thisArg` of the clause.
+        receiver: Value,
+        /// The Array a copying method fills, or the accumulator of 23.1.3.24.
+        output: Value,
+        /// The element the callback that is in flight was given.
+        element: Value,
+        /// Its index, which is the second argument of the callback.
+        element_index: u32,
+        /// The index the next callback is for.
+        index: u32,
+        /// Where the walk stops, taken once as 23.1.3 takes it.
+        length: u32,
+        /// Whether an accumulator has been taken yet (23.1.3.24 step 6).
+        started: bool,
+    },
     /// The `%Math%` namespace object of 21.3, which is ordinary in every way
     /// but one: a name it should own and this Realm has not built is a gap
     /// rather than the undefined an ordinary object answers.
@@ -87,24 +118,56 @@ impl ObjectKind {
     /// reference says so here and nowhere else: a new one that forgets to
     /// would leave a reference behind a scavenge.
     #[must_use]
-    pub const fn values(&self) -> [Option<Value>; 2] {
+    pub const fn values(&self) -> [Option<Value>; 5] {
         match self {
             Self::StringWrapper(value) | Self::ArrayIterator { target: value, .. } => {
-                [Some(*value), None]
+                [Some(*value), None, None, None, None]
             }
-            Self::BoundFunction { target, receiver } => [Some(*target), Some(*receiver)],
-            _ => [None, None],
+            Self::BoundFunction { target, receiver } => {
+                [Some(*target), Some(*receiver), None, None, None]
+            }
+            Self::ArrayIteration {
+                target,
+                callback,
+                receiver,
+                output,
+                element,
+                ..
+            } => [
+                Some(*target),
+                Some(*callback),
+                Some(*receiver),
+                Some(*output),
+                Some(*element),
+            ],
+            _ => [None, None, None, None, None],
         }
     }
 
     /// Every `Value` this kind holds, to be forwarded by a collection.
-    pub const fn values_mut(&mut self) -> [Option<&mut Value>; 2] {
+    pub const fn values_mut(&mut self) -> [Option<&mut Value>; 5] {
         match self {
             Self::StringWrapper(value) | Self::ArrayIterator { target: value, .. } => {
-                [Some(value), None]
+                [Some(value), None, None, None, None]
             }
-            Self::BoundFunction { target, receiver } => [Some(target), Some(receiver)],
-            _ => [None, None],
+            Self::BoundFunction { target, receiver } => {
+                [Some(target), Some(receiver), None, None, None]
+            }
+            Self::ArrayIteration {
+                target,
+                callback,
+                receiver,
+                output,
+                element,
+                ..
+            } => [
+                Some(target),
+                Some(callback),
+                Some(receiver),
+                Some(output),
+                Some(element),
+            ],
+            _ => [None, None, None, None, None],
         }
     }
 }

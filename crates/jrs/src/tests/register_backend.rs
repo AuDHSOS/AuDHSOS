@@ -4426,3 +4426,62 @@ fn the_math_functions_of_21_3_2_that_need_no_library() -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[test]
+fn the_array_methods_of_23_1_3_that_ask_the_script() -> Result<(), Error> {
+    // Each element is a call, so the engine leaves the method to make it and
+    // comes back through the frame the call opened. What the walk has reached
+    // lives in an object of the heap, which the collector traces.
+    for source in [
+        "[1,2,3].map(function(x){return x*2}).join(',')",
+        "[1,2,3,4].filter(function(x){return x>2}).join(',')",
+        "var a=[];[1,2,3].forEach(function(x){a.push(x)});a.join(',')",
+        "typeof [1,2].forEach(function(x){})",
+        "[1,2,3].every(function(x){return x>0})",
+        "[1,2,3].every(function(x){return x>1})",
+        "[1,2,3].some(function(x){return x>2})",
+        "[1,2,3].some(function(x){return x>3})",
+        "[1,2,3].find(function(x){return x>1})",
+        "[1,2,3].find(function(x){return x>9})",
+        "[1,2,3].findIndex(function(x){return x>1})",
+        "[1,2,3].findIndex(function(x){return x>9})",
+        "[1,2,3].reduce(function(a,b){return a+b})",
+        "[1,2,3].reduce(function(a,b){return a+b},10)",
+        "[].reduce(function(a,b){return a+b},7)",
+        // 23.1.3 gives the callback the element, its index and the object.
+        "[1,2,3].map(function(x,i,a){return i+':'+a.length}).join(',')",
+        // The second argument is the `this` of the callback.
+        "var o={v:10};[1,2,3].map(function(x){return this.v+x},o).join(',')",
+        // A hole is not an index the object has, so no callback sees it.
+        "[1,,3].map(function(x){return x*2}).length",
+        "[].map(function(x){return x}).length",
+        "[1,2,3].map(function(x){return x}).constructor===Array",
+        "[[1],[2]].map(function(x){return x[0]}).join(',')",
+        // A walk inside a walk keeps its own state.
+        "[1,2].map(function(x){return [10,20].map(function(y){return x*y}).join('+')}).join(',')",
+    ] {
+        differential(source)?;
+    }
+    // 23.1.3.25 the stack backend does not have, and 23.1.3.24 step 6 and the
+    // callback check of step 3 are raised where a `try` reaches them.
+    let program = compile(
+        "[1,2,3].reduceRight(function(a,b){return a+'-'+b})",
+        Limits::default(),
+    )?;
+    assert!(program.uses_register_backend());
+    assert_eq!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost)?,
+        Value::string("3-2-1")
+    );
+    differential_scripts(&[
+        "var one=[1];var none=[];var caught=0;",
+        "try{one.map(1)}catch(e){caught=e instanceof TypeError}",
+        "caught",
+    ])?;
+    differential_scripts(&[
+        "var none=[];var caught=0;var keep=function(a,b){return a};",
+        "try{none.reduce(keep)}catch(e){caught=e instanceof TypeError}",
+        "caught",
+    ])?;
+    Ok(())
+}

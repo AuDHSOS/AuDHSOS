@@ -6024,6 +6024,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ArrayPrototypeIncludes
         | crate::engine::realm::Intrinsic::ObjectIs
         | crate::engine::realm::Intrinsic::ObjectHasOwn
+        | crate::engine::realm::Intrinsic::ArrayPrototypeEvery
+        | crate::engine::realm::Intrinsic::ArrayPrototypeSome
         | crate::engine::realm::Intrinsic::ArrayIsArray => RegisterType::Boolean,
         // 22.1.1.1 answers a String whichever argument it took; `new` answers
         // no value at all, because the exotic object it would make is a gap.
@@ -6079,7 +6081,16 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ArrayPrototypeCopyWithin
         | crate::engine::realm::Intrinsic::ArrayPrototypeConcat
         | crate::engine::realm::Intrinsic::ArrayPrototypeWith
-        | crate::engine::realm::Intrinsic::ArrayPrototypeToReversed => RegisterType::Unknown,
+        | crate::engine::realm::Intrinsic::ArrayPrototypeToReversed
+        // 23.1.3.21 and 23.1.3.8 answer an Array, 23.1.3.9 an element and
+        // 23.1.3.24 whatever the callback carried; none has a tracked layout.
+        | crate::engine::realm::Intrinsic::ArrayPrototypeMap
+        | crate::engine::realm::Intrinsic::ArrayPrototypeFilter
+        | crate::engine::realm::Intrinsic::ArrayPrototypeFind
+        | crate::engine::realm::Intrinsic::ArrayPrototypeReduce
+        | crate::engine::realm::Intrinsic::ArrayPrototypeReduceRight
+        // 23.1.3.15 answers undefined.
+        | crate::engine::realm::Intrinsic::ArrayPrototypeForEach => RegisterType::Unknown,
         crate::engine::realm::Intrinsic::StringPrototypeCharCodeAt
         | crate::engine::realm::Intrinsic::StringPrototypeIndexOf
         | crate::engine::realm::Intrinsic::StringPrototypeLastIndexOf
@@ -6087,6 +6098,7 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ArrayPrototypeLastIndexOf
         | crate::engine::realm::Intrinsic::ArrayPrototypePush
         | crate::engine::realm::Intrinsic::ArrayPrototypeUnshift
+        | crate::engine::realm::Intrinsic::ArrayPrototypeFindIndex
         // 21.3.2 answers a Number for every one of these.
         | crate::engine::realm::Intrinsic::MathAbs
         | crate::engine::realm::Intrinsic::MathCeil

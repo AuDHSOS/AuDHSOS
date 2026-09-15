@@ -19,7 +19,7 @@ use super::{
     bytecode::{BinaryOp, BytecodeFunction, Instruction, Reg, VerificationError},
     context::ContextRef,
     feedback::{BinaryOpFeedback, FeedbackVector, NamedAccessCase},
-    heap::{GenerationalHeap, HeapError},
+    heap::{GenerationalHeap, HeapError, Root},
     object::ObjectKind,
     realm::{Intrinsic, Realm},
     shape::{PropertyFlags, ShapeId},
@@ -124,6 +124,79 @@ pub const UNRESOLVABLE_SUFFIX: &str = " is not initialized or defined";
 /// The hint 7.1.1 passes to `@@toPrimitive` for an operation that names none.
 const DEFAULT_HINT: [u16; 7] = [0x64, 0x65, 0x66, 0x61, 0x75, 0x6C, 0x74];
 
+/// The state of one walk of 23.1.3, read out of the object that holds it.
+///
+/// A plain record, so the walk can be reasoned about in one place; it is
+/// written back after every step, because the object is what the collector
+/// traces and a value held here would not survive a call.
+struct ArrayWalk {
+    intrinsic: Intrinsic,
+    target: Value,
+    callback: Value,
+    receiver: Value,
+    output: Value,
+    element: Value,
+    element_index: u32,
+    index: u32,
+    length: u32,
+    started: bool,
+}
+
+impl ArrayWalk {
+    /// Whether this clause walks from the end (23.1.3.25) or from the start.
+    const fn backwards(&self) -> bool {
+        matches!(self.intrinsic, Intrinsic::ArrayPrototypeReduceRight)
+    }
+
+    /// The next index to ask about, or none when the walk is done.
+    const fn next_index(&self) -> Option<u32> {
+        if self.backwards() {
+            if self.index == 0 {
+                return None;
+            }
+            return Some(self.index.saturating_sub(1));
+        }
+        if self.index >= self.length {
+            return None;
+        }
+        Some(self.index)
+    }
+
+    /// Moves past the index just taken.
+    const fn advance(&mut self, element_index: u32) {
+        self.index = if self.backwards() {
+            element_index
+        } else {
+            element_index.saturating_add(1)
+        };
+    }
+
+    /// How many arguments 23.1.3 gives this callback: four where an
+    /// accumulator goes in front of the element, three otherwise.
+    const fn callback_arity(&self) -> u16 {
+        match self.intrinsic {
+            Intrinsic::ArrayPrototypeReduce | Intrinsic::ArrayPrototypeReduceRight => 4,
+            _ => 3,
+        }
+    }
+
+    /// What the clause answers once every element has been asked about.
+    const fn answer(&self) -> Value {
+        match self.intrinsic {
+            // 23.1.3.15 answers undefined, 23.1.3.6 true and 23.1.3.29 false.
+            Intrinsic::ArrayPrototypeForEach | Intrinsic::ArrayPrototypeFind => VALUE_UNDEFINED,
+            Intrinsic::ArrayPrototypeEvery => VALUE_TRUE,
+            Intrinsic::ArrayPrototypeSome => VALUE_FALSE,
+            // 23.1.3.10 answers minus one; 23.1.3.9 answers undefined, as
+            // 23.1.3.15 does.
+            Intrinsic::ArrayPrototypeFindIndex => Value::from_smi(-1),
+            // 23.1.3.21 and 23.1.3.8 answer the Array they filled, and
+            // 23.1.3.24 the accumulator it carried.
+            _ => self.output,
+        }
+    }
+}
+
 /// What a conversion of 7.1.1 reached.
 enum Conversion {
     /// The primitive value the operation asked for.
@@ -211,11 +284,24 @@ pub struct FrameArguments {
 /// Only a register of the caller frame is held, never a value: the collector
 /// sees registers, and it does not see the fields of a frame header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Resume {
-    /// Register of the caller frame the answer is written to.
-    pub register: Reg,
-    /// The method of 7.1.1 whose answer this is.
-    pub step: PrimitiveStep,
+pub enum Resume {
+    /// A conversion of 7.1.1 asked a method of the object for a primitive.
+    Primitive {
+        /// Register of the caller frame the answer is written to.
+        register: Reg,
+        /// The method of 7.1.1 whose answer this is.
+        step: PrimitiveStep,
+    },
+    /// A method of 23.1.3 called the callback for one element.
+    ///
+    /// The walk keeps what it has reached in an object of the heap rather
+    /// than in a register, because it has no frame of its own and the
+    /// registers of the caller belong to the Script. Only the root is held
+    /// here, so the collector moves the state freely.
+    Iteration {
+        /// Root naming the [`ObjectKind::ArrayIteration`] state.
+        state: Root,
+    },
 }
 
 /// Which method of 7.1.1 a conversion has already asked.
@@ -945,6 +1031,19 @@ impl RegisterVM {
                         .record_call(call.slot, NATIVE_CALL_TARGET | u64::from(id))
                         .ok_or(VMError::InvalidFeedbackVector)?;
                 }
+                // A method of 23.1.3 that asks the Script about each element
+                // does not answer here: it leaves to make the first call and
+                // comes back through the frame that call opens.
+                if Self::iterates_with_callback(intrinsic) {
+                    return self.begin_array_iteration(
+                        intrinsic,
+                        call,
+                        units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    );
+                }
                 let value = self.call_intrinsic(intrinsic, call, heap, realm)?;
                 self.acc = value;
                 return Ok(None);
@@ -984,7 +1083,7 @@ impl RegisterVM {
         if callee.this_register.is_some() {
             call.receiver = Self::bind_this(call.receiver, callee.strict, heap, realm)?;
         }
-        let next_frame = self.open_frame(units.active, callee, call, function_ref)?;
+        let next_frame = self.open_frame(units.active, callee, call, function_ref, heap)?;
         if call.resume.is_none() {
             active_feedback
                 .record_call(call.slot, bytecode_call_target(unit, code_id))
@@ -1025,6 +1124,7 @@ impl RegisterVM {
         callee: &BytecodeFunction,
         call: Call,
         function: ObjectRef,
+        heap: &GenerationalHeap,
     ) -> Result<usize, VMError> {
         let next_frame = self
             .fp
@@ -1037,19 +1137,36 @@ impl RegisterVM {
             .get_mut(next_frame..frame_end)
             .ok_or(VMError::StackOverflow)?
             .fill(VALUE_UNDEFINED);
-        let argument_start = self
-            .fp
-            .checked_add(call.arg_start.0 as usize)
-            .ok_or(VMError::StackOverflow)?;
-        for index in 0..usize::from(call.arg_count.min(callee.parameter_count)) {
-            let argument = *self
-                .stack
-                .get(argument_start.saturating_add(index))
-                .ok_or(VMError::InvalidRegister)?;
-            *self
-                .stack
-                .get_mut(next_frame.saturating_add(index))
-                .ok_or(VMError::StackOverflow)? = argument;
+        // A walk of 23.1.3 has no frame, so its three arguments come from the
+        // state the collector traces rather than from registers of the caller.
+        // They are read here, after `bind_this` has run, because that may
+        // allocate and a value taken before it would name a moved object.
+        if let Some(Resume::Iteration { state }) = call.resume {
+            let arguments = Self::iteration_arguments(state, heap)?;
+            for (index, argument) in arguments.into_iter().enumerate() {
+                if index >= usize::from(callee.parameter_count) {
+                    break;
+                }
+                *self
+                    .stack
+                    .get_mut(next_frame.saturating_add(index))
+                    .ok_or(VMError::StackOverflow)? = argument;
+            }
+        } else {
+            let argument_start = self
+                .fp
+                .checked_add(call.arg_start.0 as usize)
+                .ok_or(VMError::StackOverflow)?;
+            for index in 0..usize::from(call.arg_count.min(callee.parameter_count)) {
+                let argument = *self
+                    .stack
+                    .get(argument_start.saturating_add(index))
+                    .ok_or(VMError::InvalidRegister)?;
+                *self
+                    .stack
+                    .get_mut(next_frame.saturating_add(index))
+                    .ok_or(VMError::StackOverflow)? = argument;
+            }
         }
         if let Some(self_register) = callee.self_register {
             *self
@@ -1127,6 +1244,17 @@ impl RegisterVM {
             | Intrinsic::ArrayPrototypeToString => {
                 self.call_array_intrinsic(intrinsic, call, heap, realm)
             }
+            // Never reached: `enter_call_value` sends these to the walk of
+            // 23.1.3 before an intrinsic is called at all.
+            Intrinsic::ArrayPrototypeForEach
+            | Intrinsic::ArrayPrototypeMap
+            | Intrinsic::ArrayPrototypeFilter
+            | Intrinsic::ArrayPrototypeEvery
+            | Intrinsic::ArrayPrototypeSome
+            | Intrinsic::ArrayPrototypeFind
+            | Intrinsic::ArrayPrototypeFindIndex
+            | Intrinsic::ArrayPrototypeReduce
+            | Intrinsic::ArrayPrototypeReduceRight => Err(VMError::TypeError),
             Intrinsic::ArrayPrototypeShift
             | Intrinsic::ArrayPrototypeUnshift
             | Intrinsic::ArrayPrototypeSplice
@@ -1975,6 +2103,371 @@ impl RegisterVM {
     /// skip and `includes` reads as undefined, as it reads the absent index
     /// the bounded scan already visits.
     ///
+    /// Starts one of the methods of 23.1.3 that ask the Script about each
+    /// element (23.1.3.6, .8, .9, .10, .15, .21, .24, .25, .29).
+    ///
+    /// The walk cannot finish here: every element is a call, and the engine
+    /// leaves this function to make it. What it has reached goes into an
+    /// object of the heap, which the collector traces and which
+    /// [`Self::step_array_iteration`] reads again each time a callback
+    /// answers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a callback that is
+    /// not callable, which is step 3 of each clause, and for the empty Array
+    /// of 23.1.3.24 step 6 that was given no initial value.
+    fn begin_array_iteration(
+        &mut self,
+        intrinsic: Intrinsic,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let target = Self::coerce_object(call.receiver, heap, realm)?;
+        let length = Self::array_like_length(heap, target, realm)?;
+        let callback = self.call_argument(&call, 0)?;
+        if !Self::is_callable(callback, heap) {
+            return Err(type_error(heap, realm, "callback is not callable"));
+        }
+        let reduces = matches!(
+            intrinsic,
+            Intrinsic::ArrayPrototypeReduce | Intrinsic::ArrayPrototypeReduceRight
+        );
+        // 23.1.3.24 takes its second argument as the accumulator; every other
+        // clause takes it as the `this` value of the callback.
+        let second = self.call_argument(&call, 1)?;
+        let (receiver, mut output, started) = if reduces {
+            (VALUE_UNDEFINED, second, call.arg_count > 1)
+        } else {
+            (second, VALUE_UNDEFINED, true)
+        };
+        if reduces && !started && length == 0 {
+            return Err(type_error(
+                heap,
+                realm,
+                "reduce of an empty Array with no initial value",
+            ));
+        }
+        // 23.1.3.21 and 23.1.3.8 answer an Array of their own, made before the
+        // walk so the collector sees it from its first element on. 10.4.2.2
+        // step 1 refuses a length past 2^32-1, which 7.1.20 allows and an
+        // Array cannot hold.
+        if matches!(
+            intrinsic,
+            Intrinsic::ArrayPrototypeMap | Intrinsic::ArrayPrototypeFilter
+        ) {
+            let wanted = if intrinsic == Intrinsic::ArrayPrototypeMap {
+                u32::try_from(length).map_err(|_| {
+                    raise(
+                        heap,
+                        realm,
+                        super::realm::NativeErrorKind::RangeError,
+                        "invalid array length",
+                    )
+                })?
+            } else {
+                0
+            };
+            let created = realm.array(heap, wanted)?;
+            output = Value::from_object(created);
+        }
+        // Every other clause walks the indices this engine can address.
+        let length = u32::try_from(length).unwrap_or(u32::MAX);
+        let backwards = intrinsic == Intrinsic::ArrayPrototypeReduceRight;
+        let prototype = realm.object_prototype(heap)?;
+        let shape = heap.shapes.root_shape();
+        let state = heap.allocate_object(shape, prototype)?;
+        heap.set_object_kind(
+            state,
+            ObjectKind::ArrayIteration {
+                intrinsic: intrinsic.id(),
+                target: Value::from_object(target),
+                callback,
+                receiver,
+                output,
+                element: VALUE_UNDEFINED,
+                element_index: 0,
+                index: if backwards { length } else { 0 },
+                length,
+                started,
+            },
+        )?;
+        // The state outlives every frame the walk opens, so it is a root of a
+        // scope of its own, which the walk leaves when it answers.
+        heap.enter_scope();
+        let state = heap.push_root(Value::from_object(state))?;
+        self.step_array_iteration(state, None, call, units, active_feedback, heap, realm)
+    }
+
+    /// Takes the answer of one callback, then asks for the next element or
+    /// answers what the clause answers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Heap`] when the root no longer names the state the
+    /// walk started with.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a step of the walk runs where a call does, with what a call has"
+    )]
+    fn step_array_iteration(
+        &mut self,
+        state: Root,
+        mut answered: Option<Value>,
+        mut call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        loop {
+            let mut walk = Self::read_iteration(state, heap)?;
+            if let Some(answer) = answered.take()
+                && let Some(done) = Self::take_callback_answer(&mut walk, answer, heap)?
+            {
+                heap.exit_scope();
+                self.acc = done;
+                return Ok(None);
+            }
+            let object = walk
+                .target
+                .as_object()
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let Some(element_index) = walk.next_index() else {
+                heap.exit_scope();
+                self.acc = walk.answer();
+                return Ok(None);
+            };
+            walk.advance(element_index);
+            // 23.1.3 walks the indices the object has, so a hole never reaches
+            // the callback.
+            let Some(element) = Self::element_at(heap, object, element_index)? else {
+                Self::write_iteration(state, &walk, heap)?;
+                continue;
+            };
+            // 23.1.3.24 takes the first element it finds as the accumulator and
+            // calls the callback only from the next one on.
+            if !walk.started {
+                walk.started = true;
+                walk.output = element;
+                Self::write_iteration(state, &walk, heap)?;
+                continue;
+            }
+            walk.element = element;
+            walk.element_index = element_index;
+            Self::write_iteration(state, &walk, heap)?;
+            let callback = walk.callback;
+            call.arg_count = walk.callback_arity();
+            call.arg_start = Reg(0);
+            call.receiver = walk.receiver;
+            call.resume = Some(Resume::Iteration { state });
+            call.construct = None;
+            return self.enter_call_value(callback, units, active_feedback, heap, realm, call);
+        }
+    }
+
+    /// Reads the state of a walk out of the object the root names.
+    fn read_iteration(state: Root, heap: &GenerationalHeap) -> Result<ArrayWalk, VMError> {
+        let reference = heap
+            .root_value(state)
+            .and_then(Value::as_object)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let ObjectKind::ArrayIteration {
+            intrinsic,
+            target,
+            callback,
+            receiver,
+            output,
+            element,
+            element_index,
+            index,
+            length,
+            started,
+        } = heap
+            .get_object(reference)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?
+            .kind
+        else {
+            return Err(VMError::Heap(HeapError::InvalidReference));
+        };
+        Ok(ArrayWalk {
+            intrinsic: Intrinsic::from_id(intrinsic).ok_or(VMError::TypeError)?,
+            target,
+            callback,
+            receiver,
+            output,
+            element,
+            element_index,
+            index,
+            length,
+            started,
+        })
+    }
+
+    /// Writes the state of a walk back into the object the root names.
+    fn write_iteration(
+        state: Root,
+        walk: &ArrayWalk,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        let reference = heap
+            .root_value(state)
+            .and_then(Value::as_object)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        heap.set_object_kind(
+            reference,
+            ObjectKind::ArrayIteration {
+                intrinsic: walk.intrinsic.id(),
+                target: walk.target,
+                callback: walk.callback,
+                receiver: walk.receiver,
+                output: walk.output,
+                element: walk.element,
+                element_index: walk.element_index,
+                index: walk.index,
+                length: walk.length,
+                started: walk.started,
+            },
+        )?;
+        Ok(())
+    }
+
+    /// What one callback answered, by the clause that asked.
+    ///
+    /// Answers `Some` when the clause stops there, which 23.1.3.6, 23.1.3.29,
+    /// 23.1.3.9 and 23.1.3.10 each do at the first element that decides them.
+    fn take_callback_answer(
+        walk: &mut ArrayWalk,
+        answer: Value,
+        heap: &mut GenerationalHeap,
+    ) -> Result<Option<Value>, VMError> {
+        let truthy = Self::to_boolean(answer, heap)?;
+        match walk.intrinsic {
+            // 23.1.3.15 uses no answer at all.
+            Intrinsic::ArrayPrototypeForEach => {}
+            // 23.1.3.21 writes the answer at the same index.
+            Intrinsic::ArrayPrototypeMap => {
+                let array = walk
+                    .output
+                    .as_object()
+                    .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+                heap.set_array_element(array, walk.element_index, answer)?;
+            }
+            // 23.1.3.8 appends the element the answer kept.
+            Intrinsic::ArrayPrototypeFilter => {
+                if truthy {
+                    let array = walk
+                        .output
+                        .as_object()
+                        .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+                    let next = heap.array_length(array).unwrap_or(0);
+                    heap.set_array_element(array, next, walk.element)?;
+                }
+            }
+            // 23.1.3.6 stops at the first false, 23.1.3.29 at the first true.
+            Intrinsic::ArrayPrototypeEvery => {
+                if !truthy {
+                    return Ok(Some(VALUE_FALSE));
+                }
+            }
+            Intrinsic::ArrayPrototypeSome => {
+                if truthy {
+                    return Ok(Some(VALUE_TRUE));
+                }
+            }
+            // 23.1.3.9 answers the element and 23.1.3.10 its index.
+            Intrinsic::ArrayPrototypeFind => {
+                if truthy {
+                    return Ok(Some(walk.element));
+                }
+            }
+            Intrinsic::ArrayPrototypeFindIndex => {
+                if truthy {
+                    return Ok(Some(index_value(i64::from(walk.element_index))));
+                }
+            }
+            // 23.1.3.24 and 23.1.3.25 carry the answer to the next element.
+            _ => walk.output = answer,
+        }
+        Ok(None)
+    }
+
+    /// `SetFunctionLength` of 10.2.9: not writable, not enumerable and
+    /// configurable.
+    fn set_function_length(
+        function: ObjectRef,
+        parameters: u16,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        let key = PropertyKey::String(heap.strings.intern_units(&LENGTH_NAME)?);
+        heap.define_own_named(
+            function,
+            key,
+            Value::from_smi(i32::from(parameters)),
+            PropertyFlags {
+                writable: false,
+                enumerable: false,
+                configurable: true,
+                is_accessor: false,
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Whether this method of 23.1.3 asks the Script about each element, and
+    /// so cannot answer without leaving the engine first.
+    const fn iterates_with_callback(intrinsic: Intrinsic) -> bool {
+        matches!(
+            intrinsic,
+            Intrinsic::ArrayPrototypeForEach
+                | Intrinsic::ArrayPrototypeMap
+                | Intrinsic::ArrayPrototypeFilter
+                | Intrinsic::ArrayPrototypeEvery
+                | Intrinsic::ArrayPrototypeSome
+                | Intrinsic::ArrayPrototypeFind
+                | Intrinsic::ArrayPrototypeFindIndex
+                | Intrinsic::ArrayPrototypeReduce
+                | Intrinsic::ArrayPrototypeReduceRight
+        )
+    }
+
+    /// The three arguments 23.1.3 gives a callback: the element, its index and
+    /// the object being walked.
+    fn iteration_arguments(state: Root, heap: &GenerationalHeap) -> Result<[Value; 4], VMError> {
+        let reference = heap
+            .root_value(state)
+            .and_then(Value::as_object)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let ObjectKind::ArrayIteration {
+            target,
+            element,
+            element_index,
+            output,
+            intrinsic,
+            ..
+        } = heap
+            .get_object(reference)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?
+            .kind
+        else {
+            return Err(VMError::Heap(HeapError::InvalidReference));
+        };
+        let index = index_value(i64::from(element_index));
+        // Note 1 of 23.1.3.24 gives its callback four: the value the last call
+        // answered, the element, its index and the object. Every other clause
+        // gives three and leaves the fourth unread.
+        if matches!(
+            Intrinsic::from_id(intrinsic),
+            Some(Intrinsic::ArrayPrototypeReduce | Intrinsic::ArrayPrototypeReduceRight)
+        ) {
+            return Ok([output, element, index, target]);
+        }
+        Ok([element, index, target, VALUE_UNDEFINED])
+    }
+
     /// The methods of 23.1.3 that move elements of the receiver, or copy it
     /// into an Array of their own.
     ///
@@ -2000,7 +2493,7 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Value, VMError> {
         let object = Self::coerce_object(call.receiver, heap, realm)?;
-        let length = Self::array_like_length(heap, object)?;
+        let length = Self::array_like_length(heap, object, realm)?;
         // The range 7.1.25 makes of a relative index, clamped into the Array.
         let bounded = |value: Value, fallback: i64, heap: &mut GenerationalHeap| {
             if value.is_undefined() {
@@ -2079,7 +2572,7 @@ impl RegisterVM {
                 for offset in 2..call.arg_count {
                     let index = start.saturating_add(i64::from(offset.saturating_sub(2)));
                     let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
-                    heap.set_array_element(object, index, self.call_argument(&call, offset)?)?;
+                    Self::set_element(object, index, self.call_argument(&call, offset)?, heap)?;
                 }
                 let final_length = length.saturating_sub(removed).saturating_add(inserted);
                 Self::set_array_like_length(
@@ -2095,7 +2588,7 @@ impl RegisterVM {
                 let start = bounded(self.call_argument(&call, 1)?, 0, heap)?;
                 let end = bounded(self.call_argument(&call, 2)?, length, heap)?;
                 for index in Self::scan_range(start, end) {
-                    heap.set_array_element(object, index, value)?;
+                    Self::set_element(object, index, value, heap)?;
                 }
                 Ok(call.receiver)
             }
@@ -2133,7 +2626,7 @@ impl RegisterVM {
                     let item = self.call_argument(&call, offset)?;
                     match item.as_object().filter(|_| Self::is_array(item, heap)) {
                         Some(part) => {
-                            let part_length = Self::array_like_length(heap, part)?;
+                            let part_length = Self::array_like_length(heap, part, realm)?;
                             Self::spread_into(&mut values, item, part, part_length, heap)?;
                         }
                         None => values.push(Some(item)),
@@ -2179,6 +2672,26 @@ impl RegisterVM {
                 Self::array_from_holes(values, heap, realm)
             }
         }
+    }
+
+    /// `Set(O, ! ToString(𝔽(index)), value, true)` of 7.3.4 for an index.
+    ///
+    /// This engine keeps indexed elements in the store 10.4.2 gives an Array,
+    /// so an array-like without one has nowhere to put them, which it says
+    /// rather than reporting a broken frame.
+    fn set_element(
+        object: ObjectRef,
+        index: u32,
+        value: Value,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        if heap.array_length(object).is_none() {
+            return Err(VMError::Unsupported(
+                "an indexed write to a receiver that is not an Array",
+            ));
+        }
+        heap.set_array_element(object, index, value)?;
+        Ok(())
     }
 
     /// `Set(O, "length", 𝔽(length), true)` of 7.3.4.
@@ -2298,7 +2811,7 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Value, VMError> {
         let object = Self::coerce_object(call.receiver, heap, realm)?;
-        let length = Self::array_like_length(heap, object)?;
+        let length = Self::array_like_length(heap, object, realm)?;
         let search = self.call_argument(&call, 0)?;
         match intrinsic {
             // 23.1.3.1: an index outside the Array is undefined.
@@ -2411,7 +2924,7 @@ impl RegisterVM {
                 let mut next = length;
                 for offset in 0..call.arg_count {
                     let index = u32::try_from(next).map_err(|_| VMError::PropertyLimit)?;
-                    heap.set_array_element(object, index, self.call_argument(&call, offset)?)?;
+                    Self::set_element(object, index, self.call_argument(&call, offset)?, heap)?;
                     next = next.saturating_add(1);
                 }
                 Ok(index_value(next))
@@ -2516,7 +3029,13 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Conversion, VMError> {
         let object = call.receiver.as_object().ok_or(VMError::TypeError)?;
-        let resume = call.resume.ok_or(VMError::TypeError)?;
+        let Some(Resume::Primitive {
+            register,
+            step: first,
+        }) = call.resume
+        else {
+            return Err(VMError::TypeError);
+        };
         let kind = heap
             .get_object(object)
             .ok_or(VMError::TypeError)?
@@ -2525,7 +3044,7 @@ impl RegisterVM {
         if let Some(feature) = Self::unimplemented_conversion(&kind) {
             return Err(VMError::Unsupported(feature));
         }
-        let mut step = resume.step;
+        let mut step = first;
         loop {
             let key = match step {
                 PrimitiveStep::Exotic => super::realm::WellKnownSymbol::ToPrimitive.key(),
@@ -2543,9 +3062,9 @@ impl RegisterVM {
                 call.arg_count = u16::from(step == PrimitiveStep::Exotic);
                 if step == PrimitiveStep::Exotic {
                     let hint = self.allocate_string(heap, &DEFAULT_HINT)?;
-                    self.write_reg(resume.register, hint)?;
+                    self.write_reg(register, hint)?;
                 }
-                call.resume = Some(Resume { step, ..resume });
+                call.resume = Some(Resume::Primitive { register, step });
                 if let Some(code_id) =
                     self.enter_call_value(method, units, active_feedback, heap, realm, call)?
                 {
@@ -2583,14 +3102,16 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Option<u32>, VMError> {
-        let resume = call.resume.ok_or(VMError::TypeError)?;
-        if let Some(value) = Self::primitive_answer(self.acc, resume.step, heap, realm)? {
-            self.write_reg(resume.register, value)?;
+        let Some(Resume::Primitive { register, step }) = call.resume else {
+            return Err(VMError::TypeError);
+        };
+        if let Some(value) = Self::primitive_answer(self.acc, step, heap, realm)? {
+            self.write_reg(register, value)?;
             return Ok(None);
         }
         // The method answered an Object, so 7.1.1.1 asks the next one. The
         // operand is still in its register, where the collector kept it.
-        let next = match resume.step {
+        let next = match step {
             PrimitiveStep::Exotic => PrimitiveStep::ValueOf,
             PrimitiveStep::ValueOf => PrimitiveStep::ToString,
             PrimitiveStep::ToString => {
@@ -2598,20 +3119,20 @@ impl RegisterVM {
             }
         };
         let object = self
-            .read_reg(resume.register)?
+            .read_reg(register)?
             .as_object()
             .ok_or(VMError::TypeError)?;
         let call = Call {
             receiver: Value::from_object(object),
-            resume: Some(Resume {
+            resume: Some(Resume::Primitive {
+                register,
                 step: next,
-                ..resume
             }),
             ..call
         };
         match self.convert_to_primitive(call, units, active_feedback, heap, realm)? {
             Conversion::Done(value) => {
-                self.write_reg(resume.register, value)?;
+                self.write_reg(register, value)?;
                 Ok(None)
             }
             Conversion::Suspended(code_id) => Ok(Some(code_id)),
@@ -2640,9 +3161,12 @@ impl RegisterVM {
             ObjectKind::BooleanWrapper(_) => Some("Boolean.prototype.toString"),
             // 20.1.3.6 is the right answer for these, and 23.1.3.37 is
             // implemented.
-            ObjectKind::Ordinary | ObjectKind::Array { .. } | ObjectKind::ArrayIterator { .. } => {
-                None
-            }
+            ObjectKind::Ordinary
+            | ObjectKind::Array { .. }
+            | ObjectKind::ArrayIterator { .. }
+            // The state of a walk of 23.1.3 is reachable from no Script, so
+            // no conversion of it is owed.
+            | ObjectKind::ArrayIteration { .. } => None,
         }
     }
 
@@ -2756,19 +3280,47 @@ impl RegisterVM {
             }
             // These reach a Prototype the Realm has not built at all, and it
             // owns names no list here carries, so every miss is a gap.
-            Some(ObjectKind::Error) => Err(VMError::Unsupported("a property of %Error.prototype%")),
-            Some(ObjectKind::StringWrapper(_)) => {
+            // These reach a Prototype this Realm has not built, so a name it
+            // owns is a gap. A name it does not own is absent there as it is
+            // anywhere: 20.3.3 gives %Boolean.prototype% no `length`, so an
+            // Array method called on a boolean reads none and walks nothing.
+            Some(ObjectKind::Error)
+                if super::realm::wrapper_prototype_owns(
+                    &super::realm::ERROR_PROTOTYPE_PROPERTIES,
+                    name,
+                ) =>
+            {
+                Err(VMError::Unsupported("a property of %Error.prototype%"))
+            }
+            Some(ObjectKind::StringWrapper(_)) if super::realm::string_prototype_owns(name) => {
                 Err(VMError::Unsupported("a property of %String.prototype%"))
             }
-            Some(ObjectKind::NumberWrapper(_)) => {
+            Some(ObjectKind::NumberWrapper(_))
+                if super::realm::wrapper_prototype_owns(
+                    &super::realm::NUMBER_PROTOTYPE_PROPERTIES,
+                    name,
+                ) =>
+            {
                 Err(VMError::Unsupported("a property of %Number.prototype%"))
             }
-            Some(ObjectKind::BooleanWrapper(_)) => {
+            Some(ObjectKind::BooleanWrapper(_))
+                if super::realm::wrapper_prototype_owns(
+                    &super::realm::BOOLEAN_PROTOTYPE_PROPERTIES,
+                    name,
+                ) =>
+            {
                 Err(VMError::Unsupported("a property of %Boolean.prototype%"))
             }
-            Some(ObjectKind::ArrayIterator { .. }) => Err(VMError::Unsupported(
-                "a property of %ArrayIteratorPrototype%",
-            )),
+            Some(ObjectKind::ArrayIterator { .. })
+                if super::realm::wrapper_prototype_owns(
+                    &super::realm::ARRAY_ITERATOR_PROTOTYPE_PROPERTIES,
+                    name,
+                ) =>
+            {
+                Err(VMError::Unsupported(
+                    "a property of %ArrayIteratorPrototype%",
+                ))
+            }
             _ if super::realm::object_prototype_owns(name) => {
                 Err(VMError::Unsupported("a property of %Object.prototype%"))
             }
@@ -2869,7 +3421,7 @@ impl RegisterVM {
         value: Option<Value>,
     ) -> Result<(), VMError> {
         match value {
-            Some(value) => heap.set_array_element(object, index, value)?,
+            Some(value) => Self::set_element(object, index, value, heap)?,
             None => drop(heap.delete_element(elements, index)?),
         }
         Ok(())
@@ -2882,16 +3434,25 @@ impl RegisterVM {
     }
 
     /// `LengthOfArrayLike` of 7.3.18.
-    fn array_like_length(heap: &GenerationalHeap, object: ObjectRef) -> Result<i64, VMError> {
+    fn array_like_length(
+        heap: &GenerationalHeap,
+        object: ObjectRef,
+        realm: &Realm,
+    ) -> Result<i64, VMError> {
         if let Some(length) = heap.array_length(object) {
             return Ok(i64::from(length));
         }
         let Some(name) = heap.strings.lookup_interned_units(&LENGTH_NAME) else {
             return Ok(0);
         };
-        let value = heap
-            .lookup_named(object, PropertyKey::String(name))?
-            .map_or(VALUE_UNDEFINED, |property| property.value);
+        let found = heap.lookup_named(object, PropertyKey::String(name))?;
+        // A `length` this Realm has not built is a gap, and reading it as zero
+        // would say the array-like is empty.
+        let Some(property) = found else {
+            Self::absent_property(Value::from_object(object), &LENGTH_NAME, heap, realm)?;
+            return Ok(0);
+        };
+        let value = property.value;
         // 7.1.20 ToLength clamps into 0..2^53-1; the scan is bounded again by
         // the index space, so the clamp loses no reachable index.
         Ok(integer_argument(value, heap)?.max(0))
@@ -3041,9 +3602,10 @@ impl RegisterVM {
                 ObjectKind::StringWrapper(_) => "String",
                 // 23.1.5.2.2 tags the Array Iterator through @@toStringTag, so
                 // its builtin tag is the ordinary one.
-                ObjectKind::Ordinary | ObjectKind::ArrayIterator { .. } | ObjectKind::Math => {
-                    "Object"
-                }
+                ObjectKind::Ordinary
+                | ObjectKind::ArrayIterator { .. }
+                | ObjectKind::ArrayIteration { .. }
+                | ObjectKind::Math => "Object",
             }
         };
         let mut units: Vec<u16> = "[object ".encode_utf16().collect();
@@ -4219,7 +4781,7 @@ impl RegisterVM {
                             arg_start: register,
                             arg_count: 0,
                             slot: 0,
-                            resume: Some(Resume {
+                            resume: Some(Resume::Primitive {
                                 register,
                                 step: PrimitiveStep::Exotic,
                             }),
@@ -4776,6 +5338,7 @@ impl RegisterVM {
                             ))?;
                     let captures_context = !target.outer_context_slot_counts.is_empty();
                     let constructible = target.constructible;
+                    let parameter_count = target.parameter_count;
                     let function = self.allocate_function(
                         active_code,
                         heap,
@@ -4784,6 +5347,11 @@ impl RegisterVM {
                         captures_context,
                     )?;
                     self.acc = Value::from_object(function);
+                    // 10.2.9 gives the function its `length`, which is how many
+                    // parameters stand before the first one with a default and
+                    // before a rest parameter. The lowering takes neither, so
+                    // it is the count of the list.
+                    Self::set_function_length(function, parameter_count, heap)?;
                     // 10.2.5 gives an ordinary function its `prototype`; a
                     // method and an arrow have none and no `[[Construct]]`.
                     // The accumulator carries the function through it, because
@@ -4948,10 +5516,17 @@ impl RegisterVM {
                                 .ok_or(VMError::InvalidFeedbackVector)?;
                             let feedback = feedback_unit_mut(unit_feedback, current_code_id)
                                 .ok_or(VMError::InvalidFeedbackVector)?;
+                            // A conversion names a register of the caller; a
+                            // walk of 23.1.3 names a root instead, so it has
+                            // no register of the caller to name here.
+                            let register = match resume {
+                                Resume::Primitive { register, .. } => register,
+                                Resume::Iteration { .. } => Reg(0),
+                            };
                             let call = Call {
                                 receiver: VALUE_UNDEFINED,
-                                func: resume.register,
-                                arg_start: resume.register,
+                                func: register,
+                                arg_start: register,
                                 arg_count: 0,
                                 slot: 0,
                                 resume: Some(resume),
@@ -4959,16 +5534,25 @@ impl RegisterVM {
                                 return_pc: pc,
                                 caller_code_id: current_code_id,
                             };
-                            if let Some(code_id) = self.finish_conversion(
-                                call,
-                                CodeUnits {
-                                    table,
-                                    active: caller,
-                                },
-                                feedback,
-                                heap,
-                                realm,
-                            )? {
+                            let units = CodeUnits {
+                                table,
+                                active: caller,
+                            };
+                            let resumed = match resume {
+                                Resume::Primitive { .. } => {
+                                    self.finish_conversion(call, units, feedback, heap, realm)?
+                                }
+                                Resume::Iteration { state } => self.step_array_iteration(
+                                    state,
+                                    Some(self.acc),
+                                    call,
+                                    units,
+                                    feedback,
+                                    heap,
+                                    realm,
+                                )?,
+                            };
+                            if let Some(code_id) = resumed {
                                 current_code_id = Some(code_id);
                                 pc = 0;
                             }

@@ -419,6 +419,24 @@ pub enum Intrinsic {
     MathFround,
     /// `Math.sin` (21.3.2.30).
     MathSin,
+    /// `Array.prototype.forEach` (23.1.3.15).
+    ArrayPrototypeForEach,
+    /// `Array.prototype.map` (23.1.3.21).
+    ArrayPrototypeMap,
+    /// `Array.prototype.filter` (23.1.3.8).
+    ArrayPrototypeFilter,
+    /// `Array.prototype.every` (23.1.3.6).
+    ArrayPrototypeEvery,
+    /// `Array.prototype.some` (23.1.3.29).
+    ArrayPrototypeSome,
+    /// `Array.prototype.find` (23.1.3.9).
+    ArrayPrototypeFind,
+    /// `Array.prototype.findIndex` (23.1.3.10).
+    ArrayPrototypeFindIndex,
+    /// `Array.prototype.reduce` (23.1.3.24).
+    ArrayPrototypeReduce,
+    /// `Array.prototype.reduceRight` (23.1.3.25).
+    ArrayPrototypeReduceRight,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -448,7 +466,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 78] = [
+    pub const ALL: [Self; 87] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -527,6 +545,15 @@ impl Intrinsic {
         Self::MathImul,
         Self::MathFround,
         Self::MathSin,
+        Self::ArrayPrototypeForEach,
+        Self::ArrayPrototypeMap,
+        Self::ArrayPrototypeFilter,
+        Self::ArrayPrototypeEvery,
+        Self::ArrayPrototypeSome,
+        Self::ArrayPrototypeFind,
+        Self::ArrayPrototypeFindIndex,
+        Self::ArrayPrototypeReduce,
+        Self::ArrayPrototypeReduceRight,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -573,7 +600,16 @@ impl Intrinsic {
             | Self::ArrayPrototypeCopyWithin
             | Self::ArrayPrototypeConcat
             | Self::ArrayPrototypeWith
-            | Self::ArrayPrototypeToReversed => IntrinsicHolder::ArrayPrototype,
+            | Self::ArrayPrototypeToReversed
+            | Self::ArrayPrototypeForEach
+            | Self::ArrayPrototypeMap
+            | Self::ArrayPrototypeFilter
+            | Self::ArrayPrototypeEvery
+            | Self::ArrayPrototypeSome
+            | Self::ArrayPrototypeFind
+            | Self::ArrayPrototypeFindIndex
+            | Self::ArrayPrototypeReduce
+            | Self::ArrayPrototypeReduceRight => IntrinsicHolder::ArrayPrototype,
             Self::ArrayIteratorPrototypeNext => IntrinsicHolder::ArrayIteratorPrototype,
             Self::ArrayConstructor | Self::ObjectConstructor | Self::FunctionConstructor => {
                 IntrinsicHolder::Global
@@ -697,6 +733,15 @@ impl Intrinsic {
             Self::MathImul => 75,
             Self::MathFround => 76,
             Self::MathSin => 77,
+            Self::ArrayPrototypeForEach => 78,
+            Self::ArrayPrototypeMap => 79,
+            Self::ArrayPrototypeFilter => 80,
+            Self::ArrayPrototypeEvery => 81,
+            Self::ArrayPrototypeSome => 82,
+            Self::ArrayPrototypeFind => 83,
+            Self::ArrayPrototypeFindIndex => 84,
+            Self::ArrayPrototypeReduce => 85,
+            Self::ArrayPrototypeReduceRight => 86,
         }
     }
 
@@ -781,6 +826,15 @@ impl Intrinsic {
             Self::MathImul => 75,
             Self::MathFround => 76,
             Self::MathSin => 77,
+            Self::ArrayPrototypeForEach => 78,
+            Self::ArrayPrototypeMap => 79,
+            Self::ArrayPrototypeFilter => 80,
+            Self::ArrayPrototypeEvery => 81,
+            Self::ArrayPrototypeSome => 82,
+            Self::ArrayPrototypeFind => 83,
+            Self::ArrayPrototypeFindIndex => 84,
+            Self::ArrayPrototypeReduce => 85,
+            Self::ArrayPrototypeReduceRight => 86,
         }
     }
 
@@ -866,6 +920,15 @@ impl Intrinsic {
             75 => Some(Self::MathImul),
             76 => Some(Self::MathFround),
             77 => Some(Self::MathSin),
+            78 => Some(Self::ArrayPrototypeForEach),
+            79 => Some(Self::ArrayPrototypeMap),
+            80 => Some(Self::ArrayPrototypeFilter),
+            81 => Some(Self::ArrayPrototypeEvery),
+            82 => Some(Self::ArrayPrototypeSome),
+            83 => Some(Self::ArrayPrototypeFind),
+            84 => Some(Self::ArrayPrototypeFindIndex),
+            85 => Some(Self::ArrayPrototypeReduce),
+            86 => Some(Self::ArrayPrototypeReduceRight),
             _ => None,
         }
     }
@@ -917,6 +980,15 @@ impl Intrinsic {
             Self::MathImul => "imul",
             Self::MathFround => "fround",
             Self::MathSin => "sin",
+            Self::ArrayPrototypeForEach => "forEach",
+            Self::ArrayPrototypeMap => "map",
+            Self::ArrayPrototypeFilter => "filter",
+            Self::ArrayPrototypeEvery => "every",
+            Self::ArrayPrototypeSome => "some",
+            Self::ArrayPrototypeFind => "find",
+            Self::ArrayPrototypeFindIndex => "findIndex",
+            Self::ArrayPrototypeReduce => "reduce",
+            Self::ArrayPrototypeReduceRight => "reduceRight",
             Self::ObjectDefineProperty => "defineProperty",
             Self::ObjectGetOwnPropertyDescriptor => "getOwnPropertyDescriptor",
             Self::ObjectGetOwnPropertyNames => "getOwnPropertyNames",
@@ -1007,6 +1079,15 @@ impl Intrinsic {
             | Self::MathImul
             | Self::MathFround
             | Self::MathSin
+            | Self::ArrayPrototypeForEach
+            | Self::ArrayPrototypeMap
+            | Self::ArrayPrototypeFilter
+            | Self::ArrayPrototypeEvery
+            | Self::ArrayPrototypeSome
+            | Self::ArrayPrototypeFind
+            | Self::ArrayPrototypeFindIndex
+            | Self::ArrayPrototypeReduce
+            | Self::ArrayPrototypeReduceRight
             | Self::ObjectGetOwnPropertyNames => false,
             // 20.1.2.4, 20.1.2.8 and 20.1.2.13 apply ToPropertyKey to the
             // second argument.
@@ -1092,6 +1173,15 @@ impl Intrinsic {
             | Self::MathClz32
             | Self::MathFround
             | Self::MathSin
+            | Self::ArrayPrototypeForEach
+            | Self::ArrayPrototypeMap
+            | Self::ArrayPrototypeFilter
+            | Self::ArrayPrototypeEvery
+            | Self::ArrayPrototypeSome
+            | Self::ArrayPrototypeFind
+            | Self::ArrayPrototypeFindIndex
+            | Self::ArrayPrototypeReduce
+            | Self::ArrayPrototypeReduceRight
             | Self::ObjectGetOwnPropertyNames => 1,
             Self::ObjectDefineProperty => 3,
             Self::MathPow
@@ -1388,6 +1478,36 @@ pub fn string_constructor_owns(name: &[u16]) -> bool {
     function_prototype_owns(name)
         || STRING_CONSTRUCTOR_PROPERTIES
             .into_iter()
+            .any(|owned| owned.encode_utf16().eq(name.iter().copied()))
+}
+
+/// The property names 20.3.3 gives `%Boolean.prototype%`.
+pub const BOOLEAN_PROTOTYPE_PROPERTIES: [&str; 3] = ["constructor", "toString", "valueOf"];
+
+/// The property names 21.1.3 gives `%Number.prototype%`.
+pub const NUMBER_PROTOTYPE_PROPERTIES: [&str; 7] = [
+    "constructor",
+    "toExponential",
+    "toFixed",
+    "toLocaleString",
+    "toPrecision",
+    "toString",
+    "valueOf",
+];
+
+/// The property names 20.5.3 gives `%Error.prototype%`.
+pub const ERROR_PROTOTYPE_PROPERTIES: [&str; 4] = ["constructor", "message", "name", "toString"];
+
+/// The property names 23.1.5.2 gives `%ArrayIteratorPrototype%`.
+pub const ARRAY_ITERATOR_PROTOTYPE_PROPERTIES: [&str; 1] = ["next"];
+
+/// Whether one of these names, or a name `%Object.prototype%` owns, is owned
+/// by the Prototype an instance of that kind resolves on.
+#[must_use]
+pub fn wrapper_prototype_owns(names: &[&str], name: &[u16]) -> bool {
+    object_prototype_owns(name)
+        || names
+            .iter()
             .any(|owned| owned.encode_utf16().eq(name.iter().copied()))
 }
 

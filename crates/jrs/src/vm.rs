@@ -687,6 +687,17 @@ impl Execution<'_> {
             Err(crate::engine::interpreter::VMError::Thrown(value, native)) => {
                 Err(self.register_exception(value, native, &agent))
             }
+            // Running out of references is the engine reaching a limit of its
+            // own representation, which is a resource it ran out of and not a
+            // frame it could not read.
+            Err(crate::engine::interpreter::VMError::Heap(
+                crate::engine::heap::HeapError::ReferenceSpaceExhausted
+                | crate::engine::heap::HeapError::String(
+                    crate::engine::string::StringError::ReferenceSpaceExhausted,
+                ),
+            )) => Err(Error::Limit {
+                resource: "heap references",
+            }),
             Err(
                 crate::engine::interpreter::VMError::InvalidBytecode(_)
                 | crate::engine::interpreter::VMError::InvalidFeedbackVector
