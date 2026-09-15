@@ -649,10 +649,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Object%` and its methods, after the integrity levels, on the register engine (focused) | focused | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,530 (22.49%) | 18 (0.26%) | 5,254 (77.24%) |
 | `%Number%` (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 572 (84.12%) | 102 (15.00%) | 6 (0.88%) |
 | `%Number%` on the register engine (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 226 (33.24%) | 2 (0.29%) | 452 (66.47%) |
-| `%String%` and the error constructors (focused) | focused | `d8a42a6` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/String test/built-ins/Error test/built-ins/NativeErrors --summary` | 1,410 | 2,817 | 2,154 (76.46%) | 576 (20.45%) | 87 (3.09%) |
-| `%String%` and the error constructors on the register engine (focused) | focused | `d8a42a6` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/String test/built-ins/Error test/built-ins/NativeErrors --summary` | 1,410 | 2,817 | 758 (26.91%) | 146 (5.18%) | 1,913 (67.91%) |
-| Complete pinned suite, including staging and Intl | full | `d8a42a6` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `d8a42a6` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 12,406 (12.05%) | 17,910 (17.40%) | 72,609 (70.55%) |
+| The Number and Boolean wrappers (focused) | focused | `22b642a` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Number test/built-ins/Boolean --summary` | 391 | 781 | 665 (85.15%) | 108 (13.83%) | 8 (1.02%) |
+| The Number and Boolean wrappers on the register engine (focused) | focused | `22b642a` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Number test/built-ins/Boolean --summary` | 391 | 781 | 321 (41.10%) | 126 (16.13%) | 334 (42.77%) |
+| Complete pinned suite, including staging and Intl | full | `22b642a` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `22b642a` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 12,943 (12.58%) | 17,991 (17.48%) | 71,991 (69.95%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1051,6 +1051,14 @@ constructors (20.5.1.1, 20.5.6.1.1) ask this way. 7.1.1 also takes its hint for
 the first time, so 7.1.17 asks `toString` before `valueOf` where 7.1.3 keeps
 the order it had. 842 variants move to passed and none away from it.
 
+21.1.3 and 20.3.3 wrap one primitive in an object, and the engine already had
+the kinds that hold the data: `new Number(1)` and `new Boolean(1)` were gaps
+for want of the four methods that read it back. Those are built, each refusing
+a receiver of another kind, and a radix other than 10 stays a gap. 7.1.18 now
+gives each wrapper the Prototype of its own constructor rather than
+%Object.prototype%, and 20.1.1.1 of a primitive is that same wrapper. 537
+variants move to passed and none away from it.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -1126,6 +1134,8 @@ The descriptor runs and both full runs beside the indexed descriptors were
 measured at tree `f83b656d82cfc1b7a4cba114facdc6e329ff69f6`, which is the tree of `e378c5a`.
 The `%String%` runs and both full runs beside the argument a native converts
 were measured at tree `9aa17e0b5ae6295479ba787755d90d849690a7b1`, which is the tree of `d8a42a6`.
+The `%Number%` and `%Boolean%` runs and both full runs beside the wrapper
+objects were measured at tree `2d685ff819853b5e1481e5499c88caaf6ab176ee`, which is the tree of `22b642a`.
 
 ### Historical Test262 baseline
 
