@@ -645,8 +645,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Array%` and its methods, after 23.1.3 complete but `sort`, on the register engine (focused) | focused | `7596776` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 1,922 (31.42%) | 350 (5.72%) | 3,845 (62.86%) |
 | `for`-`of` statements (focused) | focused | `f1314b2` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/for-of --summary` | 751 | 1,442 | 1,062 (73.65%) | 79 (5.48%) | 301 (20.87%) |
 | `for`-`of` statements on the register engine (focused) | focused | `f1314b2` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/for-of --summary` | 751 | 1,442 | 101 (7.00%) | 21 (1.46%) | 1,320 (91.54%) |
-| Complete pinned suite, including staging and Intl | full | `f1314b2` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `f1314b2` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 9,645 (9.37%) | 16,128 (15.67%) | 77,152 (74.96%) |
+| `%Object%` and its methods, after the integrity levels (focused) | focused | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 5,916 (86.97%) | 862 (12.67%) | 24 (0.35%) |
+| `%Object%` and its methods, after the integrity levels, on the register engine (focused) | focused | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,530 (22.49%) | 18 (0.26%) | 5,254 (77.24%) |
+| Complete pinned suite, including staging and Intl | full | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 9,999 (9.71%) | 16,417 (15.95%) | 76,509 (74.33%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -944,6 +946,29 @@ were discovered. The full engine run takes 44 seconds and the stack run 39,
 and both write byte-for-byte what the sequential runner wrote. `--jobs 1` is
 that sequential run.
 
+A Property Descriptor changes what a property is and not only what it holds.
+A Shape carries the attributes together with the names, and defining a property
+the Shape already had reused its slot and kept its old attributes, so
+`Object.defineProperty(o, 'x', {enumerable: false})` left it enumerable and
+`Object.keys` still answered it. The Shape an object should have is built by
+walking the one it has, in the order the properties were added. Two more of
+10.1.6.3 came with it: a field the descriptor does not name leaves the property
+as it was, and 6.2.6.6 fills one in as false only for a property that did not
+exist.
+
+That is what the integrity levels needed. An object carried `[[Extensible]]`
+and nothing read or wrote it, so 20.1.2.20 and 20.1.2.16 had nothing to answer
+with; 20.1.2.22 and 20.1.2.6 now set the level of 7.3.14 by giving every own
+property the attributes the level asks for, and 20.1.2.18 and 20.1.2.17 test it
+with 7.3.15. Step 1 of each clause answers a value that is not an Object,
+because there is nothing on it to configure. An object that holds indices names
+a gap instead: 7.3.14 speaks of every own property, and an index lives in a
+store that carries no attributes of its own. 20.1.2.24 and 20.1.2.5 answer the
+enumerable values and the pairs.
+
+Over `test/built-ins/Object` the engine passes 1,530 of 6,802 variants and
+fails 18, where the stack backend fails 862.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -1005,7 +1030,9 @@ tree `6e308d3bfd1883631583168a7311c83665bb1489`, which is the tree of
 Realm Script and the bound on every Array scan were measured at tree
 `f59c300f1ac9f52e3a71f09af2cfc94ba9f11c56`, which is the tree of `d7c48b2`. The `for`-`of` runs and both full runs beside them were measured at
 tree `a6e6f7c4ceb2326595e511ff0ad4887d85b14b0e`, which is the tree of
-`f1314b2`.
+`f1314b2`. The `%Object%` runs and both full runs beside them were measured at
+tree `0d446537428a6d1d20eb3a6ad1ebae9a2240b8f3`, which is the tree of
+`16f268e`.
 
 ### Historical Test262 baseline
 
