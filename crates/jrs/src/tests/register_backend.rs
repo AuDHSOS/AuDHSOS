@@ -3918,7 +3918,6 @@ fn register_lowering_rejects_for_in_heads_it_cannot_model() -> Result<(), Error>
         // method the interpreter cannot call from a step.
         "for(const k of 'ab'){}",
         "for(const k of {}){}",
-        "for(var k of [1]){}",
         "let k;for(k of [1]){}",
         // A destructuring head is not lowered.
         "for(const [a] of [[1]]){}",
@@ -4515,6 +4514,27 @@ fn a_parameter_takes_its_initializer_where_the_call_passed_none() -> Result<(), 
         // The Initializer is an expression, so it can call.
         "function one(){return 1};function f(a=one()){return a};f()",
         "function f(a={}){return typeof a};f()",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn a_for_of_takes_a_var_head_as_a_for_in_does() -> Result<(), Error> {
+    // 14.7.5 makes one binding per iteration for a lexical head and writes the
+    // one the declaration made for a `var` head, which is the same difference
+    // a `for`-`in` has. What the loop left is what the binding holds after it.
+    for source in [
+        "var s=0;for(var x of [1,2,3]){s+=x}s",
+        "var a=[1,2];var s=0;for(var x of a){s+=x}s",
+        "var s=0;for(var x of [1,2,3]){if(x==2)continue;s+=x}s",
+        "var s=0;for(var x of [1,2,3]){if(x==2)break;s+=x}s",
+        "var x=9;for(var x of []){}x",
+        "var x=9;for(var x of [1,2]){}x",
+        "var s='';for(var x of ['a','b']){s+=x}s",
+        "var s=0;for(let x of [1,2,3]){s+=x}s",
+        "var n=0;for(var x of []){n+=1}n",
     ] {
         differential(source)?;
     }

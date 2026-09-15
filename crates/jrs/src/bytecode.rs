@@ -5252,24 +5252,15 @@ impl RegisterLowerer {
     /// The iterator is the one `%Array.prototype%[@@iterator]` produces, and
     /// `IteratorNext` advances it, so the loop follows 7.4.8 rather than
     /// indexing the Array itself.
-    fn lower_for_of(
+    /// Opens the iterator of 14.7.5 step 1 on an Array.
+    ///
+    /// 23.1.3.40 makes `values` the same function object as `@@iterator`, so
+    /// the method is read by that name; every other iterable resolves the
+    /// Symbol to a method this lowering cannot name.
+    fn open_array_iterator(
         &mut self,
-        binding: Option<&(BindingPattern, Option<bool>)>,
-        target: Option<&parser::AssignmentTarget>,
-        object: &Expr,
-        body: &Stmt,
-    ) -> Option<RegisterType> {
+    ) -> Option<(crate::engine::bytecode::Reg, crate::engine::bytecode::Reg)> {
         use crate::engine::bytecode::Instruction;
-        let (name, mutable) = self.iteration_binding(binding, target, body)?;
-        // Only an Array is iterated: every other iterable resolves @@iterator
-        // to a method the interpreter cannot call from a step.
-        let object_type = self.lower(object)?;
-        let (object_id, ..) = self.array_layout(object_type)?;
-        let element_type = self.array_iteration_type(object_type)?;
-        if !element_type.is_primitive() {
-            return None;
-        }
-
         let iterable = self.allocate_register()?;
         self.code.emit(Instruction::Star(iterable));
         let values = self.string_constant(&"values".encode_utf16().collect::<Vec<_>>())?;
@@ -5289,6 +5280,31 @@ impl RegisterLowerer {
             arg_count: 0,
             slot: call,
         });
+        Some((iterable, method))
+    }
+
+    fn lower_for_of(
+        &mut self,
+        binding: Option<&(BindingPattern, Option<bool>)>,
+        target: Option<&parser::AssignmentTarget>,
+        object: &Expr,
+        body: &Stmt,
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        // 14.7.5 makes one binding per iteration for a lexical head and writes
+        // the one the declaration made for a `var` head, which is the same
+        // difference a `for`-`in` has.
+        let head_binding = self.for_in_head_binding(binding, target, body)?;
+        // Only an Array is iterated: every other iterable resolves @@iterator
+        // to a method the interpreter cannot call from a step.
+        let object_type = self.lower(object)?;
+        let (object_id, ..) = self.array_layout(object_type)?;
+        let element_type = self.array_iteration_type(object_type)?;
+        if !element_type.is_primitive() {
+            return None;
+        }
+
+        let (iterable, method) = self.open_array_iterator()?;
         let [iterator, value] = self.allocate_register_window()?;
         self.code.emit(Instruction::Star(iterator));
         self.code.emit(Instruction::LdaUndefined);
@@ -5297,18 +5313,29 @@ impl RegisterLowerer {
         self.code.emit(Instruction::LdaUndefined);
         let result_register = self.allocate_register()?;
         self.code.emit(Instruction::Star(result_register));
-        let key_register = self.allocate_register()?;
-        self.active_binding_count = self.active_binding_count.checked_add(1)?;
-        self.max_binding_count = self.max_binding_count.max(self.active_binding_count);
-        self.bindings.insert(
-            String::from(name),
-            RegisterBinding {
-                storage: RegisterBindingStorage::Register(key_register),
-                value_type: Some(element_type),
-                mutable,
-                stable_function_identity: false,
-            },
-        );
+        let key_register = match head_binding {
+            ForInHead::PerIteration { name, mutable } => {
+                let key_register = self.allocate_register()?;
+                self.active_binding_count = self.active_binding_count.checked_add(1)?;
+                self.max_binding_count = self.max_binding_count.max(self.active_binding_count);
+                self.bindings.insert(
+                    String::from(name),
+                    RegisterBinding {
+                        storage: RegisterBindingStorage::Register(key_register),
+                        value_type: Some(element_type),
+                        mutable,
+                        stable_function_identity: false,
+                    },
+                );
+                key_register
+            }
+            // The declaration already made the binding; the loop only writes
+            // it, and inside the body it holds the element.
+            ForInHead::Var { name, register, .. } => {
+                self.bindings.get_mut(name)?.value_type = Some(element_type);
+                register
+            }
+        };
 
         let mut bindings_at_head = self.bindings.clone();
         infer_register_var_types_to_fixed_point(
@@ -5336,9 +5363,22 @@ impl RegisterLowerer {
             &bindings_at_head,
         )?;
         self.bindings = bindings_at_head;
-        self.bindings.remove(name)?;
-        self.active_binding_count = self.active_binding_count.checked_sub(1)?;
-        self.release_register(key_register)?;
+        match head_binding {
+            ForInHead::PerIteration { name, .. } => {
+                self.bindings.remove(name)?;
+                self.active_binding_count = self.active_binding_count.checked_sub(1)?;
+                self.release_register(key_register)?;
+            }
+            // An iteration that ran left an element in the binding; one that
+            // iterated nothing left what the declaration put there.
+            ForInHead::Var {
+                name,
+                declared_type,
+                ..
+            } => {
+                self.bindings.get_mut(name)?.value_type = Some(declared_type.merge(element_type));
+            }
+        }
         self.release_register(result_register)?;
         self.release_register(value)?;
         self.release_register(iterator)?;
