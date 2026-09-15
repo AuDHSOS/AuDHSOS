@@ -4901,6 +4901,17 @@ D-231, document 16 step Q8.
 - A name written in double quotes that no table answers carries the
   question the C library asks.
 
+### 6.6.155 The date and time functions (`db-sqlite`)
+
+D-232, document 16 step Q8.
+
+- Every shape of moment the C library reads is read the same: a date, a
+  time, a date and a time, a julian day number and a unix time.
+- Every modifier answers what the C library answers, and a word that is
+  near one but not it answers nothing.
+- Every conversion of `strftime` writes what the C library writes.
+- A call that asks for the clock answers nothing.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

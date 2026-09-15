@@ -375,14 +375,13 @@ foreach cmd {
   testvfs test_syscall test_sqlite3_log optimization_control
   register_wholenumber_module register_echo_module register_tclvar_module
   register_fs_module register_dbstat_vtab register_schema_module
-  breakpoint do_not_use_codec database_may_be_corrupt database_never_corrupt
   load_static_extension permutation run_thread_tests test_cli_invocation
   test_find_cli test_find_sqldiff test_set_config_pagecache
   file_control_chunksize_test file_control_sizehint_test file_control_lockproxy_test
   file_control_persist_wal file_control_powersafe_overwrite file_control_vfsname
   file_control_tempfilename file_control_external_reader
   speed_trial speed_trial_init speed_trial_summary
-  clang_sanitize_address tcl_variable_type omit_test
+  tcl_variable_type
   sqlite3_db_filename sqlite3_next_stmt sqlite3_stmt_readonly
   sqlite3_table_column_metadata vfs_unlink_test vfs_shared_errors
   add_alignment_test_collations add_test_collate add_test_function
@@ -401,6 +400,14 @@ proc sqlite3_db_config {args} { return [lindex $args 2] }
 # none of: the case is not run rather than scored against a made-up
 # code.
 proc verify_ex_errcode {args} {}
+
+# What a file says about itself, which changes nothing here.
+proc breakpoint {args} {}
+proc do_not_use_codec {args} {}
+proc database_may_be_corrupt {args} {}
+proc database_never_corrupt {args} {}
+proc omit_test {args} {}
+proc clang_sanitize_address {args} { return 0 }
 
 # What the suite asks of the machine and not of the library.
 proc atomic_batch_write {args} { return 0 }

@@ -30,6 +30,20 @@ use crate::value::{Collation, Value, apply_numeric, compare, stored};
 pub enum Function {
     /// `abs(X)`.
     Abs,
+    /// `date(TIME, MOD, ...)`.
+    Date,
+    /// `time(TIME, MOD, ...)`.
+    Time,
+    /// `datetime(TIME, MOD, ...)`.
+    Datetime,
+    /// `julianday(TIME, MOD, ...)`.
+    Julianday,
+    /// `unixepoch(TIME, MOD, ...)`.
+    Unixepoch,
+    /// `strftime(FORMAT, TIME, MOD, ...)`.
+    Strftime,
+    /// `timediff(ONE, OTHER)`.
+    Timediff,
     /// `ceil(X)` and `ceiling(X)`.
     Ceil,
     /// `char(...)`.
@@ -149,6 +163,36 @@ const TABLE: &[Entry] = &[
         least: 1,
         most: Some(1),
         function: Function::Abs,
+    },
+    Entry {
+        name: b"date",
+        least: 0,
+        most: None,
+        function: Function::Date,
+    },
+    Entry {
+        name: b"datetime",
+        least: 0,
+        most: None,
+        function: Function::Datetime,
+    },
+    Entry {
+        name: b"julianday",
+        least: 0,
+        most: None,
+        function: Function::Julianday,
+    },
+    Entry {
+        name: b"strftime",
+        least: 1,
+        most: None,
+        function: Function::Strftime,
+    },
+    Entry {
+        name: b"unixepoch",
+        least: 0,
+        most: None,
+        function: Function::Unixepoch,
     },
     Entry {
         name: b"ceil",
@@ -397,6 +441,18 @@ const TABLE: &[Entry] = &[
         function: Function::Trim,
     },
     Entry {
+        name: b"time",
+        least: 0,
+        most: None,
+        function: Function::Time,
+    },
+    Entry {
+        name: b"timediff",
+        least: 2,
+        most: Some(2),
+        function: Function::Timediff,
+    },
+    Entry {
         name: b"typeof",
         least: 1,
         most: Some(1),
@@ -502,6 +558,13 @@ pub fn call(
     let arg = |at: usize| args.get(at).cloned().unwrap_or(Value::Null);
     let first = arg(0);
     Ok(match function {
+        Function::Date => crate::date::date(args),
+        Function::Time => crate::date::time(args),
+        Function::Datetime => crate::date::datetime(args),
+        Function::Julianday => crate::date::julianday(args),
+        Function::Unixepoch => crate::date::unixepoch(args),
+        Function::Strftime => crate::date::strftime(args),
+        Function::Timediff => crate::date::timediff(args),
         Function::Typeof => Value::Text(type_name(&first).to_vec()),
         Function::Length => match &first {
             Value::Null => Value::Null,

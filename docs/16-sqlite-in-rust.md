@@ -648,7 +648,7 @@ and a foreign key holds the rows of both tables it names; the rest is
 open.
 Depends on: Q6. Recorded in D-172 to D-174, D-182, D-186, D-187, D-189,
 D-191, D-193, D-195, D-196, D-205 to D-211, D-216 to D-218, D-219,
-D-224 to D-231.
+D-224 to D-232.
 Size: L.
 
 ### Does
@@ -672,7 +672,9 @@ Size: L.
    itself is built, which D-198 records, and the window clauses are
    built, which D-219 records.
 4. The functions that need a clock or a random source. `random` and
-   `randomblob` are built, which D-199 records; the clock is open.
+   `randomblob` are built, which D-199 records, and the date and time
+   functions are built for every moment but `now`, which D-232
+   records; the clock is open.
 5. `ANALYZE`, which counts the tables and their indexes into
    `sqlite_stat1`. Built, which D-207 records.
 6. `REINDEX`, which writes the entries of an index again out of the

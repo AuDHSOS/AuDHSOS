@@ -12,6 +12,7 @@
 
 mod bytes;
 mod constraint;
+mod date;
 mod db;
 mod definition;
 mod error;
