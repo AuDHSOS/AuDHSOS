@@ -6312,6 +6312,13 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ObjectIsExtensible
         | crate::engine::realm::Intrinsic::ObjectIsSealed
         | crate::engine::realm::Intrinsic::ObjectIsFrozen
+        // 28.1.3, 28.1.4, 28.1.8, 28.1.9 and 28.1.11 answer whether the
+        // operation they name succeeded.
+        | crate::engine::realm::Intrinsic::ReflectDefineProperty
+        | crate::engine::realm::Intrinsic::ReflectDeleteProperty
+        | crate::engine::realm::Intrinsic::ReflectHas
+        | crate::engine::realm::Intrinsic::ReflectIsExtensible
+        | crate::engine::realm::Intrinsic::ReflectPreventExtensions
         // 21.1.2.2 to 21.1.2.5 each answer a Boolean about one argument.
         | crate::engine::realm::Intrinsic::NumberIsFinite
         | crate::engine::realm::Intrinsic::NumberIsInteger
@@ -6353,6 +6360,10 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ObjectDefineProperties
         | crate::engine::realm::Intrinsic::ObjectGetPrototypeOf
         | crate::engine::realm::Intrinsic::ObjectKeys
+        | crate::engine::realm::Intrinsic::ReflectGet
+        | crate::engine::realm::Intrinsic::ReflectGetOwnPropertyDescriptor
+        | crate::engine::realm::Intrinsic::ReflectGetPrototypeOf
+        | crate::engine::realm::Intrinsic::ReflectOwnKeys
         | crate::engine::realm::Intrinsic::ObjectValues
         | crate::engine::realm::Intrinsic::ObjectEntries
         // 20.1.2.20, 20.1.2.22 and 20.1.2.6 answer the object they were given.

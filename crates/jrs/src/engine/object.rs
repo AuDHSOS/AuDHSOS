@@ -98,6 +98,10 @@ pub enum ObjectKind {
         /// Whether an accumulator has been taken yet (23.1.3.24 step 6).
         started: bool,
     },
+    /// The `%Reflect%` namespace object of 28.1, which is ordinary in every
+    /// way but one: a name it should own and this Realm has not built is a
+    /// gap rather than the undefined an ordinary object answers.
+    Reflect,
     /// The `%Math%` namespace object of 21.3, which is ordinary in every way
     /// but one: a name it should own and this Realm has not built is a gap
     /// rather than the undefined an ordinary object answers.

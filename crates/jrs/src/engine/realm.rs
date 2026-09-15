@@ -467,6 +467,24 @@ pub enum Intrinsic {
     NumberIsSafeInteger,
     /// The `Boolean` constructor `%Boolean%` (20.3.1.1).
     BooleanConstructor,
+    /// `Reflect.defineProperty` (28.1.3).
+    ReflectDefineProperty,
+    /// `Reflect.deleteProperty` (28.1.4).
+    ReflectDeleteProperty,
+    /// `Reflect.get` (28.1.5).
+    ReflectGet,
+    /// `Reflect.getOwnPropertyDescriptor` (28.1.6).
+    ReflectGetOwnPropertyDescriptor,
+    /// `Reflect.getPrototypeOf` (28.1.7).
+    ReflectGetPrototypeOf,
+    /// `Reflect.has` (28.1.8).
+    ReflectHas,
+    /// `Reflect.isExtensible` (28.1.9).
+    ReflectIsExtensible,
+    /// `Reflect.ownKeys` (28.1.10).
+    ReflectOwnKeys,
+    /// `Reflect.preventExtensions` (28.1.11).
+    ReflectPreventExtensions,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -494,11 +512,13 @@ pub enum IntrinsicHolder {
     FunctionPrototype,
     /// `%Math%`, the namespace object of 21.3.
     Math,
+    /// `%Reflect%`, the namespace object of 28.1.
+    Reflect,
 }
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 102] = [
+    pub const ALL: [Self; 111] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -601,6 +621,15 @@ impl Intrinsic {
         Self::NumberIsNaN,
         Self::NumberIsSafeInteger,
         Self::BooleanConstructor,
+        Self::ReflectDefineProperty,
+        Self::ReflectDeleteProperty,
+        Self::ReflectGet,
+        Self::ReflectGetOwnPropertyDescriptor,
+        Self::ReflectGetPrototypeOf,
+        Self::ReflectHas,
+        Self::ReflectIsExtensible,
+        Self::ReflectOwnKeys,
+        Self::ReflectPreventExtensions,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -683,6 +712,15 @@ impl Intrinsic {
             | Self::MathImul
             | Self::MathFround
             | Self::MathSin => IntrinsicHolder::Math,
+            Self::ReflectDefineProperty
+            | Self::ReflectDeleteProperty
+            | Self::ReflectGet
+            | Self::ReflectGetOwnPropertyDescriptor
+            | Self::ReflectGetPrototypeOf
+            | Self::ReflectHas
+            | Self::ReflectIsExtensible
+            | Self::ReflectOwnKeys
+            | Self::ReflectPreventExtensions => IntrinsicHolder::Reflect,
             Self::ErrorConstructor
             | Self::EvalErrorConstructor
             | Self::RangeErrorConstructor
@@ -828,6 +866,15 @@ impl Intrinsic {
             Self::NumberIsNaN => 99,
             Self::NumberIsSafeInteger => 100,
             Self::BooleanConstructor => 101,
+            Self::ReflectDefineProperty => 102,
+            Self::ReflectDeleteProperty => 103,
+            Self::ReflectGet => 104,
+            Self::ReflectGetOwnPropertyDescriptor => 105,
+            Self::ReflectGetPrototypeOf => 106,
+            Self::ReflectHas => 107,
+            Self::ReflectIsExtensible => 108,
+            Self::ReflectOwnKeys => 109,
+            Self::ReflectPreventExtensions => 110,
         }
     }
 
@@ -940,6 +987,15 @@ impl Intrinsic {
             Self::NumberIsNaN => 99,
             Self::NumberIsSafeInteger => 100,
             Self::BooleanConstructor => 101,
+            Self::ReflectDefineProperty => 102,
+            Self::ReflectDeleteProperty => 103,
+            Self::ReflectGet => 104,
+            Self::ReflectGetOwnPropertyDescriptor => 105,
+            Self::ReflectGetPrototypeOf => 106,
+            Self::ReflectHas => 107,
+            Self::ReflectIsExtensible => 108,
+            Self::ReflectOwnKeys => 109,
+            Self::ReflectPreventExtensions => 110,
         }
     }
 
@@ -1053,12 +1109,25 @@ impl Intrinsic {
             99 => Some(Self::NumberIsNaN),
             100 => Some(Self::NumberIsSafeInteger),
             101 => Some(Self::BooleanConstructor),
+            102 => Some(Self::ReflectDefineProperty),
+            103 => Some(Self::ReflectDeleteProperty),
+            104 => Some(Self::ReflectGet),
+            105 => Some(Self::ReflectGetOwnPropertyDescriptor),
+            106 => Some(Self::ReflectGetPrototypeOf),
+            107 => Some(Self::ReflectHas),
+            108 => Some(Self::ReflectIsExtensible),
+            109 => Some(Self::ReflectOwnKeys),
+            110 => Some(Self::ReflectPreventExtensions),
             _ => None,
         }
     }
 
     /// The `name` property of the function object (17).
     #[must_use]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one table names every intrinsic beside the name 17 gives it"
+    )]
     pub const fn name(self) -> &'static str {
         match self {
             Self::ObjectPrototypeHasOwnProperty => "hasOwnProperty",
@@ -1081,7 +1150,7 @@ impl Intrinsic {
             Self::StringConstructor => "String",
             Self::ObjectCreate => "create",
             Self::ObjectDefineProperties => "defineProperties",
-            Self::ObjectGetPrototypeOf => "getPrototypeOf",
+            Self::ObjectGetPrototypeOf | Self::ReflectGetPrototypeOf => "getPrototypeOf",
             Self::ObjectKeys => "keys",
             Self::ObjectIs => "is",
             Self::ObjectHasOwn => "hasOwn",
@@ -1114,8 +1183,8 @@ impl Intrinsic {
             Self::ArrayPrototypeReduce => "reduce",
             Self::ArrayPrototypeReduceRight => "reduceRight",
             Self::IteratorPrototypeIterator => "[Symbol.iterator]",
-            Self::ObjectPreventExtensions => "preventExtensions",
-            Self::ObjectIsExtensible => "isExtensible",
+            Self::ObjectPreventExtensions | Self::ReflectPreventExtensions => "preventExtensions",
+            Self::ObjectIsExtensible | Self::ReflectIsExtensible => "isExtensible",
             Self::ObjectSeal => "seal",
             Self::ObjectIsSealed => "isSealed",
             Self::ObjectFreeze => "freeze",
@@ -1127,8 +1196,14 @@ impl Intrinsic {
             Self::NumberIsNaN => "isNaN",
             Self::NumberIsSafeInteger => "isSafeInteger",
             Self::BooleanConstructor => "Boolean",
-            Self::ObjectDefineProperty => "defineProperty",
-            Self::ObjectGetOwnPropertyDescriptor => "getOwnPropertyDescriptor",
+            Self::ReflectDeleteProperty => "deleteProperty",
+            Self::ReflectGet => "get",
+            Self::ReflectHas => "has",
+            Self::ReflectOwnKeys => "ownKeys",
+            Self::ObjectDefineProperty | Self::ReflectDefineProperty => "defineProperty",
+            Self::ObjectGetOwnPropertyDescriptor | Self::ReflectGetOwnPropertyDescriptor => {
+                "getOwnPropertyDescriptor"
+            }
             Self::ObjectGetOwnPropertyNames => "getOwnPropertyNames",
             Self::ArrayIsArray => "isArray",
             Self::StringPrototypeCharAt => "charAt",
@@ -1241,12 +1316,21 @@ impl Intrinsic {
             | Self::NumberIsNaN
             | Self::NumberIsSafeInteger
             | Self::BooleanConstructor
+            | Self::ReflectGetPrototypeOf
+            | Self::ReflectIsExtensible
+            | Self::ReflectOwnKeys
+            | Self::ReflectPreventExtensions
             | Self::ObjectGetOwnPropertyNames => false,
             // 20.1.2.4, 20.1.2.8 and 20.1.2.13 apply ToPropertyKey to the
             // second argument.
             Self::ObjectDefineProperty
             | Self::ObjectGetOwnPropertyDescriptor
-            | Self::ObjectHasOwn => index == 1,
+            | Self::ObjectHasOwn
+            | Self::ReflectDefineProperty
+            | Self::ReflectDeleteProperty
+            | Self::ReflectGet
+            | Self::ReflectGetOwnPropertyDescriptor
+            | Self::ReflectHas => index == 1,
             // 20.1.3.2 and 20.1.3.4 apply ToPropertyKey to the first argument.
             Self::ObjectPrototypeHasOwnProperty | Self::ObjectPrototypePropertyIsEnumerable => {
                 index == 0
@@ -1354,14 +1438,22 @@ impl Intrinsic {
             | Self::NumberIsNaN
             | Self::NumberIsSafeInteger
             | Self::BooleanConstructor
+            | Self::ReflectGetPrototypeOf
+            | Self::ReflectIsExtensible
+            | Self::ReflectOwnKeys
+            | Self::ReflectPreventExtensions
             | Self::ObjectGetOwnPropertyNames => 1,
-            Self::ObjectDefineProperty => 3,
+            Self::ObjectDefineProperty | Self::ReflectDefineProperty => 3,
             Self::MathPow
             | Self::ObjectGetOwnPropertyDescriptor
             | Self::ObjectCreate
             | Self::ObjectDefineProperties
             | Self::ObjectIs
             | Self::ObjectHasOwn
+            | Self::ReflectDeleteProperty
+            | Self::ReflectGet
+            | Self::ReflectGetOwnPropertyDescriptor
+            | Self::ReflectHas
             | Self::StringPrototypeSlice
             | Self::StringPrototypeSubstring
             | Self::ArrayPrototypeSlice
@@ -1697,6 +1789,31 @@ pub fn wrapper_prototype_owns(names: &[&str], name: &[u16]) -> bool {
             .any(|owned| owned.encode_utf16().eq(name.iter().copied()))
 }
 
+/// The property names 28.1 gives `%Reflect%`.
+pub const REFLECT_PROPERTIES: [&str; 13] = [
+    "apply",
+    "construct",
+    "defineProperty",
+    "deleteProperty",
+    "get",
+    "getOwnPropertyDescriptor",
+    "getPrototypeOf",
+    "has",
+    "isExtensible",
+    "ownKeys",
+    "preventExtensions",
+    "set",
+    "setPrototypeOf",
+];
+
+/// Whether `%Reflect%` owns a property of this name.
+#[must_use]
+pub fn reflect_owns(name: &[u16]) -> bool {
+    REFLECT_PROPERTIES
+        .into_iter()
+        .any(|owned| owned.encode_utf16().eq(name.iter().copied()))
+}
+
 /// Whether `%Math%` owns a property of this name.
 #[must_use]
 pub fn math_owns(name: &[u16]) -> bool {
@@ -1870,6 +1987,7 @@ struct Holders {
     array_iterator_prototype: Root,
     global_object: Root,
     math: Root,
+    reflect: Root,
 }
 
 /// Global Environment Record of 9.1.1.4.
@@ -1894,6 +2012,10 @@ impl Realm {
     ///
     /// Returns a [`HeapError`] when an intrinsic cannot be allocated, rooted or
     /// given its initial properties.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function builds every intrinsic of a Realm, in the order they depend on each other"
+    )]
     pub fn new(heap: &mut GenerationalHeap) -> Result<Self, HeapError> {
         let root_shape = heap.shapes.root_shape();
 
@@ -1965,6 +2087,11 @@ impl Realm {
         heap.set_object_kind(math, super::object::ObjectKind::Math)?;
         Self::define_math_constants(heap, math)?;
         let math = heap.push_root(Value::from_object(math))?;
+        // 28.1 is an ordinary object like %Math%, and 19.4.4 gives it to the
+        // global object under its own name.
+        let reflect = heap.allocate_immortal_object(root_shape, ordinary)?;
+        heap.set_object_kind(reflect, super::object::ObjectKind::Reflect)?;
+        let reflect = heap.push_root(Value::from_object(reflect))?;
         let intrinsics = Self::install_intrinsics(
             heap,
             &Holders {
@@ -1975,6 +2102,7 @@ impl Realm {
                 array_iterator_prototype,
                 global_object,
                 math,
+                reflect,
             },
         )?;
 
@@ -2000,9 +2128,11 @@ impl Realm {
         let global = Self::rooted(heap, global_object)?
             .as_object()
             .ok_or(HeapError::InvalidReference)?;
-        let name = PropertyKey::String(heap.strings.intern("Math")?);
-        let value = Self::rooted(heap, math)?;
-        heap.define_own_named(global, name, value, builtin_data())?;
+        for (label, namespace) in [("Math", math), ("Reflect", reflect)] {
+            let name = PropertyKey::String(heap.strings.intern(label)?);
+            let value = Self::rooted(heap, namespace)?;
+            heap.define_own_named(global, name, value, builtin_data())?;
+        }
 
         // 9.1.1.4: the Global Environment Record binds the global object and
         // the declarations of every Script of this Realm. 19.1.1: `globalThis`
@@ -2467,6 +2597,7 @@ impl Realm {
                     Self::rooted(heap, holders.function_prototype)?
                 }
                 IntrinsicHolder::Math => Self::rooted(heap, holders.math)?,
+                IntrinsicHolder::Reflect => Self::rooted(heap, holders.reflect)?,
                 IntrinsicHolder::ObjectConstructor => Self::rooted(
                     heap,
                     *intrinsics

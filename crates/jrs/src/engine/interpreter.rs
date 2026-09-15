@@ -1367,6 +1367,15 @@ impl RegisterVM {
             | Intrinsic::ObjectIsFrozen
             | Intrinsic::ObjectValues
             | Intrinsic::ObjectEntries
+            | Intrinsic::ReflectDefineProperty
+            | Intrinsic::ReflectDeleteProperty
+            | Intrinsic::ReflectGet
+            | Intrinsic::ReflectGetOwnPropertyDescriptor
+            | Intrinsic::ReflectGetPrototypeOf
+            | Intrinsic::ReflectHas
+            | Intrinsic::ReflectIsExtensible
+            | Intrinsic::ReflectOwnKeys
+            | Intrinsic::ReflectPreventExtensions
             | Intrinsic::ObjectGetOwnPropertyNames => Self::call_object_intrinsic(
                 intrinsic,
                 self.call_argument(&call, 0)?,
@@ -1617,6 +1626,102 @@ impl RegisterVM {
         Ok(Value::from_string(text))
     }
 
+    /// The functions 28.1 gives `%Reflect%` that this Realm builds.
+    ///
+    /// Each one is an operation of clause 20.1.2 without its coercion, and
+    /// answers whether it worked where 20.1.2 throws.
+    fn call_reflect_intrinsic(
+        intrinsic: Intrinsic,
+        object: ObjectRef,
+        key: Value,
+        attributes: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let target = Value::from_object(object);
+        match intrinsic {
+            // 28.1.7 and 28.1.9 are [[GetPrototypeOf]] and [[IsExtensible]].
+            Intrinsic::ReflectGetPrototypeOf => Ok(heap
+                .get_object(object)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?
+                .prototype),
+            Intrinsic::ReflectIsExtensible => Ok(Value::from_bool(
+                heap.is_extensible(object).unwrap_or(false),
+            )),
+            // 28.1.11 answers whether [[PreventExtensions]] worked, and it
+            // always does here.
+            Intrinsic::ReflectPreventExtensions => {
+                heap.prevent_extensions(object)?;
+                Ok(VALUE_TRUE)
+            }
+            // 28.1.10 answers every own key, which for this engine is every
+            // own String key: it gives no Script a way to make a Symbol one.
+            Intrinsic::ReflectOwnKeys => {
+                let names: Vec<Value> = heap
+                    .own_keys(object)?
+                    .into_iter()
+                    .filter_map(|(name, _)| name.as_string())
+                    .map(Value::from_string)
+                    .collect();
+                Self::array_of(names, heap, realm)
+            }
+            // 28.1.8 is HasProperty of 7.3.11, which walks the chain.
+            Intrinsic::ReflectHas => {
+                let name = property_key(key, heap)?;
+                Ok(Value::from_bool(heap.lookup_named(object, name)?.is_some()))
+            }
+            // 28.1.5 is [[Get]], which for this engine answers what a read
+            // answers, and names the gap a read would name.
+            Intrinsic::ReflectGet => {
+                let name = property_key(key, heap)?;
+                if let Some(property) = heap.lookup_named(object, name)? {
+                    return Ok(property.value);
+                }
+                let units = name
+                    .as_string()
+                    .and_then(|name| heap.strings.to_utf16(Value::from_string(name)))
+                    .unwrap_or_default();
+                Self::absent_property(target, &units, heap, realm)
+            }
+            // 28.1.4 is [[Delete]] of 10.1.10, answering whether it worked
+            // where 13.5.1.2 throws in strict code.
+            Intrinsic::ReflectDeleteProperty => {
+                let name = property_key(key, heap)?;
+                let units = name
+                    .as_string()
+                    .and_then(|name| heap.strings.to_utf16(Value::from_string(name)))
+                    .unwrap_or_default();
+                let index = array_index_units(&units);
+                Ok(Value::from_bool(delete_property(
+                    object, name, index, heap,
+                )?))
+            }
+            // 28.1.6 answers the descriptor 6.2.6.4 makes, or undefined.
+            Intrinsic::ReflectGetOwnPropertyDescriptor => Self::call_object_intrinsic(
+                Intrinsic::ObjectGetOwnPropertyDescriptor,
+                target,
+                key,
+                attributes,
+                heap,
+                realm,
+            ),
+            // 28.1.3 defines the descriptor and answers whether it worked.
+            _ => {
+                let Some(source) = attributes.as_object() else {
+                    return Err(type_error(
+                        heap,
+                        realm,
+                        "property descriptor must be an object",
+                    ));
+                };
+                let name = property_key(key, heap)?;
+                let descriptor = Self::to_property_descriptor(source, heap, realm)?;
+                Self::define_property_from(object, name, &descriptor, heap)?;
+                Ok(VALUE_TRUE)
+            }
+        }
+    }
+
     /// An Array of the Realm holding these values, which the collector can
     /// see from the moment it exists.
     fn array_of(
@@ -1798,6 +1903,10 @@ impl RegisterVM {
     /// 6.2.6.5 turn into and out of an ordinary object. This engine has no
     /// accessor properties, so a descriptor that names a `get` or a `set` is
     /// a gap rather than a descriptor it would silently drop.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function keeps each function beside the clause it implements"
+    )]
     fn call_object_intrinsic(
         intrinsic: Intrinsic,
         target: Value,
@@ -1821,6 +1930,27 @@ impl RegisterVM {
             // 20.1.1.1: undefined and null make an ordinary object, and every
             // other value goes through ToObject.
             Intrinsic::ObjectConstructor => Self::construct_object(target, heap, realm),
+            // 28.1 does what clause 20.1.2 does, and answers whether it
+            // worked instead of throwing where it did not. Step 1 of each
+            // refuses a target that is not an Object, which 20.1.2 coerces.
+            Intrinsic::ReflectGetPrototypeOf
+            | Intrinsic::ReflectIsExtensible
+            | Intrinsic::ReflectPreventExtensions
+            | Intrinsic::ReflectOwnKeys
+            | Intrinsic::ReflectHas
+            | Intrinsic::ReflectGet
+            | Intrinsic::ReflectDeleteProperty
+            | Intrinsic::ReflectGetOwnPropertyDescriptor
+            | Intrinsic::ReflectDefineProperty => {
+                let Some(object) = target.as_object() else {
+                    return Err(type_error(
+                        heap,
+                        realm,
+                        "Reflect called on a value that is not an object",
+                    ));
+                };
+                Self::call_reflect_intrinsic(intrinsic, object, key, attributes, heap, realm)
+            }
             // 20.1.2.14 is SameValue of 7.2.11, which the engine already has
             // for the strict comparison that differs from it only in how it
             // treats zero and NaN.
@@ -3441,7 +3571,8 @@ impl RegisterVM {
             | ObjectKind::ArrayIterator { .. }
             // The state of a walk of 23.1.3 is reachable from no Script, so
             // no conversion of it is owed.
-            | ObjectKind::ArrayIteration { .. } => None,
+            | ObjectKind::ArrayIteration { .. }
+            | ObjectKind::Reflect => None,
         }
     }
 
@@ -3569,6 +3700,10 @@ impl RegisterVM {
                     && super::realm::string_constructor_owns(name) =>
             {
                 Err(VMError::Unsupported("a property of %String%"))
+            }
+            // 28.1 gives `%Reflect%` more than this Realm builds.
+            Some(ObjectKind::Reflect) if super::realm::reflect_owns(name) => {
+                Err(VMError::Unsupported("a property of %Reflect%"))
             }
             // 21.3 gives `%Math%` more than this Realm builds.
             Some(ObjectKind::Math) if super::realm::math_owns(name) => {
@@ -3917,6 +4052,7 @@ impl RegisterVM {
                 ObjectKind::Ordinary
                 | ObjectKind::ArrayIterator { .. }
                 | ObjectKind::ArrayIteration { .. }
+                | ObjectKind::Reflect
                 | ObjectKind::Math => "Object",
             }
         };

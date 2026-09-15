@@ -4790,3 +4790,47 @@ fn the_boolean_constructor_answers_toboolean() -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[test]
+fn the_reflect_namespace_does_what_20_1_2_does_without_coercing() -> Result<(), Error> {
+    // 28.1 is the operations of clause 20.1.2 without their coercion: step 1
+    // of each refuses a target that is not an Object, and the answer says
+    // whether the operation worked where 20.1.2 throws.
+    for source in [
+        "typeof Reflect",
+        "Reflect.has({a:1},'a')",
+        "Reflect.has({a:1},'b')",
+        "Reflect.has({a:1},'toString')",
+        "Reflect.get({a:5},'a')",
+        "Reflect.getPrototypeOf([])===Array.prototype",
+        "Reflect.getPrototypeOf({})===Object.prototype",
+        "Reflect.ownKeys({a:1,b:2}).join(',')",
+        "Reflect.ownKeys({}).length",
+        "Reflect.isExtensible({})",
+        "var o={};Reflect.preventExtensions(o);Reflect.isExtensible(o)",
+        "var o={a:1};Reflect.deleteProperty(o,'a')",
+        "var o={};Reflect.defineProperty(o,'x',{value:3});o.x",
+        "var o={};Reflect.defineProperty(o,'x',{value:3})",
+        "Reflect.getOwnPropertyDescriptor({a:1},'a').value",
+        "typeof Reflect.getOwnPropertyDescriptor({a:1},'b')",
+        // A name 28.1 does not give it is undefined like any other miss.
+        "typeof Reflect.notAName",
+    ] {
+        differential(source)?;
+    }
+    // 28.1.1, 28.1.2, 28.1.12 and 28.1.13 are names 28.1 gives it that this
+    // Realm has not built, so a read of one is a gap.
+    for source in ["Reflect.apply", "Reflect.construct", "Reflect.set"] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        assert!(
+            matches!(
+                Runtime::with_backend(Limits::default(), Backend::Engine)
+                    .run(&program, &mut SilentHost),
+                Err(Error::Unsupported { .. })
+            ),
+            "{source}"
+        );
+    }
+    Ok(())
+}
