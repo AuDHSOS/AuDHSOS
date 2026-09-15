@@ -57,6 +57,7 @@ pub(crate) enum HostBehavior {
     QueueMicrotask,
     CollectGarbage,
     StringPrint,
+    Eval,
     EvalScript,
     Intrinsic(crate::bytecode::Builtin),
     EventGet(crate::event::Field),

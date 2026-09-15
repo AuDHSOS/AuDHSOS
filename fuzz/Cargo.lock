@@ -264,6 +264,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "jrs_backend"
+version = "0.1.0"
+dependencies = [
+ "fuzz-support",
+ "jrs",
+]
+
+[[package]]
 name = "jrs_source"
 version = "0.1.0"
 dependencies = [

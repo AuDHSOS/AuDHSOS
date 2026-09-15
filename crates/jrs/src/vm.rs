@@ -194,13 +194,94 @@ impl Host for SilentHost {
 /// An isolated, fuel-limited bytecode executor. Buffers are reused between runs.
 pub struct Runtime {
     limits: Limits,
+    backend: Backend,
     stack: Vec<Value>,
     intrinsic_code: Vec<(Builtin, Rc<FunctionCode>)>,
+    register_vm: Option<crate::engine::interpreter::RegisterVM>,
+    register_agent: Option<crate::engine::agent::Agent>,
+    register_code: Vec<RegisterCodeUnit>,
+}
+
+/// What the boundary reports for a value of the engine that the embedding has
+/// no way to hold.
+///
+/// Unlike every other unsupported feature, this one does not leave the Realm in
+/// an unknown state: the Script reached a defined end and only its value cannot
+/// cross, so the Realm stays usable.
+pub(crate) const UNCROSSABLE_OBJECT: &str = "an Object of the engine crossing to the embedding";
+
+/// Converts a register-backend value into the legacy value the embedding sees.
+///
+/// Objects, Symbols and `BigInt`s of the new engine have no legacy identity, so
+/// they cannot cross this boundary and are refused rather than approximated.
+fn register_primitive(
+    value: crate::engine::value::Value,
+    heap: &crate::engine::heap::GenerationalHeap,
+) -> Option<Value> {
+    if value.is_undefined() {
+        return Some(Value::Undefined);
+    }
+    if value.is_null() {
+        return Some(Value::Null);
+    }
+    if let Some(boolean) = value.as_boolean() {
+        return Some(Value::Boolean(boolean));
+    }
+    if value.is_number() {
+        return value.as_f64().map(Value::Number);
+    }
+    if value.is_string() {
+        return heap
+            .strings
+            .to_utf16(value)
+            .map(|units| Value::String(units.into()));
+    }
+    None
+}
+
+/// One code unit of a Realm: the root bytecode of a Script it has run and the
+/// feedback gathered for it.
+///
+/// The Realm holds the code, because a function object of an earlier Script
+/// names its unit and stays callable. A unit is therefore never dropped, which
+/// is what makes its position in the list the name the function object carries.
+struct RegisterCodeUnit {
+    code: Rc<crate::engine::bytecode::BytecodeFunction>,
+    vector: crate::engine::feedback::FeedbackVector,
+    invocations: u64,
+}
+
+impl RegisterCodeUnit {
+    fn new(code: &Rc<crate::engine::bytecode::BytecodeFunction>) -> Self {
+        let vector = crate::engine::feedback::FeedbackVector::for_code(code);
+        Self {
+            code: Rc::clone(code),
+            vector,
+            invocations: 0,
+        }
+    }
+}
+
+/// Which execution path a Realm uses for every Script it evaluates.
+///
+/// The choice belongs to the Realm, not to the single Script: a Realm whose
+/// Scripts were split between the two paths would let a program depend on
+/// which one compiled it. See section 17.1 of `docs/jrs-architecture.md`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Backend {
+    /// The stack bytecode interpreter, which is being decommissioned.
+    #[default]
+    Stack,
+    /// The register engine under `crates/jrs/src/engine/`, which is the
+    /// migration target. A Script it cannot lower is refused rather than run
+    /// on the other path.
+    Engine,
 }
 
 struct Execution<'host> {
     host: &'host mut dyn Host,
     limits: Limits,
+    backend: Backend,
     stack: Vec<Value>,
     heap: Heap,
     frames: Vec<Frame>,
@@ -224,6 +305,7 @@ struct Execution<'host> {
     object_constructor_storage: Option<Value>,
     array_constructor_storage: Option<Value>,
     number_constructor_storage: Option<Value>,
+    boolean_constructor_storage: Option<Value>,
     regexp_constructor_storage: Option<Value>,
     regexp_proto: Option<Value>,
     number_parsers: Option<(Value, Value)>,
@@ -260,16 +342,35 @@ struct Execution<'host> {
     abort_controller_proto: Option<Value>,
     abort_signal_proto: Option<Value>,
     reported_exceptions: Vec<Error>,
+    register_vm: Option<crate::engine::interpreter::RegisterVM>,
+    register_agent: Option<crate::engine::agent::Agent>,
+    register_code: Vec<RegisterCodeUnit>,
 }
 
 impl Runtime {
     /// Creates an executor with explicit resource limits.
     #[must_use]
     pub const fn new(limits: Limits) -> Self {
+        Self::with_backend(limits, Backend::Stack)
+    }
+
+    /// Creates an executor that runs every program on `backend`.
+    ///
+    /// The choice belongs to the executor, not to the single program: the two
+    /// paths hold separate object models, so choosing per program would let a
+    /// program depend on which one compiled it. A program the register
+    /// lowering did not take is refused on [`Backend::Engine`] rather than run
+    /// on the other path.
+    #[must_use]
+    pub const fn with_backend(limits: Limits, backend: Backend) -> Self {
         Self {
             limits,
+            backend,
             stack: Vec::new(),
             intrinsic_code: Vec::new(),
+            register_vm: None,
+            register_agent: None,
+            register_code: Vec::new(),
         }
     }
 
@@ -280,13 +381,39 @@ impl Runtime {
     /// # Errors
     /// Returns reference/type errors, resource exhaustion, or host failure.
     pub fn run(&mut self, program: &Program, host: &mut impl Host) -> Result<Value, Error> {
+        if self.backend == Backend::Engine && program.register_code.is_none() {
+            return Err(Error::Unsupported {
+                feature: "a Script the register lowering does not take",
+            });
+        }
         let mut execution = Execution::new(host, self.limits);
+        execution.backend = self.backend;
         execution.stack = core::mem::take(&mut self.stack);
         execution.intrinsic_code = core::mem::take(&mut self.intrinsic_code);
+        execution.register_vm = self.register_vm.take();
+        execution.register_agent = self.register_agent.take();
+        execution.register_code = core::mem::take(&mut self.register_code);
         let result = execution.run(program);
         self.stack = execution.stack;
         self.intrinsic_code = execution.intrinsic_code;
+        self.register_vm = execution.register_vm;
+        self.register_agent = execution.register_agent;
+        self.register_code = execution.register_code;
         result
+    }
+
+    #[cfg(test)]
+    pub(crate) fn register_feedback_invocations(&self, program: &Program) -> Option<u64> {
+        let code = program.register_code.as_ref()?;
+        self.register_code
+            .iter()
+            .find(|unit| Rc::ptr_eq(&unit.code, code))
+            .map(|unit| unit.invocations)
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn register_feedback_count(&self) -> usize {
+        self.register_code.len()
     }
 }
 
@@ -295,6 +422,7 @@ impl<'host> Execution<'host> {
         Self {
             host,
             limits,
+            backend: Backend::Stack,
             stack: Vec::new(),
             intrinsic_code: Vec::new(),
             heap: Heap::default(),
@@ -318,6 +446,7 @@ impl<'host> Execution<'host> {
             object_constructor_storage: None,
             array_constructor_storage: None,
             number_constructor_storage: None,
+            boolean_constructor_storage: None,
             regexp_constructor_storage: None,
             regexp_proto: None,
             number_parsers: None,
@@ -353,11 +482,273 @@ impl<'host> Execution<'host> {
             abort_controller_proto: None,
             abort_signal_proto: None,
             reported_exceptions: Vec::new(),
+            register_vm: None,
+            register_agent: None,
+            register_code: Vec::new(),
         }
     }
 }
 
 impl Execution<'_> {
+    /// Takes the Agent that owns the register backend's heap and intrinsics,
+    /// building it on first use.
+    fn register_agent(&mut self) -> Result<crate::engine::agent::Agent, Error> {
+        if let Some(agent) = self.register_agent.take() {
+            return Ok(agent);
+        }
+        crate::engine::agent::Agent::new().map_err(|_| Error::InvalidBytecode)
+    }
+
+    /// Converts a value the register backend threw into the error the
+    /// embedding sees.
+    ///
+    /// A primitive crosses as itself. An error of the engine's Realm is built
+    /// again as the error of the same type here, so that a host observes the
+    /// constructor name and the message the engine gave it. Nothing else has a
+    /// representation on this side of the migration.
+    fn register_exception(
+        &mut self,
+        value: crate::engine::value::Value,
+        native: Option<(crate::engine::realm::NativeErrorKind, &'static str)>,
+        agent: &crate::engine::agent::Agent,
+    ) -> Error {
+        // An error the engine raised is the error the specification names, in
+        // the form the legacy backend reports for the same operation.
+        // TypeError and RangeError have a typed counterpart in this API. Every
+        // other kind crosses as the error object itself, built again below, so
+        // that its constructor and message survive.
+        if let Some((kind, message)) = native {
+            match kind {
+                crate::engine::realm::NativeErrorKind::TypeError => {
+                    return Error::Type { message };
+                }
+                crate::engine::realm::NativeErrorKind::RangeError => {
+                    return Error::Range { message };
+                }
+                crate::engine::realm::NativeErrorKind::EvalError
+                | crate::engine::realm::NativeErrorKind::ReferenceError
+                | crate::engine::realm::NativeErrorKind::SyntaxError
+                | crate::engine::realm::NativeErrorKind::UriError => {}
+            }
+        }
+        if let Some(value) = register_primitive(value, &agent.heap) {
+            return Error::Thrown { value };
+        }
+        // A thrown Object of the engine has no identity the embedding can
+        // hold, so one that is not a native error is a gap rather than a value.
+        let Some(object) = value.as_object() else {
+            return Error::Unsupported {
+                feature: UNCROSSABLE_OBJECT,
+            };
+        };
+        let Some(kind) = agent.realm.native_error_kind(&agent.heap, object) else {
+            return Error::Unsupported {
+                feature: UNCROSSABLE_OBJECT,
+            };
+        };
+        let message = agent
+            .heap
+            .strings
+            .lookup_interned_units(&Value::string("message").units())
+            .map(crate::engine::value::PropertyKey::String)
+            .and_then(|name| agent.heap.lookup_named(object, name).ok().flatten())
+            .and_then(|property| agent.heap.strings.to_utf16(property.value))
+            .map_or(Value::Undefined, |units| Value::String(units.into()));
+        // A ReferenceError names the binding it could not resolve, which this
+        // API carries as the name rather than as a thrown object.
+        if kind == crate::engine::realm::NativeErrorKind::ReferenceError
+            && let Value::String(units) = &message
+        {
+            let text = alloc::string::String::from_utf16_lossy(units);
+            if let Some(name) = text.strip_suffix(crate::engine::interpreter::UNRESOLVABLE_SUFFIX) {
+                return Error::Reference {
+                    name: alloc::string::String::from(name),
+                };
+            }
+        }
+        let builtin = match kind {
+            crate::engine::realm::NativeErrorKind::EvalError => Builtin::EvalError,
+            crate::engine::realm::NativeErrorKind::RangeError => Builtin::RangeError,
+            crate::engine::realm::NativeErrorKind::ReferenceError => Builtin::ReferenceError,
+            crate::engine::realm::NativeErrorKind::SyntaxError => Builtin::SyntaxError,
+            crate::engine::realm::NativeErrorKind::TypeError => Builtin::TypeError,
+            crate::engine::realm::NativeErrorKind::UriError => Builtin::URIError,
+        };
+        match self.new_error(builtin, &[message]) {
+            Ok(value) => Error::Thrown { value },
+            Err(error) => error,
+        }
+    }
+
+    /// Names the Realm's unit for `code`, entering it when the Realm has not
+    /// run this Script before.
+    ///
+    /// A unit is never dropped, so its position is a name a function object of
+    /// an earlier Script still resolves against.
+    fn register_unit(
+        &mut self,
+        code: &Rc<crate::engine::bytecode::BytecodeFunction>,
+    ) -> Result<u32, Error> {
+        let index = if let Some(index) = self
+            .register_code
+            .iter()
+            .position(|state| Rc::ptr_eq(&state.code, code))
+        {
+            index
+        } else {
+            let required = code.functions.len().saturating_add(1);
+            let used = self.register_code.iter().fold(0usize, |used, state| {
+                used.saturating_add(state.vector.vector_count())
+            });
+            if used.saturating_add(required) > self.limits.feedback_vectors {
+                return Err(Error::Limit {
+                    resource: "feedback vectors",
+                });
+            }
+            self.register_code.push(RegisterCodeUnit::new(code));
+            self.register_code.len().saturating_sub(1)
+        };
+        if let Some(state) = self.register_code.get_mut(index) {
+            state.invocations = state.invocations.saturating_add(1);
+        }
+        u32::try_from(index).map_err(|_| Error::Limit {
+            resource: "code units",
+        })
+    }
+
+    /// Runs one lowered Script on the engine.
+    ///
+    /// `discard_completion` says the caller does not read the value, so a
+    /// completion that cannot cross to the embedding is not a failure: the
+    /// Script ran to a defined end, and only its value has no identity outside
+    /// the engine.
+    fn execute_register_program(
+        &mut self,
+        code: &Rc<crate::engine::bytecode::BytecodeFunction>,
+        discard_completion: bool,
+    ) -> Result<Value, Error> {
+        let unit = self.register_unit(code)?;
+        let mut vm = self.register_vm.take().unwrap_or_else(|| {
+            crate::engine::interpreter::RegisterVM::with_limits(
+                self.fuel,
+                self.limits.stack.saturating_add(self.limits.binding_slots),
+                self.limits.stack,
+            )
+        });
+        vm.fuel = self.fuel;
+        vm.set_string_units_limit(self.limits.string_units);
+        vm.set_property_limit(self.limits.properties);
+        vm.set_call_frame_limit(self.limits.call_frames);
+        vm.set_binding_limit(self.limits.binding_slots);
+        let mut agent = match self.register_agent() {
+            Ok(agent) => agent,
+            Err(error) => {
+                self.register_vm = Some(vm);
+                return Err(error);
+            }
+        };
+        // Every unit of the Realm is handed to the run, so a call to a function
+        // of an earlier Script resolves in the table that Script was compiled
+        // into. The code is borrowed separately from the feedback because one
+        // run reads the code of every unit and writes the feedback of the one
+        // it is executing.
+        let roots: Vec<Rc<crate::engine::bytecode::BytecodeFunction>> = self
+            .register_code
+            .iter()
+            .map(|state| Rc::clone(&state.code))
+            .collect();
+        let roots: Vec<&crate::engine::bytecode::BytecodeFunction> =
+            roots.iter().map(Rc::as_ref).collect();
+        let mut vectors: Vec<&mut crate::engine::feedback::FeedbackVector> = self
+            .register_code
+            .iter_mut()
+            .map(|state| &mut state.vector)
+            .collect();
+        let result = vm.run_unit(
+            crate::engine::interpreter::CodeTable::new(&roots),
+            &mut vectors,
+            unit,
+            &[],
+            &mut agent.heap,
+            &agent.realm,
+        );
+        drop(vectors);
+        self.fuel = vm.fuel;
+        let result = match result {
+            Ok(value) => match register_primitive(value, &agent.heap) {
+                Some(value) => Ok(value),
+                None if discard_completion => Ok(Value::Undefined),
+                None => Err(Error::Unsupported {
+                    feature: UNCROSSABLE_OBJECT,
+                }),
+            },
+            Err(crate::engine::interpreter::VMError::Thrown(value, native)) => {
+                Err(self.register_exception(value, native, &agent))
+            }
+            Err(
+                crate::engine::interpreter::VMError::InvalidBytecode(_)
+                | crate::engine::interpreter::VMError::InvalidFeedbackVector
+                | crate::engine::interpreter::VMError::InvalidRegister
+                | crate::engine::interpreter::VMError::TypeError
+                | crate::engine::interpreter::VMError::UnexpectedEnd
+                | crate::engine::interpreter::VMError::Heap(_),
+            ) => Err(Error::InvalidBytecode),
+            Err(crate::engine::interpreter::VMError::Unsupported(feature)) => {
+                Err(Error::Unsupported { feature })
+            }
+            Err(crate::engine::interpreter::VMError::OutOfFuel) => Err(Error::Limit {
+                resource: "execution fuel",
+            }),
+            Err(crate::engine::interpreter::VMError::StackOverflow) => Err(Error::Limit {
+                resource: "operand stack",
+            }),
+            Err(crate::engine::interpreter::VMError::CallStackOverflow) => Err(Error::Limit {
+                resource: "call frames",
+            }),
+            Err(crate::engine::interpreter::VMError::BindingStackOverflow) => Err(Error::Limit {
+                resource: "binding slots",
+            }),
+            Err(crate::engine::interpreter::VMError::StringLimit) => Err(Error::Limit {
+                resource: "string units",
+            }),
+            Err(crate::engine::interpreter::VMError::PropertyLimit) => Err(Error::Limit {
+                resource: "object properties",
+            }),
+        };
+        self.register_vm = Some(vm);
+        self.register_agent = Some(agent);
+        result
+    }
+
+    /// Whether this execution runs `program` on the register engine.
+    ///
+    /// The lowering is produced for every program, but only a realm or an
+    /// executor on [`Backend::Engine`] runs it. Choosing per program would let
+    /// a program depend on which path compiled it.
+    fn uses_register(&self, program: &Program) -> bool {
+        self.backend == Backend::Engine && program.register_code.is_some()
+    }
+
+    fn execute_program_body(&mut self, program: &Program, boundary: usize) -> Result<Value, Error> {
+        self.execute_program_completion(program, boundary, false)
+    }
+
+    fn execute_program_completion(
+        &mut self,
+        program: &Program,
+        boundary: usize,
+        discard_completion: bool,
+    ) -> Result<Value, Error> {
+        match program
+            .register_code
+            .as_ref()
+            .filter(|_| self.uses_register(program))
+        {
+            Some(code) => self.execute_register_program(code, discard_completion),
+            None => self.execute(program, boundary),
+        }
+    }
+
     fn run(&mut self, program: &Program) -> Result<Value, Error> {
         self.stack.clear();
         self.frames.clear();
@@ -367,7 +758,11 @@ impl Execution<'_> {
         self.array_proto = None;
         self.fuel = self.limits.fuel;
         self.owner = Rc::new(());
-        self.binding_slots = program.slots.len();
+        self.binding_slots = if self.uses_register(program) {
+            0
+        } else {
+            program.slots.len()
+        };
         if self.binding_slots > self.limits.binding_slots {
             return Err(Error::Limit {
                 resource: "binding slots",
@@ -378,25 +773,11 @@ impl Execution<'_> {
                 resource: "bytecode instructions",
             });
         }
-        self.frames.push(Frame {
-            code: None,
-            pc: 0,
-            locals: alloc::vec![Binding::Direct(None); program.slots.len()],
-            captures: Vec::new(),
-            base: 0,
-            result: Value::Undefined,
-            callee: Value::Undefined,
-            this_value: Value::Undefined,
-            handlers: Vec::new(),
-            constructing: false,
-            arguments: Vec::new(),
-            enumerations: Vec::new(),
-            async_promise: None,
-            new_target: Value::Undefined,
-            this_cell: None,
-        });
-        self.top_program = Some(Rc::new(program.clone()));
-        let result = self.execute(program, 0).and_then(|value| {
+        if !self.uses_register(program) {
+            self.frames.push(Frame::script(program, 0));
+            self.top_program = Some(Rc::new(program.clone()));
+        }
+        let result = self.execute_program_body(program, 0).and_then(|value| {
             self.native_roots.push(value.clone());
             self.drain_jobs()?;
             Ok(value)
@@ -642,6 +1023,13 @@ impl Execution<'_> {
                     | Op::Define(_)
                     | Op::Accessor(_)
                     | Op::Key
+                    | Op::ObjectBindingStart
+                    | Op::ObjectBindingGet(_)
+                    | Op::ObjectAssignmentGet { .. }
+                    | Op::ObjectBindingRest(_)
+                    | Op::ObjectAssignmentRest { .. }
+                    | Op::ObjectBindingEnd(_)
+                    | Op::KeyBelow
                     | Op::Get(_)
                     | Op::Set(_)
                     | Op::Delete(_)
@@ -677,6 +1065,10 @@ impl Execution<'_> {
                     }
                     Op::IteratorSkip(id) => {
                         self.enumeration_step_value(*id, false)?;
+                    }
+                    Op::IteratorRest(id) => {
+                        let array = self.enumeration_rest(*id)?;
+                        self.push(array)?;
                     }
                     Op::ForInNext(id, end) => {
                         if let Some(key) = self.enumeration_next(*id)? {
@@ -823,14 +1215,24 @@ impl Execution<'_> {
                         pc = self.frames.last().ok_or(Error::InvalidBytecode)?.pc;
                         frame_changed = true;
                     }
-                    Op::Call(_) | Op::CallExpanded => {
-                        let count = if let Op::Call(count) = op {
+                    Op::Call(_) | Op::CallExpanded | Op::Eval(_, _) | Op::EvalExpanded(_) => {
+                        let count = if let Op::Call(count) | Op::Eval(count, _) = op {
                             *count
                         } else {
                             self.expanded_count()?
                         };
                         self.frames.last_mut().ok_or(Error::InvalidBytecode)?.pc = pc;
-                        self.invoke(count, program)?;
+                        let strict_eval = match op {
+                            Op::Eval(_, strict) | Op::EvalExpanded(strict) => Some(*strict),
+                            _ => None,
+                        };
+                        if let Some(strict) = strict_eval
+                            && self.is_direct_eval_callee(count)?
+                        {
+                            self.perform_direct_eval(count, strict)?;
+                        } else {
+                            self.invoke(count, program)?;
+                        }
                         let frame = self.frames.last().ok_or(Error::InvalidBytecode)?;
                         pc = frame.pc;
                         frame_changed = true;
@@ -943,6 +1345,9 @@ impl Execution<'_> {
             self.heap.mark_value(value);
         }
         if let Some(value) = &self.number_constructor_storage {
+            self.heap.mark_value(value);
+        }
+        if let Some(value) = &self.boolean_constructor_storage {
             self.heap.mark_value(value);
         }
         if let Some((integer, float)) = &self.number_parsers {
@@ -1242,6 +1647,42 @@ impl Execution<'_> {
     fn invoke(&mut self, count: usize, program: &Program) -> Result<(), Error> {
         self.invoke_kind(count, program, None)
     }
+
+    fn is_direct_eval_callee(&self, count: usize) -> Result<bool, Error> {
+        let start = self
+            .stack
+            .len()
+            .checked_sub(count.saturating_add(2))
+            .ok_or(Error::InvalidBytecode)?;
+        let callee = self.stack.get(start).ok_or(Error::InvalidBytecode)?;
+        match callee {
+            Value::Function(FunctionValue(Callable::Native(Builtin::Eval))) => Ok(true),
+            Value::Function(FunctionValue(Callable::Host { handle, .. })) => Ok(matches!(
+                self.heap.get(*handle)?,
+                Node::HostFunction {
+                    behavior: crate::heap::HostBehavior::Eval,
+                    ..
+                }
+            )),
+            _ => Ok(false),
+        }
+    }
+
+    fn perform_direct_eval(&mut self, count: usize, strict_caller: bool) -> Result<(), Error> {
+        let start = self
+            .stack
+            .len()
+            .checked_sub(count.saturating_add(2))
+            .ok_or(Error::InvalidBytecode)?;
+        let input = self
+            .stack
+            .get(start.saturating_add(2))
+            .cloned()
+            .unwrap_or(Value::Undefined);
+        let result = self.eval_source(&input, strict_caller)?;
+        self.stack.truncate(start);
+        self.push(result)
+    }
     #[expect(
         clippy::too_many_lines,
         reason = "single call dispatch handles forwarding and frame initialization without recursive forwarding"
@@ -1507,6 +1948,10 @@ impl Execution<'_> {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "dispatch table for all native builtins"
+    )]
     fn native_call(
         &mut self,
         builtin: Builtin,
@@ -1516,7 +1961,22 @@ impl Execution<'_> {
         if let Some(value) = self.timer_call(builtin, receiver, args)? {
             return Ok(value);
         }
-        if matches!(builtin, Builtin::ReflectApply | Builtin::ReflectConstruct) {
+        if matches!(
+            builtin,
+            Builtin::ReflectApply
+                | Builtin::ReflectConstruct
+                | Builtin::ReflectGet
+                | Builtin::ReflectSet
+                | Builtin::ReflectHas
+                | Builtin::ReflectDeleteProperty
+                | Builtin::ReflectGetPrototypeOf
+                | Builtin::ReflectSetPrototypeOf
+                | Builtin::ReflectIsExtensible
+                | Builtin::ReflectPreventExtensions
+                | Builtin::ReflectGetOwnPropertyDescriptor
+                | Builtin::ReflectDefineProperty
+                | Builtin::ReflectOwnKeys
+        ) {
             return self.reflect_call(builtin, args);
         }
         if builtin == Builtin::FunctionHasInstance {
@@ -1557,6 +2017,9 @@ impl Execution<'_> {
                 &Value::Function(FunctionValue::native(Builtin::Function)),
             );
         }
+        if builtin == Builtin::Eval {
+            return self.eval_source(args.first().unwrap_or(&Value::Undefined), false);
+        }
         if let Some(value) = self.string_call(builtin, receiver, args)? {
             return Ok(value);
         }
@@ -1582,6 +2045,15 @@ impl Execution<'_> {
             }
             Builtin::MathMax | Builtin::MathMin => return self.math_extreme(builtin, args),
             Builtin::MathPow => return self.math_pow(args),
+            Builtin::MathAbs => return self.math_unary(args, f64::abs),
+            Builtin::MathFloor => return self.math_unary(args, Self::math_floor_val),
+            Builtin::MathCeil => return self.math_unary(args, Self::math_ceil_val),
+            Builtin::MathRound => return self.math_round(args),
+            Builtin::MathTrunc => return self.math_unary(args, Self::math_trunc_val),
+            Builtin::MathSqrt => return self.math_unary(args, Self::math_sqrt_val),
+            Builtin::MathSign => return self.math_sign(args),
+            Builtin::MathSin => return self.math_unary(args, audhsos_math::sin),
+            Builtin::MathClz32 => return Ok(Self::math_clz32(args)),
             Builtin::String if !args.is_empty() => {
                 return Ok(Value::String(self.string_units(&first)?));
             }

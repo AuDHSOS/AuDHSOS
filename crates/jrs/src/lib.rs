@@ -8,6 +8,8 @@
 extern crate alloc;
 
 mod bytecode;
+/// State-of-the-Art Pure ECMAScript Engine Core.
+pub mod engine;
 mod error;
 mod event;
 mod heap;
@@ -28,7 +30,7 @@ pub use bytecode::{Script, compile_script};
 pub use error::Error;
 pub use symbol::SymbolValue;
 pub use value::{FunctionValue, ObjectValue, Value};
-pub use vm::{Host, Realm, Runtime, SilentHost};
+pub use vm::{Backend, Host, Realm, Runtime, SilentHost};
 
 /// Explicit limits for untrusted source and execution.
 ///
@@ -52,6 +54,8 @@ pub struct Limits {
     pub string_units: usize,
     /// Maximum live binding cells and function objects in the tracing heap.
     pub heap_entries: usize,
+    /// Maximum compiled functions with Agent-local execution feedback.
+    pub feedback_vectors: usize,
     /// Maximum simultaneously active JavaScript calls (not Rust recursion).
     pub call_frames: usize,
     /// Maximum binding slots across all active call frames, including the script.
@@ -75,6 +79,7 @@ impl Default for Limits {
             stack: 4096,
             string_units: 1_048_576,
             heap_entries: 65_536,
+            feedback_vectors: 65_536,
             call_frames: 1024,
             binding_slots: 65_536,
             properties: 65_536,

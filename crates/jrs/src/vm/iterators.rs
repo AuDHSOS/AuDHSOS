@@ -395,7 +395,13 @@ impl Execution<'_> {
         }
     }
 }
-pub(super) const fn language_error(error: &Error) -> bool {
+pub(super) fn language_error(error: &Error) -> bool {
+    if let Error::Unsupported { feature } = error {
+        // A value of the engine that cannot cross to the embedding is the one
+        // unsupported feature that leaves the Realm usable: the Script reached
+        // a defined end, and only its value is missing.
+        return *feature == super::UNCROSSABLE_OBJECT;
+    }
     matches!(
         error,
         Error::Thrown { .. }
@@ -403,6 +409,7 @@ pub(super) const fn language_error(error: &Error) -> bool {
             | Error::Range { .. }
             | Error::Reference { .. }
             | Error::Syntax { .. }
+            | Error::UnverifiedSyntax { .. }
     )
 }
 #[cfg(test)]

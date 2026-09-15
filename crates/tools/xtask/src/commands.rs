@@ -3,6 +3,7 @@
 
 //! The subcommands.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -2411,6 +2412,7 @@ pub(crate) fn fuzz(root: &Path, options: &[String]) -> Result<(), Error> {
         match option.as_str() {
             "--target" => selected = iter.next().cloned(),
             "--regression" => mode = Job::Regression,
+            "--compact" => mode = Job::Compact,
             "--merge" => {
                 let from = iter.next().cloned().ok_or_else(|| {
                     Error::Usage("--merge needs a directory to fold in".to_owned())
@@ -2455,6 +2457,7 @@ pub(crate) fn fuzz(root: &Path, options: &[String]) -> Result<(), Error> {
             Job::Fuzz => run_fuzzer(root, target.name, seconds)?,
             Job::Regression => {}
             Job::Merge(from) => merge_corpus(root, target.name, from)?,
+            Job::Compact => compact_corpus(root, target.name)?,
             Job::Minimize(file) => minimize_crash(root, target.name, file, seconds)?,
         }
     }
@@ -2470,6 +2473,8 @@ enum Job {
     /// Fold a directory into the stored corpus, keeping what adds
     /// coverage.
     Merge(String),
+    /// Fold the stored corpus back to a minimal cover of what it reaches.
+    Compact,
     /// Shrink one crashing input.
     Minimize(String),
 }
@@ -2506,6 +2511,62 @@ fn merge_corpus(root: &Path, name: &str, from: &str) -> Result<(), Error> {
         .run()
 }
 
+/// Folds the corpus of `name` back to a minimal cover of what it reaches.
+///
+/// Fuzzing writes a file for every input that reaches something the run had
+/// not reached as cheaply, and a run that reads a part of the corpus calls
+/// some of them new that another part already covers. A merge into an empty
+/// directory answers which files a minimal cover needs; the rest are deleted,
+/// except the ones a person named, which are the regression inputs this
+/// project tracks and never the hexadecimal names a find gets.
+fn compact_corpus(root: &Path, name: &str) -> Result<(), Error> {
+    let corpus = corpus_of(root, name);
+    let cover = corpus.with_extension("cover");
+    let _ = std::fs::remove_dir_all(&cover);
+    std::fs::create_dir_all(&cover)
+        .map_err(|source| Error::io(format!("creating {}", cover.display()), source))?;
+    note!("compacting the corpus of `{name}`");
+    Cmd::cargo()
+        .cwd(&root.join("fuzz"))
+        .args([
+            "run",
+            "--release",
+            "--bin",
+            name,
+            "--",
+            "-merge=1",
+            &cover.display().to_string(),
+            &corpus.display().to_string(),
+        ])
+        .env("RUSTFLAGS", FUZZING_FLAGS)
+        .run()?;
+    let kept: BTreeSet<String> = fs::walk_files(&cover)?
+        .iter()
+        .map(|file| fs::file_name(file).to_owned())
+        .collect();
+    let mut removed = 0usize;
+    for file in fs::walk_files(&corpus)? {
+        let found = fs::file_name(&file);
+        if is_found_name(found) && !kept.contains(found) {
+            std::fs::remove_file(&file)
+                .map_err(|source| Error::io(format!("deleting {}", file.display()), source))?;
+            removed = removed.saturating_add(1);
+        }
+    }
+    let _ = std::fs::remove_dir_all(&cover);
+    note!(
+        "`{name}`: {removed} redundant inputs removed, {} kept",
+        kept.len()
+    );
+    Ok(())
+}
+
+/// Whether `name` is the hexadecimal name a find gets rather than the name a
+/// person gave a regression input.
+fn is_found_name(name: &str) -> bool {
+    matches!(name.len(), 32 | 40) && name.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 /// Shrinks one crashing input of a target, for at most `seconds`.
 fn minimize_crash(root: &Path, name: &str, file: &str, seconds: u64) -> Result<(), Error> {
     note!("shrinking {file} against `{name}` for {seconds} seconds");
@@ -2525,30 +2586,55 @@ fn minimize_crash(root: &Path, name: &str, file: &str, seconds: u64) -> Result<(
         .run()
 }
 
-/// Runs the fuzzer of one target for `seconds` seconds.
+/// Runs the fuzzer of one target for `seconds` seconds, on every core.
+///
+/// One process is started, and it starts one worker per core itself. That
+/// process is the orchestrator: it reads the corpus once, keeps the pool,
+/// and hands its workers seeds to change. Every worker reading the whole
+/// corpus was what this used to do, and on a corpus of some thousand inputs
+/// of a slow target it spent the greater part of the run computing the same
+/// answer on every core.
 fn run_fuzzer(root: &Path, name: &str, seconds: u64) -> Result<(), Error> {
-    note!("fuzzing `{name}` for {seconds} seconds");
-    Cmd::cargo()
-        .cwd(&root.join("fuzz"))
-        .args([
-            "run",
-            "--release",
-            "--bin",
-            name,
-            "--",
-            &corpus_of(root, name).display().to_string(),
-            &format!("-max_total_time={seconds}"),
-        ])
-        .env("RUSTFLAGS", FUZZING_FLAGS)
+    let jobs = test_jobs()?;
+    note!("fuzzing `{name}` for {seconds} seconds on {jobs} workers");
+    let fuzz = root.join("fuzz");
+    let executables = artifacts::build(
+        Cmd::cargo()
+            .cwd(&fuzz)
+            .args(["build", "--release", "--bin", name])
+            .env("RUSTFLAGS", FUZZING_FLAGS),
+    )?;
+    let executable = executables
+        .iter()
+        .find(|exe| exe.name == name && !exe.test)
+        .ok_or_else(|| Error::Parse(format!("Cargo reported no executable for `{name}`")))?;
+    let corpus = corpus_of(root, name).display().to_string();
+    // The seed must differ between two runs of the whole command, and it
+    // must not be zero, which the engine reads as none.
+    let seed = u64::from(std::process::id()).wrapping_mul(0x9E37_79B9) | 1;
+    executable
+        .command()
+        .cwd(&fuzz)
+        .arg(&corpus)
+        .arg(format!("-max_total_time={seconds}"))
+        .arg(format!("-workers={jobs}"))
+        .arg(format!("-seed={seed}"))
         .run()
 }
 
 /// Builds selected regression binaries once, then replays their corpora
 /// concurrently. Targets without a corpus directory are reported and skipped.
+///
+/// The replay is the longest step of `check`, and one corpus is far larger
+/// than the rest: it is split over as many shards as there are jobs, so the
+/// machine replays it instead of one core of it. The binaries are built in
+/// release, because a replay has to reach the panics of a target, not the
+/// speed of a debug build.
 fn replay_corpora(root: &Path, targets: &[&FuzzTarget]) -> Result<(), Error> {
     let jobs = test_jobs()?;
+    let fuzz = root.join("fuzz");
     let mut selected = Vec::new();
-    let mut build = Cmd::cargo().cwd(&root.join("fuzz")).arg("build");
+    let mut build = Cmd::cargo().cwd(&fuzz).args(["build", "--release"]);
     for target in targets {
         let corpus = corpus_of(root, target.name);
         if corpus.is_dir() {
@@ -2568,14 +2654,32 @@ fn replay_corpora(root: &Path, targets: &[&FuzzTarget]) -> Result<(), Error> {
             .iter()
             .find(|exe| exe.name == name && !exe.test)
             .ok_or_else(|| Error::Parse(format!("Cargo reported no executable for `{name}`")))?;
-        commands.push(
-            executable
-                .command()
-                .cwd(&root.join("fuzz"))
-                .arg(corpus.display().to_string()),
-        );
+        for shard in corpus_shards(&fs::walk_files(&corpus)?, jobs) {
+            let paths = shard.iter().map(|path| {
+                path.strip_prefix(&fuzz)
+                    .unwrap_or(path)
+                    .display()
+                    .to_string()
+            });
+            commands.push(executable.command().cwd(&fuzz).args(paths));
+        }
     }
     run_parallel(&commands, jobs)
+}
+
+/// Deals `files` round robin into at most `jobs` shards.
+///
+/// Round robin rather than in blocks, because the corpus is named by content
+/// hash and a slow neighbourhood of it is no more spread out than any other.
+/// A corpus with fewer files than jobs gets one shard per file, and an empty
+/// one gets no shard at all. The paths stay relative to the directory the
+/// replay runs in, which keeps a shard of some thousand of them far inside
+/// the argument limit of one command.
+fn corpus_shards(files: &[PathBuf], jobs: usize) -> Vec<Vec<PathBuf>> {
+    let count = jobs.max(1).min(files.len());
+    (0..count)
+        .map(|shard| files.iter().skip(shard).step_by(count).cloned().collect())
+        .collect()
 }
 
 /// The corpus directory of one target.

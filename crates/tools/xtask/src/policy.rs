@@ -1188,6 +1188,9 @@ pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
     },
     FuzzTarget { name: "regex_nfa" },
     FuzzTarget { name: "regex_bt" },
+    FuzzTarget {
+        name: "jrs_backend",
+    },
     FuzzTarget { name: "jrs_source" },
     FuzzTarget { name: "json_codec" },
     FuzzTarget { name: "math_pow" },

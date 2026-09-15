@@ -61,6 +61,35 @@ fn nested_errors_unwind_once_and_keep_prior_script_effects() -> Result<(), Error
     }
     Ok(())
 }
+
+#[test]
+fn eval_strictness_directness_and_early_error_phase() -> Result<(), Error> {
+    for source in [
+        // A strict direct eval rejects the complete source before its first
+        // assignment can run, including errors nested in function code.
+        "let n=0;function f(){'use strict';try{eval('n=1;var arguments')}catch(e){return e instanceof SyntaxError&&n===0}}f()",
+        "let n=0;function f(){'use strict';try{eval('n=1;function g(){eval=2}')}catch(e){return e instanceof SyntaxError&&n===0}}f()",
+        // Eval source can make itself strict independently of its caller.
+        "let n=0;try{eval(\"'use strict';n=1;arguments=2\")}catch(e){n=e instanceof SyntaxError?0:2}n===0",
+        // An alias is indirect eval and does not inherit caller strictness.
+        "let e=eval;function f(){'use strict';return e('var arguments;arguments=42;arguments')}f()===42",
+        "function f(){'use strict';return (0,eval)('var arguments;arguments=42;arguments')}f()===42",
+        "function f(){'use strict';return globalThis.eval('var arguments;arguments=42;arguments')}f()===42",
+        // Syntactic eval calls are direct only when the resolved value is the
+        // realm's eval function.
+        "function f(){'use strict';try{(eval)('arguments=1')}catch(e){return e instanceof SyntaxError}}f()",
+        "function f(){'use strict';try{eval(...['arguments=1'])}catch(e){return e instanceof SyntaxError}}f()",
+        "function f(eval){return eval('value')}f(value=>value)==='value'",
+        "let original=eval;eval=value=>value;eval('value')==='value'",
+        // PerformEval returns a non-String input without ToString side effects.
+        "let n=0,o={toString(){n++;return '7'}};eval(o)===o&&n===0",
+    ] {
+        let mut host = SilentHost;
+        let mut r = realm(&mut host, Limits::default())?;
+        assert_eq!(r.evaluate(source)?, Value::Boolean(true), "{source}");
+    }
+    Ok(())
+}
 #[test]
 fn nested_scripts_preserve_stack_roots_and_do_not_drain_jobs_early() -> Result<(), Error> {
     for source in [

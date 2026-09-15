@@ -18,7 +18,7 @@ use std::process::ExitCode;
 
 use crate::engine::{name_of, outran, run, tick};
 
-use super::{GLOBALS, region_at, register_counters, scratch_path};
+use super::{GLOBALS, bump, register_counters, scratch_path};
 
 /// How many counters the body below writes into.
 const COUNTERS: usize = 32;
@@ -102,12 +102,11 @@ fn line(words: &[&str]) -> Vec<OsString> {
 /// panics on the one input that is meant to be a find.
 fn body(address: usize) -> impl FnMut(&[u8]) {
     move |input: &[u8]| {
-        // SAFETY: the caller holds `GLOBALS`, and the engine is not inside
-        // `crate::counters` while the body runs.
-        let region = unsafe { region_at(address, COUNTERS) };
-        let first = input.first().copied().unwrap_or(0);
-        let slot = usize::from(first) % COUNTERS;
-        region[slot] = region[slot].saturating_add(1);
+        bump(
+            address,
+            COUNTERS,
+            usize::from(input.first().copied().unwrap_or(0)),
+        );
         assert!(input != b"BOOM", "the input the test is looking for");
     }
 }
@@ -237,9 +236,7 @@ fn a_shrink_makes_a_crashing_input_smaller_and_writes_it_out() {
     let scratch = Scratch::new("minimize");
     let file = scratch.write("big", b"\x07padding-padding-padding");
     let mut target = move |input: &[u8]| {
-        // SAFETY: as in `body`.
-        let region = unsafe { region_at(address, COUNTERS) };
-        region[0] = region[0].saturating_add(1);
+        bump(address, COUNTERS, 0);
         assert!(
             input.first() != Some(&7),
             "every input that starts with seven"
@@ -510,10 +507,11 @@ fn a_run_that_keeps_the_value_profile_still_finds_what_it_reaches() {
     let scratch = Scratch::new("value-profile");
     scratch.write("seed", b"\x05seed");
     let mut target = move |input: &[u8]| {
-        // SAFETY: as in `body`.
-        let region = unsafe { region_at(address, COUNTERS) };
-        let slot = usize::from(input.first().copied().unwrap_or(0)) % COUNTERS;
-        region[slot] = region[slot].saturating_add(1);
+        bump(
+            address,
+            COUNTERS,
+            usize::from(input.first().copied().unwrap_or(0)),
+        );
         let mut sum = 0u32;
         for byte in input {
             if *byte == 0x42 {

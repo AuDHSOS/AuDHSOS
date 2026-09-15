@@ -158,3 +158,63 @@ fn exceptional_matrix_and_small_integer_fast_path() {
         }
     }
 }
+
+#[test]
+fn sine_special_values_quadrants_and_signed_zero() {
+    assert!(sin(f64::NAN).is_nan());
+    assert!(sin(f64::INFINITY).is_nan());
+    assert!(sin(f64::NEG_INFINITY).is_nan());
+    assert_eq!(sin(0.0).to_bits(), 0.0f64.to_bits());
+    assert_eq!(sin(-0.0).to_bits(), (-0.0f64).to_bits());
+    for (value, expected) in [
+        (core::f64::consts::FRAC_PI_6, 0.5),
+        (core::f64::consts::FRAC_PI_2, 1.0),
+        (core::f64::consts::PI, 0.0),
+        (3.0 * core::f64::consts::FRAC_PI_2, -1.0),
+        (2.0 * core::f64::consts::PI, 0.0),
+    ] {
+        let actual = sin(value);
+        assert!(
+            (actual - expected).abs() <= 3.0e-16,
+            "sin({value}) = {actual}"
+        );
+        assert_eq!(sin(-value).to_bits(), (-actual).to_bits());
+    }
+}
+
+#[test]
+fn sine_reduction_paths_agree_with_host_math() {
+    for value in [
+        262_143.999_999_999_97,
+        262_144.0,
+        262_144.000_000_000_06,
+        1.0e20,
+        -1.0e20,
+        1.0e100,
+        -1.0e100,
+        f64::MAX,
+        -f64::MAX,
+    ] {
+        let actual = sin(value);
+        let expected = value.sin();
+        assert!(
+            (actual - expected).abs() <= 2.0e-15,
+            "sin({value:?}) = {actual:?}, expected {expected:?}"
+        );
+    }
+
+    let mut seed = 0x5349_4e45_u64;
+    for _ in 0..20_000 {
+        seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+        let value = f64::from_bits(seed & 0x7fff_ffff_ffff_ffff);
+        if !value.is_finite() {
+            continue;
+        }
+        let actual = sin(value);
+        let expected = value.sin();
+        assert!(
+            (actual - expected).abs() <= 2.0e-15,
+            "sin({value:?}) = {actual:?}, expected {expected:?}"
+        );
+    }
+}

@@ -290,6 +290,7 @@ impl Execution<'_> {
                         | Builtin::Promise
                         | Builtin::RegExp
                         | Builtin::WeakMap
+                        | Builtin::Proxy
                 ) || super::errors::error_name(*kind).is_some()
             }
             _ => false,
@@ -515,6 +516,26 @@ impl Execution<'_> {
             Builtin::Event | Builtin::CustomEvent | Builtin::EventTarget
         ) {
             return self.construct_event(kind, args, target);
+        }
+        if kind == Builtin::Eval {
+            return Err(Error::Type {
+                message: "eval is not a constructor",
+            });
+        }
+        if kind == Builtin::Proxy {
+            let target_arg = args.first().unwrap_or(&Value::Undefined);
+            let handler_arg = args.get(1).unwrap_or(&Value::Undefined);
+            if !matches!(target_arg, Value::Object(_) | Value::Function(_)) {
+                return Err(Error::Type {
+                    message: "Proxy target must be an object",
+                });
+            }
+            if !matches!(handler_arg, Value::Object(_) | Value::Function(_)) {
+                return Err(Error::Type {
+                    message: "Proxy handler must be an object",
+                });
+            }
+            return Ok(target_arg.clone());
         }
         if kind == Builtin::Object
             && target.strictly_equals(&Value::Function(FunctionValue::native(Builtin::Object)))

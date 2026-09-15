@@ -23,12 +23,8 @@
 
 use std::path::PathBuf;
 
+use crate::cover::{Cover, FEATURE_SLOTS, slot_of};
 use crate::rng::Rng;
-
-/// How many features the ownership table tells apart. A feature beyond
-/// this many shares a slot with an older one, which costs coverage and
-/// never correctness.
-const FEATURE_SLOTS: usize = 1 << 21;
 
 /// One input the run keeps.
 #[derive(Clone, Debug)]
@@ -77,6 +73,9 @@ pub struct Pool {
     weights: Vec<u64>,
     /// How many features the pool covers.
     covered: usize,
+    /// The files of the inputs that stopped reaching anything, which the
+    /// run takes to delete them.
+    retired: Vec<PathBuf>,
 }
 
 impl Default for Pool {
@@ -94,6 +93,7 @@ impl Pool {
             slots: vec![Owned::default(); FEATURE_SLOTS].into_boxed_slice(),
             weights: Vec::new(),
             covered: 0,
+            retired: Vec::new(),
         }
     }
 
@@ -134,6 +134,19 @@ impl Pool {
     #[must_use]
     pub fn all(&self) -> &[Input] {
         &self.inputs
+    }
+
+    /// What the pool has reached, as one size per feature, for a worker
+    /// to filter its runs against.
+    #[must_use]
+    pub fn cover(&self) -> Cover {
+        let mut cover = Cover::new();
+        for (slot, held) in self.slots.iter().enumerate() {
+            if held.smallest != 0 {
+                cover.claim(u32::try_from(slot).unwrap_or(0), held.smallest, false);
+            }
+        }
+        cover
     }
 
     /// Whether `feature` is reached by an input no larger than `size`.
@@ -226,15 +239,29 @@ impl Pool {
 
     /// Takes one feature away from the input in `index`, dropping it if
     /// that was its last.
+    ///
+    /// An input that owns no feature reaches nothing another input of this
+    /// pool does not reach as cheaply, so the file it came from is redundant
+    /// and is offered to the run to delete. Every feature it had is owned by
+    /// an input this pool holds, and every one of those is a file of the same
+    /// corpus, so nothing the corpus reaches is lost with it.
     fn release(&mut self, index: usize) {
         let Some(input) = self.inputs.get_mut(index) else {
             return;
         };
         input.features = input.features.saturating_sub(1);
-        if input.features == 0 {
-            input.bytes = Vec::new();
-            input.live = false;
+        if input.features != 0 {
+            return;
         }
+        input.bytes = Vec::new();
+        input.live = false;
+        let file = input.file.take();
+        self.retired.extend(file);
+    }
+
+    /// Takes the files of the inputs that stopped reaching anything.
+    pub fn take_retired(&mut self) -> Vec<PathBuf> {
+        core::mem::take(&mut self.retired)
     }
 
     /// Rebuilds the running sum the draw reads.
@@ -283,9 +310,4 @@ enum Claim {
     TakenOver,
     /// Something reaches it in no more bytes.
     Refused,
-}
-
-/// The slot of the ownership table that `feature` uses.
-fn slot_of(feature: u32) -> usize {
-    usize::try_from(feature).unwrap_or(0) % FEATURE_SLOTS
 }

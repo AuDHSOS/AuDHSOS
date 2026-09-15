@@ -6,6 +6,104 @@ use crate::{Error, Value, bytecode::Builtin, heap::HostBehavior, object::Propert
 use alloc::string::String;
 
 impl Execution<'_> {
+    #[expect(
+        clippy::as_conversions,
+        clippy::arithmetic_side_effects,
+        reason = "IEEE 754 bit-level float truncation"
+    )]
+    pub(super) fn math_trunc_val(n: f64) -> f64 {
+        if n.is_nan() || n.is_infinite() || n == 0.0 {
+            return n;
+        }
+        let bits = n.to_bits();
+        let exponent = ((bits >> 52) & 0x7ff) as i32 - 1023;
+        if exponent < 0 {
+            if n.is_sign_negative() { -0.0 } else { 0.0 }
+        } else if exponent >= 52 {
+            n
+        } else {
+            let shift = 52 - exponent;
+            let mask = !((1u64 << shift) - 1);
+            f64::from_bits(bits & mask)
+        }
+    }
+
+    #[expect(clippy::float_cmp, reason = "ECMAScript exact integer check")]
+    pub(super) fn math_floor_val(n: f64) -> f64 {
+        let trunc = Self::math_trunc_val(n);
+        if n < 0.0 && trunc != n {
+            trunc - 1.0
+        } else {
+            trunc
+        }
+    }
+
+    #[expect(clippy::float_cmp, reason = "ECMAScript exact integer check")]
+    pub(super) fn math_ceil_val(n: f64) -> f64 {
+        let trunc = Self::math_trunc_val(n);
+        if n > 0.0 && trunc != n {
+            trunc + 1.0
+        } else {
+            trunc
+        }
+    }
+
+    pub(super) fn math_sqrt_val(n: f64) -> f64 {
+        if n.is_nan() || n == 0.0 {
+            return n;
+        }
+        if n < 0.0 {
+            return f64::NAN;
+        }
+        if n.is_infinite() {
+            return f64::INFINITY;
+        }
+        // Using audhsos_math::pow with exponent 0.5 for sqrt!
+        audhsos_math::pow(n, 0.5)
+    }
+
+    pub(super) fn math_unary(
+        &mut self,
+        args: &[Value],
+        f: impl FnOnce(f64) -> f64,
+    ) -> Result<Value, Error> {
+        let n = self.numeric(args.first().unwrap_or(&Value::Undefined))?;
+        Ok(Value::Number(f(n)))
+    }
+
+    pub(super) fn math_round(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let n = self.numeric(args.first().unwrap_or(&Value::Undefined))?;
+        if n.is_nan() || n.is_infinite() || n == 0.0 {
+            return Ok(Value::Number(n));
+        }
+        if (-0.5..=0.0).contains(&n) {
+            return Ok(Value::Number(-0.0));
+        }
+        if n > 0.0 && n < 0.5 {
+            return Ok(Value::Number(0.0));
+        }
+        let floor = Self::math_floor_val(n);
+        let diff = n - floor;
+        if diff < 0.5 {
+            Ok(Value::Number(floor))
+        } else {
+            Ok(Value::Number(floor + 1.0))
+        }
+    }
+
+    pub(super) fn math_sign(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let n = self.numeric(args.first().unwrap_or(&Value::Undefined))?;
+        if n.is_nan() || n == 0.0 {
+            return Ok(Value::Number(n));
+        }
+        Ok(Value::Number(if n > 0.0 { 1.0 } else { -1.0 }))
+    }
+
+    pub(super) fn math_clz32(args: &[Value]) -> Value {
+        let n = args.first().unwrap_or(&Value::Undefined).to_uint32();
+        Value::Number(f64::from(n.leading_zeros()))
+    }
+
     pub(super) fn math_pow(&mut self, args: &[Value]) -> Result<Value, Error> {
         let roots = self.native_roots.len();
         self.native_roots.extend_from_slice(args);

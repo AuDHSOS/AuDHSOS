@@ -203,6 +203,9 @@ impl Lexer<'_> {
             message,
         }
     }
+    const fn unsupported(feature: &'static str) -> Error {
+        Error::Unsupported { feature }
+    }
     fn skip(&mut self) -> Result<bool, Error> {
         let mut newline = false;
         loop {
@@ -276,7 +279,13 @@ impl Lexer<'_> {
                 return Ok(Kind::Punct(punct));
             }
         }
-        Err(self.error("unsupported or invalid source character"))
+        if ch == '#' && self.rest().chars().nth(1).is_some_and(identifier_start) {
+            Err(Self::unsupported("private identifiers"))
+        } else if ch == '\\' || !ch.is_ascii() {
+            Err(Self::unsupported("Unicode identifiers"))
+        } else {
+            Err(self.error("invalid source character"))
+        }
     }
 
     fn digits(&mut self, radix: u32) -> Result<String, Error> {
@@ -308,6 +317,11 @@ impl Lexer<'_> {
                 let digits = self.digits(radix)?;
                 let value = radix_number(&digits, radix)
                     .ok_or_else(|| self.error("expected radix digits"))?;
+                if self.peek() == Some('n') {
+                    self.bump();
+                    self.number_end()?;
+                    return Err(Self::unsupported("BigInt literals"));
+                }
                 self.number_end()?;
                 return Ok(Kind::Literal(Value::Number(value)));
             }
@@ -321,14 +335,17 @@ impl Lexer<'_> {
                     .get(start..self.at)
                     .is_some_and(|s| s.contains('_')))
         {
-            return Err(self.error("legacy leading-zero numeric literals are not supported"));
+            return Err(Self::unsupported("legacy numeric literals"));
         }
+        let mut integer = true;
         if self.peek() == Some('.') {
+            integer = false;
             self.bump();
             text.push('.');
             text.push_str(&self.digits(10)?);
         }
         if matches!(self.peek(), Some('e' | 'E')) {
+            integer = false;
             self.bump();
             text.push('e');
             if let Some(sign @ ('+' | '-')) = self.peek() {
@@ -340,6 +357,11 @@ impl Lexer<'_> {
                 return Err(self.error("missing exponent digits"));
             }
             text.push_str(&digits);
+        }
+        if integer && self.peek() == Some('n') {
+            self.bump();
+            self.number_end()?;
+            return Err(Self::unsupported("BigInt literals"));
         }
         self.number_end()?;
         text.parse::<f64>()
@@ -424,7 +446,9 @@ impl Lexer<'_> {
                     'f' => '\u{c}',
                     'v' => '\u{b}',
                     '0' if !self.peek().is_some_and(|c| c.is_ascii_digit()) => '\0',
-                    '0'..='9' => return Err(self.error("legacy numeric escape is not supported")),
+                    '0'..='9' => {
+                        return Err(Self::unsupported("legacy numeric string escapes"));
+                    }
                     'u' | 'x' => {
                         let code = if ch == 'u' && self.peek() == Some('{') {
                             self.bump();

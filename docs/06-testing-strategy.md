@@ -1753,6 +1753,37 @@ done until every applicable item has a test. Items are added, never removed.
   function of three numbers and not the body of the watchdog thread, so its
   coverage does not depend on whether that thread woke before the process
   ended.
+- The coverage table (D-147): a feature nothing reached is claimed and is
+  then covered at that size and above; a larger input never takes one
+  over; a smaller one takes it over only where the run shrinks; a feature
+  past the table shares the slot it wraps onto; a table survives the wire,
+  and one cut short leaves the slots past it where they were.
+- The protocol (D-147): every message of either side survives the wire; a
+  kind neither side writes, a pipe that ended in the middle of a message
+  at every cut, and a length no message has are each refused rather than
+  allocated; a draw the worker holds already costs its place and not its
+  bytes.
+- The flags of a fleet (D-147): `-workers` is read as it was written, so
+  `-1` is as many as there can be; the fleet is never larger than the
+  machine has cores, and one asked for every core and one asked for more
+  than there are get the same; `-fuzz_worker` selects the worker mode and
+  only where it is on.
+- A worker (D-147): it runs the corpus files it was dealt and reports what
+  they reached, passing over a number no file has and a file that is gone;
+  it keeps nothing a full coverage table already holds; it mutates the
+  draws it is given; it reports a corpus file that panics and an input it
+  made that panics, and stops on either; it ends when the pipe ends, when
+  the pipe carries nonsense, and at the end of the time the run was given.
+- The orchestrator (D-147): the corpus is dealt round robin and read once;
+  every worker is handed the coverage table before it fuzzes; a find of a
+  worker is written into the corpus and drawn from again, one the pool
+  refuses is not written, and a smaller one takes the features over; a
+  crash reported while loading and one reported while fuzzing both end the
+  run and write the input out; a worker that ends early, a fleet that says
+  nothing at all, and a worker whose pipe will not take anything are each
+  survived; the length limit grows and the run pulses as the runs add up;
+  the run ends on the clock as well as on the count; a fleet of processes
+  is started from this program and ended with it.
 - Symbol table: an address inside a function, at its first byte, at its
   last byte, and one past it; an address in no function; a symbol that is
   not a function; the narrowest of two functions that enclose each other;

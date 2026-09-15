@@ -1,0 +1,1 @@
+function f(){throw 7}let x=0;try{f()}catch(e){x=e}x

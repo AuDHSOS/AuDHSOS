@@ -12,7 +12,7 @@ use crate::{
     object::{Object, Property, same_value},
     value::{Callable, FunctionValue},
 };
-use alloc::{rc::Rc, string::String};
+use alloc::{rc::Rc, string::String, vec::Vec};
 
 impl Execution<'_> {
     pub(super) fn constructor_storage(&mut self, value: &Value) -> Result<Value, Error> {
@@ -33,6 +33,11 @@ impl Execution<'_> {
             Value::Function(FunctionValue(Callable::Native(Builtin::Number)))
         ) {
             self.number_constructor()
+        } else if matches!(
+            value,
+            Value::Function(FunctionValue(Callable::Native(Builtin::Boolean)))
+        ) {
+            self.boolean_constructor()
         } else {
             self.object_constructor()
         }
@@ -120,13 +125,30 @@ impl Execution<'_> {
                 ..Property::data(pow)
             },
         )?;
-        for (name, builtin) in [("max", Builtin::MathMax), ("min", Builtin::MathMin)] {
+        for (name, builtin, length) in [
+            ("max", Builtin::MathMax, 2),
+            ("min", Builtin::MathMin, 2),
+            ("abs", Builtin::MathAbs, 1),
+            ("floor", Builtin::MathFloor, 1),
+            ("ceil", Builtin::MathCeil, 1),
+            ("round", Builtin::MathRound, 1),
+            ("trunc", Builtin::MathTrunc, 1),
+            ("sqrt", Builtin::MathSqrt, 1),
+            ("sign", Builtin::MathSign, 1),
+            ("sin", Builtin::MathSin, 1),
+            ("clz32", Builtin::MathClz32, 1),
+        ] {
+            let f = self.new_host_behavior(
+                crate::heap::HostBehavior::Intrinsic(builtin),
+                name,
+                length,
+            )?;
             self.define(
                 &value,
                 Value::string(name).units(),
                 Property {
                     enumerable: false,
-                    ..Property::data(native(builtin))
+                    ..Property::data(f)
                 },
             )?;
         }
@@ -159,7 +181,7 @@ impl Execution<'_> {
             Error::Type { .. } => Builtin::TypeError,
             Error::Reference { .. } => Builtin::ReferenceError,
             Error::Range { .. } => Builtin::RangeError,
-            Error::Syntax { .. } => Builtin::SyntaxError,
+            Error::Syntax { .. } | Error::UnverifiedSyntax { .. } => Builtin::SyntaxError,
             _ => Builtin::Error,
         };
         self.new_error(kind, &[Value::string(&alloc::format!("{error}"))])
@@ -176,6 +198,11 @@ impl Execution<'_> {
                 Value::Function(FunctionValue(Callable::Native(Builtin::RegExp)))
             ) {
                 &self.regexp_constructor_storage
+            } else if matches!(
+                value,
+                Value::Function(FunctionValue(Callable::Native(Builtin::Boolean)))
+            ) {
+                &self.boolean_constructor_storage
             } else if matches!(
                 value,
                 Value::Function(FunctionValue(Callable::Native(Builtin::Number)))
@@ -294,6 +321,7 @@ impl Execution<'_> {
             ("Number", native(Builtin::Number)),
             ("Boolean", native(Builtin::Boolean)),
             ("RegExp", native(Builtin::RegExp)),
+            ("Proxy", native(Builtin::Proxy)),
         ] {
             self.define(
                 &value,
@@ -388,6 +416,26 @@ impl Execution<'_> {
         if let Value::Function(FunctionValue(Callable::Native(builtin))) = object {
             if *builtin == Builtin::Function {
                 return self.function_constructor_property(key);
+            }
+            if *builtin == Builtin::Proxy {
+                if key == Value::string("length").units().as_ref() {
+                    return Ok(Some(Property {
+                        value: Value::Number(2.0),
+                        writable: false,
+                        enumerable: false,
+                        configurable: true,
+                        accessor: None,
+                    }));
+                }
+                if key == Value::string("name").units().as_ref() {
+                    return Ok(Some(Property {
+                        value: Value::string("Proxy"),
+                        writable: false,
+                        enumerable: false,
+                        configurable: true,
+                        accessor: None,
+                    }));
+                }
             }
             if let Some(property) = Self::json_property(*builtin, key) {
                 return Ok(Some(property));
@@ -669,7 +717,7 @@ impl Execution<'_> {
         }
         Ok(())
     }
-    fn set_prototype(&mut self, object: &Value, prototype: &Value) -> Result<(), Error> {
+    pub(super) fn set_prototype(&mut self, object: &Value, prototype: &Value) -> Result<(), Error> {
         if matches!(object, Value::Null | Value::Undefined) {
             return Err(Error::Type {
                 message: "prototype target is nullish",
@@ -737,10 +785,15 @@ impl Execution<'_> {
                 self.push(value)?;
             }
             Op::Key => {
-                let value = self.pop()?;
-                let key = self.property_key(&value)?;
-                self.push(key)?;
+                self.property_key_op(false)?;
             }
+            Op::KeyBelow => self.property_key_op(true)?,
+            Op::ObjectBindingStart
+            | Op::ObjectBindingGet(_)
+            | Op::ObjectAssignmentGet { .. }
+            | Op::ObjectBindingRest(_)
+            | Op::ObjectAssignmentRest { .. }
+            | Op::ObjectBindingEnd(_) => self.object_binding_op(op)?,
             Op::DupPair => {
                 let at = self
                     .stack
@@ -811,6 +864,206 @@ impl Execution<'_> {
             _ => return Err(Error::InvalidBytecode),
         }
         Ok(())
+    }
+
+    fn property_key_op(&mut self, below_top: bool) -> Result<(), Error> {
+        let top = below_top.then(|| self.pop()).transpose()?;
+        let value = self.pop()?;
+        let key = self.property_key(&value)?;
+        self.push(key)?;
+        if let Some(top) = top {
+            self.push(top)?;
+        }
+        Ok(())
+    }
+
+    fn object_binding_op(&mut self, op: &Op) -> Result<(), Error> {
+        match op {
+            Op::ObjectBindingStart => {
+                if matches!(self.stack.last(), Some(Value::Null | Value::Undefined)) {
+                    return Err(Error::Type {
+                        message: "cannot destructure null or undefined",
+                    });
+                }
+                self.stack.last().ok_or(Error::InvalidBytecode)?;
+            }
+            Op::ObjectBindingGet(excluded_count) => {
+                self.object_binding_get(*excluded_count)?;
+            }
+            Op::ObjectAssignmentGet {
+                excluded,
+                target_slots,
+            } => {
+                self.object_assignment_get(*excluded, *target_slots)?;
+            }
+            Op::ObjectBindingRest(excluded_count) => {
+                self.object_binding_rest(*excluded_count)?;
+            }
+            Op::ObjectAssignmentRest {
+                excluded,
+                target_slots,
+            } => {
+                self.object_assignment_rest(*excluded, *target_slots)?;
+            }
+            Op::ObjectBindingEnd(excluded_count) => {
+                let retained = excluded_count
+                    .checked_add(1)
+                    .ok_or(Error::InvalidBytecode)?;
+                let start = self
+                    .stack
+                    .len()
+                    .checked_sub(retained)
+                    .ok_or(Error::InvalidBytecode)?;
+                self.stack.truncate(start);
+            }
+            _ => return Err(Error::InvalidBytecode),
+        }
+        Ok(())
+    }
+
+    fn object_binding_get(&mut self, excluded_count: usize) -> Result<(), Error> {
+        let key = self.stack.last().ok_or(Error::InvalidBytecode)?.clone();
+        let retained = excluded_count
+            .checked_add(2)
+            .ok_or(Error::InvalidBytecode)?;
+        let source = self
+            .stack
+            .get(
+                self.stack
+                    .len()
+                    .checked_sub(retained)
+                    .ok_or(Error::InvalidBytecode)?,
+            )
+            .ok_or(Error::InvalidBytecode)?
+            .clone();
+        let value = self.get_key(&source, &key)?;
+        self.push(value)
+    }
+
+    fn object_assignment_get(
+        &mut self,
+        excluded_count: usize,
+        target_slots: usize,
+    ) -> Result<(), Error> {
+        let retained = excluded_count
+            .checked_add(target_slots)
+            .and_then(|count| count.checked_add(2))
+            .ok_or(Error::InvalidBytecode)?;
+        let source_index = self
+            .stack
+            .len()
+            .checked_sub(retained)
+            .ok_or(Error::InvalidBytecode)?;
+        let source = self
+            .stack
+            .get(source_index)
+            .ok_or(Error::InvalidBytecode)?
+            .clone();
+        let key = self
+            .stack
+            .get(
+                source_index
+                    .saturating_add(excluded_count)
+                    .saturating_add(1),
+            )
+            .ok_or(Error::InvalidBytecode)?
+            .clone();
+        let value = self.get_key(&source, &key)?;
+        self.push(value)
+    }
+
+    fn object_binding_rest(&mut self, excluded_count: usize) -> Result<(), Error> {
+        let retained = excluded_count
+            .checked_add(1)
+            .ok_or(Error::InvalidBytecode)?;
+        let start = self
+            .stack
+            .len()
+            .checked_sub(retained)
+            .ok_or(Error::InvalidBytecode)?;
+        let source = self.stack.get(start).ok_or(Error::InvalidBytecode)?.clone();
+        let excluded = self
+            .stack
+            .get(start.saturating_add(1)..)
+            .ok_or(Error::InvalidBytecode)?
+            .to_vec();
+        let rest = self.copy_data_properties(&source, &excluded)?;
+        self.stack.truncate(start);
+        self.push(rest)
+    }
+
+    fn object_assignment_rest(
+        &mut self,
+        excluded_count: usize,
+        target_slots: usize,
+    ) -> Result<(), Error> {
+        let retained = excluded_count
+            .checked_add(target_slots)
+            .and_then(|count| count.checked_add(1))
+            .ok_or(Error::InvalidBytecode)?;
+        let start = self
+            .stack
+            .len()
+            .checked_sub(retained)
+            .ok_or(Error::InvalidBytecode)?;
+        let source = self.stack.get(start).ok_or(Error::InvalidBytecode)?.clone();
+        let excluded_end = start
+            .checked_add(excluded_count)
+            .and_then(|index| index.checked_add(1))
+            .ok_or(Error::InvalidBytecode)?;
+        let excluded = self
+            .stack
+            .get(start.saturating_add(1)..excluded_end)
+            .ok_or(Error::InvalidBytecode)?
+            .to_vec();
+        let targets = self
+            .stack
+            .get(excluded_end..)
+            .ok_or(Error::InvalidBytecode)?
+            .to_vec();
+        let rest = self.copy_data_properties(&source, &excluded)?;
+        self.stack.truncate(start);
+        self.stack.extend(targets);
+        self.push(rest)
+    }
+
+    fn copy_data_properties(&mut self, source: &Value, excluded: &[Value]) -> Result<Value, Error> {
+        let roots = self.native_roots.len();
+        self.native_roots.push(source.clone());
+        self.native_roots.extend_from_slice(excluded);
+        let result = (|| {
+            let from = self.box_value(source)?;
+            self.native_roots.push(from.clone());
+            let prototype = self.prototype()?;
+            let target = self.allocate_object(prototype)?;
+            self.native_roots.push(target.clone());
+            let mut keys: Vec<Value> = self
+                .own_keys(&from)?
+                .into_iter()
+                .map(Value::String)
+                .collect();
+            keys.extend(self.symbol_keys(&from)?);
+            self.native_roots.extend(keys.iter().cloned());
+            for key in keys {
+                self.charge(1)?;
+                if excluded
+                    .iter()
+                    .any(|excluded| excluded.strictly_equals(&key))
+                {
+                    continue;
+                }
+                if self
+                    .own_key(&from, &key)?
+                    .is_some_and(|property| property.enumerable)
+                {
+                    let value = self.get_key(&from, &key)?;
+                    self.define_key(&target, key, Property::data(value))?;
+                }
+            }
+            Ok(target)
+        })();
+        self.native_roots.truncate(roots);
+        result
     }
 
     pub(super) fn object_call(
@@ -962,7 +1215,7 @@ impl Execution<'_> {
         result
     }
 
-    fn boxed_descriptor(&mut self, target: &Value, key: &Value) -> Result<Value, Error> {
+    pub(super) fn boxed_descriptor(&mut self, target: &Value, key: &Value) -> Result<Value, Error> {
         let target = self.box_value(target)?;
         let roots = self.native_roots.len();
         self.native_roots.push(target.clone());
@@ -975,7 +1228,7 @@ impl Execution<'_> {
         result
     }
 
-    fn delete_key(&mut self, object: &Value, key: &Value) -> Result<bool, Error> {
+    pub(super) fn delete_key(&mut self, object: &Value, key: &Value) -> Result<bool, Error> {
         if matches!(object, Value::Null | Value::Undefined) {
             return Err(Error::Type {
                 message: "delete on null or undefined",
@@ -1200,7 +1453,12 @@ impl Execution<'_> {
         Ok(())
     }
 
-    fn define_descriptor(&mut self, object: &Value, key: Value, desc: &Value) -> Result<(), Error> {
+    pub(super) fn define_descriptor(
+        &mut self,
+        object: &Value,
+        key: Value,
+        desc: &Value,
+    ) -> Result<(), Error> {
         self.object_ref(object)?;
         self.object_ref(desc)?;
         let roots = self.native_roots.len();
@@ -1351,7 +1609,7 @@ pub(super) const fn has_constructor_storage(value: &Value) -> bool {
     matches!(
         value,
         Value::Function(FunctionValue(Callable::Native(
-            Builtin::Object | Builtin::Number | Builtin::RegExp | Builtin::Array
+            Builtin::Object | Builtin::Number | Builtin::Boolean | Builtin::RegExp | Builtin::Array
         )))
     )
 }

@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "jrs_backend"
+description = "Fuzz target: the register and the legacy backend answer a source identically"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "jrs_backend"
+path = "src/main.rs"
+test = false
+bench = false
+doc = false
+
+[dependencies]
+jrs.workspace = true
+fuzz-support.workspace = true
+
+[lints]
+workspace = true

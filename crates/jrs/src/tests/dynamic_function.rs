@@ -64,6 +64,23 @@ fn dynamic_syntax_validates_fragments_and_cross_boundary_early_errors() -> Resul
     )?;
     check("let yes=false;try{Function(Symbol(),'')}catch(e){yes=e instanceof TypeError}yes")?;
     check("let yes=false;try{Function('',Symbol())}catch(e){yes=e instanceof TypeError}yes")?;
+    check(
+        "let log='';try{Function({toString(){log+='p';return 'arguments'}},{toString(){log+='b';return '\"use strict\";log+=\"x\"'}})}catch(e){if(!(e instanceof SyntaxError))throw e}log==='pb'",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn function_constructor_does_not_inherit_caller_strictness_for_arguments() -> Result<(), Error> {
+    for source in [
+        "Function('arguments=42;return arguments')()===42",
+        "function outer(){'use strict';return Function('arguments=42;return arguments')()}outer()===42",
+        "let yes=false;try{Function('arguments','\"use strict\";return arguments')}catch(e){yes=e instanceof SyntaxError}yes",
+        "let yes=false;try{Function('eval','\"use strict\";return eval')}catch(e){yes=e instanceof SyntaxError}yes",
+        "let yes=false;try{Function('\"use strict\";arguments=1')}catch(e){yes=e instanceof SyntaxError}yes",
+    ] {
+        check(source)?;
+    }
     Ok(())
 }
 

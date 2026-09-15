@@ -85,6 +85,20 @@ impl Execution<'_> {
         result
     }
 
+    pub(super) fn enumeration_rest(&mut self, id: usize) -> Result<Value, Error> {
+        let array = self.new_array(0)?;
+        let roots = self.native_roots.len();
+        self.native_roots.push(array.clone());
+        let result = (|| {
+            while let Some(value) = self.enumeration_next(id)? {
+                self.append_element(&array, value)?;
+            }
+            Ok(array.clone())
+        })();
+        self.native_roots.truncate(roots);
+        result
+    }
+
     fn enumeration_step(&mut self, state: &mut Enumeration) -> Result<Option<Rc<[u16]>>, Error> {
         loop {
             self.charge(1)?;

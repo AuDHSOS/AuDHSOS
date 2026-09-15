@@ -215,6 +215,141 @@ fn next_result_failures_do_not_close_the_failed_iterator() {
 }
 
 #[test]
+fn array_binding_declarations_cover_nesting_defaults_rest_and_hoisting() {
+    for source in [
+        "var [a,[b=3],...r]=[1,[],4,5];a===1&&b===3&&r.join()==='4,5'",
+        "let [,a,,]=[1,2,3];const [...r]=[4,5];a===2&&r.join()==='4,5'",
+        "let [a,]=[1];a===1",
+        "let [...[a,,...r]]=[1,2,3,4];a===1&&r.join()==='3,4'",
+        "function f(){return [a,b];var [a,b]=[1,2]}f().join()===','",
+        "let order='';let [a=(order+='a',1),b=(order+='b',a+1)]=[];order==='ab'&&b===2",
+        "let [f=function(){},g=()=>{},c=class {},s=(0,function(){})]=[];f.name==='f'&&g.name==='g'&&c.name==='c'&&s.name===''",
+    ] {
+        assert_eq!(eval(source), Ok(Value::Boolean(true)), "{source}");
+    }
+    for source in [
+        "let [...x,]=[]",
+        "let [...x=[]]=[]",
+        "let [...[x],y]=[]",
+        "const [x]",
+        "let [x];",
+    ] {
+        assert!(
+            matches!(
+                compile(source, Limits::default()),
+                Err(Error::Syntax { .. })
+            ),
+            "{source}"
+        );
+    }
+    assert!(matches!(eval("let [x=x]=[]"), Err(Error::Reference { .. })));
+    assert!(matches!(eval("const [x]=[1];x=2"), Err(Error::Type { .. })));
+}
+
+#[test]
+fn object_binding_declarations_follow_property_and_rest_semantics() {
+    for source in [
+        "let {x,y:z=3,n:{v},a:[b]}={x:1,n:{v:4},a:[5]};x===1&&z===3&&v===4&&b===5",
+        "var {f=function(){},c=class {},g=()=>{}}={};f.name==='f'&&c.name==='c'&&g.name==='g'",
+        "let log='';let key={toString(){log+='k';return 'x'}};let source={get x(){log+='g';return 7}};let {[key]: value}=source;log==='kg'&&value===7",
+        "let symbol=Symbol('s');let source={a:1,b:2,[symbol]:3};let {a,...rest}=source;rest.a===undefined&&rest.b===2&&rest[symbol]===3",
+        "let source={get x(){return 9}};let {...rest}=source;let descriptor=Object.getOwnPropertyDescriptor(rest,'x');descriptor.value===9&&descriptor.writable&&descriptor.enumerable&&descriptor.configurable",
+        "let length='outer';let [...{0:a,1:b,length:n}]=[7,8];length==='outer'&&a===7&&b===8&&n===2",
+    ] {
+        assert_eq!(eval(source), Ok(Value::Boolean(true)), "{source}");
+    }
+    for source in ["let {}=null", "let {}=undefined"] {
+        assert!(matches!(eval(source), Err(Error::Type { .. })), "{source}");
+    }
+    for source in ["let {...x,}={}", "let {...x={}}={}"] {
+        assert!(
+            matches!(
+                compile(source, Limits::default()),
+                Err(Error::Syntax { .. })
+            ),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn declaration_patterns_follow_iterator_close_and_abrupt_completion_rules() {
+    for (body, expected) in [
+        ("let [x]=i;log+x", "r1"),
+        ("let []=i;log", "r"),
+        (
+            "i.next=function(){return {done:true}};let [x]=i;log+String(x)",
+            "undefined",
+        ),
+        (
+            "i.next=function(){return {get value(){log+='v';return 1}}};let [,]=i;log",
+            "r",
+        ),
+        (
+            "let n=0;i.next=function(){return n++<2?{value:n}:{done:true}};let [...x]=i;log+x.join()",
+            "1,2",
+        ),
+    ] {
+        assert_eq!(
+            eval(&format!("{INPUT}{body}")),
+            Ok(Value::string(expected)),
+            "{body}"
+        );
+    }
+    for next in [
+        "throw 7",
+        "return {get done(){throw 7}}",
+        "return {get value(){throw 7}}",
+    ] {
+        let source =
+            format!("{INPUT}i.next=function(){{{next}}};try{{let [x]=i}}catch(e){{log+=e}}log");
+        assert_eq!(eval(&source), Ok(Value::string("7")), "{next}");
+    }
+    for (return_body, expected) in [("log+='r';throw 9", "r3"), ("log+='r';return 1", "r3")] {
+        let source = format!(
+            "{INPUT}i.next=function(){{return {{value:undefined}}}};i.return=function(){{{return_body}}};try{{let [x=(()=>{{throw 3}})()]=i}}catch(e){{log+=e}}log"
+        );
+        assert_eq!(eval(&source), Ok(Value::string(expected)), "{return_body}");
+    }
+    assert_eq!(
+        eval(
+            "let log='';let outer={next(){return {value:inner}},return(){log+='o';return {}},[Symbol.iterator](){return this}};let inner={next(){return {value:1}},return(){log+='i';return {}},[Symbol.iterator](){return this}};let [[x]]=outer;log+x"
+        ),
+        Ok(Value::string("io1"))
+    );
+}
+
+#[test]
+fn declaration_pattern_iterator_roots_and_rest_limits_are_fatal() -> Result<(), Error> {
+    let limits = Limits {
+        heap_entries: 110,
+        ..Limits::default()
+    };
+    let mut host = SilentHost;
+    let mut realm = crate::Realm::new(limits, &mut host)?;
+    let gc = realm.gc_function()?;
+    realm.set_global("gc", &gc)?;
+    for source in [
+        "let n=0;let input={[Symbol.iterator](){return {next(){if(n++===0)return {value:{n:7}};gc();return {done:true}}}}};let [...values]=input;values[0].n===7",
+        "let closed=false;function makeInput(){return {[Symbol.iterator](){return {next(){return {value:undefined}},return(){closed=true;return {}}}}}}let [value=(gc(),{n:7})]=makeInput();gc();closed&&value.n===7",
+        "let source;source={get a(){delete source[Object.getOwnPropertySymbols(source)[0]];gc();source[Symbol('new')]=3;return 1},[Symbol('old')]:2};let {...rest}=source;rest.a===1&&Object.getOwnPropertySymbols(rest).length===0",
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::Boolean(true), "{source}");
+    }
+
+    let limits = Limits {
+        fuel: 1_000,
+        ..Limits::default()
+    };
+    let source = "let [...values]={[Symbol.iterator](){return {next(){return {value:1}}}}}";
+    assert!(matches!(
+        Runtime::new(limits).run(&compile(source, limits)?, &mut SilentHost),
+        Err(Error::Limit { .. })
+    ));
+    Ok(())
+}
+
+#[test]
 fn array_binding_patterns_close_inner_iterators_and_skip_elision_values() {
     for (body, expected) in [
         ("for(let [a] of [i]){log+=a}log", "r1"),
@@ -234,6 +369,89 @@ fn array_binding_patterns_close_inner_iterators_and_skip_elision_values() {
     ] {
         let source = format!("{INPUT}{body}");
         assert_eq!(eval(&source), Ok(Value::string(expected)), "{body}");
+    }
+}
+
+#[test]
+fn for_in_declarations_initialize_binding_patterns_per_iteration() {
+    for (source, expected) in [
+        (
+            "let result='';for(let [first,...rest] in {key:1})result=first+rest.join('');result",
+            Value::string("key"),
+        ),
+        (
+            "let result='';for(const {0:first,2:last} in {key:1})result=first+last;result",
+            Value::string("ky"),
+        ),
+        ("for(var [first] in {key:1}){}first", Value::string("k")),
+        (
+            "let callbacks=[];for(let [first] in {aa:1,bb:2})callbacks.push(()=>first);callbacks[0]()+callbacks[1]()",
+            Value::string("ab"),
+        ),
+    ] {
+        assert_eq!(eval(source), Ok(expected), "{source}");
+    }
+
+    for source in [
+        "for(let [x,x] in {}){}",
+        "for(const {x:a,y:a} in {}){}",
+        "for(let [x] in {}){var x}",
+    ] {
+        assert!(
+            matches!(
+                compile(source, Limits::default()),
+                Err(Error::Syntax { .. })
+            ),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn destructuring_assignments_preserve_values_targets_and_iteration_order() {
+    for (source, expected) in [
+        (
+            "let a,b,r;let input=[1,2,3];let result=([a,b,...r]=input);result===input&&a===1&&b===2&&r.join()==='3'",
+            Value::Boolean(true),
+        ),
+        (
+            "let a,b,r;let input={x:1,y:2,z:3};let result=({x:a,y:b,...r}=input);result===input&&a===1&&b===2&&r.z===3",
+            Value::Boolean(true),
+        ),
+        (
+            "let a,b;({x:[a],y:{z:b}}={x:[20],y:{z:22}});a+b",
+            Value::Number(42.0),
+        ),
+        (
+            "let target={},i=0;[target[i++],target[i++]]=[20,22];target[0]+target[1]+i",
+            Value::Number(44.0),
+        ),
+        ("let a,b;[a=20,b=a+2]=[];a+b", Value::Number(42.0)),
+        (
+            "let value;for([value] in {key:1}){}value",
+            Value::string("k"),
+        ),
+        (
+            "let value;for({0:value} in {key:1}){}value",
+            Value::string("k"),
+        ),
+        ("var yield=4,x;[x=yield]=[];x", Value::Number(4.0)),
+    ] {
+        assert_eq!(eval(source), Ok(expected), "{source}");
+    }
+
+    for source in [
+        "'use strict';0,{yield}={}",
+        "let x={default}={default:1}",
+        "let x={extends}={extends:1}",
+    ] {
+        assert!(
+            matches!(
+                compile(source, Limits::default()),
+                Err(Error::Syntax { .. })
+            ),
+            "{source}"
+        );
     }
 }
 

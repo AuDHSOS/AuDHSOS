@@ -3,11 +3,13 @@
 
 # jrs: Zielarchitektur und Migrationsplan
 
-Stand: 9. September 2026. Status: Architekturvorschlag, noch keine Implementierungsfreigabe für sämtliche beschriebenen Erweiterungen.
+Stand: 9. September 2026, ergänzt am 13. September 2026 um die Migrationsrichtung in Abschnitt 17.1. Status: Architekturvorschlag, noch keine Implementierungsfreigabe für sämtliche beschriebenen Erweiterungen.
 
 Dieses Dokument beschreibt eine wartbare, erweiterbare, testbare und auf hohe Performance ausgerichtete Architektur für jrs. Es basiert auf einer lesenden Prüfung des vorhandenen Workspaces. Es verändert nicht dessen laufende Implementierung. Die Konformitäts- und Performance-Ziele bleiben bestehen; die frühere Beschränkung auf eine reine Automaton-Engine ist durch die ausdrückliche Freigabe von `regex-bt` ersetzt. Vorgeschlagene Crates, Typen und APIs sind ausdrücklich Zielzustand, sofern sie nicht als vorhanden bezeichnet werden.
 
 Die Architekturentscheidung lautet: **ein semantisch einheitlicher ECMAScript-Core mit klarer Agent-/Realm-Zuordnung, einem gemeinsamen Objektmodell, expliziten Ausführungsfortsetzungen und getrennten Host-/Webplattform-Adaptern**. Optimierungen setzen auf diesen Verträgen auf und dürfen keine zweite, abweichende Sprachsemantik etablieren.
+
+Dieser Core entsteht im registerbasierten Engine-Pfad unter `crates/jrs/src/engine/`. Das Stack-Backend unter `crates/jrs/src/vm.rs` ist die Quelle der zu übernehmenden Semantik und wird vollständig stillgelegt, nicht dauerhaft gepflegt. Dass beide Pfade heute nebeneinander existieren, ist ein befristeter Migrationszustand mit den Regeln aus Abschnitt 17.1, kein Architekturziel.
 
 ## 1. Ziele, Grenzen und offene Produktentscheidungen
 
@@ -58,7 +60,7 @@ Diese Aussagen sind keine Behauptung, dass jeder aktuelle Pfad fehlerhaft ist. S
 
 ## 3. Architekturregeln
 
-1. **Eine Semantik:** Script, Module, `eval`, dynamische Function-Constructors, Host-Aufrufe und optimierte Ausführung benutzen dieselben abstrakten Operationen und Completion-Regeln.
+1. **Eine Semantik:** Script, Module, `eval`, dynamische Function-Constructors, Host-Aufrufe und optimierte Ausführung benutzen dieselben abstrakten Operationen und Completion-Regeln. Jede Klausel hat am Ende genau eine Implementierung; während der Migration gilt Abschnitt 17.1.
 2. **Ein Besitzer pro Ressource:** Heap, Source, Code, Handles, Tasks und externe Buffer haben jeweils einen expliziten Owner und ein explizites Budget.
 3. **Kein verstecktes JavaScript:** Jede Operation, die Getter, Proxy-Traps, Constructor oder Callbacks ausführen kann, ist als solcher Effekt erkennbar und kann suspendieren.
 4. **Keine Borrow über Reentry:** Über einen möglichen JavaScript-Aufruf hinweg bleiben nur IDs, Kopien und registrierte Roots bestehen, keine Referenzen auf veränderbare Heap-Inhalte.
@@ -224,7 +226,7 @@ Diese Module gehören zunächst in dasselbe Engine-Crate. Ihre API-Sichtbarkeit 
 
 ## 8. Ausführung, Completions und Builtin-Continuations
 
-Der Interpreter bleibt zunächst die portable Referenzausführung. Das bestehende Stack-Bytecode ist der Migrationsstart. Ein kompakter registerbasierter Lowering-Pfad kann später Operandenkopien und Dispatch reduzieren; er wird nur nach einem A/B-Nachweis Standard. Dauerhaft gepflegt wird ein produktives Format, nicht eine beliebig wachsende Sammlung gleichberechtigter Interpreter.
+Die Ausführung des Ziel-Cores ist der registerbasierte Interpreter unter `crates/jrs/src/engine/`. Das bestehende Stack-Bytecode ist der Migrationsstart und die Quelle der zu übernehmenden Semantik, nicht das Ziel: Jede Familie wird dorthin überführt und danach aus `vm.rs` entfernt. Dauerhaft gepflegt wird ein produktives Format, nicht eine beliebig wachsende Sammlung gleichberechtigter Interpreter.
 
 Ausführung besteht aus expliziten Frames:
 
@@ -468,13 +470,101 @@ Jede Phase besteht aus kleinen Änderungen. Das bestehende `jrs`-API bleibt zun�
 | M5 – Fortsetzbare Builtins | Callback-/Getter-/Proxy-fähige Native-Pfade auf explizite Frames und zentrale Dispatch-Schleife migrieren. | Tiefe JS/Builtin/Host-Ketten wachsen nicht auf dem Rust-Stack; Await/Generator-/Exception-Reentry teilt dieselben Frame-/Budget-Regeln. |
 | M6 – Sprachfundament vervollständigen | Proxy, BigInt, Buffer/TypedArrays, vollständige Bindings, eval, Module und Generatoren auf den neuen Verträgen implementieren; `regex-bt` explizit anbinden und fehlende RegExp-Semantik vervollständigen. | Vollständige jeweilige Testfamilien einschließlich Fehlerpfaden, GC und Ressourcenfällen bestehen; RegExp-Arbeit teilt die Agent-Budgets. Verbleibende Familien bleiben sichtbar. |
 | M7 – Host/Web ausgliedern | Vorhandene Events und Timer nach `jrs-web`; Native-State-Tracing, I/O-Requests und OS-Adapter stabilisieren. | Der ECMAScript-Core benötigt keine Web-Typen. Bestehende WPT-/E2E-Fälle bestehen über den neuen Adapter, inklusive Cancellation und Shutdown. |
-| M8 – Interpreter optimieren | Shapes/Elements, Inline Caches, Code-/Value-Layout und gegebenenfalls neues Lowering einführen. | Optimized-on/off-Differential, Cache-Invalidation und Performance-Gates bestehen. Keine neue Semantikimplementierung nur für Fast Paths. |
+| M8 – Interpreter optimieren | Shapes/Elements, Inline Caches sowie Code-/Value-Layout im Engine-Core ausbauen und messen. | Optimized-on/off-Differential, Cache-Invalidation und Performance-Gates bestehen. Keine neue Semantikimplementierung nur für Fast Paths. |
 | M9 – Webplattform ausbauen | Browser-Subsysteme und echten WPT-Produktadapter entlang ihrer Dependencies implementieren. | Jede neu behauptete Umgebung hat reale WPT-Ausführung. DOM-/Origin-/Lifecycle-/Rendering-Lücken sind nicht durch Shell-Pässe verdeckt. |
 | M10 – Release-Audit | Gesamtes ursprüngliches Requirements-Inventar gegen finale Artefakte prüfen. | Alle vereinbarten vollständigen Konformitäts-, Sicherheits-, Abhängigkeits- und Performance-Nachweise liegen vor; offene Konflikte verhindern die vollständige Fertigmeldung. |
 
 M6 kann in unabhängigen Feature-Strängen bearbeitet werden, sobald die jeweils benötigten Verträge stabil sind. M8 beginnt mit frühem Profiling, aktiviert seine strukturellen Optimierungen aber erst nach M3/M5. M7 braucht für Cross-Realm-Webobjekte M4. M9 ersetzt nicht die noch offene ECMAScript-Vervollständigung.
 
 Termine werden erst nach M0/M1 und einem gemessenen Pilotumbau geschätzt. Bestehende Pass-Zahlen sind keine Aufwandsschätzung. Vollständige Sprach- und Browser-Funktionalität ist kein seriös zusagbares Nebenprodukt einer Folge kleiner Builtin-Erweiterungen.
+
+### 17.1 Migrationsrichtung und Stilllegung des Stack-Backends
+
+Zielzustand: jrs führt jedes Programm über den Engine-Core aus. `crates/jrs/src/vm.rs` und die dort liegenden Builtins sind entfernt, nicht deaktiviert.
+
+Weg dorthin: Die Phasen M1 bis M7 werden im Engine-Core gebaut, nicht mehr im Stack-Backend. Vorhandene Semantik wird dabei übernommen, wo sie brauchbar ist; sie wird gelesen, portiert und gegen den alten Pfad geprüft, nicht neu erraten. Was nicht übernehmbar ist, wird als solches benannt und neu implementiert.
+
+Je Familie in dieser Reihenfolge:
+
+1. Den entsprechenden Code im Stack-Backend lesen und die Semantik, Auswertungsreihenfolge, Fehlerfälle, GC-Regeln und Budgets übernehmen.
+2. Differential gegen den alten Pfad, bis beide für jedes Programm, das beide ausführen können, dasselbe Ergebnis liefern.
+3. Fokussierter Test262-Lauf der Familie.
+4. Den alten Pfad entfernen, sobald ihn kein Ausführungsweg mehr erreicht.
+5. Vollständiger Test262-Lauf.
+
+Regeln für den Zwischenzustand, solange beide Pfade existieren:
+
+- **Gleichheitspflicht:** Für jedes Programm, das beide Pfade ausführen können, liefern sie dasselbe Ergebnis. Eine Abweichung ist ein Fehler und wird vor der nächsten Familie behoben, nicht dokumentiert und stehengelassen.
+- **Kein einseitiger Zuwachs:** Ein Feature, das der Stack-Pfad nicht hat, wird nicht allein im Engine-Core ergänzt, solange der Stack-Pfad noch Programme ausführt. Sonst hängt das Verhalten davon ab, welcher Pfad das Programm kompiliert hat.
+- **Befristete Doppelung:** Die Doppelung einer Familie endet mit dem Migrationsschritt, der sie überführt. Eine Familie bleibt nicht dauerhaft in beiden Pfaden.
+- **Ein Einstieg:** `Runtime::run`, `Realm::evaluate` und das Embedding benutzen denselben Lowering-Pfad. Ein Ausführungsweg, den der Engine-Core nicht erreicht, ist eine Migrationslücke und wird als solche geführt.
+- **Die Lücke gehört an ihre Stelle:** Eine Regel, die die Grenze durchsetzt, wird nicht zusätzlich im Lowering geprüft. Sonst meldet der Engine-Core "ein Script, das das Lowering nicht nimmt", wo er sagen könnte, was genau fehlt. Umgekehrt gilt: `Unsupported` vergiftet den Realm, weil sein Zustand danach unbekannt ist — außer bei einem Wert, der die Grenze nicht überqueren kann. Dort ist das Script an einem definierten Ende angekommen, und nur sein Wert fehlt.
+- **Lücke statt Antwort:** Was der Engine-Core noch nicht gebaut hat, wird als `Unsupported` benannt und nie als Wert beantwortet. Ein Name, den eine noch nicht gebaute Intrinsic besäße, ist deshalb kein `undefined`: die Namenslisten von Klausel 19, 20.1.3, 22.1.3 und 23.1.3 liegen im Realm, damit ein Fehltreffer die Lücke nennt. Eine Lücke kostet einen Test, eine falsche Antwort kostet das Vertrauen in jede Zahl.
+
+Die Doppelung ist damit ein Zustand mit Ablaufdatum, kein paralleler Semantikpfad im Sinn von Abschnitt 3 Regel 1.
+
+#### Erste Meilensteingruppe: Realm-Zustand im Engine-Core
+
+Der Engine-Core besitzt heute einen eigenen Heap und ein eigenes Objektmodell,
+die vom Realm des Stack-Backends getrennt sind. Über diese Grenze kommen nur
+Primitive: `register_primitive` kennt undefined, null, Boolean, Number und
+String, kein Objekt. Deshalb kann der Engine-Core keinen Realm-Zustand halten,
+deshalb lehnt `register_script_features` im Realm-Modus jede Deklaration ab,
+und deshalb erreicht ihn keine Test262-Datei. Die Reihenfolge folgt daraus:
+
+| Schritt | Inhalt | Exit-Kriterium |
+|---|---|---|
+| G0 | Eine Operation kann Benutzercode aufrufen und danach weiterlaufen: explizite Builtin-Frames mit Algorithmusphase nach Abschnitt 8, zuerst für ToPrimitive (7.1.1). | `1+{valueOf(){return 2}}` antwortet im Engine-Core wie im Stack-Backend. |
+| G1 | Globales Objekt und Global Environment Record (9.1.1.4) im Engine-Realm; `globalThis`; ReferenceError für nicht auflösbare Namen. | Ein nicht deklarierter Name wirft dieselbe ReferenceError wie im Stack-Backend. |
+| G2 | `LdaGlobal`/`StaGlobal` mit Property-Cell-Caches und Invalidation. | Differential gegen den Stack-Pfad über Lesen, Schreiben, Löschen und Shadowing. |
+| G3 | GlobalDeclarationInstantiation (16.1.7) für `var`, `function`, `let`, `const` samt Redeklarationsfehlern. | Bindungen überleben mehrere `Realm::evaluate`-Aufrufe; Fehlerfälle von 16.1.7 sind geprüft. |
+| G4 | Backend-Auswahl pro Realm statt pro Script. | Ein Realm läuft vollständig auf einem Pfad; ein Programm kann nicht mehr davon abhängen, welcher Pfad es kompiliert hat. |
+| G5a | Code-Identität gehört dem Realm: der Realm hält den Code jedes Scripts, das er ausgeführt hat, und ein Funktionsobjekt nennt seine Unit. Erledigt. | `function f(){}` in einem Script, `f()` im nächsten desselben Realms antwortet wie im Stack-Backend. |
+| G5b | Das Lowering nimmt einen Aufruf eines globalen Namens auch dort, wo sein Ergebnis statisch nicht typisierbar ist: als Rückgabewert und im Rumpf einer Schleife, deren Kopf dafür von den Typen der Zuweisungen des Rumpfes ausgeht. Erledigt. | Ein Aufruf eines globalen Namens wird an jeder Stelle übersetzt, an der der Stack-Pfad ihn ausführt. |
+| G5c | `this` ist der Receiver des Aufrufs (10.2.1.2), und ein Methodenaufruf erreicht eine Funktion des Scripts, nicht nur eine Intrinsic. Erledigt. Ein Aufruf ohne Receiver ist eine Lücke, bis die Code-Unit die Strictness nennt; ein Arrow mit `this` wird abgelehnt (10.2.1.1). | `let o={a:1,g:function(){return this.a}};o.g()` antwortet wie im Stack-Backend. |
+| G5d | Eigenschaften eines Werts, den das Lowering nicht benennen konnte, werden gelesen und geschrieben; ein Funktionsobjekt trägt eigene Properties. Erledigt. | `var f=function(){};f.z=1;f.z` antwortet wie im Stack-Backend. |
+| G5e | `new`: `[[Construct]]` (10.2.2), `OrdinaryCreateFromConstructor` (10.1.13) und die `prototype`-Property eines Funktionsobjekts (10.2.5). Erledigt. | `function F(a){this.x=a}new F(41).x` antwortet wie im Stack-Backend. |
+| G5g | `OrdinaryCallBindThis` (10.2.1.2): ein Aufruf ohne Receiver bindet `this` an das globale Objekt, wenn die Funktion nicht strict ist, und lässt es undefined, wenn sie es ist. Erledigt. | `function f(){return typeof this}f()` antwortet wie im Stack-Backend. |
+| G5f | `instanceof` (13.10.2, `OrdinaryHasInstance` 7.3.22); Konstruktor und Methode eines Realms werden zur Laufzeit aufgelöst, weil eine Funktionsdeklaration dort ein Name des Global Environment Record ist; das Werfen und das Completion eines Objects gehören an die Grenze, nicht ins Lowering. Erledigt. | `harness/sta.js` wird vollständig übersetzt. |
+| G5h | Das Completion eines Scripts, das für seine Wirkung läuft, muss die Grenze nicht überqueren: `Realm::run_compiled` verwirft es, und der Test262-Runner nimmt es, weil ein Verdikt am Geworfenen hängt und nie am Wert. Erledigt. | `harness/sta.js` läuft im Engine-Core vollständig durch. |
+| G5i | Ein Parameter ist ein beliebiger Wert (10.2.11). Ein Object, das an einen Aufruf geht, verliert sein Layout, denn der Aufgerufene erreicht es; eine Funktion nimmt ihre Closure mit. Eine Konvertierung, die ToPrimitive bräuchte, nennt die Lücke an ihrer Stelle statt zu antworten. Erledigt. | `harness/assert.js` läuft im Engine-Core; die Test262-Zahlen des Pfades sind messbar. |
+| G5j | `for`-`in` nimmt jeden Head (14.7.5.6: undefined und null zählen nichts auf, ein Primitive braucht ToObject und nennt die Lücke zur Laufzeit) und die Bindung, die eine `var`-Deklaration gemacht hat (14.7.5.5, 8.2.7). Erledigt. | `function f(o){var s="";for(var k in o){s+=k}return s}` antwortet wie im Stack-Backend. |
+| G5k | `arguments` (10.4.4): das unmapped Arguments-Object (10.4.4.7) mit Index-Properties, `length` und `callee`; 10.2.11 bindet den Namen. Ein Rumpf, der auch einen Parameter schreibt, könnte das Mapping sehen, das dieser Core nicht baut, und wird nicht übersetzt. Erledigt. | `function f(){return arguments.length}f(1,2)` antwortet wie im Stack-Backend. |
+| G5l | `delete` (13.5.1.2) und `[[Delete]]` eines Ordinary Objects (10.1.10.1): die Shape ohne den Namen, der Element-Store und das `length` eines Arrays (10.4.2). Ein Name, den eine Deklaration gebunden hat, antwortet false (9.1.1.1, 16.1.7); ein freier Name gehört dem globalen Objekt und bleibt eine Lücke. Erledigt. | `var o={a:1};delete o.a` antwortet wie im Stack-Backend. |
+| G5m | Ein Property-Write unter einem Key, den erst die Laufzeit kennt (13.15.2, `PutValue` 6.2.5.5, `OrdinarySetWithOwnDescriptor` 10.1.9.2): `SetByValue` nennt die Lücke dort, wo der Store läuft, wenn der Name einem Prototype gehört, den dieser Realm nicht gebaut hat. Ein berechneter Key eines Literals definiert (13.2.5.5) und erreicht keinen Prototype. Erledigt. | `let f=function(o,k){o[k]=1;return o[k]};f({},'a')` antwortet wie im Stack-Backend. |
+| G5n | Der Join von 14.6.2 nimmt die Objects, die seine Zweige gemacht haben: eines, das nur ein Zweig macht, behält sein Layout; eines, das die Zweige verschieden formen, gibt es auf, und ein Wert, dessen Layout der Join nicht halten konnte, gibt auch seinen Typ auf. Erledigt. | `harness/propertyHelper.js` wird vollständig übersetzt. |
+| G5o | `%Array%` (23.1.1.1) auf dem globalen Objekt: eine Länge oder viele Elemente, `IsArray` (23.1.2.3), und die Kopplung von Konstruktor und `%Array.prototype%` (23.1.2.5, 23.1.3.2). `new Array(...)` erreicht dieselbe Funktion, weil ein nativer Konstruktor sein eigenes Object antwortet. Ein Name, den 23.1.2 gibt und dieser Realm nicht gebaut hat, ist eine Lücke. Erledigt. | `new Array(3).length` antwortet wie im Stack-Backend. |
+| G5p | `%Object%` (20.1.1.1) auf dem globalen Objekt: undefined und null machen ein Ordinary Object, jedes Object antwortet unverändert, ein Primitive nennt den Wrapper, den `ToObject` bräuchte. Ein Name, den 20.1.2 gibt und dieser Realm nicht gebaut hat, ist eine Lücke. Erledigt. | `typeof new Object()` antwortet wie im Stack-Backend. |
+| G5q | Die Statics, die der Harness braucht: `Object.defineProperty` (20.1.2.4), `Object.getOwnPropertyDescriptor` (20.1.2.8) und `Object.getOwnPropertyNames` (20.1.2.10), mit `FromPropertyDescriptor` (6.2.6.4) und `ToPropertyDescriptor` (6.2.6.5), dazu `%Function.prototype%.call` und `.bind` (20.2.3). `harness/propertyHelper.js` scheitert daran, und mit ihm 946 Varianten, die heute als fehlgeschlagener Harness zählen. | `harness/propertyHelper.js` läuft im Engine-Core durch. |
+| G5 | Ein Object des Engine-Cores kann die Grenze zum Embedding überqueren, wo ein Aufrufer den Wert wirklich liest. Das ist das gemeinsame Objektmodell aus M3 und M4, keine Lücke des Lowerings. | `Realm::evaluate` gibt ein Object zurück, statt es als Lücke zu melden. |
+
+G0 steht vorn, weil G2 und G3 ohne ihn nicht fertig werden können. Das Lowering
+typisiert jeden Wert statisch und lehnt ab, was es nicht typisieren kann. Der
+Typ eines globalen Namens steht nie statisch fest, also ist jeder globale Wert
+möglicherweise ein Object, und `a + b` über einem Object verlangt ToPrimitive,
+das ein `valueOf` des Benutzers aufrufen kann. Eine Operation des Engine-Cores
+kann heute keinen Frame öffnen: `primitive_binary` erreicht `primitive_number`,
+das für ein Object mit einem TypeError endet. Solange das so ist, kann ein
+globaler Name gelesen, aber mit nichts verrechnet werden.
+
+Zwei falsche Antworten, die auf diesem Weg gefunden wurden, zeigen, wofür die
+Regel "Lücke statt Antwort" da ist: ein Fehltreffer auf einer noch nicht
+gebauten Prototype antwortete `undefined`, und `arguments` wurde auf dem Global
+Environment Record aufgelöst statt nach 10.4.4 in der Funktion. Beide waren vom
+Lowering verdeckt und wurden erst sichtbar, als es weiter reichte. Jede
+Erweiterung des Lowerings deckt deshalb Stellen auf, die vorher unerreichbar
+waren; der Differential-Fuzzer und der variantengenaue Test262-Vergleich sind
+die Werkzeuge, die sie finden.
+
+Seit G5i lädt der Harness im Engine-Core, also messen die `--engine`-Läufe ihn
+wirklich. Zahlen davor sind Zahlen des Stack-Backends.
+
+Aus G5a folgt eine Grenze, die mit `eval` fällig wird: der Realm hält jede Unit,
+die er ausgeführt hat, weil ein Funktionsobjekt einer früheren Unit aufrufbar
+bleibt. Solange nur Scripts Units erzeugen, ist ihre Zahl durch die Zahl der
+Scripts begrenzt. Sobald `eval` übersetzt wird, erzeugt jeder Aufruf eine Unit,
+und der Realm braucht ein Kriterium, wann eine Unit nicht mehr erreichbar ist —
+das ist eine Frage des Kollektors, nicht des Lowerings.
 
 ## 18. Erster umsetzbarer Arbeitsauftrag nach Freigabe
 
@@ -487,6 +577,10 @@ Der nächste Architektur-Arbeitsschritt sollte keine neue große Sprachfunktion 
 5. Vorher-/Nachher-Konformität, GC-Stress, Allocation-Zahlen und Performance vergleichen; erst dann den Vertrag auf weitere Constructoren ausrollen.
 
 Der Pilot ist fertig, wenn der gemeinsame Vertrag funktioniert und die bestehenden Tests ohne verdeckte Ausnahmen weiterlaufen. Er ist nicht gleichbedeutend mit dem Abschluss des gesamten Goals.
+
+Schritt 1 ist erledigt: [jrs-inventory.md](jrs-inventory.md) hält den Ausgangsstand fest. Der Befund dieses Inventars ist, dass der vorhandene registerbasierte Pfad unter `crates/jrs/src/engine/` eine zweite Sprachsemantik mit eigenem Objektmodell, eigenem Heap und eigenen Intrinsics ist und keine Test262-Datei ausführt.
+
+Die Entscheidung dazu lautet: Dieser Pfad ist das Ziel, keine spätere Optimierung. Die Doppelung wird nicht eingefroren, sondern nach Abschnitt 17.1 aufgelöst, indem die Semantik des Stack-Backends dorthin überführt und der alte Pfad entfernt wird. Die erste zu schließende Lücke ist der Einstieg: `Realm::evaluate` kompiliert mit `realm = true` und lehnt in diesem Modus jede Deklaration, jedes `var`, jede Funktion und jeden lexikalischen Block ab, weshalb der Test262-Runner den Engine-Core nie erreicht. Bis diese Lücke geschlossen ist, misst jede Test262-Zahl in [crates/jrs/README.md](../crates/jrs/README.md) ausschließlich das Stack-Backend.
 
 ## 19. Review- und Änderungsregeln
 

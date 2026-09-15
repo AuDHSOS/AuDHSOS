@@ -420,7 +420,8 @@ impl Execution<'_> {
             error @ (Error::Type { .. }
             | Error::Reference { .. }
             | Error::Range { .. }
-            | Error::Syntax { .. }) => self.error_object(&error),
+            | Error::Syntax { .. }
+            | Error::UnverifiedSyntax { .. }) => self.error_object(&error),
             other => Err(other),
         }
     }

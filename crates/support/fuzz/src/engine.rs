@@ -12,6 +12,13 @@
 //! one input out of the pool and change it a few times, testing after each
 //! change, so that a change which pays is built on rather than thrown away.
 //!
+//! A run asked for more than one worker does the same thing across
+//! processes instead: the `orchestrator` module keeps the pool and hands
+//! out the draws, the `worker` module mutates and runs. The counters are
+//! process globals, so a worker has to be a process; what it must not
+//! become is a second pool, which is why it reports what it reached and
+//! decides nothing.
+//!
 //! Invariants: the target runs on the thread the engine was started on and
 //! on no other, which is what lets the instrumentation write into a place
 //! that is never locked; an input that made the target panic is written out
@@ -19,7 +26,7 @@
 //! the length limit only ever grows, so an input already in the corpus is
 //! never too long for the run that reads it.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::panic::AssertUnwindSafe;
@@ -35,16 +42,18 @@ use crate::dictionary::Word;
 use crate::feature::feature_of;
 use crate::mutate::Mutator;
 use crate::options::{Mode, Options, parse, parse_dictionary};
+use crate::orchestrator::Fleet;
 use crate::pool::{Pool, Verdict};
 use crate::sancov;
+use crate::worker;
 
 /// How many times one input drawn from the pool is changed before another
 /// is drawn. A change that pays is built on; libFuzzer calls this the
 /// mutation depth and uses the same number.
-const MUTATE_DEPTH: usize = 5;
+pub(crate) const MUTATE_DEPTH: usize = 5;
 
 /// How often the run prints a line when nothing has happened.
-const PULSE_RUNS: u64 = 1 << 20;
+pub(crate) const PULSE_RUNS: u64 = 1 << 20;
 
 /// How often the watchdog looks at the clock.
 const WATCHDOG_INTERVAL_MS: u64 = 250;
@@ -61,7 +70,7 @@ static RUN_BEGAN: AtomicU64 = AtomicU64::new(0);
 static RUN_LIMIT: AtomicU64 = AtomicU64::new(0);
 
 /// Milliseconds since the process started.
-fn now() -> u64 {
+pub(crate) fn now() -> u64 {
     let started = START.get_or_init(Instant::now);
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
@@ -86,12 +95,13 @@ pub fn run(args: impl IntoIterator<Item = OsString>, body: &mut dyn FnMut(&[u8])
         Mode::RunOnce => runner.run_once(&options),
         Mode::Merge => runner.merge(&options),
         Mode::MinimizeCrash => runner.minimize(&options),
+        Mode::Worker => worker::serve(&mut runner, &options),
     }
 }
 
 /// What one run of the target amounted to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Outcome {
+pub(crate) enum Outcome {
     /// The target returned.
     Returned,
     /// The target panicked.
@@ -100,30 +110,30 @@ enum Outcome {
 
 /// The state of a run: the target, the counters it fills, and the pool the
 /// engine builds out of them.
-struct Runner<'a> {
+pub(crate) struct Runner<'a> {
     /// The target.
     body: &'a mut dyn FnMut(&[u8]),
     /// The features of the last run, reused so that a run allocates
     /// nothing.
-    features: Vec<u32>,
+    pub(crate) features: Vec<u32>,
     /// The first feature number the value profile may use, which is past
     /// every number a counter can produce.
     value_base: u32,
     /// Whether the value profile is kept.
     value_profile: bool,
     /// The inputs the run keeps.
-    pool: Pool,
+    pub(crate) pool: Pool,
     /// How the run changes an input.
-    mutator: Mutator,
+    pub(crate) mutator: Mutator,
     /// How many times the target has been run.
-    runs: u64,
+    pub(crate) runs: u64,
     /// Where a crashing input is written.
     artifact_prefix: PathBuf,
 }
 
 impl<'a> Runner<'a> {
     /// A run of `body` set up as `options` asks.
-    fn new(options: &Options, body: &'a mut dyn FnMut(&[u8])) -> Self {
+    pub(crate) fn new(options: &Options, body: &'a mut dyn FnMut(&[u8])) -> Self {
         let seed = options
             .seed
             .unwrap_or_else(|| now().wrapping_add(GOLDEN_TIME));
@@ -144,7 +154,7 @@ impl<'a> Runner<'a> {
 
     /// Runs the target once on `input` and leaves its features in
     /// `self.features`.
-    fn execute(&mut self, input: &[u8]) -> Outcome {
+    pub(crate) fn execute(&mut self, input: &[u8]) -> Outcome {
         if self.value_profile {
             sancov::with_trace(|trace| trace.values.clear());
         }
@@ -189,6 +199,7 @@ impl<'a> Runner<'a> {
                 let features = core::mem::take(&mut self.features);
                 let verdict = self.pool.offer(&bytes, &features, options.reduce_inputs);
                 self.features = features;
+                self.delete_retired();
                 if verdict != Verdict::Nothing {
                     let index = self.pool.next_index().saturating_sub(1);
                     self.pool.set_file(index, file);
@@ -207,7 +218,22 @@ impl<'a> Runner<'a> {
     }
 
     /// The fuzzing loop.
+    ///
+    /// `-max_total_time` is the whole run, not what is left of it after the
+    /// corpus is loaded: [`now`] counts from the start of the process, which
+    /// is where libFuzzer starts the clock of that flag too. Loading a corpus
+    /// runs every file in it, so a large one can take the greater part of a
+    /// short budget; the run says how much of it that was.
     fn fuzz(&mut self, options: &Options) -> ExitCode {
+        if options.workers > 1 {
+            return match Fleet::spawn(options) {
+                Ok(fleet) => self.orchestrate(options, fleet),
+                Err(problem) => {
+                    eprintln!("cannot start the workers: {problem}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
         watchdog();
         self.read_dictionary(options);
         if let Err(code) = self.load(options) {
@@ -221,7 +247,15 @@ impl<'a> Runner<'a> {
         }
         let deadline = options
             .max_total_time
-            .map(|seconds| now().saturating_add(seconds.saturating_mul(1000)));
+            .map(|seconds| seconds.saturating_mul(1000));
+        if let Some(deadline) = deadline {
+            let loaded = now();
+            eprintln!(
+                "INFO: loading the corpus took {}s of the {}s this run has",
+                loaded / 1000,
+                deadline / 1000
+            );
+        }
         let mut limit = SMALLEST_LIMIT.min(options.max_len);
         let mut last_find = 0u64;
         let mut printed = 0u64;
@@ -299,6 +333,25 @@ impl<'a> Runner<'a> {
 
     /// Runs `input` and keeps it if it reached something. Answers `None`
     /// when it reached nothing, and the outcome when it did or panicked.
+    /// Deletes the corpus files of the inputs the pool has stopped keeping.
+    ///
+    /// A corpus grows by one file for every input that reaches something in
+    /// fewer bytes than the one that reached it first, and the one it
+    /// replaced stays on disk unless something removes it. This removes it
+    /// where it stops being kept, so the directory holds what the pool holds
+    /// and no run has to be merged to shrink it again.
+    pub(crate) fn delete_retired(&mut self) {
+        for file in self.pool.take_retired() {
+            if file
+                .file_name()
+                .and_then(OsStr::to_str)
+                .is_some_and(is_found_name)
+            {
+                let _ = std::fs::remove_file(file);
+            }
+        }
+    }
+
     fn offer_input(&mut self, input: &[u8], options: &Options) -> Option<Outcome> {
         if self.execute(input) == Outcome::Panicked {
             self.save_artifact(input);
@@ -307,6 +360,7 @@ impl<'a> Runner<'a> {
         let features = core::mem::take(&mut self.features);
         let verdict = self.pool.offer(input, &features, options.reduce_inputs);
         self.features = features;
+        self.delete_retired();
         if verdict == Verdict::Nothing {
             return None;
         }
@@ -433,7 +487,7 @@ impl<'a> Runner<'a> {
     }
 
     /// Reads the words the run was given, if it was given any.
-    fn read_dictionary(&mut self, options: &Options) {
+    pub(crate) fn read_dictionary(&mut self, options: &Options) {
         let Some(path) = options.dictionary.as_ref() else {
             return;
         };
@@ -448,7 +502,7 @@ impl<'a> Runner<'a> {
     }
 
     /// Writes an input into the first corpus directory of the run.
-    fn write_corpus(input: &[u8], options: &Options) -> Option<PathBuf> {
+    pub(crate) fn write_corpus(input: &[u8], options: &Options) -> Option<PathBuf> {
         let directory = options.paths.first()?;
         if !directory.is_dir() {
             return None;
@@ -457,7 +511,7 @@ impl<'a> Runner<'a> {
     }
 
     /// Writes a crashing input where the run was told to put it.
-    fn save_artifact(&self, input: &[u8]) -> Option<PathBuf> {
+    pub(crate) fn save_artifact(&self, input: &[u8]) -> Option<PathBuf> {
         self.save_artifact_named("crash-", input)
     }
 
@@ -479,7 +533,7 @@ impl<'a> Runner<'a> {
     }
 
     /// Prints one line about where the run stands.
-    fn report(&self, label: &str, limit: usize, size: Option<usize>) {
+    pub(crate) fn report(&self, label: &str, limit: usize, size: Option<usize>) {
         let seconds = now().max(1) / 1000;
         let rate = self.runs.checked_div(seconds.max(1)).unwrap_or(0);
         let mut line = format!(
@@ -510,14 +564,14 @@ const DEFAULT_MINIMIZE_RUNS: u64 = 100_000;
 
 /// The length limit a run starts at, which grows as the run stops finding
 /// things.
-const SMALLEST_LIMIT: usize = 4;
+pub(crate) const SMALLEST_LIMIT: usize = 4;
 
 /// What a seed taken from the clock is mixed with, so that two runs
 /// started in the same millisecond still differ in their low bits.
 const GOLDEN_TIME: u64 = 0x9E37_79B9_7F4A_7C15;
 
 /// The base-two logarithm of `value`, at least zero.
-const fn log2(value: usize) -> u32 {
+pub(crate) const fn log2(value: usize) -> u32 {
     usize::BITS
         .saturating_sub(value.leading_zeros())
         .saturating_sub(1)
@@ -555,6 +609,13 @@ pub fn name_of(bytes: &[u8]) -> String {
     format!("{low:016x}{high:016x}")
 }
 
+/// Whether `name` is the hexadecimal name [`name_of`] gives a find, and not
+/// a name a person gave a regression input that the corpus tracks.
+#[must_use]
+pub fn is_found_name(name: &str) -> bool {
+    name.len() == 32 && name.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 /// Whether the input that began at `began` had outrun `limit` by `now`,
 /// all three in milliseconds since the process started. A run that has not
 /// begun and a run without a limit are both written as zero and outrun
@@ -581,7 +642,7 @@ pub(crate) fn tick(began: u64, limit: u64, now: u64) {
 }
 
 /// Starts the thread that ends a run whose input will not finish.
-fn watchdog() {
+pub(crate) fn watchdog() {
     static STARTED: AtomicU64 = AtomicU64::new(0);
     if STARTED.swap(1, Ordering::Relaxed) != 0 {
         return;

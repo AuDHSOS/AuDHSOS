@@ -27,6 +27,7 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
         stack: 128,
         string_units: 4096,
         heap_entries: 256,
+        feedback_vectors: 64,
         call_frames: 32,
         binding_slots: 512,
         properties: 128,

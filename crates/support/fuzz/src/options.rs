@@ -10,6 +10,10 @@
 //! so that a corpus directory can be handed to either engine. Flags this
 //! engine does not have are refused by name rather than ignored: a run
 //! that was asked for something it will not do should say so and stop.
+//! `-workers` is libFuzzer's name for how many worker processes fuzz at
+//! once and is this engine's too; `-fuzz_worker` is not a libFuzzer flag,
+//! because what it selects is this engine's protocol and nothing else
+//! speaks it.
 //!
 //! Invariant: a path on the command line is a path, and everything that
 //! begins with `-` is a flag. This is libFuzzer's rule and it is why a
@@ -60,6 +64,9 @@ pub enum Mode {
     Merge,
     /// Shrink one crashing input while it still crashes.
     MinimizeCrash,
+    /// Take work from an orchestrator on the standard input and report
+    /// what it reached on the standard output.
+    Worker,
 }
 
 /// Everything a run was told.
@@ -96,6 +103,10 @@ pub struct Options {
     pub reduce_inputs: bool,
     /// Whether to print the totals at the end.
     pub print_final_stats: bool,
+    /// How many worker processes the run was asked for, or fewer than two
+    /// to mutate and run in this process. What it gets is this and no more
+    /// than the machine has cores, which the fleet decides and says.
+    pub workers: usize,
 }
 
 impl Default for Options {
@@ -114,6 +125,7 @@ impl Default for Options {
             value_profile: false,
             reduce_inputs: true,
             print_final_stats: false,
+            workers: 0,
         }
     }
 }
@@ -132,7 +144,6 @@ pub const DEFAULT_TIMEOUT: u64 = 1200;
 /// is worse than stopping.
 const UNSUPPORTED: &[&str] = &[
     "jobs",
-    "workers",
     "fork",
     "detect_leaks",
     "rss_limit_mb",
@@ -193,6 +204,14 @@ fn apply(options: &mut Options, name: &str, value: &str) -> Result<(), OptionErr
         "use_value_profile" => options.value_profile = flag(name, value)?,
         "reduce_inputs" => options.reduce_inputs = flag(name, value)?,
         "print_final_stats" => options.print_final_stats = flag(name, value)?,
+        "workers" => {
+            options.workers = usize::try_from(number(name, value)?).unwrap_or(usize::MAX);
+        }
+        "fuzz_worker" => {
+            if flag(name, value)? {
+                options.mode = Mode::Worker;
+            }
+        }
         "runs_once" => options.mode = Mode::RunOnce,
         "merge" => {
             if flag(name, value)? {
