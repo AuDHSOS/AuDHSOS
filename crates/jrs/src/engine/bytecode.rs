@@ -498,6 +498,10 @@ pub struct BytecodeFunction {
     pub register_count: u16,
     /// Number of formal parameters expected.
     pub parameter_count: u16,
+    /// `ExpectedArgumentCount` of 15.1.5, which 10.2.9 gives the function as
+    /// its `length`: how many parameters stand before the first one with an
+    /// Initializer and before a rest parameter.
+    pub expected_arguments: u16,
     /// Number of parameter/local binding registers charged to the active binding budget.
     pub binding_count: u16,
     /// Register initialized with the currently called Function object.
@@ -538,6 +542,7 @@ impl BytecodeFunction {
             functions: Vec::new(),
             register_count,
             parameter_count,
+            expected_arguments: parameter_count,
             binding_count: parameter_count,
             self_register: None,
             this_register: None,

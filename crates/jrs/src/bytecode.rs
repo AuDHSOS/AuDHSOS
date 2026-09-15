@@ -1981,7 +1981,8 @@ impl RegisterLowerer {
         }
         // The body is lowered in its own unit, so the construct it stopped at
         // is recorded there and would be lost with it.
-        let Some(return_type) = Self::lower_function_body(&mut child, &function.body) else {
+        let Some(return_type) = Self::lower_function_body(&mut child, function, &function.body)
+        else {
             if let Some(refusal) = child.refusal {
                 self.refuse(refusal);
             }
@@ -2017,6 +2018,14 @@ impl RegisterLowerer {
         );
         child.code.register_count = child.register_count;
         child.code.parameter_count = u16::try_from(function.parameters.len()).ok()?;
+        // 15.1.5 stops counting at the first Initializer and at a rest
+        // parameter, which is what 10.2.9 gives the function as its `length`.
+        let expected = function
+            .parameters
+            .iter()
+            .position(|parameter| parameter.default.is_some() || parameter.rest)
+            .unwrap_or(function.parameters.len());
+        child.code.expected_arguments = u16::try_from(expected).ok()?;
         child.code.binding_count = child.max_binding_count;
         child.code.self_register = self_register;
         child.code.constructible = child_constructible;
@@ -2089,8 +2098,17 @@ impl RegisterLowerer {
         if function.constructor_kind != parser::ConstructorKind::Ordinary {
             return Some("a class constructor");
         }
-        if !function.parameters.iter().all(parser::Parameter::is_simple) {
-            return Some("a parameter list that is not simple");
+        // 10.2.11 instantiates each of these differently, and they are three
+        // pieces of work, so the refusal says which one it stands on.
+        if function.parameters.iter().any(|parameter| parameter.rest) {
+            return Some("a rest parameter");
+        }
+        if function
+            .parameters
+            .iter()
+            .any(|parameter| !matches!(parameter.pattern, parser::BindingPattern::Name(_)))
+        {
+            return Some("a parameter that is a binding pattern");
         }
         let duplicated = !function.parameters.iter().all(|parameter| {
             function
@@ -2293,11 +2311,47 @@ impl RegisterLowerer {
         (!counts.is_empty()).then_some(counts)
     }
 
-    fn lower_function_body(child: &mut Self, body: &[Stmt]) -> Option<RegisterType> {
+    /// The Initializer of each parameter that has one (10.2.11, and
+    /// `IteratorBindingInitialization` of 8.6.2).
+    ///
+    /// The argument is already in the register the parameter binds, so the
+    /// Initializer runs only where the call passed undefined, which is what
+    /// the clause says and what a call that passed too few arguments leaves.
+    /// They run left to right, so a later one reads what an earlier one bound.
+    fn initialize_parameter_defaults(&mut self, function: &Function) -> Option<()> {
+        use crate::engine::bytecode::Instruction;
+        for parameter in &function.parameters {
+            let Some(default) = &parameter.default else {
+                continue;
+            };
+            let name = parameter.pattern.identifier()?;
+            let binding = *self.bindings.get(name)?;
+            let RegisterBindingStorage::Register(register) = binding.storage else {
+                return None;
+            };
+            self.code.emit(Instruction::Ldar(register));
+            let present = self.code.emit(Instruction::JumpIfNotUndefined(0));
+            let value_type = self.lower(default)?;
+            self.code.emit(Instruction::Star(register));
+            let after = self.code.instructions.len();
+            self.patch_jump(present, after)?;
+            // The parameter holds either the argument, whose type the lowering
+            // cannot name, or the Initializer's answer.
+            self.bindings.get_mut(name)?.value_type = Some(RegisterType::Unknown.merge(value_type));
+        }
+        Some(())
+    }
+
+    fn lower_function_body(
+        child: &mut Self,
+        function: &Function,
+        body: &[Stmt],
+    ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         if let Some(register) = child.code.arguments_register {
             child.code.emit(Instruction::CreateArguments(register));
         }
+        child.initialize_parameter_defaults(function)?;
         for statement in body {
             if let Stmt::Function(name, function) = statement {
                 let value_type = child.lower_function_declaration(name, function)?;
@@ -6993,7 +7047,24 @@ fn register_block_local_names(body: &[Stmt]) -> Option<BTreeMap<String, bool>> {
 
 fn register_function_scope(function: &Function) -> Option<RegisterFunctionScope> {
     let local_names = register_function_local_names(function)?;
-    register_body_scope(&function.body, &local_names)
+    let mut scope = register_body_scope(&function.body, &local_names)?;
+    // An Initializer of 8.6.2 runs in the frame of the call, so a name it
+    // reads and the body does not is captured just the same.
+    let mut direct = BTreeSet::new();
+    let mut nested = BTreeSet::new();
+    for parameter in &function.parameters {
+        if let Some(default) = &parameter.default {
+            register_expression_references(default, &mut direct, &mut nested)?;
+        }
+    }
+    for name in direct.into_iter().chain(nested) {
+        if local_names.contains(&name) {
+            scope.captured_names.insert(name);
+        } else {
+            scope.free_names.insert(name);
+        }
+    }
+    Some(scope)
 }
 
 fn register_body_scope(

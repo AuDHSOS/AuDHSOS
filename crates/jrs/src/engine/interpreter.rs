@@ -5338,7 +5338,7 @@ impl RegisterVM {
                             ))?;
                     let captures_context = !target.outer_context_slot_counts.is_empty();
                     let constructible = target.constructible;
-                    let parameter_count = target.parameter_count;
+                    let expected_arguments = target.expected_arguments;
                     let function = self.allocate_function(
                         active_code,
                         heap,
@@ -5347,11 +5347,9 @@ impl RegisterVM {
                         captures_context,
                     )?;
                     self.acc = Value::from_object(function);
-                    // 10.2.9 gives the function its `length`, which is how many
-                    // parameters stand before the first one with a default and
-                    // before a rest parameter. The lowering takes neither, so
-                    // it is the count of the list.
-                    Self::set_function_length(function, parameter_count, heap)?;
+                    // 10.2.9 gives the function the `ExpectedArgumentCount` of
+                    // 15.1.5 as its `length`.
+                    Self::set_function_length(function, expected_arguments, heap)?;
                     // 10.2.5 gives an ordinary function its `prototype`; a
                     // method and an arrow have none and no `[[Construct]]`.
                     // The accumulator carries the function through it, because

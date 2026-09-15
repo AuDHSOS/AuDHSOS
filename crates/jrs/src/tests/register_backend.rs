@@ -2480,7 +2480,6 @@ fn register_function_calls_preserve_limits_and_reject_unlowered_semantics() -> R
     for source in [
         "async function f(){return 1}f()",
         "function f(a,a){return a}f(1,2)",
-        "function f(a={}){return a}f()",
         "function f(...a){return a.length}f(1)",
         "let f=function inner(){return inner===f};f()",
         "let f=function inner(inner){return inner};f(42)",
@@ -4189,13 +4188,10 @@ fn a_script_the_lowering_refuses_says_what_it_holds() -> Result<(), Error> {
         // 10.2.11 does more for these parameter lists than the lowering does,
         // and the body is lowered in a unit of its own, so both name what
         // stopped them and not the expression the function was written as.
+        ("var f=function(...r){return r}; f()", "a rest parameter"),
         (
-            "var f=function(a=1){return a}; f()",
-            "a parameter list that is not simple",
-        ),
-        (
-            "var f=function(...r){return r}; f()",
-            "a parameter list that is not simple",
+            "var f=function([a]){return a}; f([1])",
+            "a parameter that is a binding pattern",
         ),
         (
             "var f=function(){try{return 1}finally{}}; f()",
@@ -4483,5 +4479,37 @@ fn the_array_methods_of_23_1_3_that_ask_the_script() -> Result<(), Error> {
         "try{none.reduce(keep)}catch(e){caught=e instanceof TypeError}",
         "caught",
     ])?;
+    Ok(())
+}
+
+#[test]
+fn a_parameter_takes_its_initializer_where_the_call_passed_none() -> Result<(), Error> {
+    // 8.6.2 runs the Initializer of a parameter only where the argument is
+    // undefined, which is what a call that passed too few leaves. They run
+    // left to right, so a later one reads what an earlier one bound, and
+    // 15.1.5 stops counting the `length` of 10.2.9 at the first of them.
+    for source in [
+        "function f(a=1){return a};f()",
+        "function f(a=1){return a};f(5)",
+        "function f(a=1){return a};f(undefined)",
+        "function f(a=1){return a};f(null)",
+        "function f(a=1){return a};f(0)",
+        "function f(a,b=a+1){return b};f(2)",
+        "function f(a=1,b=2){return a+b};f()",
+        "function f(a=1,b=2){return a+b};f(10)",
+        "var g=function(a=7){return a};g()",
+        "function f(a=1){return arguments.length};f()",
+        "function f(a=1){return arguments.length};f(1,2)",
+        "function f(a){return a};f.length",
+        "function f(a=1){return a};f.length",
+        "function f(a,b=2){return a};f.length",
+        "function f(a,b,c){return a};f.length",
+        "function f(){return 1};f.length",
+        // The Initializer is an expression, so it can call.
+        "function one(){return 1};function f(a=one()){return a};f()",
+        "function f(a={}){return typeof a};f()",
+    ] {
+        differential(source)?;
+    }
     Ok(())
 }
