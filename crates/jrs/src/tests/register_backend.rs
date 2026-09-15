@@ -3068,7 +3068,7 @@ fn var_frame_slots_exist_before_source_order_initializers() -> Result<(), Error>
 }
 
 #[test]
-fn captured_var_mutations_wait_for_deoptimization() -> Result<(), Error> {
+fn a_capture_a_write_reaches_takes_the_answer_of_the_run() -> Result<(), Error> {
     for source in [
         "let x=1;function g(){return x}let {y=(x='a')}={};g()+1",
         "var x=1;function g(){return x}var {y=(x='a')}={};g()",
@@ -3111,9 +3111,26 @@ fn captured_var_mutations_wait_for_deoptimization() -> Result<(), Error> {
         "function f(){var x=1;function g(){return x}for(const k in (x='a')){}return g()}f()",
         "function f(){var x=1;function g(){return x}for(const v of [1]){x='a'}return g()}f()",
     ] {
+        // A binding a write reaches carries no type, so every read of it takes
+        // the generic path. Each of these either answers what the stack
+        // backend answers or names a feature it has not got; none of them
+        // answers something else.
         let program = compile(source, Limits::default())?;
-        assert!(!program.uses_register_backend(), "{source}");
-        Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let expected = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        if !program.uses_register_backend() {
+            assert!(program.register_refusal.is_some(), "{source}");
+            continue;
+        }
+        match Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)
+        {
+            Ok(actual) => assert!(
+                same_value(&actual, &expected),
+                "{source}: {actual:?} != {expected:?}"
+            ),
+            Err(Error::Unsupported { .. }) => {}
+            other => panic!("{source}: {other:?}"),
+        }
     }
     Ok(())
 }
@@ -3218,15 +3235,12 @@ fn conditional_statements_match_legacy_execution() -> Result<(), Error> {
 }
 
 #[test]
-fn register_branch_lowering_rejects_incompatible_control_flow() -> Result<(), Error> {
+fn a_capture_a_write_reaches_inside_a_function_takes_the_same_answer() -> Result<(), Error> {
     for source in [
         "function f(){function g(){return x}var x=1;x='a';return g()}f()",
         "function f(){var x=1;function g(){x++;return x}return g()}f()",
     ] {
-        assert!(
-            !compile(source, Limits::default())?.uses_register_backend(),
-            "{source}"
-        );
+        differential_scripts(&[source])?;
     }
     Ok(())
 }
@@ -5221,5 +5235,27 @@ fn an_array_pattern_takes_its_elements_from_the_iterator() -> Result<(), Error> 
         Some("a rest element of an array pattern"),
         "{source}"
     );
+    Ok(())
+}
+
+#[test]
+fn a_captured_var_a_closure_writes_carries_no_type() -> Result<(), Error> {
+    // A captured reader is compiled against the type its binding carries, and
+    // an assignment anywhere can make that type wrong. A captured `var` that
+    // is written carries the type the lowering cannot name instead.
+    for source in [
+        "var c=0;var f=function(){c=c+1};f();c",
+        "var c=0;function f(){c=c+1}f();c",
+        "var c=0;var f=function(){c=1};f();c",
+        "var c=0;var f=function(){c='s'};f();typeof c",
+        "var c=0;var f=function(){c=c+1};f();f();c",
+        "var c=1;var f=function(){c=c*2};var g=function(){return c};f();g()",
+        "var c=0;var f=function(){var g=function(){c=7};g()};f();c",
+        "var c=0;var f=function(){c=c+1;return c};f()+f()",
+        // The same binding read and never written keeps the type it had.
+        "var c=2;var f=function(){return c+1};f()",
+    ] {
+        differential_scripts(&[source])?;
+    }
     Ok(())
 }

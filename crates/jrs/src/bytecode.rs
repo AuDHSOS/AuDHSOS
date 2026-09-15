@@ -1442,21 +1442,32 @@ impl RegisterLowerer {
         let local_names = self.bindings.keys().cloned().collect();
         let captured_names = register_body_scope(body, &local_names)?.captured_names;
         let captured_vars: BTreeSet<_> = captured_names.intersection(&names).cloned().collect();
-        // Captured readers are compiled against the merged primitive type of
-        // every var initializer. An arbitrary later assignment can invalidate
-        // that contract after the closure bytecode has been emitted; until
-        // guards and deoptimization exist, reject the complete enclosing body.
-        if !captured_vars.is_empty() {
+        // A captured reader is compiled against the type its binding carries,
+        // and an assignment anywhere — in this body or in a function it holds
+        // — can make that type wrong. The name the lowering cannot give is
+        // what the top of the lattice is: a captured var that is written
+        // carries it, and every read of it takes the generic path.
+        let mut written = BTreeSet::new();
+        for name in &captured_vars {
+            let one: BTreeSet<_> = core::iter::once(name.clone()).collect();
             for statement in body {
-                if register_statement_writes_names(statement, &captured_vars)? {
-                    return None;
+                if register_statement_writes_names(statement, &one)? {
+                    written.insert(name.clone());
+                    break;
                 }
             }
+        }
+        for name in &written {
+            self.bindings.get_mut(name)?.value_type = Some(RegisterType::Unknown);
         }
         let mut inferred = self.bindings.clone();
         infer_register_body_var_types_to_fixed_point(body, &mut inferred)?;
         for name in initialized_names {
-            let hint = inferred.get(&name)?.value_type?;
+            let hint = if written.contains(&name) {
+                RegisterType::Unknown
+            } else {
+                inferred.get(&name)?.value_type?
+            };
             self.binding_type_hints.insert(name, hint);
         }
         Some(())
