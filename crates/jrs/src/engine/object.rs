@@ -44,6 +44,9 @@ pub enum ObjectKind {
     Array {
         /// Observable Array length property.
         length: u32,
+        /// `[[Writable]]` of that property, which 10.4.2.4 can clear and
+        /// nothing can set again.
+        writable: bool,
     },
     /// Bytecode-compiled callable function.
     Function {
@@ -271,7 +274,10 @@ impl JSObject {
             in_object_slots: [VALUE_UNDEFINED; IN_OBJECT_SLOT_COUNT],
             out_of_line_slots: None,
             extensible: true,
-            kind: ObjectKind::Array { length },
+            kind: ObjectKind::Array {
+                length,
+                writable: true,
+            },
         }
     }
 

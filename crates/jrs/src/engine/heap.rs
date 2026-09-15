@@ -636,9 +636,32 @@ impl GenerationalHeap {
     #[must_use]
     pub fn array_length(&self, reference: ObjectRef) -> Option<u32> {
         match self.get_object(reference)?.kind {
-            ObjectKind::Array { length } => Some(length),
+            ObjectKind::Array { length, .. } => Some(length),
             _ => None,
         }
+    }
+
+    /// Whether an Array's `length` is still writable (10.4.2.4).
+    #[must_use]
+    pub fn array_length_is_writable(&self, reference: ObjectRef) -> Option<bool> {
+        match self.get_object(reference)?.kind {
+            ObjectKind::Array { writable, .. } => Some(writable),
+            _ => None,
+        }
+    }
+
+    /// Clears `[[Writable]]` of an Array's `length`, which 10.4.2.4 never
+    /// sets again.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] unless `object` is a live Array.
+    pub fn freeze_array_length(&mut self, object: ObjectRef) -> Result<(), HeapError> {
+        let ObjectKind::Array { writable, .. } = &mut self.object_mut(object)?.kind else {
+            return Err(HeapError::InvalidReference);
+        };
+        *writable = false;
+        Ok(())
     }
 
     /// Returns the number of own named and indexed properties on an object.
@@ -725,7 +748,7 @@ impl GenerationalHeap {
         let shape_id = object.shape_id;
         let elements = object.elements;
         let array_length = match object.kind {
-            ObjectKind::Array { length } => Some(length),
+            ObjectKind::Array { length, .. } => Some(length),
             _ => None,
         };
         // An index the element store carries is an ordinary data property;
@@ -812,9 +835,11 @@ impl GenerationalHeap {
             .as_string()
             .and_then(|name| self.strings.to_utf16(Value::from_string(name)))
             .unwrap_or_default();
-        if matches!(object.kind, ObjectKind::Array { .. }) && units == LENGTH_UNITS {
+        if let ObjectKind::Array { writable, .. } = object.kind
+            && units == LENGTH_UNITS
+        {
             return Ok(Some(PropertyFlags {
-                writable: true,
+                writable,
                 enumerable: false,
                 configurable: false,
                 is_accessor: false,
@@ -1240,7 +1265,7 @@ impl GenerationalHeap {
             .ok_or(HeapError::InvalidReference)?;
         self.set_element(elements, index, value)?;
         let object = self.object_mut(object)?;
-        let ObjectKind::Array { length } = &mut object.kind else {
+        let ObjectKind::Array { length, .. } = &mut object.kind else {
             return Err(HeapError::InvalidReference);
         };
         *length = (*length).max(index.saturating_add(1));
@@ -1254,7 +1279,10 @@ impl GenerationalHeap {
     ///
     /// Returns [`HeapError::InvalidReference`] unless `object` is a live Array.
     pub fn set_array_length(&mut self, object: ObjectRef, length: u32) -> Result<(), HeapError> {
-        let ObjectKind::Array { length: current } = &mut self.object_mut(object)?.kind else {
+        let ObjectKind::Array {
+            length: current, ..
+        } = &mut self.object_mut(object)?.kind
+        else {
             return Err(HeapError::InvalidReference);
         };
         *current = length;

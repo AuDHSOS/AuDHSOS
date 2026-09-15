@@ -2196,6 +2196,7 @@ impl RegisterVM {
                     name,
                     &descriptor,
                     heap,
+                    realm,
                 )?))
             }
         }
@@ -2375,7 +2376,7 @@ impl RegisterVM {
             descriptors.push((key, Self::to_property_descriptor(descriptor, heap, realm)?));
         }
         for (key, descriptor) in descriptors {
-            if !Self::define_property_from(object, key, &descriptor, heap)? {
+            if !Self::define_property_from(object, key, &descriptor, heap, realm)? {
                 return Err(type_error(heap, realm, "property definition rejected"));
             }
         }
@@ -2531,7 +2532,7 @@ impl RegisterVM {
                     ));
                 };
                 let descriptor = Self::to_property_descriptor(source, heap, realm)?;
-                if !Self::define_property_from(object, name, &descriptor, heap)? {
+                if !Self::define_property_from(object, name, &descriptor, heap, realm)? {
                     return Err(type_error(heap, realm, "property definition rejected"));
                 }
                 Ok(target)
@@ -3056,8 +3057,11 @@ impl RegisterVM {
         name: PropertyKey,
         descriptor: &PartialDescriptor,
         heap: &mut GenerationalHeap,
+        realm: &Realm,
     ) -> Result<bool, VMError> {
-        Self::refuse_array_length(object, name, heap)?;
+        if Self::names_array_length(object, name, heap) {
+            return Self::define_array_length(object, descriptor, heap, realm);
+        }
         let indexed = Self::element_index_of(object, name, heap);
         let Some(current) = heap.own_named_flags(object, name)? else {
             // Step 2: the property does not exist, so the descriptor makes it.
@@ -3303,17 +3307,119 @@ impl RegisterVM {
     ///
     /// The length is a field of the object and no property of its Shape, so a
     /// Shape that took the name would hold a second answer beside it.
-    fn refuse_array_length(
-        object: ObjectRef,
-        name: PropertyKey,
-        heap: &GenerationalHeap,
-    ) -> Result<(), VMError> {
+    fn names_array_length(object: ObjectRef, name: PropertyKey, heap: &GenerationalHeap) -> bool {
         let units = name
             .as_string()
             .and_then(|name| heap.strings.to_utf16(Value::from_string(name)))
             .unwrap_or_default();
-        if units.as_slice() == LENGTH_NAME && heap.array_length(object).is_some() {
-            return Err(VMError::Unsupported("a descriptor for an Array length"));
+        units.as_slice() == LENGTH_NAME && heap.array_length(object).is_some()
+    }
+
+    /// `ArraySetLength` of 10.4.2.4 as a `[[DefineOwnProperty]]`.
+    ///
+    /// The property is never enumerable and never configurable, and its
+    /// `[[Writable]]` only ever goes from true to false. A descriptor with no
+    /// value only says what those three are; one with a value moves the length
+    /// and deletes every index at or above it.
+    fn define_array_length(
+        object: ObjectRef,
+        descriptor: &PartialDescriptor,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<bool, VMError> {
+        let writable = heap
+            .array_length_is_writable(object)
+            .ok_or(VMError::TypeError)?;
+        if descriptor.is_accessor()
+            || descriptor.enumerable == Some(true)
+            || descriptor.configurable == Some(true)
+        {
+            return Ok(false);
+        }
+        // Step 2: a descriptor that asks for a writable the property no longer
+        // has is refused, and one that asks for the writable it has is not.
+        if !writable && (descriptor.writable == Some(true) || descriptor.value.is_some()) {
+            return Ok(false);
+        }
+        let Some(value) = descriptor.value else {
+            if descriptor.writable == Some(false) {
+                heap.freeze_array_length(object)?;
+            }
+            return Ok(true);
+        };
+        let wanted = Self::array_length_of(value, heap, realm)?;
+        let current = heap.array_length(object).ok_or(VMError::TypeError)?;
+        if wanted < current {
+            Self::shorten_array(object, wanted, heap)?;
+        }
+        heap.set_array_length(object, wanted)?;
+        if descriptor.writable == Some(false) {
+            heap.freeze_array_length(object)?;
+        }
+        Ok(true)
+    }
+
+    /// The `ToUint32` of 10.4.2.4 step 3, which has to be the Number
+    /// `ToNumber` gives.
+    fn array_length_of(
+        value: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<u32, VMError> {
+        let number = primitive_number(value, heap)?;
+        let wanted = crate::value::number_uint32(number);
+        #[expect(
+            clippy::float_cmp,
+            reason = "10.4.2.4 asks whether the two are the same Number"
+        )]
+        let differs = f64::from(wanted) != number;
+        if differs {
+            return Err(raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::RangeError,
+                "invalid array length",
+            ));
+        }
+        Ok(wanted)
+    }
+
+    /// Deletes every index at or above the new length, which 10.4.2.4 does in
+    /// descending order.
+    fn shorten_array(
+        object: ObjectRef,
+        wanted: u32,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        // An index the Shape took over (10.4.2.1) would have to be deleted
+        // here too, and 10.4.2.4 stops at one that is not configurable.
+        let shape = heap
+            .get_object(object)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?
+            .shape_id;
+        for (name, _, _) in heap.shapes.own_properties(shape) {
+            let units = name
+                .as_string()
+                .and_then(|name| heap.strings.to_utf16(Value::from_string(name)))
+                .unwrap_or_default();
+            if array_index_units(&units).is_some_and(|index| index >= wanted) {
+                return Err(VMError::Unsupported(
+                    "an Array length that deletes a property of the Shape",
+                ));
+            }
+        }
+        if let Some(elements) = heap
+            .get_object(object)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?
+            .elements
+        {
+            let indices = heap
+                .get_elements(elements)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?
+                .indices();
+            for index in indices.into_iter().filter(|index| *index >= wanted) {
+                heap.delete_element(elements, index)?;
+            }
         }
         Ok(())
     }
@@ -4672,50 +4778,15 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<(), VMError> {
-        let number = primitive_number(value, heap)?;
-        let wanted = crate::value::number_uint32(number);
-        #[expect(
-            clippy::float_cmp,
-            reason = "10.4.2.4 asks whether the two are the same Number"
-        )]
-        let differs = f64::from(wanted) != number;
-        if differs {
-            return Err(raise(
-                heap,
-                realm,
-                super::realm::NativeErrorKind::RangeError,
-                "invalid array length",
-            ));
+        let wanted = Self::array_length_of(value, heap, realm)?;
+        // 10.4.2.4 step 2: a `length` that is no longer writable takes no
+        // value at all, which 10.1.9.1 answers false for.
+        if heap.array_length_is_writable(object) != Some(true) {
+            return Ok(());
         }
-        // An index the Shape took over (10.4.2.1) would have to be deleted
-        // here too, and 10.4.2.4 stops at one that is not configurable.
-        let shape = heap
-            .get_object(object)
-            .ok_or(VMError::Heap(HeapError::InvalidReference))?
-            .shape_id;
-        for (name, _, _) in heap.shapes.own_properties(shape) {
-            let units = name
-                .as_string()
-                .and_then(|name| heap.strings.to_utf16(Value::from_string(name)))
-                .unwrap_or_default();
-            if array_index_units(&units).is_some_and(|index| index >= wanted) {
-                return Err(VMError::Unsupported(
-                    "an Array length that deletes a property of the Shape",
-                ));
-            }
-        }
-        if let Some(elements) = heap
-            .get_object(object)
-            .ok_or(VMError::Heap(HeapError::InvalidReference))?
-            .elements
-        {
-            let indices = heap
-                .get_elements(elements)
-                .ok_or(VMError::Heap(HeapError::InvalidReference))?
-                .indices();
-            for index in indices.into_iter().filter(|index| *index >= wanted) {
-                heap.delete_element(elements, index)?;
-            }
+        let current = heap.array_length(object).ok_or(VMError::TypeError)?;
+        if wanted < current {
+            Self::shorten_array(object, wanted, heap)?;
         }
         heap.set_array_length(object, wanted)?;
         Ok(())

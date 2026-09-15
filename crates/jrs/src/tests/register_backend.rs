@@ -6273,3 +6273,36 @@ fn the_scan_clauses_walk_like_the_rest_of_23_1_3() -> Result<(), Error> {
     }
     Ok(())
 }
+
+/// 10.4.2.4 as a `[[DefineOwnProperty]]`: an Array's `length` is never
+/// enumerable and never configurable, and its `[[Writable]]` only ever goes
+/// from true to false.
+#[test]
+fn a_descriptor_sets_an_array_length() -> Result<(), Error> {
+    for source in [
+        "var a=[1,2,3];Object.defineProperty(a,'length',{value:1});a.length+','+a[1]",
+        "var a=[1,2,3];Object.defineProperty(a,'length',{value:5});''+a.length",
+        "var a=[1,2,3];Object.defineProperty(a,'length',{writable:false});a.length=1;''+a.length",
+        "var a=[1,2,3];Object.defineProperty(a,'length',{writable:false});var r=0;\
+         try{Object.defineProperty(a,'length',{value:1})}catch(e){r=e instanceof TypeError}r",
+        "var a=[1];var r=0;\
+         try{Object.defineProperty(a,'length',{enumerable:true})}catch(e){r=e instanceof TypeError}r",
+        "var a=[1];var r=0;\
+         try{Object.defineProperty(a,'length',{configurable:true})}catch(e){r=e instanceof TypeError}r",
+        "var a=[1];var r=0;\
+         try{Object.defineProperty(a,'length',{value:-1})}catch(e){r=e instanceof RangeError}r",
+        "var a=[1];var r=0;try{Object.defineProperty(a,'length',{get:function(){return 1}})}\
+         catch(e){r=e instanceof TypeError}r",
+        "var a=[1,2,3];Object.getOwnPropertyDescriptor(a,'length').writable",
+        "var a=[1];Object.defineProperty(a,'length',{writable:false});\
+         Object.getOwnPropertyDescriptor(a,'length').writable",
+        "var a=[1,2,3];a.length=1;''+a.length",
+        "var a=[1];Object.defineProperty(a,'length',{value:0,writable:false});\
+         ''+a.length+','+Object.getOwnPropertyDescriptor(a,'length').writable",
+        "var a=[1];Object.defineProperty(a,'length',{});''+a.length",
+        "var a=[1];Object.defineProperty(a,'length',{enumerable:false,configurable:false});''+a.length",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
