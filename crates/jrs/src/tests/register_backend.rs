@@ -318,10 +318,12 @@ fn arguments_inside_a_function_is_never_a_global() -> Result<(), Error> {
     differential_scripts(&["function f(){return arguments.length}f()"])?;
     differential_scripts(&["function f(a){return arguments.length}f(1,2,3)"])?;
     differential_scripts(&["function f(a){return arguments[1]}f(1,2)"])?;
-    // The object is only read as the base of a property access, because the
-    // mapping of 10.4.4.7 is not built.
+    // A function with no formal parameter has an empty mapping, so its object
+    // goes where any other value goes.
+    differential("function f(){return typeof arguments}f()")?;
+    // With a formal parameter the mapping of 10.4.4.7 is not built, so the
+    // object is only read as the base of a property access.
     for source in [
-        "function f(){return typeof arguments}f()",
         "function f(){arguments=1;return 2}f()",
         "function f(a){arguments[0]=2;return a}f(1)",
         "function f(a){a=2;return arguments[0]}f(1)",
@@ -5930,5 +5932,28 @@ fn a_template_literal_answers_on_the_engine() -> Result<(), Error> {
     ] {
         differential_scripts(&[source])?;
     }
+    Ok(())
+}
+
+/// 10.4.4.7 maps the indices of a sloppy function's arguments object onto its
+/// formal parameters. A function with none has an empty mapping, so its object
+/// carries nothing that could be observed where it goes.
+#[test]
+fn an_arguments_object_with_no_mapping_leaves_its_frame() -> Result<(), Error> {
+    for source in [
+        "var arg;(function fun(){arg=arguments}(1,2,3));arg.length",
+        "function f(){return arguments}f(1,2).length",
+        "function f(){var a=arguments;return a[0]}f(5)",
+        "function f(){return arguments}typeof f()",
+        "'use strict';var arg;(function fun(a){arg=arguments}(1,2,3));arg.length",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // A sloppy function with a formal parameter keeps a mapping this engine
+    // does not build, so its object is read only as the base of a property
+    // access.
+    let source = "var arg;(function fun(a){arg=arguments}(1,2,3));arg.length";
+    let program = compile(source, Limits::default())?;
+    assert!(!program.uses_register_backend(), "{source}");
     Ok(())
 }

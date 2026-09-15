@@ -730,6 +730,9 @@ struct RegisterLowerer {
     allow_return: bool,
     /// The binding 10.4.4 made for `arguments`, when this body reads it.
     arguments_binding: Option<RegisterBinding>,
+    /// How many formal parameters 10.4.4.7 could map the indices of the
+    /// arguments object onto.
+    mapped_parameters: usize,
     /// Strictness of the Reference the assignment being lowered names, which
     /// 10.1.9.1 reads to decide whether a write it refuses throws.
     assignment_strict: bool,
@@ -899,6 +902,7 @@ impl RegisterLowerer {
             binding_type_hints: BTreeMap::new(),
             allow_return: false,
             arguments_binding: None,
+            mapped_parameters: 0,
             assignment_strict: false,
             reading_member_base: false,
             return_type: None,
@@ -1890,9 +1894,12 @@ impl RegisterLowerer {
                         // base of a property access. A strict function has no
                         // mapping to observe.
                         "arguments" if self.allow_return => {
-                            let binding = self
-                                .arguments_binding
-                                .filter(|_| member_base || self.code.strict)?;
+                            // A function with no formal parameter has an empty
+                            // mapping, so its object carries nothing that could
+                            // be observed anywhere.
+                            let unmapped = self.code.strict || self.mapped_parameters == 0;
+                            let binding =
+                                self.arguments_binding.filter(|_| member_base || unmapped)?;
                             self.load_binding(binding);
                             RegisterType::Unknown
                         }
@@ -2884,6 +2891,7 @@ impl RegisterLowerer {
             };
             child.bindings.get_mut(ARGUMENTS)?.value_type = Some(RegisterType::Unknown);
             child.arguments_binding = child.bindings.remove(ARGUMENTS);
+            child.mapped_parameters = function.parameters.len();
             child.code.arguments_register = Some(register);
         }
         if register_body_reads_this(&function.body) {
