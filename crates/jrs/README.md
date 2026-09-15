@@ -647,8 +647,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `for`-`of` statements on the register engine (focused) | focused | `f1314b2` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/for-of --summary` | 751 | 1,442 | 101 (7.00%) | 21 (1.46%) | 1,320 (91.54%) |
 | `%Object%` and its methods, after the integrity levels (focused) | focused | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 5,916 (86.97%) | 862 (12.67%) | 24 (0.35%) |
 | `%Object%` and its methods, after the integrity levels, on the register engine (focused) | focused | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,530 (22.49%) | 18 (0.26%) | 5,254 (77.24%) |
-| Complete pinned suite, including staging and Intl | full | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 9,999 (9.71%) | 16,417 (15.95%) | 76,509 (74.33%) |
+| `%Number%` (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 572 (84.12%) | 102 (15.00%) | 6 (0.88%) |
+| `%Number%` on the register engine (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 226 (33.24%) | 2 (0.29%) | 452 (66.47%) |
+| Complete pinned suite, including staging and Intl | full | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 10,478 (10.18%) | 16,425 (15.96%) | 76,022 (73.86%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -969,6 +971,19 @@ enumerable values and the pairs.
 Over `test/built-ins/Object` the engine passes 1,530 of 6,802 variants and
 fails 18, where the stack backend fails 862.
 
+An update takes `ToNumeric` of what the binding held (13.4.4.1), so
+`var x = '1'; x++` is no longer refused for want of a Number, `Add` does not
+concatenate, and the answer a postfix update gives is the Number `ToNumeric`
+made.
+
+`%Number%` follows the pattern `%String%` and `%Math%` set. 21.1.1.1 answers
++0 for no argument and the Number `ToNumber` makes of every other, `new` names
+the Number exotic object of 21.1.3, and 21.1.2 gives eight values and four
+questions, none of which coerces: step 1 of each answers false for anything
+that is not a Number, where the `isFinite` and `isNaN` of 19.2 take `ToNumber`
+first. Over `test/built-ins/Number` the engine passes 226 of 680 variants and
+fails 2, where the stack backend fails 102.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -1032,7 +1047,9 @@ Realm Script and the bound on every Array scan were measured at tree
 tree `a6e6f7c4ceb2326595e511ff0ad4887d85b14b0e`, which is the tree of
 `f1314b2`. The `%Object%` runs and both full runs beside them were measured at
 tree `0d446537428a6d1d20eb3a6ad1ebae9a2240b8f3`, which is the tree of
-`16f268e`.
+`16f268e`. The `%Number%` runs and both full runs beside them were measured at
+tree `5e2ec2f08ae7a18f55f1b4c0fe079e7de807efdd`, which is the tree of
+`a011601`.
 
 ### Historical Test262 baseline
 
