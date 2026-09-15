@@ -629,8 +629,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `let` and `const` statements on the register engine (focused) | focused | `c14dd24` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/let test/language/statements/const --summary` | 281 | 558 | 105 (18.82%) | 28 (5.02%) | 425 (76.16%) |
 | `%Function%` and its methods (focused) | focused | `1516e27` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Function --summary` | 509 | 893 | 753 (84.32%) | 68 (7.61%) | 72 (8.06%) |
 | `%Function%` and its methods on the register engine (focused) | focused | `1516e27` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Function --summary` | 509 | 893 | 61 (6.83%) | 226 (25.31%) | 606 (67.86%) |
-| Complete pinned suite, including staging and Intl | full | `1516e27` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `1516e27` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 6,163 (5.99%) | 21,739 (21.12%) | 75,023 (72.89%) |
+| `%Math%` (focused) | focused | `65001ed` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Math --summary` | 327 | 654 | 306 (46.79%) | 344 (52.60%) | 4 (0.61%) |
+| `%Math%` on the register engine (focused) | focused | `65001ed` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Math --summary` | 327 | 654 | 2 (0.31%) | 10 (1.53%) | 642 (98.17%) |
+| Complete pinned suite, including staging and Intl | full | `65001ed` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `65001ed` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 6,197 (6.02%) | 16,438 (15.97%) | 80,290 (78.01%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -726,9 +728,16 @@ time and names that as a gap. 20.2.3.2 answers the bound function exotic
 object of 10.4.1, which 10.4.1.1 calls with the `this` value the bind fixed,
 whatever the call site passes; a bound argument is named as a gap, because it
 would have to go in front of arguments that lie in the registers of the caller.
-`harness/propertyHelper.js` now reaches the last line of its preamble,
-`Math.pow(2, 32) - 1`; that gap still holds 946 variants which count as a
-failed harness today.
+`%Math%` is an ordinary object
+that 19.1 gives the global object, with the `pow` of 21.3.2.26; a name 21.3
+gives it and this Realm has not built is a gap, because answering undefined
+would claim the namespace does not have it.
+With that, `harness/propertyHelper.js` runs on the engine from its first line
+to its last. It was the harness that stood between the engine and 946 variants,
+and they now reach what they test: the engine's failures fall by 5,301 in this
+step, because a variant that stopped at a harness which would not load now
+stops at a gap it names. Neither is a pass, and the stack backend is unchanged
+variant for variant across the step.
 
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
@@ -770,9 +779,10 @@ were measured at tree `d98662e20789888cb180d99642144c95e6596f04`. The
 `%Object%` runs at tree `595f01d820090f035e3b992c1db9990181d2ae95`. The
 compound-assignment runs at tree `8183751cf4043881206e2a64a11ef3f5f0ad0aae`.
 The lexical-declaration runs were measured at tree
-`ea89126ff888b6994a0b25a69baf8b0845fa25ff`. The `%Function%` runs and both full
-runs were measured at tree `94248adff3e44e88c2a52a671d1c38649b3e135e`, which is
-the tree of `1516e27`.
+`ea89126ff888b6994a0b25a69baf8b0845fa25ff`. The `%Function%` runs were measured at tree
+`94248adff3e44e88c2a52a671d1c38649b3e135e`. The `%Math%` runs and both full
+runs were measured at tree `ef4cd61875fba838eea55c5c337a3b2859ed4da4`, which is
+the tree of `65001ed`.
 
 ### Historical Test262 baseline
 
