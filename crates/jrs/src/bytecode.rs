@@ -736,6 +736,9 @@ struct RegisterLowerer {
     /// Strictness of the Reference the assignment being lowered names, which
     /// 10.1.9.1 reads to decide whether a write it refuses throws.
     assignment_strict: bool,
+    /// Whether a pattern being bound declares lexical bindings of the Global
+    /// Environment Record, which 16.1.7 initializes rather than writes.
+    initializing_global_lexical: bool,
     /// Set while the base of a property read is lowered, which is the one
     /// place `arguments` may be read: the mapping of 10.4.4.7 is not built,
     /// so a body that could observe it is not lowered.
@@ -909,6 +912,7 @@ impl RegisterLowerer {
             arguments_binding: None,
             mapped_parameters: 0,
             assignment_strict: false,
+            initializing_global_lexical: false,
             reading_member_base: false,
             return_type: None,
             realm: false,
@@ -1021,6 +1025,14 @@ impl RegisterLowerer {
                     }
                     let units: Vec<u16> = name.encode_utf16().collect();
                     let constant = self.string_constant(&units)?;
+                    // A lexical binding of that Record is initialized and not
+                    // written, which is what takes it out of its dead zone.
+                    if self.initializing_global_lexical {
+                        self.code.emit(
+                            crate::engine::bytecode::Instruction::InitializeGlobalLexical(constant),
+                        );
+                        return Some(());
+                    }
                     self.code
                         .emit(crate::engine::bytecode::Instruction::StaGlobal {
                             name: constant,
@@ -1581,7 +1593,17 @@ impl RegisterLowerer {
         initializer: Option<&Expr>,
     ) -> Option<()> {
         use crate::engine::bytecode::Instruction;
-        let name = pattern.identifier()?;
+        let Some(name) = pattern.identifier() else {
+            // 14.3.1.2: a lexical declaration that is a pattern always has an
+            // Initializer, and 8.6.2 binds every name it names.
+            let value_type = self.lower(initializer?)?;
+            let held = core::mem::replace(&mut self.initializing_global_lexical, true);
+            let bound = self.bind_pattern(RegisterType::Unknown, pattern);
+            self.initializing_global_lexical = held;
+            bound?;
+            self.escape(&[value_type]);
+            return Some(());
+        };
         let value_type = if let Some(initializer) = initializer {
             self.lower(initializer)?
         } else {

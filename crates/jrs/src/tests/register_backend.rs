@@ -6306,3 +6306,26 @@ fn a_descriptor_sets_an_array_length() -> Result<(), Error> {
     }
     Ok(())
 }
+
+/// 16.1.7 makes a top-level lexical declaration a binding of the Global
+/// Environment Record, which 8.6.2 initializes name by name for a pattern.
+#[test]
+fn a_global_lexical_declaration_binds_a_pattern() -> Result<(), Error> {
+    for source in [
+        "const [x]=[1];''+x",
+        "let [x,y]=[1,2];''+(x+y)",
+        "const {a}={a:1};''+a",
+        "let [x=5]=[];''+x",
+        "const [a,[b]]=[1,[2]];''+(a+b)",
+        "let {a:{b}}={a:{b:7}};''+b",
+        "const [x]=[1];function f(){return x};''+f()",
+        "let [x,...r]=[1,2,3];''+r.length",
+        "let [,x]=[1,2];''+x",
+        "const {a,b}={a:1,b:2};''+(a+b)",
+        "let {a='d'}={};a",
+        "function f(v){let [a]=v;return a}''+f([3])",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
