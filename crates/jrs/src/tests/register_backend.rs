@@ -1116,18 +1116,16 @@ fn a_property_of_a_function_object_is_read_and_written() -> Result<(), Error> {
     // 10.2.10 gives the function its `name`, and 8.5.2 gives an anonymous one
     // the name of the binding it is for.
     differential("var f=function(){};f.name")?;
-    // 20.2.3 names the rest of what %Function.prototype% owns, which does not
-    // exist yet, so a write of one is refused: it would shadow what is not
-    // writable.
-    for source in [
-        "var f=function(){};f.name=1;1",
-        "var f=function(){};f.__proto__=1;1",
-    ] {
-        assert!(
-            !compile(source, Limits::default())?.uses_register_backend(),
-            "{source}"
-        );
-    }
+    // 10.2.10 makes `name` a property that is not writable, and 10.1.9.1
+    // refuses the write where it runs.
+    differential("var f=function(){};f.name=1;f.name")?;
+    // B.2.2.1 makes `__proto__` an accessor of a Prototype this Realm has not
+    // built, so a write of that name is refused rather than guessed.
+    let source = "var f=function(){};f.__proto__=1;1";
+    assert!(
+        !compile(source, Limits::default())?.uses_register_backend(),
+        "{source}"
+    );
     Ok(())
 }
 
@@ -5536,6 +5534,32 @@ fn a_regular_expression_literal_makes_the_object_of_its_pattern() -> Result<(), 
             matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
             "{source}"
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn a_write_a_property_refuses_says_so_where_it_runs() -> Result<(), Error> {
+    // 10.1.9.1 refuses a write to a property that is not writable, and a
+    // strict Reference turns that refusal into a TypeError.
+    for source in [
+        "var a=[1,2,3];function f(){a.length=2}f();a.length",
+        "var a=[1,2,3];var f=function(){a.length=2};f();a.length",
+        "var f=function(){};f.length=9;f.length",
+        "var f=function(){};f.name='x';f.name",
+        "var f=function(){};f.x=1;f.x",
+        "var o={};Object.defineProperty(o,'x',{value:1,writable:false});o.x=2;o.x",
+        "var o={};Object.defineProperty(o,'x',{value:1,writable:true});o.x=2;o.x",
+        "var p={};Object.defineProperty(p,'x',{value:1,writable:false});var o=Object.create(p);o.x=2;o.x",
+        "var o={};o.x=1;o.x=2;o.x",
+        "'use strict';var f=function(){};var r=0;try{f.length=9}catch(e){r=1};r",
+        "'use strict';var o={};Object.defineProperty(o,'x',{value:1});var r=0;try{o.x=2}catch(e){r=1};r",
+        // 13.2.5.5 defines the properties of a literal, so a Prototype that
+        // holds the name and refuses a write does not reach them.
+        "Object.defineProperty(Object.prototype,'p',{value:1,writable:false,configurable:true});var o={p:2};o.p",
+        "Object.defineProperty(Object.prototype,'p',{value:1,writable:false,configurable:true});var o={p:2};o.hasOwnProperty('p')",
+    ] {
+        differential_scripts(&[source])?;
     }
     Ok(())
 }

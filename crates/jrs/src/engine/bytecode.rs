@@ -422,6 +422,13 @@ pub enum Instruction {
         name: u16,
         /// Feedback vector slot for inline caching.
         slot: u16,
+        /// Strictness of the Reference, which 10.1.9.1 reads to decide
+        /// whether a write it refuses throws.
+        strict: bool,
+        /// Whether this defines an own property (`CreateDataPropertyOrThrow`,
+        /// 13.2.5.5) instead of assigning through `[[Set]]` (13.15.2). A
+        /// definition reaches no Prototype and asks nothing of one.
+        define: bool,
     },
     /// Defines an accessor property of an object literal (13.2.5.1), taking
     /// the function in `acc` as one half of it.
@@ -471,6 +478,9 @@ pub enum Instruction {
         /// (`CreateDataPropertyOrThrow`, 13.2.5.5) instead of assigning
         /// through `[[Set]]` (13.15.2). A definition reaches no Prototype.
         define: bool,
+        /// Strictness of the Reference, which 10.1.9.1 reads to decide
+        /// whether a write it refuses throws.
+        strict: bool,
     },
     /// Loads an Array exotic object's `length` data property.
     GetArrayLength {
@@ -854,7 +864,9 @@ impl BytecodeFunction {
                 Some(obj)
             }
             Instruction::GetNamed { obj, name, slot }
-            | Instruction::SetNamed { obj, name, slot } => {
+            | Instruction::SetNamed {
+                obj, name, slot, ..
+            } => {
                 self.verify_string_constant(pc, name)?;
                 self.verify_feedback(pc, slot, FeedbackKind::NamedAccess)?;
                 Some(obj)

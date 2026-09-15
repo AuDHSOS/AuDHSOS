@@ -730,6 +730,9 @@ struct RegisterLowerer {
     allow_return: bool,
     /// The binding 10.4.4 made for `arguments`, when this body reads it.
     arguments_binding: Option<RegisterBinding>,
+    /// Strictness of the Reference the assignment being lowered names, which
+    /// 10.1.9.1 reads to decide whether a write it refuses throws.
+    assignment_strict: bool,
     /// Set while the base of a property read is lowered, which is the one
     /// place `arguments` may be read: the mapping of 10.4.4.7 is not built,
     /// so a body that could observe it is not lowered.
@@ -885,6 +888,7 @@ impl RegisterLowerer {
             binding_type_hints: BTreeMap::new(),
             allow_return: false,
             arguments_binding: None,
+            assignment_strict: false,
             reading_member_base: false,
             return_type: None,
             realm: false,
@@ -1843,10 +1847,12 @@ impl RegisterLowerer {
             ExprKind::Call(callee, arguments) => self.lower_call(callee, arguments)?,
             ExprKind::Member(base, key) => self.lower_member(base, key)?,
             ExprKind::Construct(callee, arguments) => self.lower_construct(callee, arguments)?,
-            ExprKind::SetMember(target, operator, value, _) => {
+            ExprKind::SetMember(target, operator, value, strict) => {
+                self.assignment_strict = *strict;
                 self.lower_member_assignment(target, *operator, value)?
             }
-            ExprKind::UpdateMember(target, add, prefix, _) => {
+            ExprKind::UpdateMember(target, add, prefix, strict) => {
+                self.assignment_strict = *strict;
                 self.lower_member_update(target, *add, *prefix)?
             }
             ExprKind::Regex(pattern, flags) => self.lower_regexp(pattern, flags)?,
@@ -2143,6 +2149,8 @@ impl RegisterLowerer {
                         obj: object,
                         name: constant,
                         slot,
+                        strict: false,
+                        define: true,
                     });
                     Some(name)
                 }
@@ -2152,6 +2160,7 @@ impl RegisterLowerer {
                         key: register,
                         slot,
                         define: true,
+                        strict: false,
                     });
                     self.release_register(register)?;
                     name
@@ -2239,6 +2248,7 @@ impl RegisterLowerer {
                 key,
                 slot,
                 define: true,
+                strict: false,
             });
             let RegisterObjectLayout::Array { elements, .. } =
                 self.object_layouts.get_mut(&object_id)?
@@ -3971,6 +3981,7 @@ impl RegisterLowerer {
                 key,
                 slot,
                 define: true,
+                strict: false,
             });
             self.release_register(key)?;
             self.release_register(value)?;
@@ -4042,6 +4053,8 @@ impl RegisterLowerer {
                 obj: rest_object,
                 name,
                 slot: set_slot,
+                strict: false,
+                define: true,
             });
             let RegisterObjectLayout::Ordinary {
                 properties, order, ..
@@ -4355,6 +4368,8 @@ impl RegisterLowerer {
                 obj: object,
                 name,
                 slot,
+                strict: self.assignment_strict,
+                define: false,
             });
         } else {
             let register = key_register?;
@@ -4363,6 +4378,7 @@ impl RegisterLowerer {
                 key: register,
                 slot,
                 define: false,
+                strict: self.assignment_strict,
             });
             self.release_register(register)?;
         }
@@ -4376,12 +4392,12 @@ impl RegisterLowerer {
     /// 10.1.9.1 creates an own property only when the Prototype Chain holds no
     /// setter and nothing that refuses the write. Every name a Prototype of
     /// this Realm would own is a writable data property, so shadowing one is
-    /// what a Script may do — except these three: B.2.2.1 makes `__proto__` an
-    /// accessor, and 10.2.9 and 10.2.10 make a function's `length` and `name`
-    /// properties that are not writable. A Prototype holding one of them is not
-    /// built yet, so a write of that name is refused rather than guessed.
+    /// what a Script may do — except `__proto__`, which B.2.2.1 makes an
+    /// accessor of a Prototype this Realm has not built, so a write of that
+    /// name is refused rather than guessed. A property that is not writable
+    /// refuses the write where it runs (10.1.9.1).
     fn names_an_unbuilt_prototype(name: &[u16]) -> bool {
-        ["__proto__", "length", "name"]
+        ["__proto__"]
             .into_iter()
             .any(|refused| refused.encode_utf16().eq(name.iter().copied()))
     }
@@ -4459,6 +4475,7 @@ impl RegisterLowerer {
                     key: register,
                     slot,
                     define: false,
+                    strict: self.assignment_strict,
                 });
                 self.release_register(register)?;
                 let RegisterType::Array(object_id) = prepared.base_type else {
@@ -4491,6 +4508,7 @@ impl RegisterLowerer {
                     key: register,
                     slot,
                     define: false,
+                    strict: self.assignment_strict,
                 });
                 self.release_register(register)?;
                 // Nothing is recorded for a base the lowering cannot name:
@@ -4508,6 +4526,8 @@ impl RegisterLowerer {
                     obj: prepared.object,
                     name: constant,
                     slot,
+                    strict: self.assignment_strict,
+                    define: false,
                 });
                 if prepared.base_type == RegisterType::Unknown {
                     return self.release_register(prepared.object);

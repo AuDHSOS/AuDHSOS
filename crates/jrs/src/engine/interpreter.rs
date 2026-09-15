@@ -6927,6 +6927,8 @@ impl RegisterVM {
                     obj,
                     name: name_index,
                     slot,
+                    strict,
+                    define,
                 } => {
                     let code_units = units;
                     let units = active_code
@@ -6984,10 +6986,28 @@ impl RegisterVM {
                     if Self::owns_string_exotic(oref, name, heap)? {
                         return Ok(None);
                     }
+                    // 10.1.9.1: a property of the object or of a Prototype of
+                    // it that is not writable refuses the write, which a
+                    // strict Reference turns into a TypeError.
+                    if !define
+                        && let Some(found) = heap.lookup_named(oref, name)?
+                        && !found.flags.is_accessor
+                        && !found.flags.writable
+                    {
+                        if strict {
+                            return Err(type_error(
+                                heap,
+                                realm,
+                                "cannot write a property that is not writable",
+                            ));
+                        }
+                        return Ok(None);
+                    }
                     // 10.1.9.2 step 5: a property of the object or of a
                     // Prototype of it that is an accessor is written by
                     // calling its setter.
-                    if let Some(found) = heap.lookup_named(oref, name)?
+                    if !define
+                        && let Some(found) = heap.lookup_named(oref, name)?
                         && found.flags.is_accessor
                     {
                         let assigned = self.acc;
@@ -7185,6 +7205,7 @@ impl RegisterVM {
                     key,
                     slot,
                     define,
+                    strict,
                 } => {
                     let code_units = units;
                     let target = self.read_reg(obj)?;
@@ -7271,6 +7292,20 @@ impl RegisterVM {
                             return Ok(None);
                         }
                         if Self::owns_string_exotic(oref, name, heap)? {
+                            return Ok(None);
+                        }
+                        if !define
+                            && let Some(found) = heap.lookup_named(oref, name)?
+                            && !found.flags.is_accessor
+                            && !found.flags.writable
+                        {
+                            if strict {
+                                return Err(type_error(
+                                    heap,
+                                    realm,
+                                    "cannot write a property that is not writable",
+                                ));
+                            }
                             return Ok(None);
                         }
                         // 13.2.5.5 defines an own property of a literal and
@@ -8419,6 +8454,8 @@ mod tests {
 
         code.emit(Instruction::LdaSmi(42));
         code.emit(Instruction::SetNamed {
+            strict: false,
+            define: false,
             obj: r_obj,
             name: prop_x,
             slot: s_slot,
@@ -8615,6 +8652,7 @@ mod tests {
         code.emit(Instruction::Star(Reg(1)));
         code.emit(Instruction::LdaSmi(1));
         code.emit(Instruction::SetByValue {
+            strict: false,
             obj: Reg(0),
             key: Reg(1),
             slot: 0,
@@ -8624,6 +8662,7 @@ mod tests {
         code.emit(Instruction::Star(Reg(1)));
         code.emit(Instruction::LdaSmi(2));
         code.emit(Instruction::SetByValue {
+            strict: false,
             obj: Reg(0),
             key: Reg(1),
             slot: 1,
@@ -8653,6 +8692,7 @@ mod tests {
         code.emit(Instruction::Star(Reg(1)));
         code.emit(Instruction::LdaSmi(7));
         code.emit(Instruction::SetByValue {
+            strict: false,
             obj: Reg(0),
             key: Reg(1),
             slot: 0,
@@ -8662,6 +8702,7 @@ mod tests {
         code.emit(Instruction::Star(Reg(1)));
         code.emit(Instruction::LdaSmi(8));
         code.emit(Instruction::SetByValue {
+            strict: false,
             obj: Reg(0),
             key: Reg(1),
             slot: 0,
@@ -8948,6 +8989,8 @@ mod tests {
         code.emit(Instruction::Star(object));
         code.emit(Instruction::LdaSmi(1));
         code.emit(Instruction::SetNamed {
+            strict: false,
+            define: false,
             obj: object,
             name,
             slot: set_name,
@@ -9137,6 +9180,7 @@ mod tests {
         code.emit(Instruction::Star(method));
         code.emit(Instruction::Ldar(value));
         code.emit(Instruction::SetByValue {
+            strict: false,
             obj: array,
             key: method,
             slot: get,

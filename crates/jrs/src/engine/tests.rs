@@ -457,6 +457,8 @@ fn end_to_end_vm_execution_with_inline_caches() {
     // obj.x = 10
     code.emit(Instruction::LdaSmi(10));
     code.emit(Instruction::SetNamed {
+        strict: false,
+        define: false,
         obj: r_obj,
         name: prop_x,
         slot: slot_set_x,
@@ -465,6 +467,8 @@ fn end_to_end_vm_execution_with_inline_caches() {
     // obj.y = 25
     code.emit(Instruction::LdaSmi(25));
     code.emit(Instruction::SetNamed {
+        strict: false,
+        define: false,
         obj: r_obj,
         name: prop_y,
         slot: slot_set_y,
