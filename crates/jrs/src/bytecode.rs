@@ -5473,14 +5473,15 @@ impl RegisterLowerer {
                         } else {
                             self.initialize(pattern.identifier()?, None)?;
                         }
+                        // 14.2.3 leaves the block with the binding, so the
+                        // only thing the lowering needs of it is a type.
                         let mut names = Vec::new();
                         pattern.names(&mut names);
                         if names.iter().any(|name| {
-                            !self
-                                .bindings
+                            self.bindings
                                 .get(name)
                                 .and_then(|binding| binding.value_type)
-                                .is_some_and(RegisterType::is_primitive)
+                                .is_none()
                         }) {
                             return None;
                         }

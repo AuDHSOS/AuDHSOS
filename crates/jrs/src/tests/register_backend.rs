@@ -13,7 +13,7 @@ fn a_realm_on_the_engine_backend_refuses_what_it_cannot_lower() -> Result<(), Er
 
     // The two paths hold separate object models, so a Script the lowering does
     // not take is refused instead of running on the stack path.
-    let source = "{ let z = {} }";
+    let source = "{ let z = class extends Object {} }";
     assert!(
         matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
         "{source}"
@@ -103,7 +103,7 @@ fn a_realm_on_the_engine_backend_evaluates_and_refuses_without_poisoning() -> Re
     // A Script the lowering does not take is refused before anything runs, so
     // the realm stays usable.
     assert!(matches!(
-        realm.evaluate("{ let z = {} }"),
+        realm.evaluate("{ let z = class extends Object {} }"),
         Err(Error::Unsupported { .. })
     ));
     assert_eq!(realm.evaluate("1+1")?, Value::Number(2.0));
@@ -2830,6 +2830,12 @@ fn a_block_scope_is_taken_or_names_what_stops_it() -> Result<(), Error> {
         "{let x=1};typeof x",
         "let y=1;{let y=2};y",
         "{let x=1;let y=2;x+y}",
+        // 14.2.3 leaves the block with the binding, so an Object one is no
+        // different from a primitive one.
+        "{let x={};42}",
+        "var r=0;{let o={a:2};r=o.a}r",
+        "var r=0;{let a=[1,2];r=a.length}r",
+        "function f(){ {let o={a:3}; return o.a} }f()",
     ] {
         differential(source)?;
     }
@@ -2839,7 +2845,6 @@ fn a_block_scope_is_taken_or_names_what_stops_it() -> Result<(), Error> {
         "{const x=1;x=2}",
         "let f;{let x=42;f=()=>x}f()",
         "{function f(){return 42}f()}",
-        "{let x={};42}",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(!program.uses_register_backend(), "{source}");
