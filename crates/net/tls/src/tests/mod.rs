@@ -11,6 +11,7 @@ mod machine;
 mod protection;
 mod record;
 mod replay;
+mod server;
 mod trace;
 mod transcript;
 

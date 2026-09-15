@@ -15,6 +15,8 @@ pub mod keys;
 pub mod protection;
 pub mod record;
 pub mod secret;
+#[cfg(any(test, feature = "test-server"))]
+pub mod server;
 pub mod suite;
 pub mod transcript;
 

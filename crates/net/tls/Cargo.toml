@@ -20,6 +20,12 @@ crypto-ec.workspace = true
 crypto-hash.workspace = true
 crypto-rng.workspace = true
 
+[features]
+# The server side of a connection, which exists so that a client can be
+# driven against something: the crate's own machine tests and the
+# acceptance run of Phase 15 (D-148).
+test-server = ["audhsos-x509/test-certificates"]
+
 [dev-dependencies]
 # The tests build the certificates they check, and drive the machine with
 # a generator whose output is written down.

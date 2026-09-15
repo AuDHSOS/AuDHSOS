@@ -22,6 +22,14 @@
 //! long as it stands; a [`Listener`] becomes the connection it took and
 //! keeps its number (D-143), which is why [`Listener::accept`] consumes
 //! it.
+//!
+//! [`Mapping`] takes its window back in [`Mapping::unmap`] and nowhere
+//! else, so a [`Stream`] that is dropped rather than closed leaves the
+//! window, the memory object and the socket behind. [`Stream::close`]
+//! gives all three back, and [`Stream::connect`] and [`Listener::accept`]
+//! call it on the way out of an error, so a caller that asks again at the
+//! same address reaches a kernel that has the range and the handle slot
+//! and a server that has the socket.
 
 use audhsos_abi::Error;
 use audhsos_abi::layout::PAGE_SIZE;
@@ -157,31 +165,48 @@ impl Listener {
         until: u64,
     ) -> Result<Stream, Error> {
         loop {
-            let reply = call(
+            let reply = match call(
                 gate,
                 self.server,
                 &Request::TcpAccept {
                     socket: self.socket,
                 },
-            )?;
+            ) {
+                Ok(reply) => reply,
+                Err(error) => return Err(self.give_back(gate, error)),
+            };
             let Reply::Accepted(outcome) = reply else {
-                return Err(Error::InvalidArgument);
+                return Err(self.give_back(gate, Error::InvalidArgument));
             };
             match outcome {
                 Ok(opened) => {
+                    let socket = opened.socket;
                     return Stream::over(
                         gate,
                         self.server,
                         process,
-                        opened.socket,
+                        socket,
                         MemoryHandle::from_handle(opened.rings),
                         at,
-                    );
+                    )
+                    .inspect_err(|_| discard(gate, self.server, socket));
                 }
-                Err(Error::WouldBlock) => idle.wait(gate, until)?,
-                Err(error) => return Err(error),
+                Err(Error::WouldBlock) => {
+                    if let Err(error) = idle.wait(gate, until) {
+                        return Err(self.give_back(gate, error));
+                    }
+                }
+                Err(error) => return Err(self.give_back(gate, error)),
             }
         }
+    }
+
+    /// Gives the port back and answers `error`, for a path that took no
+    /// connection: the socket would otherwise stand in the server for as
+    /// long as the process does.
+    fn give_back(&self, gate: &mut Gate, error: Error) -> Error {
+        discard(gate, self.server, self.socket);
+        error
     }
 }
 
@@ -195,6 +220,11 @@ pub struct Stream {
     socket: u32,
     /// Where its rings are mapped. It stands as long as this does.
     mapping: Mapping,
+    /// The object the rings are in, which the server granted with the
+    /// connection and [`Stream::close`] gives back: a handle table has
+    /// thirty-two slots and a program that opened connections without
+    /// closing the objects would run out of them.
+    rings: MemoryHandle,
     /// The process the mapping is in, which [`Stream::close`] takes it out
     /// of again.
     process: ProcessHandle,
@@ -227,17 +257,40 @@ impl Stream {
             return Err(Error::InvalidArgument);
         };
         let opened = outcome?;
+        let socket = opened.socket;
         let stream = Stream::over(
             gate,
             server,
             process,
-            opened.socket,
+            socket,
             MemoryHandle::from_handle(opened.rings),
             at,
-        )?;
+        )
+        .inspect_err(|_| discard(gate, server, socket))?;
+        match stream.established(gate, idle, until) {
+            Ok(()) => Ok(stream),
+            // The connection and the window it was mapped in go back
+            // together: a caller that asks again at the same address is
+            // otherwise refused by the kernel for a range it believes it
+            // gave up.
+            Err(error) => {
+                let _closed = stream.close(gate);
+                Err(error)
+            }
+        }
+    }
+
+    /// Waits until the handshake of RFC 9293 is through.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unavailable`] for a connection the peer refused or closed,
+    /// [`Error::Cancelled`] when `until` passes first, and whatever the
+    /// server or the kernel answered.
+    fn established(&self, gate: &mut Gate, idle: Idle, until: u64) -> Result<(), Error> {
         loop {
-            match stream.state(gate)? {
-                State::Established => return Ok(stream),
+            match self.state(gate)? {
+                State::Established => return Ok(()),
                 State::Connecting => idle.wait(gate, until)?,
                 State::PeerClosed | State::Closed | State::Refused => {
                     return Err(Error::Unavailable);
@@ -259,11 +312,18 @@ impl Stream {
         let len = u64::try_from(SOCKET_PAGE_LEN)
             .unwrap_or(0)
             .next_multiple_of(PAGE_SIZE);
-        let mapping = Mapping::new(gate, process, object, at, len)?;
+        let mapping = match Mapping::new(gate, process, object, at, len) {
+            Ok(mapping) => mapping,
+            Err(error) => {
+                let _closed = gate.handle_close(object.handle());
+                return Err(error);
+            }
+        };
         Ok(Stream {
             server,
             socket,
             mapping,
+            rings: object,
             process,
         })
     }
@@ -457,8 +517,11 @@ impl Stream {
     ///
     /// # Errors
     ///
-    /// Whatever the server answered to the close, and whatever the kernel
-    /// answered to the unmapping; the socket is given back either way.
+    /// Whatever the server answered to the close, whatever the kernel
+    /// answered to the unmapping, and whatever it answered to the handle.
+    /// The window and the handle go back even where the request never
+    /// reached the server, because a caller that answers an error holds
+    /// nothing that could give them back later.
     pub fn close(self, gate: &mut Gate) -> Result<(), Error> {
         let closed = match call(
             gate,
@@ -466,13 +529,23 @@ impl Stream {
             &Request::TcpClose {
                 socket: self.socket,
             },
-        )? {
-            Reply::Closed(outcome) => outcome,
-            _ => Err(Error::InvalidArgument),
+        ) {
+            Ok(Reply::Closed(outcome)) => outcome,
+            Ok(_) => Err(Error::InvalidArgument),
+            Err(error) => Err(error),
         };
         let unmapped = self.mapping.unmap(gate, self.process);
-        closed.and(unmapped)
+        let given_back = gate.handle_close(self.rings.handle());
+        closed.and(unmapped).and(given_back)
     }
+}
+
+/// Gives `socket` back, for a path that holds no [`Stream`] to close.
+///
+/// What the server answers is of no use here: the caller is already on its
+/// way out with an error of its own.
+fn discard(gate: &mut Gate, server: EndpointHandle, socket: u32) {
+    let _closed = call(gate, server, &Request::TcpClose { socket });
 }
 
 /// Sends one request of the socket protocol and reads the reply.

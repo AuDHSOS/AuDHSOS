@@ -289,6 +289,10 @@ done until every applicable item has a test. Items are added, never removed.
   first `allocate` hands out generation 1, slots come from the high-water
   mark in index order while none has been released, and released slots
   keep the FIFO order (D-66).
+- The message of `Unavailable` names no one caller: the entropy source,
+  the wall clock, the file system server, the network server and a
+  refused connection all answer that code, so the text carries neither
+  `RDSEED` nor the retry bound nor entropy.
 
 ### 6.6.7 Scheduler and thread states (`kernel-sched`)
 
@@ -1079,6 +1083,15 @@ done until every applicable item has a test. Items are added, never removed.
   verifies against an empty trust store, neither on its own nor as its own
   issuer. The corpus holds the certificate of RFC 8448 and three the
   builder writes.
+- The anchor table of D-148: a table of no anchors is a header and nothing
+  else; every certificate written comes back byte for byte, and its anchor
+  is the subject and the key `TrustAnchor::from_certificate` reads. A
+  magic this crate did not write, a version it does not know, a header cut
+  short, a length that reaches past the end, a record of no bytes, and a
+  byte behind the last record are six refusals with `BadAnchorTable`. An
+  array shorter than the table is `BufferTooSmall` before a certificate is
+  read, and a record that is no certificate is refused where it is read
+  and not where the table is parsed.
 
 ### 6.6.37 TLS record layer and key schedule (`audhsos-tls`)
 
@@ -2404,6 +2417,20 @@ what the kernel dispatches on, so the check is what the kernel saw.
 
 ### 6.6.65 TLS on the target (QEMU)
 
+- The anchors of the image reach a program of the image: `app-tls` reads
+  `AUDHSOS/ANCHORS.BIN` off the boot volume, reports as many anchors as
+  the directory `anchors/` held when the image was written, and one line
+  per anchor with the length of its subject and of its key. This is the
+  part of the item the anchors are, built under D-148; the three below it
+  are the handshake and are Phase 15.
+- The server of the run, on the development machine and reached over a
+  socket (D-149): the client of this project completes the handshake
+  against `audhsos-tls::server`, validates the chain against the root the
+  image carries, and reads the answer. A client that asks for another
+  name is refused with `bad_certificate`, one that trusts another root
+  with `unknown_ca`, and one whose clock is past the window with
+  `certificate_expired` — the three refusals below, checked on the host
+  before the guest is asked to make them.
 - An HTTPS `GET` against a server the test starts on the development
   machine, with a chain the test certificate builder wrote, returns a
   status line the client parses.
@@ -3166,6 +3193,12 @@ The handshake against an OpenSSH is the acceptance of the step and is
   read: one that wants no reply is ignored, one that wants a reply is
   answered `SSH_MSG_REQUEST_FAILURE`, and the command runs either way.
   OpenSSH sends `hostkeys-00@openssh.com` as such a request.
+- A global request that arrives while a re-exchange runs is answered
+  after the new keys are in use, not between `SSH_MSG_KEXINIT` and
+  `SSH_MSG_NEWKEYS` where RFC 4253, section 9, allows the transport layer
+  alone. The server of the test panics on a packet that does not belong
+  where it stands, so a client that answered too early ends the test
+  there.
 
 ### 6.6.80 The handshake against an OpenSSH (`app-ssh`, `xtask`, QEMU)
 

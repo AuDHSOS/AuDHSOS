@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::anchors;
 use crate::error::Error;
 use crate::image::{archive, boot_image, disk, fat32};
 use crate::out::{self, note, note_raw};
@@ -173,7 +174,7 @@ const E2E_TIMEOUT: Duration = Duration::from_secs(180);
 /// archive, the memory server answered, the name server answered, the
 /// console driver took the port, and the application found it and said
 /// something through it.
-const E2E_LINES: [(&str, &str); 22] = [
+const E2E_LINES: [(&str, &str); 23] = [
     (
         "[init] started server-memory",
         "the memory server did not start",
@@ -250,6 +251,10 @@ const E2E_LINES: [(&str, &str); 22] = [
     (
         "[init] started app-net",
         "the program that uses a socket did not start",
+    ),
+    (
+        "[tls-app] anchors=",
+        "the program that reads the trust anchors reported none",
     ),
     (
         "[faulter] about to write to nowhere",
@@ -432,6 +437,9 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
     }
     if violations.is_empty() {
         violations.extend(network_lines(&session.output()));
+    }
+    if violations.is_empty() {
+        violations.extend(anchor_lines(root, &session.output())?);
     }
     // The picture, while the machine still runs: `app-hello` is waiting to
     // be typed at, so nothing has ended yet. What is on the screen is
@@ -636,6 +644,31 @@ const SECOND_BOOT_LINES: [(&str, &str); 7] = [
     ),
     ("[hello] ready", "the second boot never said it was ready"),
 ];
+
+/// What the program that reads the trust anchors has to report: as many
+/// anchors as the image was given, and one line per anchor, because a
+/// table whose records parse one by one is the whole of what the program
+/// can say before a handshake exists to use them.
+///
+/// # Errors
+///
+/// Whatever reading the anchor directory answers.
+fn anchor_lines(root: &Path, output: &str) -> Result<Vec<String>, Error> {
+    let carried = anchors::of(root)?.len();
+    let mut violations = Vec::new();
+    if !output.contains(&format!("[tls-app] anchors={carried}")) {
+        violations.push(format!(
+            "the image carries {carried} trust anchor(s) and the program reported another number"
+        ));
+    }
+    let read = output.matches("[tls-app] anchor subject=").count();
+    if read != carried {
+        violations.push(format!(
+            "the program read {read} of the {carried} anchor(s) of the image"
+        ));
+    }
+    Ok(violations)
+}
 
 /// The line the program that uses the volume writes last.
 const FILES_DONE: &str = "[files-app] entries=";
@@ -2966,6 +2999,17 @@ pub(crate) fn image(root: &Path, options: &[String]) -> Result<(), Error> {
         files.push((path.as_str(), bytes.clone()));
     }
     note!("volume: {} programs under AUDHSOS/BIN/", programs.len());
+    let anchors = anchors::of(root)?;
+    let table = anchors::table(&anchors)?;
+    let named: Vec<&str> = anchors.iter().map(|anchor| anchor.name.as_str()).collect();
+    note!(
+        "volume: {} trust anchor(s) in {}, {} bytes: {}",
+        anchors.len(),
+        anchors::VOLUME_PATH,
+        table.len(),
+        named.join(", ")
+    );
+    files.push((anchors::VOLUME_PATH, table));
     let image = disk::build(&files)?;
     let boot_path = target.join("boot.img");
     let disk_path = target.join("audhsos.img");

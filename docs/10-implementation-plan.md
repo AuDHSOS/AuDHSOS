@@ -2922,9 +2922,11 @@ codes: `Unavailable = 27`, which `random_bytes` answers when the hardware
 would not deliver inside its retry bound, and `NoVector = 28`, which
 `interrupt_create_msi` answers when the vector space has nothing left.
 Neither can be folded into an existing code without saying that a
-different resource ran out. The generated wrapper names, argument counts
-and dispatcher arms follow from the syscall table, as they do for every
-other call.
+different resource ran out. `Unavailable` is the general code for
+something that cannot serve: later phases answer it for a server, a peer
+and a device as well, so its message names no one of them. The generated
+wrapper names, argument counts and dispatcher arms follow from the
+syscall table, as they do for every other call.
 
 ### 10.12.2 `kernel-sched`: a thread that waits until
 
@@ -3331,10 +3333,29 @@ specifies and which has waited for a transport.
   and sends and expects `close_notify`. The `now` of `ClientConfig` comes
   from `clock_wall` (10.14A); a machine that answers `Unavailable` there
   does not validate a chain against a guess, it refuses to connect.
-- The trust anchors the image carries are the ones the test certificate
-  builder of `audhsos-x509` wrote, placed in the archive as one file.
-- `app-tls` performs an HTTPS `GET` against a server the test starts on
-  the development machine and reports the status line.
+- A record crosses the ring in several passes. `RING_CAPACITY` is 4072
+  bytes and `audhsos_tls::client::MIN_INCOMING` and `MIN_OUTGOING` are
+  16640, so one record takes four passes at least. The ring carries a
+  byte stream and no record boundary, which is what `Stream::write_all`
+  and `Stream::read` already do: the first writes what fits and waits on
+  a full ring, the second takes what is there. The record itself stands
+  in the program's own buffers, which the glue owns, so the two sizes
+  never have to meet.
+- The trust anchors the image carries are built and in (D-148): the
+  xtask writes the files of `anchors/` as one table onto the boot volume,
+  `audhsos-x509::anchors` reads it, and `app-tls` is the program that
+  holds them. The acceptance run below adds one anchor of its own, the
+  certificate the test builder writes for the server it starts, by
+  putting that file in the same directory before the image is written.
+- The server of the run is built and in (D-149): `audhsos-tls::server`
+  under the feature `test-server`, started by `xtask::tls::Server` on a
+  port of the loopback, presenting a chain `xtask::tls::Material` builds.
+  What Phase 15 adds is the guest's half — the run puts the root of that
+  chain into `anchors/` before it writes the image, and forwards the port
+  into the machine as the network line already forwards one.
+- `app-tls` gains the handshake: it performs an HTTPS `GET` against that
+  server and reports the status line. What the program already does is
+  read the anchors and report them.
 
 Acceptance: `check` green; catalog 6.6.65; the `GET` succeeds, and an
 expired chain, a name that does not match, and an unknown anchor are each

@@ -1,10 +1,10 @@
 # 13. The Network on the Machine
 
-Document 12 built a network stack that has never seen a device, and
-document 11 built a TLS client that has never seen a socket. Both stop at
-the same wall: the running system has no way to reach a network card, and
-no way to tell the time. This document specifies what is between them and
-a sent packet, and orders it into four phases.
+Document 12 built a network stack that had never seen a device, and
+document 11 built a TLS client that had never seen a socket. Both stopped
+at the same wall: the running system could reach no network card and read
+no clock. This document specifies what lies between them and a sent
+packet, and orders it into four phases.
 
 It stands to phases 12 to 15 as document 11 stands to the cryptography
 track: the roadmap names the deliverables and the acceptance, this
@@ -32,8 +32,13 @@ it was finished in document 12.
 
 ## 13.2 What is there and what is missing
 
-| Needed | State today |
-|--------|-------------|
+The table is the state when this document was written. The seven rows it
+marks **missing** were built in Phases 12 to 14, in the shape the sections
+below specify; what is left of the four phases is the TLS transport of
+Phase 15.
+
+| Needed | State when this document was written |
+|--------|--------------------------------------|
 | Split virtqueue, chain arithmetic, initialization state machine | `virtio-queue`, step F1 of 12.7.1 |
 | Ethernet, ARP, IPv4, IPv6, UDP, TCP, DNS, DHCP, HTTP, the facade | `net-wire` to `net-stack`, steps D1 to D9 |
 | `Instant`, `Duration`, the calendar | `audhsos-time`, step E1 |

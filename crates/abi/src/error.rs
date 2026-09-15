@@ -81,7 +81,7 @@ error_codes! {
     NotRunnable = 24 => "the thread cannot run: it has no entry point, no stack, or it has exited",
     Cancelled = 25 => "the operation was cancelled before it completed",
     OutOfMemory = 26 => "no free memory of the requested size and alignment is left",
-    Unavailable = 27 => "the hardware source would not deliver inside its retry bound",
+    Unavailable = 27 => "what the operation needs cannot serve it: a hardware source, a server, a peer, or a device",
     NoVector = 28 => "the interrupt vector space has nothing left",
 }
 

@@ -62,6 +62,17 @@ fn the_two_codes_of_phase_twelve_are_their_own() {
 }
 
 #[test]
+fn the_message_of_the_general_code_names_no_one_caller() {
+    // Several subsystems answer this code: the entropy source, the wall
+    // clock, the file system server, the network server, a refused
+    // connection. A message that describes one of them misreads the rest.
+    let message = Error::Unavailable.message();
+    assert!(!message.contains("RDSEED"));
+    assert!(!message.contains("retry bound"));
+    assert!(!message.contains("entropy"));
+}
+
+#[test]
 fn a_cancelled_operation_has_a_code_of_its_own() {
     assert_eq!(Error::Cancelled.code(), 25);
     assert_eq!(Error::from_code(25), Some(Error::Cancelled));

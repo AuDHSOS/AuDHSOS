@@ -7,6 +7,29 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- A TLS server to reach (D-149). `audhsos-tls` gains the module `server`
+  behind the feature `test-server`: the other half of one connection,
+  sans-I/O like the client and written against the same record layer and
+  key schedule, so the two cannot drift. `xtask::tls` is the socket and
+  the thread around it — `Material` builds a root and a leaf for
+  `audhsos.test` with the certificate builder, `Server::start` takes a
+  port of the loopback and answers one HTTP request per connection — and
+  four host tests drive the client of this project against it over a real
+  socket: the answer arrives, and a wrong name, another root and a clock
+  past the window are each refused. It is what the acceptance run of
+  Phase 15 starts; the guest's half is the handshake in `app-tls`.
+
+- The image carries trust anchors (D-148). `cargo xtask image` reads every
+  certificate of the directory `anchors/` — DER or PEM — and writes them
+  as one table onto the boot volume as `AUDHSOS/ANCHORS.BIN`;
+  `audhsos-x509::anchors` is the writer and the reader of that table, as
+  `user_loader::tar` is of the archive. The program `app-tls` reads the
+  table and reports what it found, and the end-to-end run checks that it
+  reports as many anchors as the image was given. Five public roots are
+  tracked in `anchors/`, moved there from `tools/tls-probe/`, so a
+  checkout reaches a real host without fetching anything first. What is
+  left for Phase 15 is the handshake, not the anchors under it.
+
 - `user-programs`: `socket::Stream`, one end of a TCP connection over the
   protocol of `server-net`, with `socket::Listener` for the other end and
   `socket::Idle` for the wait every `WouldBlock` costs (D-142). It maps
@@ -686,7 +709,59 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   it, and reports the bit it woke with when the image raises the vector.
   Catalog 6.6.59 and 6.6.60.
 
+### Changed
+
+- 10.15 states what the transport glue of Phase 15 has to do about the
+  ring: `RING_CAPACITY` is 4072 bytes and a TLS record is up to 16640, so
+  a record crosses in four passes at least, which is what
+  `socket::Stream` already carries because the ring holds a byte stream
+  and no record boundary.
+
+- The documents record that the cryptography track waits on nothing: 11.14
+  strikes the entropy row, which Phase 12 filled with `random_bytes` over
+  `RDSEED`, and the transport row, which Phase 14 filled with `server-net`
+  and the socket protocol, leaving step T8 and the trust-anchor conversion
+  of D-42 as the unwritten parts. The `audhsos-der` rows of 11.3 and 11.12
+  name `audhsos-time` as the dependency it has, and `ClientConfig::now`
+  says where a caller gets the value rather than that this system has no
+  clock.
+
 ### Fixed
+
+- `audhsos-tls`: a chain that reaches an anchor and carries the wrong name
+  is `bad_certificate` and no longer `unknown_ca`. RFC 8446, section 6.2
+  gives `unknown_ca` one meaning — no anchor was found — and a caller that
+  reads the alert could not tell a certificate for another host from a
+  chain it does not trust. The same moves `NotForServerAuthentication`,
+  which is also a property of the certificate and not of the authority.
+
+- `audhsos-ssh`: a global request that arrives while a key exchange runs
+  is answered after the new keys are in use. `SSH_MSG_REQUEST_FAILURE` is
+  82, which RFC 4253, section 9, keeps off the wire between
+  `SSH_MSG_KEXINIT` and `SSH_MSG_NEWKEYS`; the client sent it at once and
+  a peer that enforces the rule would have disconnected. `Rekey::may_send`
+  existed for this and was called nowhere.
+
+- `user-programs`: `socket::Stream::connect` and `socket::Listener::accept`
+  close what they made before they answer an error. A connect that was
+  refused or ran out of time left the window mapped and the socket open in
+  `server-net`, so the next connect at the same address was refused by the
+  kernel for a range the program believed it had given up; an accept that
+  failed took the only record of the listening socket with it and the port
+  stayed taken. `Stream::close` now takes the window back even where the
+  close request never reached the server.
+
+- `audhsos-abi`: `Error::Unavailable` carries a message that fits every
+  caller. It read "the hardware source would not deliver inside its retry
+  bound", which describes `random_bytes` alone, so a boot where the file
+  system server could not serve reported five programs failing on an
+  entropy message. The wall clock, the file system server, the network
+  server, a device and a refused connection answer the same code; the
+  message names none of them, and a test of 6.6.6 holds it there.
+
+- Document 13 dates its table of what is missing: the seven rows it marks
+  missing were built in Phases 12 to 14, and the opening paragraph says
+  so in the tense the state deserves.
 
 - `audhsos-ssh`: a global request the peer makes of the connection
   (RFC 4254, section 4) no longer ends the connection. This client offers

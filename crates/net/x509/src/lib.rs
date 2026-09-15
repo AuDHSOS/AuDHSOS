@@ -6,6 +6,7 @@
 #![doc = include_str!("../README.md")]
 
 pub mod algorithm;
+pub mod anchors;
 #[cfg(any(test, feature = "test-certificates"))]
 pub mod builder;
 pub mod certificate;
@@ -17,6 +18,7 @@ pub mod path;
 pub mod test_keys;
 
 pub use algorithm::{SignatureAlgorithm, SubjectPublicKey};
+pub use anchors::Anchors;
 pub use certificate::{BasicConstraints, Certificate, DnsNames, GeneralNames, KeyUsage, Validity};
 pub use error::X509Error;
 pub use name::{ServerName, matches};

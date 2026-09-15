@@ -480,13 +480,24 @@ answers the microseconds since the epoch with the source the firmware
 named. Certificate validation had a `now` parameter and no value to put
 in it; now it has one.
 
+The anchors this phase validates against arrived ahead of it too
+(D-148): the xtask writes the files of `anchors/` as one table onto the
+boot volume, `audhsos-x509::anchors` reads it, and `app-tls` is the
+program of the image that holds them and reports what it read.
+
+The server the acceptance needs arrived ahead of it as well (D-149):
+`audhsos-tls::server` behind the feature `test-server` answers one
+connection, and `xtask::tls` starts it on a port of the loopback with a
+chain the certificate builder wrote.
+
 Deliverables: the transport glue that joins `audhsos-tls` to a TCP
 connection of `server-net` — the record layer's bytes in and out of the
 socket's ring, the handshake driven to completion against a deadline of
 the clock of Phase 12, and the close notify in both directions; the
 certificate path validated against the trust anchors the image carries,
 against the date `clock_wall` answers; `tools/tls-probe` keeps its host
-role and gains a counterpart that runs on the target.
+role, and `app-tls` gains the handshake that makes it the counterpart on
+the target.
 
 Tests: catalog 6.6.65, with 6.6.71 already in.
 
@@ -547,9 +558,9 @@ Status: specified in [document 11](11-cryptography-and-tls.md); steps T1
 to T7 and R1 to R6 are implemented and reviewed as a whole. T8 is the
 integration and is Phase 15: it needs a transport from track D, the
 `random_bytes` system call, and the driver and server that carry the
-bytes, and all three of those are Phases 12 to 14. What the track is
-still waiting on, and who owns each piece, is section 11.14; what has to
-exist under it is [document 13](13-the-network-on-the-machine.md).
+bytes, and all three arrived with Phases 12 to 14. What the track waited
+on, and who owns each piece, is section 11.14; what has to exist under it
+is [document 13](13-the-network-on-the-machine.md).
 
 R1 to R6 are RSA verification, specified in section 11.15 and
 implemented. They are the one thing on this track that changed what the
@@ -558,10 +569,10 @@ that is RSA to the root cannot be walked, which is most of the public web.
 They needed nothing from another track and were built between phases as T1
 to T7 were.
 
-The track prepares HTTPS for the day a network stack exists. Every crate
-in it is pure logic without I/O or allocation, host-tested, and depends on
-no kernel, loader, or userland crate. It therefore has no place in the
-phase order and is built between phases.
+The track prepared HTTPS for the network stack Phase 14 brought. Every
+crate in it is pure logic without I/O or allocation, host-tested, and
+depends on no kernel, loader, or userland crate. It therefore has no place
+in the phase order and is built between phases.
 
 | Step | Crates | Size | Ends with |
 |------|--------|------|-----------|

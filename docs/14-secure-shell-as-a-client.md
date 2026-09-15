@@ -368,9 +368,12 @@ A request the peer makes of the connection and not of a channel
 (section 4) is answered and not acted on: this client offers no
 forwarding, no agent and no host key proof, so every name is one it does
 not recognise, and section 4 answers that with `SSH_MSG_REQUEST_FAILURE`
-where a reply was asked for and with nothing where it was not. OpenSSH
-sends `hostkeys-00@openssh.com` as such a request as soon as it has
-authenticated a client, which is what the interop run of 14.12 found.
+where a reply was asked for and with nothing where it was not. An answer
+the client owes while a key exchange runs is sent once the new keys are
+in use, because section 9 leaves only the transport layer on the wire
+until then. OpenSSH sends `hostkeys-00@openssh.com` as such a request as
+soon as it has authenticated a client, which is what the interop run of
+14.12 found.
 
 Three things this layer does not do. There is no pty request, and so none
 of the encoded terminal modes of RFC 4254, section 8: a pty is a concept

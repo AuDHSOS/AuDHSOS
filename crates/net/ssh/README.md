@@ -213,8 +213,11 @@ end.
 A global request the peer makes of the connection (RFC 4254, section 4)
 is answered here and not acted on: this client offers no forwarding, no
 agent and no host key proof, so the answer is `SSH_MSG_REQUEST_FAILURE`
-where a reply was asked for and nothing where it was not. OpenSSH sends
-`hostkeys-00@openssh.com` as such a request.
+where a reply was asked for and nothing where it was not. An answer the
+client owes while a key exchange runs is sent once the new keys are in
+use, because RFC 4253, section 9, leaves only the transport layer on the
+wire until then. OpenSSH sends `hostkeys-00@openssh.com` as such a
+request.
 
 Its buffers are the caller's and their minimum is the packet size RFC
 4253, section 6.1, makes mandatory, which is what one connection costs.

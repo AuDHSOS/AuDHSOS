@@ -1048,12 +1048,15 @@ const fn chain_error(error: audhsos_x509::X509Error) -> TlsError {
         audhsos_x509::X509Error::NotYetValid | audhsos_x509::X509Error::Expired => {
             TlsError::CertificateExpired
         }
-        audhsos_x509::X509Error::NameMismatch
-        | audhsos_x509::X509Error::NoTrustAnchor
+        // RFC 8446, section 6.2 gives `unknown_ca` one meaning: the chain
+        // reaches no anchor. A chain that reaches one and is wrong in
+        // itself — another name, another purpose — falls to the default
+        // below and is `bad_certificate`, so that a caller can tell the
+        // two refusals apart.
+        audhsos_x509::X509Error::NoTrustAnchor
         | audhsos_x509::X509Error::NotAnAuthority
         | audhsos_x509::X509Error::PathLengthExceeded
         | audhsos_x509::X509Error::NotForCertificateSigning
-        | audhsos_x509::X509Error::NotForServerAuthentication
         | audhsos_x509::X509Error::ChainTooLong => TlsError::UnknownAuthority,
         audhsos_x509::X509Error::SignatureFailed => TlsError::BadSignature,
         _ => TlsError::BadCertificate,

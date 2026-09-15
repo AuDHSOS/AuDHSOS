@@ -26,6 +26,7 @@
 // The package holds three programs and each uses a different part of what
 // it depends on; these are the crates this one does not.
 use audhsos_time as _;
+use audhsos_x509 as _;
 use driver_virtio_net as _;
 use net_http as _;
 use net_stack as _;
