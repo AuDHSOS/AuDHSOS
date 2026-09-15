@@ -5907,3 +5907,29 @@ fn the_global_number_functions_answer_on_the_engine() -> Result<(), Error> {
     assert_eq!(realm.evaluate("parseFloat.length")?, Value::Number(1.0));
     Ok(())
 }
+
+/// 13.2.8.6: each substitution of a template goes through 7.1.17, which is
+/// 7.1.1 with the hint `string` and not the one `+` gives.
+#[test]
+fn a_template_literal_answers_on_the_engine() -> Result<(), Error> {
+    for source in [
+        "`abc`",
+        "``",
+        "var x=1;`a${x}b`",
+        "var x=1,y=2;`${x}${y}`",
+        "`${1+2}`",
+        "var o={toString:function(){return 'T'},valueOf:function(){return 9}};`v=${o}`",
+        "var a=[1,2];`${a}`",
+        "`${null} ${undefined} ${true}`",
+        "var s='q';`a${`b${s}c`}d`",
+        "var o={};`${o}`",
+        "var n=0;var o={toString:function(){n++;return 'x'}};`${o}${o}`+n",
+        "function f(v){return `<${v}>`}f(7)",
+        "var o={};o[Symbol.toPrimitive]=function(h){return h};`${o}`",
+        "typeof `a`",
+        "`a`.length",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}

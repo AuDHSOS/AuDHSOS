@@ -1996,9 +1996,54 @@ impl RegisterLowerer {
                 self.lower_member_update(target, *add, *prefix)?
             }
             ExprKind::Regex(pattern, flags) => self.lower_regexp(pattern, flags)?,
+            ExprKind::Template(head, parts) => self.lower_template(head, parts)?,
             _ => return None,
         };
         Some(result)
+    }
+
+    /// `SubstitutionTemplate` of 13.2.8.6: each substitution goes through
+    /// 7.1.17 and the parts are concatenated left to right.
+    fn lower_template(&mut self, head: &Value, parts: &[(Expr, Value)]) -> Option<RegisterType> {
+        use crate::engine::bytecode::{BinaryOp, Instruction};
+        let text = |value: &Value| match value {
+            Value::String(units) => Some(units.clone()),
+            _ => None,
+        };
+        let constant = self.string_constant(&text(head)?)?;
+        let result = self.allocate_register()?;
+        self.code.emit(Instruction::LdaString(constant));
+        self.code.emit(Instruction::Star(result));
+        let part = self.allocate_register()?;
+        for (value, tail) in parts {
+            self.lower(value)?;
+            self.code.emit(Instruction::Star(part));
+            self.code.emit(Instruction::ToText(part));
+            self.code.emit(Instruction::Star(part));
+            let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::BinaryOp)?;
+            self.code.emit(Instruction::Binary {
+                op: BinaryOp::Add,
+                lhs: result,
+                rhs: part,
+                slot,
+            });
+            self.code.emit(Instruction::Star(result));
+            let constant = self.string_constant(&text(tail)?)?;
+            self.code.emit(Instruction::LdaString(constant));
+            self.code.emit(Instruction::Star(part));
+            let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::BinaryOp)?;
+            self.code.emit(Instruction::Binary {
+                op: BinaryOp::Add,
+                lhs: result,
+                rhs: part,
+                slot,
+            });
+            self.code.emit(Instruction::Star(result));
+        }
+        self.code.emit(Instruction::Ldar(result));
+        self.release_register(part)?;
+        self.release_register(result)?;
+        Some(RegisterType::String)
     }
 
     fn lower_destructuring_assignment(
@@ -8317,8 +8362,15 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
             register_expression_writes_names(right, names)?
                 || register_assignment_pattern_writes_names(pattern, names)?
         }
-        ExprKind::Template(_, _)
-        | ExprKind::Await(_)
+        ExprKind::Template(_, parts) => {
+            for (expression, _) in parts {
+                if register_expression_writes_names(expression, names)? {
+                    return Some(true);
+                }
+            }
+            false
+        }
+        ExprKind::Await(_)
         | ExprKind::Super
         | ExprKind::NewTarget
         | ExprKind::DefaultSuper
@@ -8628,8 +8680,12 @@ fn register_expression_references(
             register_expression_references(right, names, nested_free_names)?;
             register_assignment_pattern_references(pattern, names, nested_free_names)?;
         }
-        ExprKind::Template(_, _)
-        | ExprKind::Await(_)
+        ExprKind::Template(_, parts) => {
+            for (expression, _) in parts {
+                register_expression_references(expression, names, nested_free_names)?;
+            }
+        }
+        ExprKind::Await(_)
         | ExprKind::Super
         | ExprKind::NewTarget
         | ExprKind::DefaultSuper

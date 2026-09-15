@@ -257,6 +257,13 @@ pub enum Instruction {
     ToUndefined,
     /// `acc = ToNumber(acc)` for an already primitive operand.
     ToNumber,
+    /// `acc = ToString(reg)` of 7.1.17, which 13.2.8 applies to each
+    /// substitution of a template.
+    ///
+    /// An Object operand reaches 7.1.1 with the hint `string`, which may run a
+    /// method of the Script: the primitive comes back into the register and the
+    /// instruction runs again.
+    ToText(Reg),
     /// `acc = ~ToInt32(acc)` for an already numeric primitive.
     BitNot,
     /// `acc = typeof acc`, materialized as an Agent-local String.
@@ -821,6 +828,7 @@ impl BytecodeFunction {
         let register = match instruction {
             Instruction::Ldar(register)
             | Instruction::Star(register)
+            | Instruction::ToText(register)
             | Instruction::Add(register)
             | Instruction::Sub(register)
             | Instruction::Mul(register)

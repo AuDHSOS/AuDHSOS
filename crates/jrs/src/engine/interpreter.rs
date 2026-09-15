@@ -7153,6 +7153,48 @@ impl RegisterVM {
                 Instruction::ToNumber => {
                     self.acc = Value::from_f64(primitive_number(self.acc, heap)?);
                 }
+                Instruction::ToText(register) => {
+                    let value = self.read_reg(register)?;
+                    // 7.1.17 of an Object is 7.1.1 with the hint `string`,
+                    // which runs a method of the Script; the instruction runs
+                    // again once the register holds the primitive.
+                    if let Some(object) = value.as_object() {
+                        let call = Call {
+                            receiver: Value::from_object(object),
+                            func: register,
+                            arg_start: register,
+                            arg_count: 0,
+                            slot: 0,
+                            resume: Some(Resume::Primitive {
+                                register,
+                                step: PrimitiveStep::Exotic,
+                                hint: PrimitiveHint::String,
+                            }),
+                            return_pc: pc.saturating_sub(1),
+                            caller_code_id: current_code_id,
+                            construct: None,
+                        };
+                        match self.convert_to_primitive(
+                            call,
+                            units,
+                            active_feedback,
+                            heap,
+                            realm,
+                        )? {
+                            Conversion::Done(value) => {
+                                self.write_reg(register, value)?;
+                                pc = pc.saturating_sub(1);
+                            }
+                            Conversion::Suspended(code_id) => {
+                                current_code_id = Some(code_id);
+                                pc = 0;
+                            }
+                        }
+                        return Ok(None);
+                    }
+                    let text = self.primitive_string(value, heap)?;
+                    self.acc = text;
+                }
                 Instruction::BitNot => {
                     let number = self.acc.as_f64().ok_or(VMError::TypeError)?;
                     self.acc = Value::from_smi(!number_to_i32(number));
