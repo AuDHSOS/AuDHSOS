@@ -61,6 +61,13 @@ pub enum Error {
         /// The exact value thrown by the script.
         value: crate::Value,
     },
+    /// An uncaught throw of a value the embedding has no way to hold.
+    ///
+    /// The Script threw, which is a completion of the language and not a
+    /// feature the engine is missing. An Object of the register engine has no
+    /// identity outside it, so what was thrown cannot be handed over; that the
+    /// Script threw at all is what crosses.
+    ThrownUnrepresentable,
 }
 
 impl fmt::Display for Error {
@@ -78,6 +85,9 @@ impl fmt::Display for Error {
             Self::Type { message } => write!(f, "TypeError: {message}"),
             Self::Range { message } => write!(f, "RangeError: {message}"),
             Self::Limit { resource } => write!(f, "resource limit: {resource}"),
+            Self::ThrownUnrepresentable => {
+                write!(f, "threw a value the embedding cannot hold")
+            }
             Self::Unsupported { feature } => write!(f, "unsupported feature: {feature}"),
             Self::InvalidBytecode => f.write_str("invalid bytecode"),
             Self::Host => f.write_str("host capability failed"),

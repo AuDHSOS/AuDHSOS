@@ -393,16 +393,23 @@ fn instanceof_walks_the_prototype_chain_of_the_value() -> Result<(), Error> {
 #[test]
 fn a_value_the_embedding_cannot_hold_leaves_the_realm_usable() -> Result<(), Error> {
     // The Script reaches a defined end and only its value cannot cross, so this
-    // is the one unsupported feature that does not poison the Realm.
+    // is the one unsupported feature that does not poison the Realm. A Script
+    // that throws such a value reached its end too, and that it threw is what
+    // crosses.
     let mut host = SilentHost;
     let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
-    for source in ["({x:1})", "[1,2]", "throw {}"] {
+    for source in ["({x:1})", "[1,2]"] {
         assert!(
             matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
             "{source}"
         );
         assert_eq!(realm.evaluate("2*3")?, Value::Number(6.0), "{source}");
     }
+    assert!(matches!(
+        realm.evaluate("throw {}"),
+        Err(Error::ThrownUnrepresentable)
+    ));
+    assert_eq!(realm.evaluate("2*3")?, Value::Number(6.0));
     Ok(())
 }
 
@@ -996,17 +1003,23 @@ fn a_conversion_that_cannot_run_valueof_names_the_gap() -> Result<(), Error> {
 #[test]
 fn a_script_run_for_effect_ends_on_a_value_that_cannot_cross() -> Result<(), Error> {
     // `run_compiled` drops the completion value, so a Script whose value has no
-    // identity outside the engine still completes. A thrown value stays a
-    // failure.
+    // identity outside the engine still completes.
     let limits = Limits::default();
     let mut host = SilentHost;
     let mut realm = Realm::with_backend(limits, &mut host, Backend::Engine)?;
     for source in ["({x:1})", "[1,2]", "2*3"] {
         realm.run_compiled(&compile_script(source, limits)?)?;
     }
+    // A Script that throws reached its end and threw, which is a completion of
+    // the language. That what it threw has no identity outside the engine says
+    // nothing about the engine missing a feature, so it is not reported as one.
     assert!(matches!(
         realm.run_compiled(&compile_script("throw {}", limits)?),
-        Err(Error::Unsupported { .. })
+        Err(Error::ThrownUnrepresentable)
+    ));
+    assert!(matches!(
+        realm.run_compiled(&compile_script("throw new TypeError('x')", limits)?),
+        Err(Error::Thrown { .. })
     ));
     Ok(())
 }

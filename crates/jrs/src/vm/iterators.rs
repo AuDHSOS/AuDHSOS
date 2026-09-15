@@ -404,7 +404,8 @@ pub(super) fn language_error(error: &Error) -> bool {
     }
     matches!(
         error,
-        Error::Thrown { .. }
+        Error::ThrownUnrepresentable
+            | Error::Thrown { .. }
             | Error::Type { .. }
             | Error::Range { .. }
             | Error::Reference { .. }

@@ -538,15 +538,14 @@ impl Execution<'_> {
         }
         // A thrown Object of the engine has no identity the embedding can
         // hold, so one that is not a native error is a gap rather than a value.
+        // The Script threw, which is a completion of the language. What it
+        // threw has no identity outside the engine, and saying the engine is
+        // missing a feature would say the Script never reached its end.
         let Some(object) = value.as_object() else {
-            return Error::Unsupported {
-                feature: UNCROSSABLE_OBJECT,
-            };
+            return Error::ThrownUnrepresentable;
         };
         let Some(kind) = agent.realm.native_error_kind(&agent.heap, object) else {
-            return Error::Unsupported {
-                feature: UNCROSSABLE_OBJECT,
-            };
+            return Error::ThrownUnrepresentable;
         };
         let message = agent
             .heap
