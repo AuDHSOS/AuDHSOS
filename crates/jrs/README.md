@@ -643,8 +643,8 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Math%`, after 21.3, on the register engine (focused) | focused | `6fe4b67` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Math --summary` | 327 | 654 | 118 (18.04%) | 0 (0.00%) | 536 (81.96%) |
 | `%Array%` and its methods, after 23.1.3 complete but `sort` (focused) | focused | `7596776` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 5,066 (82.82%) | 969 (15.84%) | 82 (1.34%) |
 | `%Array%` and its methods, after 23.1.3 complete but `sort`, on the register engine (focused) | focused | `7596776` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 1,922 (31.42%) | 350 (5.72%) | 3,845 (62.86%) |
-| Complete pinned suite, including staging and Intl | full | `7596776` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `7596776` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 9,565 (9.29%) | 16,116 (15.66%) | 77,244 (75.05%) |
+| Complete pinned suite, including staging and Intl | full | `d7c48b2` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `d7c48b2` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 9,643 (9.37%) | 16,122 (15.66%) | 77,160 (74.97%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -892,6 +892,31 @@ That is 1,210 more variants. Over `test/built-ins/Array` the engine passes
 1,922 of 6,117, up from 750. What 23.1.3 still owes is `sort`, whose comparator
 is a callback of a different shape.
 
+A parameter takes the Initializer of 8.6.2 where the call passed undefined,
+and 15.1.5 stops counting the `length` of 10.2.9 at the first of them. An
+Initializer runs in the frame of the call, so a name it reads is captured like
+one the body reads, which the scan of free names did not do. The refusal of a
+parameter list now says which of the three things 10.2.11 would have to do:
+of 1,634 variants they were 62 a rest parameter, 756 an Initializer and 816 a
+binding pattern.
+
+A Realm Script that held a `let` or a `const` anywhere inside a block was
+refused whole. The lowering has always bound a block in registers of the frame;
+what it does not take is named where it stands now, and the Script around it is
+taken. A closure over a block binding, a `const` assigned to and an object in a
+block still name their own gap.
+
+The differential fuzz then found what the suite could not: an input that ran
+for over twenty minutes. Every clause of 23.1.3 walks to the `length` 7.1.20
+gave it, and a Script can make one 2^32-1 while holding a single element, so
+`new Array(4294967294).fill(1)` did four billion writes and answered after 27
+seconds. Nothing charged for it, because a hole opens no frame and fuel is
+charged when a frame opens. A walk is charged before it starts now, at the rate
+a batch of indices costs; the three clauses that search stop at what they find,
+so those are charged where they look. The suite answers the same result for all
+102,925 variants as before the charge, and the fuzz run ends clean with its
+throughput up from 11,445 to 17,801 executions a second.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -949,7 +974,9 @@ tree `b01866f6404a7fdcb87da506795dcaca929665c5`, which is the tree of
 tree `6a1ceed16ca5526f8fbcb1c08c6ff841d525978d`, which is the tree of
 `6fe4b67`. The `%Array%` runs and both full runs beside them were measured at
 tree `6e308d3bfd1883631583168a7311c83665bb1489`, which is the tree of
-`7596776`.
+`7596776`. Both full runs beside the parameter Initializers, the blocks of a
+Realm Script and the bound on every Array scan were measured at tree
+`f59c300f1ac9f52e3a71f09af2cfc94ba9f11c56`, which is the tree of `d7c48b2`.
 
 ### Historical Test262 baseline
 
