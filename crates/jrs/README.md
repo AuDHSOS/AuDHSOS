@@ -703,8 +703,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | Block scopes, after the Object binding, on the register engine (focused) | focused | `b93d713` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/block-scope --summary` | 145 | 287 | 147 (51.22%) | 26 (9.06%) | 114 (39.72%) |
 | Object patterns, after the rest element (focused) | focused | `22fdd9f` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/object/dstr test/language/statements/variable/dstr --summary` | 658 | 1,316 | 474 (36.02%) | 6 (0.46%) | 836 (63.53%) |
 | Object patterns, after the rest element, on the register engine (focused) | focused | `22fdd9f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/object/dstr test/language/statements/variable/dstr --summary` | 658 | 1,316 | 456 (34.65%) | 2 (0.15%) | 858 (65.20%) |
-| Complete pinned suite, including staging and Intl | full | `22fdd9f` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `22fdd9f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 25,144 (24.43%) | 19,814 (19.25%) | 57,967 (56.32%) |
+| `for`-`of`, after the iterator close (focused) | focused | `f151cfc` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/for-of --summary` | 751 | 1,442 | 1,062 (73.65%) | 79 (5.48%) | 301 (20.87%) |
+| `for`-`of`, after the iterator close, on the register engine (focused) | focused | `f151cfc` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/for-of --summary` | 751 | 1,442 | 742 (51.46%) | 45 (3.12%) | 655 (45.42%) |
+| Complete pinned suite, including staging and Intl | full | `f151cfc` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `f151cfc` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 25,152 (24.44%) | 19,818 (19.25%) | 57,955 (56.31%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1444,7 +1446,9 @@ which is the tree of `2107883`. The block-scope runs and both full runs beside
 the Object binding were measured at tree `a194a281a88c32175c5cb02c2efa50dcd08ec212`,
 which is the tree of `b93d713`. The object-pattern runs and both full runs
 beside the rest element were measured at tree `3e4e680be64f17dfdbbd915f2cf5bdf339f2c60f`,
-which is the tree of `22fdd9f`. That step moved 868 variants from unsupported
+which is the tree of `22fdd9f`. The `for`-`of` runs and both full runs beside
+the iterator close were measured at tree `22fb2237d4e46bd487f8db4e43822baef9d45cfa`,
+which is the tree of `f151cfc`. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
 fails on the feature it actually needs. `RegExp.prototype[@@split]` landed in `fe5797c`
 between them and moved no variant of the suite.
