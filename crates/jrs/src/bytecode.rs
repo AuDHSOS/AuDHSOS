@@ -2298,6 +2298,10 @@ impl RegisterLowerer {
         Some(yes_type.merge(no_type))
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function emits every property definition of 13.2.5"
+    )]
     fn lower_object(&mut self, properties: &[parser::ObjectProperty]) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         let object_id = self.next_object_id;
@@ -2322,7 +2326,23 @@ impl RegisterLowerer {
             // property, which needs the key at run time.
             if let Some(setter) = property.accessor {
                 if property.computed {
-                    return None;
+                    // 13.2.5.1 with a key only the run time knows: 7.1.19
+                    // makes it, and 10.2.10 names the half after it.
+                    if !self.lower(&property.key)?.converts_to_primitive() {
+                        return None;
+                    }
+                    let register = self.allocate_register()?;
+                    self.code.emit(Instruction::Star(register));
+                    self.lower(&property.value)?;
+                    self.code.emit(Instruction::DefineAccessorByValue {
+                        obj: object,
+                        key: register,
+                        setter,
+                        enumerable: true,
+                    });
+                    self.release_register(register)?;
+                    self.record_ordinary_property_write(object_id, None, RegisterType::Unknown)?;
+                    continue;
                 }
                 let name = Self::static_property_name(&property.key)?.to_vec();
                 let constant = self.string_constant(&name)?;
@@ -2337,6 +2357,24 @@ impl RegisterLowerer {
                 // A read of the property is a call of its getter, so the
                 // layout knows the name and not what it answers.
                 self.record_ordinary_property_write(object_id, Some(name), RegisterType::Unknown)?;
+                continue;
+            }
+            // 13.2.5.5 names the function a definition holds after the key it
+            // is given, which for a computed one 10.2.10 does at run time.
+            if property.computed && register_names_itself_after_its_key(&property.value) {
+                if !self.lower(&property.key)?.converts_to_primitive() {
+                    return None;
+                }
+                let register = self.allocate_register()?;
+                self.code.emit(Instruction::Star(register));
+                self.lower(&property.value)?;
+                self.code.emit(Instruction::DefineMethodByValue {
+                    obj: object,
+                    key: register,
+                    enumerable: true,
+                });
+                self.release_register(register)?;
+                self.record_ordinary_property_write(object_id, None, RegisterType::Unknown)?;
                 continue;
             }
             let key = if property.computed {
@@ -2668,12 +2706,6 @@ impl RegisterLowerer {
             self.refuse("a class that extends another");
             return None;
         }
-        // A computed name is only known at run time, and the two halves of an
-        // accessor have to reach one property.
-        if class.methods.iter().any(|(_, method)| method.computed) {
-            self.refuse("a computed name in a class body");
-            return None;
-        }
         let value_type = self.lower_callable(&class.constructor, true, name)?;
         let constructor = self.allocate_register()?;
         self.code.emit(Instruction::Star(constructor));
@@ -2690,6 +2722,31 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Star(prototype));
         for (is_static, method) in &class.methods {
             let target = if *is_static { constructor } else { prototype };
+            // 15.7.14 with a key only the run time knows: 7.1.19 makes it, and
+            // 10.2.10 names the method after it.
+            if method.computed {
+                if !self.lower(&method.key)?.converts_to_primitive() {
+                    return None;
+                }
+                let register = self.allocate_register()?;
+                self.code.emit(Instruction::Star(register));
+                self.lower(&method.value)?;
+                self.code.emit(match method.accessor {
+                    Some(setter) => Instruction::DefineAccessorByValue {
+                        obj: target,
+                        key: register,
+                        setter,
+                        enumerable: false,
+                    },
+                    None => Instruction::DefineMethodByValue {
+                        obj: target,
+                        key: register,
+                        enumerable: false,
+                    },
+                });
+                self.release_register(register)?;
+                continue;
+            }
             let name = Self::static_property_name(&method.key)?.to_vec();
             let constant = self.string_constant(&name)?;
             let given = match method.accessor {
@@ -3396,6 +3453,10 @@ impl RegisterLowerer {
         Some(RegisterType::Unknown)
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function emits 13.3.6.1 for every shape of a callee"
+    )]
     fn lower_method_call(
         &mut self,
         base: &Expr,
@@ -3456,6 +3517,14 @@ impl RegisterLowerer {
                 // which is what a bytecode callee reading `this` needs.
                 RegisterType::Function(code_id) => {
                     let result = self.lower_method_call_bytecode(receiver, code_id, arguments)?;
+                    self.release_register(receiver)?;
+                    self.escape(&[base_type]);
+                    return Some(result);
+                }
+                // A property the layout answers with a type it cannot name is
+                // a callee 7.3.14 dispatches on at run time.
+                RegisterType::Unknown => {
+                    let result = self.lower_dynamic_method_call(receiver, arguments)?;
                     self.release_register(receiver)?;
                     self.escape(&[base_type]);
                     return Some(result);
@@ -9521,6 +9590,17 @@ fn register_lexical_dead_zone_read(
         }
     }
     Some(false)
+}
+
+/// Whether 8.5.2 gives this value the name of the key it is defined under,
+/// which is what an anonymous function definition takes.
+fn register_names_itself_after_its_key(expression: &Expr) -> bool {
+    match &expression.kind {
+        ExprKind::Group(inner) => register_names_itself_after_its_key(inner),
+        ExprKind::Function(function) => function.name.is_none(),
+        ExprKind::Class(class) => class.name.is_none(),
+        _ => false,
+    }
 }
 
 fn register_assignment_target_supported(target: &parser::AssignmentTarget) -> bool {

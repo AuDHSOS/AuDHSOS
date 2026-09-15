@@ -5123,14 +5123,53 @@ fn a_class_body_builds_its_constructor_and_its_prototype() -> Result<(), Error> 
     // 15.7.14 gives the constructor a `[[Call]]` that throws.
     differential_scripts(&["class C{};var r=0;try{C()}catch(e){r=e instanceof TypeError};r"])?;
     // 15.7 derives a class through `super`, which needs every method's
-    // [[HomeObject]], and a computed name is only known at run time.
-    for (source, feature) in [
-        ("class C extends Object{};0", "a class that extends another"),
-        ("class C{['m'](){}};0", "a computed name in a class body"),
+    // [[HomeObject]].
+    let source = "class C extends Object{};0";
+    let program = compile(source, Limits::default())?;
+    assert!(!program.uses_register_backend(), "{source}");
+    assert_eq!(
+        program.register_refusal,
+        Some("a class that extends another"),
+        "{source}"
+    );
+    Ok(())
+}
+
+/// 15.7.14 and 13.2.5.5 define a method under a key only the run time knows,
+/// and 10.2.10 names it after that key.
+#[test]
+fn a_computed_key_defines_a_method_and_an_accessor() -> Result<(), Error> {
+    for source in [
+        "var k='m';class C{[k](){return 1}};(new C()).m()",
+        "var k='s';class C{static [k](){return 2}};C.s()",
+        "var k='g';class C{get [k](){return 3}};(new C()).g",
+        "var k='g';class C{get [k](){return 3};set [k](v){}};(new C()).g",
+        "var k='m';class C{[k](){}};Object.keys(C.prototype).length",
+        "var k='m';class C{[k](){}};(new C()).m.name",
+        "var k='m';var o={[k](){return 1}};o.m()",
+        "var k='m';var o={[k](){}};Object.keys(o).length",
+        "var k='p';var o={get [k](){return 1}};o.p",
+        "var k='p';var o={get [k](){return 1},set [k](v){}};o.p",
+        "var s=Symbol('d');var o={[s](){return 4}};o[s]()",
+        "var o={a:1};var k='b';o[k]=function(){return 7};o.b()",
+        "var k='m';var o={[k]:1};o.m",
     ] {
-        let program = compile(source, Limits::default())?;
-        assert!(!program.uses_register_backend(), "{source}");
-        assert_eq!(program.register_refusal, Some(feature), "{source}");
+        differential_scripts(&[source])?;
+    }
+    // 10.2.10 names such a function after its key, which the stack backend
+    // leaves empty; these check the engine against the specification.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    for (source, expected) in [
+        ("var k='m';var o={[k](){return 1}};o.m.name", "m"),
+        ("var k='m';var o={[k]:function(){}};o.m.name", "m"),
+        ("var s=Symbol('d');var o={[s](){}};o[s].name", "[d]"),
+        (
+            "var k='p';var o={get [k](){return 1}};             Object.getOwnPropertyDescriptor(o,'p').get.name",
+            "get p",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(expected), "{source}");
     }
     Ok(())
 }

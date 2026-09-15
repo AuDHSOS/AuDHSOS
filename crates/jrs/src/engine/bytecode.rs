@@ -453,6 +453,30 @@ pub enum Instruction {
         /// class body does not.
         enumerable: bool,
     },
+    /// [`Instruction::DefineAccessor`] under a key only the run time knows,
+    /// which 7.1.19 makes of the value in `key`.
+    DefineAccessorByValue {
+        /// Object register.
+        obj: Reg,
+        /// Register holding the key.
+        key: Reg,
+        /// Whether the function is the `[[Set]]` rather than the `[[Get]]`.
+        setter: bool,
+        /// Whether the property is enumerable, which a literal gives it and a
+        /// class body does not.
+        enumerable: bool,
+    },
+    /// [`Instruction::DefineMethod`] under a key only the run time knows,
+    /// which 7.1.19 makes of the value in `key`.
+    DefineMethodByValue {
+        /// Register of the object the method belongs to.
+        obj: Reg,
+        /// Register holding the key.
+        key: Reg,
+        /// Whether the property is enumerable, which a literal gives it and a
+        /// class body does not.
+        enumerable: bool,
+    },
     /// Defines a method of a class body (15.7.14), taking the function in
     /// `acc` as its value.
     ///
@@ -891,7 +915,9 @@ impl BytecodeFunction {
                 self.verify_string_constant(pc, name)?;
                 Some(obj)
             }
-            Instruction::DeleteByValue { obj, key, .. } => {
+            Instruction::DeleteByValue { obj, key, .. }
+            | Instruction::DefineAccessorByValue { obj, key, .. }
+            | Instruction::DefineMethodByValue { obj, key, .. } => {
                 self.verify_register(pc, obj)?;
                 Some(key)
             }

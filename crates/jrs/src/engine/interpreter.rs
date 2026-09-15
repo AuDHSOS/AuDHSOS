@@ -3816,6 +3816,127 @@ impl RegisterVM {
         Ok(None)
     }
 
+    /// `CreateMethodProperty` of 7.3.5, which 15.7.14 relies on: the method
+    /// in the accumulator becomes a writable and configurable property that is
+    /// not enumerable.
+    fn define_method(
+        &self,
+        obj: Reg,
+        name: PropertyKey,
+        enumerable: bool,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        let method = self.acc;
+        let target = self.read_reg(obj)?.as_object().ok_or(VMError::TypeError)?;
+        heap.define_own_named(
+            target,
+            name,
+            method,
+            PropertyFlags {
+                enumerable,
+                ..PropertyFlags::constructor_data()
+            },
+        )?;
+        Ok(())
+    }
+
+    /// One half of an accessor property of 13.2.5.1.
+    ///
+    /// The other half is whatever the property already holds, so the two
+    /// clauses of one name meet on the object.
+    fn define_accessor(
+        &self,
+        obj: Reg,
+        name: PropertyKey,
+        setter: bool,
+        enumerable: bool,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        let oref = self.read_reg(obj)?.as_object().ok_or(VMError::TypeError)?;
+        let (get, set) = match heap.own_named_flags(oref, name)? {
+            Some(flags) if flags.is_accessor => {
+                let held = heap
+                    .lookup_named(oref, name)?
+                    .map_or(VALUE_UNDEFINED, |property| property.value);
+                Self::accessor_parts(held, heap)?
+            }
+            _ => (VALUE_UNDEFINED, VALUE_UNDEFINED),
+        };
+        let function = self.acc;
+        let (get, set) = if setter {
+            (get, function)
+        } else {
+            (function, set)
+        };
+        let pair = Self::make_accessor(get, set, heap)?;
+        // The pair was allocated, which may have moved the object.
+        let oref = self.read_reg(obj)?.as_object().ok_or(VMError::TypeError)?;
+        heap.define_own_named(
+            oref,
+            name,
+            pair,
+            PropertyFlags {
+                writable: false,
+                enumerable,
+                configurable: true,
+                is_accessor: true,
+            },
+        )?;
+        Ok(())
+    }
+
+    /// `SetFunctionName` of 10.2.10 for a function the lowering could not name,
+    /// because its key is only known at run time.
+    ///
+    /// 10.2.10 step 2 writes `[description]` for a Symbol key and nothing at
+    /// all for one whose description is undefined, and step 4 prefixes `get `
+    /// or `set ` for the two halves of an accessor.
+    fn name_from_key(
+        &self,
+        name: PropertyKey,
+        accessor: Option<bool>,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        let mut units: Vec<u16> = match accessor {
+            Some(true) => "set ".encode_utf16().collect(),
+            Some(false) => "get ".encode_utf16().collect(),
+            None => Vec::new(),
+        };
+        match name {
+            PropertyKey::String(text) => {
+                units.extend(
+                    heap.strings
+                        .to_utf16(Value::from_string(text))
+                        .ok_or(VMError::Heap(HeapError::InvalidReference))?,
+                );
+            }
+            PropertyKey::Symbol(symbol) => {
+                if let Some(description) = Self::symbol_description(symbol, heap) {
+                    units.push(0x5B);
+                    units.extend_from_slice(&description);
+                    units.push(0x5D);
+                }
+            }
+        }
+        // The text is made first, because the accumulator holds the function
+        // and the collector only follows what it can see.
+        let text = self.allocate_string(heap, &units)?;
+        let function = self.acc.as_object().ok_or(VMError::TypeError)?;
+        let key = PropertyKey::String(heap.strings.intern("name")?);
+        heap.define_own_named(
+            function,
+            key,
+            text,
+            PropertyFlags {
+                writable: false,
+                enumerable: false,
+                configurable: true,
+                is_accessor: false,
+            },
+        )?;
+        Ok(())
+    }
+
     /// `SetFunctionLength` of 10.2.9: not writable, not enumerable and
     /// configurable.
     /// `SetFunctionName` of 10.2.10, which 8.5.2 gives a name a function or a
@@ -8362,11 +8483,28 @@ impl RegisterVM {
                         .get(name as usize)
                         .ok_or(VMError::InvalidRegister)?;
                     let name = PropertyKey::String(heap.strings.intern_units(units)?);
-                    let method = self.acc;
-                    let target = self.read_reg(obj)?.as_object().ok_or(VMError::TypeError)?;
-                    // 7.3.5 makes a method writable and configurable and not
-                    // enumerable, which 15.7.14 relies on.
-                    heap.define_own_named(target, name, method, PropertyFlags::constructor_data())?;
+                    self.define_method(obj, name, false, heap)?;
+                }
+                Instruction::DefineMethodByValue {
+                    obj,
+                    key,
+                    enumerable,
+                } => {
+                    let name = property_key(self.read_reg(key)?, heap)?;
+                    // 15.7.14 and 13.2.5.5 name a method after the key only
+                    // the run time knows, which 10.2.10 does here.
+                    self.name_from_key(name, None, heap)?;
+                    self.define_method(obj, name, enumerable, heap)?;
+                }
+                Instruction::DefineAccessorByValue {
+                    obj,
+                    key,
+                    setter,
+                    enumerable,
+                } => {
+                    let name = property_key(self.read_reg(key)?, heap)?;
+                    self.name_from_key(name, Some(setter), heap)?;
+                    self.define_accessor(obj, name, setter, enumerable, heap)?;
                 }
                 Instruction::DefineAccessor {
                     obj,
@@ -8379,39 +8517,7 @@ impl RegisterVM {
                         .get(name as usize)
                         .ok_or(VMError::InvalidRegister)?;
                     let name = PropertyKey::String(heap.strings.intern_units(units)?);
-                    let target = self.read_reg(obj)?;
-                    let oref = target.as_object().ok_or(VMError::TypeError)?;
-                    // 13.2.5.1 leaves the other half of the property as it is,
-                    // so `get` and `set` of one name meet on the object.
-                    let (get, set) = match heap.own_named_flags(oref, name)? {
-                        Some(flags) if flags.is_accessor => {
-                            let held = heap
-                                .lookup_named(oref, name)?
-                                .map_or(VALUE_UNDEFINED, |property| property.value);
-                            Self::accessor_parts(held, heap)?
-                        }
-                        _ => (VALUE_UNDEFINED, VALUE_UNDEFINED),
-                    };
-                    let function = self.acc;
-                    let (get, set) = if setter {
-                        (get, function)
-                    } else {
-                        (function, set)
-                    };
-                    let pair = Self::make_accessor(get, set, heap)?;
-                    // The pair was allocated, which may have moved the object.
-                    let oref = self.read_reg(obj)?.as_object().ok_or(VMError::TypeError)?;
-                    heap.define_own_named(
-                        oref,
-                        name,
-                        pair,
-                        PropertyFlags {
-                            writable: false,
-                            enumerable,
-                            configurable: true,
-                            is_accessor: true,
-                        },
-                    )?;
+                    self.define_accessor(obj, name, setter, enumerable, heap)?;
                 }
                 Instruction::GetArrayLength { obj } => {
                     let target = self.read_reg(obj)?;
