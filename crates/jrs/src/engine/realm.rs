@@ -455,6 +455,16 @@ pub enum Intrinsic {
     ObjectValues,
     /// `Object.entries` (20.1.2.5).
     ObjectEntries,
+    /// The `Number` constructor `%Number%` (21.1.1.1).
+    NumberConstructor,
+    /// `Number.isFinite` (21.1.2.2).
+    NumberIsFinite,
+    /// `Number.isInteger` (21.1.2.3).
+    NumberIsInteger,
+    /// `Number.isNaN` (21.1.2.4).
+    NumberIsNaN,
+    /// `Number.isSafeInteger` (21.1.2.5).
+    NumberIsSafeInteger,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -473,6 +483,8 @@ pub enum IntrinsicHolder {
     Global,
     /// `%Array%`, which carries the functions 23.1.2 gives the constructor.
     ArrayConstructor,
+    /// `%Number%`, which carries the functions 21.1.2 gives the constructor.
+    NumberConstructor,
     /// `%Object%`, which carries the functions 20.1.2 gives the constructor.
     ObjectConstructor,
     /// `%Function.prototype%`, which carries the methods 20.2.3 gives every
@@ -484,7 +496,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 96] = [
+    pub const ALL: [Self; 101] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -581,10 +593,19 @@ impl Intrinsic {
         Self::ObjectIsFrozen,
         Self::ObjectValues,
         Self::ObjectEntries,
+        Self::NumberConstructor,
+        Self::NumberIsFinite,
+        Self::NumberIsInteger,
+        Self::NumberIsNaN,
+        Self::NumberIsSafeInteger,
     ];
 
     /// The intrinsic object this function is installed on.
     #[must_use]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one table names every intrinsic beside the object it is installed on"
+    )]
     pub const fn holder(self) -> IntrinsicHolder {
         match self {
             Self::ObjectPrototypeHasOwnProperty
@@ -666,7 +687,8 @@ impl Intrinsic {
             | Self::SyntaxErrorConstructor
             | Self::TypeErrorConstructor
             | Self::UriErrorConstructor
-            | Self::StringConstructor => IntrinsicHolder::Global,
+            | Self::StringConstructor
+            | Self::NumberConstructor => IntrinsicHolder::Global,
             Self::ArrayIsArray => IntrinsicHolder::ArrayConstructor,
             Self::ObjectDefineProperty
             | Self::ObjectGetOwnPropertyDescriptor
@@ -685,11 +707,19 @@ impl Intrinsic {
             | Self::ObjectIsFrozen
             | Self::ObjectValues
             | Self::ObjectEntries => IntrinsicHolder::ObjectConstructor,
+            Self::NumberIsFinite
+            | Self::NumberIsInteger
+            | Self::NumberIsNaN
+            | Self::NumberIsSafeInteger => IntrinsicHolder::NumberConstructor,
         }
     }
 
     /// The identifier carried by the function object.
     #[must_use]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one table names every intrinsic beside the identifier it carries"
+    )]
     pub const fn id(self) -> u32 {
         match self {
             Self::ObjectPrototypeHasOwnProperty => 0,
@@ -788,10 +818,19 @@ impl Intrinsic {
             Self::ObjectIsFrozen => 93,
             Self::ObjectValues => 94,
             Self::ObjectEntries => 95,
+            Self::NumberConstructor => 96,
+            Self::NumberIsFinite => 97,
+            Self::NumberIsInteger => 98,
+            Self::NumberIsNaN => 99,
+            Self::NumberIsSafeInteger => 100,
         }
     }
 
     /// Index of this intrinsic in [`Self::ALL`].
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one table names every intrinsic beside its place in ALL"
+    )]
     const fn index(self) -> usize {
         match self {
             Self::ObjectPrototypeHasOwnProperty => 0,
@@ -890,11 +929,20 @@ impl Intrinsic {
             Self::ObjectIsFrozen => 93,
             Self::ObjectValues => 94,
             Self::ObjectEntries => 95,
+            Self::NumberConstructor => 96,
+            Self::NumberIsFinite => 97,
+            Self::NumberIsInteger => 98,
+            Self::NumberIsNaN => 99,
+            Self::NumberIsSafeInteger => 100,
         }
     }
 
     /// The intrinsic one identifier denotes.
     #[must_use]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one table names every identifier beside the intrinsic it denotes"
+    )]
     pub const fn from_id(id: u32) -> Option<Self> {
         match id {
             0 => Some(Self::ObjectPrototypeHasOwnProperty),
@@ -993,6 +1041,11 @@ impl Intrinsic {
             93 => Some(Self::ObjectIsFrozen),
             94 => Some(Self::ObjectValues),
             95 => Some(Self::ObjectEntries),
+            96 => Some(Self::NumberConstructor),
+            97 => Some(Self::NumberIsFinite),
+            98 => Some(Self::NumberIsInteger),
+            99 => Some(Self::NumberIsNaN),
+            100 => Some(Self::NumberIsSafeInteger),
             _ => None,
         }
     }
@@ -1061,6 +1114,11 @@ impl Intrinsic {
             Self::ObjectFreeze => "freeze",
             Self::ObjectIsFrozen => "isFrozen",
             Self::ObjectEntries => "entries",
+            Self::NumberConstructor => "Number",
+            Self::NumberIsFinite => "isFinite",
+            Self::NumberIsInteger => "isInteger",
+            Self::NumberIsNaN => "isNaN",
+            Self::NumberIsSafeInteger => "isSafeInteger",
             Self::ObjectDefineProperty => "defineProperty",
             Self::ObjectGetOwnPropertyDescriptor => "getOwnPropertyDescriptor",
             Self::ObjectGetOwnPropertyNames => "getOwnPropertyNames",
@@ -1169,6 +1227,11 @@ impl Intrinsic {
             | Self::ObjectIsFrozen
             | Self::ObjectValues
             | Self::ObjectEntries
+            | Self::NumberConstructor
+            | Self::NumberIsFinite
+            | Self::NumberIsInteger
+            | Self::NumberIsNaN
+            | Self::NumberIsSafeInteger
             | Self::ObjectGetOwnPropertyNames => false,
             // 20.1.2.4, 20.1.2.8 and 20.1.2.13 apply ToPropertyKey to the
             // second argument.
@@ -1191,6 +1254,10 @@ impl Intrinsic {
 
     /// The `length` property of the function object (17).
     #[must_use]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one table names every intrinsic beside the length 17 gives it"
+    )]
     pub const fn length(self) -> u32 {
         match self {
             Self::ObjectPrototypeToString
@@ -1272,6 +1339,11 @@ impl Intrinsic {
             | Self::ObjectIsFrozen
             | Self::ObjectValues
             | Self::ObjectEntries
+            | Self::NumberConstructor
+            | Self::NumberIsFinite
+            | Self::NumberIsInteger
+            | Self::NumberIsNaN
+            | Self::NumberIsSafeInteger
             | Self::ObjectGetOwnPropertyNames => 1,
             Self::ObjectDefineProperty => 3,
             Self::MathPow
@@ -1591,6 +1663,13 @@ pub const ERROR_PROTOTYPE_PROPERTIES: [&str; 4] = ["constructor", "message", "na
 /// The property names 23.1.5.2 gives `%ArrayIteratorPrototype%`.
 pub const ARRAY_ITERATOR_PROTOTYPE_PROPERTIES: [&str; 1] = ["next"];
 
+/// Whether `%Number.prototype%` or `%Object.prototype%` owns a property of
+/// this name, which a Number resolves on its Prototype Chain.
+#[must_use]
+pub fn number_prototype_owns(name: &[u16]) -> bool {
+    wrapper_prototype_owns(&NUMBER_PROTOTYPE_PROPERTIES, name)
+}
+
 /// Whether one of these names, or a name `%Object.prototype%` owns, is owned
 /// by the Prototype an instance of that kind resolves on.
 #[must_use]
@@ -1741,6 +1820,7 @@ pub struct Realm {
     function_prototype: Root,
     array_prototype: Root,
     string_prototype: Root,
+    number_prototype: Root,
     array_iterator_prototype: Root,
     error_prototype: Root,
     native_error_prototypes: [Root; NATIVE_ERROR_COUNT],
@@ -1819,6 +1899,11 @@ impl Realm {
         let string_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
         let string_prototype = heap.push_root(Value::from_object(string_prototype))?;
 
+        // 21.1.3: %Number.prototype% is a Number exotic object whose
+        // [[Prototype]] is %Object.prototype%.
+        let number_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
+        let number_prototype = heap.push_root(Value::from_object(number_prototype))?;
+
         // 23.1.5.2: %ArrayIteratorPrototype% inherits from %IteratorPrototype%,
         // which is an ordinary object of %Object.prototype% until the Iterator
         // intrinsics exist.
@@ -1875,6 +1960,7 @@ impl Realm {
             (Intrinsic::ObjectConstructor, object_prototype),
             (Intrinsic::FunctionConstructor, function_prototype),
             (Intrinsic::StringConstructor, string_prototype),
+            (Intrinsic::NumberConstructor, number_prototype),
         ] {
             Self::pair_constructor_with_prototype(heap, &intrinsics, constructor, prototype)?;
         }
@@ -1915,6 +2001,7 @@ impl Realm {
             function_prototype,
             array_prototype,
             string_prototype,
+            number_prototype,
             array_iterator_prototype,
             error_prototype,
             native_error_prototypes,
@@ -2247,6 +2334,36 @@ impl Realm {
     /// # Errors
     ///
     /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    /// The values 21.1.2 gives `%Number%`, each of them not writable, not
+    /// enumerable and not configurable.
+    fn define_number_constants(
+        heap: &mut GenerationalHeap,
+        constructor: ObjectRef,
+    ) -> Result<(), HeapError> {
+        let flags = PropertyFlags {
+            writable: false,
+            enumerable: false,
+            configurable: false,
+            is_accessor: false,
+        };
+        for (name, value) in [
+            // 21.1.2.1 is the difference between 1 and the next binary64 above
+            // it, and 21.1.2.9 the smallest subnormal.
+            ("EPSILON", f64::EPSILON),
+            ("MAX_SAFE_INTEGER", 9_007_199_254_740_991.0),
+            ("MAX_VALUE", f64::MAX),
+            ("MIN_SAFE_INTEGER", -9_007_199_254_740_991.0),
+            ("MIN_VALUE", 5e-324),
+            ("NaN", f64::NAN),
+            ("NEGATIVE_INFINITY", f64::NEG_INFINITY),
+            ("POSITIVE_INFINITY", f64::INFINITY),
+        ] {
+            let key = intern(heap, name)?;
+            heap.define_own_named(constructor, key, Value::from_f64(value), flags)?;
+        }
+        Ok(())
+    }
+
     /// The values 21.3.1 gives `%Math%`, each of them not writable, not
     /// enumerable and not configurable.
     ///
@@ -2337,6 +2454,12 @@ impl Realm {
                         .get(Intrinsic::ArrayConstructor.index())
                         .ok_or(HeapError::InvalidReference)?,
                 )?,
+                IntrinsicHolder::NumberConstructor => Self::rooted(
+                    heap,
+                    *intrinsics
+                        .get(Intrinsic::NumberConstructor.index())
+                        .ok_or(HeapError::InvalidReference)?,
+                )?,
             }
             .as_object()
             .ok_or(HeapError::InvalidReference)?;
@@ -2353,6 +2476,12 @@ impl Realm {
             }
             let key = PropertyKey::String(heap.strings.intern(intrinsic.name())?);
             heap.define_own_named(holder, key, function, builtin_data())?;
+            // 21.1.2 gives %Number% values as well as functions, and they go
+            // on it as soon as it exists.
+            if intrinsic == Intrinsic::NumberConstructor {
+                let constructor = function.as_object().ok_or(HeapError::InvalidReference)?;
+                Self::define_number_constants(heap, constructor)?;
+            }
             // 23.1.3.40: %Array.prototype%[@@iterator] is the same function
             // object as `values`.
             if intrinsic == Intrinsic::ArrayPrototypeValues {
@@ -2499,6 +2628,15 @@ impl Realm {
     /// Returns [`HeapError::InvalidReference`] when the root was discarded.
     pub fn string_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
         Self::rooted(heap, self.string_prototype)
+    }
+
+    /// `%Number.prototype%` of 21.1.3.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when the root was discarded.
+    pub fn number_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.number_prototype)
     }
 
     /// %`ArrayIteratorPrototype`%.

@@ -6294,6 +6294,10 @@ fn register_expression_type(
 }
 
 /// The type one intrinsic returns.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one table names every intrinsic beside the type it answers"
+)]
 const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> RegisterType {
     match intrinsic {
         crate::engine::realm::Intrinsic::ObjectPrototypeHasOwnProperty
@@ -6308,6 +6312,11 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ObjectIsExtensible
         | crate::engine::realm::Intrinsic::ObjectIsSealed
         | crate::engine::realm::Intrinsic::ObjectIsFrozen
+        // 21.1.2.2 to 21.1.2.5 each answer a Boolean about one argument.
+        | crate::engine::realm::Intrinsic::NumberIsFinite
+        | crate::engine::realm::Intrinsic::NumberIsInteger
+        | crate::engine::realm::Intrinsic::NumberIsNaN
+        | crate::engine::realm::Intrinsic::NumberIsSafeInteger
         | crate::engine::realm::Intrinsic::ArrayPrototypeEvery
         | crate::engine::realm::Intrinsic::ArrayPrototypeSome
         | crate::engine::realm::Intrinsic::ArrayIsArray => RegisterType::Boolean,
@@ -6404,7 +6413,9 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::MathClz32
         | crate::engine::realm::Intrinsic::MathImul
         | crate::engine::realm::Intrinsic::MathFround
-        | crate::engine::realm::Intrinsic::MathSin => RegisterType::Number,
+        | crate::engine::realm::Intrinsic::MathSin
+        // 21.1.1.1 answers the Number ToNumber makes of its argument.
+        | crate::engine::realm::Intrinsic::NumberConstructor => RegisterType::Number,
         // 22.1.3.1 and 22.1.3.4 answer undefined for an index outside the String.
         crate::engine::realm::Intrinsic::StringPrototypeAt
         | crate::engine::realm::Intrinsic::StringPrototypeCodePointAt => RegisterType::Primitive,

@@ -159,7 +159,7 @@ fn a_callee_the_lowering_cannot_type_is_dispatched_at_run_time() -> Result<(), E
     // 7.3.14 dispatches on the callee, so a name resolved on the Global
     // Environment Record is still callable. A name of clause 19 this Realm has
     // not built is a gap, and it is reported as one rather than answered.
-    let program = compile("Number(1)", Limits::default())?;
+    let program = compile("Boolean(1)", Limits::default())?;
     assert!(program.uses_register_backend());
     assert!(matches!(
         Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
@@ -167,7 +167,7 @@ fn a_callee_the_lowering_cannot_type_is_dispatched_at_run_time() -> Result<(), E
     ));
     assert_eq!(
         Runtime::new(Limits::default()).run(&program.legacy_only(), &mut SilentHost)?,
-        Value::Number(1.0)
+        Value::Boolean(true)
     );
     Ok(())
 }
@@ -4682,5 +4682,59 @@ fn an_update_takes_tonumeric_of_what_the_binding_held() -> Result<(), Error> {
         Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
         Err(Error::Unsupported { .. })
     ));
+    Ok(())
+}
+
+#[test]
+fn the_number_constructor_and_what_21_1_2_gives_it() -> Result<(), Error> {
+    // 21.1.1.1 answers +0 for no argument and the Number ToNumber makes of
+    // every other, 21.1.2 gives eight values and four questions, and none of
+    // the four coerces: 21.1.2.2 step 1 answers false for anything that is
+    // not a Number, where 19.2.2 takes ToNumber first.
+    for source in [
+        "Number('42')",
+        "Number()",
+        "Number(true)",
+        "Number(null)",
+        "Number('')",
+        "typeof Number",
+        "Number.length",
+        "Number.prototype.constructor===Number",
+        "Number.NaN",
+        "Number.EPSILON",
+        "Number.MAX_SAFE_INTEGER",
+        "Number.MIN_SAFE_INTEGER",
+        "Number.MAX_VALUE",
+        "Number.MIN_VALUE",
+        "Number.POSITIVE_INFINITY",
+        "Number.NEGATIVE_INFINITY",
+        "Number.isNaN(NaN)",
+        "Number.isNaN('NaN')",
+        "Number.isFinite(1)",
+        "Number.isFinite('1')",
+        "Number.isFinite(Infinity)",
+        "Number.isInteger(1.5)",
+        "Number.isInteger(-3)",
+        "Number.isInteger('3')",
+        "Number.isSafeInteger(9007199254740991)",
+        "Number.isSafeInteger(9007199254740992)",
+        "Number.isSafeInteger(1.5)",
+    ] {
+        differential(source)?;
+    }
+    // `new` makes the Number exotic object of 21.1.3, and 21.1.3 gives its
+    // Prototype methods, neither of which this engine has built.
+    for source in ["new Number(1)", "Number.prototype.toFixed"] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        assert!(
+            matches!(
+                Runtime::with_backend(Limits::default(), Backend::Engine)
+                    .run(&program, &mut SilentHost),
+                Err(Error::Unsupported { .. })
+            ),
+            "{source}"
+        );
+    }
     Ok(())
 }

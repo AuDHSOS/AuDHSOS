@@ -1311,6 +1311,26 @@ impl RegisterVM {
                 self.call_argument(&call, 0)?,
                 heap,
             ),
+            // 21.1.1.1: a call with no argument is +0, and every other value
+            // goes through ToNumber. `new` makes the Number exotic object of
+            // 21.1.3, which this engine has not built.
+            Intrinsic::NumberConstructor => {
+                if call.construct.is_some() {
+                    return Err(VMError::Unsupported("a Number exotic object"));
+                }
+                let argument = self.call_argument(&call, 0)?;
+                if call.arg_count == 0 {
+                    return Ok(Value::from_smi(0));
+                }
+                Ok(Value::from_f64(primitive_number(argument, heap)?))
+            }
+            Intrinsic::NumberIsFinite
+            | Intrinsic::NumberIsInteger
+            | Intrinsic::NumberIsNaN
+            | Intrinsic::NumberIsSafeInteger => Ok(Value::from_bool(Self::number_predicate(
+                intrinsic,
+                self.call_argument(&call, 0)?,
+            ))),
             Intrinsic::ErrorConstructor
             | Intrinsic::EvalErrorConstructor
             | Intrinsic::RangeErrorConstructor
@@ -1493,6 +1513,7 @@ impl RegisterVM {
                     | Intrinsic::TypeErrorConstructor
                     | Intrinsic::UriErrorConstructor
                     | Intrinsic::StringConstructor
+                    | Intrinsic::NumberConstructor
                     | Intrinsic::FunctionConstructor
             )
         })
@@ -1524,6 +1545,39 @@ impl RegisterVM {
             }
             value = prototype;
         }
+    }
+
+    /// The four questions 21.1.2 asks about a value.
+    ///
+    /// None of them coerces: 21.1.2.2 step 1 and its siblings answer false for
+    /// anything that is not a Number, where the global `isFinite` and `isNaN`
+    /// of 19.2.2 and 19.2.3 take `ToNumber` first.
+    fn number_predicate(intrinsic: Intrinsic, value: Value) -> bool {
+        let Some(number) = value.as_f64() else {
+            return false;
+        };
+        match intrinsic {
+            Intrinsic::NumberIsNaN => number.is_nan(),
+            Intrinsic::NumberIsFinite => number.is_finite(),
+            // 21.1.2.3 asks whether the Number has no fractional part, which
+            // is where its floor is the Number itself, and 21.1.2.5 whether it
+            // is one 6.1.6.1 can tell from its neighbours.
+            Intrinsic::NumberIsInteger => Self::is_integral(number),
+            _ => {
+                Self::is_integral(number)
+                    && (-9_007_199_254_740_991.0..=9_007_199_254_740_991.0).contains(&number)
+            }
+        }
+    }
+
+    /// Whether a Number has no fractional part, which is where its floor is
+    /// the Number itself.
+    #[expect(
+        clippy::float_cmp,
+        reason = "the question 21.1.2.3 asks is exactly whether the two are the same Number"
+    )]
+    fn is_integral(number: f64) -> bool {
+        number.is_finite() && Self::round_toward(number, true) == number
     }
 
     /// `%String%` of 22.1.1.1.
@@ -3411,6 +3465,11 @@ impl RegisterVM {
                 realm.function_prototype(heap)?,
                 super::realm::function_prototype_owns,
                 "a property of %Function.prototype%",
+            ),
+            (
+                realm.number_prototype(heap)?,
+                super::realm::number_prototype_owns,
+                "a property of %Number.prototype%",
             ),
         ] {
             if prototype.as_object() == Some(object) && owns(name) {
