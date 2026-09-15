@@ -4329,14 +4329,22 @@ impl RegisterLowerer {
         use crate::engine::bytecode::Instruction;
         let (base, key) = target.member()?;
         let base_type = self.lower(base)?;
-        if !base_type.is_object()
-            || matches!(base_type, RegisterType::Array(_)) && Self::is_length_name(key)
-        {
+        // A value the lowering cannot name is written at run time, which is
+        // what 13.15.2 does anyway; only a layout it tracks needs more.
+        if !base_type.is_object() && base_type != RegisterType::Unknown {
             return None;
         }
         let object = self.allocate_register()?;
         self.code.emit(Instruction::Star(object));
-        let key = if matches!(base_type, RegisterType::Array(_)) {
+        let array_length = matches!(base_type, RegisterType::Array(_)) && Self::is_length_name(key);
+        let key = if array_length {
+            // 10.4.2.4 takes the name and sets the Array's own length.
+            let name = Self::static_property_name(key)?.to_vec();
+            RegisterMemberKey::Named {
+                constant: self.string_constant(&name)?,
+                name,
+            }
+        } else if matches!(base_type, RegisterType::Array(_)) {
             let array_index = Self::static_array_index(key);
             if let Some(index) = array_index {
                 self.emit_array_index(index)?;
@@ -4424,6 +4432,11 @@ impl RegisterLowerer {
                     define: false,
                 });
                 self.release_register(register)?;
+                // Nothing is recorded for a base the lowering cannot name:
+                // there is no layout of it to record into.
+                if prepared.base_type == RegisterType::Unknown {
+                    return self.release_register(prepared.object);
+                }
                 let RegisterType::Object(object_id) = prepared.base_type else {
                     return None;
                 };
@@ -4435,6 +4448,32 @@ impl RegisterLowerer {
                     name: constant,
                     slot,
                 });
+                if prepared.base_type == RegisterType::Unknown {
+                    return self.release_register(prepared.object);
+                }
+                // 10.4.2.4 deletes every index at or above the new length, and
+                // the lowering cannot name which those are, so the layout
+                // keeps only that its elements are no longer known.
+                if let RegisterType::Array(object_id) = prepared.base_type {
+                    let RegisterObjectLayout::Array {
+                        length,
+                        elements,
+                        dynamic,
+                    } = self.object_layouts.get_mut(&object_id)?
+                    else {
+                        return None;
+                    };
+                    let merged = elements
+                        .values()
+                        .copied()
+                        .chain(*dynamic)
+                        .chain(core::iter::once(RegisterType::Undefined))
+                        .reduce(RegisterType::merge);
+                    *dynamic = merged;
+                    elements.clear();
+                    *length = None;
+                    return self.release_register(prepared.object);
+                }
                 let RegisterType::Object(object_id) = prepared.base_type else {
                     return None;
                 };

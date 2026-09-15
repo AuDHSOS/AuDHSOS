@@ -3481,7 +3481,8 @@ fn differential(source: &str) -> Result<(), Error> {
         }
         // An error the engine raised itself carries its message, and both
         // backends must name the same one.
-        (Err(Error::Type { message: actual }), Err(Error::Type { message: expected })) => {
+        (Err(Error::Type { message: actual }), Err(Error::Type { message: expected }))
+        | (Err(Error::Range { message: actual }), Err(Error::Range { message: expected })) => {
             assert_eq!(actual, expected, "{source}");
         }
         _ => panic!("{source}: {actual:?} != {expected:?}"),
@@ -5371,6 +5372,32 @@ fn the_arguments_object_of_a_strict_function_is_a_value() -> Result<(), Error> {
         "var o={length:2,0:'a',1:'b'};var r='';for(var v of Array.prototype.values.call(o))r=r+v;r",
         "var a=[1,2,3];var r=0;for(var v of Array.prototype.values.call(a))r=r+v;r",
     ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn a_property_write_reaches_a_base_the_lowering_cannot_name() -> Result<(), Error> {
+    // 13.15.2 writes through `[[Set]]`, which needs no layout. And 10.4.2.4
+    // sets an Array's own length, deleting every index at or above it.
+    for source in [
+        "function f(o){o.x=1;return o.x}f({})",
+        "function f(o){o.x=1;return o.x}f({x:0})",
+        "function f(o,k){o[k]=2;return o.y}f({},'y')",
+        "function f(o){o.x=1;return o}f({}).x",
+        "var a=[1,2,3];a.length=2;a.length",
+        "var a=[1,2,3];a.length=2;a[2]",
+        "var a=[1,2,3];a.length=2;a.join(',')",
+        "var a=[1];a.length=3;a.length",
+        "var a=[1];a.length=3;typeof a[2]",
+        "var a=[1,2,3];a.length=0;a.length",
+        "var a=[1,2,3];a.length='2';a.length",
+    ] {
+        differential(source)?;
+    }
+    // 10.4.2.4 refuses a length that is not the Number `ToUint32` gives.
+    for source in ["var a=[1,2,3];a.length=-1", "var a=[1,2,3];a.length=1.5"] {
         differential(source)?;
     }
     Ok(())

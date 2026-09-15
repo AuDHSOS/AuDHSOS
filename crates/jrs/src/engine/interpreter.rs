@@ -3984,6 +3984,64 @@ impl RegisterVM {
     ///
     /// An Array keeps its length where 10.4.2 puts it; any other array-like
     /// keeps it as an ordinary property, which is where 23.1.3 writes it.
+    /// `ArraySetLength` of 10.4.2.4: the new length is `ToUint32` of the
+    /// value, which has to be the number `ToNumber` gives, and every index at
+    /// or above it is deleted.
+    fn set_array_length(
+        object: ObjectRef,
+        value: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let number = primitive_number(value, heap)?;
+        let wanted = crate::value::number_uint32(number);
+        #[expect(
+            clippy::float_cmp,
+            reason = "10.4.2.4 asks whether the two are the same Number"
+        )]
+        let differs = f64::from(wanted) != number;
+        if differs {
+            return Err(raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::RangeError,
+                "invalid array length",
+            ));
+        }
+        // An index the Shape took over (10.4.2.1) would have to be deleted
+        // here too, and 10.4.2.4 stops at one that is not configurable.
+        let shape = heap
+            .get_object(object)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?
+            .shape_id;
+        for (name, _, _) in heap.shapes.own_properties(shape) {
+            let units = name
+                .as_string()
+                .and_then(|name| heap.strings.to_utf16(Value::from_string(name)))
+                .unwrap_or_default();
+            if array_index_units(&units).is_some_and(|index| index >= wanted) {
+                return Err(VMError::Unsupported(
+                    "an Array length that deletes a property of the Shape",
+                ));
+            }
+        }
+        if let Some(elements) = heap
+            .get_object(object)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?
+            .elements
+        {
+            let indices = heap
+                .get_elements(elements)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?
+                .indices();
+            for index in indices.into_iter().filter(|index| *index >= wanted) {
+                heap.delete_element(elements, index)?;
+            }
+        }
+        heap.set_array_length(object, wanted)?;
+        Ok(())
+    }
+
     fn set_array_like_length(
         object: ObjectRef,
         length: u32,
@@ -6609,6 +6667,13 @@ impl RegisterVM {
                     // 10.4.2: an Array keeps its indices in an element store,
                     // so a name that is one is written there and not as a
                     // property of its own.
+                    // 10.4.2.4 sets an Array's `length` and deletes every
+                    // index at or above the new one.
+                    if units.as_slice() == LENGTH_NAME && heap.array_length(oref).is_some() {
+                        let wanted = self.acc;
+                        Self::set_array_length(oref, wanted, heap, realm)?;
+                        return Ok(None);
+                    }
                     let elements = heap.get_object(oref).ok_or(VMError::TypeError)?.elements;
                     let name = PropertyKey::String(heap.strings.intern_units(units)?);
                     if let Some(eref) = elements
