@@ -1155,6 +1155,12 @@ impl RegisterVM {
             | Intrinsic::ObjectConstructor
             | Intrinsic::ObjectDefineProperty
             | Intrinsic::ObjectGetOwnPropertyDescriptor
+            | Intrinsic::ObjectCreate
+            | Intrinsic::ObjectDefineProperties
+            | Intrinsic::ObjectGetPrototypeOf
+            | Intrinsic::ObjectKeys
+            | Intrinsic::ObjectIs
+            | Intrinsic::ObjectHasOwn
             | Intrinsic::ObjectGetOwnPropertyNames => Self::call_object_intrinsic(
                 intrinsic,
                 argument(self, 0)?,
@@ -1353,6 +1359,103 @@ impl RegisterVM {
         Ok(Value::from_string(text))
     }
 
+    /// An Array of the Realm holding these values, which the collector can
+    /// see from the moment it exists.
+    fn array_of(
+        values: Vec<Value>,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let count = u32::try_from(values.len()).map_err(|_| VMError::PropertyLimit)?;
+        let array = realm.array(heap, count)?;
+        for (index, value) in values.into_iter().enumerate() {
+            let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+            heap.set_array_element(array, index, value)?;
+        }
+        Ok(Value::from_object(array))
+    }
+
+    /// The own String keys of an object, in the order 10.1.11 gives them:
+    /// every one for 20.1.2.10, and the enumerable ones for 20.1.2.19.
+    ///
+    /// The names are interned, and interning moves no object, so the Array
+    /// may be allocated after them.
+    fn own_string_keys(
+        intrinsic: Intrinsic,
+        target: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let enumerable_only = intrinsic == Intrinsic::ObjectKeys;
+        let object = Self::coerce_object(target, heap, realm)?;
+        let names: Vec<Value> = heap
+            .own_keys(object)?
+            .into_iter()
+            .filter(|(_, enumerable)| *enumerable || !enumerable_only)
+            .filter_map(|(key, _)| key.as_string())
+            .map(Value::from_string)
+            .collect();
+        Self::array_of(names, heap, realm)
+    }
+
+    /// `Object.create` of 20.1.2.2: an ordinary object under the Prototype
+    /// given, with the properties of 20.1.2.3 when a second argument names
+    /// any.
+    fn create_object(
+        prototype: Value,
+        properties: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if !prototype.is_null() && prototype.as_object().is_none() {
+            return Err(type_error(
+                heap,
+                realm,
+                "Object.create called with a value that is neither an object nor null",
+            ));
+        }
+        let shape = heap.shapes.root_shape();
+        let created = heap.allocate_object(shape, prototype)?;
+        if properties.is_undefined() {
+            return Ok(Value::from_object(created));
+        }
+        Self::define_properties(created, properties, heap, realm)
+    }
+
+    /// `ObjectDefineProperties` of 20.1.2.3.2.
+    ///
+    /// Step 4 reads every descriptor before step 5 defines any, so a source
+    /// whose second descriptor is malformed leaves the object untouched.
+    fn define_properties(
+        object: ObjectRef,
+        properties: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let source = Self::coerce_object(properties, heap, realm)?;
+        let mut descriptors = Vec::new();
+        for (key, enumerable) in heap.own_keys(source)? {
+            if !enumerable {
+                continue;
+            }
+            let value = heap
+                .lookup_named(source, key)?
+                .map_or(VALUE_UNDEFINED, |property| property.value);
+            let Some(descriptor) = value.as_object() else {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "property descriptor must be an object",
+                ));
+            };
+            descriptors.push((key, Self::to_property_descriptor(descriptor, heap, realm)?));
+        }
+        for (key, (value, flags)) in descriptors {
+            heap.define_own_named(object, key, value, flags)?;
+        }
+        Ok(Value::from_object(object))
+    }
+
     /// The functions 20.1.2 gives `%Object%` that this Realm builds.
     ///
     /// Each of them answers or takes a Property Descriptor, which 6.2.6.4 and
@@ -1382,24 +1485,42 @@ impl RegisterVM {
             // 20.1.1.1: undefined and null make an ordinary object, and every
             // other value goes through ToObject.
             Intrinsic::ObjectConstructor => Self::construct_object(target, heap, realm),
-            // 20.1.2.10: the String keys of the object, in the order 10.1.11
-            // gives them. The names are interned, and interning moves no
-            // object, so the Array below may be allocated after them.
-            Intrinsic::ObjectGetOwnPropertyNames => {
+            // 20.1.2.14 is SameValue of 7.2.11, which the engine already has
+            // for the strict comparison that differs from it only in how it
+            // treats zero and NaN.
+            Intrinsic::ObjectIs => Ok(Value::from_bool(same_value(target, key, heap)?)),
+            // 20.1.2.13 is HasOwnProperty of 7.3.13 without reaching the
+            // Prototype Chain, on a `this` that goes through ToObject.
+            Intrinsic::ObjectHasOwn => {
                 let object = Self::coerce_object(target, heap, realm)?;
-                let names: Vec<Value> = heap
-                    .own_keys(object)?
-                    .into_iter()
-                    .filter_map(|(key, _)| key.as_string())
-                    .map(Value::from_string)
-                    .collect();
-                let count = u32::try_from(names.len()).map_err(|_| VMError::PropertyLimit)?;
-                let array = realm.array(heap, count)?;
-                for (index, name) in names.into_iter().enumerate() {
-                    let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
-                    heap.set_array_element(array, index, name)?;
-                }
-                Ok(Value::from_object(array))
+                let name = property_key(key, heap)?;
+                Ok(Value::from_bool(
+                    heap.own_named_flags(object, name)?.is_some(),
+                ))
+            }
+            // 20.1.2.12 answers the [[Prototype]] of the object ToObject made.
+            Intrinsic::ObjectGetPrototypeOf => {
+                let object = Self::coerce_object(target, heap, realm)?;
+                Ok(heap
+                    .get_object(object)
+                    .ok_or(VMError::Heap(HeapError::InvalidReference))?
+                    .prototype)
+            }
+            Intrinsic::ObjectCreate => Self::create_object(target, key, heap, realm),
+            // 20.1.2.3: every own enumerable property of the source is a
+            // Property Descriptor of 6.2.6.5, defined on the object.
+            Intrinsic::ObjectDefineProperties => {
+                let object = target.as_object().ok_or_else(|| {
+                    type_error(
+                        heap,
+                        realm,
+                        "Object.defineProperties called on a value that is not an object",
+                    )
+                })?;
+                Self::define_properties(object, key, heap, realm)
+            }
+            Intrinsic::ObjectGetOwnPropertyNames | Intrinsic::ObjectKeys => {
+                Self::own_string_keys(intrinsic, target, heap, realm)
             }
             // 20.1.2.8: the own property, as the object 6.2.6.4 makes of it.
             Intrinsic::ObjectGetOwnPropertyDescriptor => {
@@ -4728,6 +4849,21 @@ const fn absolute_index(position: i64, length: i64) -> i64 {
     } else {
         position
     }
+}
+
+/// `SameValue` of 7.2.11: strict equality, except that NaN matches NaN and
+/// the two zeroes do not match each other.
+fn same_value(left: Value, right: Value, heap: &GenerationalHeap) -> Result<bool, VMError> {
+    if let (Some(left), Some(right)) = (left.as_f64(), right.as_f64()) {
+        if left.is_nan() && right.is_nan() {
+            return Ok(true);
+        }
+        // 6.1.6.1.14 tells +0 from -0, which strict equality does not.
+        if left == 0.0 && right == 0.0 {
+            return Ok(left.is_sign_positive() == right.is_sign_positive());
+        }
+    }
+    RegisterVM::strictly_equals(left, right, heap)
 }
 
 /// `SameValueZero` of 7.2.10: strict equality, except that NaN matches NaN.

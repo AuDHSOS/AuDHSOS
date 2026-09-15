@@ -6022,6 +6022,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::StringPrototypeIncludes
         | crate::engine::realm::Intrinsic::StringPrototypeStartsWith
         | crate::engine::realm::Intrinsic::ArrayPrototypeIncludes
+        | crate::engine::realm::Intrinsic::ObjectIs
+        | crate::engine::realm::Intrinsic::ObjectHasOwn
         | crate::engine::realm::Intrinsic::ArrayIsArray => RegisterType::Boolean,
         // 22.1.1.1 answers a String whichever argument it took; `new` answers
         // no value at all, because the exotic object it would make is a gap.
@@ -6050,6 +6052,10 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ObjectDefineProperty
         | crate::engine::realm::Intrinsic::ObjectGetOwnPropertyDescriptor
         | crate::engine::realm::Intrinsic::ObjectGetOwnPropertyNames
+        | crate::engine::realm::Intrinsic::ObjectCreate
+        | crate::engine::realm::Intrinsic::ObjectDefineProperties
+        | crate::engine::realm::Intrinsic::ObjectGetPrototypeOf
+        | crate::engine::realm::Intrinsic::ObjectKeys
         | crate::engine::realm::Intrinsic::FunctionConstructor
         | crate::engine::realm::Intrinsic::FunctionPrototypeCall
         | crate::engine::realm::Intrinsic::FunctionPrototypeBind

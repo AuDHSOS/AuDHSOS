@@ -367,6 +367,18 @@ pub enum Intrinsic {
     UriErrorConstructor,
     /// The `String` constructor `%String%` (22.1.1.1).
     StringConstructor,
+    /// `Object.create` (20.1.2.2).
+    ObjectCreate,
+    /// `Object.defineProperties` (20.1.2.3).
+    ObjectDefineProperties,
+    /// `Object.getPrototypeOf` (20.1.2.12).
+    ObjectGetPrototypeOf,
+    /// `Object.keys` (20.1.2.19).
+    ObjectKeys,
+    /// `Object.is` (20.1.2.14).
+    ObjectIs,
+    /// `Object.hasOwn` (20.1.2.13).
+    ObjectHasOwn,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -396,7 +408,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 52] = [
+    pub const ALL: [Self; 58] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -449,6 +461,12 @@ impl Intrinsic {
         Self::TypeErrorConstructor,
         Self::UriErrorConstructor,
         Self::StringConstructor,
+        Self::ObjectCreate,
+        Self::ObjectDefineProperties,
+        Self::ObjectGetPrototypeOf,
+        Self::ObjectKeys,
+        Self::ObjectIs,
+        Self::ObjectHasOwn,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -507,7 +525,13 @@ impl Intrinsic {
             Self::ArrayIsArray => IntrinsicHolder::ArrayConstructor,
             Self::ObjectDefineProperty
             | Self::ObjectGetOwnPropertyDescriptor
-            | Self::ObjectGetOwnPropertyNames => IntrinsicHolder::ObjectConstructor,
+            | Self::ObjectGetOwnPropertyNames
+            | Self::ObjectCreate
+            | Self::ObjectDefineProperties
+            | Self::ObjectGetPrototypeOf
+            | Self::ObjectKeys
+            | Self::ObjectIs
+            | Self::ObjectHasOwn => IntrinsicHolder::ObjectConstructor,
         }
     }
 
@@ -567,6 +591,12 @@ impl Intrinsic {
             Self::TypeErrorConstructor => 49,
             Self::UriErrorConstructor => 50,
             Self::StringConstructor => 51,
+            Self::ObjectCreate => 52,
+            Self::ObjectDefineProperties => 53,
+            Self::ObjectGetPrototypeOf => 54,
+            Self::ObjectKeys => 55,
+            Self::ObjectIs => 56,
+            Self::ObjectHasOwn => 57,
         }
     }
 
@@ -625,6 +655,12 @@ impl Intrinsic {
             Self::TypeErrorConstructor => 49,
             Self::UriErrorConstructor => 50,
             Self::StringConstructor => 51,
+            Self::ObjectCreate => 52,
+            Self::ObjectDefineProperties => 53,
+            Self::ObjectGetPrototypeOf => 54,
+            Self::ObjectKeys => 55,
+            Self::ObjectIs => 56,
+            Self::ObjectHasOwn => 57,
         }
     }
 
@@ -684,6 +720,12 @@ impl Intrinsic {
             49 => Some(Self::TypeErrorConstructor),
             50 => Some(Self::UriErrorConstructor),
             51 => Some(Self::StringConstructor),
+            52 => Some(Self::ObjectCreate),
+            53 => Some(Self::ObjectDefineProperties),
+            54 => Some(Self::ObjectGetPrototypeOf),
+            55 => Some(Self::ObjectKeys),
+            56 => Some(Self::ObjectIs),
+            57 => Some(Self::ObjectHasOwn),
             _ => None,
         }
     }
@@ -710,6 +752,12 @@ impl Intrinsic {
             Self::TypeErrorConstructor => "TypeError",
             Self::UriErrorConstructor => "URIError",
             Self::StringConstructor => "String",
+            Self::ObjectCreate => "create",
+            Self::ObjectDefineProperties => "defineProperties",
+            Self::ObjectGetPrototypeOf => "getPrototypeOf",
+            Self::ObjectKeys => "keys",
+            Self::ObjectIs => "is",
+            Self::ObjectHasOwn => "hasOwn",
             Self::ObjectDefineProperty => "defineProperty",
             Self::ObjectGetOwnPropertyDescriptor => "getOwnPropertyDescriptor",
             Self::ObjectGetOwnPropertyNames => "getOwnPropertyNames",
@@ -775,9 +823,17 @@ impl Intrinsic {
             | Self::TypeErrorConstructor
             | Self::UriErrorConstructor
             | Self::StringConstructor
+            | Self::ObjectCreate
+            | Self::ObjectDefineProperties
+            | Self::ObjectGetPrototypeOf
+            | Self::ObjectKeys
+            | Self::ObjectIs
             | Self::ObjectGetOwnPropertyNames => false,
-            // 20.1.2.4 and 20.1.2.8 apply ToPropertyKey to the second argument.
-            Self::ObjectDefineProperty | Self::ObjectGetOwnPropertyDescriptor => index == 1,
+            // 20.1.2.4, 20.1.2.8 and 20.1.2.13 apply ToPropertyKey to the
+            // second argument.
+            Self::ObjectDefineProperty
+            | Self::ObjectGetOwnPropertyDescriptor
+            | Self::ObjectHasOwn => index == 1,
             // 20.1.3.2 and 20.1.3.4 apply ToPropertyKey to the first argument.
             Self::ObjectPrototypeHasOwnProperty | Self::ObjectPrototypePropertyIsEnumerable => {
                 index == 0
@@ -841,10 +897,16 @@ impl Intrinsic {
             | Self::TypeErrorConstructor
             | Self::UriErrorConstructor
             | Self::StringConstructor
+            | Self::ObjectGetPrototypeOf
+            | Self::ObjectKeys
             | Self::ObjectGetOwnPropertyNames => 1,
             Self::ObjectDefineProperty => 3,
             Self::MathPow
             | Self::ObjectGetOwnPropertyDescriptor
+            | Self::ObjectCreate
+            | Self::ObjectDefineProperties
+            | Self::ObjectIs
+            | Self::ObjectHasOwn
             | Self::StringPrototypeSlice
             | Self::StringPrototypeSubstring
             | Self::ArrayPrototypeSlice => 2,

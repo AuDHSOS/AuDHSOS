@@ -4243,3 +4243,61 @@ fn the_top_level_this_of_a_script_is_the_global_object() -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[test]
+fn the_object_constructor_answers_what_20_1_2_asks_of_it() -> Result<(), Error> {
+    // 20.1.2.2 makes an object under a Prototype and 20.1.2.3 defines the
+    // descriptors of a source on it; 20.1.2.12 answers the [[Prototype]],
+    // 20.1.2.19 the own enumerable String keys, 20.1.2.14 SameValue and
+    // 20.1.2.13 HasOwnProperty without the Prototype Chain.
+    for source in [
+        "Object.is(NaN,NaN)",
+        "Object.is(0,-0)",
+        "Object.is(-0,-0)",
+        "Object.is(1,1)",
+        "Object.is('a','a')",
+        "Object.hasOwn({a:1},'a')",
+        "Object.hasOwn({a:1},'b')",
+        "Object.hasOwn([1],'length')",
+        "var o=Object.create(null); typeof o",
+        "var o=Object.create({x:1}); o.x",
+        "var o=Object.create({},{a:{value:5}}); o.a",
+        "var o={}; Object.defineProperties(o,{a:{value:1},b:{value:2}}); o.a+o.b",
+        "Object.getPrototypeOf([])===Array.prototype",
+        "Object.getPrototypeOf({})===Object.prototype",
+        "Object.keys({a:1,b:2}).join(',')",
+        "Object.keys({}).length",
+        "var o={}; Object.defineProperty(o,'h',{value:1}); Object.keys(o).length",
+        "Object.getOwnPropertyNames({a:1}).join(',')",
+        "Object.create(Object.prototype).toString()",
+        "Object.length",
+    ] {
+        differential(source)?;
+    }
+    // 17 counts the one argument of the heading of 20.1.2.19, so `keys` has a
+    // length of one. The stack backend answers zero, as it does for `call`,
+    // which is why this is not compared against it.
+    let program = compile("Object.keys.length", Limits::default())?;
+    assert!(program.uses_register_backend());
+    assert_eq!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost)?,
+        Value::Number(1.0)
+    );
+    // 20.1.2.2 and 20.1.2.3 refuse what is not an object.
+    for source in [
+        "var r=0;try{Object.create(1)}catch(e){r=e instanceof TypeError}r",
+        "var r=0;try{Object.defineProperties(1,{})}catch(e){r=e instanceof TypeError}r",
+    ] {
+        differential(source)?;
+    }
+    // 20.1.2.3.2 reads every descriptor before it defines any, so a source
+    // whose second entry is no descriptor leaves the object untouched. The
+    // lowering does not take a `try` that holds an object literal, so the two
+    // Scripts run in one realm instead.
+    differential_scripts(&[
+        "var o={};var s={a:{value:1},b:2};var caught=0;",
+        "try{Object.defineProperties(o,s)}catch(e){caught=1}",
+        "caught+(o.a===undefined)",
+    ])?;
+    Ok(())
+}
