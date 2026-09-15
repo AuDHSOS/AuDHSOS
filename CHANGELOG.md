@@ -7,6 +7,26 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `docs/16-more-than-one-processor.md`: the design and implementation plan
+  for running this kernel on more than one processor. What is already
+  built and needs no change: `Scheduler`, whose doc comment names one
+  processor; `TlbControl`, which `kernel-mm` calls and never implements;
+  the destination field an I/O APIC entry and an MSI address already
+  carry; the eighteen call sites that take the whole machine cell at
+  once. What is missing, in twelve entries with the file and line of
+  each. Eight decisions: a processor finds its own data through its local
+  APIC identifier and not `GS_BASE`; the start-up code of an application
+  processor is a `naked_asm!` function copied into a low frame, because
+  R3 forbids `global_asm!`; the boot processor keeps the clock and an
+  application processor's timer charges only its own time slice; a thread
+  is given a home processor at creation; a borrow refuses the processor
+  that holds the cell and makes another wait, so every caller that exists
+  keeps its meaning; the lock order is controller, console, memory,
+  machine; `CPUS` is sixteen; and the `unsafe` and `asm!` budgets rise by
+  named sites, since three crates stand exactly at theirs. Eleven steps
+  from the Intel manual on the disk to the measurement that decides
+  whether the machine cell splits, and ten risks. Nothing of it is built.
+
 - A TLS server to reach (D-149). `audhsos-tls` gains the module `server`
   behind the feature `test-server`: the other half of one connection,
   sans-I/O like the client and written against the same record layer and
