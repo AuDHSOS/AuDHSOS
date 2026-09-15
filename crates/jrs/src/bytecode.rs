@@ -6072,32 +6072,34 @@ impl RegisterLowerer {
     fn lower_update(&mut self, name: &str, add: bool, prefix: bool) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         let binding = *self.bindings.get(name)?;
-        if !binding.mutable || binding.value_type != Some(RegisterType::Number) {
+        if !binding.mutable {
             return None;
         }
+        // 13.4.4.1 takes `ToNumeric` of the old value first, so the operand of
+        // the addition is a Number whatever the binding held, and the answer a
+        // postfix update gives is that Number and not what was there before.
+        // An Object would need the `ToPrimitive` of 7.1.1, which the
+        // instruction names where it runs.
         self.load_binding(binding);
-        let original = if prefix {
-            None
-        } else {
-            let register = self.allocate_register()?;
-            self.code.emit(Instruction::Star(register));
-            Some(register)
-        };
+        self.code.emit(Instruction::ToNumber);
+        let numeric = self.allocate_register()?;
+        self.code.emit(Instruction::Star(numeric));
         let one = self.allocate_register()?;
         self.code.emit(Instruction::LdaSmi(1));
         self.code.emit(Instruction::Star(one));
-        self.load_binding(binding);
+        self.code.emit(Instruction::Ldar(numeric));
         self.code.emit(if add {
             Instruction::Add(one)
         } else {
             Instruction::Sub(one)
         });
         self.store_binding(binding);
+        self.bindings.get_mut(name)?.value_type = Some(RegisterType::Number);
         self.release_register(one)?;
-        if let Some(original) = original {
-            self.code.emit(Instruction::Ldar(original));
-            self.release_register(original)?;
+        if !prefix {
+            self.code.emit(Instruction::Ldar(numeric));
         }
+        self.release_register(numeric)?;
         Some(RegisterType::Number)
     }
 

@@ -4653,3 +4653,34 @@ fn the_integrity_levels_of_20_1_2_hold_on_the_new_engine() -> Result<(), Error> 
     }
     Ok(())
 }
+
+#[test]
+fn an_update_takes_tonumeric_of_what_the_binding_held() -> Result<(), Error> {
+    // 13.4.4.1 takes ToNumeric of the old value first, so the operand of the
+    // addition is a Number whatever the binding held, and the answer a
+    // postfix update gives is that Number and not what was there before.
+    for source in [
+        "var x='1';x++;x",
+        "var x='1';var y=x++;y",
+        "var x='1';var y=++x;y",
+        "var x=1;x++;x",
+        "var x=1;var y=x++;y",
+        "var x=true;x++;x",
+        "var x=null;x++;x",
+        "var x='a';x++;x",
+        "var x='3';x--;x",
+        "var x=1;x--;x",
+        "let x='2';x++;x",
+    ] {
+        differential(source)?;
+    }
+    // An Object would need the ToPrimitive of 7.1.1, which the instruction
+    // names where it runs.
+    let program = compile("var x=[];x++;x", Limits::default())?;
+    assert!(program.uses_register_backend());
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
+    Ok(())
+}
