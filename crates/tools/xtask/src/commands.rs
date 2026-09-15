@@ -1931,6 +1931,9 @@ pub(crate) fn sqlite_suite(root: &Path, options: &[String]) -> Result<(), Error>
     for (what, count) in suite::reasons().iter().take(30) {
         note!("{count:>6}  {what}");
     }
+    for (what, count) in suite::shapes().iter().take(40) {
+        note!("{count:>6}  {what}");
+    }
     note!(
         "{} files, {} cases: {} passed, {} failed, {} refused",
         scores.len(),

@@ -225,7 +225,7 @@ fn rows_held(
     quick: bool,
     found: &mut Found,
 ) -> Result<(), Error> {
-    let rows = database.rows_of(&table.name)?;
+    let rows = database.held_rows_of(&table.name)?;
     for (_, values) in &rows {
         for (at, column) in table.columns.iter().enumerate() {
             if !column.not_null || values.get(at) != Some(&Value::Null) {
@@ -254,7 +254,7 @@ fn entries_held(
     database: &Database<'_>,
     index: &crate::schema::Index,
     root: u32,
-    rows: &[(i64, Vec<Value>)],
+    rows: &[(Vec<Value>, Vec<Value>)],
     found: &mut Found,
 ) -> Result<(), Error> {
     let image = database.image();
@@ -263,6 +263,10 @@ fn entries_held(
         .iter()
         .map(|column| column.collation)
         .collect();
+    // The entry of a row ends with the key of that row, which is one
+    // value for a rowid and the columns of the `PRIMARY KEY` for a
+    // table that keeps its rows in the key's own tree.
+    let tail = rows.first().map_or(1, |(key, _)| key.len());
     let mut keys: Vec<Vec<Value>> = Vec::new();
     let mut payload = Vec::new();
     let mut count = 0_usize;
@@ -272,7 +276,8 @@ fn entries_held(
         image.read_payload(&entry, &mut payload)?;
         let record = crate::record::Record::parse(&payload)?;
         let mut key = Vec::new();
-        for at in 0..index.columns.len().saturating_add(1) {
+        let width = index.columns.len().saturating_add(tail);
+        for at in 0..width {
             key.push(held(record.value(at)?));
         }
         keys.push(key);
@@ -281,16 +286,20 @@ fn entries_held(
     // The entries are put in order once, so holding `n` rows to them
     // costs O(n log n) and not O(n²).
     keys.sort_by(|one, other| order_of(one, other, &collations));
-    for (rowid, values) in rows {
-        let wanted = entry_of(index, values, *rowid);
+    // `sqlite3Pragma` counts the rows of the table as it walks them and
+    // names a row by that count, which is register 7 of the routine it
+    // writes and not the key of the row.
+    for (at, (key, values)) in rows.iter().enumerate() {
+        let wanted = crate::change::entry_of(index, values, key);
         if keys
-            .binary_search_by(|key| order_of(key, &wanted, &collations))
+            .binary_search_by(|held| order_of(held, &wanted, &collations))
             .is_ok()
         {
             continue;
         }
         let mut text = b"row ".to_vec();
-        text.extend_from_slice(&crate::number::integer_text(*rowid));
+        let counted = i64::try_from(at).unwrap_or(0).saturating_add(1);
+        text.extend_from_slice(&crate::number::integer_text(counted));
         text.extend_from_slice(b" missing from index ");
         text.extend_from_slice(&index.name);
         found.note(&text);
@@ -329,17 +338,6 @@ fn held(value: Option<crate::record::Value<'_>>) -> Value {
         Some(crate::record::Value::Text(bytes)) => Value::Text(bytes.to_vec()),
         Some(crate::record::Value::Blob(bytes)) => Value::Blob(bytes.to_vec()),
     }
-}
-
-/// The entry an index holds for one row.
-fn entry_of(index: &crate::schema::Index, values: &[Value], rowid: i64) -> Vec<Value> {
-    let mut key: Vec<Value> = index
-        .columns
-        .iter()
-        .map(|column| values.get(column.column).cloned().unwrap_or(Value::Null))
-        .collect();
-    key.push(Value::Int(rowid));
-    key
 }
 
 /// Where one entry stands against another, column by column under the

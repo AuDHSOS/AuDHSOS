@@ -242,6 +242,42 @@ impl Writer {
         })
     }
 
+    /// A connection over a database that is already written, which is
+    /// what opening a file that was there answers.
+    ///
+    /// The header of the image says what the pages hold; the settings a
+    /// connection is told, from the journal mode to the seed, are the
+    /// ones a new connection begins with and not the ones the
+    /// connection that wrote the file was told.
+    ///
+    /// Splitting the image costs O(n) in its pages.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what the header breaks, and what the image
+    /// breaks where it carries fewer bytes than the header claims
+    /// pages.
+    pub fn opened(image: &[u8]) -> Result<Self, Error> {
+        let header = Header::parse(image)?;
+        let pages = Pages::opened(image, &header)?;
+        Ok(Writer {
+            pages,
+            header,
+            mode: Mode::Delete,
+            nonce: 0,
+            random: crate::random::Source::default(),
+            kept: alloc::vec![None; crate::pragma::HELD.len()],
+            running: Vec::new(),
+            sector: SECTOR,
+            journal: None,
+            log: None,
+            origin: None,
+            counting: false,
+            began: None,
+            stopped: false,
+        })
+    }
+
     /// Where `random` and `randomblob` take their bytes from.
     ///
     /// SQLite seeds `sqlite3_randomness` from the operating system,
@@ -1406,7 +1442,7 @@ impl Writer {
     fn taken_away(&mut self, name: &[u8], rowid: i64) -> Result<(), Error> {
         let (root, kept, table, values) = self.one_row(name, rowid)?;
         self.orphaned(name, &table, &values, rowid, None)?;
-        self.unindex_row(&kept, &values, rowid)?;
+        self.unindex_row(&kept, &values, &keyed_as(rowid))?;
         crate::tree::remove(&mut self.pages, root, rowid)?;
         Ok(())
     }
@@ -1474,8 +1510,8 @@ impl Writer {
         {
             *slot = Value::Null;
         }
-        self.unindex_row(&kept, &held, rowid)?;
-        self.index_row(&kept, values, rowid)?;
+        self.unindex_row(&kept, &held, &keyed_as(rowid))?;
+        self.index_row(&kept, values, &keyed_as(rowid))?;
         let record = crate::record::write(&stored, &affinities, 4);
         crate::tree::update(&mut self.pages, root, rowid, &record)?;
         Ok(())
@@ -1503,16 +1539,40 @@ impl Writer {
     /// Whether a trigger of this name is running already and may not
     /// run again, which `PRAGMA recursive_triggers` turns off.
     fn repeats(&self, name: &[u8]) -> bool {
-        let recursive = crate::pragma::HELD
-            .iter()
-            .position(|keeps| keeps.name == b"recursive_triggers")
-            .and_then(|at| self.kept.get(at).copied().flatten())
-            .unwrap_or(0);
-        recursive == 0
+        !self.recursive()
             && self
                 .running
                 .iter()
                 .any(|held| held.eq_ignore_ascii_case(name))
+    }
+
+    /// The triggers a row written over by a `REPLACE` runs, which are
+    /// the triggers of a `DELETE` where `PRAGMA recursive_triggers` is
+    /// on and none where it is off, because the row is written out from
+    /// inside an `INSERT`.
+    fn deleting(
+        &self,
+        name: &[u8],
+    ) -> Result<(Vec<crate::db::Trigger>, Vec<crate::db::Trigger>), Error> {
+        if !self.recursive() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        Ok((
+            self.triggers_for(name, TriggerEvent::Delete, TriggerTime::Before)?,
+            self.triggers_for(name, TriggerEvent::Delete, TriggerTime::After)?,
+        ))
+    }
+
+    /// Whether a trigger runs from inside another statement of a
+    /// trigger, which `PRAGMA recursive_triggers` turns on and
+    /// `SQLITE_RecTriggers` reads.
+    fn recursive(&self) -> bool {
+        crate::pragma::HELD
+            .iter()
+            .position(|keeps| keeps.name == b"recursive_triggers")
+            .and_then(|at| self.kept.get(at).copied().flatten())
+            .unwrap_or(0)
+            != 0
     }
 
     /// Runs the statements of one trigger's body.
@@ -1573,6 +1633,23 @@ impl Writer {
         Ok(())
     }
 
+    /// The page a tree of `kind` begins on, and nought for a view,
+    /// which `sqlite3EndTable` writes as the root of a thing that
+    /// begins on no page.
+    fn rooted(&mut self, kind: Option<Kind>) -> Result<u32, Error> {
+        let Some(kind) = kind else {
+            return Ok(0);
+        };
+        let root = self.pages.add(kind, 0)?;
+        // `sqlite3BtreeCreateTable`: the root of a tree is named by no
+        // page, and page one holds the largest root the file has.
+        self.pages.point(root, crate::tree::Point::Root, 0)?;
+        if self.header.largest_root != 0 {
+            self.header.largest_root = root;
+        }
+        Ok(root)
+    }
+
     /// `CREATE TABLE`: a page for the tree of the table and a row of
     /// `sqlite_schema` that names it.
     fn define(&mut self, arena: &Arena, definition: Definition, sql: &[u8]) -> Result<(), Error> {
@@ -1585,8 +1662,15 @@ impl Writer {
                     return self.create_as(arena, &table, select, sql);
                 }
                 let name = crate::schema::dequote(table.name.text(sql));
+                // A table written `WITHOUT ROWID` keeps its rows in the
+                // tree of its key, which is a tree of index pages.
+                let kind = if table.options.without_rowid {
+                    Kind::LeafIndex
+                } else {
+                    Kind::LeafTable
+                };
                 (
-                    Some(Kind::LeafTable),
+                    Some(kind),
                     name.clone(),
                     name,
                     table.if_not_exists,
@@ -1624,29 +1708,14 @@ impl Writer {
         if self.already(&name, already)? {
             return Ok(());
         }
-        let root = match kind {
-            Some(kind) => {
-                let root = self.pages.add(kind, 0)?;
-                // `sqlite3BtreeCreateTable`: the root of a tree is
-                // named by no page, and page one holds the largest root
-                // the file has.
-                self.pages.point(root, crate::tree::Point::Root, 0)?;
-                if self.header.largest_root != 0 {
-                    self.header.largest_root = root;
-                }
-                root
-            }
-            // A view begins on no page, which `sqlite3EndTable` writes
-            // as nought.
-            None => 0,
-        };
+        let root = self.rooted(kind)?;
         let text = |bytes: &[u8]| Value::Text(crate::value::stored(bytes, self.header.encoding));
         let row = crate::record::write(
             &[
-                text(match kind {
-                    Some(Kind::LeafIndex) => b"index".as_slice(),
-                    Some(_) => b"table",
-                    None => b"view",
+                text(match definition {
+                    Definition::Index(_) => b"index".as_slice(),
+                    Definition::View(_) => b"view",
+                    _ => b"table",
                 }),
                 text(&name),
                 text(&over),
@@ -1719,7 +1788,11 @@ impl Writer {
     ///
     /// Writing one row costs O(log n) in the rows of the schema.
     fn own_index(&mut self, table: &crate::schema::Table, at: usize) -> Result<(), Error> {
-        let index = crate::schema::own_index(table, at).ok_or(Error::Unsupported)?;
+        // The `PRIMARY KEY` of a table that keeps its rows in the key's
+        // own tree is that tree, so it is counted and not written.
+        let Some(index) = crate::schema::own_index(table, at) else {
+            return Ok(());
+        };
         let root = self.pages.add(Kind::LeafIndex, 0)?;
         self.pages.point(root, crate::tree::Point::Root, 0)?;
         if self.header.largest_root != 0 {
@@ -1762,8 +1835,8 @@ impl Writer {
             let read = crate::schema::index(arena, index, sql, table)?;
             let collations = collations_of(&read);
             let mut entries = Vec::new();
-            for (rowid, values) in database.rows_of(over)? {
-                entries.push(entry_of(&read, &values, rowid));
+            for (key, values) in database.held_rows_of(over)? {
+                entries.push(entry_of(&read, &values, &key));
             }
             (entries, collations)
         };
@@ -1796,9 +1869,6 @@ impl Writer {
         let (table, root) = database
             .table(name)
             .ok_or_else(|| Error::NoTable(name.to_vec()))?;
-        if table.without_rowid {
-            return Err(Error::Unsupported);
-        }
         let kept = kept_indexes(&database, name);
         let places = places(table, &named)?;
         // A column the statement names no value for holds what it falls
@@ -1838,6 +1908,477 @@ impl Writer {
             kept,
             table: table.clone(),
         })
+    }
+
+    /// The `BEFORE` triggers of an `INSERT` run over the row as it
+    /// stands before the key is given, which `sqlite3Insert` writes as
+    /// nought less one where the statement named none.
+    fn fired_early(
+        &mut self,
+        before: &[crate::db::Trigger],
+        table: &Table,
+        named: &[Value],
+        alias: Option<usize>,
+        given: Option<i64>,
+    ) -> Result<bool, Error> {
+        let shown = given.unwrap_or(-1);
+        let mut early = named.to_vec();
+        for slot in early.iter_mut().skip(alias.unwrap_or(usize::MAX)).take(1) {
+            *slot = Value::Int(shown);
+        }
+        let row = Fired {
+            table,
+            old: None,
+            new: Some((&early, shown)),
+            encoding: self.header.encoding,
+        };
+        self.fire(before, &[], &row)
+    }
+
+    /// Whether the table `name` keeps its rows in the key's own tree.
+    ///
+    /// Reading the schema costs O(n) in its rows.
+    fn keeps_rows(&self, name: &[u8]) -> Result<bool, Error> {
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        Ok(database
+            .table(name)
+            .is_some_and(|(table, _)| table.without_rowid))
+    }
+
+    /// Whether the `WHERE` of a statement keeps one row of a table that
+    /// keeps its rows in the key's own tree.
+    ///
+    /// Answering it costs what the expression costs.
+    fn keeps(
+        &self,
+        arena: &Arena,
+        filter: Option<crate::ast::ExprId>,
+        sql: &[u8],
+        table: &Table,
+        values: &[Value],
+        outer: Option<&dyn crate::eval::Row>,
+    ) -> Result<bool, Error> {
+        let Some(filter) = filter else {
+            return Ok(true);
+        };
+        // A table with no rowid answers none of the three names of the
+        // key, which `Held` says by holding none.
+        let held = Held {
+            table,
+            values,
+            rowid: None,
+            encoding: self.header.encoding,
+            random: &self.random,
+            outer,
+        };
+        Ok(crate::eval::evaluate_row(arena, filter, sql, &held)?.truth(false))
+    }
+
+    /// `DELETE` from a table that keeps its rows in the key's own tree:
+    /// the entry the key finds is taken out, with the entry of every
+    /// index over the table.
+    ///
+    /// Taking one row out costs O(log n) in the rows of the table.
+    fn delete_keyed(
+        &mut self,
+        arena: &Arena,
+        statement: &crate::ast::Delete,
+        sql: &[u8],
+        outer: Option<&dyn crate::eval::Row>,
+        name: &[u8],
+    ) -> Result<i64, Error> {
+        let (root, rows, kept, table) = {
+            let bytes = self.image();
+            let database = Database::open(&bytes)?;
+            // The table was found before this ran, so the refusal
+            // carries no name to write into a message.
+            let (table, root) = database.table(name).ok_or(Error::NoTable(Vec::new()))?;
+            let kept = kept_indexes(&database, name);
+            let mut rows = Vec::new();
+            for values in database.keyed_rows_of(name)? {
+                if self.keeps(arena, statement.filter, sql, table, &values, outer)? {
+                    rows.push(values);
+                }
+            }
+            (root, rows, kept, table.clone())
+        };
+        let before = self.triggers_for(name, TriggerEvent::Delete, TriggerTime::Before)?;
+        let after = self.triggers_for(name, TriggerEvent::Delete, TriggerTime::After)?;
+        let fires = !before.is_empty() || !after.is_empty();
+        let collations = crate::schema::key_collations(&table);
+        let mut taken = 0_i64;
+        for values in rows {
+            let row = Fired {
+                table: &table,
+                old: Some((&values, 0)),
+                new: None,
+                encoding: self.header.encoding,
+            };
+            if fires && !self.fire(&before, &[], &row)? {
+                continue;
+            }
+            // `D.2` of `src/fkey.c`: a row that rows of another table
+            // point at is refused, or those rows are written.
+            self.orphaned(name, &table, &values, 0, None)?;
+            let key = crate::schema::key_of(&table, &values);
+            self.unindex_row(&kept, &values, &key)?;
+            crate::tree::remove_entry(&mut self.pages, root, &key, &collations)?;
+            taken = taken.saturating_add(1);
+            if fires {
+                self.fire(&after, &[], &row)?;
+            }
+        }
+        Ok(taken)
+    }
+
+    /// `INSERT` into a table that keeps its rows in the key's own tree:
+    /// the row itself is the entry, placed under the columns of its
+    /// `PRIMARY KEY`, which is section 2.4 of the format.
+    ///
+    /// Writing one row costs O(log n) in the rows of the table.
+    fn insert_keyed(
+        &mut self,
+        name: &[u8],
+        written: Conflict,
+        inserting: Inserting,
+    ) -> Result<i64, Error> {
+        let Inserting {
+            root,
+            rows,
+            kept,
+            table,
+            ..
+        } = inserting;
+        let before = self.triggers_for(name, TriggerEvent::Insert, TriggerTime::Before)?;
+        let after = self.triggers_for(name, TriggerEvent::Insert, TriggerTime::After)?;
+        let fires = !before.is_empty() || !after.is_empty();
+        let collations = crate::schema::key_collations(&table);
+        let affinities = ordered_affinities(&table);
+        let mut count = 0_i64;
+        for (_, values) in rows {
+            let mut named = values;
+            let row = Fired::inserted(&table, &named, self.header.encoding);
+            if fires && !self.fire(&before, &[], &row)? {
+                continue;
+            }
+            if !self.constrained(&table, &mut named, 0, written)? {
+                continue;
+            }
+            let stored = ordered(&table, &named);
+            let key = crate::schema::key_of(&table, &named);
+            if !self.placed(root, &table, &key, &collations, &kept, written)? {
+                continue;
+            }
+            if let Some((index, held)) = self.conflicting(&kept, &named, &key, None)? {
+                match resolved(written, &kept, index) {
+                    Conflict::Ignore => continue,
+                    Conflict::Fail => {
+                        self.stopped = true;
+                        return Err(Error::Unique(Self::shown_key_of(&table, &kept, index)));
+                    }
+                    Conflict::Replace if self.replaced_keyed(root, &kept, &table, &held)? => {}
+                    _ => return Err(Error::Unique(Self::shown_key_of(&table, &kept, index))),
+                }
+            }
+            self.parented(&table, &named, 0)?;
+            self.index_row(&kept, &named, &key)?;
+            let record = crate::record::write(&stored, &affinities, 4);
+            crate::tree::insert_entry(&mut self.pages, root, &record, &key, &collations, false)?;
+            count = count.saturating_add(1);
+            if fires {
+                let row = Fired::inserted(&table, &named, self.header.encoding);
+                self.fire(&after, &[], &row)?;
+            }
+        }
+        Ok(count)
+    }
+
+    /// Whether a row may be placed under `key` in the tree of a table
+    /// that keeps its rows in the key's own tree: the key is free, or
+    /// the row that holds it was written over, which is
+    /// `sqlite3GenerateConstraintChecks` over the key of the table.
+    ///
+    /// Answers `false` where the row is passed over. Looking one key
+    /// up costs O(log n).
+    fn placed(
+        &mut self,
+        root: u32,
+        table: &Table,
+        key: &[Value],
+        collations: &[Collation],
+        kept: &[Kept],
+        written: Conflict,
+    ) -> Result<bool, Error> {
+        if crate::tree::find_entry(&self.pages, root, key, collations)?.is_none() {
+            return Ok(true);
+        }
+        let mut answer = written;
+        if answer == Conflict::Unspecified {
+            answer = key_conflict(table);
+        }
+        match answer {
+            Conflict::Ignore => return Ok(false),
+            Conflict::Fail => self.stopped = true,
+            Conflict::Replace if self.replaced_keyed(root, kept, table, key)? => {
+                return Ok(true);
+            }
+            _ => {}
+        }
+        Err(Error::Unique(Self::shown_keys_of(table)))
+    }
+
+    /// The row a `REPLACE` writes over in a table that keeps its rows
+    /// in the key's own tree, taken out with its entries and with the
+    /// triggers a `DELETE` on it runs.
+    fn replaced_keyed(
+        &mut self,
+        root: u32,
+        kept: &[Kept],
+        table: &Table,
+        key: &[Value],
+    ) -> Result<bool, Error> {
+        let collations = crate::schema::key_collations(table);
+        let values = self.keyed_row(table, key, &collations)?;
+        // `sqlite3GenerateConstraintChecks` writes the row out under
+        // `OE_Replace` with the triggers of a `DELETE` only where
+        // `SQLITE_RecTriggers` is on, so a `REPLACE` runs none of them
+        // on a connection that was told nothing.
+        let (before, after) = self.deleting(&table.name)?;
+        let row = Fired {
+            table,
+            old: Some((&values, 0)),
+            new: None,
+            encoding: self.header.encoding,
+        };
+        // A trigger that says the row stays leaves the key where it
+        // was, so what the statement writes shares a key with it.
+        if !self.fire(&before, &[], &row)? {
+            return Ok(false);
+        }
+        self.unindex_row(kept, &values, key)?;
+        crate::tree::remove_entry(&mut self.pages, root, key, &collations)?;
+        self.fire(&after, &[], &row)?;
+        Ok(true)
+    }
+
+    /// The row of a table that keeps its rows in the key's own tree
+    /// that `key` finds, and nothing where the table holds none.
+    ///
+    /// The walk is O(n) in the rows of the table.
+    fn keyed_row(
+        &self,
+        table: &Table,
+        key: &[Value],
+        collations: &[Collation],
+    ) -> Result<Vec<Value>, Error> {
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        // The key is one the tree answered, so the walk finds the row it
+        // belongs to and the refusal carries no name to write into a
+        // message.
+        database
+            .keyed_rows_of(&table.name)?
+            .into_iter()
+            .find(|values| {
+                let mine = crate::schema::key_of(table, values);
+                order_of_keys(&mine, key, collations) == core::cmp::Ordering::Equal
+            })
+            .ok_or(Error::NoTable(Vec::new()))
+    }
+
+    /// The columns of the `PRIMARY KEY` of a table, as a message names
+    /// them: `table.column`, one after another with a comma between
+    /// them.
+    fn shown_keys_of(table: &Table) -> Vec<u8> {
+        let mut out = Vec::new();
+        for at in crate::schema::key_places(table) {
+            if !out.is_empty() {
+                out.extend_from_slice(b", ");
+            }
+            out.extend_from_slice(&table.name);
+            out.push(b'.');
+            let named = table
+                .columns
+                .get(at)
+                .map_or(&[][..], |column| column.name.as_slice());
+            out.extend_from_slice(named);
+        }
+        out
+    }
+
+    /// The rows an `UPDATE` changes in a table that keeps its rows in
+    /// the key's own tree: the row as it stands and the row as the
+    /// `SET` makes it.
+    ///
+    /// Reading `n` rows costs O(n) and answering the `SET` of one costs
+    /// what its expressions cost.
+    fn updated_keyed(
+        &self,
+        arena: &Arena,
+        statement: &crate::ast::Update,
+        sql: &[u8],
+        outer: Option<&dyn crate::eval::Row>,
+        name: &[u8],
+    ) -> Result<Rewriting, Error> {
+        written_to(name)?;
+        let sets = arena.sets(statement.sets);
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        // The table was found before this ran, so the refusal carries
+        // no name to write into a message.
+        let (table, root) = database.table(name).ok_or(Error::NoTable(Vec::new()))?;
+        let kept = kept_indexes(&database, name);
+        let places: Vec<usize> = sets
+            .iter()
+            .map(|set| {
+                let column = crate::schema::dequote(set.column.text(sql));
+                table
+                    .columns
+                    .iter()
+                    .position(|held| held.name.eq_ignore_ascii_case(&column))
+                    .ok_or(Error::Unsupported)
+            })
+            .collect::<Result<_, Error>>()?;
+        let mut out = Vec::new();
+        for values in database.keyed_rows_of(name)? {
+            if !self.keeps(arena, statement.filter, sql, table, &values, outer)? {
+                continue;
+            }
+            let held = Held {
+                table,
+                values: &values,
+                rowid: None,
+                encoding: self.header.encoding,
+                random: &self.random,
+                outer,
+            };
+            let mut next = values.clone();
+            for (at, set) in places.iter().zip(sets) {
+                let value = crate::eval::evaluate_row(arena, set.value, sql, &held)?;
+                for slot in next.iter_mut().skip(*at).take(1) {
+                    *slot = stored(&value, self.header.encoding);
+                }
+            }
+            out.push((values, next));
+        }
+        Ok(Rewriting {
+            root,
+            written: out,
+            kept,
+            table: table.clone(),
+        })
+    }
+
+    /// `UPDATE` of a table that keeps its rows in the key's own tree:
+    /// the entry the key finds is taken out and the row is written
+    /// again, because the `SET` may write the key itself.
+    ///
+    /// Writing one row costs O(log n) in the rows of the table.
+    fn update_keyed(
+        &mut self,
+        arena: &Arena,
+        statement: &crate::ast::Update,
+        sql: &[u8],
+        outer: Option<&dyn crate::eval::Row>,
+        name: &[u8],
+    ) -> Result<i64, Error> {
+        let columns: Vec<Vec<u8>> = arena
+            .sets(statement.sets)
+            .iter()
+            .map(|set| crate::schema::dequote(set.column.text(sql)))
+            .collect();
+        let Rewriting {
+            root,
+            written: rows,
+            kept,
+            table,
+        } = self.updated_keyed(arena, statement, sql, outer, name)?;
+        let before = self.triggers_for(name, TriggerEvent::Update, TriggerTime::Before)?;
+        let after = self.triggers_for(name, TriggerEvent::Update, TriggerTime::After)?;
+        let fires = !before.is_empty() || !after.is_empty();
+        let collations = crate::schema::key_collations(&table);
+        let affinities = ordered_affinities(&table);
+        let mut changed = 0_i64;
+        for (held, values) in rows {
+            let mut named = values;
+            if fires {
+                let row = Fired {
+                    table: &table,
+                    old: Some((&held, 0)),
+                    new: Some((&named, 0)),
+                    encoding: self.header.encoding,
+                };
+                if !self.fire(&before, &columns, &row)? {
+                    continue;
+                }
+            }
+            if !self.constrained(&table, &mut named, 0, statement.conflict)? {
+                continue;
+            }
+            if !self.rekeyed(root, &table, &kept, (&held, &named), statement.conflict)? {
+                continue;
+            }
+            let key = crate::schema::key_of(&table, &named);
+            self.parented(&table, &named, 0)?;
+            self.orphaned(name, &table, &held, 0, Some((&named, 0)))?;
+            let was = crate::schema::key_of(&table, &held);
+            self.unindex_row(&kept, &held, &was)?;
+            crate::tree::remove_entry(&mut self.pages, root, &was, &collations)?;
+            self.index_row(&kept, &named, &key)?;
+            let stored = ordered(&table, &named);
+            let record = crate::record::write(&stored, &affinities, 4);
+            crate::tree::insert_entry(&mut self.pages, root, &record, &key, &collations, false)?;
+            changed = changed.saturating_add(1);
+            if fires {
+                let row = Fired {
+                    table: &table,
+                    old: Some((&held, 0)),
+                    new: Some((&named, 0)),
+                    encoding: self.header.encoding,
+                };
+                self.fire(&after, &columns, &row)?;
+            }
+        }
+        Ok(changed)
+    }
+
+    /// Whether the row an `UPDATE` writes may be placed under the key
+    /// it is written with: the key it had, a key no row holds, or a key
+    /// whose row was written over.
+    ///
+    /// Answers `false` where the row is passed over. Looking the keys
+    /// up costs O(log n).
+    fn rekeyed(
+        &mut self,
+        root: u32,
+        table: &Table,
+        kept: &[Kept],
+        row: (&[Value], &[Value]),
+        written: Conflict,
+    ) -> Result<bool, Error> {
+        let (held, named) = row;
+        let collations = crate::schema::key_collations(table);
+        let was = crate::schema::key_of(table, held);
+        let key = crate::schema::key_of(table, named);
+        // A row that keeps the key it had shares it with nothing.
+        if order_of_keys(&key, &was, &collations) != core::cmp::Ordering::Equal
+            && !self.placed(root, table, &key, &collations, kept, written)?
+        {
+            return Ok(false);
+        }
+        let Some((index, other)) = self.conflicting(kept, named, &key, Some(&was))? else {
+            return Ok(true);
+        };
+        match resolved(written, kept, index) {
+            Conflict::Ignore => Ok(false),
+            Conflict::Fail => {
+                self.stopped = true;
+                Err(Error::Unique(Self::shown_key_of(table, kept, index)))
+            }
+            Conflict::Replace if self.replaced_keyed(root, kept, table, &other)? => Ok(true),
+            _ => Err(Error::Unique(Self::shown_key_of(table, kept, index))),
+        }
     }
 
     /// The entries of one index written into the tree at `root`, which
@@ -1884,8 +2425,8 @@ impl Writer {
                 let bytes = self.image();
                 let database = Database::open(&bytes)?;
                 let mut entries = Vec::new();
-                for (rowid, values) in database.rows_of(&table)? {
-                    entries.push(entry_of(&index, &values, rowid));
+                for (key, values) in database.held_rows_of(&table)? {
+                    entries.push(entry_of(&index, &values, &key));
                 }
                 entries
             };
@@ -1955,6 +2496,10 @@ impl Writer {
         outer: Option<&dyn crate::eval::Row>,
     ) -> Result<i64, Error> {
         let name = crate::schema::dequote(statement.name.text(sql));
+        let inserting = self.inserting(arena, statement, sql, outer, &name)?;
+        if inserting.table.without_rowid {
+            return self.insert_keyed(&name, statement.conflict, inserting);
+        }
         let Inserting {
             root,
             alias,
@@ -1962,7 +2507,7 @@ impl Writer {
             rows,
             kept,
             table,
-        } = self.inserting(arena, statement, sql, outer, &name)?;
+        } = inserting;
         let before = self.triggers_for(&name, TriggerEvent::Insert, TriggerTime::Before)?;
         let after = self.triggers_for(&name, TriggerEvent::Insert, TriggerTime::After)?;
         let fires = !before.is_empty() || !after.is_empty();
@@ -2006,24 +2551,8 @@ impl Writer {
             for slot in values.iter_mut().skip(alias.unwrap_or(usize::MAX)).take(1) {
                 *slot = Value::Null;
             }
-            if fires {
-                // `sqlite3Insert` writes the key as nought less one
-                // where the statement named none, because the key is
-                // given after the `BEFORE` triggers have run.
-                let shown = given.unwrap_or(-1);
-                let mut early = named.clone();
-                for slot in early.iter_mut().skip(alias.unwrap_or(usize::MAX)).take(1) {
-                    *slot = Value::Int(shown);
-                }
-                let row = Fired {
-                    table: &table,
-                    old: None,
-                    new: Some((&early, shown)),
-                    encoding: self.header.encoding,
-                };
-                if !self.fire(&before, &[], &row)? {
-                    continue;
-                }
+            if fires && !self.fired_early(&before, &table, &named, alias, given)? {
+                continue;
             }
             // `sqlite3GenerateConstraintChecks`: the columns that
             // refuse nothing and every `CHECK` of the table hold the
@@ -2044,16 +2573,15 @@ impl Writer {
             // `sqlite3GenerateConstraintChecks`: a row that shares a
             // key with one the table holds is refused, passed over, or
             // written over the one that is there.
-            if let Some((index, held)) = self.conflicting(&kept, &named, rowid, None)? {
+            if let Some((index, held)) = self.conflicting(&kept, &named, &keyed_as(rowid), None)? {
                 match resolved(statement.conflict, &kept, index) {
                     crate::ast::Conflict::Ignore => continue,
                     crate::ast::Conflict::Fail => {
                         self.stopped = true;
                         return Err(Error::Unique(Self::shown_key_of(&table, &kept, index)));
                     }
-                    crate::ast::Conflict::Replace => {
-                        self.replaced(root, &kept, &table, &held)?;
-                    }
+                    crate::ast::Conflict::Replace
+                        if self.replaced(root, &kept, &table, &held)? => {}
                     _ => return Err(Error::Unique(Self::shown_key_of(&table, &kept, index))),
                 }
             }
@@ -2064,7 +2592,7 @@ impl Writer {
             // `sqlite3CompleteInsertion` writes the entry of every
             // index before the row, so the pages an entry runs onto
             // are taken before the pages the row runs onto.
-            self.index_row(&kept, &named, rowid)?;
+            self.index_row(&kept, &named, &keyed_as(rowid))?;
             insert(&mut self.pages, root, rowid, &record)?;
             written = written.saturating_add(1);
             if fires {
@@ -2166,8 +2694,10 @@ struct Held<'a> {
     /// The value of each column, in the order the table was created
     /// with.
     values: &'a [Value],
-    /// The key of the row, which the three names of the key answer.
-    rowid: i64,
+    /// The key of the row, which the three names of the key answer,
+    /// and nothing where the table keeps its rows in the key's own
+    /// tree, which has no rowid for a name to answer.
+    rowid: Option<i64>,
     /// What encoding the file keeps its text in.
     encoding: Encoding,
     /// Where `random` and `randomblob` take their bytes from.
@@ -2225,9 +2755,9 @@ impl Held<'_> {
                 let value = self.values.get(at)?.clone();
                 Some((value, held.affinity, held.collation))
             }
-            None if is_rowid(column) => {
-                Some((Value::Int(self.rowid), Affinity::Integer, Collation::Binary))
-            }
+            None if is_rowid(column) => self
+                .rowid
+                .map(|key| (Value::Int(key), Affinity::Integer, Collation::Binary)),
             None => None,
         }
     }
@@ -2292,6 +2822,20 @@ struct Inserting {
     table: Table,
 }
 
+/// What an `UPDATE` of a table that keeps its rows in the key's own
+/// tree writes.
+struct Rewriting {
+    /// The tree of the table.
+    root: u32,
+    /// One per row the `WHERE` keeps: the values it held and the values
+    /// it is written with.
+    written: Vec<(Vec<Value>, Vec<Value>)>,
+    /// The indexes over the table.
+    kept: Vec<Kept>,
+    /// The table itself.
+    table: Table,
+}
+
 /// What an `UPDATE` writes.
 struct Updating {
     /// The tree of the table.
@@ -2323,6 +2867,19 @@ struct Fired<'a> {
     new: Option<(&'a [Value], i64)>,
     /// What encoding the file keeps its text in.
     encoding: Encoding,
+}
+
+impl<'a> Fired<'a> {
+    /// The row an `INSERT` writes, which no key of its own names where
+    /// the table keeps its rows in the key's own tree.
+    const fn inserted(table: &'a Table, values: &'a [Value], encoding: Encoding) -> Self {
+        Fired {
+            table,
+            old: None,
+            new: Some((values, 0)),
+            encoding,
+        }
+    }
 }
 
 impl crate::eval::Row for Fired<'_> {
@@ -2416,6 +2973,9 @@ impl Writer {
     ) -> Result<i64, Error> {
         let name = crate::schema::dequote(statement.name.text(sql));
         written_to(&name)?;
+        if self.keeps_rows(&name)? {
+            return self.delete_keyed(arena, statement, sql, outer, &name);
+        }
         let (root, keys, kept, table) = {
             let bytes = self.image();
             let database = Database::open(&bytes)?;
@@ -2429,7 +2989,7 @@ impl Writer {
                 let held = Held {
                     table,
                     values,
-                    rowid: *rowid,
+                    rowid: Some(*rowid),
                     encoding: self.header.encoding,
                     random: &self.random,
                     outer,
@@ -2466,7 +3026,7 @@ impl Writer {
             // point at is refused, or those rows are written, by what
             // the key says happens.
             self.orphaned(&name, &table, &values, key, None)?;
-            self.unindex_row(&kept, &values, key)?;
+            self.unindex_row(&kept, &values, &keyed_as(key))?;
             crate::tree::remove(&mut self.pages, root, key)?;
             taken = taken.saturating_add(1);
             if fires {
@@ -2530,7 +3090,7 @@ impl Writer {
             let held = Held {
                 table,
                 values: &values,
-                rowid,
+                rowid: Some(rowid),
                 encoding: self.header.encoding,
                 random: &self.random,
                 outer,
@@ -2580,6 +3140,9 @@ impl Writer {
         outer: Option<&dyn crate::eval::Row>,
     ) -> Result<i64, Error> {
         let name = crate::schema::dequote(statement.name.text(sql));
+        if self.keeps_rows(&name)? {
+            return self.update_keyed(arena, statement, sql, outer, &name);
+        }
         let sets = arena.sets(statement.sets);
         let Updating {
             root,
@@ -2643,16 +3206,17 @@ impl Writer {
             if key != rowid && !self.keyed(root, &kept, &table, alias, key, statement.conflict)? {
                 continue;
             }
-            if let Some((index, other)) = self.conflicting(&kept, &named, key, Some(rowid))? {
+            if let Some((index, other)) =
+                self.conflicting(&kept, &named, &keyed_as(key), Some(&keyed_as(rowid)))?
+            {
                 match resolved(statement.conflict, &kept, index) {
                     crate::ast::Conflict::Ignore => continue,
                     crate::ast::Conflict::Fail => {
                         self.stopped = true;
                         return Err(Error::Unique(Self::shown_key_of(&table, &kept, index)));
                     }
-                    crate::ast::Conflict::Replace => {
-                        self.replaced(root, &kept, &table, &other)?;
-                    }
+                    crate::ast::Conflict::Replace
+                        if self.replaced(root, &kept, &table, &other)? => {}
                     _ => return Err(Error::Unique(Self::shown_key_of(&table, &kept, index))),
                 }
             }
@@ -2665,12 +3229,12 @@ impl Writer {
             // `sqlite3Update` removes the entries of the row, removes
             // the row itself where the key changes, and then writes
             // the new entries before the new row.
-            self.unindex_row(&kept, &held, rowid)?;
+            self.unindex_row(&kept, &held, &keyed_as(rowid))?;
             let moved = key != rowid;
             if moved {
                 crate::tree::remove(&mut self.pages, root, rowid)?;
             }
-            self.index_row(&kept, &named, key)?;
+            self.index_row(&kept, &named, &keyed_as(key))?;
             if moved {
                 insert(&mut self.pages, root, key, &record)?;
             } else {
@@ -2689,9 +3253,9 @@ impl Writer {
     /// The entry every index over the table holds for one row, written,
     /// which is what `sqlite3GenerateConstraintChecks` writes beside
     /// the row.
-    fn index_row(&mut self, kept: &[Kept], values: &[Value], rowid: i64) -> Result<(), Error> {
+    fn index_row(&mut self, kept: &[Kept], values: &[Value], tail: &[Value]) -> Result<(), Error> {
         for (index, collations, root) in kept {
-            let key = entry_of(index, values, rowid);
+            let key = entry_of(index, values, tail);
             let plain = alloc::vec![Affinity::None; key.len()];
             let entry = crate::record::write(&key, &plain, 4);
             let pages = &mut self.pages;
@@ -2709,8 +3273,8 @@ impl Writer {
         root: u32,
         kept: &[Kept],
         table: &Table,
-        found: &Value,
-    ) -> Result<(), Error> {
+        found: &[Value],
+    ) -> Result<bool, Error> {
         // The entry names the key of the row it belongs to, so the row
         // the statement writes over is the one that key finds.
         let (rowid, values) = {
@@ -2719,24 +3283,25 @@ impl Writer {
             database
                 .rows_of(&table.name)?
                 .into_iter()
-                .find(|(key, _)| Value::Int(*key) == *found)
+                .find(|(key, _)| found == [Value::Int(*key)])
                 .ok_or(Error::NoTable(Vec::new()))?
         };
-        let before = self.triggers_for(&table.name, TriggerEvent::Delete, TriggerTime::Before)?;
-        let after = self.triggers_for(&table.name, TriggerEvent::Delete, TriggerTime::After)?;
+        let (before, after) = self.deleting(&table.name)?;
         let row = Fired {
             table,
             old: Some((&values, rowid)),
             new: None,
             encoding: self.header.encoding,
         };
+        // A trigger that says the row stays leaves the key where it
+        // was, so what the statement writes shares a key with it.
         if !self.fire(&before, &[], &row)? {
-            return Ok(());
+            return Ok(false);
         }
-        self.unindex_row(kept, &values, rowid)?;
+        self.unindex_row(kept, &values, &keyed_as(rowid))?;
         crate::tree::remove(&mut self.pages, root, rowid)?;
         self.fire(&after, &[], &row)?;
-        Ok(())
+        Ok(true)
     }
 
     /// The unique index a row would share a key with, and the key of
@@ -2750,22 +3315,24 @@ impl Writer {
         &self,
         kept: &[Kept],
         values: &[Value],
-        rowid: i64,
-        held: Option<i64>,
-    ) -> Result<Option<(usize, Value)>, Error> {
+        tail: &[Value],
+        held: Option<&[Value]>,
+    ) -> Result<Option<(usize, Vec<Value>)>, Error> {
         for (at, (index, collations, root)) in kept.iter().enumerate() {
             if !index.unique {
                 continue;
             }
-            let entry = entry_of(index, values, rowid);
+            let entry = entry_of(index, values, tail);
             let key = entry.get(..index.columns.len()).unwrap_or_default();
             if key.contains(&Value::Null) {
                 continue;
             }
-            let Some(found) = crate::tree::entry_at(&self.pages, *root, key, collations)? else {
+            let found =
+                crate::tree::entry_tail_at(&self.pages, *root, key, collations, tail.len())?;
+            let Some(found) = found else {
                 continue;
             };
-            if held.map(Value::Int).as_ref() == Some(&found) {
+            if held == Some(found.as_slice()) {
                 continue;
             }
             return Ok(Some((at, found)));
@@ -2827,7 +3394,7 @@ impl Writer {
         let row = Held {
             table,
             values,
-            rowid,
+            rowid: Some(rowid),
             encoding: self.header.encoding,
             random: &self.random,
             outer: None,
@@ -2870,8 +3437,7 @@ impl Writer {
         match written {
             Conflict::Ignore => return Ok(false),
             Conflict::Fail => self.stopped = true,
-            Conflict::Replace => {
-                self.replaced(root, kept, table, &Value::Int(key))?;
+            Conflict::Replace if self.replaced(root, kept, table, &keyed_as(key))? => {
                 return Ok(true);
             }
             _ => {}
@@ -2930,9 +3496,14 @@ impl Writer {
 
     /// The entry every index over the table holds for one row, taken
     /// out, which is `sqlite3GenerateRowIndexDelete`.
-    fn unindex_row(&mut self, kept: &[Kept], values: &[Value], rowid: i64) -> Result<(), Error> {
+    fn unindex_row(
+        &mut self,
+        kept: &[Kept],
+        values: &[Value],
+        tail: &[Value],
+    ) -> Result<(), Error> {
         for (index, collations, root) in kept {
-            let key = entry_of(index, values, rowid);
+            let key = entry_of(index, values, tail);
             crate::tree::remove_entry(&mut self.pages, *root, &key, collations)?;
         }
         Ok(())
@@ -2955,15 +3526,73 @@ fn kept_indexes(database: &Database<'_>, name: &[u8]) -> Vec<Kept> {
 }
 
 /// The entry an index holds for one row: the columns it is over, and
-/// the key of the row last, which is what makes its order total.
-pub(crate) fn entry_of(index: &crate::schema::Index, values: &[Value], rowid: i64) -> Vec<Value> {
+/// the key of the row after them, which is what makes its order total.
+///
+/// The key of a row is its rowid, one value, or the columns of the
+/// `PRIMARY KEY` where the table keeps its rows in the key's own tree.
+pub(crate) fn entry_of(
+    index: &crate::schema::Index,
+    values: &[Value],
+    tail: &[Value],
+) -> Vec<Value> {
     let mut key: Vec<Value> = index
         .columns
         .iter()
         .map(|column| values.get(column.column).cloned().unwrap_or(Value::Null))
         .collect();
-    key.push(Value::Int(rowid));
+    key.extend_from_slice(tail);
     key
+}
+
+/// The values of one row in the order the table stores them, which is
+/// the columns of the key first where the table keeps its rows in the
+/// key's own tree, and the columns a generated column takes no place
+/// for left out.
+fn ordered(table: &Table, values: &[Value]) -> Vec<Value> {
+    let places = crate::db::places(table);
+    let width = places.iter().filter(|place| **place != usize::MAX).count();
+    let mut out = alloc::vec![Value::Null; width];
+    for (at, place) in places.iter().enumerate() {
+        let value = values.get(at).unwrap_or(&Value::Null);
+        for slot in out.iter_mut().skip(*place).take(1) {
+            slot.clone_from(value);
+        }
+    }
+    out
+}
+
+/// What each place of a stored row converts a value under, in the order
+/// the table stores them.
+fn ordered_affinities(table: &Table) -> Vec<Affinity> {
+    let places = crate::db::places(table);
+    let width = places.iter().filter(|place| **place != usize::MAX).count();
+    let mut out = alloc::vec![Affinity::None; width];
+    for (at, place) in places.iter().enumerate() {
+        let affinity = table
+            .columns
+            .get(at)
+            .map_or(Affinity::None, |column| column.affinity);
+        for slot in out.iter_mut().skip(*place).take(1) {
+            *slot = affinity;
+        }
+    }
+    out
+}
+
+/// What the `PRIMARY KEY` of a table says to do where two rows share a
+/// key, which is the clause the constraint carries.
+fn key_conflict(table: &Table) -> Conflict {
+    table
+        .keys
+        .iter()
+        .find(|keys| keys.primary)
+        .map_or(Conflict::Unspecified, |keys| keys.conflict)
+}
+
+/// The key of a row of a table with a rowid, as the entries of the
+/// indexes over that table carry it.
+const fn keyed_as(rowid: i64) -> [Value; 1] {
+    [Value::Int(rowid)]
 }
 
 /// The collation each column of an index is held in.

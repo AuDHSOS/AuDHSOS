@@ -157,6 +157,63 @@ impl Pages {
         })
     }
 
+    /// The pages a file already written holds, page one first, which
+    /// is what a connection that opened such a file reads.
+    ///
+    /// The header claims how many pages the file holds; a file whose
+    /// claim is nought, which is what a library older than 3.7.0 wrote,
+    /// is read as the pages the image itself carries. Splitting the
+    /// image costs O(n) in its pages.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::PageSize`] for a page size the format does not allow,
+    /// [`Error::Reserved`] for a tail that leaves too little of the
+    /// page, and [`Error::Overrun`] where the image carries fewer bytes
+    /// than the header claims pages.
+    pub fn opened(image: &[u8], header: &Header) -> Result<Self, Error> {
+        if !(512..=crate::header::MAX_PAGE_SIZE).contains(&header.page_size)
+            || !header.page_size.is_power_of_two()
+        {
+            return Err(Error::PageSize(header.page_size));
+        }
+        let usable = header.usable();
+        if usable < crate::header::MIN_USABLE {
+            return Err(Error::Reserved(header.reserved));
+        }
+        let page_size = size(u64::from(header.page_size));
+        let usable = size(u64::from(usable));
+        // The page size is 512 at least, so the division answers.
+        let whole = image.len().checked_div(page_size).unwrap_or(0);
+        let claimed = usize::try_from(header.pages).unwrap_or(0);
+        let count = if header.pages == 0 { whole } else { claimed };
+        if count > whole || count == 0 {
+            return Err(Error::Overrun);
+        }
+        let held: Vec<Vec<u8>> = image
+            .chunks_exact(page_size)
+            .take(count)
+            .map(<[u8]>::to_vec)
+            .collect();
+        let origin = u32::try_from(count).unwrap_or(u32::MAX);
+        Ok(Pages {
+            page_size,
+            usable,
+            held,
+            freelist: header.freelist,
+            before: alloc::vec![None; count],
+            skipped: alloc::vec![None; count],
+            freed: alloc::vec![false; count],
+            origin,
+            journalled: Vec::new(),
+            list: (header.freelist, header.freelist_pages),
+            freelist_count: header.freelist_pages,
+            // Section 1.6: a file keeps pointer maps where the header
+            // names a largest root page.
+            vacuum: header.largest_root != 0,
+        })
+    }
+
     /// Keeps pointer maps from here on, which is what `PRAGMA
     /// auto_vacuum` turns on before the first table is written.
     pub const fn vacuums(&mut self) {
@@ -1242,22 +1299,26 @@ fn replace_entry(
 }
 
 /// The key of the row an entry of `key` belongs to, where the index
-/// tree at `root` holds one, which is the value after the columns.
+/// tree at `root` holds one, which is the `width` values after the
+/// columns.
 ///
 /// `key` is the columns of the index and not the key of the row after
 /// them, so an entry whose columns are these answers whatever row it
-/// belongs to, which is what a `UNIQUE` is held to. The walk is
-/// O(log n) pages.
+/// belongs to, which is what a `UNIQUE` is held to. The key of a row
+/// is one value where the table has a rowid and the columns of the
+/// `PRIMARY KEY` where the table keeps its rows in the key's own tree.
+/// The walk is O(log n) pages.
 ///
 /// # Errors
 ///
 /// [`Error`] names whatever reading a page refuses.
-pub(crate) fn entry_at(
+pub(crate) fn entry_tail_at(
     pages: &Pages,
     root: u32,
     key: &[Value],
     collations: &[Collation],
-) -> Result<Option<Value>, Error> {
+    width: usize,
+) -> Result<Option<Vec<Value>>, Error> {
     let Some(path) = find_entry(pages, root, key, collations)? else {
         return Ok(None);
     };
@@ -1272,9 +1333,12 @@ pub(crate) fn entry_at(
         &held
     };
     let record = crate::record::Record::parse(bytes)?;
-    Ok(Some(
-        record.value(key.len())?.map_or(Value::Null, held_value),
-    ))
+    let mut out = Vec::new();
+    for step in 0..width {
+        let place = key.len().saturating_add(step);
+        out.push(record.value(place)?.map_or(Value::Null, held_value));
+    }
+    Ok(Some(out))
 }
 
 /// Where the entry of `key` lies in the index tree at `root`: one page

@@ -597,7 +597,7 @@ Status: a table is filled in any key order, emptied again, and filled
 from the pages the delete freed; the file and the rollback journal
 beside it are the ones the shell wrote, byte for byte. The pointer maps and the
 checkpoint are not built.
-Depends on: Q3, Q5. Recorded in D-162 to D-171.
+Depends on: Q3, Q5. Recorded in D-162 to D-171 and D-233.
 Size: L.
 
 ### Needs
@@ -631,6 +631,9 @@ Size: L.
 11. Play a journal back over the file it belongs to. Built.
 12. Write the frames of a transaction into the write-ahead log. Built.
 13. Checkpoint a log back into the file it belongs to.
+14. Open a database that is already written and write it again, which
+    reads the pages and the free list out of the header. Built, which
+    D-233 records.
 
 ### Done when
 
@@ -648,7 +651,7 @@ and a foreign key holds the rows of both tables it names; the rest is
 open.
 Depends on: Q6. Recorded in D-172 to D-174, D-182, D-186, D-187, D-189,
 D-191, D-193, D-195, D-196, D-205 to D-211, D-216 to D-218, D-219,
-D-224 to D-232.
+D-224 to D-232 and D-234.
 Size: L.
 
 ### Does
@@ -698,6 +701,10 @@ Size: L.
 12. The constraints a row is held to: the columns that refuse nothing,
     every `CHECK` of the table, and the key the row is written under.
     Built, which D-230 records.
+13. The date and time functions, which D-232 records.
+14. A table that keeps its rows in the key's own tree: the tree it is
+    made as, and the statements that write it. Built, which D-234
+    records.
 
 ### Done when
 
@@ -707,8 +714,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 63 280 cases in 637 files, 44 451
-pass, 4304 answer differently, and 14 525 name something the engine
+under the `tclsh` of the machine. Of 71 405 cases in 698 files, 53 995
+pass, 4365 answer differently, and 13 045 name something the engine
 refuses or a command that needs the C library's internals.
 Depends on: Q7, Q8. Recorded in D-201, D-212, D-213, D-220, D-222,
 D-223 and D-224.

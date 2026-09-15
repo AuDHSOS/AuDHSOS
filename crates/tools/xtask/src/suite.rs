@@ -68,6 +68,9 @@ pub(crate) fn why() {
     if let Ok(mut held) = WHY.lock() {
         *held = Some(BTreeMap::new());
     }
+    if let Ok(mut held) = SHAPES.lock() {
+        *held = Some(BTreeMap::new());
+    }
 }
 
 /// What the refusals were for, most first.
@@ -86,6 +89,34 @@ pub(crate) fn reasons() -> Vec<(String, usize)> {
 /// Records that `what` was refused.
 fn refused(what: &str) {
     if let Ok(mut held) = WHY.lock()
+        && let Some(counts) = held.as_mut()
+    {
+        let count = counts.entry(what.to_owned()).or_insert(0);
+        *count = count.saturating_add(1);
+    }
+}
+
+/// What the engine refused a statement for, counted by the first
+/// words of the statement and the message, which `--why` answers
+/// beside the cases.
+static SHAPES: std::sync::Mutex<Option<BTreeMap<String, usize>>> = std::sync::Mutex::new(None);
+
+/// What the statements the engine refused were, most first.
+pub(crate) fn shapes() -> Vec<(String, usize)> {
+    let Ok(held) = SHAPES.lock() else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, usize)> = held
+        .as_ref()
+        .map(|counts| counts.iter().map(|(k, v)| (k.clone(), *v)).collect())
+        .unwrap_or_default();
+    out.sort_by(|one, other| other.1.cmp(&one.1).then_with(|| one.0.cmp(&other.0)));
+    out
+}
+
+/// Records that the engine refused a statement `what`.
+fn shaped(what: &str) {
+    if let Ok(mut held) = SHAPES.lock()
         && let Some(counts) = held.as_mut()
     {
         let count = counts.entry(what.to_owned()).or_insert(0);
@@ -229,6 +260,7 @@ fn read_score(name: &str, text: &str) -> Score {
                 _ => score.failed = score.failed.saturating_add(1),
             },
             "W" => refused(rest),
+            "S" => shaped(rest),
             "F" if SHOW.load(std::sync::atomic::Ordering::Relaxed) => {
                 let mine = lines.next().unwrap_or("");
                 let want = lines.next().unwrap_or("");
@@ -388,7 +420,7 @@ impl Session {
                 Ok(Vec::new())
             }
             "exists" => Ok(vec![usize::from(self.held.contains_key(first)).to_string()]),
-            "copy" => Err("this harness cannot copy a database".to_owned()),
+            "copy" => self.copy(first, second),
             "null" => {
                 self.nulls.insert(first.to_owned(), second.to_owned());
                 Ok(Vec::new())
@@ -423,6 +455,19 @@ impl Session {
         }
         self.connections.insert(name.to_owned(), path.to_owned());
         self.nulls.entry(name.to_owned()).or_default();
+    }
+
+    /// One database written again under another path, which is what a
+    /// file that saves itself and reads the save back asks for.
+    fn copy(&mut self, from: &str, to: &str) -> Result<Vec<String>, String> {
+        let Some(held) = self.held.get(from) else {
+            self.held.remove(to);
+            return Ok(Vec::new());
+        };
+        let bytes = held.written();
+        let writer = Writer::opened(&bytes).map_err(|error| error.message())?;
+        self.held.insert(to.to_owned(), writer);
+        Ok(Vec::new())
     }
 
     /// The statements of one text, in order, answered as one list.
@@ -532,7 +577,7 @@ fn run_one(writer: &mut Writer, text: &str) -> Result<Vec<Value>, String> {
         };
         let answered = opened
             .and_then(|database| database.query(text.as_bytes()))
-            .map_err(|error| error.message())?;
+            .map_err(|error| shape(text, error.message()))?;
         for row in &answered.rows {
             out.extend(row.iter().cloned());
         }
@@ -540,7 +585,7 @@ fn run_one(writer: &mut Writer, text: &str) -> Result<Vec<Value>, String> {
     }
     let rows = writer
         .run(text.as_bytes())
-        .map_err(|error| error.message())?;
+        .map_err(|error| shape(text, error.message()))?;
     for row in &rows {
         out.extend(row.iter().cloned());
     }
@@ -680,6 +725,14 @@ fn write_error(stream: &mut &TcpStream, message: &str) -> Result<(), Error> {
     stream
         .write_all(&out)
         .map_err(|source| Error::io("writing a refusal", source))
+}
+
+/// Writes out what the engine refused a statement for, keyed by the
+/// first words of the statement, and answers the message the tester
+/// reads, which `catchsql` compares against the C library's own.
+fn shape(text: &str, message: String) -> String {
+    say(&format!("S {} {message}", first_words(text)));
+    message
 }
 
 /// The first two words of a statement in capitals, which is enough to

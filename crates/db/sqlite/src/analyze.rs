@@ -81,7 +81,7 @@ fn stat_of(index: &Index, rows: &[(i64, Vec<Value>)]) -> Vec<u8> {
     let collations = crate::change::collations_of(index);
     let mut keys: Vec<Vec<Value>> = rows
         .iter()
-        .map(|(rowid, values)| crate::change::entry_of(index, values, *rowid))
+        .map(|(rowid, values)| crate::change::entry_of(index, values, &[Value::Int(*rowid)]))
         .collect();
     keys.sort_by(|one, other| crate::change::order_of_keys(one, other, &collations));
     let columns = index.columns.len();

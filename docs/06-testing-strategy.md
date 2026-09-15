@@ -4912,6 +4912,35 @@ D-232, document 16 step Q8.
 - Every conversion of `strftime` writes what the C library writes.
 - A call that asks for the clock answers nothing.
 
+### 6.6.156 A connection over a database that is already written (`db-sqlite`)
+
+D-233, document 16 step Q8.
+
+- A connection that opens a written image writes rows into the tables it
+  holds, and the indexes beside them answer those rows.
+- A connection that opens such an image writes onto the free list the
+  image carries.
+- A file that keeps pointer maps keeps them when a connection opens it
+  again.
+- A header that counts no pages is read as the pages the image carries.
+- An image that carries fewer pages than the header counts is refused,
+  and so is one that is not a database.
+- The encoding the image was written under is the encoding the new rows
+  are written under.
+
+### 6.6.157 A table that keeps its rows in the key's own tree (`db-sqlite`)
+
+D-234, document 16 step Q8.
+
+- A row written into such a table is read back, by the key and by a
+  column the key does not name.
+- A row is written again and taken out again, with the entries of the
+  index beside it.
+- A key a row already holds is refused, passed over or written over, by
+  what the statement says.
+- The file this crate writes for such a table is the file the shell
+  wrote for it, byte for byte.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

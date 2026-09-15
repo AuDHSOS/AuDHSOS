@@ -566,6 +566,10 @@ struct View {
     columns: Vec<Vec<u8>>,
 }
 
+/// One row of a table as a statement that writes rows reads it: the
+/// key that names the row, and the value of each column.
+pub type Reading = (Vec<Value>, Vec<Value>);
+
 /// What a statement answered.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Answer {
@@ -1057,6 +1061,56 @@ impl<'a> Database<'a> {
                 self.collation(),
             )?;
             out.push((rowid, values));
+        }
+        Ok(out)
+    }
+
+    /// Every row of a table with the key that names it: the rowid
+    /// where the table has one, and the columns of the `PRIMARY KEY`
+    /// where the table keeps its rows in the key's own tree.
+    ///
+    /// One walk is O(n) in the rows of the table.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoTable`] where the database holds no such table, and
+    /// whatever reading a row of it refuses.
+    pub fn held_rows_of(&self, name: &[u8]) -> Result<Vec<Reading>, Error> {
+        let stored = self.find(name).ok_or(Error::NoTable(Vec::new()))?;
+        if stored.table.without_rowid {
+            return Ok(self
+                .keyed_rows_of(name)?
+                .into_iter()
+                .map(|values| (schema::key_of(&stored.table, &values), values))
+                .collect());
+        }
+        Ok(self
+            .rows_of(name)?
+            .into_iter()
+            .map(|(rowid, values)| (alloc::vec![Value::Int(rowid)], values))
+            .collect())
+    }
+
+    /// The rows of a table that keeps its rows in the key's own tree,
+    /// each with the columns in the order the table declares them.
+    ///
+    /// One walk is O(n) in the rows of the table.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoTable`] where the database holds no such table, and
+    /// whatever reading a row of it refuses.
+    pub fn keyed_rows_of(&self, name: &[u8]) -> Result<Vec<Vec<Value>>, Error> {
+        // The name is one the schema holds wherever this is reached
+        // from, so the refusal carries no name to write into a message.
+        let stored = self.find(name).ok_or(Error::NoTable(Vec::new()))?;
+        let mut out = Vec::new();
+        let mut payload = Vec::new();
+        let collation = self.collation();
+        for step in self.walk(stored, (None, None)) {
+            let (_, held) = step?;
+            read_payload(&self.image, &held, &mut payload)?;
+            out.push(values_of(&payload, stored, None, self.encoding, collation)?);
         }
         Ok(out)
     }

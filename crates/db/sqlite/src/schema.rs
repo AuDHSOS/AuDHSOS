@@ -23,7 +23,7 @@ use crate::ast::{
     Arena, ColumnConstraint, CreateIndex, CreateTable, ExprId, Literal, Node, Order, Span,
     TableBody, TableConstraint,
 };
-use crate::value::{Affinity, Collation};
+use crate::value::{Affinity, Collation, Value};
 
 /// Why a definition is not a table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -186,13 +186,58 @@ pub struct Keys {
     pub columns: Vec<Keyed>,
     /// What the statement says to do where two rows share a key.
     pub conflict: crate::ast::Conflict,
+    /// Whether the constraint is the `PRIMARY KEY`.
+    pub primary: bool,
+}
+
+/// The columns of the `PRIMARY KEY`, by the place each takes in the
+/// table, in the order the key names them, which is the order a table
+/// that keeps its rows in the key's own tree places them under.
+///
+/// Sorting `k` columns costs O(k log k).
+#[must_use]
+pub fn key_places(table: &Table) -> Vec<usize> {
+    let mut named: Vec<usize> = (0..table.columns.len())
+        .filter(|at| table.columns.get(*at).is_some_and(|column| column.key > 0))
+        .collect();
+    named.sort_by_key(|at| table.columns.get(*at).map_or(0, |column| column.key));
+    named
+}
+
+/// The value of each column of the `PRIMARY KEY` of one row, in the
+/// order the key names them.
+#[must_use]
+pub fn key_of(table: &Table, values: &[Value]) -> Vec<Value> {
+    key_places(table)
+        .iter()
+        .map(|at| values.get(*at).cloned().unwrap_or(Value::Null))
+        .collect()
+}
+
+/// The collation each column of the `PRIMARY KEY` is held in.
+#[must_use]
+pub fn key_collations(table: &Table) -> Vec<Collation> {
+    key_places(table)
+        .iter()
+        .map(|at| {
+            table
+                .columns
+                .get(*at)
+                .map_or(Collation::Binary, |column| column.collation)
+        })
+        .collect()
 }
 
 /// The index `at` of the table's own, counting from nought, as a
-/// `CREATE INDEX` would have described it.
+/// `CREATE INDEX` would have described it, and nothing for the
+/// `PRIMARY KEY` of a table that keeps its rows in the key's own tree,
+/// which that tree holds rather than an index beside it.
 #[must_use]
 pub fn own_index(table: &Table, at: usize) -> Option<Index> {
     let keys = table.keys.get(at)?;
+    if table.without_rowid && keys.primary {
+        return None;
+    }
     let mut name = b"sqlite_autoindex_".to_vec();
     name.extend_from_slice(&table.name);
     name.push(b'_');
@@ -263,6 +308,7 @@ fn own_keys(table: &Table, written: &[Written]) -> Result<Vec<Keys>, Error> {
         keys.push(Keys {
             columns: keyed,
             conflict: *conflict,
+            primary: *primary,
         });
     }
     Ok(keys)

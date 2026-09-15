@@ -375,7 +375,7 @@ foreach cmd {
   testvfs test_syscall test_sqlite3_log optimization_control
   register_wholenumber_module register_echo_module register_tclvar_module
   register_fs_module register_dbstat_vtab register_schema_module
-  load_static_extension permutation run_thread_tests test_cli_invocation
+  load_static_extension run_thread_tests test_cli_invocation
   test_find_cli test_find_sqldiff test_set_config_pagecache
   file_control_chunksize_test file_control_sizehint_test file_control_lockproxy_test
   file_control_persist_wal file_control_powersafe_overwrite file_control_vfsname
@@ -426,6 +426,93 @@ proc faultsim_delete_and_reopen {args} { reset_db }
 proc faultsim_integrity_check {args} {}
 proc faultsim_test_result {args} {}
 proc faultsim_test_control {args} {}
+
+# The rows of a statement as name and value one after another, which
+# `execsql2` of the suite's own tester answers.
+proc execsql2 {sql {db db}} {
+  set out {}
+  $db eval $sql row {
+    foreach name $row(*) { lappend out $name $row($name) }
+  }
+  return $out
+}
+
+# How long a statement took, which changes nothing this harness scores.
+proc execsql_timed {sql {db db}} { return [uplevel 1 [list $db eval $sql]] }
+proc do_timed_execsql_test {name sql {expected {}}} {
+  uplevel 1 [list do_test $name [list execsql $sql] [list {*}$expected]]
+}
+
+# A list written again as a list, which drops the whitespace a file
+# wrote it with.
+proc normalize_list {L} {
+  set out [list]
+  foreach item $L { lappend out $item }
+  return $out
+}
+
+# A real as the suite writes it: the exponent without its leading
+# noughts and without the `.0` before it.
+proc realnum_normalize {r} {
+  string map {1.#INF inf Inf inf .0e e} [regsub -all {(e[+-])0+} $r {\1}]
+}
+
+# A path as the suite writes it, which on this platform is the path.
+proc filepath_normalize {p} { return $p }
+proc do_filepath_test {name script expected} {
+  uplevel 1 [list do_test $name $script [filepath_normalize $expected]]
+}
+proc is_relative_file {file} { return [expr {[file pathtype $file] ne "absolute"}] }
+proc get_pwd {} { return [pwd] }
+
+# What a run says about itself. This harness runs one permutation, the
+# one the suite's own tester runs without a name.
+proc permutation {} { return "" }
+proc isquick {} { return 0 }
+proc verbose {} { return 0 }
+proc output1 {args} {}
+proc output2 {args} {}
+proc output2_if_no_verbose {args} {}
+proc warning {msg {append 1}} {}
+proc incr_ntest {} {}
+proc fail_test {name} {}
+
+# Write-ahead logging, which a run this harness makes reads under the
+# journal mode the file sets and not under a permutation.
+proc wal_is_wal_mode {} { return 0 }
+proc wal_set_journal_mode {{db db}} {}
+proc wal_check_journal_mode {name {db db}} {}
+
+# Whether this engine has what a name says, which `ifcapable` reads the
+# same way.
+proc capable {expr} { return [lindex [harness_send capable $expr] 0] }
+
+# The database written again beside itself and read back, which a file
+# calls around a run it wants undone. This harness holds one database
+# per path, so a save copies the path and not the files beside it.
+proc db_save {} { harness_send copy test.db sv_test.db }
+proc db_restore {} { harness_send copy sv_test.db test.db }
+proc db_save_and_close {} { db_save ; catch { db close } ; return "" }
+proc db_restore_and_reopen {{file test.db}} {
+  catch { db close }
+  db_restore
+  sqlite3 db $file
+}
+
+# Every row of every table taken out, and every index a statement made
+# dropped, which a file calls between two runs of its own.
+proc delete_all_data {} {
+  foreach t [db eval {SELECT tbl_name FROM sqlite_master WHERE type='table'}] {
+    catch { db eval "DELETE FROM '[string map {' ''} $t]'" }
+  }
+}
+proc drop_all_indexes {{db db}} {
+  foreach i [$db eval {
+    SELECT name FROM sqlite_master WHERE type='index' AND sql LIKE 'create%'
+  }] {
+    catch { $db eval "DROP INDEX '[string map {' ''} $i]'" }
+  }
+}
 
 # `tcl_precision` is what SQLite's own tester sets, so a real a file
 # counts with is written with the digits the file's answers hold.

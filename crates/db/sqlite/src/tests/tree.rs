@@ -1031,14 +1031,6 @@ fn what_a_statement_that_changes_a_database_refuses() {
         refuse(&["CREATE TABLE t(a)", "INSERT INTO t(rowid,a) VALUES ('x',1)"]),
         Error::Unsupported
     ));
-    // A table whose rows are kept in the key's own tree.
-    assert!(matches!(
-        refuse(&[
-            "CREATE TABLE w(a TEXT, b, PRIMARY KEY(a)) WITHOUT ROWID",
-            "INSERT INTO w VALUES ('x',1)",
-        ]),
-        Error::Unsupported
-    ));
 }
 
 #[test]
@@ -1245,12 +1237,6 @@ fn a_delete_reads_the_columns_of_the_row_it_is_asked_about() {
         database.query(b"SELECT count(*) FROM t").unwrap().rows,
         alloc::vec![alloc::vec![Value::Int(0)]]
     );
-    // A table that keeps its rows in the key's own tree is one this
-    // crate does not walk to change.
-    writer
-        .run(b"CREATE TABLE w(a TEXT, b, PRIMARY KEY(a)) WITHOUT ROWID")
-        .unwrap();
-    assert!(writer.run(b"DELETE FROM w").is_err());
     // A statement with no `WHERE` takes every row out, and a `WHERE`
     // that reads the bytes as they are stored reads them in the
     // encoding the file names.
@@ -4320,4 +4306,43 @@ fn a_name_the_schema_holds_is_refused_unless_the_statement_allows_it() {
     writer
         .run(b"CREATE TRIGGER i AFTER DELETE ON t BEGIN SELECT 1; END")
         .unwrap();
+}
+
+#[test]
+fn a_row_a_trigger_keeps_holds_the_key_a_replace_of_a_table_with_a_rowid_wanted() {
+    use crate::change::Writer;
+    // `sqlite3GenerateConstraintChecks` writes a row out under
+    // `OE_Replace` with the triggers of a `DELETE` only where
+    // `PRAGMA recursive_triggers` is on, and a trigger that says the
+    // row stays leaves the key where it was.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"PRAGMA recursive_triggers=on".as_slice(),
+        b"CREATE TABLE t(a INTEGER PRIMARY KEY, b UNIQUE)",
+        b"INSERT INTO t VALUES(1,'x'),(2,'y')",
+        b"CREATE TRIGGER g BEFORE DELETE ON t BEGIN SELECT RAISE(IGNORE); END",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let refused = writer
+        .run(b"INSERT OR REPLACE INTO t VALUES(3,'x')")
+        .unwrap_err();
+    assert_eq!(refused.message(), "UNIQUE constraint failed: t.b");
+    let refused = writer
+        .run(b"UPDATE OR REPLACE t SET b='x' WHERE a=2")
+        .unwrap_err();
+    assert_eq!(refused.message(), "UNIQUE constraint failed: t.b");
+    let refused = writer
+        .run(b"INSERT OR REPLACE INTO t VALUES(1,'z')")
+        .unwrap_err();
+    assert_eq!(refused.message(), "UNIQUE constraint failed: t.a");
+    let written = writer.written();
+    let database = crate::db::Database::open(&written).unwrap();
+    assert_eq!(
+        database.query(b"SELECT a,b FROM t").unwrap().rows,
+        [
+            alloc::vec![Value::Int(1), Value::Text(b"x".to_vec())],
+            alloc::vec![Value::Int(2), Value::Text(b"y".to_vec())]
+        ]
+    );
 }
