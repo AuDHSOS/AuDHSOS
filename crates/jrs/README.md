@@ -643,8 +643,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Math%`, after 21.3, on the register engine (focused) | focused | `6fe4b67` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Math --summary` | 327 | 654 | 118 (18.04%) | 0 (0.00%) | 536 (81.96%) |
 | `%Array%` and its methods, after 23.1.3 complete but `sort` (focused) | focused | `7596776` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 5,066 (82.82%) | 969 (15.84%) | 82 (1.34%) |
 | `%Array%` and its methods, after 23.1.3 complete but `sort`, on the register engine (focused) | focused | `7596776` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 1,922 (31.42%) | 350 (5.72%) | 3,845 (62.86%) |
-| Complete pinned suite, including staging and Intl | full | `d7c48b2` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `d7c48b2` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 9,643 (9.37%) | 16,122 (15.66%) | 77,160 (74.97%) |
+| `for`-`of` statements (focused) | focused | `f1314b2` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/for-of --summary` | 751 | 1,442 | 1,062 (73.65%) | 79 (5.48%) | 301 (20.87%) |
+| `for`-`of` statements on the register engine (focused) | focused | `f1314b2` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/for-of --summary` | 751 | 1,442 | 101 (7.00%) | 21 (1.46%) | 1,320 (91.54%) |
+| Complete pinned suite, including staging and Intl | full | `f1314b2` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `f1314b2` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 9,645 (9.37%) | 16,128 (15.67%) | 77,152 (74.96%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -917,6 +919,31 @@ so those are charged where they look. The suite answers the same result for all
 102,925 variants as before the charge, and the fuzz run ends clean with its
 throughput up from 11,445 to 17,801 executions a second.
 
+A `for`-`of` takes a `var` head as a `for`-`in` always did: 14.7.5 makes one
+binding per iteration for a lexical head and writes the one the declaration
+made for a `var` head, which is the same question for both.
+
+What it owed after that was the protocol itself. A `for`-`of` stepped an Array
+with an instruction and refused every other iterable, because those resolve
+`@@iterator` to a method the lowering had no way to name. It can name one now,
+and the rest of 7.4 is calls and property reads it already emits: 7.4.2 reads
+`@@iterator` and calls it, 7.4.6 calls `next` and asks whether the result is
+`done`, and 7.4.7 reads `value` only where it is not. 27.1.2.1 gives
+`%IteratorPrototype%` an `@@iterator` that answers `this`, so an iterator is
+itself iterable. A Symbol a Prototype owns and this Realm has not built was
+undefined, which 7.4.2 turns into "not iterable" — a different statement from
+"the String iterator of 22.1.3.34 is not built" — and it names that instead.
+A body that leaves by `break` or `return` is still refused and says so, because
+7.4.9 would have to close the iterator. The refusals fall from 2,275 to 2,207.
+
+The runner itself was the other cost. A full run took about thirteen minutes
+and a step is measured two or three times, so the wait was most of the work.
+Every file already gets a realm of its own, so files share nothing and are now
+spread over as many threads as the machine has, merged back in the order they
+were discovered. The full engine run takes 44 seconds and the stack run 39,
+and both write byte-for-byte what the sequential runner wrote. `--jobs 1` is
+that sequential run.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -976,7 +1003,9 @@ tree `6a1ceed16ca5526f8fbcb1c08c6ff841d525978d`, which is the tree of
 tree `6e308d3bfd1883631583168a7311c83665bb1489`, which is the tree of
 `7596776`. Both full runs beside the parameter Initializers, the blocks of a
 Realm Script and the bound on every Array scan were measured at tree
-`f59c300f1ac9f52e3a71f09af2cfc94ba9f11c56`, which is the tree of `d7c48b2`.
+`f59c300f1ac9f52e3a71f09af2cfc94ba9f11c56`, which is the tree of `d7c48b2`. The `for`-`of` runs and both full runs beside them were measured at
+tree `a6e6f7c4ceb2326595e511ff0ad4887d85b14b0e`, which is the tree of
+`f1314b2`.
 
 ### Historical Test262 baseline
 
