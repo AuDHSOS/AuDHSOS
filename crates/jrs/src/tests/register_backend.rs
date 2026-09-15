@@ -5402,3 +5402,30 @@ fn a_property_write_reaches_a_base_the_lowering_cannot_name() -> Result<(), Erro
     }
     Ok(())
 }
+
+#[test]
+fn an_update_reaches_a_global_and_a_property() -> Result<(), Error> {
+    // 13.4.4.1 reads the Reference, takes `ToNumeric` of it and writes back.
+    // A name this Script does not bind is resolved on the Global Environment
+    // Record (9.1.1.4), and a property Reference is evaluated once.
+    for source in [
+        "var i=0;i++;i",
+        "var i=0;++i",
+        "var i=0;i++",
+        "var i=0;i--;i",
+        "var i='3';i++;i",
+        "var c=0;function f(){c++}f();f();c",
+        "var o={n:0};o.n++;o.n",
+        "var o={n:0};o.n++",
+        "var o={n:0};++o.n",
+        "var o={n:'2'};o.n++;o.n",
+        "var a=[1,2];a[0]++;a[0]",
+        "var a=[1,2];var i=1;a[i]--;a[1]",
+        "var o={n:0};function f(){o.n++}f();f();o.n",
+        "var o={};var r=o.n++;typeof r",
+        "function f(p){p.n++;return p.n}f({n:5})",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}

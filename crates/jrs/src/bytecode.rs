@@ -1840,6 +1840,9 @@ impl RegisterLowerer {
             ExprKind::SetMember(target, operator, value, _) => {
                 self.lower_member_assignment(target, *operator, value)?
             }
+            ExprKind::UpdateMember(target, add, prefix, _) => {
+                self.lower_member_update(target, *add, *prefix)?
+            }
             _ => return None,
         };
         Some(result)
@@ -4201,6 +4204,42 @@ impl RegisterLowerer {
         let value_type = self.emit_compound(operator, left_type, left_register, right_type)?;
         self.finish_member_assignment(prepared, value_type)?;
         Some(value_type)
+    }
+
+    /// `13.4.4.1` on a property reference: the base and the key are evaluated
+    /// once, and the read and the write reach the same property.
+    fn lower_member_update(
+        &mut self,
+        target: &Expr,
+        add: bool,
+        prefix: bool,
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        // The old value outlives the write, so its register is allocated
+        // before the ones the assignment takes and released after them.
+        let numeric = self.allocate_register()?;
+        let one = self.allocate_register()?;
+        let prepared = self.prepare_member_assignment(target)?;
+        self.read_prepared_member(&prepared)?;
+        // 13.4.4.1 takes `ToNumeric` of the old value first, so a postfix
+        // update answers that Number and not what the property held.
+        self.code.emit(Instruction::ToNumber);
+        self.code.emit(Instruction::Star(numeric));
+        self.code.emit(Instruction::LdaSmi(1));
+        self.code.emit(Instruction::Star(one));
+        self.code.emit(Instruction::Ldar(numeric));
+        self.code.emit(if add {
+            Instruction::Add(one)
+        } else {
+            Instruction::Sub(one)
+        });
+        self.finish_member_assignment(prepared, RegisterType::Number)?;
+        if !prefix {
+            self.code.emit(Instruction::Ldar(numeric));
+        }
+        self.release_register(one)?;
+        self.release_register(numeric)?;
+        Some(RegisterType::Number)
     }
 
     /// Reads the property a prepared assignment names, through the registers
@@ -6624,7 +6663,14 @@ impl RegisterLowerer {
 
     fn lower_update(&mut self, name: &str, add: bool, prefix: bool) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
-        let binding = *self.bindings.get(name)?;
+        // 9.1.1.4 resolves a name this Script does not bind on the Global
+        // Environment Record, which 13.4.4.1 reads and writes the same way.
+        let Some(binding) = self.bindings.get(name).copied() else {
+            if !self.realm || matches!(name, "undefined" | "NaN" | "Infinity") {
+                return None;
+            }
+            return self.lower_global_update(name, add, prefix);
+        };
         if !binding.mutable {
             return None;
         }
@@ -6648,6 +6694,36 @@ impl RegisterLowerer {
         });
         self.store_binding(binding);
         self.bindings.get_mut(name)?.value_type = Some(RegisterType::Number);
+        self.release_register(one)?;
+        if !prefix {
+            self.code.emit(Instruction::Ldar(numeric));
+        }
+        self.release_register(numeric)?;
+        Some(RegisterType::Number)
+    }
+
+    /// `13.4.4.1` on a name the Global Environment Record binds.
+    fn lower_global_update(&mut self, name: &str, add: bool, prefix: bool) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let units: Vec<u16> = name.encode_utf16().collect();
+        let constant = self.string_constant(&units)?;
+        self.code.emit(Instruction::LdaGlobal(constant));
+        self.code.emit(Instruction::ToNumber);
+        let numeric = self.allocate_register()?;
+        self.code.emit(Instruction::Star(numeric));
+        let one = self.allocate_register()?;
+        self.code.emit(Instruction::LdaSmi(1));
+        self.code.emit(Instruction::Star(one));
+        self.code.emit(Instruction::Ldar(numeric));
+        self.code.emit(if add {
+            Instruction::Add(one)
+        } else {
+            Instruction::Sub(one)
+        });
+        self.code.emit(Instruction::StaGlobal {
+            name: constant,
+            strict: false,
+        });
         self.release_register(one)?;
         if !prefix {
             self.code.emit(Instruction::Ldar(numeric));
@@ -7709,6 +7785,9 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
             register_expression_writes_names(target, names)?
                 || register_expression_writes_names(value, names)?
         }
+        // 13.4.4.1 writes a property and not a binding, so only what names
+        // the property can write one of these names.
+        ExprKind::UpdateMember(target, _, _, _) => register_expression_writes_names(target, names)?,
         ExprKind::Function(function) => register_function_writes_names(function, names)?,
         // 15.7.14 is the heritage and one function for each member, so a class
         // writes what any of those writes.
@@ -7726,8 +7805,7 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
         | ExprKind::Super
         | ExprKind::NewTarget
         | ExprKind::DefaultSuper
-        | ExprKind::Spread(_)
-        | ExprKind::UpdateMember(_, _, _, _) => return None,
+        | ExprKind::Spread(_) => return None,
     })
 }
 
@@ -8019,6 +8097,9 @@ fn register_expression_references(
             register_expression_references(target, names, nested_free_names)?;
             register_expression_references(value, names, nested_free_names)?;
         }
+        ExprKind::UpdateMember(target, _, _, _) => {
+            register_expression_references(target, names, nested_free_names)?;
+        }
         ExprKind::Function(function) => {
             nested_free_names.extend(register_function_scope(function)?.free_names);
         }
@@ -8036,8 +8117,7 @@ fn register_expression_references(
         | ExprKind::Super
         | ExprKind::NewTarget
         | ExprKind::DefaultSuper
-        | ExprKind::Spread(_)
-        | ExprKind::UpdateMember(_, _, _, _) => return None,
+        | ExprKind::Spread(_) => return None,
     }
     Some(())
 }
