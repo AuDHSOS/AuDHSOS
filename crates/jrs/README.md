@@ -641,8 +641,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Array%` and its methods, after 23.1.3, on the register engine (focused) | focused | `14a8333` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 750 (12.26%) | 358 (5.85%) | 5,009 (81.89%) |
 | `%Math%`, after 21.3 (focused) | focused | `6fe4b67` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Math --summary` | 327 | 654 | 306 (46.79%) | 344 (52.60%) | 4 (0.61%) |
 | `%Math%`, after 21.3, on the register engine (focused) | focused | `6fe4b67` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Math --summary` | 327 | 654 | 118 (18.04%) | 0 (0.00%) | 536 (81.96%) |
-| Complete pinned suite, including staging and Intl | full | `6fe4b67` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `6fe4b67` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 8,355 (8.12%) | 15,945 (15.49%) | 78,625 (76.39%) |
+| `%Array%` and its methods, after 23.1.3 complete but `sort` (focused) | focused | `7596776` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 5,066 (82.82%) | 969 (15.84%) | 82 (1.34%) |
+| `%Array%` and its methods, after 23.1.3 complete but `sort`, on the register engine (focused) | focused | `7596776` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 1,922 (31.42%) | 350 (5.72%) | 3,845 (62.86%) |
+| Complete pinned suite, including staging and Intl | full | `7596776` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `7596776` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 9,565 (9.29%) | 16,116 (15.66%) | 77,244 (75.05%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -862,6 +864,34 @@ printed form does not show that, so 20.1.2.14 is what asks. Over
 `test/built-ins/Math` the engine passes 118 of 654 variants and fails none,
 where the stack backend fails 344 of them.
 
+The nine methods of 23.1.3 that ask the Script about each element follow, and
+they are what the engine was missing rather than one more list of functions.
+Each element is a call, so the engine leaves the method to make it and comes
+back through the frame that call opened, as 7.1.1 already did for a `valueOf`.
+What the walk has reached outlives those frames, so it lives in an object of
+the heap that the collector traces, named by a root the resume record carries;
+the callback takes its arguments from there too, written into the window of the
+callee after `bind_this` has run, because the operation has no frame whose
+registers could hold them and a value read before `bind_this` would name an
+object it moved.
+
+Seven wrong answers the Scripts then reached are right or named now. Note 1 of
+23.1.3.24 gives its callback four arguments and it was given three. 10.2.9
+gives a function its `length`, which no function object had, and a `length` the
+Realm has not built read as zero, which says an array-like is empty where the
+truth is that the engine cannot tell. A miss on `%Boolean.prototype%`,
+`%Number.prototype%`, `%Error.prototype%` and `%ArrayIteratorPrototype%` was a
+gap whatever the name was, and 20.3.3 gives `%Boolean.prototype%` no `length`,
+so an Array method called on a boolean reads none and walks nothing, which is
+an answer. An indexed write to a receiver with no Elements store, and running
+out of heap or string references, each reported a broken frame where one is a
+gap and the other a resource. And 10.4.2.2 step 1 refuses a length past
+2^32-1, which 23.1.3.21 reaches through 7.1.20.
+
+That is 1,210 more variants. Over `test/built-ins/Array` the engine passes
+1,922 of 6,117, up from 750. What 23.1.3 still owes is `sort`, whose comparator
+is a callback of a different shape.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -917,7 +947,9 @@ at tree `32a160f59e6759ed3b30746a8eb7f024d49194a4`, which is the tree of
 tree `b01866f6404a7fdcb87da506795dcaca929665c5`, which is the tree of
 `14a8333`. The `%Math%` runs and both full runs beside them were measured at
 tree `6a1ceed16ca5526f8fbcb1c08c6ff841d525978d`, which is the tree of
-`6fe4b67`.
+`6fe4b67`. The `%Array%` runs and both full runs beside them were measured at
+tree `6e308d3bfd1883631583168a7311c83665bb1489`, which is the tree of
+`7596776`.
 
 ### Historical Test262 baseline
 
