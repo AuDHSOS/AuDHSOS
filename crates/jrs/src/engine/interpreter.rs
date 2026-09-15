@@ -135,6 +135,9 @@ const DEFAULT_HINT: [u16; 7] = [0x64, 0x65, 0x66, 0x61, 0x75, 0x6C, 0x74];
 /// The `"string"` hint 7.1.17 passes to 7.1.1.
 const STRING_HINT: [u16; 6] = [0x73, 0x74, 0x72, 0x69, 0x6E, 0x67];
 
+/// The text 25.5.2.4 gives null and a Number that is not finite.
+const NULL_UNITS: [u16; 4] = [0x6E, 0x75, 0x6C, 0x6C];
+
 /// The state of one walk of 23.1.3, read out of the object that holds it.
 ///
 /// A plain record, so the walk can be reasoned about in one place; it is
@@ -1595,6 +1598,12 @@ impl RegisterVM {
             }
             // 22.1.3.32 and 22.1.3.28 are `thisStringValue`, which answers a
             // String and the `[[StringData]]` of a wrapper.
+            // 25.5.1 and 25.5.2, neither of which takes the function the
+            // other argument may be: a reviver and a replacer are calls, and
+            // a native has no frame to make one from.
+            Intrinsic::JsonParse | Intrinsic::JsonStringify => {
+                self.call_json_intrinsic(intrinsic, &call, heap, realm)
+            }
             // 22.2.4.1 compiles a pattern at run time, which this engine does
             // only where the Script was compiled.
             Intrinsic::RegExpConstructor => Err(VMError::Unsupported(
@@ -4583,6 +4592,7 @@ impl RegisterVM {
             | ObjectKind::ArrayIteration { .. }
             | ObjectKind::Accessor { .. }
             | ObjectKind::RegExp { .. }
+            | ObjectKind::Json
             | ObjectKind::Reflect => None,
         }
     }
@@ -4672,6 +4682,10 @@ impl RegisterVM {
     /// That is `undefined` only when the chain is complete. A prototype this
     /// Realm has not finished building would have owned the name, so the miss
     /// is a gap and never an answer.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function names every Prototype that owes a name"
+    )]
     fn absent_property(
         target: Value,
         name: &[u16],
@@ -4726,6 +4740,10 @@ impl RegisterVM {
             // 28.1 gives `%Reflect%` more than this Realm builds.
             Some(ObjectKind::Reflect) if super::realm::reflect_owns(name) => {
                 Err(VMError::Unsupported("a property of %Reflect%"))
+            }
+            // 25.5 gives `%JSON%` more than this Realm builds.
+            Some(ObjectKind::Json) if super::realm::json_owns(name) => {
+                Err(VMError::Unsupported("a property of %JSON%"))
             }
             // 21.3 gives `%Math%` more than this Realm builds.
             Some(ObjectKind::Math) if super::realm::math_owns(name) => {
@@ -5080,6 +5098,7 @@ impl RegisterVM {
                 | ObjectKind::ArrayIteration { .. }
                 | ObjectKind::Accessor { .. }
                 | ObjectKind::Reflect
+                | ObjectKind::Json
                 | ObjectKind::Math => "Object",
                 // 22.2.6.17 tags a RegExp through its own `toString`, and
                 // 20.1.3.6 gives it the builtin tag of 22.2.
@@ -5480,6 +5499,228 @@ impl RegisterVM {
             return Ok(None);
         };
         self.allocate_string(heap, &[unit]).map(Some)
+    }
+
+    /// The two functions 25.5 gives `%JSON%`.
+    fn call_json_intrinsic(
+        &mut self,
+        intrinsic: Intrinsic,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let first = self.call_argument(call, 0)?;
+        let second = self.call_argument(call, 1)?;
+        if intrinsic == Intrinsic::JsonParse {
+            // 25.5.1 step 7 calls the reviver for every name it parsed.
+            if Self::is_callable(second, heap) {
+                return Err(VMError::Unsupported("a reviver of 25.5.1"));
+            }
+            let text = property_name_units(first, heap)?;
+            return self.json_parse(&text, heap, realm);
+        }
+        // 25.5.2 step 2 takes a replacer that is a function or an Array of
+        // names; step 4 takes a space; neither is built.
+        if !second.is_undefined() {
+            return Err(VMError::Unsupported("a replacer of 25.5.2"));
+        }
+        let third = self.call_argument(call, 2)?;
+        if !third.is_undefined() {
+            return Err(VMError::Unsupported("a space of 25.5.2"));
+        }
+        let mut out = Vec::new();
+        if !self.json_quote_value(first, &mut out, 0, heap, realm)? {
+            return Ok(VALUE_UNDEFINED);
+        }
+        self.allocate_string(heap, &out)
+    }
+
+    /// `JSON.parse` of 25.5.1 without its reviver: the text is parsed once
+    /// and the tree is built from the leaves up.
+    fn json_parse(
+        &mut self,
+        text: &[u16],
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let limits = audhsos_json::Limits {
+            input: self.string_units_limit,
+            ..audhsos_json::Limits::default()
+        };
+        let mut work = self.fuel;
+        let document = audhsos_json::parse(text, limits, &mut work).map_err(|_| {
+            raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::SyntaxError,
+                "invalid JSON text",
+            )
+        })?;
+        self.fuel = work;
+        // The arena is in postorder, so a node is built after everything it
+        // holds, and each one is rooted while the next is allocated.
+        heap.enter_scope();
+        let mut built: Vec<Root> = Vec::with_capacity(document.nodes.len());
+        for node in &document.nodes {
+            let value = match &node.kind {
+                audhsos_json::Kind::Null => VALUE_NULL,
+                audhsos_json::Kind::Boolean(boolean) => Value::from_bool(*boolean),
+                audhsos_json::Kind::Number(number) => Value::from_f64(*number),
+                audhsos_json::Kind::String(units) => self.allocate_string(heap, units)?,
+                audhsos_json::Kind::Array(elements) => {
+                    let count =
+                        u32::try_from(elements.len()).map_err(|_| VMError::PropertyLimit)?;
+                    let array = realm.array(heap, count)?;
+                    for (index, element) in elements.iter().enumerate() {
+                        let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+                        let held = *built.get(*element).ok_or(VMError::InvalidRegister)?;
+                        let value = heap.root_value(held).unwrap_or(VALUE_UNDEFINED);
+                        heap.set_array_element(array, index, value)?;
+                    }
+                    Value::from_object(array)
+                }
+                audhsos_json::Kind::Object(properties) => {
+                    let object = realm.ordinary_object(heap)?;
+                    for (name, child) in properties {
+                        let key = PropertyKey::String(heap.strings.intern_units(name)?);
+                        let held = *built.get(*child).ok_or(VMError::InvalidRegister)?;
+                        let value = heap.root_value(held).unwrap_or(VALUE_UNDEFINED);
+                        heap.define_own_named(object, key, value, PropertyFlags::ordinary_data())?;
+                    }
+                    Value::from_object(object)
+                }
+            };
+            built.push(heap.push_root(value)?);
+        }
+        let root = *built.get(document.root).ok_or(VMError::InvalidRegister)?;
+        let value = heap.root_value(root).unwrap_or(VALUE_UNDEFINED);
+        heap.exit_scope();
+        Ok(value)
+    }
+
+    /// `SerializeJSONProperty` of 25.5.2.4, answering whether the value has a
+    /// text at all.
+    fn json_quote_value(
+        &mut self,
+        value: Value,
+        out: &mut Vec<u16>,
+        depth: u16,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<bool, VMError> {
+        if depth > 64 {
+            return Err(VMError::Unsupported(
+                "a JSON text deeper than this engine walks",
+            ));
+        }
+        let mut work = self.fuel;
+        let limit = self.string_units_limit;
+        let appended = |out: &mut Vec<u16>, units: &[u16], work: &mut u64| {
+            audhsos_json::append(out, units, limit, work).map_err(|_| VMError::StringLimit)
+        };
+        if value.is_null() {
+            appended(out, &NULL_UNITS, &mut work)?;
+        } else if let Some(boolean) = value.as_boolean() {
+            let text: Vec<u16> = if boolean { "true" } else { "false" }
+                .encode_utf16()
+                .collect();
+            appended(out, &text, &mut work)?;
+        } else if let Some(number) = value.as_f64() {
+            // 25.5.2.4 step 10: a Number that is not finite has no text.
+            let text: Vec<u16> = if number.is_finite() {
+                crate::number::decimal_string(number)
+                    .encode_utf16()
+                    .collect()
+            } else {
+                NULL_UNITS.to_vec()
+            };
+            appended(out, &text, &mut work)?;
+        } else if value.is_string() {
+            let units = heap
+                .strings
+                .to_utf16(value)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            audhsos_json::quote(out, &units, limit, &mut work).map_err(|_| VMError::StringLimit)?;
+        } else if let Some(object) = value.as_object() {
+            // 25.5.2.4 step 5 calls `toJSON`, and step 11 a callable has no
+            // text at all.
+            let key = PropertyKey::String(heap.strings.intern("toJSON")?);
+            if heap.lookup_named(object, key)?.is_some() {
+                return Err(VMError::Unsupported("a toJSON of 25.5.2.4"));
+            }
+            if Self::is_callable(value, heap) {
+                return Ok(false);
+            }
+            self.fuel = work;
+            return self.json_quote_object(object, out, depth, heap, realm);
+        } else {
+            // A Symbol and undefined have no text (25.5.2.4 steps 11 and 12).
+            return Ok(false);
+        }
+        self.fuel = work;
+        Ok(true)
+    }
+
+    /// `SerializeJSONArray` of 25.5.2.5 and `SerializeJSONObject` of 25.5.2.6.
+    fn json_quote_object(
+        &mut self,
+        object: ObjectRef,
+        out: &mut Vec<u16>,
+        depth: u16,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<bool, VMError> {
+        let depth = depth.saturating_add(1);
+        if Self::is_array(Value::from_object(object), heap) {
+            let length = Self::array_like_length(heap, object, realm)?;
+            out.push(0x5B);
+            for index in 0..length {
+                if index > 0 {
+                    out.push(0x2C);
+                }
+                let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+                let element = Self::element_at(heap, object, index)?.unwrap_or(VALUE_UNDEFINED);
+                if !self.json_quote_value(element, out, depth, heap, realm)? {
+                    out.extend_from_slice(&NULL_UNITS);
+                }
+            }
+            out.push(0x5D);
+            return Ok(true);
+        }
+        out.push(0x7B);
+        let mut written = 0usize;
+        for (key, enumerable) in heap.own_keys(object)? {
+            if !enumerable {
+                continue;
+            }
+            let Some(name) = key.as_string() else {
+                continue;
+            };
+            let units = heap
+                .strings
+                .to_utf16(Value::from_string(name))
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let held = Self::plain_value(
+                heap.lookup_named(object, key)?
+                    .ok_or(VMError::Heap(HeapError::InvalidReference))?,
+            )?;
+            let mut text = Vec::new();
+            if !self.json_quote_value(held, &mut text, depth, heap, realm)? {
+                continue;
+            }
+            if written > 0 {
+                out.push(0x2C);
+            }
+            let mut work = self.fuel;
+            audhsos_json::quote(out, &units, self.string_units_limit, &mut work)
+                .map_err(|_| VMError::StringLimit)?;
+            self.fuel = work;
+            out.push(0x3A);
+            out.extend_from_slice(&text);
+            written = written.saturating_add(1);
+        }
+        out.push(0x7D);
+        Ok(true)
     }
 
     /// The methods 22.2.6 gives `%RegExp.prototype%` that this Realm builds.

@@ -530,6 +530,10 @@ pub enum Intrinsic {
     RegExpPrototypeTest,
     /// `RegExp.prototype.toString`, 22.2.6.17.
     RegExpPrototypeToString,
+    /// `JSON.parse`, 25.5.1.
+    JsonParse,
+    /// `JSON.stringify`, 25.5.2.
+    JsonStringify,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -565,11 +569,13 @@ pub enum IntrinsicHolder {
     BooleanPrototype,
     /// `%RegExp.prototype%`, which carries the methods 22.2.6 gives it.
     RegExpPrototype,
+    /// `%JSON%`, the namespace object of 25.5.
+    Json,
 }
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 123] = [
+    pub const ALL: [Self; 125] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -693,6 +699,8 @@ impl Intrinsic {
         Self::RegExpPrototypeExec,
         Self::RegExpPrototypeTest,
         Self::RegExpPrototypeToString,
+        Self::JsonParse,
+        Self::JsonStringify,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -796,6 +804,7 @@ impl Intrinsic {
             Self::RegExpPrototypeExec
             | Self::RegExpPrototypeTest
             | Self::RegExpPrototypeToString => IntrinsicHolder::RegExpPrototype,
+            Self::JsonParse | Self::JsonStringify => IntrinsicHolder::Json,
             // 10.2.4.1 stands on no object: the `callee` of a strict
             // arguments object is the only way to reach it, and nothing
             // installs it on the holder this names.
@@ -968,6 +977,8 @@ impl Intrinsic {
             Self::RegExpPrototypeExec => 120,
             Self::RegExpPrototypeTest => 121,
             Self::RegExpPrototypeToString => 122,
+            Self::JsonParse => 123,
+            Self::JsonStringify => 124,
         }
     }
 
@@ -1101,6 +1112,8 @@ impl Intrinsic {
             Self::RegExpPrototypeExec => 120,
             Self::RegExpPrototypeTest => 121,
             Self::RegExpPrototypeToString => 122,
+            Self::JsonParse => 123,
+            Self::JsonStringify => 124,
         }
     }
 
@@ -1235,6 +1248,8 @@ impl Intrinsic {
             120 => Some(Self::RegExpPrototypeExec),
             121 => Some(Self::RegExpPrototypeTest),
             122 => Some(Self::RegExpPrototypeToString),
+            123 => Some(Self::JsonParse),
+            124 => Some(Self::JsonStringify),
             _ => None,
         }
     }
@@ -1263,6 +1278,8 @@ impl Intrinsic {
             Self::SymbolConstructor => "Symbol",
             Self::RegExpConstructor => "RegExp",
             Self::RegExpPrototypeExec => "exec",
+            Self::JsonParse => "parse",
+            Self::JsonStringify => "stringify",
             Self::RegExpPrototypeTest => "test",
             Self::ArrayConstructor => "Array",
             Self::ObjectConstructor => "Object",
@@ -1465,6 +1482,8 @@ impl Intrinsic {
             | Self::RegExpPrototypeExec
             | Self::RegExpPrototypeTest
             | Self::RegExpPrototypeToString
+            | Self::JsonParse
+            | Self::JsonStringify
             | Self::ObjectGetOwnPropertyNames => false,
             // 20.1.2.4, 20.1.2.8 and 20.1.2.13 apply ToPropertyKey to the
             // second argument.
@@ -1594,6 +1613,7 @@ impl Intrinsic {
             | Self::RegExpConstructor
             | Self::RegExpPrototypeExec
             | Self::RegExpPrototypeTest
+            | Self::JsonParse
             | Self::NumberPrototypeToString
             | Self::ReflectGetPrototypeOf
             | Self::ReflectIsExtensible
@@ -1619,6 +1639,7 @@ impl Intrinsic {
             | Self::ArrayPrototypeWith
             | Self::MathMax
             | Self::MathMin
+            | Self::JsonStringify
             | Self::MathImul => 2,
         }
     }
@@ -1915,6 +1936,17 @@ pub fn string_constructor_owns(name: &[u16]) -> bool {
             .any(|owned| owned.encode_utf16().eq(name.iter().copied()))
 }
 
+/// The property names 25.5 gives `%JSON%`.
+pub const JSON_PROPERTIES: [&str; 4] = ["isRawJSON", "parse", "rawJSON", "stringify"];
+
+/// Whether `%JSON%` owns a property of this name.
+#[must_use]
+pub fn json_owns(name: &[u16]) -> bool {
+    JSON_PROPERTIES
+        .into_iter()
+        .any(|owned| owned.encode_utf16().eq(name.iter().copied()))
+}
+
 /// The property names 22.2.6 gives `%RegExp.prototype%`.
 pub const REGEXP_PROTOTYPE_PROPERTIES: [&str; 16] = [
     "compile",
@@ -2188,6 +2220,7 @@ struct Holders {
     global_object: Root,
     math: Root,
     reflect: Root,
+    json: Root,
     number_prototype: Root,
     boolean_prototype: Root,
     regexp_prototype: Root,
@@ -2299,6 +2332,11 @@ impl Realm {
         let reflect = heap.allocate_immortal_object(root_shape, ordinary)?;
         heap.set_object_kind(reflect, super::object::ObjectKind::Reflect)?;
         let reflect = heap.push_root(Value::from_object(reflect))?;
+        // 25.5 is an ordinary object like %Math%, and 19.4.2 gives it to the
+        // global object under its own name.
+        let json = heap.allocate_immortal_object(root_shape, ordinary)?;
+        heap.set_object_kind(json, super::object::ObjectKind::Json)?;
+        let json = heap.push_root(Value::from_object(json))?;
         let intrinsics = Self::install_intrinsics(
             heap,
             &Holders {
@@ -2310,6 +2348,7 @@ impl Realm {
                 global_object,
                 math,
                 reflect,
+                json,
                 number_prototype,
                 boolean_prototype,
                 regexp_prototype,
@@ -2339,7 +2378,7 @@ impl Realm {
         let global = Self::rooted(heap, global_object)?
             .as_object()
             .ok_or(HeapError::InvalidReference)?;
-        for (label, namespace) in [("Math", math), ("Reflect", reflect)] {
+        for (label, namespace) in [("Math", math), ("Reflect", reflect), ("JSON", json)] {
             let name = PropertyKey::String(heap.strings.intern(label)?);
             let value = Self::rooted(heap, namespace)?;
             heap.define_own_named(global, name, value, builtin_data())?;
@@ -2791,6 +2830,10 @@ impl Realm {
         Ok(())
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function installs every intrinsic on its holder"
+    )]
     fn install_intrinsics(
         heap: &mut GenerationalHeap,
         holders: &Holders,
@@ -2839,6 +2882,7 @@ impl Realm {
                 }
                 IntrinsicHolder::Math => Self::rooted(heap, holders.math)?,
                 IntrinsicHolder::Reflect => Self::rooted(heap, holders.reflect)?,
+                IntrinsicHolder::Json => Self::rooted(heap, holders.json)?,
                 IntrinsicHolder::NumberPrototype => Self::rooted(heap, holders.number_prototype)?,
                 IntrinsicHolder::BooleanPrototype => Self::rooted(heap, holders.boolean_prototype)?,
                 IntrinsicHolder::RegExpPrototype => Self::rooted(heap, holders.regexp_prototype)?,

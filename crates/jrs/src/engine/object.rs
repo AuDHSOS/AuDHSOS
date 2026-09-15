@@ -102,6 +102,10 @@ pub enum ObjectKind {
     /// way but one: a name it should own and this Realm has not built is a
     /// gap rather than the undefined an ordinary object answers.
     Reflect,
+    /// The `%JSON%` namespace object of 25.5, which is ordinary in every way
+    /// but one: a name it should own and this Realm has not built is a gap
+    /// rather than the undefined an ordinary object answers.
+    Json,
     /// The `%Math%` namespace object of 21.3, which is ordinary in every way
     /// but one: a name it should own and this Realm has not built is a gap
     /// rather than the undefined an ordinary object answers.

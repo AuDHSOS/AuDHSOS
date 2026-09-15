@@ -26,7 +26,7 @@ fn a_realm_on_the_engine_backend_refuses_what_it_cannot_lower() -> Result<(), Er
     // never an answer. It shows only once the Script has run, which is fatal
     // like every other unsupported feature.
     assert!(matches!(
-        realm.evaluate("typeof JSON"),
+        realm.evaluate("typeof Proxy"),
         Err(Error::Unsupported { .. })
     ));
     assert!(realm.evaluate("1").is_err());
@@ -5593,6 +5593,55 @@ fn a_head_that_is_a_pattern_binds_each_step() -> Result<(), Error> {
         "var r='';for(const [a,b] of [[1,2]]){r=r+a+'-'+b};r",
     ] {
         differential_scripts(&[source])?;
+    }
+    Ok(())
+}
+
+#[test]
+fn json_parses_and_quotes_what_it_reaches() -> Result<(), Error> {
+    // 25.5.1 parses one JSON text, and 25.5.2 answers the text of a value.
+    for source in [
+        "typeof JSON",
+        "JSON.parse('1')",
+        "JSON.parse('\"a\"')",
+        "JSON.parse('true')",
+        "JSON.parse('null')",
+        "JSON.parse('[1,2,3]').length",
+        "JSON.parse('[1,2,3]')[1]",
+        "JSON.parse('{\"a\":1}').a",
+        "JSON.parse('{\"a\":{\"b\":2}}').a.b",
+        "JSON.parse('[{\"a\":1}]')[0].a",
+        "var r=0;try{JSON.parse('{')}catch(e){r=e instanceof SyntaxError};r",
+        "JSON.stringify(1)",
+        "JSON.stringify('a')",
+        "JSON.stringify(true)",
+        "JSON.stringify(null)",
+        "typeof JSON.stringify(undefined)",
+        "JSON.stringify([1,2])",
+        "JSON.stringify({a:1})",
+        "JSON.stringify({a:1,b:'x'})",
+        "JSON.stringify({a:[1,{b:2}]})",
+        "JSON.stringify({a:undefined,b:1})",
+        "JSON.stringify([undefined])",
+        "JSON.stringify(1/0)",
+        "JSON.stringify('a\"b')",
+        "JSON.parse(JSON.stringify({a:[1,2],b:'c'})).b",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // 25.5.1 and 25.5.2 take a reviver, a replacer and a space, each of
+    // which this engine has not built.
+    for source in [
+        "JSON.parse('1',function(k,v){return v})",
+        "JSON.stringify({},null,2)",
+        "JSON.stringify({toJSON(){return 1}})",
+    ] {
+        let mut host = SilentHost;
+        let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+        assert!(
+            matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
+            "{source}"
+        );
     }
     Ok(())
 }

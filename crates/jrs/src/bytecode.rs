@@ -7222,6 +7222,7 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::NumberPrototypeToString
         | crate::engine::realm::Intrinsic::BooleanPrototypeToString
         | crate::engine::realm::Intrinsic::RegExpPrototypeToString
+        | crate::engine::realm::Intrinsic::JsonStringify
         | crate::engine::realm::Intrinsic::StringPrototypeToString
         | crate::engine::realm::Intrinsic::StringPrototypeValueOf
         | crate::engine::realm::Intrinsic::StringPrototypeCharAt
@@ -7247,6 +7248,7 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::SymbolConstructor
         | crate::engine::realm::Intrinsic::RegExpConstructor
         | crate::engine::realm::Intrinsic::RegExpPrototypeExec
+        | crate::engine::realm::Intrinsic::JsonParse
         | crate::engine::realm::Intrinsic::ArrayConstructor
         | crate::engine::realm::Intrinsic::ObjectConstructor
         | crate::engine::realm::Intrinsic::ObjectDefineProperty
