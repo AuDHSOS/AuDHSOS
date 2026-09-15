@@ -691,6 +691,12 @@ impl GenerationalHeap {
                 None => symbols.push((name, flags.enumerable)),
             }
         }
+        // 10.4.3.3 lists every index of the `[[StringData]]` first.
+        if let Some(count) = self.string_data_length(reference)? {
+            for index in 0..count {
+                indices.push((index, true));
+            }
+        }
         indices.sort_unstable();
         indices.dedup_by_key(|(index, _)| *index);
         let mut keys = Vec::with_capacity(indices.len().saturating_add(named.len()));
@@ -699,9 +705,10 @@ impl GenerationalHeap {
         }
         keys.extend(named);
         keys.extend(symbols);
-        if array_length.is_some() {
-            // 23.1.4: an Array's "length" is an own non-enumerable property, so
-            // it shadows an inherited one without being visited.
+        if array_length.is_some() || self.string_data_length(reference)?.is_some() {
+            // 23.1.4 and 10.4.3 give an Array and a String exotic object an own
+            // non-enumerable "length", which shadows an inherited one without
+            // being visited.
             keys.push((
                 PropertyKey::String(self.strings.intern_units(&LENGTH_UNITS)?),
                 false,
@@ -752,7 +759,43 @@ impl GenerationalHeap {
                 is_accessor: false,
             }));
         }
+        // 10.4.3.1: a String exotic object owns its `length` and every index
+        // of its `[[StringData]]`, all of them unwritable and unconfigurable.
+        if let Some(count) = self.string_data_length(reference)? {
+            if units == LENGTH_UNITS {
+                return Ok(Some(PropertyFlags {
+                    writable: false,
+                    enumerable: false,
+                    configurable: false,
+                    is_accessor: false,
+                }));
+            }
+            if canonical_array_index(&units).is_some_and(|index| index < count) {
+                return Ok(Some(PropertyFlags {
+                    writable: false,
+                    enumerable: true,
+                    configurable: false,
+                    is_accessor: false,
+                }));
+            }
+        }
         Ok(None)
+    }
+
+    /// The number of code units a String exotic object of 10.4.3 wraps.
+    fn string_data_length(&self, reference: ObjectRef) -> Result<Option<u32>, HeapError> {
+        let ObjectKind::StringWrapper(data) = self
+            .get_object(reference)
+            .ok_or(HeapError::InvalidReference)?
+            .kind
+        else {
+            return Ok(None);
+        };
+        let length = self
+            .strings
+            .length_of(data)
+            .ok_or(HeapError::InvalidReference)?;
+        Ok(Some(u32::try_from(length).unwrap_or(u32::MAX)))
     }
 
     /// The canonical array index a property key denotes, if it denotes one.

@@ -1499,6 +1499,7 @@ impl RegisterVM {
                 call.construct.is_some(),
                 self.call_argument(&call, 0)?,
                 heap,
+                realm,
             ),
             // 21.1.1.1: a call with no argument is +0, and every other value
             // goes through ToNumber. `new` makes the Number exotic object of
@@ -1544,6 +1545,23 @@ impl RegisterVM {
             | Intrinsic::BooleanPrototypeValueOf
             | Intrinsic::BooleanPrototypeToString => {
                 self.wrapped_value(intrinsic, &call, heap, realm)
+            }
+            // 22.1.3.32 and 22.1.3.28 are `thisStringValue`, which answers a
+            // String and the `[[StringData]]` of a wrapper.
+            Intrinsic::StringPrototypeValueOf | Intrinsic::StringPrototypeToString => {
+                if call.receiver.is_string() {
+                    return Ok(call.receiver);
+                }
+                call.receiver
+                    .as_object()
+                    .and_then(|object| Self::string_data(object, heap))
+                    .ok_or_else(|| {
+                        type_error(
+                            heap,
+                            realm,
+                            "this value is not of the type the method belongs to",
+                        )
+                    })
             }
             Intrinsic::NumberIsFinite
             | Intrinsic::NumberIsInteger
@@ -1822,17 +1840,32 @@ impl RegisterVM {
         construct: bool,
         target: Value,
         heap: &mut GenerationalHeap,
+        realm: &Realm,
     ) -> Result<Value, VMError> {
-        if construct {
-            return Err(VMError::Unsupported("a String exotic object"));
-        }
-        let units = if target.is_undefined() {
+        let units = if target.is_undefined() && !construct {
             alloc::vec::Vec::new()
         } else {
             property_name_units(target, heap)?
         };
         let text = heap.strings.allocate_units(&units)?;
+        if construct {
+            // 22.1.4: the wrapper holds `[[StringData]]`, and 10.4.3 answers
+            // its indices and its `length` from there.
+            return Self::wrapper(
+                ObjectKind::StringWrapper(Value::from_string(text)),
+                realm.string_prototype(heap)?,
+                heap,
+            );
+        }
         Ok(Value::from_string(text))
+    }
+
+    /// The `[[StringData]]` of a String exotic object of 10.4.3.
+    fn string_data(object: ObjectRef, heap: &GenerationalHeap) -> Option<Value> {
+        match heap.get_object(object)?.kind {
+            ObjectKind::StringWrapper(value) => Some(value),
+            _ => None,
+        }
     }
 
     /// The functions 28.1 gives `%Reflect%` that this Realm builds.
@@ -2776,8 +2809,29 @@ impl RegisterVM {
         object: ObjectRef,
         name: PropertyKey,
         indexed: Option<(ElementsRef, u32)>,
-        heap: &GenerationalHeap,
+        heap: &mut GenerationalHeap,
     ) -> Result<Value, VMError> {
+        if let Some(data) = Self::string_data(object, heap) {
+            let units = name
+                .as_string()
+                .and_then(|name| heap.strings.to_utf16(Value::from_string(name)))
+                .unwrap_or_default();
+            let length = heap
+                .strings
+                .length_of(data)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            if units == LENGTH_NAME {
+                let length = i32::try_from(length).map_err(|_| VMError::StringLimit)?;
+                return Ok(Value::from_smi(length));
+            }
+            if let Some(unit) = string_index(&units)
+                .and_then(|index| usize::try_from(index).ok())
+                .filter(|index| *index < length)
+                .and_then(|index| heap.strings.char_code_at(data, index))
+            {
+                return Ok(Value::from_string(heap.strings.allocate_units(&[unit])?));
+            }
+        }
         if let Some((elements, index)) = indexed
             && let Some(value) = heap
                 .get_elements(elements)
@@ -2806,6 +2860,19 @@ impl RegisterVM {
         flags: PropertyFlags,
         heap: &mut GenerationalHeap,
     ) -> Result<(), VMError> {
+        // 10.4.3.1 answers an index and the `length` from the
+        // `[[StringData]]`, so a Shape that took the name would hold a second
+        // answer beside the one a read finds.
+        if heap.own_named_flags(object, name)?.is_some()
+            && matches!(
+                heap.get_object(object).map(|entry| &entry.kind),
+                Some(ObjectKind::StringWrapper(_))
+            )
+        {
+            return Err(VMError::Unsupported(
+                "a descriptor for an own name of a String exotic object",
+            ));
+        }
         let Some((elements, index)) = indexed else {
             heap.define_own_named(object, name, stored, flags)?;
             return Ok(());
@@ -4335,14 +4402,13 @@ impl RegisterVM {
             // 21.3 gives `%Math%` an @@toStringTag, which this Realm has not
             // built, so `[object Math]` is not an answer it can give.
             ObjectKind::Math => Some("the @@toStringTag of %Math%"),
-            // 22.1.3.28 answers the wrapped primitive, where 21.1.3.6 and
-            // 20.3.3.2 are built.
-            ObjectKind::StringWrapper(_) => Some("String.prototype.toString"),
+
             // 20.1.3.6 is the right answer for these, and 23.1.3.37 is
             // implemented.
             ObjectKind::Ordinary
             | ObjectKind::NumberWrapper(_)
             | ObjectKind::BooleanWrapper(_)
+            | ObjectKind::StringWrapper(_)
             | ObjectKind::Array { .. }
             | ObjectKind::ArrayIterator { .. }
             // The state of a walk of 23.1.3 and the pair of 6.1.7.1 are
@@ -5187,6 +5253,50 @@ impl RegisterVM {
             return Ok(VALUE_UNDEFINED);
         };
         self.allocate_string(heap, &[unit])
+    }
+
+    /// Whether 10.4.3.1 gives this object this name out of its
+    /// `[[StringData]]` rather than out of its Shape.
+    fn owns_string_exotic(
+        object: ObjectRef,
+        name: PropertyKey,
+        heap: &GenerationalHeap,
+    ) -> Result<bool, VMError> {
+        if Self::string_data(object, heap).is_none() {
+            return Ok(false);
+        }
+        Ok(heap.own_named_flags(object, name)?.is_some())
+    }
+
+    /// The own property 10.4.3.1 gives a String exotic object: its `length`
+    /// and every index the `[[StringData]]` has.
+    ///
+    /// Every other name is ordinary, and answers nothing here.
+    fn string_exotic_member(
+        &self,
+        object: ObjectRef,
+        units: &[u16],
+        heap: &mut GenerationalHeap,
+    ) -> Result<Option<Value>, VMError> {
+        let Some(data) = Self::string_data(object, heap) else {
+            return Ok(None);
+        };
+        let length = heap
+            .strings
+            .length_of(data)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        if units == LENGTH_NAME {
+            let length = i32::try_from(length).map_err(|_| VMError::StringLimit)?;
+            return Ok(Some(Value::from_smi(length)));
+        }
+        let Some(unit) = string_index(units)
+            .and_then(|index| usize::try_from(index).ok())
+            .filter(|index| *index < length)
+            .and_then(|index| heap.strings.char_code_at(data, index))
+        else {
+            return Ok(None);
+        };
+        self.allocate_string(heap, &[unit]).map(Some)
     }
 
     /// `ToObject` of 7.1.18: an Object is itself, a primitive is boxed, and
@@ -6274,6 +6384,13 @@ impl RegisterVM {
                             .map_or_else(|_| Value::from_f64(f64::from(length)), Value::from_smi);
                         return Ok(None);
                     }
+                    // 10.4.3.1 answers a String exotic object's own indices
+                    // and `length` from its `[[StringData]]`.
+                    let units = units.clone();
+                    if let Some(member) = self.string_exotic_member(oref, &units, heap)? {
+                        self.acc = member;
+                        return Ok(None);
+                    }
                     let shape_id = heap.get_object(oref).ok_or(VMError::TypeError)?.shape_id;
                     let prototype_epoch = heap.shapes.prototype_epoch();
 
@@ -6384,6 +6501,12 @@ impl RegisterVM {
                         return Ok(None);
                     }
 
+                    // 10.4.3.1 gives a String exotic object own names that
+                    // are neither writable nor in a Shape, so a write to one
+                    // has nowhere to go.
+                    if Self::owns_string_exotic(oref, name, heap)? {
+                        return Ok(None);
+                    }
                     // 10.1.9.2 step 5: a property of the object or of a
                     // Prototype of it that is an accessor is written by
                     // calling its setter.
@@ -6485,6 +6608,10 @@ impl RegisterVM {
                             return Ok(None);
                         }
                         let units = name;
+                        if let Some(member) = self.string_exotic_member(oref, &units, heap)? {
+                            self.acc = member;
+                            return Ok(None);
+                        }
                         let Some(name) = heap
                             .strings
                             .lookup_interned_units(&units)
@@ -6623,6 +6750,9 @@ impl RegisterVM {
                             && case.holder_shape == current_shape
                         {
                             heap.set_object_slot(oref, case.slot, val)?;
+                            return Ok(None);
+                        }
+                        if Self::owns_string_exotic(oref, name, heap)? {
                             return Ok(None);
                         }
                         // 13.2.5.5 defines an own property of a literal and
@@ -7167,6 +7297,11 @@ fn delete_property(
             .lookup_interned_units(&LENGTH_NAME)
             .is_some_and(|length| PropertyKey::String(length) == name)
     {
+        return Ok(false);
+    }
+    // 10.4.3.1 gives a String exotic object own names that are never
+    // configurable, and 10.1.10 answers false for one of those.
+    if RegisterVM::owns_string_exotic(object, name, heap)? {
         return Ok(false);
     }
     let Some(location) = heap.shapes.lookup(shape, name) else {

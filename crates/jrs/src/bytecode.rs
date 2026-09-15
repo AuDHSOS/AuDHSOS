@@ -6336,6 +6336,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ObjectPrototypeToString
         | crate::engine::realm::Intrinsic::NumberPrototypeToString
         | crate::engine::realm::Intrinsic::BooleanPrototypeToString
+        | crate::engine::realm::Intrinsic::StringPrototypeToString
+        | crate::engine::realm::Intrinsic::StringPrototypeValueOf
         | crate::engine::realm::Intrinsic::StringPrototypeCharAt
         | crate::engine::realm::Intrinsic::StringPrototypeConcat
         | crate::engine::realm::Intrinsic::StringPrototypeRepeat

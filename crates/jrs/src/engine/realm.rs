@@ -493,6 +493,10 @@ pub enum Intrinsic {
     BooleanPrototypeValueOf,
     /// `Boolean.prototype.toString`, 20.3.3.2.
     BooleanPrototypeToString,
+    /// `String.prototype.valueOf`, 22.1.3.32.
+    StringPrototypeValueOf,
+    /// `String.prototype.toString`, 22.1.3.28.
+    StringPrototypeToString,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -530,7 +534,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 115] = [
+    pub const ALL: [Self; 117] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -646,6 +650,8 @@ impl Intrinsic {
         Self::NumberPrototypeToString,
         Self::BooleanPrototypeValueOf,
         Self::BooleanPrototypeToString,
+        Self::StringPrototypeValueOf,
+        Self::StringPrototypeToString,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -742,6 +748,9 @@ impl Intrinsic {
             }
             Self::BooleanPrototypeValueOf | Self::BooleanPrototypeToString => {
                 IntrinsicHolder::BooleanPrototype
+            }
+            Self::StringPrototypeValueOf | Self::StringPrototypeToString => {
+                IntrinsicHolder::StringPrototype
             }
             Self::ErrorConstructor
             | Self::EvalErrorConstructor
@@ -901,6 +910,8 @@ impl Intrinsic {
             Self::NumberPrototypeToString => 112,
             Self::BooleanPrototypeValueOf => 113,
             Self::BooleanPrototypeToString => 114,
+            Self::StringPrototypeValueOf => 115,
+            Self::StringPrototypeToString => 116,
         }
     }
 
@@ -1026,6 +1037,8 @@ impl Intrinsic {
             Self::NumberPrototypeToString => 112,
             Self::BooleanPrototypeValueOf => 113,
             Self::BooleanPrototypeToString => 114,
+            Self::StringPrototypeValueOf => 115,
+            Self::StringPrototypeToString => 116,
         }
     }
 
@@ -1152,6 +1165,8 @@ impl Intrinsic {
             112 => Some(Self::NumberPrototypeToString),
             113 => Some(Self::BooleanPrototypeValueOf),
             114 => Some(Self::BooleanPrototypeToString),
+            115 => Some(Self::StringPrototypeValueOf),
+            116 => Some(Self::StringPrototypeToString),
             _ => None,
         }
     }
@@ -1170,8 +1185,11 @@ impl Intrinsic {
             Self::ObjectPrototypeToString
             | Self::ArrayPrototypeToString
             | Self::NumberPrototypeToString
-            | Self::BooleanPrototypeToString => "toString",
-            Self::NumberPrototypeValueOf | Self::BooleanPrototypeValueOf => "valueOf",
+            | Self::BooleanPrototypeToString
+            | Self::StringPrototypeToString => "toString",
+            Self::NumberPrototypeValueOf
+            | Self::BooleanPrototypeValueOf
+            | Self::StringPrototypeValueOf => "valueOf",
             Self::ArrayConstructor => "Array",
             Self::ObjectConstructor => "Object",
             Self::FunctionConstructor => "Function",
@@ -1361,6 +1379,8 @@ impl Intrinsic {
             | Self::NumberPrototypeValueOf
             | Self::BooleanPrototypeValueOf
             | Self::BooleanPrototypeToString
+            | Self::StringPrototypeValueOf
+            | Self::StringPrototypeToString
             | Self::ObjectGetOwnPropertyNames => false,
             // 20.1.2.4, 20.1.2.8 and 20.1.2.13 apply ToPropertyKey to the
             // second argument.
@@ -1398,6 +1418,8 @@ impl Intrinsic {
             | Self::NumberPrototypeValueOf
             | Self::BooleanPrototypeValueOf
             | Self::BooleanPrototypeToString
+            | Self::StringPrototypeValueOf
+            | Self::StringPrototypeToString
             | Self::StringPrototypeTrim
             | Self::StringPrototypeTrimEnd
             | Self::StringPrototypeTrimStart
