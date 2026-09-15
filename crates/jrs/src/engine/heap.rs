@@ -936,6 +936,66 @@ impl GenerationalHeap {
         Ok(slot)
     }
 
+    /// Whether new properties can be added to this object (`[[Extensible]]`).
+    #[must_use]
+    pub fn is_extensible(&self, reference: ObjectRef) -> Option<bool> {
+        self.get_object(reference).map(|object| object.extensible)
+    }
+
+    /// `[[PreventExtensions]]` of 10.1.4, which no operation undoes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale or invalid object.
+    pub fn prevent_extensions(&mut self, reference: ObjectRef) -> Result<(), HeapError> {
+        self.object_mut(reference)?.extensible = false;
+        Ok(())
+    }
+
+    /// Gives every own property of an object a different set of attributes,
+    /// which is what 7.3.15 does to seal and to freeze one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale or invalid object.
+    pub fn reshape_all(
+        &mut self,
+        reference: ObjectRef,
+        writable: Option<bool>,
+    ) -> Result<(), HeapError> {
+        let shape_id = self
+            .get_object(reference)
+            .ok_or(HeapError::InvalidReference)?
+            .shape_id;
+        let properties = self.shapes.own_properties(shape_id);
+        let mut held = Vec::with_capacity(properties.len());
+        for (property, flags, slot) in properties {
+            let value = self
+                .get_object(reference)
+                .ok_or(HeapError::InvalidReference)?
+                .get_slot(slot)
+                .unwrap_or(VALUE_UNDEFINED);
+            held.push((property, flags, value));
+        }
+        let mut rebuilt = self.shapes.root_shape();
+        let mut placed = Vec::with_capacity(held.len());
+        for (property, flags, value) in held {
+            let wanted = PropertyFlags {
+                configurable: false,
+                writable: writable.unwrap_or(flags.writable),
+                ..flags
+            };
+            let (next, slot) = self.shapes.transition(rebuilt, property, wanted);
+            rebuilt = next;
+            placed.push((slot, value));
+        }
+        self.set_object_shape(reference, rebuilt)?;
+        for (slot, value) in placed {
+            self.set_object_slot(reference, slot, value)?;
+        }
+        Ok(())
+    }
+
     /// Gives one own property of an object a different set of attributes.
     ///
     /// A Shape is the names and the attributes together, so this builds the

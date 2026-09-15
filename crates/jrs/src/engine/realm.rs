@@ -439,6 +439,22 @@ pub enum Intrinsic {
     ArrayPrototypeReduceRight,
     /// `%IteratorPrototype%[@@iterator]` (27.1.2.1), which answers `this`.
     IteratorPrototypeIterator,
+    /// `Object.preventExtensions` (20.1.2.20).
+    ObjectPreventExtensions,
+    /// `Object.isExtensible` (20.1.2.16).
+    ObjectIsExtensible,
+    /// `Object.seal` (20.1.2.22).
+    ObjectSeal,
+    /// `Object.isSealed` (20.1.2.18).
+    ObjectIsSealed,
+    /// `Object.freeze` (20.1.2.6).
+    ObjectFreeze,
+    /// `Object.isFrozen` (20.1.2.17).
+    ObjectIsFrozen,
+    /// `Object.values` (20.1.2.24).
+    ObjectValues,
+    /// `Object.entries` (20.1.2.5).
+    ObjectEntries,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -468,7 +484,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 88] = [
+    pub const ALL: [Self; 96] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -557,6 +573,14 @@ impl Intrinsic {
         Self::ArrayPrototypeReduce,
         Self::ArrayPrototypeReduceRight,
         Self::IteratorPrototypeIterator,
+        Self::ObjectPreventExtensions,
+        Self::ObjectIsExtensible,
+        Self::ObjectSeal,
+        Self::ObjectIsSealed,
+        Self::ObjectFreeze,
+        Self::ObjectIsFrozen,
+        Self::ObjectValues,
+        Self::ObjectEntries,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -652,7 +676,15 @@ impl Intrinsic {
             | Self::ObjectGetPrototypeOf
             | Self::ObjectKeys
             | Self::ObjectIs
-            | Self::ObjectHasOwn => IntrinsicHolder::ObjectConstructor,
+            | Self::ObjectHasOwn
+            | Self::ObjectPreventExtensions
+            | Self::ObjectIsExtensible
+            | Self::ObjectSeal
+            | Self::ObjectIsSealed
+            | Self::ObjectFreeze
+            | Self::ObjectIsFrozen
+            | Self::ObjectValues
+            | Self::ObjectEntries => IntrinsicHolder::ObjectConstructor,
         }
     }
 
@@ -748,6 +780,14 @@ impl Intrinsic {
             Self::ArrayPrototypeReduce => 85,
             Self::ArrayPrototypeReduceRight => 86,
             Self::IteratorPrototypeIterator => 87,
+            Self::ObjectPreventExtensions => 88,
+            Self::ObjectIsExtensible => 89,
+            Self::ObjectSeal => 90,
+            Self::ObjectIsSealed => 91,
+            Self::ObjectFreeze => 92,
+            Self::ObjectIsFrozen => 93,
+            Self::ObjectValues => 94,
+            Self::ObjectEntries => 95,
         }
     }
 
@@ -842,6 +882,14 @@ impl Intrinsic {
             Self::ArrayPrototypeReduce => 85,
             Self::ArrayPrototypeReduceRight => 86,
             Self::IteratorPrototypeIterator => 87,
+            Self::ObjectPreventExtensions => 88,
+            Self::ObjectIsExtensible => 89,
+            Self::ObjectSeal => 90,
+            Self::ObjectIsSealed => 91,
+            Self::ObjectFreeze => 92,
+            Self::ObjectIsFrozen => 93,
+            Self::ObjectValues => 94,
+            Self::ObjectEntries => 95,
         }
     }
 
@@ -937,6 +985,14 @@ impl Intrinsic {
             85 => Some(Self::ArrayPrototypeReduce),
             86 => Some(Self::ArrayPrototypeReduceRight),
             87 => Some(Self::IteratorPrototypeIterator),
+            88 => Some(Self::ObjectPreventExtensions),
+            89 => Some(Self::ObjectIsExtensible),
+            90 => Some(Self::ObjectSeal),
+            91 => Some(Self::ObjectIsSealed),
+            92 => Some(Self::ObjectFreeze),
+            93 => Some(Self::ObjectIsFrozen),
+            94 => Some(Self::ObjectValues),
+            95 => Some(Self::ObjectEntries),
             _ => None,
         }
     }
@@ -998,6 +1054,13 @@ impl Intrinsic {
             Self::ArrayPrototypeReduce => "reduce",
             Self::ArrayPrototypeReduceRight => "reduceRight",
             Self::IteratorPrototypeIterator => "[Symbol.iterator]",
+            Self::ObjectPreventExtensions => "preventExtensions",
+            Self::ObjectIsExtensible => "isExtensible",
+            Self::ObjectSeal => "seal",
+            Self::ObjectIsSealed => "isSealed",
+            Self::ObjectFreeze => "freeze",
+            Self::ObjectIsFrozen => "isFrozen",
+            Self::ObjectEntries => "entries",
             Self::ObjectDefineProperty => "defineProperty",
             Self::ObjectGetOwnPropertyDescriptor => "getOwnPropertyDescriptor",
             Self::ObjectGetOwnPropertyNames => "getOwnPropertyNames",
@@ -1019,7 +1082,7 @@ impl Intrinsic {
             Self::StringPrototypeTrim => "trim",
             Self::StringPrototypeTrimEnd => "trimEnd",
             Self::StringPrototypeTrimStart => "trimStart",
-            Self::ArrayPrototypeValues => "values",
+            Self::ArrayPrototypeValues | Self::ObjectValues => "values",
             Self::ArrayIteratorPrototypeNext => "next",
             Self::ArrayPrototypeJoin => "join",
             Self::ArrayPrototypePop => "pop",
@@ -1098,6 +1161,14 @@ impl Intrinsic {
             | Self::ArrayPrototypeReduce
             | Self::ArrayPrototypeReduceRight
             | Self::IteratorPrototypeIterator
+            | Self::ObjectPreventExtensions
+            | Self::ObjectIsExtensible
+            | Self::ObjectSeal
+            | Self::ObjectIsSealed
+            | Self::ObjectFreeze
+            | Self::ObjectIsFrozen
+            | Self::ObjectValues
+            | Self::ObjectEntries
             | Self::ObjectGetOwnPropertyNames => false,
             // 20.1.2.4, 20.1.2.8 and 20.1.2.13 apply ToPropertyKey to the
             // second argument.
@@ -1193,6 +1264,14 @@ impl Intrinsic {
             | Self::ArrayPrototypeFindIndex
             | Self::ArrayPrototypeReduce
             | Self::ArrayPrototypeReduceRight
+            | Self::ObjectPreventExtensions
+            | Self::ObjectIsExtensible
+            | Self::ObjectSeal
+            | Self::ObjectIsSealed
+            | Self::ObjectFreeze
+            | Self::ObjectIsFrozen
+            | Self::ObjectValues
+            | Self::ObjectEntries
             | Self::ObjectGetOwnPropertyNames => 1,
             Self::ObjectDefineProperty => 3,
             Self::MathPow

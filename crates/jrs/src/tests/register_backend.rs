@@ -4600,3 +4600,56 @@ fn a_descriptor_changes_what_a_property_is_and_not_only_what_it_holds() -> Resul
     }
     Ok(())
 }
+
+#[test]
+fn the_integrity_levels_of_20_1_2_hold_on_the_new_engine() -> Result<(), Error> {
+    // 20.1.2.20 and 20.1.2.16 are [[PreventExtensions]] and [[IsExtensible]];
+    // 20.1.2.22 and 20.1.2.6 set the level of 7.3.14 and 20.1.2.18 and
+    // 20.1.2.17 test it with 7.3.15. Step 1 of each answers a value that is
+    // not an Object, because there is nothing on it to configure.
+    for source in [
+        "var o={};Object.preventExtensions(o);Object.isExtensible(o)",
+        "Object.isExtensible({})",
+        "Object.isExtensible(1)",
+        "var o={a:1};Object.seal(o);Object.isSealed(o)",
+        "var o={a:1};Object.seal(o);Object.isFrozen(o)",
+        "var o={a:1};Object.freeze(o);Object.isFrozen(o)",
+        "var o={a:1};Object.freeze(o);Object.isSealed(o)",
+        "var o={a:1};Object.freeze(o);o.a",
+        "var o={a:1};Object.freeze(o);Object.getOwnPropertyDescriptor(o,'a').writable",
+        "var o={a:1};Object.seal(o);Object.getOwnPropertyDescriptor(o,'a').configurable",
+        "var o={a:1};Object.seal(o);Object.getOwnPropertyDescriptor(o,'a').writable",
+        "Object.isSealed({})",
+        "Object.isFrozen({})",
+        "var o={};Object.preventExtensions(o);Object.isSealed(o)",
+        "var o={};Object.preventExtensions(o);Object.isFrozen(o)",
+        "Object.isFrozen(1)",
+        "Object.isSealed('a')",
+        "Object.seal(1)",
+        "Object.preventExtensions(1)",
+        // 20.1.2.24 and 20.1.2.5 answer the enumerable values and the pairs.
+        "Object.values({a:1,b:2}).join(',')",
+        "Object.values({}).length",
+        "Object.entries({a:1}).length",
+        "Object.entries({a:1})[0].join(':')",
+        "Object.entries({a:1,b:2})[1].join(':')",
+        "var o={a:1};Object.defineProperty(o,'h',{value:2});Object.values(o).join(',')",
+    ] {
+        differential(source)?;
+    }
+    // 7.3.14 speaks of every own property, and this engine keeps an index in
+    // a store that carries no attributes of its own.
+    for source in ["Object.freeze([1])", "Object.isFrozen([1])"] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        assert!(
+            matches!(
+                Runtime::with_backend(Limits::default(), Backend::Engine)
+                    .run(&program, &mut SilentHost),
+                Err(Error::Unsupported { .. })
+            ),
+            "{source}"
+        );
+    }
+    Ok(())
+}

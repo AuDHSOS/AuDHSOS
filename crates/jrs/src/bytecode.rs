@@ -6303,6 +6303,9 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ArrayPrototypeIncludes
         | crate::engine::realm::Intrinsic::ObjectIs
         | crate::engine::realm::Intrinsic::ObjectHasOwn
+        | crate::engine::realm::Intrinsic::ObjectIsExtensible
+        | crate::engine::realm::Intrinsic::ObjectIsSealed
+        | crate::engine::realm::Intrinsic::ObjectIsFrozen
         | crate::engine::realm::Intrinsic::ArrayPrototypeEvery
         | crate::engine::realm::Intrinsic::ArrayPrototypeSome
         | crate::engine::realm::Intrinsic::ArrayIsArray => RegisterType::Boolean,
@@ -6337,6 +6340,12 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ObjectDefineProperties
         | crate::engine::realm::Intrinsic::ObjectGetPrototypeOf
         | crate::engine::realm::Intrinsic::ObjectKeys
+        | crate::engine::realm::Intrinsic::ObjectValues
+        | crate::engine::realm::Intrinsic::ObjectEntries
+        // 20.1.2.20, 20.1.2.22 and 20.1.2.6 answer the object they were given.
+        | crate::engine::realm::Intrinsic::ObjectPreventExtensions
+        | crate::engine::realm::Intrinsic::ObjectSeal
+        | crate::engine::realm::Intrinsic::ObjectFreeze
         | crate::engine::realm::Intrinsic::FunctionConstructor
         | crate::engine::realm::Intrinsic::FunctionPrototypeCall
         | crate::engine::realm::Intrinsic::FunctionPrototypeBind

@@ -25,8 +25,8 @@ use super::{
     shape::{PropertyFlags, ShapeId},
     string::StringError,
     value::{
-        ObjectRef, PropertyKey, VALUE_FALSE, VALUE_NAN, VALUE_NULL, VALUE_TRUE, VALUE_UNDEFINED,
-        Value,
+        ObjectRef, PropertyKey, StringRef, VALUE_FALSE, VALUE_NAN, VALUE_NULL, VALUE_TRUE,
+        VALUE_UNDEFINED, Value,
     },
 };
 use alloc::vec::Vec;
@@ -1327,6 +1327,14 @@ impl RegisterVM {
             | Intrinsic::ObjectKeys
             | Intrinsic::ObjectIs
             | Intrinsic::ObjectHasOwn
+            | Intrinsic::ObjectPreventExtensions
+            | Intrinsic::ObjectIsExtensible
+            | Intrinsic::ObjectSeal
+            | Intrinsic::ObjectIsSealed
+            | Intrinsic::ObjectFreeze
+            | Intrinsic::ObjectIsFrozen
+            | Intrinsic::ObjectValues
+            | Intrinsic::ObjectEntries
             | Intrinsic::ObjectGetOwnPropertyNames => Self::call_object_intrinsic(
                 intrinsic,
                 self.call_argument(&call, 0)?,
@@ -1558,6 +1566,64 @@ impl RegisterVM {
         Ok(Value::from_object(array))
     }
 
+    /// Sets or tests the integrity level of 7.3.14 and 7.3.15.
+    ///
+    /// Step 1 of each clause answers a value that is not an Object: setting a
+    /// level on one answers it unchanged, and testing one answers true,
+    /// because there is nothing on it to configure.
+    fn integrity_level(
+        intrinsic: Intrinsic,
+        target: Value,
+        heap: &mut GenerationalHeap,
+    ) -> Result<Value, VMError> {
+        let tests = matches!(
+            intrinsic,
+            Intrinsic::ObjectIsSealed | Intrinsic::ObjectIsFrozen
+        );
+        let Some(object) = target.as_object() else {
+            return Ok(if tests { VALUE_TRUE } else { target });
+        };
+        Self::refuse_indexed_integrity(object, heap)?;
+        if !tests {
+            heap.prevent_extensions(object)?;
+            let writable = (intrinsic == Intrinsic::ObjectFreeze).then_some(false);
+            heap.reshape_all(object, writable)?;
+            return Ok(target);
+        }
+        if heap.is_extensible(object).unwrap_or(true) {
+            return Ok(VALUE_FALSE);
+        }
+        let frozen = intrinsic == Intrinsic::ObjectIsFrozen;
+        for (key, _) in heap.own_keys(object)? {
+            let Some(flags) = heap.own_named_flags(object, key)? else {
+                continue;
+            };
+            if flags.configurable || (frozen && !flags.is_accessor && flags.writable) {
+                return Ok(VALUE_FALSE);
+            }
+        }
+        Ok(VALUE_TRUE)
+    }
+
+    /// Refuses an integrity level on an object that holds indexed elements.
+    ///
+    /// 7.3.14 and 7.3.15 speak of every own property, and this engine keeps an
+    /// index in an Elements store that carries no attributes of its own, so it
+    /// can neither seal one nor tell whether it is sealed.
+    fn refuse_indexed_integrity(object: ObjectRef, heap: &GenerationalHeap) -> Result<(), VMError> {
+        let holds_indices = heap
+            .get_object(object)
+            .and_then(|object| object.elements)
+            .and_then(|elements| heap.get_elements(elements))
+            .is_some_and(|elements| !elements.is_empty());
+        if holds_indices {
+            return Err(VMError::Unsupported(
+                "an integrity level on an object that holds indexed elements",
+            ));
+        }
+        Ok(())
+    }
+
     /// The own String keys of an object, in the order 10.1.11 gives them:
     /// every one for 20.1.2.10, and the enumerable ones for 20.1.2.19.
     ///
@@ -1569,16 +1635,36 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        let enumerable_only = intrinsic == Intrinsic::ObjectKeys;
+        // 20.1.2.10 answers every own String key; 20.1.2.19, 20.1.2.24 and
+        // 20.1.2.5 answer only the enumerable ones, as the key, the value, or
+        // the two of them in an Array of their own.
+        let every = intrinsic == Intrinsic::ObjectGetOwnPropertyNames;
         let object = Self::coerce_object(target, heap, realm)?;
-        let names: Vec<Value> = heap
+        let names: Vec<StringRef> = heap
             .own_keys(object)?
             .into_iter()
-            .filter(|(_, enumerable)| *enumerable || !enumerable_only)
+            .filter(|(_, enumerable)| *enumerable || every)
             .filter_map(|(key, _)| key.as_string())
-            .map(Value::from_string)
             .collect();
-        Self::array_of(names, heap, realm)
+        let mut answers = Vec::with_capacity(names.len());
+        for name in names {
+            let key = Value::from_string(name);
+            let answer = match intrinsic {
+                Intrinsic::ObjectValues | Intrinsic::ObjectEntries => {
+                    let held = heap
+                        .lookup_named(object, PropertyKey::String(name))?
+                        .map_or(VALUE_UNDEFINED, |property| property.value);
+                    if intrinsic == Intrinsic::ObjectValues {
+                        held
+                    } else {
+                        Self::array_of(alloc::vec![key, held], heap, realm)?
+                    }
+                }
+                _ => key,
+            };
+            answers.push(answer);
+        }
+        Self::array_of(answers, heap, realm)
     }
 
     /// `Object.create` of 20.1.2.2: an ordinary object under the Prototype
@@ -1702,9 +1788,31 @@ impl RegisterVM {
                 })?;
                 Self::define_properties(object, key, heap, realm)
             }
-            Intrinsic::ObjectGetOwnPropertyNames | Intrinsic::ObjectKeys => {
-                Self::own_string_keys(intrinsic, target, heap, realm)
+            Intrinsic::ObjectGetOwnPropertyNames
+            | Intrinsic::ObjectKeys
+            | Intrinsic::ObjectValues
+            | Intrinsic::ObjectEntries => Self::own_string_keys(intrinsic, target, heap, realm),
+            // 20.1.2.20 and 20.1.2.16 are [[PreventExtensions]] and
+            // [[IsExtensible]] of 10.1.4 and 10.1.3, on a value that is not an
+            // Object unchanged and true respectively (steps 1 of each).
+            Intrinsic::ObjectPreventExtensions => {
+                if let Some(object) = target.as_object() {
+                    heap.prevent_extensions(object)?;
+                }
+                Ok(target)
             }
+            Intrinsic::ObjectIsExtensible => Ok(Value::from_bool(
+                target
+                    .as_object()
+                    .and_then(|object| heap.is_extensible(object))
+                    .unwrap_or(false),
+            )),
+            // 20.1.2.22 and 20.1.2.6 set the integrity level of 7.3.14, and
+            // 20.1.2.18 and 20.1.2.17 test it with 7.3.15.
+            Intrinsic::ObjectSeal
+            | Intrinsic::ObjectFreeze
+            | Intrinsic::ObjectIsSealed
+            | Intrinsic::ObjectIsFrozen => Self::integrity_level(intrinsic, target, heap),
             // 20.1.2.8: the own property, as the object 6.2.6.4 makes of it.
             Intrinsic::ObjectGetOwnPropertyDescriptor => {
                 let object = Self::coerce_object(target, heap, realm)?;
