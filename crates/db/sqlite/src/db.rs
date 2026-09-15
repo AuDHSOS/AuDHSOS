@@ -2563,13 +2563,30 @@ fn equal(cursor: &Cursor<'_>, name: &[u8]) -> bool {
     // The leftmost side that holds the name is the one the column
     // belongs to, because a `USING` drops the copy the right side
     // carries and leaves the left side's: `t1 LEFT JOIN t2 USING(a)`
-    // answers `t1.a` for `a`, whatever `t2` held.
-    let theirs = cursor
+    // answers `t1.a` for `a`, whatever `t2` held. The value is the
+    // first that is not nothing, which is the column a `RIGHT JOIN`
+    // answers: the side on its left is empty for a row it kept, and
+    // the name stands for the side that filled it.
+    let before = cursor
         .held
         .get(..cursor.held.len().saturating_sub(1))
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let theirs = before
         .iter()
-        .find_map(|held| held.column(name, cursor.collation));
+        .find_map(|held| held.column(name, cursor.collation))
+        .map(|(value, affinity, collation)| {
+            let filled = if value == Value::Null {
+                before
+                    .iter()
+                    .filter_map(|held| held.column(name, cursor.collation))
+                    .map(|(value, ..)| value)
+                    .find(|value| *value != Value::Null)
+                    .unwrap_or(Value::Null)
+            } else {
+                value
+            };
+            (filled, affinity, collation)
+        });
     mine.zip(theirs).is_some_and(
         |((mut right, right_affinity, _), (mut left, left_affinity, collation))| {
             if left == Value::Null || right == Value::Null {

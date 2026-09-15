@@ -4833,6 +4833,16 @@ D-225, document 16 step Q8.
 - A statement used as one value compares under the affinity of the
   column it answers.
 
+### 6.6.149 The column a `USING` names (`db-sqlite`)
+
+D-226, document 16 step Q8.
+
+- A `RIGHT JOIN` followed by another join answers the rows the C
+  library answers, the column the `USING` names standing for the side
+  that filled it.
+- A row a `RIGHT JOIN` keeps whose own column is nothing matches no row
+  of the side after it.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

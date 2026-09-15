@@ -483,6 +483,68 @@ fn joined_answer(sql: &[u8]) -> Vec<String> {
         .collect()
 }
 
+/// A database of three tables a `USING` names one column of, which the
+/// tests of what a `RIGHT JOIN` answers for that column ask.
+fn kept_database() -> Vec<u8> {
+    use crate::change::Writer;
+    use crate::header::Encoding;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t1(a INT, c INT)".as_slice(),
+        b"CREATE TABLE t4(a INT, f INT)",
+        b"CREATE TABLE t5(a INT, g INT)",
+        b"INSERT INTO t1 VALUES(11,31),(15,35)",
+        b"INSERT INTO t4 VALUES(11,41),(15,45),(19,49),(NULL,40)",
+        b"INSERT INTO t5 VALUES(15,55),(19,59),(NULL,50)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    writer.written()
+}
+
+#[test]
+fn the_column_a_using_names_is_the_one_the_join_filled_it_from() {
+    // A `RIGHT JOIN` keeps a row of the side on the right with the
+    // sides on its left empty, so the column the `USING` names stands
+    // for the side that filled it, which is what the join after it
+    // compares against.
+    let bytes = kept_database();
+    let database = Database::open(&bytes).unwrap();
+    let answered = |sql: &[u8]| {
+        database
+            .query(sql)
+            .unwrap()
+            .rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|value| alloc::format!("{value:?}"))
+                    .collect::<Vec<String>>()
+                    .join(",")
+            })
+            .collect::<Vec<String>>()
+    };
+    assert_eq!(
+        answered(b"SELECT a, t1.a, t4.a, t5.a FROM t1 RIGHT JOIN t4 USING(a) JOIN t5 USING(a) ORDER BY a"),
+        ["Int(15),Int(15),Int(15),Int(15)", "Int(19),Null,Int(19),Int(19)"]
+    );
+    // The row a `RIGHT JOIN` keeps whose own column is nothing matches
+    // no row of the side after it, nothing included.
+    assert_eq!(
+        answered(b"SELECT count(*) FROM t1 RIGHT JOIN t4 USING(a) LEFT JOIN t5 USING(a)"),
+        ["Int(4)"]
+    );
+    assert_eq!(
+        answered(b"SELECT a, t1.a, t4.a FROM t1 RIGHT JOIN t4 USING(a) ORDER BY a"),
+        [
+            "Null,Null,Null",
+            "Int(11),Int(11),Int(11)",
+            "Int(15),Int(15),Int(15)",
+            "Int(19),Null,Int(19)"
+        ]
+    );
+}
+
 #[test]
 fn a_join_whose_condition_names_an_index_answers_the_rows_a_scan_answers() {
     // `sqlite3WhereLoopAddBtree` reads the side of a join by an index

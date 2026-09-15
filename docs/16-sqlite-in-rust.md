@@ -648,7 +648,7 @@ and a foreign key holds the rows of both tables it names; the rest is
 open.
 Depends on: Q6. Recorded in D-172 to D-174, D-182, D-186, D-187, D-189,
 D-191, D-193, D-195, D-196, D-205 to D-211, D-216 to D-218, D-219,
-D-224 and D-225.
+D-224 to D-226.
 Size: L.
 
 ### Does
