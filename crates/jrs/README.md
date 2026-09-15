@@ -671,8 +671,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | Template literals on the register engine (focused) | focused | `5cdf8b3` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/template-literal --summary` | 57 | 114 | 78 (68.42%) | 0 (0.00%) | 36 (31.58%) |
 | Assignments and declarations, after the owned name (focused) | focused | `fe340f5` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/assignment test/language/statements/variable --summary` | 663 | 1,159 | 802 (69.20%) | 18 (1.55%) | 339 (29.25%) |
 | Assignments and declarations, after the owned name, on the register engine (focused) | focused | `fe340f5` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/assignment test/language/statements/variable --summary` | 663 | 1,159 | 583 (50.30%) | 20 (1.73%) | 556 (47.97%) |
-| Complete pinned suite, including staging and Intl | full | `fe340f5` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `fe340f5` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 22,552 (21.91%) | 18,582 (18.05%) | 61,791 (60.03%) |
+| The arguments object, after the empty mapping (focused) | focused | `0f5cc0f` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/arguments-object --summary` | 263 | 460 | 188 (40.87%) | 2 (0.43%) | 270 (58.70%) |
+| The arguments object, after the empty mapping, on the register engine (focused) | focused | `0f5cc0f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/arguments-object --summary` | 263 | 460 | 120 (26.09%) | 0 (0.00%) | 340 (73.91%) |
+| Complete pinned suite, including staging and Intl | full | `0f5cc0f` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `0f5cc0f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 22,729 (22.08%) | 18,617 (18.09%) | 61,579 (59.83%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1380,7 +1382,9 @@ which is the tree of `91aba35`. The template-literal runs and both full runs
 beside them were measured at tree `cb9dc9fe7f409501a68a9afa010a219e9d858e90`,
 which is the tree of `5cdf8b3`. The assignment and declaration runs and both
 full runs beside the owned name were measured at tree `b1c6ab8b0854ef198bbbc1ee8ba0636bdfcb0e47`,
-which is the tree of `fe340f5`. `RegExp.prototype[@@split]` landed in `fe5797c`
+which is the tree of `fe340f5`. The arguments-object runs and both full runs
+beside the empty mapping were measured at tree `ae2ca38251143cf7066f601d2f589bb2a5158035`,
+which is the tree of `0f5cc0f`. `RegExp.prototype[@@split]` landed in `fe5797c`
 between them and moved no variant of the suite.
 
 ### Historical Test262 baseline
