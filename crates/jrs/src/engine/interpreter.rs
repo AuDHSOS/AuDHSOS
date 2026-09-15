@@ -1038,8 +1038,19 @@ impl RegisterVM {
             });
             return Ok(observed);
         }
+        // 13.11.1 is 7.2.14, which compares two primitives and never a
+        // number it made of a String against another String.
+        if op == BinaryOp::Equals {
+            self.acc = Value::from_bool(Self::loosely_equals(self.acc, rhs, heap)?);
+            return Ok(observed);
+        }
         let left = primitive_number(self.acc, heap)?;
         let right = primitive_number(rhs, heap)?;
+        // 13.12 and 13.9 read both operands as integers of 32 bits.
+        if let Some(bits) = Self::integer_binary(op, left, right) {
+            self.acc = bits;
+            return Ok(observed);
+        }
         self.acc = match op {
             BinaryOp::Add => Value::from_f64(left + right),
             BinaryOp::Sub => Value::from_f64(left - right),
@@ -1051,6 +1062,8 @@ impl RegisterVM {
             BinaryOp::LessThanOrEqual => Value::from_bool(left <= right),
             BinaryOp::GreaterThan => Value::from_bool(left > right),
             BinaryOp::GreaterThanOrEqual => Value::from_bool(left >= right),
+            // The integer operators answered above, and 13.11.1 before them.
+            _ => return Err(VMError::TypeError),
         };
         if !matches!(
             op,
@@ -1064,6 +1077,24 @@ impl RegisterVM {
             self.acc = Value::from_smi(integer);
         }
         Ok(observed)
+    }
+
+    /// The operators of 13.12 and 13.9, which read 6.1.6.1.2 of each operand.
+    fn integer_binary(op: BinaryOp, left: f64, right: f64) -> Option<Value> {
+        let a = number_to_i32(left);
+        let b = number_to_i32(right);
+        let shift = crate::value::number_uint32(right) & 0x1F;
+        Some(match op {
+            BinaryOp::BitAnd => Value::from_smi(a & b),
+            BinaryOp::BitOr => Value::from_smi(a | b),
+            BinaryOp::BitXor => Value::from_smi(a ^ b),
+            BinaryOp::ShiftLeft => Value::from_smi(a.wrapping_shl(shift)),
+            BinaryOp::ShiftRight => Value::from_smi(a.wrapping_shr(shift)),
+            BinaryOp::UnsignedShiftRight => Value::from_f64(f64::from(
+                crate::value::number_uint32(left).wrapping_shr(shift),
+            )),
+            _ => return None,
+        })
     }
 
     fn primitive_string(
@@ -1107,9 +1138,15 @@ impl RegisterVM {
         if left.is_object() && right.is_object() {
             return Ok(left.strictly_equals(right));
         }
-        // 7.2.14 sends the Object operand through ToPrimitive, which can call
-        // a `valueOf` of the Script; this comparison has no frame to run one in.
         if left.is_object() || right.is_object() {
+            // 7.2.14 step 12: an Object is never equal to null or undefined,
+            // and nothing is converted to find that out.
+            if left.is_null() || left.is_undefined() || right.is_null() || right.is_undefined() {
+                return Ok(false);
+            }
+            // Every other Object goes through ToPrimitive, which can call a
+            // `valueOf` of the Script; a comparison that reaches here has no
+            // frame to run one in.
             return Err(NUMERIC_CONVERSION_GAP);
         }
         if left.is_bigint() || right.is_bigint() {
@@ -6124,10 +6161,27 @@ impl RegisterVM {
                     // with the converted operand in its register.
                     let left = self.read_reg(lhs)?;
                     let right = self.read_reg(rhs)?;
-                    let pending = left
-                        .as_object()
-                        .map(|object| (object, lhs))
-                        .or_else(|| right.as_object().map(|object| (object, rhs)));
+                    // 7.2.14 compares two values of one type without
+                    // converting either, and answers false for an Object
+                    // against null or undefined. Every other operator of this
+                    // instruction converts an Object operand.
+                    let converts = if op == BinaryOp::Equals {
+                        let one_object = left.as_object().is_some() != right.as_object().is_some();
+                        let nullish = left.is_null()
+                            || left.is_undefined()
+                            || right.is_null()
+                            || right.is_undefined();
+                        one_object && !nullish
+                    } else {
+                        true
+                    };
+                    let pending = converts
+                        .then(|| {
+                            left.as_object()
+                                .map(|object| (object, lhs))
+                                .or_else(|| right.as_object().map(|object| (object, rhs)))
+                        })
+                        .flatten();
                     if let Some((object, register)) = pending {
                         let call = Call {
                             receiver: Value::from_object(object),
@@ -7908,23 +7962,24 @@ mod tests {
             .allocate_object(heap.shapes.root_shape(), VALUE_NULL)
             .unwrap();
 
-        for (value, expected) in [
+        // 7.2.14 step 12 answers an Object against undefined without
+        // converting it; every other Object needs a frame this has not.
+        for (left, right, expected) in [
             (
+                VALUE_UNDEFINED,
                 Value::from_bigint(super::super::value::BigIntRef(0)),
                 VMError::TypeError,
             ),
-            (Value::from_object(object), NUMERIC_CONVERSION_GAP),
+            (
+                Value::from_smi(1),
+                Value::from_object(object),
+                NUMERIC_CONVERSION_GAP,
+            ),
         ] {
             let mut feedback = FeedbackVector::for_code(&code);
             let mut vm = RegisterVM::new(100);
             assert_eq!(
-                vm.run_with_arguments(
-                    &code,
-                    &[VALUE_UNDEFINED, value],
-                    &mut feedback,
-                    &mut heap,
-                    &realm
-                ),
+                vm.run_with_arguments(&code, &[left, right], &mut feedback, &mut heap, &realm),
                 Err(expected)
             );
         }

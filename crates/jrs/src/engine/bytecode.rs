@@ -48,6 +48,20 @@ pub enum BinaryOp {
     GreaterThan,
     /// Abstract relational greater-than-or-equal comparison.
     GreaterThanOrEqual,
+    /// Bitwise AND of 13.12.
+    BitAnd,
+    /// Bitwise OR of 13.12.
+    BitOr,
+    /// Bitwise XOR of 13.12.
+    BitXor,
+    /// Left shift of 13.9.1.
+    ShiftLeft,
+    /// Signed right shift of 13.9.2.
+    ShiftRight,
+    /// Unsigned right shift of 13.9.3.
+    UnsignedShiftRight,
+    /// Loose equality of 13.11.1, which is 7.2.14.
+    Equals,
 }
 
 /// Structural verification failure in register bytecode.

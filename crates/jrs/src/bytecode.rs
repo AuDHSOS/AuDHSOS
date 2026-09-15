@@ -5743,6 +5743,10 @@ impl RegisterLowerer {
         Some(left_type.merge(right_type))
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one table names every operator beside the form it takes"
+    )]
     fn lower_binary(
         &mut self,
         operator: Binary,
@@ -5787,27 +5791,14 @@ impl RegisterLowerer {
                 };
                 (instruction, RegisterType::Boolean)
             }
-            // 7.1.1 converts an Object operand at run time, so the feedback
-            // dispatch takes every operand the typed forms above do not.
-            Binary::Add
-            | Binary::Sub
-            | Binary::Mul
-            | Binary::Pow
-            | Binary::Div
-            | Binary::Rem
-            | Binary::Lt
-            | Binary::Le
-            | Binary::Gt
-            | Binary::Ge => self.feedback_binary(operator, left_register, right_register)?,
             Binary::BitAnd
             | Binary::BitOr
             | Binary::BitXor
             | Binary::Shl
             | Binary::Shr
-            | Binary::Ushr => {
-                if !left_type.converts_to_primitive() || !right_type.converts_to_primitive() {
-                    return None;
-                }
+            | Binary::Ushr
+                if left_type.is_primitive() && right_type.is_primitive() =>
+            {
                 let instruction = match operator {
                     Binary::BitAnd => Instruction::BitAnd(right_register),
                     Binary::BitOr => Instruction::BitOr(right_register),
@@ -5834,6 +5825,37 @@ impl RegisterLowerer {
                 self.release_register(left_register)?;
                 return Some(RegisterType::Boolean);
             }
+            // 13.11.1 answers the negation of the same comparison, and the
+            // comparison converts an Object operand.
+            Binary::Ne => {
+                let (instruction, _) =
+                    self.feedback_binary(operator, left_register, right_register)?;
+                self.code.emit(instruction);
+                self.code.emit(Instruction::LogicalNot);
+                self.release_register(right_register)?;
+                self.release_register(left_register)?;
+                return Some(RegisterType::Boolean);
+            }
+            // 7.1.1 converts an Object operand at run time, so the feedback
+            // dispatch takes every operand the typed forms above do not. It is
+            // also where 13.12, 13.9 and 13.11.1 land.
+            Binary::Add
+            | Binary::Sub
+            | Binary::Mul
+            | Binary::Pow
+            | Binary::Div
+            | Binary::Rem
+            | Binary::Lt
+            | Binary::Le
+            | Binary::Gt
+            | Binary::Ge
+            | Binary::BitAnd
+            | Binary::BitOr
+            | Binary::BitXor
+            | Binary::Shl
+            | Binary::Shr
+            | Binary::Ushr
+            | Binary::Eq => self.feedback_binary(operator, left_register, right_register)?,
             Binary::StrictNe => {
                 self.code.emit(Instruction::TestStrictEqual(right_register));
                 self.code.emit(Instruction::LogicalNot);
@@ -5879,6 +5901,13 @@ impl RegisterLowerer {
             Binary::Pow => (BinaryOp::Pow, RegisterType::Number),
             Binary::Div => (BinaryOp::Div, RegisterType::Number),
             Binary::Rem => (BinaryOp::Mod, RegisterType::Number),
+            Binary::BitAnd => (BinaryOp::BitAnd, RegisterType::Number),
+            Binary::BitOr => (BinaryOp::BitOr, RegisterType::Number),
+            Binary::BitXor => (BinaryOp::BitXor, RegisterType::Number),
+            Binary::Shl => (BinaryOp::ShiftLeft, RegisterType::Number),
+            Binary::Shr => (BinaryOp::ShiftRight, RegisterType::Number),
+            Binary::Ushr => (BinaryOp::UnsignedShiftRight, RegisterType::Number),
+            Binary::Eq | Binary::Ne => (BinaryOp::Equals, RegisterType::Boolean),
             Binary::Lt => (BinaryOp::LessThan, RegisterType::Boolean),
             Binary::Le => (BinaryOp::LessThanOrEqual, RegisterType::Boolean),
             Binary::Gt => (BinaryOp::GreaterThan, RegisterType::Boolean),
@@ -5999,19 +6028,17 @@ impl RegisterLowerer {
                 // Object operand there, so the type is the one a run-time
                 // dispatch answers with.
                 Binary::Add => RegisterType::Primitive,
-                Binary::Sub | Binary::Mul | Binary::Div | Binary::Rem => RegisterType::Number,
-                Binary::Pow
+                Binary::Sub
+                | Binary::Mul
+                | Binary::Div
+                | Binary::Rem
+                | Binary::Pow
                 | Binary::BitAnd
                 | Binary::BitOr
                 | Binary::BitXor
                 | Binary::Shl
                 | Binary::Shr
-                | Binary::Ushr => {
-                    if !left_type.converts_to_primitive() || !right_type.converts_to_primitive() {
-                        return None;
-                    }
-                    RegisterType::Number
-                }
+                | Binary::Ushr => RegisterType::Number,
                 _ => return None,
             };
             let right_register = self.allocate_register()?;
@@ -6024,12 +6051,21 @@ impl RegisterLowerer {
             let concatenates = operator == Binary::Add
                 && left_type == RegisterType::String
                 && right_type == RegisterType::String;
-            let generic = matches!(
+            let integer = matches!(
                 operator,
-                Binary::Add | Binary::Sub | Binary::Mul | Binary::Div | Binary::Rem
-            ) && !(left_type.is_numeric_primitive()
-                && right_type.is_numeric_primitive())
-                && !concatenates;
+                Binary::BitAnd
+                    | Binary::BitOr
+                    | Binary::BitXor
+                    | Binary::Shl
+                    | Binary::Shr
+                    | Binary::Ushr
+            ) && !(left_type.is_primitive() && right_type.is_primitive());
+            let generic = integer
+                || matches!(
+                    operator,
+                    Binary::Add | Binary::Sub | Binary::Mul | Binary::Div | Binary::Rem
+                ) && !(left_type.is_numeric_primitive() && right_type.is_numeric_primitive())
+                    && !concatenates;
             if generic {
                 let (instruction, generic_type) =
                     self.feedback_binary(operator, left_register, right_register)?;
@@ -6167,11 +6203,12 @@ impl RegisterLowerer {
     }
 }
 
+/// Whether 13.11.1 needs no conversion of either operand.
+///
+/// A type the lowering does not know may be an Object, and 7.2.14 sends an
+/// Object through 7.1.1, so only two types it does know answer here.
 const fn equality_operands_supported(left: RegisterType, right: RegisterType) -> bool {
-    matches!(left, RegisterType::Unknown)
-        || matches!(right, RegisterType::Unknown)
-        || left.is_primitive() && right.is_primitive()
-        || left.is_object() && right.is_object()
+    left.is_primitive() && right.is_primitive() || left.is_object() && right.is_object()
 }
 
 fn smi_literal(number: f64) -> Option<i32> {

@@ -979,24 +979,22 @@ fn an_object_that_reached_a_call_keeps_no_layout() -> Result<(), Error> {
 
 #[test]
 fn a_conversion_that_cannot_run_valueof_names_the_gap() -> Result<(), Error> {
-    // 7.1.4 sends an Object through ToPrimitive. A conversion that cannot open
-    // a frame for a `valueOf` of the Script names that instead of answering.
-    for source in [
-        "function f(p){return p&1}f({})",
-        "function f(p){return +p}f({})",
-        "function f(p){return p==1}f({})",
-    ] {
-        let program = compile(source, Limits::default())?;
-        assert!(program.uses_register_backend(), "{source}");
-        assert!(
-            matches!(
-                Runtime::with_backend(Limits::default(), Backend::Engine)
-                    .run(&program, &mut SilentHost),
-                Err(Error::Unsupported { .. })
-            ),
-            "{source}"
-        );
-    }
+    // 7.1.4 sends an Object through ToPrimitive. 13.12 and 13.11.1 reach the
+    // instruction that opens a frame for a `valueOf` of the Script, and 13.5.4
+    // still has none.
+    let source = "function f(p){return +p}f({})";
+    let program = compile(source, Limits::default())?;
+    assert!(program.uses_register_backend(), "{source}");
+    assert!(
+        matches!(
+            Runtime::with_backend(Limits::default(), Backend::Engine)
+                .run(&program, &mut SilentHost),
+            Err(Error::Unsupported { .. })
+        ),
+        "{source}"
+    );
+    differential_scripts(&["function f(p){return p&1}f({})"])?;
+    differential_scripts(&["function f(p){return p==1}f({})"])?;
     // The same code answers for every argument that is a primitive.
     differential_scripts(&["function f(p){return p&1}f(3)"])?;
     differential_scripts(&["function f(p){return +p}f('42')"])?;
@@ -2178,14 +2176,8 @@ fn register_backend_is_selected_statically_without_runtime_fallback() -> Result<
     for source in [
         "+({valueOf(){return 1}})",
         "-function(){}",
-        "({}) & 1",
-        "1 | ({})",
-        "let o={};let x=o^1;0",
-        "let x={};x<<=1;0",
-        "let x=1;x>>={};0",
         "let o={};false&&(o.x=1);0",
         "let x=1;false&&(function(){return x});x",
-        "let x={};x**=2;0",
     ] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
@@ -2333,8 +2325,21 @@ fn object_identity_equality_runs_without_coercion() -> Result<(), Error> {
         assert_eq!(actual, expected, "{source}");
     }
 
-    for source in ["let o={};o==0", "let o={};0!=o"] {
-        assert!(!compile(source, Limits::default())?.uses_register_backend());
+    // 13.11.1 is 7.2.14, which sends the Object operand through 7.1.1.
+    for source in [
+        "let o={};o==0",
+        "let o={};0!=o",
+        "let o={valueOf(){return 0}};o==0",
+        "let o={valueOf(){return 1}};o!=0",
+        "let o={toString(){return '2'}};o=='2'",
+        // 7.2.14 step 1 and step 12 answer without converting either.
+        "let a={},b={};a==b",
+        "let o={};o==o",
+        "let o={};o==null",
+        "let o={};o!=undefined",
+        "let o={valueOf(){return 1}};o==true",
+    ] {
+        differential(source)?;
     }
     Ok(())
 }
@@ -5002,5 +5007,26 @@ fn new_number_and_new_boolean_make_the_wrapper_objects() -> Result<(), Error> {
         ),
         "{source}"
     );
+    Ok(())
+}
+
+#[test]
+fn the_integer_operators_convert_an_object_operand() -> Result<(), Error> {
+    // 13.12 and 13.9 read 6.1.6.1.2 of each operand, which for an Object is
+    // 7.1.1 and therefore a call. The instruction that converts takes them.
+    for source in [
+        "({}) & 1",
+        "1 | ({})",
+        "let o={};let x=o^1;x",
+        "let x={valueOf(){return 3}};x<<1",
+        "let x=8;x>>{valueOf(){return 1}}",
+        "let o={valueOf(){return -1}};o>>>28",
+        "let x={valueOf(){return 6}};x&=3;x",
+        "let x=1;x<<={valueOf(){return 4}};x",
+        "let o={toString(){return '5'}};o|0",
+        "let x={valueOf(){return 3}};x**=2;x",
+    ] {
+        differential(source)?;
+    }
     Ok(())
 }
