@@ -635,8 +635,8 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The error constructors on the register engine (focused) | focused | `a36aa89` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Error test/built-ins/NativeErrors --summary` | 187 | 374 | 54 (14.44%) | 90 (24.06%) | 230 (61.50%) |
 | `%String%` and its methods (focused) | focused | `86ba2e2` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/String --summary` | 1,223 | 2,443 | 1,928 (78.92%) | 448 (18.34%) | 67 (2.74%) |
 | `%String%` and its methods on the register engine (focused) | focused | `86ba2e2` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/String --summary` | 1,223 | 2,443 | 566 (23.17%) | 8 (0.33%) | 1,869 (76.50%) |
-| Complete pinned suite, including staging and Intl | full | `86ba2e2` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `86ba2e2` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 7,415 (7.20%) | 16,046 (15.59%) | 79,464 (77.21%) |
+| Complete pinned suite, including staging and Intl | full | `b367caf` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `b367caf` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 7,532 (7.32%) | 15,907 (15.45%) | 79,486 (77.23%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -776,6 +776,32 @@ the same function, and the errors this engine throws are made by that same
 operation, so `e instanceof TypeError` answers what it should and
 `assert.throws` does its work.
 
+Every Script the lowering refused reported one sentence, which says that
+something is missing but never what, and 19,800 variants stood on it. The
+lowering now records the innermost construct it stopped at, by the name of the
+grammar, and the two places that refuse a Script report it. Nothing runs
+differently for it: the full run answers the same result for all 102,925
+variants, variant for variant. The number reads as 4,619 a function expression,
+2,939 a class expression, 1,515 a declaration of the Script, 1,462 a for-of
+statement, 1,308 a call, 1,212 a regular-expression literal and a long tail;
+1,533 are refused by a pass that runs before the lowering and still have no
+name.
+
+The first of them is `this` outside a function. 9.4.2 resolves it on the
+Environment Record that has one, and every one the lowering took was bound by
+10.2.1.2 into a register. At the top level of a Script that Record is the
+Global Environment Record, whose `[[GlobalThisValue]]` (9.1.1.4.11) is the
+global object, which is how the harness reaches
+`verifyProperty(this, name, ...)`. Two wrong answers behind it are gaps now:
+19.1 gives the global object properties this Realm holds in the Global
+Environment Record, so reading one off the object is a gap and not the
+undefined of an object without it, and `new Function(...)` names 20.2.1.1 as
+the gap a call of it already named instead of answering that `%Function%` is
+not a constructor. That costs one pass: `15.3.5.4_2-59gs` asserted that
+`new Function("return f();")()` throws a `TypeError`, and the `TypeError` it
+was given was the refusal of `new` rather than the one it describes. A pass
+that rests on the wrong error is not one.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -823,6 +849,9 @@ full runs were measured at tree `0d3fee5ef3592d9e2e77a9f9bc5c146b996afa81`,
 which is the tree of `a36aa89`. The `%String%` runs and both full runs beside
 them were measured at tree
 `54864a06604bd2b5f1d9f81f232e8e5d64939692`, which is the tree of `86ba2e2`.
+Both full runs beside the named refusals and the top-level `this` were
+measured at tree `950e1f858de5af48170d7517db5171da2957ccdb`, which is the tree
+of `b367caf`.
 
 ### Historical Test262 baseline
 
