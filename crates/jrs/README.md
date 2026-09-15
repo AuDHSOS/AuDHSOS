@@ -649,10 +649,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Object%` and its methods, after the integrity levels, on the register engine (focused) | focused | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,530 (22.49%) | 18 (0.26%) | 5,254 (77.24%) |
 | `%Number%` (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 572 (84.12%) | 102 (15.00%) | 6 (0.88%) |
 | `%Number%` on the register engine (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 226 (33.24%) | 2 (0.29%) | 452 (66.47%) |
-| Functions (focused) | focused | `eded9bc` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/function test/language/expressions/function --summary` | 715 | 1,267 | 1,083 (85.48%) | 12 (0.95%) | 172 (13.58%) |
-| Functions on the register engine (focused) | focused | `eded9bc` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/function test/language/expressions/function --summary` | 715 | 1,267 | 385 (30.39%) | 20 (1.58%) | 862 (68.03%) |
-| Complete pinned suite, including staging and Intl | full | `eded9bc` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `eded9bc` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 14,334 (13.93%) | 18,123 (17.61%) | 70,468 (68.47%) |
+| Destructuring (focused) | focused | `f85a432` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/assignment/dstr test/language/statements/function/dstr --summary` | 554 | 1,012 | 762 (75.30%) | 0 (0.00%) | 250 (24.70%) |
+| Destructuring on the register engine (focused) | focused | `f85a432` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/assignment/dstr test/language/statements/function/dstr --summary` | 554 | 1,012 | 142 (14.03%) | 0 (0.00%) | 870 (85.97%) |
+| Complete pinned suite, including staging and Intl | full | `f85a432` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `f85a432` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 14,786 (14.37%) | 18,139 (17.62%) | 70,000 (68.01%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1112,6 +1112,15 @@ running the same 14.3.3.3 an untracked source runs. An array pattern stays a
 named gap, because 8.6.2 takes its elements from the iterator of the argument.
 230 variants move to passed and none away from it.
 
+8.6.2 opens the iterator of the value (7.4.2), takes one step of 7.4.6 for each
+element, and closes what it did not exhaust (7.4.9). The lowering could only read
+an array pattern out of a layout it tracked; the elements are now emitted as that
+sequence, with the record's `[[Done]]` in a register, and a parameter that is an
+array pattern reaches it too. 7.4.2 also refuses a value whose `@@iterator` is
+undefined before it calls anything, so both backends raise the same error for the
+same reason. A rest element stays a named gap. 452 variants move to passed and
+none away from it.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -1201,6 +1210,8 @@ The declaration runs and both full runs beside the object pattern were measured
 at tree `67426c2ce138305f53eba9d1beaac6082913a393`, which is the tree of `502784d`.
 The function runs and both full runs beside the pattern parameters were measured
 at tree `4c551f2b918796cf23f17d6665e79fc5f5ecd6a5`, which is the tree of `eded9bc`.
+The destructuring runs and both full runs beside the array pattern were measured
+at tree `3a9b434d676073eb8148c6e5865cf8ef0c75ebb7`, which is the tree of `f85a432`.
 
 ### Historical Test262 baseline
 
