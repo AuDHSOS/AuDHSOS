@@ -701,8 +701,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `Function.prototype.toString` on the register engine (focused) | focused | `2107883` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Function/prototype/toString --summary` | 80 | 160 | 18 (11.25%) | 96 (60.00%) | 46 (28.75%) |
 | Block scopes, after the Object binding (focused) | focused | `b93d713` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/block-scope --summary` | 145 | 287 | 169 (58.89%) | 26 (9.06%) | 92 (32.06%) |
 | Block scopes, after the Object binding, on the register engine (focused) | focused | `b93d713` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/block-scope --summary` | 145 | 287 | 147 (51.22%) | 26 (9.06%) | 114 (39.72%) |
-| Complete pinned suite, including staging and Intl | full | `b93d713` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `b93d713` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 25,004 (24.29%) | 19,814 (19.25%) | 58,107 (56.46%) |
+| Object patterns, after the rest element (focused) | focused | `22fdd9f` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/object/dstr test/language/statements/variable/dstr --summary` | 658 | 1,316 | 474 (36.02%) | 6 (0.46%) | 836 (63.53%) |
+| Object patterns, after the rest element, on the register engine (focused) | focused | `22fdd9f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/object/dstr test/language/statements/variable/dstr --summary` | 658 | 1,316 | 456 (34.65%) | 2 (0.15%) | 858 (65.20%) |
+| Complete pinned suite, including staging and Intl | full | `22fdd9f` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `22fdd9f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 25,144 (24.43%) | 19,814 (19.25%) | 57,967 (56.32%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1440,7 +1442,9 @@ which is the tree of `cd6fe50`. The `Function.prototype.toString` runs and both
 full runs beside it were measured at tree `72fe3b28cc25e058c5929e0dc204e456f158a561`,
 which is the tree of `2107883`. The block-scope runs and both full runs beside
 the Object binding were measured at tree `a194a281a88c32175c5cb02c2efa50dcd08ec212`,
-which is the tree of `b93d713`. That step moved 868 variants from unsupported
+which is the tree of `b93d713`. The object-pattern runs and both full runs
+beside the rest element were measured at tree `3e4e680be64f17dfdbbd915f2cf5bdf339f2c60f`,
+which is the tree of `22fdd9f`. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
 fails on the feature it actually needs. `RegExp.prototype[@@split]` landed in `fe5797c`
 between them and moved no variant of the suite.
