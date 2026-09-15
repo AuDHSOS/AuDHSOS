@@ -649,10 +649,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Object%` and its methods, after the integrity levels, on the register engine (focused) | focused | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,530 (22.49%) | 18 (0.26%) | 5,254 (77.24%) |
 | `%Number%` (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 572 (84.12%) | 102 (15.00%) | 6 (0.88%) |
 | `%Number%` on the register engine (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 226 (33.24%) | 2 (0.29%) | 452 (66.47%) |
-| `%Symbol%` (focused) | focused | `0f9693b` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Symbol --summary` | 98 | 192 | 94 (48.96%) | 64 (33.33%) | 34 (17.71%) |
-| `%Symbol%` on the register engine (focused) | focused | `0f9693b` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Symbol --summary` | 98 | 192 | 4 (2.08%) | 64 (33.33%) | 124 (64.58%) |
-| Complete pinned suite, including staging and Intl | full | `0f9693b` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `0f9693b` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 17,518 (17.02%) | 17,490 (16.99%) | 67,917 (65.99%) |
+| `%RegExp%` and its literals (focused) | focused | `f3ee748` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/RegExp test/language/literals/regexp --summary` | 2,119 | 4,236 | 1,572 (37.11%) | 100 (2.36%) | 2,564 (60.53%) |
+| `%RegExp%` and its literals on the register engine (focused) | focused | `f3ee748` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/RegExp test/language/literals/regexp --summary` | 2,119 | 4,236 | 656 (15.49%) | 671 (15.84%) | 2,909 (68.67%) |
+| Complete pinned suite, including staging and Intl | full | `f3ee748` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `f3ee748` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 18,226 (17.71%) | 18,368 (17.85%) | 66,331 (64.45%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1193,6 +1193,15 @@ between Realms. 7.1.19 keeps a Symbol as the key it is, which the three
 computed-property instructions did not — they sent every key through `ToString`,
 where a Symbol has no text. 328 more variants move to passed.
 
+22.2.4.1 makes an object of a pattern, and the engine had none, so every Script
+holding a literal was refused. The pattern is compiled where the Script is and
+lives in the code unit beside its string constants; the object names the unit
+and the index the way a closure names its function, and 22.2.7 gives the
+instance its own ordinary `lastIndex`. 22.2.7.2 runs on the automaton the stack
+backend already uses, charging the work it reports to the fuel of the call. The
+constructor, which compiles at run time, and the accessors of 22.2.6 stay named
+gaps. 708 more variants move to passed.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -1300,7 +1309,8 @@ measured at tree `5171fcbc56893b889cbf004ecb90d08d50f25a2a`, which is the tree o
 The `in` runs and both full runs beside it were measured at tree `7566b356e8ed2ed32878328b146d71676841ba39`,
 which is the tree of `9161a72`. The `%Symbol%` runs and both full runs beside
 the well-known Symbols were measured at tree `063dd5f1f751852170a46382cf38652a70be0fa7`, which is the tree of
-`0f9693b`.
+`0f9693b`. The `%RegExp%` runs and both full runs beside the literal were
+measured at tree `33b4f21bcf4ad4e3dd7ce0f89f6659253ffe3f6b`, which is the tree of `f3ee748`.
 
 ### Historical Test262 baseline
 
