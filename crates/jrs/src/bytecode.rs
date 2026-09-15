@@ -776,6 +776,9 @@ enum ForInHead<'a> {
         register: crate::engine::bytecode::Reg,
         declared_type: RegisterType,
     },
+    /// A `var` head of a Realm Script, whose binding 16.1.7 made on the
+    /// Global Environment Record.
+    Global { name: &'a str },
 }
 
 /// What a `for`-`in` or `for`-`of` head leaves for its body.
@@ -787,6 +790,9 @@ struct IterationHead {
     enter: usize,
     /// Jump taken when it did not.
     exit: usize,
+    /// Name of the Global Environment Record the loop variable is written to
+    /// as well, when the head declared one there.
+    global: Option<u16>,
     /// Register the loop variable is written to.
     variable: crate::engine::bytecode::Reg,
     /// Register holding the loop's completion value.
@@ -5580,7 +5586,14 @@ impl RegisterLowerer {
         if nested.contains(name) {
             return None;
         }
-        let declared = *self.bindings.get(name)?;
+        let Some(declared) = self.bindings.get(name).copied() else {
+            // 16.1.7 made the binding on the Global Environment Record, so
+            // the loop writes it there.
+            if !self.realm {
+                return None;
+            }
+            return Some(ForInHead::Global { name });
+        };
         if !declared.mutable || declared.stable_function_identity {
             return None;
         }
@@ -5675,6 +5688,16 @@ impl RegisterLowerer {
                 self.bindings.get_mut(name)?.value_type = Some(RegisterType::String);
                 register
             }
+            // The binding is a property of the global object, and the loop
+            // keeps the key in a register of its own to write it from.
+            ForInHead::Global { .. } => self.allocate_register()?,
+        };
+        let head_global = match head_binding {
+            ForInHead::Global { name } => {
+                let units: Vec<u16> = name.encode_utf16().collect();
+                Some(self.string_constant(&units)?)
+            }
+            _ => None,
         };
 
         let mut bindings_at_head = self.bindings.clone();
@@ -5695,6 +5718,7 @@ impl RegisterLowerer {
                 enter,
                 exit,
                 variable: key_register,
+                global: head_global,
                 result: result_register,
                 source: None,
                 guarded_layout: None,
@@ -5717,6 +5741,11 @@ impl RegisterLowerer {
             } => {
                 self.bindings.get_mut(name)?.value_type =
                     Some(declared_type.merge(RegisterType::String));
+            }
+            // The binding lives on the Global Environment Record, so nothing
+            // of this frame holds it after the loop.
+            ForInHead::Global { .. } => {
+                self.release_register(key_register)?;
             }
         }
         self.release_register(result_register)?;
@@ -5752,6 +5781,14 @@ impl RegisterLowerer {
             self.code.emit(Instruction::Ldar(source));
         }
         self.code.emit(Instruction::Star(loop_head.variable));
+        // 14.7.5.6 writes the binding the head declared, which for a `var` of
+        // a Realm Script is a property of the global object.
+        if let Some(name) = loop_head.global {
+            self.code.emit(Instruction::StaGlobal {
+                name,
+                strict: false,
+            });
+        }
         self.code.emit(Instruction::Ldar(loop_head.result));
         self.loops.push(RegisterLoop {
             is_switch: false,
@@ -5853,6 +5890,10 @@ impl RegisterLowerer {
     /// A body that leaves by `break` or `return` would have to close the
     /// iterator (7.4.9), which the lowering does not emit, so it names that
     /// rather than leaving a `return` method uncalled.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function emits the whole of a loop head and its close"
+    )]
     fn lower_iterated_for_of(
         &mut self,
         head_binding: ForInHead<'_>,
@@ -5891,6 +5932,13 @@ impl RegisterLowerer {
         let step = self.allocate_register()?;
         let next = self.allocate_register()?;
         let variable = self.iteration_variable(head_binding, RegisterType::Unknown)?;
+        let head_global = match head_binding {
+            ForInHead::Global { name } => {
+                let units: Vec<u16> = name.encode_utf16().collect();
+                Some(self.string_constant(&units)?)
+            }
+            _ => None,
+        };
 
         let mut bindings_at_head = self.bindings.clone();
         infer_register_var_types_to_fixed_point(
@@ -5943,6 +5991,7 @@ impl RegisterLowerer {
                 enter,
                 exit,
                 variable,
+                global: head_global,
                 result: result_register,
                 source: None,
                 guarded_layout: None,
@@ -5991,6 +6040,9 @@ impl RegisterLowerer {
                 self.bindings.get_mut(name)?.value_type = Some(element_type);
                 Some(register)
             }
+            // The binding is a property of the global object, and the loop
+            // keeps the element in a register of its own to write it from.
+            ForInHead::Global { .. } => self.allocate_register(),
         }
     }
 
@@ -6015,10 +6067,19 @@ impl RegisterLowerer {
             } => {
                 self.bindings.get_mut(name)?.value_type = Some(declared_type.merge(element_type));
             }
+            // The binding lives on the Global Environment Record, so nothing
+            // of this frame holds it after the loop.
+            ForInHead::Global { .. } => {
+                self.release_register(variable)?;
+            }
         }
         Some(())
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function emits the whole of a loop head and its close"
+    )]
     fn lower_for_of(
         &mut self,
         binding: Option<&(BindingPattern, Option<bool>)>,
@@ -6076,6 +6137,14 @@ impl RegisterLowerer {
                 self.bindings.get_mut(name)?.value_type = Some(element_type);
                 register
             }
+            ForInHead::Global { .. } => self.allocate_register()?,
+        };
+        let head_global = match head_binding {
+            ForInHead::Global { name } => {
+                let units: Vec<u16> = name.encode_utf16().collect();
+                Some(self.string_constant(&units)?)
+            }
+            _ => None,
         };
 
         let mut bindings_at_head = self.bindings.clone();
@@ -6097,6 +6166,7 @@ impl RegisterLowerer {
                 enter,
                 exit,
                 variable: key_register,
+                global: head_global,
                 result: result_register,
                 source: Some(value),
                 guarded_layout: Some(object_id),
@@ -6118,6 +6188,11 @@ impl RegisterLowerer {
                 ..
             } => {
                 self.bindings.get_mut(name)?.value_type = Some(declared_type.merge(element_type));
+            }
+            // The binding lives on the Global Environment Record, so nothing
+            // of this frame holds it after the loop.
+            ForInHead::Global { .. } => {
+                self.release_register(key_register)?;
             }
         }
         self.release_register(result_register)?;

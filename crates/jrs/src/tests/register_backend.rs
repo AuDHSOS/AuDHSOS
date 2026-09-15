@@ -5429,3 +5429,22 @@ fn an_update_reaches_a_global_and_a_property() -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[test]
+fn a_var_head_of_a_realm_script_writes_the_global() -> Result<(), Error> {
+    // 16.1.7 makes a `var` of a Realm Script a binding of the Global
+    // Environment Record, and 14.7.5.6 writes the head's binding wherever it
+    // lives.
+    for source in [
+        "var r='';for(var k in {a:1,b:2}){r=r+k};r",
+        "var r=0;for(var v of [1,2,3]){r=r+v};r",
+        "var r=0;for(var v of [1,2]){}v",
+        "var r='';for(var k in {a:1}){r=r+k};k",
+        "var r=0;for(var v of []){r=1};typeof v",
+        "var r=0;var o={a:1,b:2};for(var k in o){r=r+o[k]};r",
+        "var r=0;for(var v of [1,2,3]){if(v===2)continue;r=r+v};r",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
