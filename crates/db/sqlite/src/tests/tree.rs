@@ -3663,7 +3663,7 @@ fn a_row_that_shares_a_key_is_refused_passed_over_or_written_over() {
     // `ABORT` is what a statement that says nothing does.
     assert_eq!(
         writer.run(b"INSERT INTO t VALUES(1,'x')").err(),
-        Some(crate::db::Error::Unique)
+        Some(crate::db::Error::Unique(b"t.a".to_vec()))
     );
     writer
         .run(b"INSERT OR IGNORE INTO t VALUES(1,'two')")
@@ -3719,7 +3719,7 @@ fn a_row_that_shares_a_key_is_refused_passed_over_or_written_over() {
         writer
             .run(b"INSERT OR FAIL INTO u VALUES(3,'z'),(1,'w'),(4,'v')")
             .err(),
-        Some(crate::db::Error::Stopped)
+        Some(crate::db::Error::Unique(b"u.a".to_vec()))
     );
     assert_eq!(
         shown(&writer, b"SELECT group_concat(a) FROM u"),
@@ -3735,11 +3735,11 @@ fn a_row_that_shares_a_key_is_refused_passed_over_or_written_over() {
     );
     assert_eq!(
         writer.run(b"UPDATE u SET a=1 WHERE a=2").err(),
-        Some(crate::db::Error::Unique)
+        Some(crate::db::Error::Unique(b"u.a".to_vec()))
     );
     assert_eq!(
         writer.run(b"UPDATE OR FAIL u SET a=1 WHERE a=2").err(),
-        Some(crate::db::Error::Stopped)
+        Some(crate::db::Error::Unique(b"u.a".to_vec()))
     );
     writer
         .run(b"UPDATE OR REPLACE u SET a=1 WHERE a=2")
@@ -3762,7 +3762,7 @@ fn what_the_index_a_key_carries_reaches() {
     writer.run(b"INSERT INTO t VALUES(1,2)").unwrap();
     assert_eq!(
         writer.run(b"INSERT INTO t VALUES(1,3)").err(),
-        Some(crate::db::Error::Unique)
+        Some(crate::db::Error::Unique(b"t.a".to_vec()))
     );
 
     // An index that is not unique constrains no row, and an entry that
@@ -3780,7 +3780,7 @@ fn what_the_index_a_key_carries_reaches() {
         writer
             .run(b"INSERT INTO t VALUES(2, hex(zeroblob(400)))")
             .err(),
-        Some(crate::db::Error::Unique)
+        Some(crate::db::Error::Unique(b"t.b".to_vec()))
     );
     let written = writer.written();
     let database = Database::open(&written).unwrap();

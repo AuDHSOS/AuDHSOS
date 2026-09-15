@@ -416,7 +416,13 @@ pub enum ColumnConstraint {
     /// `UNIQUE`.
     Unique(Conflict),
     /// `CHECK (expression)`.
-    Check(ExprId),
+    Check {
+        /// What every row is held to.
+        value: ExprId,
+        /// The text of it, which `CHECK constraint failed:` writes
+        /// where the constraint carries no name.
+        text: Span,
+    },
     /// `DEFAULT value`.
     Default {
         /// What the column falls back to.
@@ -473,7 +479,13 @@ pub enum TableConstraint {
         conflict: Conflict,
     },
     /// `CHECK (expression)`.
-    Check(ExprId),
+    Check {
+        /// What every row is held to.
+        value: ExprId,
+        /// The text of it, which `CHECK constraint failed:` writes
+        /// where the constraint carries no name.
+        text: Span,
+    },
     /// `FOREIGN KEY (columns) REFERENCES ...`.
     ForeignKey {
         /// The columns of this table.

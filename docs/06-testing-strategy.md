@@ -4878,6 +4878,20 @@ D-229, document 17 step T6.
 - A `COLLATE` naming a collation the connection does not hold is `no
   such collation sequence: NAME`.
 
+### 6.6.153 The constraints a row is held to (`db-sqlite`)
+
+D-230, document 16 step Q8.
+
+- A column written `NOT NULL` refuses a row that holds nothing there,
+  whether an `INSERT` or an `UPDATE` wrote it.
+- A `CHECK` that answers false refuses the row, under the name the
+  `CONSTRAINT` gave it or the text of the expression; one that answers
+  nothing holds.
+- A key the table already holds refuses the row, and the message names
+  the columns the key is over.
+- `IGNORE` passes the row over, `REPLACE` writes what the column falls
+  back to, and `FAIL` stops the statement and keeps the rows before it.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

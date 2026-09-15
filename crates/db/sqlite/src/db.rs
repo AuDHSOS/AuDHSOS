@@ -104,11 +104,15 @@ pub enum Error {
     /// open.
     NoTransaction,
     /// A row that shares a key with one the table already holds, where
-    /// the statement said to refuse it and undo what it wrote.
-    Unique,
-    /// The same, where the statement said to stop where it stands and
-    /// keep what it wrote, which is `OE_Fail`.
-    Stopped,
+    /// the statement said to refuse it and undo what it wrote, with
+    /// the columns the key is over as `table.column`.
+    Unique(Vec<u8>),
+    /// A row that holds nothing where a column refuses nothing, with
+    /// that column as `table.column`.
+    NotNull(Vec<u8>),
+    /// A row a `CHECK` of the table does not hold for, with the name
+    /// of the constraint or the text of the expression.
+    Check(Vec<u8>),
     /// A `WITH` term that reads itself and answered more rows than
     /// `RECURSION_ROWS` allows.
     Recursion,
@@ -150,7 +154,18 @@ impl Error {
             ),
             Error::Foreign => "FOREIGN KEY constraint failed".to_string(),
             Error::ForeignMismatch => "foreign key mismatch".to_string(),
-            Error::Unique => "UNIQUE constraint failed".to_string(),
+            Error::Unique(columns) => alloc::format!(
+                "UNIQUE constraint failed: {}",
+                alloc::string::String::from_utf8_lossy(columns)
+            ),
+            Error::NotNull(column) => alloc::format!(
+                "NOT NULL constraint failed: {}",
+                alloc::string::String::from_utf8_lossy(column)
+            ),
+            Error::Check(shown) => alloc::format!(
+                "CHECK constraint failed: {}",
+                alloc::string::String::from_utf8_lossy(shown)
+            ),
             Error::Nested => "cannot start a transaction within a transaction".to_string(),
             Error::NoTransaction => "cannot commit - no transaction is active".to_string(),
             Error::Recursion => "recursive aggregate queries not supported".to_string(),
@@ -977,6 +992,37 @@ impl<'a> Database<'a> {
                 None => Ok(Value::Null),
             })
             .collect()
+    }
+
+    /// The name of the first `CHECK` of the table that does not hold
+    /// for a row, or nothing where every one of them holds.
+    ///
+    /// `sqlite3ExprIfFalse`: a `CHECK` holds where it answers anything
+    /// but false, so a row that answers nothing holds. Reading one row
+    /// costs what the expressions of the table cost.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what an expression could not answer.
+    pub fn refused_check(
+        &self,
+        name: &[u8],
+        row: &dyn eval::Row,
+    ) -> Result<Option<Vec<u8>>, Error> {
+        let held = self
+            .tables
+            .iter()
+            .filter(|stored| stored.table.name.eq_ignore_ascii_case(name));
+        for stored in held {
+            for check in &stored.table.checks {
+                let value =
+                    crate::eval::evaluate_row(&stored.arena, check.value, &stored.sql, row)?;
+                if value != Value::Null && !value.truth(false) {
+                    return Ok(Some(check.shown.clone()));
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// Every row of the table of `name`, each with its key and the

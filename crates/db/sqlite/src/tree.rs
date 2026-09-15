@@ -1721,6 +1721,24 @@ pub(crate) fn quick(pages: &mut Pages, parent: u32, page: u32, cell: &[u8]) -> R
     pages.point_cells(sibling)
 }
 
+/// Whether the table tree at `root` holds a row under `rowid`, which is
+/// what `sqlite3BtreeTableMoveto` answers for the key of a row about to
+/// be written. One walk is O(log n) in the rows.
+///
+/// # Errors
+///
+/// [`Error::Depth`] for a tree deeper than this crate walks, and
+/// whatever reading a page of it refuses.
+pub fn holds(pages: &Pages, root: u32, rowid: i64) -> Result<bool, Error> {
+    let path = place(pages, root, rowid)?;
+    let (leaf, at) = *path.last().ok_or(Error::Depth)?;
+    let page = pages.page(leaf)?;
+    if at >= page.cells() {
+        return Ok(false);
+    }
+    Ok(page.row(at)?.0 == rowid)
+}
+
 /// The largest key the table tree at `root` holds, or nothing where the
 /// tree holds no row.
 ///

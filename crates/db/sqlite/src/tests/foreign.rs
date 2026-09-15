@@ -419,7 +419,18 @@ fn the_rows_that_point_at_no_row_are_answered_whatever_the_pragma_says() {
 fn the_text_a_refusal_is_written_as() {
     assert_eq!(Error::Foreign.message(), "FOREIGN KEY constraint failed");
     assert_eq!(Error::ForeignMismatch.message(), "foreign key mismatch");
-    assert_eq!(Error::Unique.message(), "UNIQUE constraint failed");
+    assert_eq!(
+        Error::Unique(b"t1.a, t1.b".to_vec()).message(),
+        "UNIQUE constraint failed: t1.a, t1.b"
+    );
+    assert_eq!(
+        Error::NotNull(b"t4.a".to_vec()).message(),
+        "NOT NULL constraint failed: t4.a"
+    );
+    assert_eq!(
+        Error::Check(b"a>0".to_vec()).message(),
+        "CHECK constraint failed: a>0"
+    );
     assert_eq!(
         Error::Nested.message(),
         "cannot start a transaction within a transaction"

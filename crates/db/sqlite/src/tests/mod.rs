@@ -11,6 +11,7 @@
 #![allow(clippy::arithmetic_side_effects, clippy::indexing_slicing)]
 
 mod bytes;
+mod constraint;
 mod db;
 mod definition;
 mod error;

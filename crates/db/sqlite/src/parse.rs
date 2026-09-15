@@ -1471,7 +1471,8 @@ impl<'a> Parser<'a> {
             }
             Keyword::Check => {
                 self.bump();
-                ColumnConstraint::Check(self.parenthesized_expression()?)
+                let (value, text) = self.checked()?;
+                ColumnConstraint::Check { value, text }
             }
             Keyword::Default => {
                 self.bump();
@@ -1509,7 +1510,26 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    /// `( expression )`.
+    /// `( expression )` with the text between the brackets, which is
+    /// what `CHECK constraint failed:` writes where the constraint
+    /// carries no name.
+    fn checked(&mut self) -> Result<(ExprId, Span), Error> {
+        self.expect(Kind::Lp, Expected::OpenParen)?;
+        let start = self.peek().map_or(0, |token| token.start);
+        let value = self.expression()?;
+        let end = self.peek().map_or(start, |token| token.start);
+        self.expect(Kind::Rp, Expected::CloseParen)?;
+        Ok((
+            value,
+            Span {
+                start,
+                len: end.saturating_sub(start),
+            },
+        ))
+    }
+
+    /// `( expr )`, which is what a `CHECK` and a `DEFAULT` are written
+    /// with.
     fn parenthesized_expression(&mut self) -> Result<ExprId, Error> {
         self.expect(Kind::Lp, Expected::OpenParen)?;
         let expr = self.expression()?;
@@ -1731,9 +1751,9 @@ impl<'a> Parser<'a> {
             });
         }
         if self.eat_keyword(Keyword::Check) {
-            let check = self.parenthesized_expression()?;
+            let (value, text) = self.checked()?;
             self.conflict_clause()?;
-            return Ok(TableConstraint::Check(check));
+            return Ok(TableConstraint::Check { value, text });
         }
         self.expect_keyword(Keyword::Foreign, Expected::Key)?;
         self.expect_keyword(Keyword::Key, Expected::Key)?;

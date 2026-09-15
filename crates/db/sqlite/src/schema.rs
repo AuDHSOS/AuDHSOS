@@ -92,6 +92,10 @@ pub struct Column {
     pub collation: Collation,
     /// Whether it refuses nothing.
     pub not_null: bool,
+    /// What a row that holds nothing there does, where the constraint
+    /// said so: `NOT NULL ON CONFLICT REPLACE` writes what the column
+    /// falls back to in its place.
+    pub null_conflict: crate::ast::Conflict,
     /// What it falls back to, as it was written.
     pub default: Option<Vec<u8>>,
     /// The same, as the tree of the `CREATE` holds it, which is what a
@@ -132,6 +136,21 @@ pub struct Table {
     /// written, which is the order `PRAGMA foreign_key_list` answers
     /// them backwards in.
     pub foreign: Vec<Foreign>,
+    /// The `CHECK` constraints every row is held to, in the order they
+    /// were written.
+    pub checks: Vec<Checked>,
+}
+
+/// One `CHECK` of a table: what every row is held to, and what the
+/// message names it by.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Checked {
+    /// The expression, as the tree of the `CREATE` holds it.
+    pub value: ExprId,
+    /// The name the constraint was given, or the text of the
+    /// expression where it was given none, which is what `CHECK
+    /// constraint failed:` writes.
+    pub shown: Vec<u8>,
 }
 
 /// One `REFERENCES` of a table: which of its columns point at which
@@ -582,6 +601,7 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
         autoincrement: false,
         keys: Vec::new(),
         foreign: Vec::new(),
+        checks: Vec::new(),
     };
     let mut key: Option<(Vec<usize>, Order, bool)> = None;
     // Every `PRIMARY KEY` and `UNIQUE`, in the order they were written,
@@ -592,6 +612,9 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
     // Every `REFERENCES`, in the order they were written, each with the
     // columns of this table that point.
     let mut pointed: Vec<(Vec<Vec<u8>>, crate::ast::Foreign)> = Vec::new();
+    // Every `CHECK`, in the order they were written, each under the
+    // name the `CONSTRAINT` in front of it gave it.
+    let mut checks: Vec<Checked> = Vec::new();
     for written in arena.columns(columns) {
         let name = dequote(written.name.text(sql));
         if table
@@ -624,6 +647,7 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
             },
             collation: Collation::Binary,
             not_null: false,
+            null_conflict: crate::ast::Conflict::Unspecified,
             default: None,
             falls_back: None,
             key: 0,
@@ -631,9 +655,23 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
             computed: None,
         };
         let mut own_key = None;
+        let mut last_named: Option<Span> = None;
         for constraint in arena.column_constraints(written.constraints) {
+            if let ColumnConstraint::Named(span) = *constraint {
+                last_named = Some(span);
+                continue;
+            }
             match *constraint {
-                ColumnConstraint::NotNull(_) => column.not_null = true,
+                ColumnConstraint::NotNull(conflict) => {
+                    column.not_null = true;
+                    column.null_conflict = conflict;
+                }
+                ColumnConstraint::Check { value, text } => {
+                    checks.push(Checked {
+                        value,
+                        shown: named_or(last_named, text, sql),
+                    });
+                }
                 ColumnConstraint::Collate(name) => {
                     column.collation =
                         Collation::of_name(&dequote(name.text(sql))).ok_or(Error::NoCollation)?;
@@ -676,7 +714,18 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
             key = Some((alloc::vec![at], order, autoincrement));
         }
     }
+    let mut last_named: Option<Span> = None;
     for constraint in arena.table_constraints(constraints) {
+        if let TableConstraint::Named(span) = *constraint {
+            last_named = Some(span);
+            continue;
+        }
+        if let TableConstraint::Check { value, text } = *constraint {
+            checks.push(Checked {
+                value,
+                shown: named_or(last_named, text, sql),
+            });
+        }
         if let TableConstraint::ForeignKey { columns, foreign } = *constraint {
             let mut named = Vec::new();
             for column in arena.names(columns) {
@@ -754,6 +803,7 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
 
     table.keys = own_keys(&table, &written_keys)?;
     table.foreign = pointing(arena, &table, &pointed, sql)?;
+    table.checks = checks;
 
     if table.strict {
         for column in &mut table.columns {
@@ -833,6 +883,21 @@ fn index_of(table: &Table, name: Span, sql: &[u8]) -> Option<usize> {
         .columns
         .iter()
         .position(|column| column.name.eq_ignore_ascii_case(&name))
+}
+
+/// What a `CHECK` is named in a message: the name a `CONSTRAINT` in
+/// front of it gave it, or the text of the expression.
+fn named_or(named: Option<Span>, text: Span, sql: &[u8]) -> Vec<u8> {
+    let Some(span) = named else {
+        let mut written = text.text(sql);
+        while written.last().is_some_and(u8::is_ascii_whitespace) {
+            written = written
+                .get(..written.len().saturating_sub(1))
+                .unwrap_or_default();
+        }
+        return written.to_vec();
+    };
+    dequote(span.text(sql))
 }
 
 /// The foreign keys of a table, each with the places of the columns

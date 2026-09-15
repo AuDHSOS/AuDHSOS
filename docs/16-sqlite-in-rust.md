@@ -648,7 +648,7 @@ and a foreign key holds the rows of both tables it names; the rest is
 open.
 Depends on: Q6. Recorded in D-172 to D-174, D-182, D-186, D-187, D-189,
 D-191, D-193, D-195, D-196, D-205 to D-211, D-216 to D-218, D-219,
-D-224 to D-228.
+D-224 to D-230.
 Size: L.
 
 ### Does
@@ -693,6 +693,9 @@ Size: L.
 11. The joins: the column a `USING` names after a `RIGHT JOIN`, the
     tables written inside brackets, and the names those tables answer
     under. Built, which D-226 to D-228 record.
+12. The constraints a row is held to: the columns that refuse nothing,
+    every `CHECK` of the table, and the key the row is written under.
+    Built, which D-230 records.
 
 ### Done when
 

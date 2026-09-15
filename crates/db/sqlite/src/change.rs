@@ -190,6 +190,10 @@ pub struct Writer {
     /// one. A connection outside `BEGIN` holds none and commits every
     /// statement of its own.
     began: Option<Header>,
+    /// Whether the statement running now stopped where it stood, which
+    /// is `OE_Fail`: the rows it wrote before that stand, and the
+    /// refusal carries the message of the constraint all the same.
+    stopped: bool,
 }
 
 impl Writer {
@@ -214,6 +218,7 @@ impl Writer {
             origin: None,
             counting: false,
             began: None,
+            stopped: false,
             header: Header {
                 page_size,
                 write_version: 1,
@@ -570,6 +575,7 @@ impl Writer {
         if self.began.is_none() {
             self.pages.begin();
         }
+        self.stopped = false;
         let ran = self.ran(sql);
         // A statement that refuses what it was given leaves the file
         // as it found it, which is what `OE_Abort` does: the pages go
@@ -583,7 +589,7 @@ impl Writer {
                 // wrote, which is `OE_Fail`. `OE_Rollback` undoes the
                 // whole transaction, which this crate answers as
                 // `OE_Abort`.
-                if self.began.is_none() && error != Error::Stopped {
+                if self.began.is_none() && !self.stopped {
                     self.pages.rollback();
                 }
                 return Err(error);
@@ -2014,23 +2020,36 @@ impl Writer {
                     continue;
                 }
             }
+            // `sqlite3GenerateConstraintChecks`: the columns that
+            // refuse nothing and every `CHECK` of the table hold the
+            // row before the keys do.
+            if !self.constrained(&table, &mut named, rowid, statement.conflict)? {
+                continue;
+            }
+            Self::refilled(&named, &mut values, alias);
             let row = Fired {
                 table: &table,
                 old: None,
                 new: Some((&named, rowid)),
                 encoding: self.header.encoding,
             };
+            if !self.keyed(root, &kept, &table, alias, rowid, statement.conflict)? {
+                continue;
+            }
             // `sqlite3GenerateConstraintChecks`: a row that shares a
             // key with one the table holds is refused, passed over, or
             // written over the one that is there.
             if let Some((index, held)) = self.conflicting(&kept, &named, rowid, None)? {
                 match resolved(statement.conflict, &kept, index) {
                     crate::ast::Conflict::Ignore => continue,
-                    crate::ast::Conflict::Fail => return Err(Error::Stopped),
+                    crate::ast::Conflict::Fail => {
+                        self.stopped = true;
+                        return Err(Error::Unique(Self::shown_key_of(&table, &kept, index)));
+                    }
                     crate::ast::Conflict::Replace => {
                         self.replaced(root, &kept, &table, &held)?;
                     }
-                    _ => return Err(Error::Unique),
+                    _ => return Err(Error::Unique(Self::shown_key_of(&table, &kept, index))),
                 }
             }
             let record = crate::record::write(&values, &affinities, 4);
@@ -2594,23 +2613,42 @@ impl Writer {
             for slot in named.iter_mut().skip(alias.unwrap_or(usize::MAX)).take(1) {
                 *slot = Value::Int(key);
             }
+            if fires {
+                let row = Fired {
+                    table: &table,
+                    old: Some((&held, rowid)),
+                    new: Some((&named, key)),
+                    encoding: self.header.encoding,
+                };
+                if !self.fire(&before, &columns, &row)? {
+                    continue;
+                }
+            }
+            if !self.constrained(&table, &mut named, key, statement.conflict)? {
+                continue;
+            }
+            Self::refilled(&named, &mut values, alias);
             let row = Fired {
                 table: &table,
                 old: Some((&held, rowid)),
                 new: Some((&named, key)),
                 encoding: self.header.encoding,
             };
-            if fires && !self.fire(&before, &columns, &row)? {
+            // A row that keeps the key it had shares it with nothing.
+            if key != rowid && !self.keyed(root, &kept, &table, alias, key, statement.conflict)? {
                 continue;
             }
             if let Some((index, other)) = self.conflicting(&kept, &named, key, Some(rowid))? {
                 match resolved(statement.conflict, &kept, index) {
                     crate::ast::Conflict::Ignore => continue,
-                    crate::ast::Conflict::Fail => return Err(Error::Stopped),
+                    crate::ast::Conflict::Fail => {
+                        self.stopped = true;
+                        return Err(Error::Unique(Self::shown_key_of(&table, &kept, index)));
+                    }
                     crate::ast::Conflict::Replace => {
                         self.replaced(root, &kept, &table, &other)?;
                     }
-                    _ => return Err(Error::Unique),
+                    _ => return Err(Error::Unique(Self::shown_key_of(&table, &kept, index))),
                 }
             }
             let record = crate::record::write(&values, &affinities, 4);
@@ -2728,6 +2766,156 @@ impl Writer {
             return Ok(Some((at, found)));
         }
         Ok(None)
+    }
+
+    /// Whether a row is held to the columns that refuse nothing and to
+    /// every `CHECK` of the table, which is
+    /// `sqlite3GenerateConstraintChecks` before the keys are held.
+    ///
+    /// A column that refuses nothing and holds nothing writes what it
+    /// falls back to where the resolution is `REPLACE`, and refuses
+    /// where what it falls back to is nothing as well. The answer is
+    /// `false` where the resolution is `IGNORE`, which is the row
+    /// passed over.
+    fn constrained(
+        &mut self,
+        table: &Table,
+        values: &mut [Value],
+        rowid: i64,
+        written: Conflict,
+    ) -> Result<bool, Error> {
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        let falls_back = database.defaults(&table.name)?;
+        for (at, column) in table.columns.iter().enumerate() {
+            if !column.not_null || values.get(at) != Some(&Value::Null) {
+                continue;
+            }
+            let mut answer = match written {
+                Conflict::Unspecified => column.null_conflict,
+                other => other,
+            };
+            if answer == Conflict::Replace {
+                let held = falls_back.get(at).cloned().unwrap_or(Value::Null);
+                for slot in values.iter_mut().skip(at).take(1) {
+                    *slot = stored(&held, self.header.encoding);
+                }
+                if values.get(at) != Some(&Value::Null) {
+                    continue;
+                }
+                // `sqlite3GenerateConstraintChecks`: a column that
+                // falls back to nothing refuses the row instead.
+                answer = Conflict::Abort;
+            }
+            let mut shown = table.name.clone();
+            shown.push(b'.');
+            shown.extend_from_slice(&column.name);
+            match answer {
+                Conflict::Ignore => return Ok(false),
+                Conflict::Fail => {
+                    self.stopped = true;
+                    return Err(Error::NotNull(shown));
+                }
+                _ => return Err(Error::NotNull(shown)),
+            }
+        }
+        let row = Held {
+            table,
+            values,
+            rowid,
+            encoding: self.header.encoding,
+            random: &self.random,
+            outer: None,
+        };
+        let Some(shown) = database.refused_check(&table.name, &row)? else {
+            return Ok(true);
+        };
+        match written {
+            Conflict::Ignore => Ok(false),
+            Conflict::Fail => {
+                self.stopped = true;
+                Err(Error::Check(shown))
+            }
+            _ => Err(Error::Check(shown)),
+        }
+    }
+
+    /// What a row whose key the table already holds does, which is
+    /// `sqlite3GenerateConstraintChecks` over the key of a table whose
+    /// rowid a column is another name for: the row is refused, passed
+    /// over, or written over the row that is there. The answer is
+    /// `false` where the row is passed over.
+    fn keyed(
+        &mut self,
+        root: u32,
+        kept: &[Kept],
+        table: &Table,
+        alias: Option<usize>,
+        key: i64,
+        written: Conflict,
+    ) -> Result<bool, Error> {
+        if alias.is_none() || !crate::tree::holds(&self.pages, root, key)? {
+            return Ok(true);
+        }
+        match written {
+            Conflict::Ignore => return Ok(false),
+            Conflict::Fail => self.stopped = true,
+            Conflict::Replace => {
+                self.replaced(root, kept, table, &Value::Int(key))?;
+                return Ok(true);
+            }
+            _ => {}
+        }
+        Err(Error::Unique(Self::shown_column(table, alias)))
+    }
+
+    /// The values a row is written with, where a column that refuses
+    /// nothing took what it falls back to. The column the key is another
+    /// name for is stored as nothing, because the key carries it.
+    fn refilled(named: &[Value], values: &mut [Value], alias: Option<usize>) {
+        for (at, value) in named.iter().enumerate() {
+            if Some(at) == alias {
+                continue;
+            }
+            for slot in values.iter_mut().skip(at).take(1) {
+                *slot = value.clone();
+            }
+        }
+    }
+
+    /// The column at `at` of the table, as a message names it:
+    /// `table.column`.
+    fn shown_column(table: &Table, at: Option<usize>) -> Vec<u8> {
+        let mut out = table.name.clone();
+        out.push(b'.');
+        let named = at
+            .and_then(|at| table.columns.get(at))
+            .map_or(&[][..], |column| column.name.as_slice());
+        out.extend_from_slice(named);
+        out
+    }
+
+    /// The columns a key is over, as `sqlite3UniqueConstraint` writes
+    /// them into a message: `table.column`, one after another with a
+    /// comma between them.
+    fn shown_key_of(table: &Table, kept: &[Kept], at: usize) -> Vec<u8> {
+        let mut out = Vec::new();
+        let columns = kept
+            .get(at)
+            .map_or(&[][..], |(index, _, _)| index.columns.as_slice());
+        for keyed in columns {
+            if !out.is_empty() {
+                out.extend_from_slice(b", ");
+            }
+            out.extend_from_slice(&table.name);
+            out.push(b'.');
+            let named = table
+                .columns
+                .get(keyed.column)
+                .map_or(&[][..], |column| column.name.as_slice());
+            out.extend_from_slice(named);
+        }
+        out
     }
 
     /// The entry every index over the table holds for one row, taken

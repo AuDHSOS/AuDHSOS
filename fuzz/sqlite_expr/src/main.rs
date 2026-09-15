@@ -9,7 +9,9 @@
 //! holds it: a statement of ten thousand brackets is refused rather than
 //! followed.
 
-use db_sqlite::ast::{Arena, ColumnConstraint, Definition, ExprId, Node, SelectId, TableBody, TriggerStep};
+use db_sqlite::ast::{
+    Arena, ColumnConstraint, Definition, ExprId, Node, SelectId, TableBody, TriggerStep,
+};
 use db_sqlite::parse::{definition, expression, statement};
 
 fuzz_support::fuzz_target!(|bytes: &[u8]| {
@@ -62,7 +64,10 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
     }
     match expression(bytes) {
         Err(error) => {
-            assert!(error.at <= bytes.len(), "a refusal past the end of the input");
+            assert!(
+                error.at <= bytes.len(),
+                "a refusal past the end of the input"
+            );
             assert!(
                 error.at.saturating_add(error.len) <= bytes.len(),
                 "a refusal longer than the input"
@@ -87,7 +92,7 @@ fn walk_definition(arena: &Arena, definition: Definition) {
                 for column in arena.columns(columns) {
                     for constraint in arena.column_constraints(column.constraints) {
                         match *constraint {
-                            ColumnConstraint::Check(expr)
+                            ColumnConstraint::Check { value: expr, .. }
                             | ColumnConstraint::Default { value: expr, .. }
                             | ColumnConstraint::Generated { value: expr, .. } => {
                                 walk(arena, expr, 0);
@@ -115,7 +120,7 @@ fn walk_definition(arena: &Arena, definition: Definition) {
         Definition::AddColumn(added) => {
             for constraint in arena.column_constraints(added.column.constraints) {
                 match *constraint {
-                    ColumnConstraint::Check(expr)
+                    ColumnConstraint::Check { value: expr, .. }
                     | ColumnConstraint::Default { value: expr, .. }
                     | ColumnConstraint::Generated { value: expr, .. } => {
                         walk(arena, expr, 0);
@@ -159,8 +164,13 @@ fn walk_definition(arena: &Arena, definition: Definition) {
 /// Reads every statement reachable from `id`, and every expression of
 /// each, so that a statement is a tree as well.
 fn walk_select(arena: &Arena, id: SelectId, depth: u32) {
-    assert!(depth < 512, "a statement nested deeper than the parser walks");
-    let select = arena.select(id).expect("a statement the arena does not hold");
+    assert!(
+        depth < 512,
+        "a statement nested deeper than the parser walks"
+    );
+    let select = arena
+        .select(id)
+        .expect("a statement the arena does not hold");
     let deeper = depth.saturating_add(1);
     for cte in arena.ctes(select.ctes) {
         walk_select(arena, cte.select, deeper);
@@ -193,7 +203,11 @@ fn walk_select(arena: &Arena, id: SelectId, depth: u32) {
     {
         walk(arena, expr, 0);
     }
-    for expr in arena.children(select.group).iter().chain(arena.children(select.values)) {
+    for expr in arena
+        .children(select.group)
+        .iter()
+        .chain(arena.children(select.values))
+    {
         walk(arena, *expr, 0);
     }
     for term in arena.orders(select.order) {
@@ -213,8 +227,8 @@ fn walk_select(arena: &Arena, id: SelectId, depth: u32) {
         }
         if let Some(frame) = window.frame {
             for bound in [frame.start, frame.end] {
-                if let db_sqlite::ast::Bound::Preceding(id)
-                | db_sqlite::ast::Bound::Following(id) = bound
+                if let db_sqlite::ast::Bound::Preceding(id) | db_sqlite::ast::Bound::Following(id) =
+                    bound
                 {
                     walk(arena, id, 0);
                 }

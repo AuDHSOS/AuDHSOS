@@ -253,7 +253,7 @@ fn what_follows_the_columns_belongs_to_the_table() {
     assert_eq!(key[0].order, Order::Descending);
     assert_eq!(key[1].order, Order::Unspecified);
     assert!(matches!(constraints[1], TableConstraint::Unique { .. }));
-    assert!(matches!(constraints[2], TableConstraint::Check(_)));
+    assert!(matches!(constraints[2], TableConstraint::Check { .. }));
     let TableConstraint::ForeignKey { columns, foreign } = constraints[3] else {
         panic!("no foreign key");
     };
