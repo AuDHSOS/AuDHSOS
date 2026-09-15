@@ -167,6 +167,10 @@ pub enum Instruction {
     LdaConstant(u16),
     /// `acc = strings[index]`, materialized in the current Agent's string arena.
     LdaString(u16),
+    /// `acc = [[GlobalThisValue]]` of the Realm's Global Environment Record
+    /// (9.1.1.4.11), which 9.4.2 answers for `this` where no function bound
+    /// one, that is at the top level of a Script.
+    LdaGlobalThis,
     /// `acc = GetBindingValue(strings[index])` on the Realm's Global
     /// Environment Record (9.1.1.4.6), which throws a `ReferenceError` for a
     /// name it does not bind.
@@ -846,6 +850,7 @@ impl BytecodeFunction {
             | Instruction::ToNumber
             | Instruction::BitNot
             | Instruction::TypeOf
+            | Instruction::LdaGlobalThis
             | Instruction::LdaUndefined
             | Instruction::LdaNull
             | Instruction::LdaTrue

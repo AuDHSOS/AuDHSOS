@@ -1296,6 +1296,7 @@ impl RegisterVM {
                     | Intrinsic::TypeErrorConstructor
                     | Intrinsic::UriErrorConstructor
                     | Intrinsic::StringConstructor
+                    | Intrinsic::FunctionConstructor
             )
         })
     }
@@ -2065,6 +2066,13 @@ impl RegisterVM {
             return Ok(false);
         };
         let is = |prototype: Value| prototype.as_object() == Some(object);
+        // 19.1 and 19.2 give the global object properties this Realm reaches
+        // through the Global Environment Record rather than through it.
+        if realm.global_environment().global_object(heap)? == object
+            && super::realm::global_properties_own(name)
+        {
+            return Ok(true);
+        }
         Ok(
             is(realm.string_prototype(heap)?) && super::realm::string_prototype_owns(name)
                 || is(realm.array_prototype(heap)?) && super::realm::array_prototype_owns(name)
@@ -3300,6 +3308,11 @@ impl RegisterVM {
                             return Err(Self::binding_error(heap, realm, outcome, units));
                         }
                     };
+                }
+                Instruction::LdaGlobalThis => {
+                    // 9.1.1.4.11 answers [[GlobalThisValue]], which 9.4.2 gives
+                    // `this` wherever no function bound one.
+                    self.acc = Value::from_object(realm.global_environment().global_object(heap)?);
                 }
                 Instruction::LdaGlobal(index) => {
                     let units = active_code

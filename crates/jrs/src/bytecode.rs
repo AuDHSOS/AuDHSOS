@@ -1439,10 +1439,22 @@ impl RegisterLowerer {
             // call, which the frame carries in a register of its own. A Script
             // has no such record, so its `this` is not this binding.
             ExprKind::This => {
-                let binding = self.bindings.get(THIS_BINDING).copied()?;
-                let value_type = binding.value_type?;
-                self.load_binding(binding);
-                value_type
+                // 9.4.2 resolves `this` on the Environment Record that has
+                // one. At the top level of a Script that is the Global
+                // Environment Record, whose [[GlobalThisValue]] is the global
+                // object; 10.2.1.2 bound every other one to a register.
+                match self.bindings.get(THIS_BINDING).copied() {
+                    Some(binding) => {
+                        let value_type = binding.value_type?;
+                        self.load_binding(binding);
+                        value_type
+                    }
+                    None if self.realm => {
+                        self.code.emit(Instruction::LdaGlobalThis);
+                        RegisterType::Unknown
+                    }
+                    None => return None,
+                }
             }
             ExprKind::Name(name) => {
                 if let Some(binding) = self.bindings.get(name).copied() {
