@@ -793,6 +793,9 @@ enum ForInHead<'a> {
         /// Whether the head is lexical, and if so whether it is mutable.
         lexical: Option<bool>,
     },
+    /// A head that declares nothing: 14.7.5.6 step 7.g evaluates the target as
+    /// a Reference of its own and writes the value of each step through it.
+    Target(&'a parser::AssignmentTarget),
 }
 
 /// What a `for`-`in` or `for`-`of` head leaves for its body.
@@ -810,6 +813,8 @@ struct IterationHead<'a> {
     /// The pattern the head declared, which 8.6.2 binds out of the value of
     /// each step.
     pattern: Option<&'a BindingPattern>,
+    /// The target a head that declares nothing writes each step through.
+    target: Option<&'a parser::AssignmentTarget>,
     /// Register the loop variable is written to.
     variable: crate::engine::bytecode::Reg,
     /// Register holding the loop's completion value.
@@ -5923,11 +5928,17 @@ impl RegisterLowerer {
     fn for_in_head_binding<'a>(
         &self,
         binding: Option<&'a (BindingPattern, Option<bool>)>,
-        target: Option<&parser::AssignmentTarget>,
+        target: Option<&'a parser::AssignmentTarget>,
         body: &Stmt,
     ) -> Option<ForInHead<'a>> {
-        if target.is_some() {
-            return None;
+        if let Some(target) = target {
+            // 14.7.5.6 step 7.g evaluates the target once per iteration, so
+            // every name it writes carries the top of the lattice from the
+            // head on.
+            if !register_assignment_target_supported(target) {
+                return None;
+            }
+            return Some(ForInHead::Target(target));
         }
         let (pattern, lexical) = binding?;
         // 8.6.2 binds the names a pattern head names out of the value of each
@@ -5999,6 +6010,20 @@ impl RegisterLowerer {
             );
         }
         Some(())
+    }
+
+    /// Gives every name an assignment head writes the top of the lattice,
+    /// which is what it carries from the head on.
+    fn widen_assignment_target(&mut self, target: &parser::AssignmentTarget) {
+        let mut names = Vec::new();
+        register_assignment_target_names(target, &mut names);
+        for name in names {
+            if let Some(binding) = self.bindings.get_mut(name)
+                && binding.value_type.is_some()
+            {
+                binding.value_type = Some(RegisterType::Unknown);
+            }
+        }
     }
 
     /// Gives back what a pattern head took.
@@ -6118,6 +6143,11 @@ impl RegisterLowerer {
                 self.declare_iteration_pattern(pattern, lexical)?;
                 register
             }
+            ForInHead::Target(target) => {
+                let register = self.allocate_register()?;
+                self.widen_assignment_target(target);
+                register
+            }
         };
         let head_global = match head_binding {
             ForInHead::Global { name } => {
@@ -6128,6 +6158,10 @@ impl RegisterLowerer {
         };
         let head_pattern = match head_binding {
             ForInHead::Pattern { pattern, .. } => Some(pattern),
+            _ => None,
+        };
+        let head_target = match head_binding {
+            ForInHead::Target(target) => Some(target),
             _ => None,
         };
 
@@ -6151,6 +6185,7 @@ impl RegisterLowerer {
                 variable: key_register,
                 global: head_global,
                 pattern: head_pattern,
+                target: head_target,
                 result: result_register,
                 source: None,
                 guarded_layout: None,
@@ -6177,7 +6212,7 @@ impl RegisterLowerer {
             // The binding lives on the Global Environment Record, or is the
             // names a pattern bound, so nothing of this frame holds the step
             // after the loop.
-            ForInHead::Global { .. } => {
+            ForInHead::Global { .. } | ForInHead::Target(_) => {
                 self.release_register(key_register)?;
             }
             ForInHead::Pattern { pattern, lexical } => {
@@ -6230,6 +6265,21 @@ impl RegisterLowerer {
         if let Some(pattern) = loop_head.pattern {
             self.code.emit(Instruction::Ldar(loop_head.variable));
             self.bind_pattern(RegisterType::Unknown, pattern)?;
+        }
+        // 14.7.5.6 step 7.g evaluates the target as a Reference of its own,
+        // after the step produced the value it writes through it.
+        if let Some(target) = loop_head.target {
+            match target {
+                parser::AssignmentTarget::Reference(reference) => {
+                    let prepared = self.prepare_assignment_reference(reference)?;
+                    self.code.emit(Instruction::Ldar(loop_head.variable));
+                    self.finish_assignment_reference(RegisterType::Unknown, reference, prepared)?;
+                }
+                parser::AssignmentTarget::Pattern(pattern) => {
+                    self.code.emit(Instruction::Ldar(loop_head.variable));
+                    self.assign_pattern(RegisterType::Unknown, pattern)?;
+                }
+            }
         }
         self.code.emit(Instruction::Ldar(loop_head.result));
         self.loops.push(RegisterLoop {
@@ -6385,6 +6435,10 @@ impl RegisterLowerer {
             ForInHead::Pattern { pattern, .. } => Some(pattern),
             _ => None,
         };
+        let head_target = match head_binding {
+            ForInHead::Target(target) => Some(target),
+            _ => None,
+        };
 
         let mut bindings_at_head = self.bindings.clone();
         infer_register_var_types_to_fixed_point(
@@ -6439,6 +6493,7 @@ impl RegisterLowerer {
                 variable,
                 global: head_global,
                 pattern: head_pattern,
+                target: head_target,
                 result: result_register,
                 source: None,
                 guarded_layout: None,
@@ -6496,6 +6551,11 @@ impl RegisterLowerer {
                 self.declare_iteration_pattern(pattern, lexical)?;
                 Some(register)
             }
+            ForInHead::Target(target) => {
+                let register = self.allocate_register()?;
+                self.widen_assignment_target(target);
+                Some(register)
+            }
         }
     }
 
@@ -6520,7 +6580,7 @@ impl RegisterLowerer {
             } => {
                 self.bindings.get_mut(name)?.value_type = Some(declared_type.merge(element_type));
             }
-            ForInHead::Global { .. } => {
+            ForInHead::Global { .. } | ForInHead::Target(_) => {
                 self.release_register(variable)?;
             }
             ForInHead::Pattern { pattern, lexical } => {
@@ -6598,6 +6658,11 @@ impl RegisterLowerer {
                 self.declare_iteration_pattern(pattern, lexical)?;
                 register
             }
+            ForInHead::Target(target) => {
+                let register = self.allocate_register()?;
+                self.widen_assignment_target(target);
+                register
+            }
         };
         let head_global = match head_binding {
             ForInHead::Global { name } => {
@@ -6608,6 +6673,10 @@ impl RegisterLowerer {
         };
         let head_pattern = match head_binding {
             ForInHead::Pattern { pattern, .. } => Some(pattern),
+            _ => None,
+        };
+        let head_target = match head_binding {
+            ForInHead::Target(target) => Some(target),
             _ => None,
         };
 
@@ -6632,6 +6701,7 @@ impl RegisterLowerer {
                 variable: key_register,
                 global: head_global,
                 pattern: head_pattern,
+                target: head_target,
                 result: result_register,
                 source: Some(value),
                 guarded_layout: Some(object_id),
@@ -6657,7 +6727,7 @@ impl RegisterLowerer {
             // The binding lives on the Global Environment Record, or is the
             // names a pattern bound, so nothing of this frame holds the step
             // after the loop.
-            ForInHead::Global { .. } => {
+            ForInHead::Global { .. } | ForInHead::Target(_) => {
                 self.release_register(key_register)?;
             }
             ForInHead::Pattern { pattern, lexical } => {
@@ -8119,15 +8189,20 @@ fn register_scoped_statement_writes_names(
             object,
             body,
         } => {
-            if target.is_some() {
-                return None;
-            }
             // A `var` head writes its binding once per iteration; a lexical
             // head makes one of its own and writes nothing outside the loop.
             if let Some((pattern, None)) = binding {
                 let mut bound = Vec::new();
                 pattern.names(&mut bound);
                 if bound.iter().any(|name| names.contains(name)) {
+                    return Some(true);
+                }
+            }
+            // A head that declares nothing writes every name its target does.
+            if let Some(target) = target {
+                let mut written = Vec::new();
+                register_assignment_target_names(target, &mut written);
+                if written.iter().any(|name| names.contains(*name)) {
                     return Some(true);
                 }
             }
@@ -8902,11 +8977,20 @@ fn register_scoped_statement_references(
             object,
             body,
         } => {
-            if target.is_some() {
-                return None;
-            }
             // 14.7.5.4: the head's declaration binds only in the loop.
             register_expression_references(object, names, nested_free_names)?;
+            if let Some(target) = target {
+                match target {
+                    parser::AssignmentTarget::Reference(reference) => {
+                        register_expression_references(reference, names, nested_free_names)?;
+                    }
+                    parser::AssignmentTarget::Pattern(pattern) => {
+                        let mut written = Vec::new();
+                        register_assignment_pattern_names(pattern, &mut written);
+                        names.extend(written.into_iter().map(String::from));
+                    }
+                }
+            }
             let mut bound = BTreeSet::new();
             if let Some((pattern, _)) = binding {
                 let mut declared = Vec::new();
@@ -9379,6 +9463,61 @@ fn register_binding_pattern_supported(pattern: &parser::BindingPattern) -> bool 
                     .properties
                     .iter()
                     .all(|property| RegisterLowerer::binding_property_name(property).is_some()))
+        }
+    }
+}
+
+/// Whether the head of a `for`-`of` or `for`-`in` that declares nothing names
+/// a Reference this lowering writes.
+fn register_assignment_target_supported(target: &parser::AssignmentTarget) -> bool {
+    match target {
+        parser::AssignmentTarget::Reference(reference) => {
+            reference.reference_name().is_some() || register_member_assignment_supported(reference)
+        }
+        parser::AssignmentTarget::Pattern(pattern) => {
+            register_assignment_pattern_supported(pattern)
+        }
+    }
+}
+
+/// The names such a head writes.
+fn register_assignment_target_names<'a>(
+    target: &'a parser::AssignmentTarget,
+    names: &mut Vec<&'a str>,
+) {
+    match target {
+        parser::AssignmentTarget::Reference(reference) => {
+            names.extend(reference.reference_name());
+        }
+        parser::AssignmentTarget::Pattern(pattern) => {
+            register_assignment_pattern_names(pattern, names);
+        }
+    }
+}
+
+fn register_assignment_pattern_names<'a>(
+    pattern: &'a parser::AssignmentPattern,
+    names: &mut Vec<&'a str>,
+) {
+    match pattern {
+        parser::AssignmentPattern::Target(target) => names.extend(target.reference_name()),
+        parser::AssignmentPattern::Array(array) => {
+            for element in &array.elements {
+                if let parser::AssignmentArrayElement::Element { target, .. } = element {
+                    register_assignment_pattern_names(target, names);
+                }
+            }
+            if let Some(rest) = array.rest.as_deref() {
+                register_assignment_pattern_names(rest, names);
+            }
+        }
+        parser::AssignmentPattern::Object(object) => {
+            for property in &object.properties {
+                register_assignment_pattern_names(&property.target, names);
+            }
+            if let Some(rest) = object.rest.as_deref() {
+                names.extend(rest.reference_name());
+            }
         }
     }
 }

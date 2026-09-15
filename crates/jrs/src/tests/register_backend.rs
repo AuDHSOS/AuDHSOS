@@ -3980,11 +3980,8 @@ fn register_lowering_rejects_for_in_heads_it_cannot_model() -> Result<(), Error>
     ));
     for source in [
         // An assignment head writes an existing reference.
-        "let k;for(k in {a:1}){}",
-        // A destructuring head is not lowered.
         // A captured per-iteration binding needs a context of its own.
         "for(const k in {a:1}){(()=>k)}",
-        "let k;for(k of [1]){}",
         // A per-iteration binding captured by a closure needs a context.
         "for(const x of [1]){(()=>x)}",
         // A head that shadows a binding of the enclosing scope is not lowered.
@@ -5955,5 +5952,27 @@ fn an_arguments_object_with_no_mapping_leaves_its_frame() -> Result<(), Error> {
     let source = "var arg;(function fun(a){arg=arguments}(1,2,3));arg.length";
     let program = compile(source, Limits::default())?;
     assert!(!program.uses_register_backend(), "{source}");
+    Ok(())
+}
+
+/// 14.7.5.6 step 7.g: a head that declares nothing evaluates its target as a
+/// Reference of its own, once per iteration, and writes the step through it.
+#[test]
+fn a_for_head_that_declares_nothing_writes_its_target() -> Result<(), Error> {
+    for source in [
+        "var a;for(a of [1,2]){}a",
+        "var a;for(a of []){}typeof a",
+        "var s='';var a;for(a of [1,2,3]){s+=a}s",
+        "var a;for([a] of [[1]]){}a",
+        "var a;for([a=2] of [[]]){}a",
+        "var a,b;for([a,b] of [[1,2],[3,4]]){}a+','+b",
+        "var a;for({a} of [{a:1}]){}a",
+        "var o={};for([o.p] of [[1]]){}o.p",
+        "var a;for(a in {x:1}){}a",
+        "var o={};for(o.k in {x:1,y:2}){}o.k",
+        "var a;var n=0;for(a of [1,2]){n+=a}''+a+','+n",
+    ] {
+        differential_scripts(&[source])?;
+    }
     Ok(())
 }
