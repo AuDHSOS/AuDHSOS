@@ -5,6 +5,24 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- The files of SQLite's own suite run beside each other rather than one
+  after another: `sh tools/xtask.sh sqlite-suite` starts
+  `process::test_jobs` processes at once, the count `AUDHSOS_TEST_JOBS`
+  sets for every parallel step. A file collides with no other, because
+  each binds a port the system hands out and writes under a directory
+  its own name keys. `suite::beside` is the pool that runs them, a
+  scoped pool of its own rather than `process::run_parallel_report`,
+  which waits on a child for as long as the child runs and so would drop
+  the sixty-second deadline; that runner also reads a child's output
+  while the child writes, which would count cases a file that fills its
+  pipe has never had counted. `suite::apart` answers what one process
+  wrote and whether it ended by itself, and `suite::run` reads those on
+  the thread that called it, in the order of the names, so the counters
+  `--why` answers and the cases `--show` prints are what a run of one
+  file after another wrote.
+
 ### Added
 
 - `mod` in `db-sqlite`, whose answer is exact: the divisor is doubled up
