@@ -464,6 +464,9 @@ pub enum Instruction {
         /// Array object register.
         obj: Reg,
     },
+    /// `RequireObjectCoercible` of 7.2.1 on `acc`, which 14.3.3.3 does before
+    /// it reads any property of the source.
+    RequireObjectCoercible,
     /// Creates an empty object `{}` in `acc`.
     CreateObject,
     /// Creates an empty array `[]` in `acc` with initial capacity.
@@ -930,6 +933,7 @@ impl BytecodeFunction {
             | Instruction::LdaNull
             | Instruction::LdaTrue
             | Instruction::LdaFalse
+            | Instruction::RequireObjectCoercible
             | Instruction::CreateObject
             | Instruction::CreateArray(_)
             | Instruction::Throw

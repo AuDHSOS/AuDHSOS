@@ -6900,6 +6900,15 @@ impl RegisterVM {
                     let name = PropertyKey::String(heap.strings.intern_units(&units)?);
                     self.acc = delete_reference(target, name, index, strict, heap, realm)?;
                 }
+                Instruction::RequireObjectCoercible => {
+                    if self.acc.is_undefined() || self.acc.is_null() {
+                        return Err(type_error(
+                            heap,
+                            realm,
+                            "cannot destructure null or undefined",
+                        ));
+                    }
+                }
                 Instruction::DefineMethod { obj, name } => {
                     let units = active_code
                         .string_constants

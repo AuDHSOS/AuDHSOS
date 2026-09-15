@@ -284,6 +284,11 @@ fn differential_scripts(scripts: &[&str]) -> Result<(), Error> {
                 "{scripts:?}: {actual:?} != {expected:?}"
             );
         }
+        // An error the engine raised itself carries its message, and both
+        // backends must name the same one.
+        (Err(Error::Type { message: actual }), Err(Error::Type { message: expected })) => {
+            assert_eq!(actual, expected, "{scripts:?}");
+        }
         _ => panic!("{scripts:?}: {actual:?} != {expected:?}"),
     }
     Ok(())
@@ -5097,6 +5102,48 @@ fn a_class_body_builds_its_constructor_and_its_prototype() -> Result<(), Error> 
     for (source, feature) in [
         ("class C extends Object{};0", "a class that extends another"),
         ("class C{['m'](){}};0", "a computed name in a class body"),
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(!program.uses_register_backend(), "{source}");
+        assert_eq!(program.register_refusal, Some(feature), "{source}");
+    }
+    Ok(())
+}
+
+#[test]
+fn an_object_pattern_reads_a_value_with_no_known_layout() -> Result<(), Error> {
+    // 14.3.3.3 reads each property of the source, which for a value the
+    // lowering cannot name is a read at run time.
+    for source in [
+        "function f(o){let {a}=o;return a}f({a:1})",
+        "function f(o){let {a,b}=o;return a+b}f({a:1,b:2})",
+        "function f(o){let {a:x}=o;return x}f({a:5})",
+        "function f(o){let {a=7}=o;return a}f({})",
+        "function f(o){let {a:{b}}=o;return b}f({a:{b:3}})",
+        "function f(o,k){let {[k]:v}=o;return v}f({x:4},'x')",
+        "function f(o){let {a}=o;return a}f({get a(){return 8}})",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // 14.3.3.3 refuses a source that is not coercible to an Object, which the
+    // read of its first property is what finds out.
+    for source in [
+        "function f(o){let {a}=o;return a}f(null)",
+        "function f(o){let {a}=o;return a}f(undefined)",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // A pattern that reads no property would not find that out, and a rest
+    // element collects the own keys of a shape the lowering does not know.
+    for (source, feature) in [
+        (
+            "function f(o){let {}=o;return 1}f(null)",
+            "an object pattern with no property",
+        ),
+        (
+            "function f(o){let {a,...r}=o;return r}f({a:1,b:2})",
+            "a rest element of an object pattern",
+        ),
     ] {
         let program = compile(source, Limits::default())?;
         assert!(!program.uses_register_backend(), "{source}");

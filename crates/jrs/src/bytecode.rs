@@ -986,11 +986,29 @@ impl RegisterLowerer {
                 self.bindings.get_mut(name)?.value_type = Some(value_type);
             }
             parser::BindingPattern::Object(object) => {
-                if !value_type.is_object() {
-                    return None;
+                // A layout the lowering tracks answers each property from
+                // what it knows; every other value is read at run time.
+                let tracked = value_type.is_object();
+                if !tracked {
+                    // 14.3.3.3 requires the source to be coercible to an
+                    // Object, which reading one of its properties checks. A
+                    // pattern that reads none would not check it.
+                    if object.properties.is_empty() {
+                        self.refuse("an object pattern with no property");
+                        return None;
+                    }
+                    // 14.3.3.3 collects the rest from the own keys, which the
+                    // lowering knows only for a layout it tracks.
+                    if object.rest.is_some() {
+                        self.refuse("a rest element of an object pattern");
+                        return None;
+                    }
                 }
                 if object.rest.is_some() && !matches!(value_type, RegisterType::Object(_)) {
                     return None;
+                }
+                if !tracked {
+                    self.code.emit(Instruction::RequireObjectCoercible);
                 }
                 let source = self.allocate_register()?;
                 self.code.emit(Instruction::Star(source));
@@ -999,13 +1017,21 @@ impl RegisterLowerer {
                     if object.rest.is_some() {
                         excluded.push(Self::binding_property_name(property)?);
                     }
-                    let mut property_type = self.lower_property_from_register(
-                        source,
-                        value_type,
-                        &property.key,
-                        property.computed,
-                        true,
-                    )?;
+                    let mut property_type = if tracked {
+                        self.lower_property_from_register(
+                            source,
+                            value_type,
+                            &property.key,
+                            property.computed,
+                            true,
+                        )?
+                    } else {
+                        self.lower_unknown_property_from_register(
+                            source,
+                            &property.key,
+                            property.computed,
+                        )?
+                    };
                     if let Some(initializer) = &property.initializer {
                         property_type = self.lower_binding_default(property_type, initializer)?;
                     }
@@ -1022,6 +1048,9 @@ impl RegisterLowerer {
             }
             parser::BindingPattern::Array(array) => {
                 if !matches!(value_type, RegisterType::Array(_)) {
+                    // 8.6.2 takes the elements from the iterator of the value,
+                    // and closes it (7.4.9) when the pattern stops early.
+                    self.refuse("an array pattern on a value with no known layout");
                     return None;
                 }
                 let source = self.allocate_register()?;
@@ -1071,9 +1100,11 @@ impl RegisterLowerer {
                 && register_context_bindings_unchanged(&bindings_without_default, &self.bindings))
             .then_some(default_type);
         }
+        // A value the lowering cannot name may be undefined, so the check
+        // 8.6.2 makes has to be made at run time.
         if !matches!(
             value_type,
-            RegisterType::NumberOrUndefined | RegisterType::Primitive
+            RegisterType::NumberOrUndefined | RegisterType::Primitive | RegisterType::Unknown
         ) {
             return Some(value_type);
         }
@@ -1090,10 +1121,10 @@ impl RegisterLowerer {
         self.bindings = merge_register_bindings(&bindings_without_default, &self.bindings)?;
         let end = self.code.instructions.len();
         self.patch_jump(present, end)?;
-        Some(if value_type == RegisterType::Primitive {
-            RegisterType::Primitive
-        } else {
-            RegisterType::Number.merge(default_type)
+        Some(match value_type {
+            RegisterType::Primitive => RegisterType::Primitive,
+            RegisterType::Unknown => RegisterType::Unknown,
+            _ => RegisterType::Number.merge(default_type),
         })
     }
 
@@ -3701,6 +3732,40 @@ impl RegisterLowerer {
             properties.insert(property_name, value_type);
         }
         Some((RegisterType::Object(rest_id), rest_object))
+    }
+
+    /// Reads one property of a value the lowering cannot name, which is what
+    /// 14.3.3.3 does for a binding pattern over an argument.
+    fn lower_unknown_property_from_register(
+        &mut self,
+        object: crate::engine::bytecode::Reg,
+        key: &Expr,
+        keyed: bool,
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        if keyed {
+            if !self.lower(key)?.converts_to_primitive() {
+                return None;
+            }
+            let register = self.allocate_register()?;
+            self.code.emit(Instruction::Star(register));
+            self.code.emit(Instruction::GetByValue {
+                obj: object,
+                key: register,
+                slot,
+            });
+            self.release_register(register)?;
+        } else {
+            let name = Self::static_property_name(key)?.to_vec();
+            let constant = self.string_constant(&name)?;
+            self.code.emit(Instruction::GetNamed {
+                obj: object,
+                name: constant,
+                slot,
+            });
+        }
+        Some(RegisterType::Unknown)
     }
 
     fn lower_ordinary_property_from_register(
