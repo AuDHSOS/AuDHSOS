@@ -117,7 +117,6 @@ impl Execution<'_> {
         let handle = self.heap.allocate(
             Node::HostFunction {
                 behavior,
-                name: name.clone(),
                 object: Object::new(proto),
             },
             self.limits.heap_entries,
@@ -258,21 +257,23 @@ impl Execution<'_> {
                 return Ok(Value::String(text.encode_utf16().collect()));
             }
         }
-        if let Value::Function(FunctionValue(Callable::Host { handle, .. })) = receiver {
-            let Node::HostFunction { name, .. } = self.heap.get(*handle)? else {
-                return Err(Error::InvalidBytecode);
-            };
-            let mut units = Value::string("function ").units().to_vec();
-            units.extend_from_slice(name);
-            units.extend("() { [native code] }".encode_utf16());
-            if units.len() > self.limits.string_units {
-                return Err(Error::Limit {
-                    resource: "string units",
-                });
-            }
-            Ok(Value::String(units.into()))
-        } else {
-            Ok(Value::string("function () { [native code] }"))
+        // 20.2.3.5 step 3 answers a `NativeFunction` string, which carries the
+        // name the function owns where it owns one.
+        let name = match self.own(receiver, &Value::string("name").units())? {
+            Some(property) if property.accessor.is_none() => match property.value {
+                Value::String(units) => units,
+                _ => alloc::rc::Rc::default(),
+            },
+            _ => alloc::rc::Rc::default(),
+        };
+        let mut units = Value::string("function ").units().to_vec();
+        units.extend_from_slice(&name);
+        units.extend("() { [native code] }".encode_utf16());
+        if units.len() > self.limits.string_units {
+            return Err(Error::Limit {
+                resource: "string units",
+            });
         }
+        Ok(Value::String(units.into()))
     }
 }

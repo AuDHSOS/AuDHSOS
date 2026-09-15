@@ -21,7 +21,6 @@ pub(crate) enum Node {
     Symbol,
     HostFunction {
         behavior: HostBehavior,
-        name: alloc::rc::Rc<[u16]>,
         object: Object,
     },
     Cell {

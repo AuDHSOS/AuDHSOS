@@ -140,7 +140,7 @@ fn async_intrinsic_mutation_does_not_change_internal_prototype_selection() -> Re
     for source in [
         "let A=(async()=>{}).constructor;Object.defineProperty(A.prototype,'constructor',{value:7});let f=async()=>{};Object.getPrototypeOf(f)===A.prototype&&f.constructor===7",
         "let A=(async()=>{}).constructor;delete A.prototype[Symbol.toStringTag];Object.prototype.toString.call(async()=>{})==='[object Function]'",
-        "let A=(async()=>{}).constructor;Object.defineProperty(A,'name',{value:'changed'});A.toString()==='function AsyncFunction() { [native code] }'",
+        "let A=(async()=>{}).constructor;Object.defineProperty(A,'name',{value:'changed'});A.toString()==='function changed() { [native code] }'",
         "let A=(async()=>{}).constructor;class S extends A{constructor(){super('return 1');this.n=7}}new S().n===7",
         "let A=(async()=>{}).constructor,log='';A({toString(){log+='p';return 'a'}},{toString(){log+='b';return 'return await a'}});log==='pb'",
         "let A=(async()=>{}).constructor,ok=false;try{A(Symbol(),'')}catch(e){ok=e instanceof TypeError}ok",

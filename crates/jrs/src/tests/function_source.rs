@@ -153,10 +153,11 @@ fn native_functions_and_modified_properties_keep_native_source() {
         "let f=Function.prototype.toString;f.name==='toString'&&f.length===0&&Object.isExtensible(f)&&f.prototype===undefined",
         "Object.getOwnPropertyNames(Function.prototype.toString).join()==='length,name'",
         "Function.prototype.toString.toString()==='function toString() { [native code] }'",
-        "let f=Math.pow;Object.defineProperty(f,'name',{value:'changed'});f.toString()==='function pow() { [native code] }'",
+        "let f=Math.pow;Object.defineProperty(f,'name',{value:'changed'});f.toString()==='function changed() { [native code] }'",
+        "Object.keys.toString()==='function () { [native code] }'&&String.toString()==='function String() { [native code] }'",
         "let f=()=>7;let b=f.bind(null);b.toString()==='function () { [native code] }'",
         "Function.prototype.toString()==='function () { [native code] }'",
-        "let original=Function.prototype.toString;Function.prototype.toString=function(){return 'changed'};Number.toString()==='changed'&&original.call(Number)==='function () { [native code] }'",
+        "let original=Function.prototype.toString;Function.prototype.toString=function(){return 'changed'};Number.toString()==='changed'&&original.call(Number)==='function Number() { [native code] }'",
     ] {
         assert_eq!(eval(source), Ok(Value::Boolean(true)), "{source}");
     }
