@@ -145,9 +145,8 @@ of lines and 100 percent of branches, in both instrumentations.
 | 3 | Writing past the record: the b-tree writer, transactions, the journal in four modes, the WAL. `changes`, `total_changes` and `last_insert_rowid` answer nought until then, which is what a connection that has written nothing answers. | Q7 |
 | 4 | The rest of the language: `INSERT`, `UPDATE`, `DELETE`, `CREATE`, `ALTER`, `DROP`, triggers, views, a `WITH` written `RECURSIVE`. | Q8 |
 | 5 | The functions whose answers are not exact: `sqrt`, `exp`, `ln`, `log`, `pow` and the trigonometric set. See D-160. | Q8 |
-| 6 | An adapter that speaks the commands SQLite's TCL suite drives. | Q9 |
-| 7 | The matrix run across every level of the suite rather than the format alone. | Q9 |
-| 8 | A report that names MC/DC pairs, which the pinned toolchain does not emit. D4 (16.10) derives MC/DC from condition coverage and `cargo xtask mcdc` instead. | Q10 |
+| 6 | The matrix run across every level of the suite rather than the format alone. | Q9 |
+| 7 | A report that names MC/DC pairs, which the pinned toolchain does not emit. D4 (16.10) derives MC/DC from condition coverage and `cargo xtask mcdc` instead. | Q10 |
 
 ## 16.7 Decision D1: the engine is a port of the routines
 
@@ -690,27 +689,25 @@ library accepts or refuses it, with no count of what is waiting.
 
 ## 16.23 Q9. The suites run whole
 
-Status: `sh tools/xtask.sh sqlite-suite` runs the part of SQLite's own
-test files that needs no TCL interpreter. Of 15 364 cases in 1 171
-files, 2333 pass, 6 answer differently, and 13 025 name something the
-engine refuses or something the harness cannot run.
-Depends on: Q7, Q8.
+Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
+under the `tclsh` of the machine. Of 61 784 cases in 636 files, 41 970
+pass, 6517 answer differently, and 13 297 name something the engine
+refuses or a command that needs the C library's internals.
+Depends on: Q7, Q8. Recorded in D-201, D-212, D-213, D-220, D-222 and
+D-223.
 Size: M.
 
 ### Needs
 
 - An adapter that speaks the commands `testfixture` drives, which is
-  where a C ABI would live. Built for the part written out in the file:
-  a `do_execsql_test`, a `do_test` whose body is one `execsql`, and the
-  `execsql` a file sets itself up with, each carrying no substitution.
+  `tools/suite/tester.tcl`: this repository's own tester, read by every
+  file, reaching the engine over a socket. Built, which D-223 records.
 - The matrix of 16.11 in the test support. Built.
 
 ### Does
 
 1. Run SQLite's TCL suite under `research/sqlite/test` against the
-   engine. Built for 15 364 of its cases; the rest need the
-   interpreter, because a substitution says what they run only once it
-   has run.
+   engine. Built.
 2. Run every level of this repository's own suite across the matrix
    rather than the format alone. Built for the write path.
 3. Drive differential execution from `norec`'s generator with the engine
@@ -718,38 +715,26 @@ Size: M.
 
 ### How a case is counted
 
-A file keeps one database, at the page size of 1024 `testfixture` is
-built with, because that is the size the answers the files write were
-recorded under. A statement is run through the connection that reads or
-the one that writes by its first word, which is read with the comments
-taken out, and a `WITH` clause carries a statement that writes as well,
-so the words after it say which. A real is written with the fifteen
-significant digits `tcl_precision` holds.
+A file keeps one database per path a connection opened, at the page size
+of 4096, and `tclsh` runs every command of the file. A statement is run
+through the connection that reads or the one that writes by its first
+word, which is read with the comments taken out, and a `WITH` clause
+carries a statement that writes as well, so the words after it say
+which. A real is written with the fifteen significant digits
+`tcl_precision` holds.
 
-An `execsql` outside a case is the file setting itself up: it runs so that the cases after it read what it
-wrote, and it is counted only by stopping the file where the engine
-refuses it. A step this harness cannot run stops the file only where
-the text it stands for may have changed the database, which D-213
-records. The cases run in the order they are written, because each
-builds on the ones before it. A case the engine refuses stops the file,
-and the cases after it are refused with it, because the database is then
-short of what they read. A case that runs is counted passed where the
-list it answers is the list the file writes, element for element.
+A case is counted passed where what it answered is what the file writes,
+compared as `do_test` of the suite's own tester compares it: `/RE/` is a
+regular expression, `~/RE/` one that must not match, `#/A..B/` a range,
+`*GLOB*` a pattern, and anything else the text itself, with a token that
+is a number compared to fifteen significant digits. A case the engine
+refused a statement of is refused and not failed, because the rows a
+later case reads are then short. A file runs in a process of its own and
+is ended after sixty seconds, with the cases it ran counted.
 
 `--why` counts what each refusal was for, by the first two words of the
 statement and what the engine answered, which is what says which missing
 feature stops the most files.
-
-### The six that answer differently
-
-| File | Cases | What it shows |
-|------|-------|---------------|
-| `fpconv1.test` | 2 | `sqlite3_db_config db FP_DIGITS`, which asks the library to render a real rather than the interpreter: the two cases before it is set want seventeen digits where the harness writes the fifteen `tcl_precision` holds, which D-212 records. |
-| `collate1.test` | 1 | A collation the file registers through the interpreter, which this harness cannot run. |
-| `gencol1.test` | 1 | `INSERT INTO t1 SELECT * FROM t0` where both hold a computed column: the values are placed over every column and the computed one is written again. |
-| `autoindex4.test` | 1 | The order of rows an `ORDER BY` leaves equal, which SQLite settles by the automatic index it builds. |
-| `e_wal.test` | 1 | A VFS without shared memory, under which `PRAGMA journal_mode=wal` leaves the mode as it was. |
-
 
 ### Done when
 

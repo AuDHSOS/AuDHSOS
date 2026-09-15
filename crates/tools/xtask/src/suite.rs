@@ -4,18 +4,26 @@
 //! SQLite's own test files, run against `db-sqlite`.
 //!
 //! `research/sqlite/test` holds the suite `testfixture` drives. This
-//! runs the part of it that needs no TCL interpreter: a
-//! `do_execsql_test` whose statements and whose answer are both written
-//! out in the file, with no substitution left in either. One database
-//! is kept per file and the cases of that file run against it in the
+//! runs each file under `tclsh`, which reads `tools/suite/tester.tcl`
+//! for the commands the file drives and reaches the engine over a
+//! socket on the loopback address. One database is kept per path a
+//! connection opened, and the cases of a file run against it in the
 //! order they are written, because each case builds on the ones before
 //! it.
 //!
-//! The checkout is not part of this repository, so this is never a step
-//! of `cargo xtask check`; `sh tools/sqlite.sh` brings it.
+//! `docs/17-the-suite-on-the-machine.md` says why the interpreter is
+//! `tclsh` and why the tester is this repository's own.
+//!
+//! Neither the checkout nor the interpreter is part of this repository,
+//! so this is never a step of `cargo xtask check`; `sh tools/sqlite.sh`
+//! brings the checkout.
 
 use std::collections::BTreeMap;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use db_sqlite::change::Writer;
 use db_sqlite::db::Database;
@@ -23,7 +31,6 @@ use db_sqlite::header::Encoding;
 use db_sqlite::value::Value;
 
 use crate::error::Error;
-use crate::fs;
 
 /// How a case ended.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -52,36 +59,8 @@ impl Score {
     }
 }
 
-/// One step of a file.
-pub(crate) enum Step {
-    /// Statements the file runs to set itself up, which the cases after
-    /// it read what was written by.
-    Setup(String),
-    /// A case: what the file calls it, the statements, and the answer
-    /// it writes for them as the elements of a list.
-    Case {
-        /// What the file calls it.
-        name: String,
-        /// The statements, as written.
-        sql: String,
-        /// The answer the file writes.
-        want: Vec<String>,
-    },
-    /// What the file prints a `NULL` as from here on, which `db null`
-    /// and `db nullvalue` set and which every answer after it carries.
-    Null(String),
-    /// Something the file runs that this harness cannot: a body that
-    /// runs more than statements, or statements a substitution stands
-    /// in. Where it may have changed the database it leaves the
-    /// database short of what the cases after it read and stops the
-    /// file the way a refusal does; where it reads alone the cases
-    /// after it read what the file wrote, so the file runs on and the
-    /// step itself is counted refused.
-    Opaque(bool),
-}
-
-/// What the engine refused, counted by the first word of the statement
-/// it refused, which `--why` answers.
+/// What a file stopped at, counted by the first words of it, which
+/// `--why` answers.
 static WHY: std::sync::Mutex<Option<BTreeMap<String, usize>>> = std::sync::Mutex::new(None);
 
 /// Counts what each refusal was for from here on.
@@ -123,12 +102,49 @@ pub(crate) fn show() {
     SHOW.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Runs the suite and answers one score per file, by file name.
+/// How long one file may run before the interpreter is ended. A file
+/// that writes more rows than the engine answers for in this long is
+/// scored with what it answered up to there.
+const DEADLINE: Duration = Duration::from_secs(60);
+
+/// The capabilities an `ifcapable` may name that this engine does not
+/// have. Every other name is answered as held.
+const MISSING: [&str; 21] = [
+    "vtab",
+    "fts1",
+    "fts2",
+    "fts3",
+    "fts4",
+    "fts5",
+    "rtree",
+    "icu",
+    "incrblob",
+    "shared_cache",
+    "memdebug",
+    "crashtest",
+    "codec",
+    "atomicwrite",
+    "vacuum",
+    "attach",
+    "explain",
+    "autovacuum",
+    "compound_select",
+    "unlock_notify",
+    "session",
+];
+
+/// Runs every file of the suite, or the one `only` names, and answers
+/// what each scored.
+///
+/// Each file runs in a process of its own, because a statement the
+/// engine answers slowly cannot be stopped from inside: the process is
+/// ended when the deadline passes and the file is counted with what it
+/// scored up to there.
 ///
 /// # Errors
 ///
-/// [`Error`] names a checkout that is not there and a file that would
-/// not be read.
+/// [`Error::Usage`] where the suite or the runner is not on the
+/// machine; the errors of reading a file.
 pub(crate) fn run(root: &Path, only: Option<&str>) -> Result<BTreeMap<String, Score>, Error> {
     let dir = root.join("research").join("sqlite").join("test");
     if !dir.is_dir() {
@@ -137,6 +153,12 @@ pub(crate) fn run(root: &Path, only: Option<&str>) -> Result<BTreeMap<String, Sc
             dir.display()
         )));
     }
+    let runner = root.join("tools").join("suite").join("runner.tcl");
+    if !runner.is_file() {
+        return Err(Error::Usage(format!("no runner at {}", runner.display())));
+    }
+    let me = std::env::current_exe()
+        .map_err(|source| Error::io("reading the path of this program", source))?;
     let mut scores = BTreeMap::new();
     for path in files(&dir)? {
         let name = path
@@ -146,13 +168,132 @@ pub(crate) fn run(root: &Path, only: Option<&str>) -> Result<BTreeMap<String, Sc
         if only.is_some_and(|wanted| wanted != name) {
             continue;
         }
-        let cases = cases(&fs::read(&path)?);
-        if cases.is_empty() {
-            continue;
+        let score = apart(&me, &path, &name)?;
+        if score.ran() != 0 {
+            scores.insert(name, score);
         }
-        scores.insert(name.clone(), score(&name, &cases));
     }
     Ok(scores)
+}
+
+/// One file in a process of its own, ended where the deadline passes.
+fn apart(me: &Path, path: &Path, name: &str) -> Result<Score, Error> {
+    let mut child = Command::new(me)
+        .arg("sqlite-suite")
+        .arg("--one")
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|source| Error::io("starting the run of one file", source))?;
+    let over = Instant::now();
+    let ended = loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break true,
+            Ok(None) => {}
+            Err(source) => return Err(Error::io("waiting for the run of one file", source)),
+        }
+        if over.elapsed() > DEADLINE {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    if !ended {
+        let _ = child.kill();
+        let _ = child.wait();
+        refused(&format!("{name} took longer than the deadline"));
+    }
+    // What the run wrote before it was ended is still in the pipe, so a
+    // file the deadline ended is counted with the cases it ran.
+    let mut text = String::new();
+    if let Some(mut out) = child.stdout.take() {
+        let _ = out.read_to_string(&mut text);
+    }
+    Ok(read_score(name, &text))
+}
+
+/// What a run of one file wrote about itself: one line per case, one
+/// per refusal, and one per case that answered differently.
+fn read_score(name: &str, text: &str) -> Score {
+    let mut score = Score::default();
+    let mut lines = text.lines();
+    while let Some(line) = lines.next() {
+        let Some((kind, rest)) = line.split_once(' ') else {
+            continue;
+        };
+        match kind {
+            "C" => match rest {
+                "passed" => score.passed = score.passed.saturating_add(1),
+                "refused" => score.refused = score.refused.saturating_add(1),
+                _ => score.failed = score.failed.saturating_add(1),
+            },
+            "W" => refused(rest),
+            "F" if SHOW.load(std::sync::atomic::Ordering::Relaxed) => {
+                let mine = lines.next().unwrap_or("");
+                let want = lines.next().unwrap_or("");
+                crate::out::note!("{name} {rest}\n{mine}\n{want}");
+            }
+            "F" => {
+                lines.next();
+                lines.next();
+            }
+            _ => {}
+        }
+    }
+    score
+}
+
+/// One file, run here and written out for the process that started it.
+///
+/// # Errors
+///
+/// The errors of the line.
+pub(crate) fn one(root: &Path, path: &Path) -> Result<(), Error> {
+    let runner = root.join("tools").join("suite").join("runner.tcl");
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    alone(&runner, path, &name)?;
+    Ok(())
+}
+
+/// One file: the harness listens, the interpreter reads the file, and
+/// every request of the tester is answered until the file is done.
+fn alone(runner: &Path, path: &Path, name: &str) -> Result<(), Error> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .map_err(|source| Error::io("listening for the interpreter", source))?;
+    let port = listener
+        .local_addr()
+        .map_err(|source| Error::io("reading the port", source))?
+        .port();
+    // The interpreter runs in a directory of its own, because a file
+    // of the suite writes beside itself: a log, a copy of a database,
+    // a script it reads back.
+    let scratch = std::env::temp_dir().join(format!("audhsos-suite-{name}"));
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch)
+        .map_err(|source| Error::io("making the directory the file runs in", source))?;
+    let mut child = Command::new("tclsh")
+        .arg(runner)
+        .arg(path)
+        .arg(port.to_string())
+        .current_dir(&scratch)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|source| Error::io("starting tclsh", source))?;
+    let mut session = Session::new(name);
+    if let Ok((stream, _)) = listener.accept() {
+        let _ = stream.set_read_timeout(Some(DEADLINE));
+        let _ = session.serve(&stream);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&scratch);
+    Ok(())
 }
 
 /// Every `.test` file of the checkout, in the order their names run.
@@ -171,439 +312,374 @@ fn files(dir: &Path) -> Result<Vec<PathBuf>, Error> {
     Ok(out)
 }
 
-/// Every case of one file whose statements and answer are both written
-/// out with no substitution left in either.
-///
-/// A case carrying `$` or `[` needs the TCL interpreter to say what it
-/// runs, so it is passed over rather than guessed at.
-/// `do_execsql_test NAME { SQL } ANSWER`, the name already read.
-///
-/// An answer of one word needs no braces, and what stands on the line
-/// the case ends on is that word; a case with nothing after it expects
-/// no row, which is what the interpreter reads an answer it was not
-/// given as.
-fn execsql_case<'a>(rest: &'a str, out: &mut Vec<Step>) -> &'a str {
-    let Some((name, after)) = word(rest) else {
-        return rest;
-    };
-    let Some((sql, after)) = braced(after) else {
-        out.push(Step::Opaque(true));
-        return after;
-    };
-    let (want, over) =
-        braced(after).unwrap_or_else(|| (after.split('\n').next().unwrap_or("").trim(), after));
-    push(out, name, sql, want);
-    over
+/// One run of one file: the interpreter on one side of the line and the
+/// engine on the other.
+struct Session {
+    /// The name of the file, for what `--show` writes.
+    file: String,
+    /// One writer per path a connection opened, which is what two
+    /// connections over one path share.
+    held: BTreeMap<String, Writer>,
+    /// Which path each connection reads.
+    connections: BTreeMap<String, String>,
+    /// What a `NULL` prints as, per connection.
+    nulls: BTreeMap<String, String>,
+    /// What the file has scored.
+    score: Score,
+    /// When the file began, which is what the deadline is counted from.
+    started: Instant,
 }
 
-/// `do_test NAME { execsql { SQL } } { ANSWER }`, the older way of
-/// writing a case, the name already read.
-///
-/// The only body this reads is one `execsql` and nothing else; every
-/// other body is TCL this harness cannot run.
-fn tcl_case<'a>(rest: &'a str, out: &mut Vec<Step>) -> &'a str {
-    let Some((name, after)) = word(rest) else {
-        return rest;
-    };
-    let Some((body, after)) = braced(after) else {
-        out.push(Step::Opaque(true));
-        return after;
-    };
-    let Some((want, after)) = braced(after) else {
-        out.push(Step::Opaque(true));
-        return after;
-    };
-    let read = body
-        .trim()
-        .strip_prefix("execsql")
-        .and_then(braced)
-        .filter(|(_, over)| over.trim().is_empty());
-    match read {
-        Some((sql, _)) => push(out, name, sql, want),
-        // The body was read past, so the text of it is what says
-        // whether the step may have written.
-        None => out.push(Step::Opaque(false)),
+impl Session {
+    /// A run that has answered nothing.
+    fn new(file: &str) -> Self {
+        Session {
+            file: file.to_owned(),
+            held: BTreeMap::new(),
+            connections: BTreeMap::new(),
+            nulls: BTreeMap::new(),
+            score: Score::default(),
+            started: Instant::now(),
+        }
     }
-    after
-}
 
-pub(crate) fn cases(text: &str) -> Vec<Step> {
-    let mut out = Vec::new();
-    let mut rest = text;
-    while let Some((command, after)) = next_command(rest) {
-        let from = rest;
-        rest = after;
-        let at = out.len();
-        match command {
-            // `execsql` and `db eval` outside a case are the file
-            // setting itself up, and the cases after them read what
-            // they wrote.
-            // `ifcapable !X` holds a block for a build without `X`,
-            // which this engine has, so the block is read past. Every
-            // other condition is left to be read inline, because the
-            // cases of both arms carry one name and the first of a
-            // name is the one kept.
-            "ifcapable" => {
-                if let Some((asked, after)) = word(rest)
-                    && asked
-                        .strip_prefix('!')
-                        .is_some_and(|name| HELD.contains(&name.trim_matches(['{', '}'])))
-                {
-                    rest = past(after, 1);
-                    // The arm that runs is the `else` of a condition
-                    // that did not hold, so its block is read and the
-                    // word before it is not.
-                    if let Some(over) = rest.trim_start().strip_prefix("else") {
-                        rest = over;
-                    }
-                }
+    /// Answers the requests of the tester until the line closes.
+    fn serve(&mut self, stream: &TcpStream) -> Result<(), Error> {
+        let mut reader = BufReader::new(
+            stream
+                .try_clone()
+                .map_err(|source| Error::io("reading the line", source))?,
+        );
+        let mut writer = stream;
+        while let Some((verb, args)) = request(&mut reader)? {
+            // The deadline is counted over the file and not over one
+            // request, because a file that writes a million rows spends
+            // its time inside the engine and not on the line.
+            if self.started.elapsed() > DEADLINE {
+                say(&format!("W {} took longer than the deadline", self.file));
+                return Ok(());
             }
-            // The interpreter runs one arm of a conditional, so the
-            // block of an `else` is read past and the arm written
-            // before it is the one that runs.
-            "else" => {
-                rest = past(rest, 1);
+            match self.answered(&verb, &args) {
+                Ok(values) => write_ok(&mut writer, &values)?,
+                Err(message) => write_error(&mut writer, &message)?,
             }
-            // `db null` and `db nullvalue` say what a `NULL` prints
-            // as, which the answers a file writes are written under.
-            "db nullvalue" | "db null" => {
-                if let Some((text, after)) = word(rest) {
-                    rest = after;
-                    out.push(Step::Null(text.to_owned()));
-                }
-            }
-            "execsql" | "db eval" => match braced(rest) {
-                Some((sql, after)) => {
-                    rest = after;
-                    out.push(Step::Setup(sql.to_owned()));
-                }
-                // Setup written as a quoted string carries a
-                // substitution the interpreter fills in, so the rows it
-                // writes are rows this harness cannot write. The file
-                // stops there rather than running its cases against a
-                // database that is short of them.
-                None => out.push(Step::Opaque(true)),
-            },
-            "do_execsql_test" => rest = execsql_case(rest, &mut out),
-            // A case that expects a refusal says so as a pair of a
-            // code and a message, which this does not answer; the
-            // block is read past so that the `execsql` inside it is
-            // not taken for setup.
-            "do_catchsql_test" => {
-                rest = past(rest, 2);
-                out.push(Step::Opaque(false));
-            }
-            // `do_test NAME { execsql { SQL } } { ANSWER }` is the
-            // older way of writing `do_execsql_test`, and the only
-            // body this reads is one `execsql` and nothing else.
-            "do_test" => rest = tcl_case(rest, &mut out),
-            _ => {
-                let Some((name, after)) = word(rest) else {
-                    continue;
-                };
-                let Some((sql, after)) = braced(after) else {
-                    rest = after;
-                    out.push(Step::Opaque(true));
-                    continue;
-                };
-                let Some((want, after)) = braced(after) else {
-                    rest = after;
-                    out.push(Step::Opaque(true));
-                    continue;
-                };
-                rest = after;
-                push(&mut out, name, sql, want);
+            if verb == "done" {
+                return Ok(());
             }
         }
-        // A step this harness cannot run stops the file only where the
-        // text it stands for may have changed the database. A step
-        // whose text was not read past says so itself, and the text
-        // read here only adds to what it says.
-        let consumed = from
-            .get(..from.len().saturating_sub(rest.len()))
+        Ok(())
+    }
+
+    /// What one request answers, or the message it raises.
+    fn answered(&mut self, verb: &str, args: &[String]) -> Result<Vec<String>, String> {
+        let first = args.first().map_or("", String::as_str);
+        let second = args.get(1).map_or("", String::as_str);
+        match verb {
+            "open" => {
+                self.open(first, second);
+                Ok(Vec::new())
+            }
+            "close" => {
+                self.connections.remove(first);
+                Ok(Vec::new())
+            }
+            "delete" => {
+                self.held.remove(first);
+                Ok(Vec::new())
+            }
+            "exists" => Ok(vec![usize::from(self.held.contains_key(first)).to_string()]),
+            "copy" => Err("this harness cannot copy a database".to_owned()),
+            "null" => {
+                self.nulls.insert(first.to_owned(), second.to_owned());
+                Ok(Vec::new())
+            }
+            "eval" => self.eval(first, second),
+            "names" => self.names(first, second),
+            // What the engine's writer does not answer. A case that
+            // reads one of these is refused rather than scored against
+            // a number this harness made up.
+            "changes" | "rowid" | "errorcode" => Err(format!("this harness has no {verb}")),
+            "capable" => Ok(vec![usize::from(capable(first)).to_string()]),
+            "case" => {
+                self.case(args);
+                Ok(Vec::new())
+            }
+            "stopped" => {
+                say(&format!("W stopped: {}", first_words(first)));
+                Ok(Vec::new())
+            }
+            "done" => Ok(Vec::new()),
+            other => Err(format!("this harness has no request {other}")),
+        }
+    }
+
+    /// Opens a connection over a path, making the database where no
+    /// connection has opened that path yet.
+    fn open(&mut self, name: &str, path: &str) {
+        if !self.held.contains_key(path)
+            && let Ok(writer) = Writer::new(4096, 0, Encoding::Utf8)
+        {
+            self.held.insert(path.to_owned(), writer);
+        }
+        self.connections.insert(name.to_owned(), path.to_owned());
+        self.nulls.entry(name.to_owned()).or_default();
+    }
+
+    /// The statements of one text, in order, answered as one list.
+    fn eval(&mut self, name: &str, sql: &str) -> Result<Vec<String>, String> {
+        let null = self.nulls.get(name).cloned().unwrap_or_default();
+        let path = self
+            .connections
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("no such connection: {name}"))?;
+        let writer = self
+            .held
+            .get_mut(&path)
+            .ok_or_else(|| format!("no such database: {path}"))?;
+        let mut out = Vec::new();
+        for statement in statements(sql) {
+            let text = statement.trim();
+            if text.is_empty() {
+                continue;
+            }
+            for value in &run_one(writer, text)? {
+                out.push(listed(value, &null));
+            }
+        }
+        Ok(out)
+    }
+
+    /// The names of the columns the last statement of a text answers.
+    fn names(&self, name: &str, sql: &str) -> Result<Vec<String>, String> {
+        let path = self
+            .connections
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("no such connection: {name}"))?;
+        let writer = self
+            .held
+            .get(&path)
+            .ok_or_else(|| format!("no such database: {path}"))?;
+        let last = statements(sql)
+            .into_iter()
+            .map(str::trim)
+            .rfind(|text| !text.is_empty())
             .unwrap_or("");
-        let held = writes(consumed);
-        for step in out.iter_mut().skip(at) {
-            if let Step::Opaque(stops) = step {
-                *stops = *stops || held;
+        if !reads(last) {
+            return Ok(Vec::new());
+        }
+        let bytes = writer.written();
+        let database = Database::open(&bytes).map_err(|error| format!("{error:?}"))?;
+        let answered = database
+            .query(last.as_bytes())
+            .map_err(|error| format!("{error:?}"))?;
+        Ok(answered
+            .names
+            .iter()
+            .map(|name| String::from_utf8_lossy(name).into_owned())
+            .collect())
+    }
+
+    /// Scores one case, written out as it is scored so that a file the
+    /// deadline ends is counted with the cases it ran.
+    fn case(&mut self, args: &[String]) {
+        let name = args.first().map_or("", String::as_str);
+        match args.get(1).map_or("", String::as_str) {
+            "passed" => {
+                self.score.passed = self.score.passed.saturating_add(1);
+                say("C passed");
+            }
+            "refused" => {
+                self.score.refused = self.score.refused.saturating_add(1);
+                say("C refused");
+                say(&format!("W {}", args.get(2).map_or("", String::as_str)));
+            }
+            _ => {
+                self.score.failed = self.score.failed.saturating_add(1);
+                say("C failed");
+                say(&format!(
+                    "F {name}\n  mine {:?}\n  want {:?}",
+                    args.get(2).map_or("", String::as_str),
+                    args.get(3).map_or("", String::as_str)
+                ));
             }
         }
     }
-    // A file that writes one case in each arm of a conditional names it
-    // once per arm, and the interpreter runs one arm, so the first case
-    // of a name is kept and the rest are dropped.
-    let mut seen = std::collections::BTreeSet::new();
-    out.retain(|step| match step {
-        Step::Case { name, .. } => seen.insert(name.clone()),
-        Step::Setup(_) | Step::Null(_) | Step::Opaque(_) => true,
-    });
-    out
 }
 
-/// Keeps a case whose statements and whose answer are both written out
-/// with no substitution left in either.
-///
-/// A case carrying `$` or `[` needs the TCL interpreter to say what it
-/// runs, so it stops the file rather than being guessed at.
-fn push(out: &mut Vec<Step>, name: &str, sql: &str, want: &str) {
-    if [sql, want]
-        .iter()
-        .any(|text| text.contains('$') || text.contains('['))
-    {
-        out.push(Step::Opaque(false));
-        return;
-    }
-    out.push(Step::Case {
-        name: name.to_owned(),
-        sql: sql.to_owned(),
-        want: elements(want),
-    });
+/// One line to the process that started this run, written as it
+/// happens because that process may end this one at the deadline.
+fn say(line: &str) {
+    let mut out = std::io::stdout();
+    let _ = writeln!(out, "{line}");
+    let _ = out.flush();
 }
 
-/// The next of the four commands this reads, and what follows its name.
-fn next_command(text: &str) -> Option<(&'static str, &str)> {
-    const COMMANDS: [&str; 9] = [
-        "do_execsql_test",
-        "do_catchsql_test",
-        "do_test",
-        "execsql",
-        "db eval",
-        "db nullvalue",
-        "db null",
-        "ifcapable",
-        "else",
-    ];
-    let mut best: Option<(&'static str, usize)> = None;
-    for command in COMMANDS {
-        let mut from = 0;
-        while let Some(at) = text.get(from..).and_then(|rest| rest.find(command)) {
-            let at = from.saturating_add(at);
-            let before = text.get(..at).and_then(|head| head.chars().next_back());
-            let after = text.get(at.saturating_add(command.len())..);
-            let bare = !before.is_some_and(|character| {
-                character.is_alphanumeric() || character == '_' || character == '.'
-            }) && !after.is_some_and(|rest| {
-                rest.starts_with(|character: char| character.is_alphanumeric() || character == '_')
-            });
-            if bare {
-                if best.is_none_or(|(_, held)| at < held) {
-                    best = Some((command, at));
-                }
-                break;
-            }
-            from = at.saturating_add(command.len());
-        }
-    }
-    let (command, at) = best?;
-    Some((command, text.get(at.saturating_add(command.len())..)?))
-}
-
-/// What follows `count` braced blocks.
-fn past(text: &str, count: usize) -> &str {
-    let mut rest = text;
-    if let Some((_, after)) = word(rest) {
-        rest = after;
-    }
-    for _ in 0..count {
-        match braced(rest) {
-            Some((_, after)) => rest = after,
-            None => return rest,
-        }
-    }
-    rest
-}
-
-/// The next word and what follows it, where a word is what stands
-/// before the next space or brace.
-fn word(text: &str) -> Option<(&str, &str)> {
-    let text = text.trim_start_matches([' ', '\t']);
-    let end = text.find([' ', '\t', '\n', '{']).unwrap_or(text.len());
-    let (name, rest) = text.split_at(end);
-    if name.is_empty() {
-        return None;
-    }
-    Some((name, rest))
-}
-
-/// What the next pair of braces holds and what follows it, or nothing
-/// where the next thing written is not a brace.
-pub(crate) fn braced(text: &str) -> Option<(&str, &str)> {
-    let text = text.trim_start_matches([' ', '\t', '\n', '\\', '\r']);
-    if !text.starts_with('{') {
-        return None;
-    }
-    let mut depth: usize = 0;
-    let mut escaped = false;
-    for (at, character) in text.char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match character {
-            '\\' => escaped = true,
-            '{' => depth = depth.saturating_add(1),
-            '}' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    let inside = text.get(1..at)?;
-                    let rest = text.get(at.saturating_add(1)..)?;
-                    return Some((inside, rest));
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-/// Runs one file's cases in order against one database and counts how
-/// each ended.
-fn score(file: &str, cases: &[Step]) -> Score {
-    let mut score = Score::default();
-    let Ok(mut writer) = Writer::new(1024, 0, Encoding::Utf8) else {
-        return score;
-    };
-    let show = SHOW.load(std::sync::atomic::Ordering::Relaxed);
-    let mut stopped = false;
-    let mut null = String::new();
-    for step in cases {
-        let (name, sql, want) = match step {
-            Step::Opaque(changes) => {
-                stopped = stopped || *changes;
-                continue;
-            }
-            Step::Null(text) => {
-                null.clone_from(text);
-                continue;
-            }
-            Step::Setup(sql) => {
-                if !stopped && answer(&mut writer, sql, &null).is_none() {
-                    stopped = true;
-                }
-                continue;
-            }
-            Step::Case { name, sql, want } => (name, sql, want),
-        };
-        // A case the engine refused, and a step this harness could not
-        // run, each leave the database short of what the cases after
-        // them read, so the rest of the file is refused with them
-        // rather than counted wrong.
-        if stopped {
-            score.refused = score.refused.saturating_add(1);
-            continue;
-        }
-        match answer(&mut writer, sql, &null) {
-            None => {
-                score.refused = score.refused.saturating_add(1);
-                stopped = true;
-            }
-            Some(ref mine) if mine == want => {
-                score.passed = score.passed.saturating_add(1);
-            }
-            Some(mine) => {
-                score.failed = score.failed.saturating_add(1);
-                if show {
-                    crate::out::note!(
-                        "{file} {name}\n  sql  {}\n  mine {mine:?}\n  want {want:?}",
-                        sql.split_whitespace().collect::<Vec<&str>>().join(" ")
-                    );
-                }
-            }
-        }
-    }
-    score
-}
-
-/// What the engine answers for one case, written as `execsql` writes an
-/// answer: every value of every row of every statement, in order, as
-/// one list.
-fn answer(writer: &mut Writer, sql: &str, null: &str) -> Option<Vec<String>> {
-    let mut out: Vec<String> = Vec::new();
-    for statement in statements(sql) {
-        let text = statement.trim();
-        if text.is_empty() {
-            continue;
-        }
-        if reads(text) {
-            let bytes = writer.written();
-            // A connection in write-ahead logging holds its newest
-            // pages in the log, so a reader follows the log beside the
-            // file.
-            let log = writer.log().map(db_sqlite::wal::Wal::open);
-            let opened = match &log {
-                Some(Ok(log)) => Database::open_with_log(&bytes, log),
-                Some(Err(_)) => return None,
-                None => Database::open(&bytes),
-            };
-            let answered = match opened.and_then(|database| database.query(text.as_bytes())) {
-                Ok(answered) => answered,
-                Err(error) => {
-                    refused(&format!("{} {error:?}", first_words(text)));
-                    return None;
-                }
-            };
-            for row in &answered.rows {
-                for value in row {
-                    out.push(listed(value, null));
-                }
-            }
-        } else {
-            let rows = match writer.run(text.as_bytes()) {
-                Ok(rows) => rows,
-                Err(error) => {
-                    refused(&format!("{} {error:?}", first_words(text)));
-                    return None;
-                }
-            };
-            for row in &rows {
-                for value in row {
-                    out.push(listed(value, null));
-                }
-            }
-        }
-    }
-    Some(out)
-}
-
-/// The elements of a TCL list, which is what `do_execsql_test` writes
-/// its answer as: words parted by space, with a word that holds a space
-/// written inside braces.
-pub(crate) fn elements(text: &str) -> Vec<String> {
+/// One statement: a reader answers one that reads and the writer
+/// answers the rest, which is what a connection does with either.
+fn run_one(writer: &mut Writer, text: &str) -> Result<Vec<Value>, String> {
     let mut out = Vec::new();
+    if reads(text) {
+        let bytes = writer.written();
+        // A connection in write-ahead logging holds its newest pages in
+        // the log, so a reader follows the log beside the file.
+        let log = writer.log().map(db_sqlite::wal::Wal::open);
+        let opened = match &log {
+            Some(Ok(log)) => Database::open_with_log(&bytes, log),
+            Some(Err(error)) => return Err(format!("{error:?}")),
+            None => Database::open(&bytes),
+        };
+        let answered = opened
+            .and_then(|database| database.query(text.as_bytes()))
+            .map_err(|error| format!("{} {error:?}", first_words(text)))?;
+        for row in &answered.rows {
+            out.extend(row.iter().cloned());
+        }
+        return Ok(out);
+    }
+    let rows = writer
+        .run(text.as_bytes())
+        .map_err(|error| format!("{} {error:?}", first_words(text)))?;
+    for row in &rows {
+        out.extend(row.iter().cloned());
+    }
+    Ok(out)
+}
+
+/// Whether this engine has what an `ifcapable` names, which is a
+/// condition of names, `!`, `&&`, `||` and brackets.
+fn capable(expression: &str) -> bool {
+    let mut words = Vec::new();
     let mut held = String::new();
-    let mut depth: usize = 0;
-    let mut started = false;
-    for character in text.chars() {
-        match character {
-            '{' => {
-                if depth > 0 {
-                    held.push(character);
-                }
-                depth = depth.saturating_add(1);
-                started = true;
-            }
-            '}' if depth > 0 => {
-                depth = depth.saturating_sub(1);
-                if depth > 0 {
-                    held.push(character);
-                }
-            }
-            character if character.is_whitespace() && depth == 0 => {
-                if started {
-                    out.push(core::mem::take(&mut held));
-                    started = false;
-                }
-            }
-            character => {
-                held.push(character);
-                started = true;
-            }
+    for character in expression.chars() {
+        if character.is_alphanumeric() || character == '_' {
+            held.push(character);
+            continue;
+        }
+        if !held.is_empty() {
+            words.push(core::mem::take(&mut held));
+        }
+        if !character.is_whitespace() {
+            words.push(character.to_string());
         }
     }
-    if started {
-        out.push(held);
+    if !held.is_empty() {
+        words.push(held);
     }
-    out
+    // `&&` and `||` come out as two characters each, which are joined
+    // here so that the walk over them reads one operator.
+    let mut joined: Vec<String> = Vec::new();
+    for word in words {
+        if joined.last().is_some_and(|last| *last == word) && (word == "&" || word == "|") {
+            continue;
+        }
+        joined.push(word);
+    }
+    let mut at = 0;
+    condition(&joined, &mut at)
+}
+
+/// One condition, which is terms joined by `&&` and `||` read left to
+/// right, because the suite writes no condition that needs more.
+fn condition(words: &[String], at: &mut usize) -> bool {
+    let mut held = term(words, at);
+    while let Some(word) = words.get(*at) {
+        let operator = word.clone();
+        if operator != "&" && operator != "|" {
+            break;
+        }
+        *at = at.saturating_add(1);
+        let next = term(words, at);
+        held = if operator == "&" {
+            held && next
+        } else {
+            held || next
+        };
+    }
+    held
+}
+
+/// One term: a name, a `!` before a term, or a condition in brackets.
+fn term(words: &[String], at: &mut usize) -> bool {
+    let Some(word) = words.get(*at).cloned() else {
+        return true;
+    };
+    *at = at.saturating_add(1);
+    match word.as_str() {
+        "!" => !term(words, at),
+        "(" => {
+            let held = condition(words, at);
+            if words.get(*at).is_some_and(|word| word == ")") {
+                *at = at.saturating_add(1);
+            }
+            held
+        }
+        name => !MISSING.iter().any(|held| name.eq_ignore_ascii_case(held)),
+    }
+}
+
+/// One request of the tester: the verb and its values.
+fn request(reader: &mut BufReader<TcpStream>) -> Result<Option<(String, Vec<String>)>, Error> {
+    let Some(head) = line(reader)? else {
+        return Ok(None);
+    };
+    let mut parts = head.split_whitespace();
+    if parts.next() != Some("REQ") {
+        return Ok(None);
+    }
+    let verb = parts.next().unwrap_or_default().to_owned();
+    let count: usize = parts.next().unwrap_or("0").parse().unwrap_or(0);
+    let mut args = Vec::new();
+    for _ in 0..count {
+        let Some(length) = line(reader)? else {
+            return Ok(None);
+        };
+        let length: usize = length.trim().parse().unwrap_or(0);
+        let mut bytes = vec![0_u8; length];
+        reader
+            .read_exact(&mut bytes)
+            .map_err(|source| Error::io("reading a value", source))?;
+        line(reader)?;
+        args.push(String::from_utf8_lossy(&bytes).into_owned());
+    }
+    Ok(Some((verb, args)))
+}
+
+/// One line of the line, without its newline, and nothing where it
+/// closed.
+fn line(reader: &mut BufReader<TcpStream>) -> Result<Option<String>, Error> {
+    let mut held = String::new();
+    let read = reader
+        .read_line(&mut held)
+        .map_err(|source| Error::io("reading the line", source))?;
+    if read == 0 {
+        return Ok(None);
+    }
+    Ok(Some(held.trim_end_matches(['\n', '\r']).to_owned()))
+}
+
+/// Answers a request with its values.
+fn write_ok(stream: &mut &TcpStream, values: &[String]) -> Result<(), Error> {
+    let mut out = format!("OK {}\n", values.len()).into_bytes();
+    for value in values {
+        out.extend_from_slice(format!("{}\n", value.len()).as_bytes());
+        out.extend_from_slice(value.as_bytes());
+        out.push(b'\n');
+    }
+    stream
+        .write_all(&out)
+        .map_err(|source| Error::io("writing an answer", source))
+}
+
+/// Answers a request with the message it raised.
+fn write_error(stream: &mut &TcpStream, message: &str) -> Result<(), Error> {
+    let mut out = format!("ERR {}\n", message.len()).into_bytes();
+    out.extend_from_slice(message.as_bytes());
+    out.push(b'\n');
+    stream
+        .write_all(&out)
+        .map_err(|source| Error::io("writing a refusal", source))
 }
 
 /// The first two words of a statement in capitals, which is enough to
@@ -615,83 +691,6 @@ fn first_words(sql: &str) -> String {
         .collect::<Vec<String>>()
         .join(" ")
 }
-
-/// The commands a bracketed substitution may name for the text around
-/// it still to count as one that writes nothing.
-const READING: [&str; 18] = [
-    "db", "execsql", "catchsql", "expr", "set", "format", "list", "lappend", "lindex", "llength",
-    "lrange", "lsort", "lsearch", "concat", "join", "split", "string", "incr",
-];
-
-/// Whether every bracketed substitution of `text` names a command that
-/// reads.
-///
-/// Reading the text costs O(n) in its bytes.
-fn substitutes(text: &str) -> bool {
-    text.split('[').skip(1).all(|after| {
-        let word = after
-            .trim_start()
-            .split(|byte: char| !byte.is_ascii_alphanumeric() && byte != '_')
-            .next()
-            .unwrap_or("");
-        READING
-            .iter()
-            .any(|reading| word.eq_ignore_ascii_case(reading))
-    })
-}
-
-/// Whether a step this harness cannot run may have changed the
-/// database.
-///
-/// A word that names a statement that writes, a command that opens or
-/// closes a connection, and a bracketed command that is not one of the
-/// few that only read, all say it may have. A text that a variable
-/// stands in for is read where the file wrote it, so the step that
-/// wrote it is the step that stops the file. Reading the text costs
-/// O(n) in its bytes.
-fn writes(text: &str) -> bool {
-    const WRITING: [&str; 24] = [
-        "insert",
-        "update",
-        "delete",
-        "replace",
-        "create",
-        "drop",
-        "alter",
-        "pragma",
-        "begin",
-        "commit",
-        "rollback",
-        "analyze",
-        "reindex",
-        "vacuum",
-        "attach",
-        "detach",
-        "savepoint",
-        "release",
-        "close",
-        "sqlite3",
-        "restore",
-        "backup",
-        "copy",
-        "crash",
-    ];
-    if !substitutes(text) {
-        return true;
-    }
-    let words = words(text);
-    words.iter().any(|word| {
-        WRITING
-            .iter()
-            .any(|written| word.eq_ignore_ascii_case(written))
-    })
-}
-
-/// Whether the statement answers rows rather than changing them.
-///
-/// What this engine has of the capabilities an `ifcapable` names, so
-/// that a block written for a build without one is read past.
-const HELD: [&str; 2] = ["wal", "utf16"];
 
 /// A `PRAGMA` goes to the connection either way, because a connection
 /// answers one out of what it holds and a file with no table holds no

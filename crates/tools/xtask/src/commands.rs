@@ -1891,6 +1891,15 @@ pub(crate) fn sqlite_suite(root: &Path, options: &[String]) -> Result<(), Error>
             }
             "--show" => suite::show(),
             "--why" => suite::why(),
+            // One file, run in a process of its own, which is how
+            // `run` runs every file: a statement the engine answers
+            // slowly cannot be stopped from inside.
+            "--one" => {
+                let path = rest
+                    .next()
+                    .ok_or_else(|| Error::Usage("--one wants a path".to_owned()))?;
+                return suite::one(root, std::path::Path::new(path));
+            }
             other => {
                 return Err(Error::Usage(format!(
                     "unknown option `{other}` for sqlite-suite"

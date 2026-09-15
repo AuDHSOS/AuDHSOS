@@ -60,9 +60,13 @@ subcommands:
   coverage [--condition]
                    host coverage with thresholds; --condition counts every
                    operand of a compound decision as well
-  sqlite-suite [--file <name>]
+  sqlite-suite [--file <name>] [--why] [--show] [--one <path>]
                    run SQLite's own test files against `db-sqlite` from
-                   the checkout `sh tools/sqlite.sh` brings
+                   the checkout `sh tools/sqlite.sh` brings, under the
+                   `tclsh` of this machine; --why counts what each file
+                   stopped at, --show writes what a case answered, and
+                   --one runs one file in this process, which is what
+                   the run of every file starts for each of them
   mcdc             hold every decision of the completely covered crates to
                    the short-circuit operators, which is what makes
                    condition coverage masking MC/DC

@@ -4781,6 +4781,24 @@ D-221, document 16 step Q5.
   classes sort, and a join against a view over one table converts as
   that table's column does.
 
+### 6.6.146 SQLite's own test files under `tclsh` (`db-sqlite`)
+
+D-223, document 17.
+
+- Every command of a file runs, so a case is refused only where the
+  engine refused a statement or where a command needs the C library's
+  internals.
+- `tools/suite/tester.tcl` answers `do_test`, `do_execsql_test` and
+  `do_catchsql_test`, and compares an answer as SQLite's own tester
+  does: `/RE/`, `~/RE/`, `#/A..B/`, `*GLOB*`, and otherwise the text.
+- One database is held per path a connection opened, so a file that
+  opens `db2` beside `db` reads what `db` wrote.
+- Each file runs in a process of its own and is ended after sixty
+  seconds, with the cases it ran counted.
+- `sh tools/xtask.sh sqlite-suite` needs the `tclsh` of the machine and
+  the checkout `sh tools/sqlite.sh` brings, so it is never a step of
+  `cargo xtask check`.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`
