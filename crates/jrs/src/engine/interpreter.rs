@@ -2054,31 +2054,46 @@ impl RegisterVM {
         }
     }
 
-    /// Whether this object is an intrinsic Prototype that owns the name and
-    /// this Realm has not built it.
+    /// The intrinsic that owns this name and has not been built, when the
+    /// object is that intrinsic itself rather than something under it.
     fn prototype_owes(
         target: Value,
         name: &[u16],
         heap: &GenerationalHeap,
         realm: &Realm,
-    ) -> Result<bool, VMError> {
+    ) -> Result<Option<&'static str>, VMError> {
         let Some(object) = target.as_object() else {
-            return Ok(false);
+            return Ok(None);
         };
-        let is = |prototype: Value| prototype.as_object() == Some(object);
         // 19.1 and 19.2 give the global object properties this Realm reaches
         // through the Global Environment Record rather than through it.
         if realm.global_environment().global_object(heap)? == object
             && super::realm::global_properties_own(name)
         {
-            return Ok(true);
+            return Ok(Some("a property of the global object"));
         }
-        Ok(
-            is(realm.string_prototype(heap)?) && super::realm::string_prototype_owns(name)
-                || is(realm.array_prototype(heap)?) && super::realm::array_prototype_owns(name)
-                || is(realm.function_prototype(heap)?)
-                    && super::realm::function_prototype_owns(name),
-        )
+        for (prototype, owns, owner) in [
+            (
+                realm.string_prototype(heap)?,
+                super::realm::string_prototype_owns as fn(&[u16]) -> bool,
+                "a property of %String.prototype%",
+            ),
+            (
+                realm.array_prototype(heap)?,
+                super::realm::array_prototype_owns,
+                "a property of %Array.prototype%",
+            ),
+            (
+                realm.function_prototype(heap)?,
+                super::realm::function_prototype_owns,
+                "a property of %Function.prototype%",
+            ),
+        ] {
+            if prototype.as_object() == Some(object) && owns(name) {
+                return Ok(Some(owner));
+            }
+        }
+        Ok(None)
     }
 
     /// The answer 10.1.8.1 gives when no object of the Prototype Chain has the
@@ -2093,67 +2108,78 @@ impl RegisterVM {
         heap: &GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        const GAP: VMError = VMError::Unsupported("a property of an unbuilt Prototype");
         if target.is_string() {
             if super::realm::string_prototype_owns(name) {
-                return Err(GAP);
+                return Err(VMError::Unsupported("a property of %String.prototype%"));
             }
             return Ok(VALUE_UNDEFINED);
         }
         // The Prototype itself owns the names its instances resolve on it, so
         // a miss there is the same gap read one object earlier.
-        if Self::prototype_owes(target, name, heap, realm)? {
-            return Err(GAP);
+        if let Some(owner) = Self::prototype_owes(target, name, heap, realm)? {
+            return Err(VMError::Unsupported(owner));
         }
         let kind = target
             .as_object()
             .and_then(|reference| heap.get_object(reference))
             .map(|object| object.kind.clone());
         match kind {
-            Some(ObjectKind::Array { .. }) if super::realm::array_prototype_owns(name) => Err(GAP),
+            Some(ObjectKind::Array { .. }) if super::realm::array_prototype_owns(name) => {
+                Err(VMError::Unsupported("a property of %Array.prototype%"))
+            }
             // 23.1.2 gives `%Array%` more than 17 gives a built-in function,
             // and this Realm builds only some of them.
             Some(ObjectKind::NativeFunction { id, .. })
                 if id == Intrinsic::ArrayConstructor.id()
                     && super::realm::array_constructor_owns(name) =>
             {
-                Err(GAP)
+                Err(VMError::Unsupported("a property of %Array%"))
             }
             // 22.1.2 gives `%String%` more than 17 gives a built-in function.
             Some(ObjectKind::NativeFunction { id, .. })
                 if id == Intrinsic::StringConstructor.id()
                     && super::realm::string_constructor_owns(name) =>
             {
-                Err(GAP)
+                Err(VMError::Unsupported("a property of %String%"))
             }
             // 21.3 gives `%Math%` more than this Realm builds.
-            Some(ObjectKind::Math) if super::realm::math_owns(name) => Err(GAP),
+            Some(ObjectKind::Math) if super::realm::math_owns(name) => {
+                Err(VMError::Unsupported("a property of %Math%"))
+            }
             // 20.1.2 gives `%Object%` more than 17 gives a built-in function,
             // and this Realm builds only some of them.
             Some(ObjectKind::NativeFunction { id, .. })
                 if id == Intrinsic::ObjectConstructor.id()
                     && super::realm::object_constructor_owns(name) =>
             {
-                Err(GAP)
+                Err(VMError::Unsupported("a property of %Object%"))
             }
             Some(ObjectKind::Function { .. } | ObjectKind::NativeFunction { .. })
                 if super::realm::function_prototype_owns(name) =>
             {
-                Err(GAP)
+                Err(VMError::Unsupported("a property of %Function.prototype%"))
             }
             Some(ObjectKind::Function { .. } | ObjectKind::NativeFunction { .. }) => {
                 Ok(VALUE_UNDEFINED)
             }
             // These reach a Prototype the Realm has not built at all, and it
             // owns names no list here carries, so every miss is a gap.
-            Some(
-                ObjectKind::Error
-                | ObjectKind::StringWrapper(_)
-                | ObjectKind::NumberWrapper(_)
-                | ObjectKind::BooleanWrapper(_)
-                | ObjectKind::ArrayIterator { .. },
-            ) => Err(GAP),
-            _ if super::realm::object_prototype_owns(name) => Err(GAP),
+            Some(ObjectKind::Error) => Err(VMError::Unsupported("a property of %Error.prototype%")),
+            Some(ObjectKind::StringWrapper(_)) => {
+                Err(VMError::Unsupported("a property of %String.prototype%"))
+            }
+            Some(ObjectKind::NumberWrapper(_)) => {
+                Err(VMError::Unsupported("a property of %Number.prototype%"))
+            }
+            Some(ObjectKind::BooleanWrapper(_)) => {
+                Err(VMError::Unsupported("a property of %Boolean.prototype%"))
+            }
+            Some(ObjectKind::ArrayIterator { .. }) => Err(VMError::Unsupported(
+                "a property of %ArrayIteratorPrototype%",
+            )),
+            _ if super::realm::object_prototype_owns(name) => {
+                Err(VMError::Unsupported("a property of %Object.prototype%"))
+            }
             _ => Ok(VALUE_UNDEFINED),
         }
     }
