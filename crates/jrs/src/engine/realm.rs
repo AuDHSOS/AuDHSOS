@@ -437,6 +437,8 @@ pub enum Intrinsic {
     ArrayPrototypeReduce,
     /// `Array.prototype.reduceRight` (23.1.3.25).
     ArrayPrototypeReduceRight,
+    /// `%IteratorPrototype%[@@iterator]` (27.1.2.1), which answers `this`.
+    IteratorPrototypeIterator,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -466,7 +468,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 87] = [
+    pub const ALL: [Self; 88] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -554,6 +556,7 @@ impl Intrinsic {
         Self::ArrayPrototypeFindIndex,
         Self::ArrayPrototypeReduce,
         Self::ArrayPrototypeReduceRight,
+        Self::IteratorPrototypeIterator,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -610,7 +613,9 @@ impl Intrinsic {
             | Self::ArrayPrototypeFindIndex
             | Self::ArrayPrototypeReduce
             | Self::ArrayPrototypeReduceRight => IntrinsicHolder::ArrayPrototype,
-            Self::ArrayIteratorPrototypeNext => IntrinsicHolder::ArrayIteratorPrototype,
+            Self::ArrayIteratorPrototypeNext | Self::IteratorPrototypeIterator => {
+                IntrinsicHolder::ArrayIteratorPrototype
+            }
             Self::ArrayConstructor | Self::ObjectConstructor | Self::FunctionConstructor => {
                 IntrinsicHolder::Global
             }
@@ -742,6 +747,7 @@ impl Intrinsic {
             Self::ArrayPrototypeFindIndex => 84,
             Self::ArrayPrototypeReduce => 85,
             Self::ArrayPrototypeReduceRight => 86,
+            Self::IteratorPrototypeIterator => 87,
         }
     }
 
@@ -835,6 +841,7 @@ impl Intrinsic {
             Self::ArrayPrototypeFindIndex => 84,
             Self::ArrayPrototypeReduce => 85,
             Self::ArrayPrototypeReduceRight => 86,
+            Self::IteratorPrototypeIterator => 87,
         }
     }
 
@@ -929,6 +936,7 @@ impl Intrinsic {
             84 => Some(Self::ArrayPrototypeFindIndex),
             85 => Some(Self::ArrayPrototypeReduce),
             86 => Some(Self::ArrayPrototypeReduceRight),
+            87 => Some(Self::IteratorPrototypeIterator),
             _ => None,
         }
     }
@@ -989,6 +997,7 @@ impl Intrinsic {
             Self::ArrayPrototypeFindIndex => "findIndex",
             Self::ArrayPrototypeReduce => "reduce",
             Self::ArrayPrototypeReduceRight => "reduceRight",
+            Self::IteratorPrototypeIterator => "[Symbol.iterator]",
             Self::ObjectDefineProperty => "defineProperty",
             Self::ObjectGetOwnPropertyDescriptor => "getOwnPropertyDescriptor",
             Self::ObjectGetOwnPropertyNames => "getOwnPropertyNames",
@@ -1088,6 +1097,7 @@ impl Intrinsic {
             | Self::ArrayPrototypeFindIndex
             | Self::ArrayPrototypeReduce
             | Self::ArrayPrototypeReduceRight
+            | Self::IteratorPrototypeIterator
             | Self::ObjectGetOwnPropertyNames => false,
             // 20.1.2.4, 20.1.2.8 and 20.1.2.13 apply ToPropertyKey to the
             // second argument.
@@ -1122,6 +1132,7 @@ impl Intrinsic {
             | Self::ArrayPrototypeReverse
             | Self::ArrayPrototypeToString
             | Self::ArrayPrototypeShift
+            | Self::IteratorPrototypeIterator
             | Self::ArrayPrototypeToReversed => 0,
             Self::ObjectPrototypeHasOwnProperty
             | Self::ObjectPrototypeIsPrototypeOf
@@ -2250,6 +2261,17 @@ impl Realm {
             }
             .as_object()
             .ok_or(HeapError::InvalidReference)?;
+            // 27.1.2.1 is a Symbol-keyed property, so it takes no String name
+            // on its holder.
+            if intrinsic == Intrinsic::IteratorPrototypeIterator {
+                heap.define_own_named(
+                    holder,
+                    WellKnownSymbol::Iterator.key(),
+                    function,
+                    builtin_data(),
+                )?;
+                continue;
+            }
             let key = PropertyKey::String(heap.strings.intern(intrinsic.name())?);
             heap.define_own_named(holder, key, function, builtin_data())?;
             // 23.1.3.40: %Array.prototype%[@@iterator] is the same function

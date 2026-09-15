@@ -1236,6 +1236,8 @@ impl RegisterVM {
             | Intrinsic::StringPrototypeTrimStart => {
                 self.call_string_intrinsic(intrinsic, call, heap, realm)
             }
+            // 27.1.2.1 answers the object it was called on.
+            Intrinsic::IteratorPrototypeIterator => Ok(call.receiver),
             Intrinsic::ArrayPrototypeValues | Intrinsic::ArrayIteratorPrototypeNext => {
                 Self::call_iterator_intrinsic(intrinsic, call, heap, realm)
             }
@@ -3272,6 +3274,33 @@ impl RegisterVM {
         Ok(None)
     }
 
+    /// What a well-known Symbol answers when no object of the chain has it.
+    ///
+    /// Every Prototype of clause 22 and 23 that this Realm has not finished
+    /// building owns `@@iterator`, so a miss on one of them is a gap. An
+    /// ordinary object owns none, and its miss is the undefined that 7.4.2
+    /// turns into a `TypeError`.
+    fn absent_well_known(
+        target: Value,
+        object: ObjectRef,
+        heap: &GenerationalHeap,
+    ) -> Result<Value, VMError> {
+        const GAP: VMError = VMError::Unsupported("a well-known Symbol of an unbuilt Prototype");
+        if target.is_string() {
+            return Err(GAP);
+        }
+        match heap.get_object(object).map(|object| &object.kind) {
+            Some(
+                ObjectKind::StringWrapper(_)
+                | ObjectKind::ArrayIterator { .. }
+                | ObjectKind::NumberWrapper(_)
+                | ObjectKind::BooleanWrapper(_)
+                | ObjectKind::Error,
+            ) => Err(GAP),
+            _ => Ok(VALUE_UNDEFINED),
+        }
+    }
+
     /// The answer 10.1.8.1 gives when no object of the Prototype Chain has the
     /// name.
     ///
@@ -4996,6 +5025,26 @@ impl RegisterVM {
                         }
                         pc = (pc as isize + offset as isize) as usize;
                     }
+                }
+                Instruction::GetWellKnown {
+                    obj,
+                    symbol,
+                    slot: _,
+                } => {
+                    // 7.4.2 reads @@iterator, which is a Symbol key and so
+                    // reaches no Elements store and no String exotic object.
+                    let symbol = super::realm::WellKnownSymbol::ALL
+                        .get(symbol as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    let target = self.read_reg(obj)?;
+                    let object = Self::coerce_object(target, heap, realm)?;
+                    self.acc = match heap.lookup_named(object, symbol.key())? {
+                        Some(property) => property.value,
+                        // A Prototype this Realm has not finished building
+                        // owns the Symbol; answering undefined would say the
+                        // value is not iterable, which is a different thing.
+                        None => Self::absent_well_known(target, object, heap)?,
+                    };
                 }
                 Instruction::GetNamed {
                     obj,

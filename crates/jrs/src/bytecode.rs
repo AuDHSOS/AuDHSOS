@@ -544,6 +544,10 @@ fn compile_parsed(body: &[Stmt], limits: Limits, realm: bool) -> Result<Program,
     Ok(compiler.program)
 }
 
+/// Where `@@iterator` stands in [`crate::engine::realm::WellKnownSymbol::ALL`],
+/// which is the index `GetWellKnown` takes.
+const WELL_KNOWN_ITERATOR: usize = 3;
+
 /// The binding a frame holds its `this` value in.
 ///
 /// No program can declare it: `this` is a keyword, so the name cannot collide
@@ -5283,6 +5287,182 @@ impl RegisterLowerer {
         Some((iterable, method))
     }
 
+    /// Walks an iterable by the protocol of 7.4, for a `for`-`of` whose
+    /// operand is not an Array this lowering typed.
+    ///
+    /// 7.4.2 reads `@@iterator` and calls it, 7.4.6 calls `next` and asks the
+    /// result whether it is `done`, and 7.4.7 reads `value` only when it is
+    /// not. Each of those is a call or a property read the engine already has.
+    ///
+    /// A body that leaves by `break` or `return` would have to close the
+    /// iterator (7.4.9), which the lowering does not emit, so it names that
+    /// rather than leaving a `return` method uncalled.
+    fn lower_iterated_for_of(
+        &mut self,
+        head_binding: ForInHead<'_>,
+        body: &Stmt,
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        if register_statement_transfers_control(body) {
+            self.refuse("a for-of a break or a return leaves, which 7.4.9 closes");
+            return None;
+        }
+        let iterable = self.allocate_register()?;
+        self.code.emit(Instruction::Star(iterable));
+        let iterator_slot =
+            self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetWellKnown {
+            obj: iterable,
+            symbol: u16::try_from(WELL_KNOWN_ITERATOR).ok()?,
+            slot: iterator_slot,
+        });
+        let method = self.allocate_register()?;
+        self.code.emit(Instruction::Star(method));
+        let open = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
+        self.code.emit(Instruction::CallMethod {
+            receiver: iterable,
+            func: method,
+            arg_start: method,
+            arg_count: 0,
+            slot: open,
+        });
+        let iterator = self.allocate_register()?;
+        self.code.emit(Instruction::Star(iterator));
+
+        self.code.emit(Instruction::LdaUndefined);
+        let result_register = self.allocate_register()?;
+        self.code.emit(Instruction::Star(result_register));
+        let step = self.allocate_register()?;
+        let next = self.allocate_register()?;
+        let variable = self.iteration_variable(head_binding, RegisterType::Unknown)?;
+
+        let mut bindings_at_head = self.bindings.clone();
+        infer_register_var_types_to_fixed_point(
+            body,
+            &mut bindings_at_head,
+            self.loop_head_types == RegisterLoopHead::Widened,
+        )?;
+        self.bindings = bindings_at_head.clone();
+
+        let head = self.code.instructions.len();
+        let next_name = self.string_constant(&"next".encode_utf16().collect::<Vec<_>>())?;
+        let next_slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetNamed {
+            obj: iterator,
+            name: next_name,
+            slot: next_slot,
+        });
+        self.code.emit(Instruction::Star(next));
+        let step_slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
+        self.code.emit(Instruction::CallMethod {
+            receiver: iterator,
+            func: next,
+            arg_start: next,
+            arg_count: 0,
+            slot: step_slot,
+        });
+        self.code.emit(Instruction::Star(step));
+        let done_name = self.string_constant(&"done".encode_utf16().collect::<Vec<_>>())?;
+        let done_slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetNamed {
+            obj: step,
+            name: done_name,
+            slot: done_slot,
+        });
+        // 7.4.6 answers done by ToBoolean, and 7.4.7 reads `value` only where
+        // it is false, which is what the order of these two says.
+        let exit = self.code.emit(Instruction::JumpIfTrue(0));
+        let value_name = self.string_constant(&"value".encode_utf16().collect::<Vec<_>>())?;
+        let value_slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetNamed {
+            obj: step,
+            name: value_name,
+            slot: value_slot,
+        });
+        let enter = self.code.emit(Instruction::Jump(0));
+        let flow = self.lower_iteration_body(
+            body,
+            IterationHead {
+                head,
+                enter,
+                exit,
+                variable,
+                result: result_register,
+                source: None,
+                guarded_layout: None,
+            },
+            &bindings_at_head,
+        )?;
+        self.bindings = bindings_at_head;
+        self.close_iteration_variable(head_binding, variable, RegisterType::Unknown)?;
+        self.release_register(next)?;
+        self.release_register(step)?;
+        self.release_register(result_register)?;
+        self.release_register(iterator)?;
+        self.release_register(method)?;
+        self.release_register(iterable)?;
+        Some(match flow {
+            RegisterFlow::Value(value_type) => RegisterType::Undefined.merge(value_type),
+            RegisterFlow::Empty | RegisterFlow::Abrupt => RegisterType::Undefined,
+        })
+    }
+
+    /// The register a `for`-`in` or `for`-`of` head writes each iteration.
+    fn iteration_variable(
+        &mut self,
+        head_binding: ForInHead<'_>,
+        element_type: RegisterType,
+    ) -> Option<crate::engine::bytecode::Reg> {
+        match head_binding {
+            ForInHead::PerIteration { name, mutable } => {
+                let register = self.allocate_register()?;
+                self.active_binding_count = self.active_binding_count.checked_add(1)?;
+                self.max_binding_count = self.max_binding_count.max(self.active_binding_count);
+                self.bindings.insert(
+                    String::from(name),
+                    RegisterBinding {
+                        storage: RegisterBindingStorage::Register(register),
+                        value_type: Some(element_type),
+                        mutable,
+                        stable_function_identity: false,
+                    },
+                );
+                Some(register)
+            }
+            // The declaration already made the binding; the loop only writes
+            // it, and inside the body it holds the element.
+            ForInHead::Var { name, register, .. } => {
+                self.bindings.get_mut(name)?.value_type = Some(element_type);
+                Some(register)
+            }
+        }
+    }
+
+    /// Gives back what the head took, and says what the binding holds after a
+    /// loop that may have run no iteration at all.
+    fn close_iteration_variable(
+        &mut self,
+        head_binding: ForInHead<'_>,
+        variable: crate::engine::bytecode::Reg,
+        element_type: RegisterType,
+    ) -> Option<()> {
+        match head_binding {
+            ForInHead::PerIteration { name, .. } => {
+                self.bindings.remove(name)?;
+                self.active_binding_count = self.active_binding_count.checked_sub(1)?;
+                self.release_register(variable)?;
+            }
+            ForInHead::Var {
+                name,
+                declared_type,
+                ..
+            } => {
+                self.bindings.get_mut(name)?.value_type = Some(declared_type.merge(element_type));
+            }
+        }
+        Some(())
+    }
+
     fn lower_for_of(
         &mut self,
         binding: Option<&(BindingPattern, Option<bool>)>,
@@ -5295,14 +5475,19 @@ impl RegisterLowerer {
         // the one the declaration made for a `var` head, which is the same
         // difference a `for`-`in` has.
         let head_binding = self.for_in_head_binding(binding, target, body)?;
-        // Only an Array is iterated: every other iterable resolves @@iterator
-        // to a method the interpreter cannot call from a step.
         let object_type = self.lower(object)?;
-        let (object_id, ..) = self.array_layout(object_type)?;
-        let element_type = self.array_iteration_type(object_type)?;
-        if !element_type.is_primitive() {
-            return None;
-        }
+        // An Array is stepped by `IteratorNext`, which needs no call. Every
+        // other iterable is walked by the protocol of 7.4 itself, which is
+        // calls and property reads the lowering already emits.
+        let Some((object_id, ..)) = self.array_layout(object_type) else {
+            return self.lower_iterated_for_of(head_binding, body);
+        };
+        let Some(element_type) = self
+            .array_iteration_type(object_type)
+            .filter(|element| element.is_primitive())
+        else {
+            return self.lower_iterated_for_of(head_binding, body);
+        };
 
         let (iterable, method) = self.open_array_iterator()?;
         let [iterator, value] = self.allocate_register_window()?;
@@ -6169,6 +6354,9 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ArrayPrototypePop
         | crate::engine::realm::Intrinsic::ArrayPrototypeReverse
         | crate::engine::realm::Intrinsic::ArrayPrototypeSlice
+        // 27.1.2.1 answers the receiver, whose layout the call site knows and
+        // this table does not.
+        | crate::engine::realm::Intrinsic::IteratorPrototypeIterator
         | crate::engine::realm::Intrinsic::ArrayPrototypeShift
         | crate::engine::realm::Intrinsic::ArrayPrototypeSplice
         | crate::engine::realm::Intrinsic::ArrayPrototypeFill

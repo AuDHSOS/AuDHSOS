@@ -3914,16 +3914,9 @@ fn register_lowering_rejects_for_in_heads_it_cannot_model() -> Result<(), Error>
         "for(const [k] in {a:1}){}",
         // A captured per-iteration binding needs a context of its own.
         "for(const k in {a:1}){(()=>k)}",
-        // A for-of over a value that is not an Array resolves @@iterator to a
-        // method the interpreter cannot call from a step.
-        "for(const k of 'ab'){}",
-        "for(const k of {}){}",
         "let k;for(k of [1]){}",
         // A destructuring head is not lowered.
         "for(const [a] of [[1]]){}",
-        // An element the loop cannot type as a primitive is not lowered.
-        "for(const x of [{}]){}",
-        "for(const x of [[1]]){}",
         // A per-iteration binding captured by a closure needs a context.
         "for(const x of [1]){(()=>x)}",
         // A head that shadows a binding of the enclosing scope is not lowered.
@@ -4537,6 +4530,48 @@ fn a_for_of_takes_a_var_head_as_a_for_in_does() -> Result<(), Error> {
         "var n=0;for(var x of []){n+=1}n",
     ] {
         differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn a_for_of_walks_an_iterable_by_the_protocol_of_7_4() -> Result<(), Error> {
+    // An Array is stepped by an instruction that needs no call. Every other
+    // iterable is walked by 7.4 itself: 7.4.2 reads @@iterator and calls it,
+    // 7.4.6 calls `next` and asks the result whether it is `done`, and 7.4.7
+    // reads `value` only where it is not.
+    for source in [
+        "var s=0;for(var x of [1,2,3].values()){s+=x}s",
+        "var s=0;for(let x of [1,2].values()){s+=x}s",
+        "var n=0;for(var x of [].values()){n+=1}n",
+        "var s=0;var a=[1,2,3];for(var x of a){s+=x}s",
+    ] {
+        differential(source)?;
+    }
+    // 22.1.3.34 gives a String an iterator this Realm has not built, and
+    // answering undefined would say a String is not iterable.
+    for source in ["for(var c of 'ab'){}", "for(const c of 'ab'){}"] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        assert!(
+            matches!(
+                Runtime::with_backend(Limits::default(), Backend::Engine)
+                    .run(&program, &mut SilentHost),
+                Err(Error::Unsupported { .. })
+            ),
+            "{source}"
+        );
+    }
+    // A body that leaves by `break` or `return` would have to close the
+    // iterator (7.4.9), which the lowering does not emit.
+    for source in [
+        "for(var x of [1].values()){break}",
+        "function f(a){for(var x of a.values()){return x}}f([1])",
+    ] {
+        assert!(
+            !compile(source, Limits::default())?.uses_register_backend(),
+            "{source}"
+        );
     }
     Ok(())
 }

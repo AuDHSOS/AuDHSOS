@@ -332,6 +332,16 @@ pub enum Instruction {
         /// Feedback vector slot for inline caching.
         slot: u16,
     },
+    /// `acc = obj[@@symbol]`, the read 7.4.2 makes of `@@iterator` and the
+    /// only way the lowering names a Symbol key.
+    GetWellKnown {
+        /// Object register.
+        obj: Reg,
+        /// Index of the Symbol in [`crate::engine::realm::WellKnownSymbol::ALL`].
+        symbol: u16,
+        /// Feedback vector slot for inline caching.
+        slot: u16,
+    },
     /// `acc = acc instanceof reg` (13.10.2).
     TestInstanceOf(Reg),
     /// Builds the arguments object of this call in `reg` (10.4.4).
@@ -755,6 +765,13 @@ impl BytecodeFunction {
                 self.verify_feedback(pc, slot, FeedbackKind::BinaryOp)?;
                 self.verify_register(pc, lhs)?;
                 Some(rhs)
+            }
+            Instruction::GetWellKnown { obj, symbol, slot } => {
+                if usize::from(symbol) >= crate::engine::realm::WellKnownSymbol::ALL.len() {
+                    return Err(VerificationError::ConstantOutOfBounds { pc, index: symbol });
+                }
+                self.verify_feedback(pc, slot, FeedbackKind::NamedAccess)?;
+                Some(obj)
             }
             Instruction::GetNamed { obj, name, slot }
             | Instruction::SetNamed { obj, name, slot } => {
