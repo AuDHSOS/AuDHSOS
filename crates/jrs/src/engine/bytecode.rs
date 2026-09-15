@@ -366,6 +366,9 @@ pub enum Instruction {
         /// Feedback vector slot for inline caching.
         slot: u16,
     },
+    /// `acc = acc in reg` (13.10.2), which is `HasProperty` of 7.3.11 on the
+    /// key `ToPropertyKey` makes of the accumulator.
+    TestIn(Reg),
     /// `acc = acc instanceof reg` (13.10.2).
     TestInstanceOf(Reg),
     /// Builds the arguments object of this call in `reg` (10.4.4).
@@ -819,6 +822,7 @@ impl BytecodeFunction {
             | Instruction::TestGreaterThan(register)
             | Instruction::TestGreaterThanOrEqual(register)
             | Instruction::TestInstanceOf(register)
+            | Instruction::TestIn(register)
             | Instruction::CreateArguments(register) => Some(register),
             Instruction::Mov { src, dst } => {
                 self.verify_register(pc, src)?;

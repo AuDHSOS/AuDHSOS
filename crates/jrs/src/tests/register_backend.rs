@@ -5448,3 +5448,25 @@ fn a_var_head_of_a_realm_script_writes_the_global() -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[test]
+fn the_in_operator_asks_the_prototype_chain() -> Result<(), Error> {
+    // 13.10.2 is `HasProperty` of 7.3.11 on the key 7.1.19 makes, and the
+    // right side has to be an Object.
+    for source in [
+        "var o={a:1};'a' in o",
+        "var o={a:1};'b' in o",
+        "var o={a:1};'toString' in o",
+        "var a=[1,2];0 in a",
+        "var a=[1,2];5 in a",
+        "var a=[1,2];'length' in a",
+        "var o=Object.create({p:1});'p' in o",
+        "var o={};var k='x';k in o",
+        "var o={x:1};var k='x';k in o",
+        "function f(o){return 'a' in o}f({a:1})",
+        "var o={};var r=0;try{'a' in 1}catch(e){r=e instanceof TypeError};r",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}

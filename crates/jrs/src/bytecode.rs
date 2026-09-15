@@ -6395,6 +6395,9 @@ impl RegisterLowerer {
         let (instruction, result_type) = match operator {
             // 13.10.2 reaches 7.3.22 for every object of this Realm, because
             // none of them carries an `@@hasInstance` yet.
+            // 13.10.2: `HasProperty` on the key the left side makes, with a
+            // right side that has to be an Object.
+            Binary::In => (Instruction::TestIn(right_register), RegisterType::Boolean),
             Binary::InstanceOf => (
                 Instruction::TestInstanceOf(right_register),
                 RegisterType::Boolean,

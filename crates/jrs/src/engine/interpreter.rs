@@ -5450,6 +5450,41 @@ impl RegisterVM {
         self.allocate_string(heap, &[unit]).map(Some)
     }
 
+    /// `HasProperty` of 7.3.11: the own property, then the Prototype Chain.
+    fn has_property(
+        object: ObjectRef,
+        name: PropertyKey,
+        heap: &GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<bool, VMError> {
+        let mut current = object;
+        let mut depth = 0u16;
+        loop {
+            if heap.own_named_flags(current, name)?.is_some() {
+                return Ok(true);
+            }
+            let prototype = heap
+                .get_object(current)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?
+                .prototype;
+            let Some(next) = prototype.as_object() else {
+                // A name a Prototype this Realm has not built would own is a
+                // gap, and answering false would say the object has not got
+                // what it has.
+                let units = name
+                    .as_string()
+                    .and_then(|name| heap.strings.to_utf16(Value::from_string(name)))
+                    .unwrap_or_default();
+                Self::absent_property(Value::from_object(object), &units, heap, realm)?;
+                return Ok(false);
+            };
+            depth = depth
+                .checked_add(1)
+                .ok_or(VMError::Heap(HeapError::ReferenceSpaceExhausted))?;
+            current = next;
+        }
+    }
+
     /// `ToObject` of 7.1.18: an Object is itself, a primitive is boxed, and
     /// undefined and null throw a `TypeError`.
     fn coerce_object(
@@ -6409,6 +6444,18 @@ impl RegisterVM {
                 Instruction::TestStrictEqual(reg) => {
                     let rhs = self.read_reg(reg)?;
                     self.acc = Value::from_bool(Self::strictly_equals(self.acc, rhs, heap)?);
+                }
+                Instruction::TestIn(reg) => {
+                    let target = self.read_reg(reg)?;
+                    let Some(object) = target.as_object() else {
+                        return Err(type_error(
+                            heap,
+                            realm,
+                            "the right-hand side of in is not an object",
+                        ));
+                    };
+                    let key = property_key(self.acc, heap)?;
+                    self.acc = Value::from_bool(Self::has_property(object, key, heap, realm)?);
                 }
                 Instruction::TestInstanceOf(reg) => {
                     let constructor = self.read_reg(reg)?;
