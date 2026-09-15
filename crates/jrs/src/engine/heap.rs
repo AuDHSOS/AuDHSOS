@@ -919,6 +919,13 @@ impl GenerationalHeap {
             .ok_or(HeapError::InvalidReference)?
             .shape_id;
         let slot = if let Some(location) = self.shapes.lookup(shape_id, name) {
+            // 10.1.6.3 writes the attributes a descriptor names, so redefining
+            // a property changes what it is and not only what it holds. The
+            // Shape holds the attributes, so a different set of them is a
+            // different Shape.
+            if location.flags != flags {
+                self.reshape_one(reference, name, flags)?;
+            }
             location.slot_offset
         } else {
             let (shape, slot) = self.shapes.transition(shape_id, name, flags);
@@ -927,6 +934,54 @@ impl GenerationalHeap {
         };
         self.set_object_slot(reference, slot, value)?;
         Ok(slot)
+    }
+
+    /// Gives one own property of an object a different set of attributes.
+    ///
+    /// A Shape is the names and the attributes together, so this builds the
+    /// Shape the object should have by walking the one it has, in the order
+    /// the properties were added. The slots keep their offsets, because the
+    /// walk adds the same names in the same order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale or invalid object.
+    fn reshape_one(
+        &mut self,
+        reference: ObjectRef,
+        name: PropertyKey,
+        flags: PropertyFlags,
+    ) -> Result<(), HeapError> {
+        let shape_id = self
+            .get_object(reference)
+            .ok_or(HeapError::InvalidReference)?
+            .shape_id;
+        let properties = self.shapes.own_properties(shape_id);
+        // The values are read by the slots the old Shape gave them and written
+        // back by the slots the new one gives, because a Shape the transitions
+        // already held may lay them out differently.
+        let mut held = Vec::with_capacity(properties.len());
+        for (property, existing, slot) in properties {
+            let value = self
+                .get_object(reference)
+                .ok_or(HeapError::InvalidReference)?
+                .get_slot(slot)
+                .unwrap_or(VALUE_UNDEFINED);
+            held.push((property, existing, value));
+        }
+        let mut rebuilt = self.shapes.root_shape();
+        let mut placed = Vec::with_capacity(held.len());
+        for (property, existing, value) in held {
+            let wanted = if property == name { flags } else { existing };
+            let (next, slot) = self.shapes.transition(rebuilt, property, wanted);
+            rebuilt = next;
+            placed.push((slot, value));
+        }
+        self.set_object_shape(reference, rebuilt)?;
+        for (slot, value) in placed {
+            self.set_object_slot(reference, slot, value)?;
+        }
+        Ok(())
     }
 
     /// Writes an indexed element and records an Old-to-Young edge.

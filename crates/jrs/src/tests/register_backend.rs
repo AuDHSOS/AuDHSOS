@@ -4575,3 +4575,28 @@ fn a_for_of_walks_an_iterable_by_the_protocol_of_7_4() -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[test]
+fn a_descriptor_changes_what_a_property_is_and_not_only_what_it_holds() -> Result<(), Error> {
+    // A Shape holds the attributes with the names, so a property redefined
+    // with different ones belongs to a different Shape. 10.1.6.3 leaves a
+    // field the descriptor does not name as it was, and 6.2.6.6 fills it in
+    // as false only for a property that did not exist.
+    for source in [
+        "var o={x:1};Object.defineProperty(o,'x',{enumerable:false});Object.keys(o).length",
+        "var o={x:1,y:2};Object.defineProperty(o,'x',{enumerable:false});o.x+o.y",
+        "var o={x:1,y:2};Object.defineProperty(o,'x',{enumerable:false});Object.keys(o).join(',')",
+        "var o={x:1,y:2,z:3};Object.defineProperty(o,'y',{enumerable:false});o.x+o.y+o.z",
+        "var o={x:1};Object.defineProperty(o,'x',{value:2});o.x",
+        "var o={x:1};Object.defineProperty(o,'x',{value:2});Object.keys(o).length",
+        "var o={x:1};Object.defineProperty(o,'x',{value:2});Object.getOwnPropertyDescriptor(o,'x').enumerable",
+        "var o={};Object.defineProperty(o,'x',{value:1});Object.getOwnPropertyDescriptor(o,'x').enumerable",
+        "var o={x:1};Object.defineProperty(o,'x',{});o.x",
+        "var o={x:1};Object.defineProperty(o,'x',{configurable:true});Object.getOwnPropertyDescriptor(o,'x').configurable",
+        "var o={x:1};Object.defineProperties(o,{x:{enumerable:false}});Object.keys(o).length",
+        "var o={x:1};Object.defineProperties(o,{x:{enumerable:false}});o.x",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}

@@ -204,6 +204,14 @@ impl ArrayWalk {
     }
 }
 
+/// A Property Descriptor as 6.2.6.5 read it: only the fields it named.
+struct PartialDescriptor {
+    value: Option<Value>,
+    writable: Option<bool>,
+    enumerable: Option<bool>,
+    configurable: Option<bool>,
+}
+
 /// What a conversion of 7.1.1 reached.
 enum Conversion {
     /// The primitive value the operation asked for.
@@ -1625,8 +1633,8 @@ impl RegisterVM {
             };
             descriptors.push((key, Self::to_property_descriptor(descriptor, heap, realm)?));
         }
-        for (key, (value, flags)) in descriptors {
-            heap.define_own_named(object, key, value, flags)?;
+        for (key, descriptor) in descriptors {
+            Self::define_property_from(object, key, &descriptor, heap)?;
         }
         Ok(Value::from_object(object))
     }
@@ -1738,8 +1746,8 @@ impl RegisterVM {
                         "property descriptor must be an object",
                     ));
                 };
-                let (value, flags) = Self::to_property_descriptor(source, heap, realm)?;
-                heap.define_own_named(object, name, value, flags)?;
+                let descriptor = Self::to_property_descriptor(source, heap, realm)?;
+                Self::define_property_from(object, name, &descriptor, heap)?;
                 Ok(target)
             }
         }
@@ -1781,7 +1789,7 @@ impl RegisterVM {
         source: ObjectRef,
         heap: &mut GenerationalHeap,
         realm: &Realm,
-    ) -> Result<(Value, PropertyFlags), VMError> {
+    ) -> Result<PartialDescriptor, VMError> {
         for accessor in ["get", "set"] {
             let key = PropertyKey::String(heap.strings.intern(accessor)?);
             if heap.lookup_named(source, key)?.is_some() {
@@ -1792,26 +1800,56 @@ impl RegisterVM {
             let key = PropertyKey::String(heap.strings.intern(name)?);
             Ok(heap.lookup_named(source, key)?.map(|found| found.value))
         };
-        let value = field("value", heap)?.unwrap_or(VALUE_UNDEFINED);
+        let value = field("value", heap)?;
         let writable = field("writable", heap)?;
         let enumerable = field("enumerable", heap)?;
         let configurable = field("configurable", heap)?;
-        let truth = |found: Option<Value>| -> Result<bool, VMError> {
-            found.map_or(Ok(false), |value| Self::to_boolean(value, heap))
+        let truth = |found: Option<Value>| -> Result<Option<bool>, VMError> {
+            found.map(|value| Self::to_boolean(value, heap)).transpose()
         };
-        let writable = truth(writable)?;
-        let enumerable = truth(enumerable)?;
-        let configurable = truth(configurable)?;
         let _ = realm;
-        Ok((
+        // 6.2.6.5 keeps a field the descriptor does not name absent, and
+        // 10.1.6.3 leaves an absent field of an existing property as it was.
+        Ok(PartialDescriptor {
             value,
-            PropertyFlags {
-                writable,
-                enumerable,
-                configurable,
-                is_accessor: false,
-            },
-        ))
+            writable: truth(writable)?,
+            enumerable: truth(enumerable)?,
+            configurable: truth(configurable)?,
+        })
+    }
+
+    /// Applies a Property Descriptor to an object, as 10.1.6.3 does.
+    ///
+    /// A field the descriptor does not name keeps what the property had, and
+    /// is false on a property that did not exist, which is what 6.2.6.6 fills
+    /// in for one.
+    fn define_property_from(
+        object: ObjectRef,
+        name: PropertyKey,
+        descriptor: &PartialDescriptor,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        let existing = heap.own_named_flags(object, name)?;
+        let held = match existing {
+            Some(_) => heap
+                .lookup_named(object, name)?
+                .map_or(VALUE_UNDEFINED, |property| property.value),
+            None => VALUE_UNDEFINED,
+        };
+        let previous = existing.unwrap_or(PropertyFlags {
+            writable: false,
+            enumerable: false,
+            configurable: false,
+            is_accessor: false,
+        });
+        let flags = PropertyFlags {
+            writable: descriptor.writable.unwrap_or(previous.writable),
+            enumerable: descriptor.enumerable.unwrap_or(previous.enumerable),
+            configurable: descriptor.configurable.unwrap_or(previous.configurable),
+            is_accessor: false,
+        };
+        heap.define_own_named(object, name, descriptor.value.unwrap_or(held), flags)?;
+        Ok(())
     }
 
     /// The intrinsics that need nothing of the call but its arguments.
