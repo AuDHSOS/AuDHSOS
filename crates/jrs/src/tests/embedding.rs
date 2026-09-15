@@ -444,7 +444,7 @@ fn retained_quota_release_and_name_limits_are_enforced() -> Result<(), Error> {
     let mut host = SilentHost;
     let mut realm = Realm::new(
         Limits {
-            properties: 32,
+            properties: 34,
             ..Limits::default()
         },
         &mut host,
@@ -459,7 +459,7 @@ fn retained_quota_release_and_name_limits_are_enforced() -> Result<(), Error> {
         realm.set_global("same", &object)?;
         realm.get_global("same")?;
     }
-    for _ in 0..31 {
+    for _ in 0..33 {
         realm.object()?;
     }
     assert!(matches!(

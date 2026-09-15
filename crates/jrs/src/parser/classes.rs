@@ -67,10 +67,19 @@ impl Parser {
             if is_static {
                 self.need("static")?;
             }
+            if self.is("{") {
+                return Err(Self::unsupported("class static blocks"));
+            }
             let method_start = self.token()?.offset;
             let async_method = self.async_method_head();
             if async_method {
                 self.need("async")?;
+                if self.is("*") {
+                    return Err(Self::unsupported("async generator methods"));
+                }
+            }
+            if self.is("*") {
+                return Err(Self::unsupported("generator methods"));
             }
             let accessor = if (self.is("get") || self.is("set"))
                 && self
@@ -116,9 +125,7 @@ impl Parser {
                 return Err(self.error("invalid or duplicate constructor"));
             }
             if !self.is("(") {
-                return Err(self.error(
-                    "class fields, private elements and static blocks are not implemented",
-                ));
+                return Err(Self::unsupported("class fields"));
             }
             let mut function = self.method_function(
                 None,
@@ -155,6 +162,7 @@ impl Parser {
                     ObjectProperty {
                         key,
                         value,
+                        computed,
                         prototype: false,
                         accessor,
                     },

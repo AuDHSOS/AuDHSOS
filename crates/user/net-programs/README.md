@@ -5,7 +5,7 @@ network device and answers the socket protocol; `app-net`, which uses a
 socket; `app-ssh`, the Secure Shell client of document 14, which reads
 what it is given off the scratch volume (D-146), opens one connection,
 and runs a command on the far side; and `app-tls`, which holds the trust
-anchors of the image, reads them off the boot volume (D-147), and gains
+anchors of the image, reads them off the boot volume (D-148), and gains
 the TLS handshake in Phase 15.
 
 They are a package of their own and not four more binaries of

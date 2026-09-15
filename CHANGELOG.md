@@ -7,7 +7,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
-- A TLS server to reach (D-148). `audhsos-tls` gains the module `server`
+- A TLS server to reach (D-149). `audhsos-tls` gains the module `server`
   behind the feature `test-server`: the other half of one connection,
   sans-I/O like the client and written against the same record layer and
   key schedule, so the two cannot drift. `xtask::tls` is the socket and
@@ -19,7 +19,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   past the window are each refused. It is what the acceptance run of
   Phase 15 starts; the guest's half is the handshake in `app-tls`.
 
-- The image carries trust anchors (D-147). `cargo xtask image` reads every
+- The image carries trust anchors (D-148). `cargo xtask image` reads every
   certificate of the directory `anchors/` — DER or PEM — and writes them
   as one table onto the boot volume as `AUDHSOS/ANCHORS.BIN`;
   `audhsos-x509::anchors` is the writer and the reader of that table, as
@@ -827,6 +827,28 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   holds one and `Server::new` holds two more while it builds one, which
   reached the last mapped page of the old stack: the network server
   faulted between the line that reports the device and its first poll.
+
+- A fuzzing run of more than one worker is one orchestrator process and N
+  workers, where it was N independent engines over one corpus directory.
+  Loading a corpus means running every file in it to learn what it
+  reaches, so the old shape paid the whole corpus on every core before it
+  mutated anything. The orchestrator reads the corpus once, deals the
+  files round robin, keeps the pool, and draws the seeds; a worker
+  mutates, runs, and says what it reached. The draw stays with the pool
+  because it weights an input by the features it owns times its place,
+  which no process that sees a part of the corpus can compute. What a
+  worker needs to answer whether an input reached anything is the
+  coverage table alone, which it is handed once after the load; it keeps
+  only the features that table lets it claim, so the pipe carries nothing
+  for the inputs that reach nothing. Measured on four cores over 6,925
+  `jrs_backend` inputs with a budget of 120 seconds: loading went from
+  113-129 seconds of that budget to 34, and the run from 48,056
+  executions across four processes to 799,868, which is 394 executions a
+  second against 6,665. `-workers` is implemented rather than refused, and
+  the fleet it asks for is never larger than the machine has cores, which
+  the run says when it gives fewer than were asked for; `-fuzz_worker` is
+  this engine's own flag for a worker process. `-jobs` and `-fork` stay
+  refused (D-147).
 
 - `Interrupt::line` is an `Option<u8>`: a message interrupt has no line at
   any controller the kernel could mask. `interrupt_ack` on such an object

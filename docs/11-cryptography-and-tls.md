@@ -492,12 +492,12 @@ Modules:
   connection, which then refuses every further call. `unknown_ca` keeps
   the one meaning RFC 8446, section 6.2 gives it — the chain reaches no
   anchor — so a chain that reaches one and carries the wrong name or the
-  wrong purpose is `bad_certificate` (D-148).
+  wrong purpose is `bad_certificate` (D-149).
 - `server.rs`, behind the feature `test-server`: the other half of one
   connection, in the same four calls, so that the client has something to
   be driven against — in memory in this crate's tests, and over a socket
   in the acceptance run of Phase 15, where `xtask::tls` owns the listener
-  and the thread (D-148). It answers one connection at a time, asks for no
+  and the thread (D-149). It answers one connection at a time, asks for no
   client certificate, sends no ticket, answers no key update, and sends no
   `HelloRetryRequest`.
 
@@ -620,7 +620,7 @@ them is step T8, which joins the four to the client.
 | What was missing | Where it was felt | Who owns it |
 |-----------------|------------------|-------------|
 | ~~A clock~~ | `audhsos-time` arrived, so `audhsos-der` yields a `CivilTime` that the calendar validated and `verify_chain` compares one as its `now`. The source for that value arrived with D-137: the loader reads the firmware clock through `GetTime` before it leaves the boot services, the moment travels in the boot information, and `clock_wall` answers it to userland as microseconds since the epoch. No crate of this track reads a clock, which is what D-46 asked; what changed is that there is now a caller that can fill the parameter | D-137, catalog 6.6.71; step T8 is what joins the two |
-| ~~A PEM decoder~~ | `audhsos-encoding` arrived with strict Base64, hex, and PEM, and the trust-anchor conversion that needed it is written: `xtask::anchors` reads the files of `anchors/` in either form and `audhsos-x509::anchors` writes them as the table the boot volume carries (D-147) | D-47, D-147, [document 12](12-parallel-work.md) |
+| ~~A PEM decoder~~ | `audhsos-encoding` arrived with strict Base64, hex, and PEM, and the trust-anchor conversion that needed it is written: `xtask::anchors` reads the files of `anchors/` in either form and `audhsos-x509::anchors` writes them as the table the boot volume carries (D-148) | D-47, D-148, [document 12](12-parallel-work.md) |
 | ~~A source of entropy~~ | The source arrived in Phase 12: `RDSEED` in `kernel-hal-x86_64` behind the system call `random_bytes`, number 49, which answers the four words a `ChaChaRng` seed is and `Unavailable` where a word cannot be filled inside the retry bound. A process seeds one generator at startup, as `app-ssh` does at `crates/user/net-programs/src/bin/app_ssh.rs:621` | D-43, D-110, D-121; the reference machine carries `+rdrand,+rdseed` |
 | ~~A transport~~ | The transport arrived in Phase 14: `server-net` over `net-stack`, the socket protocol of `user-proto` with one ring per direction, and the client helper `Stream` at `crates/user/programs/src/socket.rs:217`, which `app-ssh` and `app-net` already move bytes through. What step T8 writes is the glue between that socket and `Connection`, not the socket | D-49, D-119, D-142, D-143; [document 13](13-the-network-on-the-machine.md) |
 

@@ -85,6 +85,7 @@ impl Execution<'_> {
                 | Error::Reference { .. }
                 | Error::Range { .. }
                 | Error::Syntax { .. }
+                | Error::UnverifiedSyntax { .. }
         ) && self
             .frames
             .iter()

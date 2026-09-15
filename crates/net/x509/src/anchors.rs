@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! The table of trust anchors an image carries (D-42, D-147).
+//! The table of trust anchors an image carries (D-42, D-148).
 //!
 //! An anchor is a certificate whose subject and key the system trusts
 //! without asking who signed it. [`TrustAnchor::from_certificate`] reads

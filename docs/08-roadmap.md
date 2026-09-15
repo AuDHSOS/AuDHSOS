@@ -481,11 +481,11 @@ named. Certificate validation had a `now` parameter and no value to put
 in it; now it has one.
 
 The anchors this phase validates against arrived ahead of it too
-(D-147): the xtask writes the files of `anchors/` as one table onto the
+(D-148): the xtask writes the files of `anchors/` as one table onto the
 boot volume, `audhsos-x509::anchors` reads it, and `app-tls` is the
 program of the image that holds them and reports what it read.
 
-The server the acceptance needs arrived ahead of it as well (D-148):
+The server the acceptance needs arrived ahead of it as well (D-149):
 `audhsos-tls::server` behind the feature `test-server` answers one
 connection, and `xtask::tls` starts it on a port of the loopback with a
 chain the certificate builder wrote.

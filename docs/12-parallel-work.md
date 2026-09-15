@@ -153,7 +153,7 @@ of D-42 uses this crate instead of an ad-hoc decoder in the xtask
 (D-47), and the certificate builder of document 11 uses it to emit test
 data in a form a human can read. Both consumers are the xtask: the
 Secure Shell interop run reads its key material through `pem::decode`
-and `base64`, and the trust-anchor conversion of D-147 reads a root in
+and `base64`, and the trust-anchor conversion of D-148 reads a root in
 either form and hands the DER to `audhsos-x509::anchors`. Neither
 contains a decoder of its own, which is the point of writing this crate
 first.

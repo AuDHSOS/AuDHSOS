@@ -28,7 +28,7 @@ row.
 calls `write`, the program that reads the file calls `Anchors::parse` and
 `Anchors::read_into`, and one certificate becomes one `TrustAnchor`
 through `TrustAnchor::from_certificate`. The format is a magic, a
-version, a count, and that many length-prefixed certificates (D-147), and
+version, a count, and that many length-prefixed certificates (D-148), and
 it refuses a record of no bytes and a byte behind the last record, so a
 file that was cut short and one that was appended to are seen rather than
 read.

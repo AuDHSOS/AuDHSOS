@@ -50,6 +50,31 @@ fn thrown_values_and_runtime_errors_reach_catch() {
 }
 
 #[test]
+fn catch_parameters_support_nested_binding_patterns() {
+    for (source, expected) in [
+        (
+            "try{throw [20,{x:22}]}catch([a,{x:b}]){a+b}",
+            Value::Number(42.0),
+        ),
+        (
+            "try{throw {x:20,y:22,z:1}}catch({x,y,...rest}){x+y+rest.z}",
+            Value::Number(43.0),
+        ),
+        ("try{throw []}catch([a=42]){a}", Value::Number(42.0)),
+    ] {
+        assert_eq!(eval(source), Ok(expected), "{source}");
+    }
+    for source in [
+        "try{}catch([x,x]){}",
+        "try{}catch({a:x,b:x}){}",
+        "try{}catch([x]){let x}",
+        "try{}catch({x}){var x}",
+    ] {
+        assert!(compile(source, Limits::default()).is_err(), "{source}");
+    }
+}
+
+#[test]
 fn finally_runs_on_all_abrupt_completions_and_can_override_them() {
     for (source, expected) in [
         ("function f(){try{return 1;}finally{return 42;}}f()", 42.0),

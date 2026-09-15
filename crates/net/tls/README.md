@@ -24,7 +24,7 @@ sizes are constants of this crate.
 The feature `test-server` adds `server`, the server half of one
 connection, so that the client has something to be driven against: the
 crate's own tests do it in memory, and the acceptance run of Phase 15
-does it over a socket the xtask owns (D-148). It is sans-I/O in the same
+does it over a socket the xtask owns (D-149). It is sans-I/O in the same
 four calls and written against the same record layer and key schedule, so
 the two halves cannot drift apart.
 

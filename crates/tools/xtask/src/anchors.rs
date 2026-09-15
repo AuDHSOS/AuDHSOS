@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Manuel Baesler and contributors
 
 //! The trust anchors of the image: from the files of a directory to the
-//! table the boot volume carries (D-42, D-147).
+//! table the boot volume carries (D-42, D-148).
 //!
 //! The directory is an operator's input. Every file in it is one root
 //! certificate, written as DER or as PEM with the label `CERTIFICATE`;

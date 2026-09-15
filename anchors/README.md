@@ -11,7 +11,7 @@ reader of that table, so the tool and the program cannot disagree about
 its shape.
 
 An operator adds a root by dropping the file in and building the image
-again (D-42, D-147). A build with no directory and a build with an empty
+again (D-42, D-148). A build with no directory and a build with an empty
 one both write a table of no anchors, and a program that finds one refuses
 every chain rather than trusting the next best thing.
 
@@ -28,7 +28,7 @@ every chain rather than trusting the next best thing.
 These five are public documents: a root certificate is the authority's own
 published bytes, carries no secret, and is what every browser ships. They
 are tracked so that a checkout can reach a real server without an operator
-first fetching anything, which is the one point on which D-147 amends
+first fetching anything, which is the one point on which D-148 amends
 D-42.
 
 ## Checking a file

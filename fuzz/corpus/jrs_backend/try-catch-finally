@@ -1,0 +1,1 @@
+let x=0;try{throw 1}catch(e){x=e}finally{x+=10}x

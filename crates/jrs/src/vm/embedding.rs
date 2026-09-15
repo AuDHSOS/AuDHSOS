@@ -165,6 +165,9 @@ impl Execution<'_> {
             HostBehavior::EvalScript => {
                 return self.eval_global_source(args.first().unwrap_or(&Value::Undefined));
             }
+            HostBehavior::Eval => {
+                return self.eval_source(args.first().unwrap_or(&Value::Undefined), false);
+            }
             HostBehavior::Intrinsic(kind) => return self.native_call(kind, receiver, args),
             HostBehavior::CollectGarbage => {
                 self.collect_garbage()?;

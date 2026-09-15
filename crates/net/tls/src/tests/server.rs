@@ -6,7 +6,7 @@
 //! `tests/machine.rs` drives the client against a server written in that
 //! file, message by message, so that a test can break one rule at a time.
 //! This one drives it against [`crate::server`], which is the server the
-//! acceptance run of Phase 15 starts on the development machine (D-148):
+//! acceptance run of Phase 15 starts on the development machine (D-149):
 //! what it checks is that the two halves of this crate reach each other
 //! over nothing but the bytes they exchange.
 

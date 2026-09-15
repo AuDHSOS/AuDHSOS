@@ -1083,7 +1083,7 @@ done until every applicable item has a test. Items are added, never removed.
   verifies against an empty trust store, neither on its own nor as its own
   issuer. The corpus holds the certificate of RFC 8448 and three the
   builder writes.
-- The anchor table of D-147: a table of no anchors is a header and nothing
+- The anchor table of D-148: a table of no anchors is a header and nothing
   else; every certificate written comes back byte for byte, and its anchor
   is the subject and the key `TrustAnchor::from_certificate` reads. A
   magic this crate did not write, a version it does not know, a header cut
@@ -1766,6 +1766,37 @@ done until every applicable item has a test. Items are added, never removed.
   function of three numbers and not the body of the watchdog thread, so its
   coverage does not depend on whether that thread woke before the process
   ended.
+- The coverage table (D-147): a feature nothing reached is claimed and is
+  then covered at that size and above; a larger input never takes one
+  over; a smaller one takes it over only where the run shrinks; a feature
+  past the table shares the slot it wraps onto; a table survives the wire,
+  and one cut short leaves the slots past it where they were.
+- The protocol (D-147): every message of either side survives the wire; a
+  kind neither side writes, a pipe that ended in the middle of a message
+  at every cut, and a length no message has are each refused rather than
+  allocated; a draw the worker holds already costs its place and not its
+  bytes.
+- The flags of a fleet (D-147): `-workers` is read as it was written, so
+  `-1` is as many as there can be; the fleet is never larger than the
+  machine has cores, and one asked for every core and one asked for more
+  than there are get the same; `-fuzz_worker` selects the worker mode and
+  only where it is on.
+- A worker (D-147): it runs the corpus files it was dealt and reports what
+  they reached, passing over a number no file has and a file that is gone;
+  it keeps nothing a full coverage table already holds; it mutates the
+  draws it is given; it reports a corpus file that panics and an input it
+  made that panics, and stops on either; it ends when the pipe ends, when
+  the pipe carries nonsense, and at the end of the time the run was given.
+- The orchestrator (D-147): the corpus is dealt round robin and read once;
+  every worker is handed the coverage table before it fuzzes; a find of a
+  worker is written into the corpus and drawn from again, one the pool
+  refuses is not written, and a smaller one takes the features over; a
+  crash reported while loading and one reported while fuzzing both end the
+  run and write the input out; a worker that ends early, a fleet that says
+  nothing at all, and a worker whose pipe will not take anything are each
+  survived; the length limit grows and the run pulses as the runs add up;
+  the run ends on the clock as well as on the count; a fleet of processes
+  is started from this program and ended with it.
 - Symbol table: an address inside a function, at its first byte, at its
   last byte, and one past it; an address in no function; a symbol that is
   not a function; the narrowest of two functions that enclose each other;
@@ -2390,10 +2421,10 @@ what the kernel dispatches on, so the check is what the kernel saw.
   `AUDHSOS/ANCHORS.BIN` off the boot volume, reports as many anchors as
   the directory `anchors/` held when the image was written, and one line
   per anchor with the length of its subject and of its key. This is the
-  part of the item the anchors are, built under D-147; the three below it
+  part of the item the anchors are, built under D-148; the three below it
   are the handshake and are Phase 15.
 - The server of the run, on the development machine and reached over a
-  socket (D-148): the client of this project completes the handshake
+  socket (D-149): the client of this project completes the handshake
   against `audhsos-tls::server`, validates the chain against the root the
   image carries, and reads the answer. A client that asks for another
   name is refused with `bad_certificate`, one that trusts another root

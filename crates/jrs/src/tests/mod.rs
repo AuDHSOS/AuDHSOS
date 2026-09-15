@@ -29,6 +29,7 @@ mod functions;
 mod heap;
 mod iterators;
 mod json;
+mod math;
 mod microtasks;
 mod number_parsing;
 mod objects;
@@ -42,6 +43,7 @@ mod regexp_dispatch;
 mod regexp_intrinsics;
 mod regexp_replace;
 mod regexp_split;
+mod register_backend;
 mod reverse;
 mod scripts;
 mod sorting;
@@ -230,6 +232,9 @@ fn loops_control_flow_and_slot_reset() {
             "let i=0; while(i<3){let x; if(x !== undefined)break; x=9;i++;}i",
             3.0,
         ),
+        ("let i=0;do{i++}while(i<3);i", 3.0),
+        ("let i=0;do{i++;if(i<3)continue;break}while(true);i", 3.0),
+        ("let i=0;do i++;while(false);i", 1.0),
         ("if (false) 3; else 4", 4.0),
         ("if(true) if(false) 3; else 4;", 4.0),
     ] {
@@ -243,6 +248,59 @@ fn loops_control_flow_and_slot_reset() {
         eval("let i=0; while(i<2){ if(i==1)x; let x=3; i++; }"),
         Err(Error::Reference { .. })
     ));
+    for source in [
+        "do let x=1;while(false)",
+        "do async function f(){}while(false)",
+        "do{}while false",
+        "do{}while(true",
+        "do var x=1;var y=2;while(false)",
+    ] {
+        assert!(matches!(
+            compile(source, Limits::default()),
+            Err(Error::Syntax { .. })
+        ));
+    }
+}
+
+#[test]
+fn for_initializer_conditional_honors_the_in_grammar_parameter() {
+    assert_eq!(
+        eval("let a={x:1},n=0;for(true?'x' in a:false;n<1;n++){}n"),
+        Ok(Value::Number(1.0))
+    );
+    assert_eq!(
+        eval("let n=0;for((('x' in {}));n<1;n++){}n"),
+        Ok(Value::Number(1.0))
+    );
+    assert_eq!(
+        eval("let a={x:1},n=0;for(true?(false?0:'x' in a):false;n<1;n++){}n"),
+        Ok(Value::Number(1.0))
+    );
+    assert_eq!(
+        eval("let of=0;for(of;of<1;of++){}of"),
+        Ok(Value::Number(1.0))
+    );
+    assert_eq!(
+        eval("let obj={of:0};for(obj.of;obj.of<1;obj.of++){}obj.of"),
+        Ok(Value::Number(1.0))
+    );
+    assert_eq!(
+        eval("let n=0;for(let of=0;of<1;of++)n++;n"),
+        Ok(Value::Number(1.0))
+    );
+    for source in [
+        "for('x' in {}?0:0;false;);",
+        "for(true?0:'x' in {};false;);",
+        "for(true?0:false?0:'x' in {};false;);",
+    ] {
+        assert!(
+            matches!(
+                compile(source, Limits::default()),
+                Err(Error::Syntax { .. })
+            ),
+            "{source}"
+        );
+    }
 }
 
 #[test]
@@ -513,6 +571,7 @@ fn resource_limits_exact_boundaries_are_accepted() -> Result<(), Error> {
         stack: 1,
         string_units: 1,
         heap_entries: 32,
+        feedback_vectors: 1,
         call_frames: 8,
         binding_slots: 32,
         properties: 32,
@@ -573,6 +632,10 @@ fn error_variants_render_useful_messages() {
             offset: 4,
             message: "bad token",
         },
+        Error::UnverifiedSyntax {
+            offset: 4,
+            message: "unknown grammar",
+        },
         Error::Reference {
             name: "x".to_owned(),
         },
@@ -585,6 +648,44 @@ fn error_variants_render_useful_messages() {
     ] {
         assert!(!error.to_string().is_empty());
         assert!(!format!("{error:?}").is_empty());
+    }
+}
+
+#[test]
+fn unsupported_syntax_is_distinct_from_syntax_errors() {
+    for source in [
+        "function* g(){}",
+        "async function* g(){}",
+        "class C{x=1}",
+        "let x=0;x&&=1",
+        "let x={};x?.y",
+        "let x={...{a:1}}",
+        "let x={*g(){}}",
+        "let x={async *g(){}}",
+        "label: 0",
+        "123n",
+        "let café=1",
+    ] {
+        assert!(
+            matches!(
+                compile(source, Limits::default()),
+                Err(Error::Unsupported { .. })
+            ),
+            "{source}"
+        );
+    }
+    assert!(matches!(
+        compile("1 +", Limits::default()),
+        Err(Error::UnverifiedSyntax { .. })
+    ));
+    for source in ["let =", "({x})={x:1}", "for(true?0:'x' in {};false;);"] {
+        assert!(
+            matches!(
+                compile(source, Limits::default()),
+                Err(Error::Syntax { .. })
+            ),
+            "{source}"
+        );
     }
 }
 

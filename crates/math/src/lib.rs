@@ -5,7 +5,9 @@
 #![doc = include_str!("../README.md")]
 
 mod integer;
+mod trig;
 pub use integer::RadixInteger;
+pub use trig::sin;
 
 // Exact comparisons below classify IEEE special values and representable integers.
 #[expect(

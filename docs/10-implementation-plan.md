@@ -3341,13 +3341,13 @@ specifies and which has waited for a transport.
   a full ring, the second takes what is there. The record itself stands
   in the program's own buffers, which the glue owns, so the two sizes
   never have to meet.
-- The trust anchors the image carries are built and in (D-147): the
+- The trust anchors the image carries are built and in (D-148): the
   xtask writes the files of `anchors/` as one table onto the boot volume,
   `audhsos-x509::anchors` reads it, and `app-tls` is the program that
   holds them. The acceptance run below adds one anchor of its own, the
   certificate the test builder writes for the server it starts, by
   putting that file in the same directory before the image is written.
-- The server of the run is built and in (D-148): `audhsos-tls::server`
+- The server of the run is built and in (D-149): `audhsos-tls::server`
   under the feature `test-server`, started by `xtask::tls::Server` on a
   port of the loopback, presenting a chain `xtask::tls::Material` builds.
   What Phase 15 adds is the guest's half — the run puts the root of that

@@ -3,7 +3,7 @@
 //! Original Test262 inputs, explicit variants and fail-closed diagnostic accounting.
 //! Unsupported host/module operations and unproven parse negatives cannot pass.
 mod metadata;
-use jrs::{Error, Host, Limits, Realm, Script, Value, compile_script};
+use jrs::{Backend, Error, Host, Limits, Realm, Script, Value, compile_script};
 use metadata::{Metadata, Variant};
 use std::{
     cell::RefCell,
@@ -76,8 +76,24 @@ struct Counts {
 struct Runner {
     root: PathBuf,
     limits: Limits,
+    backend: Backend,
     harness: BTreeMap<String, Result<Rc<Script>, String>>,
     harness_bytes: usize,
+}
+
+fn parse_negative_outcome(compiled: Result<Script, Error>, expected: &str) -> Outcome {
+    match compiled {
+        Ok(_) => Outcome::Fail("parse-negative test compiled successfully".into()),
+        Err(Error::Syntax { .. }) if expected == "SyntaxError" => Outcome::Pass,
+        Err(Error::Syntax { .. }) => {
+            Outcome::Fail("parse phase produced SyntaxError of the wrong expected type".into())
+        }
+        Err(Error::Unsupported { feature }) => Outcome::Unsupported(format!("compile: {feature}")),
+        Err(Error::UnverifiedSyntax { .. }) => {
+            Outcome::Unsupported("parse rejection is not yet verified".into())
+        }
+        Err(error) => Outcome::Fail(format!("compile: {error}")),
+    }
 }
 
 #[expect(
@@ -87,6 +103,7 @@ struct Runner {
 pub(super) fn run(
     mut args: impl Iterator<Item = String>,
     limits: Limits,
+    backend: Backend,
     output: &mut impl Write,
 ) -> Result<(), String> {
     let root = PathBuf::from(
@@ -137,6 +154,7 @@ pub(super) fn run(
     let mut runner = Runner {
         root,
         limits,
+        backend,
         harness: BTreeMap::new(),
         harness_bytes: 0,
     };
@@ -320,12 +338,10 @@ impl Runner {
             source.to_owned()
         };
         let compiled = compile_script(&source, self.limits);
-        if meta
-            .negative
-            .as_ref()
-            .is_some_and(|(phase, _)| phase == "parse")
+        if let Some((phase, expected)) = &meta.negative
+            && phase == "parse"
         {
-            return match compiled {Ok(_)=>Outcome::Fail("parse-negative test compiled successfully".into()),Err(Error::Syntax{..})=>Outcome::Unsupported("parse rejection unverified: compiler still combines unsupported grammar with SyntaxError".into()),Err(e)=>Outcome::Fail(format!("compile: {e}"))};
+            return parse_negative_outcome(compiled, expected);
         }
         let script = match compiled {
             Ok(s) => s,
@@ -340,7 +356,7 @@ impl Runner {
         };
         let mut report = Report::default();
         let state = report.0.clone();
-        let mut realm = match Realm::new(self.limits, &mut report) {
+        let mut realm = match Realm::with_backend(self.limits, &mut report, self.backend) {
             Ok(r) => r,
             Err(e) => return Outcome::Fail(format!("realm: {e}")),
         };
@@ -348,11 +364,13 @@ impl Runner {
             return Outcome::Fail(format!("host setup: {e}"));
         }
         for script in harness {
-            if let Err(e) = realm.evaluate_compiled(&script) {
+            if let Err(e) = realm.run_compiled(&script) {
                 return Outcome::Fail(format!("harness execution: {}", describe(&mut realm, &e)));
             }
         }
-        let result = realm.evaluate_compiled(&script);
+        // A test passes or fails by what it throws, never by its completion
+        // value, so the value never has to reach this runner.
+        let result = realm.run_compiled(&script);
         if let Some(feature) = &state.borrow().unsupported {
             return Outcome::Unsupported(feature.clone());
         }
@@ -360,7 +378,7 @@ impl Runner {
             return Outcome::Unsupported((*feature).into());
         }
         let outcome = match (&meta.negative, result) {
-            (None, Ok(_)) => Outcome::Pass,
+            (None, Ok(())) => Outcome::Pass,
             (None, Err(e)) => Outcome::Fail(format!("runtime: {}", describe(&mut realm, &e))),
             (Some((phase, expected)), Err(e)) if phase == "runtime" => {
                 if error_name(&mut realm, &e).as_deref() == Some(expected) {
@@ -372,7 +390,7 @@ impl Runner {
                     ))
                 }
             }
-            (Some(_), Ok(_)) => Outcome::Fail("negative test completed without throwing".into()),
+            (Some(_), Ok(())) => Outcome::Fail("negative test completed without throwing".into()),
             (_, Err(e)) => Outcome::Fail(format!("unexpected phase: {e}")),
         };
         if outcome != Outcome::Pass {
@@ -413,7 +431,7 @@ impl Runner {
 }
 fn error_name(realm: &mut Realm<'_>, error: &Error) -> Option<String> {
     match error {
-        Error::Syntax { .. } => Some("SyntaxError".into()),
+        Error::Syntax { .. } | Error::UnverifiedSyntax { .. } => Some("SyntaxError".into()),
         Error::Type { .. } => Some("TypeError".into()),
         Error::Reference { .. } => Some("ReferenceError".into()),
         Error::Range { .. } => Some("RangeError".into()),

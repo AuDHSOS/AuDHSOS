@@ -189,15 +189,20 @@ There is no JIT and no claim of competitive performance without benchmarks.
   Number bitwise operators and signed/unsigned shifts,
   logical operators, nullish coalescing, conditional expressions, assignment,
   compound arithmetic assignment, prefix/postfix increment/decrement.
+- Array and object destructuring assignments support nested patterns, defaults,
+  rest targets, computed property keys and property-reference targets. Reference
+  evaluation, property reads, iterator closing and the assignment expression's
+  result follow their specified observable order.
 - `if`, `while`, three-part `for`, unlabelled `break` and `continue`.
 - Untagged template literals with nested substitutions, cooked escapes, line
   normalization and string-hint conversion in evaluation order. Tagged
   templates and their raw/cooked template-object identity are not implemented.
 - `instanceof` with ordinary prototype-chain semantics (without Symbol hooks),
   `switch` with strict selectors, fallthrough and shared lexical case scope,
-  `for…in` key enumeration, and synchronous iterable `for…of`. For-of declarations
-  support nested array binding patterns and elisions, not defaults or rest
-  inside patterns. Symbol.iterator is called with the original receiver; the
+  `for…in` key enumeration, and synchronous iterable `for…of`. Declarations and
+  for-of bindings support nested array/object binding patterns, elisions,
+  defaults and array rest. Object rest copies own enumerable String and Symbol
+  properties while preserving observable key/getter order. Symbol.iterator is called with the original receiver; the
   returned iterator's next method is cached and done is read before value.
   `IteratorClose` runs on early exits and binding-pattern completion, in lexical
   order with finally handlers. Next/done/value failures mark the record done;
@@ -209,8 +214,9 @@ There is no JIT and no claim of competitive performance without benchmarks.
   traced through active and suspended async frames. User next/return functions
   run under the same host, fuel and native-reentry quotas as other calls.
 - Function declarations and expressions, named self-recursion, arrow
-  functions with simple, default and rest parameters, `return`, hoisting, first-class calls
-  and closures over shared mutable bindings. `for (let ...)` creates
+  functions with simple, default, rest and destructured parameters, `return`,
+  hoisting, first-class calls and closures over shared mutable bindings.
+  `for (let ...)` creates
   per-iteration bindings; `for (var ...)` retains one shared binding.
   Non-simple parameters initialize through bytecode with a parameter TDZ;
   default-expression closures do not see body `var`/function declarations.
@@ -223,8 +229,7 @@ There is no JIT and no claim of competitive performance without benchmarks.
   bounded operand stack, with a private count preserved across await/suspension.
   Array elements use data-property creation, not push/setter/species hooks.
   The super constructor is captured before argument evaluation, including
-  iterator side effects. Object spread and rest inside binding patterns remain
-  unimplemented.
+  iterator side effects. Object spread remains unimplemented.
 - Async function declarations/expressions, async arrows/methods and `await`.
   Await stores the frame, operand stack, lexical bindings, loop state and
   exception handlers in the tracing heap and resumes only through a FIFO job.
@@ -314,7 +319,6 @@ There is no JIT and no claim of competitive performance without benchmarks.
   another engine; its measured work consumes VM fuel.
 
 Missing language features include complete function properties,
-destructured parameters,
 remaining array methods, complete completion records outside exception handlers, Unicode
 identifiers, `BigInt`, full `RegExp`, modules, class fields/private elements/static
 blocks, iterator helpers, generators,
@@ -560,12 +564,181 @@ createRealm/detachArrayBuffer,
 `AbstractModuleSource` and agents are explicit fatal unsupported host callbacks;
 modules are counted as unsupported. No browser events are installed for Test262.
 These host gaps mean this is still a diagnostic runner, not complete Test262 support.
-Parse-negative rejections are conservatively unsupported while the parser still
-combines invalid syntax with unsupported grammar. Runtime-negative errors must
+Parse-negative tests pass only for an explicitly classified `SyntaxError`.
+Recognized unavailable features and unverified parser rejections remain
+unsupported. Runtime-negative errors must
 occur at runtime with the expected constructor name; harness/resource failures
 cannot satisfy them. Regex implementation restrictions now use fatal
 `Error::Unsupported`, not catchable `SyntaxError`, so they cannot produce false
 negative-test passes. Other parser/builtin completeness gaps remain open.
+
+### Current Test262 result
+
+The latest measurements were run on 2026-09-14 against Test262 revision
+`419d3e0a2273ba01a3bfcbec423f2801425b8e93`. The checkout was obtained with
+`sh tools/xtask.sh test-ext` and was clean at that pinned revision, which
+`sh tools/xtask.sh test-ext --status` reported back. Every run used the
+original Test262 harness, a fresh realm per test, no expected-failure masks
+and no feature exclusions, and a limit of 1,000,000 fuel units per realm.
+Resource exhaustion, harness failure, an unexecuted test and `unsupported`
+are not passes, so all commands correctly returned failure. Host: macOS on
+aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
+
+| Scope | Run | Implementation commit | Command | Files | Variants | Passed | Failed | Unsupported |
+|---|---|---|---|---:|---:|---:|---:|---:|
+| Throw statements (focused) | focused | `e5402166a49fcab99d5075ef2c076e3a49572d46` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/throw --summary` | 14 | 28 | 28 (100.00%) | 0 (0.00%) | 0 (0.00%) |
+| Try statements (focused) | focused | `e5402166a49fcab99d5075ef2c076e3a49572d46` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/try --summary` | 201 | 388 | 334 (86.08%) | 5 (1.29%) | 49 (12.63%) |
+| Switch statements (focused) | focused | `e5402166a49fcab99d5075ef2c076e3a49572d46` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/switch --summary` | 111 | 216 | 135 (62.50%) | 11 (5.09%) | 70 (32.41%) |
+| For-in and for-of statements (focused) | focused | `401c4c1d875c9e5a2107510217b2ea4994ce4088` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/for-of test/language/statements/for-in --summary` | 870 | 1,648 | 1,230 (74.64%) | 86 (5.22%) | 332 (20.15%) |
+| Array search methods (focused) | focused | `449f79faf5c7336b6014249523d00b6c817c6609` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/prototype/at test/built-ins/Array/prototype/includes test/built-ins/Array/prototype/indexOf test/built-ins/Array/prototype/lastIndexOf --summary` | 442 | 882 | 850 (96.37%) | 32 (3.63%) | 0 (0.00%) |
+| Array join (focused) | focused | `7d4fe9ec875244e04043c08414f9878469504051` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/prototype/join --summary` | 23 | 46 | 40 (86.96%) | 6 (13.04%) | 0 (0.00%) |
+| Array push and pop (focused) | focused | `ab8aae8eb7e1b2368dabe5a49d79f3a9e402a395` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/prototype/push test/built-ins/Array/prototype/pop --summary` | 47 | 94 | 94 (100.00%) | 0 (0.00%) | 0 (0.00%) |
+| Array reverse (focused) | focused | `4b859f4feca764020ca4bd385f168e4e213dd767` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/prototype/reverse --summary` | 18 | 36 | 32 (88.89%) | 4 (11.11%) | 0 (0.00%) |
+| Array slice (focused) | focused | `42d23a2033eb26f2dc996747e92adb157c6ef1d1` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/prototype/slice --summary` | 71 | 142 | 126 (88.73%) | 12 (8.45%) | 4 (2.82%) |
+| Object.prototype methods (focused) | focused | `e5402166a49fcab99d5075ef2c076e3a49572d46` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object/prototype --summary` | 248 | 494 | 284 (57.49%) | 202 (40.89%) | 8 (1.62%) |
+| Property accessors (focused) | focused | `e5402166a49fcab99d5075ef2c076e3a49572d46` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/property-accessors --summary` | 21 | 42 | 32 (76.19%) | 10 (23.81%) | 0 (0.00%) |
+| String.prototype methods (focused) | focused | `e5402166a49fcab99d5075ef2c076e3a49572d46` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/String/prototype --summary` | 1,073 | 2,144 | 1,708 (79.66%) | 382 (17.82%) | 54 (2.52%) |
+| Functions and `this` (focused) | focused | `4fd3513` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/this test/language/statements/function --summary` | 457 | 794 | 688 (86.65%) | 4 (0.50%) | 102 (12.85%) |
+| Functions and `this` on the register engine (focused) | focused | `4fd3513` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/this test/language/statements/function --summary` | 457 | 794 | 189 (23.80%) | 24 (3.02%) | 581 (73.17%) |
+| Loop statements (focused) | focused | `24d6a88` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/for test/language/statements/while test/language/statements/do-while --summary` | 459 | 900 | 713 (79.22%) | 11 (1.22%) | 176 (19.56%) |
+| Loop statements on the register engine (focused) | focused | `24d6a88` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/for test/language/statements/while test/language/statements/do-while --summary` | 459 | 900 | 107 (11.89%) | 619 (68.78%) | 174 (19.33%) |
+| Property reads over the Prototype Chain (focused) | focused | `a240620` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/property-accessors test/built-ins/Object/prototype test/built-ins/Array/prototype --summary` | 3,080 | 6,119 | 5,060 (82.69%) | 1,021 (16.69%) | 38 (0.62%) |
+| Property reads over the Prototype Chain on the register engine (focused) | focused | `a240620` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/property-accessors test/built-ins/Object/prototype test/built-ins/Array/prototype --summary` | 3,080 | 6,119 | 2 (0.03%) | 6,099 (99.67%) | 18 (0.29%) |
+| Property reads, writes and `Function.prototype` (focused) | focused | `30b9dc3` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/property-accessors test/language/expressions/assignment test/built-ins/Function/prototype --summary` | 815 | 1,494 | 1,077 (72.09%) | 73 (4.89%) | 344 (23.03%) |
+| Property reads, writes and `Function.prototype` on the register engine (focused) | focused | `30b9dc3` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/property-accessors test/language/expressions/assignment test/built-ins/Function/prototype --summary` | 815 | 1,494 | 60 (4.02%) | 1,100 (73.63%) | 334 (22.36%) |
+| `instanceof`, `new` and `throw` (focused) | focused | `cae1518` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/instanceof test/language/expressions/new test/language/statements/throw --summary` | 116 | 231 | 187 (80.95%) | 0 (0.00%) | 44 (19.05%) |
+| `instanceof`, `new` and `throw` on the register engine (focused) | focused | `cae1518` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/instanceof test/language/expressions/new test/language/statements/throw --summary` | 116 | 231 | 0 (0.00%) | 189 (81.82%) | 42 (18.18%) |
+| `delete` (focused) | focused | `0989fc9` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/delete --summary` | 69 | 103 | 91 (88.35%) | 10 (9.71%) | 2 (1.94%) |
+| `delete` on the register engine (focused) | focused | `0989fc9` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/delete --summary` | 69 | 103 | 31 (30.10%) | 10 (9.71%) | 62 (60.19%) |
+| Assignment and property accessors (focused) | focused | `7047dcf` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/assignment test/language/expressions/property-accessors --summary` | 506 | 892 | 570 (63.90%) | 28 (3.14%) | 294 (32.96%) |
+| Assignment and property accessors on the register engine (focused) | focused | `7047dcf` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/assignment test/language/expressions/property-accessors --summary` | 506 | 892 | 86 (9.64%) | 65 (7.29%) | 741 (83.07%) |
+| `if` and object literals (focused) | focused | `6438218` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/if test/language/expressions/object --summary` | 1,239 | 2,377 | 793 (33.36%) | 58 (2.44%) | 1,526 (64.20%) |
+| `if` and object literals on the register engine (focused) | focused | `6438218` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/if test/language/expressions/object --summary` | 1,239 | 2,377 | 200 (8.41%) | 115 (4.84%) | 2,062 (86.75%) |
+| `new` and function declarations (focused) | focused | `1ed956e` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/new test/language/statements/function --summary` | 510 | 901 | 751 (83.35%) | 4 (0.44%) | 146 (16.20%) |
+| `new` and function declarations on the register engine (focused) | focused | `1ed956e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/new test/language/statements/function --summary` | 510 | 901 | 202 (22.42%) | 26 (2.89%) | 673 (74.69%) |
+| `%Array%` and its methods (focused) | focused | `877447f` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 5,066 (82.82%) | 969 (15.84%) | 82 (1.34%) |
+| `%Array%` and its methods on the register engine (focused) | focused | `877447f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 338 (5.52%) | 642 (10.50%) | 5,137 (83.98%) |
+| `%Object%` and its methods (focused) | focused | `0768883` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 5,916 (86.98%) | 862 (12.67%) | 24 (0.35%) |
+| `%Object%` and its methods on the register engine (focused) | focused | `0768883` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 40 (0.59%) | 1,688 (24.82%) | 5,074 (74.60%) |
+| Complete pinned suite, including staging and Intl | full | `0768883` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `0768883` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 5,318 (5.17%) | 19,254 (18.71%) | 78,353 (76.13%) |
+
+The two full rows measure the two execution paths against the same suite, as do
+the two function-declaration rows. Every other row is the stack backend, which
+`Realm::evaluate` uses by default. The `--engine` rows are the register engine
+under `crates/jrs/src/engine/`, which `jrs --engine` selects for the whole
+realm: a Script its lowering does not take is refused as `Unsupported` rather
+than run on the stack path, because the two paths hold separate object models.
+That refusal is why its unsupported count is high; it is the honest measurement
+of the migration, not a defect of the suite. The gap between each pair of rows
+is what the milestone group in
+[docs/jrs-architecture.md](../../docs/jrs-architecture.md) has to close. Code
+identity belongs to the Realm, so a function declared in one Script is callable
+from the next, and a call of a global name is lowered where it is returned and
+inside the body of a loop. `this` is the receiver of the call, a method call
+reaches a function of the Script and not only an intrinsic, and a property of a
+value the lowering could not name is read and written, `new` constructs from
+the `prototype` 10.2.5 gives a function, `instanceof` walks the chain of the
+value, and 10.2.1.2 binds `this` for a call that has no receiver. A parameter is
+any value (10.2.11), so `harness/assert.js`, `harness/sta.js` and
+`harness/compareArray.js` all run on the engine and the suite reaches it, and a
+`for`-`in` takes any head and the binding its declaration made. A conversion
+that would have to call a `valueOf` of the Script names that as a gap instead of
+answering, which is most of what the engine now reports as unsupported.
+A body reads its own `arguments`: 10.2.11 binds the name and 10.4.4 makes the
+unmapped object 10.4.4.7 describes, with its index properties, `length` and
+`callee`. A body that also writes a parameter could observe the mapping this
+engine does not build and is not lowered.
+A `delete` takes a property off an object: 13.5.1.2 sends the base through
+`ToObject` and the name through `[[Delete]]`, 10.1.10.1 keeps a property that is
+not configurable, and an Array answers its indices and its `length` from where
+10.4.2 puts them. A `delete` of a free name stays a gap, because the name
+belongs to the global object.
+A property is written under a key only the run time knows: 13.15.2 writes
+through `PutValue`, and the store names the gap where it happens when the name
+is one a Prototype this Realm has not built owns — `__proto__` on every object,
+`length` and `name` on an Array or a function. A computed key of a literal
+defines instead of assigning (13.2.5.5), reaches no Prototype, and asks that
+nothing.
+The join of an `if` takes the Objects its branches made (14.6.2): one only a
+branch made keeps what its layout says, one the branches shaped differently
+gives that up, and so does every value whose layout the join could not keep.
+Two references the constructor path lost to a collection are fixed with it,
+both of them the same mistake — a reference read before an allocation that may
+scavenge (10.2.5 and 10.1.13).
+With that, `harness/propertyHelper.js` lowers completely, and what stops it is
+no longer the lowering but the constructors clause 19 gives the global object.
+`%Array%` and `%Object%` are the first two it builds: 23.1.1.1 makes an Array of
+one length or of many elements and 20.1.1.1 makes an ordinary object of
+undefined and of null, `new` reaches the same function in both because a native
+constructor answers an object of its own, 23.1.2.3 answers `IsArray`, and 17
+ties each constructor and its prototype together, which gives
+`%Object.prototype%` its own `constructor`. A read of a name 23.1.2 or 20.1.2
+gives a constructor and this Realm has not built, `Array.from` and
+`Object.defineProperty` among them, is a gap and not the undefined of a
+constructor without it, as is `ToObject` of a primitive. The harness asks for
+those next; that gap still holds 946 variants which count as a failed harness
+today.
+
+The complete run also identified 294 `_FIXTURE` files which were correctly not
+executed as standalone tests. These numbers are a migration measurement, not a
+conformance claim. Failed and unsupported variants of both the focused and the
+full runs remain open work.
+
+A read of a name no object of the Prototype Chain has used to answer undefined
+on the engine where the chain reached a Prototype this Realm has not finished
+building. It now names the gap, which is why the engine row of the property-read
+family is almost entirely refusals. The full run is unchanged against the run
+before it, so no pass depended on the wrong answer.
+
+The focused families are what the register backend gained in this migration
+step. The function, call, `this`, loop, property, `new` and `instanceof` rows are pairs measuring the two paths against
+each other rather than a family the engine has taken over; the rest are families
+it answers itself: the five statements, the methods of %Object.prototype% it now answers
+itself, the property accessors, which reach a String's own "length" and indices
+on the new engine, the methods of %String.prototype%, and the four search
+methods, `join`, `push`, `pop`, `reverse` and `slice` of %Array.prototype%. What the engine
+passes in the paired families are the files that need no harness. Each produces
+the counts the legacy stack backend produces for the same family, which is what
+a backend migration has to show: the full-suite counts are unchanged against the
+same suite measured before it, variant for variant. The Array search run was measured at tree
+`da4011ac65a23328693080a67da8efbe902c02f3`, the join run at tree
+`75bc66931663a104b8f4c973fae1a7878aa53ca2`, the push and pop run at tree
+`2f35debf666654ca39a9ef91cdf75097a7125288`, the reverse run at tree
+`19054962f1f93e409f7b0d5dad173b74d5eb1d88`, the iteration run at tree
+`769107adb8c6f8b0f87d7dfe0f348df4531d0ce0`, the slice run at tree
+`e873e530ad100efc4492e5a0a4ce68c824503cae`, and the property-read runs at tree
+`e946d0f5655a3f90d2abe1986bcff7cdc9765072`. The function, call and `this` runs at tree
+`94023436def77fc0433c7d67f6bc9b70c2455b5d`, the property runs at tree
+`c1f2a4fab7808f3b5c8b0824f8a8ed3eaf11dc59`, the `instanceof` runs at tree
+`504da841ece9a2a58acc73ef0a5968b53daa252c`, and the `this` runs at tree
+`3d20693df017258270e78d197497481761dee88b`, and the `delete` runs at tree
+`db32abdb924343cb345a45286c3df0a2b8f3eb9d`, and the assignment runs at tree
+`e2e3473e55f557f7f7a887963d18a60c857fb433`. The `new` runs and both full runs
+were measured at tree `d98662e20789888cb180d99642144c95e6596f04`. The
+`%Array%` runs at tree `4dcc52a89757181705ea5687778e857ae9d07408`. The
+`%Object%` runs and both full runs were measured at tree
+`03ef10cc7c6d056da15ef1b96c638e41d8a365b0`, which is the tree of `0768883`.
+
+### Historical Test262 baseline
+
+The preceding measurement was taken on 2026-09-12 with the same Test262
+revision. It is superseded by the table above and is not the current status:
+
+| Scope | Implementation commit | Command | Files | Variants | Passed | Failed | Unsupported |
+|---|---|---|---:|---:|---:|---:|---:|
+| Equality operators (focused) | `fccd5e6571261014c37fc5dc94321c8fbba8c780` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/equals test/language/expressions/does-not-equals test/language/expressions/strict-equals test/language/expressions/strict-does-not-equals --summary` | 145 | 286 | 222 (77.62%) | 0 (0.00%) | 64 (22.38%) |
+| Return statements (focused) | `fab47fdb0adf3b8a7b5e9e575a4a3487e468b345` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/return --summary` | 16 | 31 | 26 (83.87%) | 1 (3.23%) | 4 (12.90%) |
+| Object literals (focused) | `caeb6559961fd79dd275ed4cf4f3123afc2a5a01` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/object --summary` | 1,170 | 2,252 | 684 (30.37%) | 54 (2.40%) | 1,514 (67.23%) |
+| Destructuring assignment (focused) | `1f7f4879f91186dffda86812e366151a6446bcc7` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/assignment/dstr --summary` | 368 | 640 | 446 (69.69%) | 0 (0.00%) | 194 (30.31%) |
+| Complete pinned suite, including staging and Intl | `fab47fdb0adf3b8a7b5e9e575a4a3487e468b345` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,399 (34.39%) | 30,724 (29.85%) | 36,802 (35.76%) |
+
+The full-suite baseline before that was measured on 2026-09-11 with the same
+Test262 revision and command. It contained 53,582 standalone files and 102,925
+executed variants: 27,965 passed (27.17%), 64,007 failed (62.19%), and 10,953
+were unsupported (10.64%); 294 fixture files were not standalone tests. These
+figures are retained only for historical comparison and are not the current
+implementation status.
 
 Object.prototype.propertyIsEnumerable and isPrototypeOf use the ordinary property
 and prototype operations, with Symbol keys, primitive boxing and required error
@@ -575,9 +748,10 @@ Global declaration collisions are validated before function/var definability
 checks, and top-level arrows no longer incorrectly permit new.target.
 
 The full run uses `--fuel 1000000` per realm as a bounded diagnostic baseline;
-resource exhaustion is a failure, not a pass. The current focused JSON run covers
-165 original files / 330 strict and non-strict variants: 272 passed, 54 failed,
-4 unsupported. No expected-failure masks or feature exclusions are used.
+resource exhaustion is a failure, not a pass. A historical focused JSON run
+covered 165 original files / 330 strict and non-strict variants: 272 passed,
+54 failed and 4 were unsupported. It predates the current full-suite result
+above. No expected-failure masks or feature exclusions were used.
 
 Math.pow, exponentiation (`**`, `**=`) and the comma operator are implemented.
 `crates/math` owns the allocation-free `no_std` binary64 power kernel, with exact

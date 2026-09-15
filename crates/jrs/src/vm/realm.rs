@@ -99,6 +99,25 @@ impl<'host> Realm<'host> {
             e.new_host_behavior(crate::heap::HostBehavior::StringPrint, "print", 1)
         })
     }
+    /// Refuses a Script the register lowering does not take while this realm
+    /// runs on the engine.
+    ///
+    /// Nothing has executed at this point, so the realm stays usable: the
+    /// refusal reports a gap in the migration, not a failure of the realm. A
+    /// gap that only shows once the Script has run, such as a completion value
+    /// the boundary cannot carry, is fatal like every other unsupported
+    /// feature.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] for a Script only the stack backend can run.
+    fn refuse_unlowered(&self, program: &Program) -> Result<(), Error> {
+        if self.execution.backend == crate::Backend::Engine && program.register_code.is_none() {
+            return Err(Error::Unsupported {
+                feature: "a Script the register lowering does not take",
+            });
+        }
+        Ok(())
+    }
     /// Executes a precompiled global Script and performs its job checkpoint.
     /// Declaration instantiation errors belong to execution, not compilation.
     /// Compilation limits must equal the limits of this realm.
@@ -107,13 +126,34 @@ impl<'host> Realm<'host> {
     /// Limit mismatch, poisoned realm, declaration conflicts or execution errors.
     pub fn evaluate_compiled(&mut self, script: &crate::Script) -> Result<Value, Error> {
         self.available()?;
+        self.refuse_unlowered(&script.program)?;
         if script.limits != self.execution.limits {
             return Err(Error::Type {
                 message: "compiled Script limits differ from realm limits",
             });
         }
-        let result = self.execution.evaluate_script(&script.program);
+        let result = self.execution.evaluate_script(&script.program, false);
         self.outcome(result)
+    }
+    /// Executes a precompiled global Script for its effects and performs its
+    /// job checkpoint. The completion value is dropped, so a Script that ends
+    /// in an object the embedding cannot name still completes normally: a
+    /// value without identity outside the engine is not a failure of the
+    /// Script. Everything else, a thrown value included, reports as in
+    /// [`Self::evaluate_compiled`].
+    ///
+    /// # Errors
+    /// Limit mismatch, poisoned realm, declaration conflicts or execution errors.
+    pub fn run_compiled(&mut self, script: &crate::Script) -> Result<(), Error> {
+        self.available()?;
+        self.refuse_unlowered(&script.program)?;
+        if script.limits != self.execution.limits {
+            return Err(Error::Type {
+                message: "compiled Script limits differ from realm limits",
+            });
+        }
+        let result = self.execution.evaluate_script(&script.program, true);
+        self.outcome(result).map(|_| ())
     }
     /// Installs standalone Event/EventTarget and AbortController/AbortSignal
     /// interfaces (timeout additionally requires `install_timers`). This does not make the
@@ -402,7 +442,24 @@ impl<'host> Realm<'host> {
     /// # Errors
     /// Returns a resource error if intrinsic/global initialization exceeds limits.
     pub fn new(limits: Limits, host: &'host mut impl Host) -> Result<Self, Error> {
+        Self::with_backend(limits, host, crate::Backend::Stack)
+    }
+    /// Creates a fresh realm that evaluates every Script on `backend`.
+    ///
+    /// A realm on [`crate::Backend::Engine`] refuses a Script the register
+    /// lowering cannot take, rather than running it on the stack path: the two
+    /// paths hold separate object models, so a realm split between them would
+    /// let a program depend on which one compiled it.
+    ///
+    /// # Errors
+    /// Returns a resource error if intrinsic/global initialization exceeds limits.
+    pub fn with_backend(
+        limits: Limits,
+        host: &'host mut impl Host,
+        backend: crate::Backend,
+    ) -> Result<Self, Error> {
         let mut execution = Execution::new(host, limits);
+        execution.backend = backend;
         execution.fuel = limits.fuel;
         execution.initialize_globals()?;
         Ok(Self {
@@ -432,7 +489,8 @@ impl<'host> Realm<'host> {
                 return Err(error);
             }
         };
-        let result = self.execution.evaluate_script(&program);
+        self.refuse_unlowered(&program)?;
+        let result = self.execution.evaluate_script(&program, false);
         if result
             .as_ref()
             .is_err_and(|e| !super::iterators::language_error(e))
@@ -444,7 +502,23 @@ impl<'host> Realm<'host> {
 }
 
 impl Execution<'_> {
+    pub(super) fn eval_source(
+        &mut self,
+        input: &Value,
+        strict_caller: bool,
+    ) -> Result<Value, Error> {
+        let Value::String(units) = input else {
+            return Ok(input.clone());
+        };
+        self.eval_source_units(units, strict_caller)
+    }
+
     pub(super) fn eval_global_source(&mut self, input: &Value) -> Result<Value, Error> {
+        let units = self.string_units(input)?;
+        self.eval_source_units(&units, false)
+    }
+
+    fn eval_source_units(&mut self, units: &[u16], strict_caller: bool) -> Result<Value, Error> {
         if self.native_depth >= 12 {
             return Err(Error::Limit {
                 resource: "nested Script reentry",
@@ -452,15 +526,14 @@ impl Execution<'_> {
         }
         self.native_depth = self.native_depth.saturating_add(1);
         let roots = self.native_roots.len();
-        self.native_roots.push(input.clone());
+        self.native_roots.push(Value::String(units.into()));
         let result = (|| {
-            let units = self.string_units(input)?;
             self.charge(u64::try_from(units.len()).unwrap_or(u64::MAX))?;
             let source =
-                alloc::string::String::from_utf16(&units).map_err(|_| Error::Unsupported {
+                alloc::string::String::from_utf16(units).map_err(|_| Error::Unsupported {
                     feature: "lone-surrogate Script source",
                 })?;
-            let program = crate::bytecode::compile_realm(&source, self.limits)?;
+            let program = crate::bytecode::compile_eval(&source, self.limits, strict_caller)?;
             self.charge(u64::try_from(program.instruction_count()).unwrap_or(u64::MAX))?;
             self.execute_nested_script(program)
         })();
@@ -469,6 +542,9 @@ impl Execution<'_> {
         result
     }
     fn execute_nested_script(&mut self, program: Program) -> Result<Value, Error> {
+        if self.uses_register(&program) {
+            return self.execute_program_body(&program, self.frames.len());
+        }
         self.check_frame_limit()?;
         self.instantiate_globals(&program)?;
         self.reserve_bindings(program.slots.len())?;
@@ -513,6 +589,7 @@ impl Execution<'_> {
             "SyntaxError",
             "EvalError",
             "URIError",
+            "Proxy",
             "isNaN",
             "isFinite",
         ] {
@@ -528,6 +605,15 @@ impl Execution<'_> {
         }
         let math = self.math_object()?;
         let reflect = self.reflect_object()?;
+        let eval_fn = self.new_host_behavior(crate::heap::HostBehavior::Eval, "eval", 1)?;
+        self.define(
+            &global,
+            Value::string("eval").units(),
+            Property {
+                enumerable: false,
+                ..Property::data(eval_fn)
+            },
+        )?;
         self.define(
             &global,
             Value::string("Reflect").units(),
@@ -654,10 +740,18 @@ impl Execution<'_> {
         }
         Ok(())
     }
-    fn evaluate_script(&mut self, program: &Program) -> Result<Value, Error> {
+    fn evaluate_script(
+        &mut self,
+        program: &Program,
+        discard_completion: bool,
+    ) -> Result<Value, Error> {
         self.instantiate_globals(program)?;
-        self.start_script_frame(program)?;
-        let result = self.execute(program, 0);
+        let result = if self.uses_register(program) {
+            self.execute_program_completion(program, 0, discard_completion)
+        } else {
+            self.start_script_frame(program)?;
+            self.execute_program_body(program, 0)
+        };
         self.finish_script_turn(program, result)
     }
     fn start_script_frame(&mut self, program: &Program) -> Result<(), Error> {

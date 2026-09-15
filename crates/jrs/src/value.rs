@@ -288,7 +288,7 @@ pub(crate) fn integer_or_infinity(n: f64) -> f64 {
     }
 }
 
-fn string_number(text: &str) -> f64 {
+pub(crate) fn string_number(text: &str) -> f64 {
     let text = text.trim_matches(|c| whitespace(c) || line_terminator(c));
     if text.is_empty() {
         return 0.0;
@@ -336,7 +336,7 @@ pub(crate) fn radix_number(digits: &str, radix: u32) -> Option<f64> {
 
 // ECMA-262 7.1.5, 7.1.7–9. Reading the binary64 significand computes
 // truncation modulo 2^32 without a saturating float cast or a libm call.
-fn number_uint32(number: f64) -> u32 {
+pub(crate) fn number_uint32(number: f64) -> u32 {
     let bits = number.to_bits();
     let exponent = u32::try_from((bits >> 52) & 0x7ff).unwrap_or(0);
     if !(1023..1107).contains(&exponent) {

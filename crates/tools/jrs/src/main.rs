@@ -4,7 +4,7 @@
 //! The command-line host for jrs. Scripts cannot access the host filesystem.
 #![forbid(unsafe_code)]
 
-use jrs::{Error, Host, Limits, Realm, Runtime, Value, compile};
+use jrs::{Backend, Error, Host, Limits, Realm, Runtime, Value, compile};
 use std::{
     io::{self, Read, Write},
     process::ExitCode,
@@ -13,9 +13,11 @@ use std::{
 
 const USAGE: &str = "usage: jrs [--fuel N] [--stats] [--bench N] (-e SOURCE | FILE | -)\n\
        jrs --wpt ROOT TEST_FILE...\n\
-       jrs [--fuel N] --test262 ROOT (--all | TEST_PATH...) [--summary]\n\
-       jrs [--fuel N] --realm FILE...\n\
-Initial JavaScript subset; no browser APIs. '-' reads standard input.";
+       jrs [--fuel N] [--engine] --test262 ROOT (--all | TEST_PATH...) [--summary]\n\
+       jrs [--fuel N] [--engine] --realm FILE...\n\
+Initial JavaScript subset; no browser APIs. '-' reads standard input.\n\
+--engine evaluates every Script on the register engine and refuses the ones\n\
+it cannot lower, instead of falling back to the stack backend.";
 
 mod test262;
 mod wpt;
@@ -66,12 +68,16 @@ fn run(
     let mut limits = Limits::default();
     let mut source = None;
     let mut stats = false;
+    let mut backend = Backend::Stack;
     let mut iterations = 1u32;
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--realm" if source.is_none() => return run_realm(args, limits, output),
+            "--realm" if source.is_none() => return run_realm(args, limits, backend, output),
             "--wpt" if source.is_none() => return wpt::run(args, output),
-            "--test262" if source.is_none() => return test262::run(args, limits, output),
+            "--test262" if source.is_none() => {
+                return test262::run(args, limits, backend, output);
+            }
+            "--engine" => backend = Backend::Engine,
             "--help" | "-h" => {
                 writeln!(output, "{USAGE}").map_err(|e| e.to_string())?;
                 return Ok(());
@@ -110,7 +116,7 @@ fn run(
     let start = Instant::now();
     let program = compile(&source, limits).map_err(|e| e.to_string())?;
     let compiled = start.elapsed();
-    let mut runtime = Runtime::new(limits);
+    let mut runtime = Runtime::with_backend(limits, backend);
     let start = Instant::now();
     let mut value = Value::Undefined;
     for _ in 0..iterations {
@@ -150,10 +156,11 @@ fn read_source(reader: impl Read, limit: usize) -> Result<String, String> {
 fn run_realm(
     args: impl Iterator<Item = String>,
     limits: Limits,
+    backend: Backend,
     output: &mut impl Write,
 ) -> Result<(), String> {
     let mut host = Console(output);
-    let mut realm = Realm::new(limits, &mut host).map_err(|e| e.to_string())?;
+    let mut realm = Realm::with_backend(limits, &mut host, backend).map_err(|e| e.to_string())?;
     let mut any = false;
     for file in args {
         any = true;

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Manuel Baesler and contributors
 
 //! The program that holds the trust anchors of the image: it reads the
-//! table the boot volume carries and reports what it found (D-147).
+//! table the boot volume carries and reports what it found (D-148).
 //!
 //! The anchors are what a certificate path is validated against, so a
 //! program that speaks TLS needs them before it opens a connection. The
