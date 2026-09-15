@@ -8641,8 +8641,23 @@ fn store_reaches_unbuilt_prototype(
     let Some(kind) = heap.get_object(object).map(|entry| entry.kind.clone()) else {
         return false;
     };
+    // 10.4.2.1 gives an Array's `length` a `[[DefineOwnProperty]]` of its own,
+    // which a write under a key only the run time knows does not reach.
+    if matches!(kind, ObjectKind::Array { .. }) && is("length") {
+        return true;
+    }
+    // Every other name the object owns is written by 10.1.9.1 on the object
+    // itself and reaches no Prototype at all.
+    if heap
+        .strings
+        .lookup_interned_units(name)
+        .map(PropertyKey::String)
+        .and_then(|key| heap.own_named_flags(object, key).ok().flatten())
+        .is_some()
+    {
+        return false;
+    }
     match kind {
-        ObjectKind::Array { .. } => is("length"),
         ObjectKind::Function { .. } | ObjectKind::NativeFunction { .. } => {
             is("length") || is("name")
         }

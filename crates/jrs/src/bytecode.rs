@@ -1030,13 +1030,6 @@ impl RegisterLowerer {
                 // what it knows; every other value is read at run time.
                 let tracked = value_type.is_object();
                 if !tracked {
-                    // 14.3.3.3 requires the source to be coercible to an
-                    // Object, which reading one of its properties checks. A
-                    // pattern that reads none would not check it.
-                    if object.properties.is_empty() {
-                        self.refuse("an object pattern with no property");
-                        return None;
-                    }
                     // 14.3.3.3 collects the rest from the own keys, which the
                     // lowering knows only for a layout it tracks.
                     if object.rest.is_some() {

@@ -862,13 +862,14 @@ fn a_property_is_written_under_a_key_only_the_run_time_knows() -> Result<(), Err
             .run(&program, &mut SilentHost);
         assert_eq!(format!("{actual:?}"), format!("{expected:?}"), "{source}");
     }
-    // `__proto__`, `length` and `name` belong to a Prototype or an exotic
-    // object this Realm has not built, so a store that reaches one names that
-    // where it happens instead of shadowing it.
+    // `__proto__` belongs to a Prototype this Realm has not built, and an
+    // Array's `length` has the `[[DefineOwnProperty]]` of 10.4.2.1, so a store
+    // that reaches one names that where it happens instead of shadowing it. A
+    // name the object owns is written on the object itself.
+    differential("var f=function(o,k){o[k]='x'};var g=function(){};f(g,'name');g.name")?;
     for source in [
         "let f=function(o,k){o[k]=1};f({},'__proto__')",
         "let f=function(o,k){o[k]=1};f([1,2],'length')",
-        "let f=function(o,k){o[k]=1};f(function(){},'name')",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
@@ -5169,22 +5170,20 @@ fn an_object_pattern_reads_a_value_with_no_known_layout() -> Result<(), Error> {
     ] {
         differential_scripts(&[source])?;
     }
-    // A pattern that reads no property would not find that out, and a rest
-    // element collects the own keys of a shape the lowering does not know.
-    for (source, feature) in [
-        (
-            "function f(o){let {}=o;return 1}f(null)",
-            "an object pattern with no property",
-        ),
-        (
-            "function f(o){let {a,...r}=o;return r}f({a:1,b:2})",
-            "a rest element of an object pattern",
-        ),
-    ] {
-        let program = compile(source, Limits::default())?;
-        assert!(!program.uses_register_backend(), "{source}");
-        assert_eq!(program.register_refusal, Some(feature), "{source}");
-    }
+    // A rest element collects the own keys of a shape the lowering does not
+    // know.
+    // 14.3.3.3 requires the source to be coercible to an Object, which a
+    // pattern that reads no property still checks.
+    differential("function f(o){let {}=o;return 1}f({})")?;
+    differential("function f(o){let {}=o;return 1}f(null)")?;
+    let source = "function f(o){let {a,...r}=o;return r}f({a:1,b:2})";
+    let program = compile(source, Limits::default())?;
+    assert!(!program.uses_register_backend(), "{source}");
+    assert_eq!(
+        program.register_refusal,
+        Some("a rest element of an object pattern"),
+        "{source}"
+    );
     Ok(())
 }
 
