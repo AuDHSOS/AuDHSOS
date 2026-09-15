@@ -5645,3 +5645,38 @@ fn json_parses_and_quotes_what_it_reaches() -> Result<(), Error> {
     }
     Ok(())
 }
+
+/// 23.1.3 reads each element with 7.3.2, so an accessor's getter runs where a
+/// data property would simply be read.
+#[test]
+fn walks_over_accessor_elements() -> Result<(), Error> {
+    for source in [
+        "var a=[0,0,0];var n=0;Object.defineProperty(a,1,{get:function(){n++;return 7},\
+         enumerable:true,configurable:true});var s=0;a.forEach(function(v){s+=v});''+s+','+n",
+        "var a=[1,2,3];Object.defineProperty(a,0,{get:function(){return 10},enumerable:true});\
+         ''+a.map(function(v){return v*2})",
+        "var a=[1,2,3];Object.defineProperty(a,2,{get:function(){return 0},enumerable:true});\
+         ''+a.filter(function(v){return v>0})",
+        "var a=[1,2,3];Object.defineProperty(a,1,{get:function(){return 9},enumerable:true});\
+         a.reduce(function(p,v){return p+v})",
+        "var a=[1,2,3];Object.defineProperty(a,0,{get:function(){return 4},enumerable:true});\
+         a.reduce(function(p,v){return p+v})",
+        "var a=[1,2,3];Object.defineProperty(a,1,{get:function(){return 0},enumerable:true});\
+         a.every(function(v){return v>0})",
+        "var a=[1,2,3];Object.defineProperty(a,1,{get:function(){return 0},enumerable:true});\
+         a.some(function(v){return v===0})",
+        // 10.1.8.1 step 3.b: an accessor with no getter reads undefined.
+        "var a=[1,2];Object.defineProperty(a,0,{set:function(v){},enumerable:true});\
+         var s='';a.forEach(function(v){s+=typeof v});s",
+        // The getter may write the array the walk is in the middle of.
+        "var a=[1,2,3];Object.defineProperty(a,0,{get:function(){a.length=1;return 5},\
+         enumerable:true});var s=0;a.forEach(function(v){s+=v});s",
+        // A getter that throws leaves the walk through the same path a
+        // throwing callback does.
+        "var a=[1,2];Object.defineProperty(a,0,{get:function(){throw 1},enumerable:true});\
+         try{a.forEach(function(){});0}catch(e){e}",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}

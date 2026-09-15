@@ -154,6 +154,9 @@ struct ArrayWalk {
     index: u32,
     length: u32,
     started: bool,
+    /// Whether the call in flight is the getter of an accessor element
+    /// rather than the callback of the clause.
+    getter: bool,
 }
 
 impl ArrayWalk {
@@ -2582,6 +2585,15 @@ impl RegisterVM {
         }
     }
 
+    /// Whether the value is a function a Script wrote, which answers through a
+    /// frame and so can carry a [`Resume`].
+    fn is_script_function(value: Value, heap: &GenerationalHeap) -> bool {
+        value
+            .as_object()
+            .and_then(|reference| heap.get_object(reference))
+            .is_some_and(|object| matches!(object.kind, ObjectKind::Function { .. }))
+    }
+
     /// Calls the getter or the setter of an accessor property, as 10.1.8.1
     /// step 3 and 10.1.9.2 step 5 do.
     ///
@@ -2632,11 +2644,7 @@ impl RegisterVM {
         // A native takes its arguments from registers of the caller, and a
         // setter reaches its frame from a root instead, so one written in Rust
         // would be called with whatever those registers hold.
-        let script = set
-            .as_object()
-            .and_then(|reference| heap.get_object(reference))
-            .is_some_and(|object| matches!(object.kind, ObjectKind::Function { .. }));
-        if !script {
+        if !Self::is_script_function(set, heap) {
             return Err(VMError::Unsupported(
                 "a setter that is not a Script function",
             ));
@@ -3427,6 +3435,7 @@ impl RegisterVM {
                 index: if backwards { length } else { 0 },
                 length,
                 started,
+                getter: false,
             },
         )?;
         // The state outlives every frame the walk opens, so it is a root of a
@@ -3465,32 +3474,75 @@ impl RegisterVM {
         let mut skipped: u32 = 0;
         loop {
             let mut walk = Self::read_iteration(state, heap)?;
-            if let Some(answer) = answered.take()
-                && let Some(done) = Self::take_callback_answer(&mut walk, answer, heap)?
-            {
-                heap.exit_scope();
-                self.acc = done;
-                return Ok(None);
+            // A call the walk made answered: the getter of the element it is
+            // at, or the callback of the clause.
+            let mut got = None;
+            if let Some(answer) = answered.take() {
+                if walk.getter {
+                    walk.getter = false;
+                    got = Some(answer);
+                } else if let Some(done) = Self::take_callback_answer(&mut walk, answer, heap)? {
+                    heap.exit_scope();
+                    self.acc = done;
+                    return Ok(None);
+                }
             }
             let object = walk
                 .target
                 .as_object()
                 .ok_or(VMError::Heap(HeapError::InvalidReference))?;
-            let Some(element_index) = walk.next_index() else {
-                heap.exit_scope();
-                self.acc = walk.answer();
-                return Ok(None);
-            };
-            walk.advance(element_index);
-            // 23.1.3 walks the indices the object has, so a hole never reaches
-            // the callback.
-            let Some(element) = Self::element_at(heap, object, element_index)? else {
-                Self::write_iteration(state, &walk, heap)?;
-                skipped = skipped.saturating_add(1);
-                if skipped.is_multiple_of(HOLES_PER_FUEL_UNIT) {
-                    self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+            let element = if let Some(element) = got {
+                element
+            } else {
+                let Some(element_index) = walk.next_index() else {
+                    heap.exit_scope();
+                    self.acc = walk.answer();
+                    return Ok(None);
+                };
+                walk.advance(element_index);
+                // 23.1.3 walks the indices the object has, so a hole never
+                // reaches the callback.
+                let Some((slot, accessor)) = Self::element_slot_at(heap, object, element_index)?
+                else {
+                    Self::write_iteration(state, &walk, heap)?;
+                    skipped = skipped.saturating_add(1);
+                    if skipped.is_multiple_of(HOLES_PER_FUEL_UNIT) {
+                        self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+                    }
+                    continue;
+                };
+                walk.element_index = element_index;
+                if accessor {
+                    let (get, _) = Self::accessor_parts(slot, heap)?;
+                    // 10.1.8.1 step 3.b: a property with no getter reads
+                    // undefined, which needs no frame.
+                    if get.is_undefined() {
+                        VALUE_UNDEFINED
+                    } else {
+                        if !Self::is_script_function(get, heap) {
+                            return Err(VMError::Unsupported(
+                                "a getter that is not a Script function",
+                            ));
+                        }
+                        walk.getter = true;
+                        Self::write_iteration(state, &walk, heap)?;
+                        call.arg_count = 0;
+                        call.arg_start = Reg(0);
+                        call.receiver = walk.target;
+                        call.resume = Some(Resume::Iteration { state });
+                        call.construct = None;
+                        return self.enter_call_value(
+                            get,
+                            units,
+                            active_feedback,
+                            heap,
+                            realm,
+                            call,
+                        );
+                    }
+                } else {
+                    slot
                 }
-                continue;
             };
             // 23.1.3.24 takes the first element it finds as the accumulator and
             // calls the callback only from the next one on.
@@ -3501,7 +3553,6 @@ impl RegisterVM {
                 continue;
             }
             walk.element = element;
-            walk.element_index = element_index;
             Self::write_iteration(state, &walk, heap)?;
             let callback = walk.callback;
             call.arg_count = walk.callback_arity();
@@ -3530,6 +3581,7 @@ impl RegisterVM {
             index,
             length,
             started,
+            getter,
         } = heap
             .get_object(reference)
             .ok_or(VMError::Heap(HeapError::InvalidReference))?
@@ -3548,6 +3600,7 @@ impl RegisterVM {
             index,
             length,
             started,
+            getter,
         })
     }
 
@@ -3574,6 +3627,7 @@ impl RegisterVM {
                 index: walk.index,
                 length: walk.length,
                 started: walk.started,
+                getter: walk.getter,
             },
         )?;
         Ok(())
@@ -4956,6 +5010,20 @@ impl RegisterVM {
         object: ObjectRef,
         index: u32,
     ) -> Result<Option<Value>, VMError> {
+        match Self::element_slot_at(heap, object, index)? {
+            Some((value, false)) => Ok(Some(value)),
+            Some((_, true)) => Err(VMError::Unsupported("a property that is an accessor")),
+            None => Ok(None),
+        }
+    }
+
+    /// The same index, with the pair of 6.1.7.1 where the property is an
+    /// accessor rather than the gap a native names for one.
+    fn element_slot_at(
+        heap: &mut GenerationalHeap,
+        object: ObjectRef,
+        index: u32,
+    ) -> Result<Option<(Value, bool)>, VMError> {
         let elements = heap.get_object(object).ok_or(VMError::TypeError)?.elements;
         if let Some(elements) = elements
             && let Some(value) = heap
@@ -4963,12 +5031,12 @@ impl RegisterVM {
                 .ok_or(VMError::TypeError)?
                 .get(index)
         {
-            return Ok(Some(value));
+            return Ok(Some((value, false)));
         }
         let key = PropertyKey::String(heap.intern_index(index)?);
-        heap.lookup_named(object, key)?
-            .map(Self::plain_value)
-            .transpose()
+        Ok(heap
+            .lookup_named(object, key)?
+            .map(|found| (found.value, found.flags.is_accessor)))
     }
 
     /// Runs one of the Array iterator intrinsics of 23.1.5.
