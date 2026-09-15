@@ -7740,6 +7740,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::TypeErrorConstructor
         | crate::engine::realm::Intrinsic::UriErrorConstructor
         | crate::engine::realm::Intrinsic::ArrayPrototypeValues
+        | crate::engine::realm::Intrinsic::ArrayPrototypeKeys
+        | crate::engine::realm::Intrinsic::ArrayPrototypeEntries
         | crate::engine::realm::Intrinsic::ArrayIteratorPrototypeNext
         | crate::engine::realm::Intrinsic::ArrayPrototypeAt
         | crate::engine::realm::Intrinsic::ArrayPrototypePop
@@ -7760,6 +7762,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ArrayPrototypeMap
         | crate::engine::realm::Intrinsic::ArrayPrototypeFilter
         | crate::engine::realm::Intrinsic::ArrayPrototypeFind
+        | crate::engine::realm::Intrinsic::ArrayPrototypeFindLast
+        | crate::engine::realm::Intrinsic::ArrayPrototypeFindLastIndex
         | crate::engine::realm::Intrinsic::ArrayPrototypeReduce
         | crate::engine::realm::Intrinsic::ArrayPrototypeReduceRight
         // 23.1.3.15 answers undefined.

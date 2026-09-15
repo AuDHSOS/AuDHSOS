@@ -6125,3 +6125,44 @@ fn a_native_converts_a_receiver_whose_conversion_needs_no_frame() -> Result<(), 
     }
     Ok(())
 }
+
+/// 23.1.3.12 and 23.1.3.13 walk backwards, and they and 23.1.3.9 and 23.1.3.10
+/// read every index with 7.3.2, so a hole reaches the callback.
+#[test]
+fn the_find_clauses_walk_every_index() -> Result<(), Error> {
+    for source in [
+        "[1,2,3].findLast(function(x){return x<3})",
+        "[1,2,3].findLastIndex(function(x){return x<3})",
+        "typeof [1,2,3].findLast(function(x){return false})",
+        "[1,2,3].findLastIndex(function(x){return false})",
+        "var n=0;[,1].find(function(x){n++;return false});n",
+        "var n=0;[,1].findIndex(function(x){n++;return false});n",
+        "var n=0;[1,,3].findLast(function(x){n++;return false});n",
+        "var r='';[1,2,3].findLast(function(x,i){r+=i});r",
+        "var r='';[1,2,3].findLastIndex(function(x,i,a){r+=a.length});r",
+        "typeof [].findLast(function(){return true})",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
+
+/// 23.1.3.17 and 23.1.3.4 answer the Array Iterator of 23.1.5 over the index
+/// of each element, and over the index and the element together.
+#[test]
+fn an_array_iterates_its_keys_and_its_entries() -> Result<(), Error> {
+    for source in [
+        "var r='';for(var k of [7,8].keys()){r+=k}r",
+        "var r='';for(var e of [7,8].entries()){r+=e[0]+':'+e[1]+','}r",
+        "var i=[7,8].keys();''+i.next().value",
+        "var i=[7,8].entries();i.next().value.join('-')",
+        "var i=[7].values();''+i.next().value",
+        "var i=[].keys();i.next().done",
+        "typeof [].keys",
+        "var i=[7].entries();i.next();i.next().done",
+        "var r='';for(var k of [,1].keys()){r+=k}r",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}

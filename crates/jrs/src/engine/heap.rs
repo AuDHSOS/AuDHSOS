@@ -2355,6 +2355,7 @@ mod tests {
             ObjectKind::ArrayIterator {
                 target: Value::from_object(array),
                 index: 0,
+                kind: crate::engine::object::ArrayIterationKind::Value,
             },
         )
         .unwrap();
@@ -2363,7 +2364,8 @@ mod tests {
         heap.scavenge().unwrap();
 
         let forwarded = rooted_object(&heap, root);
-        let ObjectKind::ArrayIterator { target, index } = heap.get_object(forwarded).unwrap().kind
+        let ObjectKind::ArrayIterator { target, index, .. } =
+            heap.get_object(forwarded).unwrap().kind
         else {
             panic!("the iterator lost its kind");
         };

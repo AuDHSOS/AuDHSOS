@@ -21,7 +21,7 @@ use super::{
     elements::ElementsRef,
     feedback::{BinaryOpFeedback, FeedbackVector, NamedAccessCase},
     heap::{GenerationalHeap, HeapError, NamedProperty, Root},
-    object::ObjectKind,
+    object::{ArrayIterationKind, ObjectKind},
     realm::{Intrinsic, Realm},
     shape::{PropertyFlags, ShapeId},
     string::StringError,
@@ -165,7 +165,12 @@ struct ArrayWalk {
 impl ArrayWalk {
     /// Whether this clause walks from the end (23.1.3.25) or from the start.
     const fn backwards(&self) -> bool {
-        matches!(self.intrinsic, Intrinsic::ArrayPrototypeReduceRight)
+        matches!(
+            self.intrinsic,
+            Intrinsic::ArrayPrototypeReduceRight
+                | Intrinsic::ArrayPrototypeFindLast
+                | Intrinsic::ArrayPrototypeFindLastIndex
+        )
     }
 
     /// The next index to ask about, or none when the walk is done.
@@ -204,12 +209,16 @@ impl ArrayWalk {
     const fn answer(&self) -> Value {
         match self.intrinsic {
             // 23.1.3.15 answers undefined, 23.1.3.6 true and 23.1.3.29 false.
-            Intrinsic::ArrayPrototypeForEach | Intrinsic::ArrayPrototypeFind => VALUE_UNDEFINED,
+            Intrinsic::ArrayPrototypeForEach
+            | Intrinsic::ArrayPrototypeFind
+            | Intrinsic::ArrayPrototypeFindLast => VALUE_UNDEFINED,
             Intrinsic::ArrayPrototypeEvery => VALUE_TRUE,
             Intrinsic::ArrayPrototypeSome => VALUE_FALSE,
             // 23.1.3.10 answers minus one; 23.1.3.9 answers undefined, as
             // 23.1.3.15 does.
-            Intrinsic::ArrayPrototypeFindIndex => Value::from_smi(-1),
+            Intrinsic::ArrayPrototypeFindIndex | Intrinsic::ArrayPrototypeFindLastIndex => {
+                Value::from_smi(-1)
+            }
             // 23.1.3.21 and 23.1.3.8 answer the Array they filled, and
             // 23.1.3.24 the accumulator it carried.
             _ => self.output,
@@ -1528,7 +1537,10 @@ impl RegisterVM {
             }
             // 27.1.2.1 answers the object it was called on.
             Intrinsic::IteratorPrototypeIterator => Ok(call.receiver),
-            Intrinsic::ArrayPrototypeValues | Intrinsic::ArrayIteratorPrototypeNext => {
+            Intrinsic::ArrayPrototypeValues
+            | Intrinsic::ArrayPrototypeKeys
+            | Intrinsic::ArrayPrototypeEntries
+            | Intrinsic::ArrayIteratorPrototypeNext => {
                 Self::call_iterator_intrinsic(intrinsic, call, heap, realm)
             }
             Intrinsic::ArrayPrototypeAt
@@ -1552,6 +1564,8 @@ impl RegisterVM {
             | Intrinsic::ArrayPrototypeSome
             | Intrinsic::ArrayPrototypeFind
             | Intrinsic::ArrayPrototypeFindIndex
+            | Intrinsic::ArrayPrototypeFindLast
+            | Intrinsic::ArrayPrototypeFindLastIndex
             | Intrinsic::ArrayPrototypeReduce
             | Intrinsic::ArrayPrototypeReduceRight => Err(VMError::TypeError),
             Intrinsic::ArrayPrototypeShift
@@ -3541,7 +3555,12 @@ impl RegisterVM {
         }
         // Every other clause walks the indices this engine can address.
         let length = u32::try_from(length).unwrap_or(u32::MAX);
-        let backwards = intrinsic == Intrinsic::ArrayPrototypeReduceRight;
+        let backwards = matches!(
+            intrinsic,
+            Intrinsic::ArrayPrototypeReduceRight
+                | Intrinsic::ArrayPrototypeFindLast
+                | Intrinsic::ArrayPrototypeFindLastIndex
+        );
         let prototype = realm.object_prototype(heap)?;
         let shape = heap.shapes.root_shape();
         let state = heap.allocate_object(shape, prototype)?;
@@ -3625,8 +3644,13 @@ impl RegisterVM {
                 walk.advance(element_index);
                 // 23.1.3 walks the indices the object has, so a hole never
                 // reaches the callback.
-                let Some((slot, accessor)) = Self::element_slot_at(heap, object, element_index)?
-                else {
+                let found = Self::element_slot_at(heap, object, element_index)?;
+                let Some((slot, accessor)) = found.or_else(|| {
+                    // 23.1.3.9, 23.1.3.10, 23.1.3.12 and 23.1.3.13 read every
+                    // index with 7.3.2, so a hole reaches the callback as
+                    // undefined instead of being passed over.
+                    Self::visits_holes(walk.intrinsic).then_some((VALUE_UNDEFINED, false))
+                }) else {
                     Self::write_iteration(state, &walk, heap)?;
                     skipped = skipped.saturating_add(1);
                     if skipped.is_multiple_of(HOLES_PER_FUEL_UNIT) {
@@ -3800,12 +3824,12 @@ impl RegisterVM {
                 }
             }
             // 23.1.3.9 answers the element and 23.1.3.10 its index.
-            Intrinsic::ArrayPrototypeFind => {
+            Intrinsic::ArrayPrototypeFind | Intrinsic::ArrayPrototypeFindLast => {
                 if truthy {
                     return Ok(Some(walk.element));
                 }
             }
-            Intrinsic::ArrayPrototypeFindIndex => {
+            Intrinsic::ArrayPrototypeFindIndex | Intrinsic::ArrayPrototypeFindLastIndex => {
                 if truthy {
                     return Ok(Some(index_value(i64::from(walk.element_index))));
                 }
@@ -4011,8 +4035,23 @@ impl RegisterVM {
                 | Intrinsic::ArrayPrototypeSome
                 | Intrinsic::ArrayPrototypeFind
                 | Intrinsic::ArrayPrototypeFindIndex
+                | Intrinsic::ArrayPrototypeFindLast
+                | Intrinsic::ArrayPrototypeFindLastIndex
                 | Intrinsic::ArrayPrototypeReduce
                 | Intrinsic::ArrayPrototypeReduceRight
+        )
+    }
+
+    /// Whether the clause reads every index from zero to the length, which
+    /// 23.1.3.9, 23.1.3.10, 23.1.3.12 and 23.1.3.13 do with 7.3.2 and every
+    /// other clause of 23.1.3 does only where the object has the index.
+    const fn visits_holes(intrinsic: Intrinsic) -> bool {
+        matches!(
+            intrinsic,
+            Intrinsic::ArrayPrototypeFind
+                | Intrinsic::ArrayPrototypeFindIndex
+                | Intrinsic::ArrayPrototypeFindLast
+                | Intrinsic::ArrayPrototypeFindLastIndex
         )
     }
 
@@ -5334,8 +5373,16 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Value, VMError> {
         match intrinsic {
-            // 23.1.3.38: the iterator holds the Array and the next index.
-            Intrinsic::ArrayPrototypeValues => {
+            // 23.1.3.38, 23.1.3.17 and 23.1.3.4: the iterator holds the
+            // Array, the next index and which of the three it yields.
+            Intrinsic::ArrayPrototypeValues
+            | Intrinsic::ArrayPrototypeKeys
+            | Intrinsic::ArrayPrototypeEntries => {
+                let kind = match intrinsic {
+                    Intrinsic::ArrayPrototypeKeys => ArrayIterationKind::Key,
+                    Intrinsic::ArrayPrototypeEntries => ArrayIterationKind::KeyAndValue,
+                    _ => ArrayIterationKind::Value,
+                };
                 let target = Self::coerce_object(call.receiver, heap, realm)?;
                 let prototype = realm.array_iterator_prototype(heap)?;
                 let shape = heap.shapes.root_shape();
@@ -5345,6 +5392,7 @@ impl RegisterVM {
                     ObjectKind::ArrayIterator {
                         target: Value::from_object(target),
                         index: 0,
+                        kind,
                     },
                 )?;
                 Ok(Value::from_object(iterator))
@@ -5353,8 +5401,11 @@ impl RegisterVM {
             // iterator is exhausted once the index reaches it.
             Intrinsic::ArrayIteratorPrototypeNext => {
                 let iterator = call.receiver.as_object().ok_or(VMError::TypeError)?;
-                let ObjectKind::ArrayIterator { target, index } =
-                    heap.get_object(iterator).ok_or(VMError::TypeError)?.kind
+                let ObjectKind::ArrayIterator {
+                    target,
+                    index,
+                    kind,
+                } = heap.get_object(iterator).ok_or(VMError::TypeError)?.kind
                 else {
                     return Err(type_error(
                         heap,
@@ -5369,7 +5420,18 @@ impl RegisterVM {
                     Some(object)
                         if i64::from(index) < Self::array_like_length(heap, object, realm)? =>
                     {
-                        Some(Self::element_at(heap, object, index)?.unwrap_or(VALUE_UNDEFINED))
+                        let key = index_value(i64::from(index));
+                        match kind {
+                            ArrayIterationKind::Key => Some(key),
+                            ArrayIterationKind::Value => Some(
+                                Self::element_at(heap, object, index)?.unwrap_or(VALUE_UNDEFINED),
+                            ),
+                            ArrayIterationKind::KeyAndValue => {
+                                let element = Self::element_at(heap, object, index)?
+                                    .unwrap_or(VALUE_UNDEFINED);
+                                Some(Self::array_of(alloc::vec![key, element], heap, realm)?)
+                            }
+                        }
                     }
                     _ => None,
                 };
@@ -5377,10 +5439,12 @@ impl RegisterVM {
                     Some(_) => ObjectKind::ArrayIterator {
                         target,
                         index: index.saturating_add(1),
+                        kind,
                     },
                     None => ObjectKind::ArrayIterator {
                         target: VALUE_UNDEFINED,
                         index,
+                        kind,
                     },
                 };
                 heap.set_object_kind(iterator, next)?;

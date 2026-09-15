@@ -24,6 +24,17 @@ use alloc::vec::Vec;
 /// Number of in-object property slots allocated inline with the object header.
 pub const IN_OBJECT_SLOT_COUNT: usize = 2;
 
+/// `[[ArrayLikeIterationKind]]` of 23.1.5.1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArrayIterationKind {
+    /// 23.1.3.17: the index of each element.
+    Key,
+    /// 23.1.3.38: each element.
+    Value,
+    /// 23.1.3.4: the index and the element, in an Array of two.
+    KeyAndValue,
+}
+
 /// Exotic object specializations.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ObjectKind {
@@ -66,6 +77,8 @@ pub enum ObjectKind {
         target: Value,
         /// `[[ArrayLikeNextIndex]]`.
         index: u32,
+        /// `[[ArrayLikeIterationKind]]`.
+        kind: ArrayIterationKind,
     },
     /// The state of one call of a method of 23.1.3 that calls back into the
     /// Script (23.1.3.5, .8, .11, .12, .15, .21, .24, .25).

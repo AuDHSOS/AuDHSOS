@@ -350,6 +350,14 @@ pub enum Intrinsic {
     SymbolFor,
     /// `Symbol.keyFor` (20.4.2.3).
     SymbolKeyFor,
+    /// `Array.prototype.findLast` (23.1.3.12).
+    ArrayPrototypeFindLast,
+    /// `Array.prototype.findLastIndex` (23.1.3.13).
+    ArrayPrototypeFindLastIndex,
+    /// `Array.prototype.keys` (23.1.3.17).
+    ArrayPrototypeKeys,
+    /// `Array.prototype.entries` (23.1.3.4).
+    ArrayPrototypeEntries,
     /// `Array.prototype.values`, which is also `%Array.prototype%[@@iterator]`
     /// (23.1.3.38 and 23.1.3.40).
     ArrayPrototypeValues,
@@ -602,7 +610,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 136] = [
+    pub const ALL: [Self; 140] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -739,6 +747,10 @@ impl Intrinsic {
         Self::SymbolPrototypeValueOf,
         Self::SymbolFor,
         Self::SymbolKeyFor,
+        Self::ArrayPrototypeFindLast,
+        Self::ArrayPrototypeFindLastIndex,
+        Self::ArrayPrototypeKeys,
+        Self::ArrayPrototypeEntries,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -800,6 +812,10 @@ impl Intrinsic {
             | Self::ArrayPrototypeSome
             | Self::ArrayPrototypeFind
             | Self::ArrayPrototypeFindIndex
+            | Self::ArrayPrototypeFindLast
+            | Self::ArrayPrototypeFindLastIndex
+            | Self::ArrayPrototypeKeys
+            | Self::ArrayPrototypeEntries
             | Self::ArrayPrototypeReduce
             | Self::ArrayPrototypeReduceRight => IntrinsicHolder::ArrayPrototype,
             Self::ArrayIteratorPrototypeNext | Self::IteratorPrototypeIterator => {
@@ -1039,6 +1055,10 @@ impl Intrinsic {
             Self::SymbolPrototypeValueOf => 133,
             Self::SymbolFor => 134,
             Self::SymbolKeyFor => 135,
+            Self::ArrayPrototypeFindLast => 136,
+            Self::ArrayPrototypeFindLastIndex => 137,
+            Self::ArrayPrototypeKeys => 138,
+            Self::ArrayPrototypeEntries => 139,
         }
     }
 
@@ -1185,6 +1205,10 @@ impl Intrinsic {
             Self::SymbolPrototypeValueOf => 133,
             Self::SymbolFor => 134,
             Self::SymbolKeyFor => 135,
+            Self::ArrayPrototypeFindLast => 136,
+            Self::ArrayPrototypeFindLastIndex => 137,
+            Self::ArrayPrototypeKeys => 138,
+            Self::ArrayPrototypeEntries => 139,
         }
     }
 
@@ -1332,6 +1356,10 @@ impl Intrinsic {
             133 => Some(Self::SymbolPrototypeValueOf),
             134 => Some(Self::SymbolFor),
             135 => Some(Self::SymbolKeyFor),
+            136 => Some(Self::ArrayPrototypeFindLast),
+            137 => Some(Self::ArrayPrototypeFindLastIndex),
+            138 => Some(Self::ArrayPrototypeKeys),
+            139 => Some(Self::ArrayPrototypeEntries),
             _ => None,
         }
     }
@@ -1382,7 +1410,7 @@ impl Intrinsic {
             Self::ObjectCreate => "create",
             Self::ObjectDefineProperties => "defineProperties",
             Self::ObjectGetPrototypeOf | Self::ReflectGetPrototypeOf => "getPrototypeOf",
-            Self::ObjectKeys => "keys",
+            Self::ObjectKeys | Self::ArrayPrototypeKeys => "keys",
             Self::ObjectIs => "is",
             Self::ObjectHasOwn => "hasOwn",
             Self::ArrayPrototypeShift => "shift",
@@ -1410,6 +1438,8 @@ impl Intrinsic {
             Self::ArrayPrototypeEvery => "every",
             Self::ArrayPrototypeSome => "some",
             Self::ArrayPrototypeFind => "find",
+            Self::ArrayPrototypeFindLast => "findLast",
+            Self::ArrayPrototypeFindLastIndex => "findLastIndex",
             Self::ArrayPrototypeFindIndex => "findIndex",
             Self::ArrayPrototypeReduce => "reduce",
             Self::ArrayPrototypeReduceRight => "reduceRight",
@@ -1420,7 +1450,7 @@ impl Intrinsic {
             Self::ObjectIsSealed => "isSealed",
             Self::ObjectFreeze => "freeze",
             Self::ObjectIsFrozen => "isFrozen",
-            Self::ObjectEntries => "entries",
+            Self::ObjectEntries | Self::ArrayPrototypeEntries => "entries",
             Self::NumberConstructor => "Number",
             Self::NumberIsFinite | Self::IsFinite => "isFinite",
             Self::NumberIsInteger => "isInteger",
@@ -1590,6 +1620,8 @@ impl Intrinsic {
             Self::ObjectPrototypeIsPrototypeOf
             | Self::ObjectPrototypeToString
             | Self::ArrayPrototypeValues
+            | Self::ArrayPrototypeKeys
+            | Self::ArrayPrototypeEntries
             | Self::ArrayIteratorPrototypeNext
             | Self::ArrayPrototypePop
             | Self::ArrayPrototypePush
@@ -1642,6 +1674,8 @@ impl Intrinsic {
             | Self::ArrayPrototypeSome
             | Self::ArrayPrototypeFind
             | Self::ArrayPrototypeFindIndex
+            | Self::ArrayPrototypeFindLast
+            | Self::ArrayPrototypeFindLastIndex
             | Self::ArrayPrototypeReduce
             | Self::ArrayPrototypeReduceRight
             | Self::IteratorPrototypeIterator
@@ -1729,6 +1763,8 @@ impl Intrinsic {
             | Self::StringPrototypeTrimEnd
             | Self::StringPrototypeTrimStart
             | Self::ArrayPrototypeValues
+            | Self::ArrayPrototypeKeys
+            | Self::ArrayPrototypeEntries
             | Self::ArrayIteratorPrototypeNext
             | Self::ArrayPrototypePop
             | Self::ArrayPrototypeReverse
@@ -1800,6 +1836,8 @@ impl Intrinsic {
             | Self::ArrayPrototypeSome
             | Self::ArrayPrototypeFind
             | Self::ArrayPrototypeFindIndex
+            | Self::ArrayPrototypeFindLast
+            | Self::ArrayPrototypeFindLastIndex
             | Self::ArrayPrototypeReduce
             | Self::ArrayPrototypeReduceRight
             | Self::ObjectPreventExtensions
