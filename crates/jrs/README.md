@@ -633,8 +633,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Math%` on the register engine (focused) | focused | `65001ed` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Math --summary` | 327 | 654 | 2 (0.31%) | 10 (1.53%) | 642 (98.17%) |
 | The error constructors (focused) | focused | `a36aa89` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Error test/built-ins/NativeErrors --summary` | 187 | 374 | 226 (60.43%) | 128 (34.22%) | 20 (5.35%) |
 | The error constructors on the register engine (focused) | focused | `a36aa89` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Error test/built-ins/NativeErrors --summary` | 187 | 374 | 54 (14.44%) | 90 (24.06%) | 230 (61.50%) |
-| Complete pinned suite, including staging and Intl | full | `a36aa89` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `a36aa89` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 6,771 (6.58%) | 16,508 (16.04%) | 79,646 (77.38%) |
+| `%String%` and its methods (focused) | focused | `86ba2e2` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/String --summary` | 1,223 | 2,443 | 1,928 (78.92%) | 448 (18.34%) | 67 (2.74%) |
+| `%String%` and its methods on the register engine (focused) | focused | `86ba2e2` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/String --summary` | 1,223 | 2,443 | 566 (23.17%) | 8 (0.33%) | 1,869 (76.50%) |
+| Complete pinned suite, including staging and Intl | full | `86ba2e2` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `86ba2e2` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 7,415 (7.20%) | 16,046 (15.59%) | 79,464 (77.21%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -741,6 +743,30 @@ step, because a variant that stopped at a harness which would not load now
 stops at a gap it names. Neither is a pass, and the stack backend is unchanged
 variant for variant across the step.
 
+`%String%` is next: 22.1.1.1 answers the String `ToString` makes and the empty
+String for no argument, 17 ties it to `%String.prototype%`, so `"".constructor`
+is `String`, and `new` names the String exotic object of 10.4.3 that this
+engine has not built rather than answering the primitive a call answers. A
+property read on a String was refused by the lowering for every name
+`%String.prototype%` owns, which put the gap one step too early: the
+instruction already walks the Prototype, so `"".charAt` and `'abc'['slice']`
+answer the function the Realm installed.
+
+Taking those Scripts reached four wrong answers, which are gaps now. `ToString`
+of an Object answered a `TypeError` the embedding reports as invalid bytecode;
+it needs the `ToPrimitive` of 7.1.1 and says so. 22.1.3 begins every
+`%String.prototype%` method with `RequireObjectCoercible` and `ToString`, so
+`String.prototype.charAt.call(42, 0)` is `"4"` and only null and undefined are a
+`TypeError`. A name an intrinsic Prototype owns and this Realm has not built was
+undefined when it was read on the Prototype itself, which claims the Prototype
+does not have it. And a property key a Script made was never interned, while a
+Shape holds its names by reference, so every lookup by such a key missed:
+`Object.getOwnPropertyDescriptor(String, "prototype")` was undefined while
+`String.prototype` read fine. B.2.2 gives `trimLeft` and `trimRight` and 21.3
+gives `sumPrecise`, which no list carried, so those answered undefined too.
+The engine gains 644 passes in this step and loses 462 failures; no variant
+that passed before stopped passing, and the stack backend is unchanged.
+
 The error constructors follow, which is the largest step of this migration so
 far: 574 more variants pass. The Realm built the prototype of every error and
 none of the constructors, so an error the engine threw could not be told apart
@@ -794,7 +820,9 @@ The lexical-declaration runs were measured at tree
 `94248adff3e44e88c2a52a671d1c38649b3e135e`. The `%Math%` runs were measured at tree
 `ef4cd61875fba838eea55c5c337a3b2859ed4da4`. The error-constructor runs and both
 full runs were measured at tree `0d3fee5ef3592d9e2e77a9f9bc5c146b996afa81`,
-which is the tree of `a36aa89`.
+which is the tree of `a36aa89`. The `%String%` runs and both full runs beside
+them were measured at tree
+`54864a06604bd2b5f1d9f81f232e8e5d64939692`, which is the tree of `86ba2e2`.
 
 ### Historical Test262 baseline
 
