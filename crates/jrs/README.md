@@ -681,8 +681,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Symbol%` on the register engine (focused) | focused | `b19277f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Symbol --summary` | 98 | 192 | 86 (44.79%) | 82 (42.71%) | 24 (12.50%) |
 | `%String.prototype%`, after the receiver conversion (focused) | focused | `7b37b0e` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/String/prototype --summary` | 1,073 | 2,144 | 1,708 (79.66%) | 382 (17.82%) | 54 (2.52%) |
 | `%String.prototype%`, after the receiver conversion, on the register engine (focused) | focused | `7b37b0e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/String/prototype --summary` | 1,073 | 2,144 | 1,084 (50.56%) | 106 (4.94%) | 954 (44.50%) |
-| Complete pinned suite, including staging and Intl | full | `7b37b0e` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `7b37b0e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 23,702 (23.03%) | 18,772 (18.24%) | 60,451 (58.73%) |
+| Computed property names (focused) | focused | `23fa2a0` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/computed-property-names --summary` | 48 | 96 | 80 (83.33%) | 6 (6.25%) | 10 (10.42%) |
+| Computed property names on the register engine (focused) | focused | `23fa2a0` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/computed-property-names --summary` | 48 | 96 | 56 (58.33%) | 8 (8.33%) | 32 (33.33%) |
+| Complete pinned suite, including staging and Intl | full | `23fa2a0` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `23fa2a0` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 24,021 (23.34%) | 18,834 (18.30%) | 60,070 (58.36%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1400,7 +1402,9 @@ which is the tree of `e97b8c6`. The `%Symbol%` runs and both full runs beside
 it were measured at tree `1950a0001bb73932a642838afd34359af15a076e`, which is
 the tree of `b19277f`. The `%String.prototype%` runs and both full runs beside
 the receiver conversion were measured at tree `2e1bff21ea2bd050d97c5ed88a8ca4c19a7a7a6a`,
-which is the tree of `7b37b0e`. `RegExp.prototype[@@split]` landed in `fe5797c`
+which is the tree of `7b37b0e`. The computed-property-name runs and both full
+runs beside them were measured at tree `7be09357adf77ef8086f4dcb39be9cad03db3473`,
+which is the tree of `23fa2a0`. `RegExp.prototype[@@split]` landed in `fe5797c`
 between them and moved no variant of the suite.
 
 ### Historical Test262 baseline
