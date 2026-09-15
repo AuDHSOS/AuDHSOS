@@ -649,10 +649,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Object%` and its methods, after the integrity levels, on the register engine (focused) | focused | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,530 (22.49%) | 18 (0.26%) | 5,254 (77.24%) |
 | `%Number%` (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 572 (84.12%) | 102 (15.00%) | 6 (0.88%) |
 | `%Number%` on the register engine (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 226 (33.24%) | 2 (0.29%) | 452 (66.47%) |
-| The integer operators and loose equality (focused) | focused | `5375042` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/bitwise-and test/language/expressions/bitwise-or test/language/expressions/bitwise-xor test/language/expressions/left-shift test/language/expressions/right-shift test/language/expressions/unsigned-right-shift test/language/expressions/equals test/language/expressions/does-not-equals test/language/expressions/compound-assignment --summary` | 756 | 1,382 | 1,083 (78.36%) | 55 (3.98%) | 244 (17.66%) |
-| The integer operators and loose equality on the register engine (focused) | focused | `5375042` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/bitwise-and test/language/expressions/bitwise-or test/language/expressions/bitwise-xor test/language/expressions/left-shift test/language/expressions/right-shift test/language/expressions/unsigned-right-shift test/language/expressions/equals test/language/expressions/does-not-equals test/language/expressions/compound-assignment --summary` | 756 | 1,382 | 835 (60.42%) | 0 (0.00%) | 547 (39.58%) |
-| Complete pinned suite, including staging and Intl | full | `5375042` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `5375042` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 13,703 (13.31%) | 18,055 (17.54%) | 71,167 (69.14%) |
+| Object literals (focused) | focused | `8ab84e6` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/object --summary` | 1,170 | 2,252 | 684 (30.37%) | 54 (2.40%) | 1,514 (67.23%) |
+| Object literals on the register engine (focused) | focused | `8ab84e6` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/object --summary` | 1,170 | 2,252 | 227 (10.08%) | 69 (3.06%) | 1,956 (86.86%) |
+| Complete pinned suite, including staging and Intl | full | `8ab84e6` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `8ab84e6` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 13,774 (13.38%) | 18,091 (17.58%) | 71,060 (69.04%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1078,6 +1078,14 @@ the object anything. A type the lowering does not know may be an Object, so
 was why `new Number(1) | true` still reached the gap after the wrapper objects
 were built. 426 variants move to passed and none away from it.
 
+13.2.5.1 gives a property of a literal a getter or a setter instead of a value,
+which the object model took an earlier step. One instruction defines it, taking
+the function in the accumulator as one half and leaving the other as it is, so
+the `get` and the `set` of one name meet on the object. A computed accessor
+name stays a gap, because the two halves have to reach the same property and
+the key is only known at run time. 71 variants move to passed and none away
+from it.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -1159,6 +1167,8 @@ The `%String%` runs and both full runs beside the String exotic object were
 measured at tree `e938d192c95e51d5340fa2d275c3c4c1765f69dd`, which is the tree of `7f92bfc`.
 The operator runs and both full runs beside the integer operators were measured
 at tree `c6b06778209374850329d3bf80f9e85707afcd94`, which is the tree of `5375042`.
+The object-literal runs and both full runs beside the accessors of a literal
+were measured at tree `897db95e9541cd60c08a909f3c43fdaa056c2280`, which is the tree of `8ab84e6`.
 
 ### Historical Test262 baseline
 
