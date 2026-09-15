@@ -114,11 +114,34 @@ belongs, after S11 measures whether the read is worth removing.
 ## 16.6 Decision D2: what produces the start-up code
 
 This decision must be made before S7 starts. R3 of
-[document 4](04-safety-policy.md) forbids `global_asm!`, assembly files, and an assembler invoked from a
-build script (`crates/tools/xtask/src/unsafe_budget.rs`, line 344, refuses
+[document 4](04-safety-policy.md) forbids `global_asm!`, assembly files,
+and an assembler invoked from a build script
+(`crates/tools/xtask/src/unsafe_budget.rs`, line 344, refuses
 `global_asm!` outright), and an application processor starts in real mode
 at a page below 1 MiB, which is neither where the linker puts code nor the
 mode it compiles for.
+
+### Why the start-up code is not Rust
+
+A processor at reset has no stack, no paging, sixteen-bit registers and no
+sixty-four-bit mode. `rustc` emits sixty-four-bit code only. These are the
+instructions between reset and the first Rust call, and what stops each
+from being Rust:
+
+| Instruction | Why Rust cannot write it |
+|-------------|--------------------------|
+| Read the processor's own base out of `CS` | Sixteen-bit code; `rustc` emits none. |
+| `lgdt` | The instruction has no Rust form. |
+| Set `CR4.PAE`, load `CR3`, set `IA32_EFER.LME`, set `CR0.PG` and `CR0.PE` | Control registers; the same. |
+| Far-jump into the sixty-four-bit segment | Rust has no far jump. |
+| Load the stack pointer | Rust needs a stack before it runs, so no Rust code can be the one that sets it. |
+| Call the kernel | Nothing: this is the first Rust instruction, and every instruction after it is Rust. |
+
+About twenty instructions, run once per processor at start-up and never
+again. No assembler program enters the build: `naked_asm!` is the
+compiler's, and `kernel-hal-x86_64` holds thirty of its sites today
+(`crates/tools/xtask/src/policy.rs`, line 684). D8 makes this the
+thirty-first.
 
 **The decision: one `#[unsafe(naked)]` function whose body is
 `naked_asm!`, placed in its own output section, copied into the start-up

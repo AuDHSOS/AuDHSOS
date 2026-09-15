@@ -17,8 +17,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   each. Eight decisions: a processor finds its own data through its local
   APIC identifier and not `GS_BASE`; the start-up code of an application
   processor is a `naked_asm!` function copied into a low frame, because
-  R3 forbids `global_asm!`; the boot processor keeps the clock and an
-  application processor's timer charges only its own time slice; a thread
+  R3 forbids `global_asm!`, with a table of the twenty instructions
+  between reset and the first Rust call and what stops each from being
+  Rust; the boot processor keeps the clock and an application processor's
+  timer charges only its own time slice; a thread
   is given a home processor at creation; a borrow refuses the processor
   that holds the cell and makes another wait, so every caller that exists
   keeps its meaning; the lock order is controller, console, memory,
