@@ -113,6 +113,9 @@ pub enum ObjectKind {
         /// Whether the call in flight is the getter of an accessor element
         /// rather than the callback of the clause.
         getter: bool,
+        /// Whether the call in flight is the getter of the `length` 7.1.20
+        /// reads, which runs before the walk begins.
+        pending_length: bool,
     },
     /// The `%Reflect%` namespace object of 28.1, which is ordinary in every
     /// way but one: a name it should own and this Realm has not built is a

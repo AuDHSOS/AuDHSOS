@@ -160,6 +160,9 @@ struct ArrayWalk {
     /// Whether the call in flight is the getter of an accessor element
     /// rather than the callback of the clause.
     getter: bool,
+    /// Whether the call in flight is the getter of the `length` 7.1.20 reads,
+    /// which runs before the walk begins.
+    pending_length: bool,
 }
 
 impl ArrayWalk {
@@ -3630,61 +3633,34 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Option<u32>, VMError> {
         let target = Self::coerce_object(call.receiver, heap, realm)?;
-        let length = Self::array_like_length(heap, target, realm)?;
         let callback = self.call_argument(&call, 0)?;
-        if !Self::is_callable(callback, heap) {
-            return Err(type_error(heap, realm, "callback is not callable"));
-        }
+        // 23.1.3.24 takes its second argument as the accumulator; every other
+        // clause takes it as the `this` value of the callback. Both are read
+        // before the `length`, because reading a register has no effect a
+        // Script can see and its getter may open a frame of its own.
+        let second = self.call_argument(&call, 1)?;
         let reduces = matches!(
             intrinsic,
             Intrinsic::ArrayPrototypeReduce | Intrinsic::ArrayPrototypeReduceRight
         );
-        // 23.1.3.24 takes its second argument as the accumulator; every other
-        // clause takes it as the `this` value of the callback.
-        let second = self.call_argument(&call, 1)?;
-        let (receiver, mut output, started) = if reduces {
+        let (receiver, output, started) = if reduces {
             (VALUE_UNDEFINED, second, call.arg_count > 1)
         } else {
             (second, VALUE_UNDEFINED, true)
         };
-        if reduces && !started && length == 0 {
-            return Err(type_error(
-                heap,
-                realm,
-                "reduce of an empty Array with no initial value",
-            ));
-        }
-        // 23.1.3.21 and 23.1.3.8 answer an Array of their own, made before the
-        // walk so the collector sees it from its first element on. 10.4.2.2
-        // step 1 refuses a length past 2^32-1, which 7.1.20 allows and an
-        // Array cannot hold.
-        if matches!(
-            intrinsic,
-            Intrinsic::ArrayPrototypeMap | Intrinsic::ArrayPrototypeFilter
-        ) {
-            let wanted = if intrinsic == Intrinsic::ArrayPrototypeMap {
-                u32::try_from(length).map_err(|_| {
-                    raise(
-                        heap,
-                        realm,
-                        super::realm::NativeErrorKind::RangeError,
-                        "invalid array length",
-                    )
-                })?
-            } else {
-                0
-            };
-            let created = realm.array(heap, wanted)?;
-            output = Value::from_object(created);
-        }
-        // Every other clause walks the indices this engine can address.
-        let length = u32::try_from(length).unwrap_or(u32::MAX);
         let backwards = matches!(
             intrinsic,
             Intrinsic::ArrayPrototypeReduceRight
                 | Intrinsic::ArrayPrototypeFindLast
                 | Intrinsic::ArrayPrototypeFindLastIndex
         );
+        let pending = Self::array_like_length_getter(heap, target)?;
+        let mut length = 0;
+        if pending.is_none() {
+            let read = Self::array_like_length(heap, target, realm)?;
+            Self::refuse_long_array(intrinsic, read, heap, realm)?;
+            length = u32::try_from(read).unwrap_or(u32::MAX);
+        }
         let prototype = realm.object_prototype(heap)?;
         let shape = heap.shapes.root_shape();
         let state = heap.allocate_object(shape, prototype)?;
@@ -3702,12 +3678,125 @@ impl RegisterVM {
                 length,
                 started,
                 getter: false,
+                pending_length: pending.is_some(),
             },
         )?;
         // The state outlives every frame the walk opens, so it is a root of a
         // scope of its own, which the walk leaves when it answers.
         heap.enter_scope();
         let state = heap.push_root(Value::from_object(state))?;
+        // 7.1.20 reads a `length` that is an accessor by calling its getter,
+        // which the walk enters the way it enters the callback.
+        if let Some(getter) = pending {
+            let mut call = call;
+            call.arg_count = 0;
+            call.arg_start = Reg(0);
+            call.receiver = Value::from_object(target);
+            call.resume = Some(Resume::Iteration { state });
+            call.construct = None;
+            return self.enter_call_value(getter, units, active_feedback, heap, realm, call);
+        }
+        self.begin_array_walk(state, call, units, active_feedback, heap, realm)
+    }
+
+    /// 10.4.2.2 step 1 refuses a length past 2^32-1, which 7.1.20 allows and
+    /// an Array cannot hold. Only 23.1.3.21 makes an Array of that length.
+    fn refuse_long_array(
+        intrinsic: Intrinsic,
+        length: i64,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        if intrinsic == Intrinsic::ArrayPrototypeMap && u32::try_from(length).is_err() {
+            return Err(raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::RangeError,
+                "invalid array length",
+            ));
+        }
+        Ok(())
+    }
+
+    /// The getter of a `length` that is an accessor, which 7.1.20 calls.
+    ///
+    /// A getter written in Rust takes its arguments from registers of the
+    /// caller, so one of those is a gap rather than a call.
+    fn array_like_length_getter(
+        heap: &GenerationalHeap,
+        object: ObjectRef,
+    ) -> Result<Option<Value>, VMError> {
+        if heap.array_length(object).is_some() {
+            return Ok(None);
+        }
+        let Some(name) = heap.strings.lookup_interned_units(&LENGTH_NAME) else {
+            return Ok(None);
+        };
+        let Some(property) = heap.lookup_named(object, PropertyKey::String(name))? else {
+            return Ok(None);
+        };
+        if !property.flags.is_accessor {
+            return Ok(None);
+        }
+        let (get, _) = Self::accessor_parts(property.value, heap)?;
+        if get.is_undefined() {
+            // 10.1.8.1 step 3.b: a property with no getter reads undefined,
+            // which 7.1.20 clamps to zero.
+            return Ok(None);
+        }
+        if !Self::is_script_function(get, heap) {
+            return Err(VMError::Unsupported(
+                "a getter that is not a Script function",
+            ));
+        }
+        Ok(Some(get))
+    }
+
+    /// The checks 23.1.3 makes once it knows the length, and the Array the two
+    /// clauses that build one start from.
+    fn begin_array_walk(
+        &mut self,
+        state: Root,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let mut walk = Self::read_iteration(state, heap)?;
+        if !Self::is_callable(walk.callback, heap) {
+            heap.exit_scope();
+            return Err(type_error(heap, realm, "callback is not callable"));
+        }
+        let reduces = matches!(
+            walk.intrinsic,
+            Intrinsic::ArrayPrototypeReduce | Intrinsic::ArrayPrototypeReduceRight
+        );
+        if reduces && !walk.started && walk.length == 0 {
+            heap.exit_scope();
+            return Err(type_error(
+                heap,
+                realm,
+                "reduce of an empty Array with no initial value",
+            ));
+        }
+        // 23.1.3.21 and 23.1.3.8 answer an Array of their own, made before the
+        // walk so the collector sees it from its first element on. 10.4.2.2
+        // step 1 refuses a length past 2^32-1, which 7.1.20 allows and an
+        // Array cannot hold.
+        if matches!(
+            walk.intrinsic,
+            Intrinsic::ArrayPrototypeMap | Intrinsic::ArrayPrototypeFilter
+        ) {
+            let wanted = if walk.intrinsic == Intrinsic::ArrayPrototypeMap {
+                walk.length
+            } else {
+                0
+            };
+            let created = realm.array(heap, wanted)?;
+            walk.output = Value::from_object(created);
+            Self::write_iteration(state, &walk, heap)?;
+        }
         self.step_array_iteration(state, None, call, units, active_feedback, heap, realm)
     }
 
@@ -3721,6 +3810,10 @@ impl RegisterVM {
     #[expect(
         clippy::too_many_arguments,
         reason = "a step of the walk runs where a call does, with what a call has"
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function carries every phase of the walk of 23.1.3"
     )]
     fn step_array_iteration(
         &mut self,
@@ -3737,6 +3830,25 @@ impl RegisterVM {
         // 7.1.20 gave it, which a Script can make 2^32-1 while holding one
         // element, so the walk charges for the indices it passes over, at the
         // rate a batch of them costs.
+        // 7.1.20 answered the `length` its getter gave, and the walk starts
+        // from the checks 23.1.3 makes once it knows it.
+        if let Some(answer) = answered {
+            let mut walk = Self::read_iteration(state, heap)?;
+            if walk.pending_length {
+                walk.pending_length = false;
+                let length = integer_argument(answer, heap)?.max(0);
+                if let Err(refused) = Self::refuse_long_array(walk.intrinsic, length, heap, realm) {
+                    heap.exit_scope();
+                    return Err(refused);
+                }
+                walk.length = u32::try_from(length).unwrap_or(u32::MAX);
+                if walk.backwards() {
+                    walk.index = walk.length;
+                }
+                Self::write_iteration(state, &walk, heap)?;
+                return self.begin_array_walk(state, call, units, active_feedback, heap, realm);
+            }
+        }
         let mut skipped: u32 = 0;
         loop {
             let mut walk = Self::read_iteration(state, heap)?;
@@ -3853,6 +3965,7 @@ impl RegisterVM {
             length,
             started,
             getter,
+            pending_length,
         } = heap
             .get_object(reference)
             .ok_or(VMError::Heap(HeapError::InvalidReference))?
@@ -3872,6 +3985,7 @@ impl RegisterVM {
             length,
             started,
             getter,
+            pending_length,
         })
     }
 
@@ -3899,6 +4013,7 @@ impl RegisterVM {
                 length: walk.length,
                 started: walk.started,
                 getter: walk.getter,
+                pending_length: walk.pending_length,
             },
         )?;
         Ok(())
@@ -5441,7 +5556,17 @@ impl RegisterVM {
             Self::absent_property(Value::from_object(object), &LENGTH_NAME, heap, realm)?;
             return Ok(0);
         };
-        let value = Self::plain_value(property)?;
+        // 10.1.8.1 step 3.b: an accessor with no getter reads undefined,
+        // which 7.1.20 clamps to zero.
+        let value = if property.flags.is_accessor {
+            let (get, _) = Self::accessor_parts(property.value, heap)?;
+            if !get.is_undefined() {
+                return Err(VMError::Unsupported("a property that is an accessor"));
+            }
+            VALUE_UNDEFINED
+        } else {
+            property.value
+        };
         // 7.1.20 ToLength clamps into 0..2^53-1; the scan is bounded again by
         // the index space, so the clamp loses no reachable index.
         Ok(integer_argument(value, heap)?.max(0))

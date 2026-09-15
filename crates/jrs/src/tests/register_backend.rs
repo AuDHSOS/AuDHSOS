@@ -6206,3 +6206,33 @@ fn apply_calls_with_a_list_of_arguments() -> Result<(), Error> {
     );
     Ok(())
 }
+
+/// 7.1.20 reads a `length` that is an accessor by calling its getter, which
+/// runs before the walk of 23.1.3 begins.
+#[test]
+fn a_walk_of_23_1_3_calls_the_getter_of_its_length() -> Result<(), Error> {
+    for source in [
+        "var o={get length(){return 2},0:'a',1:'b'};var r='';\
+         Array.prototype.forEach.call(o,function(x){r+=x});r",
+        "var o={get length(){return 2},0:1,1:2};\
+         Array.prototype.map.call(o,function(x){return x*2}).join()",
+        "var o={get length(){return 3},0:1,1:2,2:3};\
+         ''+Array.prototype.reduce.call(o,function(a,b){return a+b})",
+        "var n=0;var o={get length(){n++;return 1},0:5};\
+         Array.prototype.forEach.call(o,function(){});''+n",
+        "var o={get length(){throw 1},0:5};var r=0;\
+         try{Array.prototype.forEach.call(o,function(){})}catch(e){r=e}''+r",
+        "var o={get length(){return 2},0:1,1:2};\
+         Array.prototype.filter.call(o,function(x){return x>1}).join()",
+        "var o={get length(){return 0}};var r=0;\
+         try{Array.prototype.reduce.call(o,function(){})}catch(e){r=e instanceof TypeError}r",
+        "var o={get length(){return 1},0:1};var r=0;\
+         try{Array.prototype.forEach.call(o,1)}catch(e){r=e instanceof TypeError}r",
+        "var o={get length(){return 2},0:1,1:2};\
+         ''+Array.prototype.findLast.call(o,function(x){return x<2})",
+        "var o={set length(v){},0:1};''+Array.prototype.map.call(o,function(x){return x}).length",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
