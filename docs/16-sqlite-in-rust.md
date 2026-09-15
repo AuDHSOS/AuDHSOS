@@ -684,7 +684,7 @@ library accepts or refuses it, with no count of what is waiting.
 
 Status: `sh tools/xtask.sh sqlite-suite` runs the part of SQLite's own
 test files that needs no TCL interpreter. Of 15 364 cases in 1 171
-files, 2182 pass, 8 answer differently, and 13 174 name something the
+files, 2184 pass, 6 answer differently, and 13 174 name something the
 engine refuses or something the harness cannot run.
 Depends on: Q7, Q8.
 Size: M.
@@ -715,7 +715,8 @@ built with, because that is the size the answers the files write were
 recorded under. A statement is run through the connection that reads or
 the one that writes by its first word, which is read with the comments
 taken out, and a `WITH` clause carries a statement that writes as well,
-so the words after it say which.
+so the words after it say which. A real is written with the fifteen
+significant digits `tcl_precision` holds.
 
 An `execsql` outside a case is the file setting itself up: it runs so that the cases after it read what it
 wrote, and it is counted only by stopping the file where the engine
@@ -729,12 +730,11 @@ list it answers is the list the file writes, element for element.
 statement and what the engine answered, which is what says which missing
 feature stops the most files.
 
-### The eight that answer differently
+### The six that answer differently
 
 | File | Cases | What it shows |
 |------|-------|---------------|
-| `fpconv1.test` | 3 | `sqlite3_db_config db FP_DIGITS 15`, which the interpreter sets between two cases; the pinned shell answers what this engine answers for the third. |
-| `numindex1.test` | 1 | A real written with fifteen digits, which is what `testfixture` is configured to write and not what the pinned shell writes; the shell answers what this engine answers. |
+| `fpconv1.test` | 2 | `sqlite3_db_config db FP_DIGITS`, which asks the library to render a real rather than the interpreter: the two cases before it is set want seventeen digits where the harness writes the fifteen `tcl_precision` holds, which D-212 records. |
 | `collate1.test` | 1 | A collation the file registers through the interpreter, which this harness cannot run. |
 | `gencol1.test` | 1 | `INSERT INTO t1 SELECT * FROM t0` where both hold a computed column: the values are placed over every column and the computed one is written again. |
 | `autoindex4.test` | 1 | The order of rows an `ORDER BY` leaves equal, which SQLite settles by the automatic index it builds. |

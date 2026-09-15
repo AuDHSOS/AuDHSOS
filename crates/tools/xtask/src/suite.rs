@@ -720,9 +720,11 @@ fn listed(value: &Value, null: &str) -> String {
     match value {
         Value::Null => null.to_owned(),
         Value::Int(number) => number.to_string(),
+        // `tester.tcl` sets `tcl_precision 15`, so the answers a file
+        // writes for a real are the fifteen significant digits the
+        // interpreter wrote and not the seventeen the library writes.
         Value::Real(number) => {
-            String::from_utf8_lossy(&db_sqlite::fp::text(*number, db_sqlite::fp::DIGITS))
-                .into_owned()
+            String::from_utf8_lossy(&db_sqlite::fp::text(*number, 15)).into_owned()
         }
         Value::Text(bytes) | Value::Blob(bytes) => String::from_utf8_lossy(bytes).into_owned(),
     }

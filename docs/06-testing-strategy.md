@@ -4294,7 +4294,10 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
   by its first word, read with the comments taken out, and a `WITH`
   clause stands in front of a statement that writes as well, so the
   words after it say which.
-- 2182 pass, 8 answer differently and 13 174 are refused or stopped.
+- A real is written with fifteen significant digits, which is what
+  `tester.tcl` sets `tcl_precision` to and what the interpreter wrote
+  into the answers the files hold, which D-212 records.
+- 2184 pass, 6 answer differently and 13 174 are refused or stopped.
   Document 16, section 16.23 groups the seven. Earlier runs answered
   14, then 27, then 17, then 13, then 16 differently; twenty-five were
   defects, which D-181, D-184, D-189, D-197 and D-205 record and
