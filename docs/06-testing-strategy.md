@@ -4843,6 +4843,15 @@ D-226, document 16 step Q8.
 - A row a `RIGHT JOIN` keeps whose own column is nothing matches no row
   of the side after it.
 
+### 6.6.150 Tables inside brackets in a `FROM` (`db-sqlite`)
+
+D-227, document 16 step Q8.
+
+- A bracket holding a join reads that join first, and the join written
+  after the bracket is against the rows it answers.
+- A bracket holding one table answers the rows that table holds.
+- `joinB.test` runs every one of its 512 cases.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

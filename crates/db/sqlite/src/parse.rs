@@ -511,7 +511,11 @@ impl<'a> Parser<'a> {
     fn source(&mut self, join: Join) -> Result<Source, Error> {
         let kind = if self.at(Kind::Lp) {
             self.bump();
-            let select = self.select()?;
+            let select = if self.at_select() {
+                self.select()?
+            } else {
+                self.parenthesized_tables()?
+            };
             self.expect(Kind::Rp, Expected::CloseParen)?;
             SourceKind::Select(select)
         } else {
@@ -572,6 +576,21 @@ impl<'a> Parser<'a> {
             on,
             using,
         })
+    }
+
+    /// The tables a `FROM` names inside brackets, which is `seltablist
+    /// ::= stl_prefix LP seltablist RP` of `parse.y`: the tables and
+    /// the joins between them stand for a statement that answers every
+    /// column of them, so the brackets hold the joins together and the
+    /// join written after the brackets is against what they answer.
+    fn parenthesized_tables(&mut self) -> Result<SelectId, Error> {
+        let from = self.tables()?;
+        let columns = self.arena.push_results(&[ResultColumn::Star]);
+        Ok(self.arena.push_select(Select {
+            columns,
+            from,
+            ..Select::default()
+        }))
     }
 
     /// `INDEXED BY name` and `NOT INDEXED`, which only a table may carry.

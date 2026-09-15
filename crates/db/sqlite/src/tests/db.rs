@@ -503,6 +503,59 @@ fn kept_database() -> Vec<u8> {
 }
 
 #[test]
+fn the_tables_inside_brackets_are_the_statement_the_join_is_against() {
+    // `seltablist ::= stl_prefix LP seltablist RP` of `parse.y`: the
+    // tables inside brackets stand for a statement that answers every
+    // column of them, and the join written after the brackets is
+    // against what that statement answers.
+    use crate::change::Writer;
+    use crate::header::Encoding;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a, k)".as_slice(),
+        b"CREATE TABLE u(b, c, d)",
+        b"CREATE TABLE v(b, e)",
+        b"INSERT INTO t VALUES(1,'p'),(2,'q'),(NULL,'r')",
+        b"INSERT INTO u VALUES(1,'x','X'),(1,'y','Y'),(2,'z','Z'),(NULL,'n','N')",
+        b"INSERT INTO v VALUES(1,'E1'),(3,'E3')",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let bytes = writer.written();
+    let database = Database::open(&bytes).unwrap();
+    let answered = |sql: &[u8]| {
+        database
+            .query(sql)
+            .unwrap()
+            .rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|value| alloc::format!("{value:?}"))
+                    .collect::<Vec<String>>()
+                    .join(",")
+            })
+            .collect::<Vec<String>>()
+    };
+    assert_eq!(
+        answered(b"SELECT count(*) FROM (t JOIN u ON t.a=u.b)"),
+        ["Int(3)"]
+    );
+    assert_eq!(
+        answered(b"SELECT a, c, e FROM t JOIN (u LEFT JOIN v USING(b)) ON t.a=b ORDER BY a, c"),
+        [
+            "Int(1),Text([120]),Text([69, 49])",
+            "Int(1),Text([121]),Text([69, 49])",
+            "Int(2),Text([122]),Null"
+        ]
+    );
+    assert_eq!(
+        answered(b"SELECT count(*) FROM t JOIN (u JOIN v USING(b)) ON t.a=b"),
+        ["Int(2)"]
+    );
+}
+
+#[test]
 fn the_column_a_using_names_is_the_one_the_join_filled_it_from() {
     // A `RIGHT JOIN` keeps a row of the side on the right with the
     // sides on its left empty, so the column the `USING` names stands
