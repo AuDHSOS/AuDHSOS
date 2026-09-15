@@ -6328,11 +6328,14 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::BooleanConstructor
         | crate::engine::realm::Intrinsic::ArrayPrototypeEvery
         | crate::engine::realm::Intrinsic::ArrayPrototypeSome
+        | crate::engine::realm::Intrinsic::BooleanPrototypeValueOf
         | crate::engine::realm::Intrinsic::ArrayIsArray => RegisterType::Boolean,
         // 22.1.1.1 answers a String whichever argument it took; `new` answers
         // no value at all, because the exotic object it would make is a gap.
         crate::engine::realm::Intrinsic::StringConstructor
         | crate::engine::realm::Intrinsic::ObjectPrototypeToString
+        | crate::engine::realm::Intrinsic::NumberPrototypeToString
+        | crate::engine::realm::Intrinsic::BooleanPrototypeToString
         | crate::engine::realm::Intrinsic::StringPrototypeCharAt
         | crate::engine::realm::Intrinsic::StringPrototypeConcat
         | crate::engine::realm::Intrinsic::StringPrototypeRepeat
@@ -6428,6 +6431,7 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::MathFround
         | crate::engine::realm::Intrinsic::MathSin
         // 21.1.1.1 answers the Number ToNumber makes of its argument.
+        | crate::engine::realm::Intrinsic::NumberPrototypeValueOf
         | crate::engine::realm::Intrinsic::NumberConstructor => RegisterType::Number,
         // 22.1.3.1 and 22.1.3.4 answer undefined for an index outside the String.
         crate::engine::realm::Intrinsic::StringPrototypeAt

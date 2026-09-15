@@ -1504,26 +1504,46 @@ impl RegisterVM {
             // goes through ToNumber. `new` makes the Number exotic object of
             // 21.1.3, which this engine has not built.
             Intrinsic::NumberConstructor => {
-                if call.construct.is_some() {
-                    return Err(VMError::Unsupported("a Number exotic object"));
-                }
                 let argument = self.call_argument(&call, 0)?;
-                if call.arg_count == 0 {
-                    return Ok(Value::from_smi(0));
+                let number = if call.arg_count == 0 {
+                    0.0
+                } else {
+                    primitive_number(argument, heap)?
+                };
+                if call.construct.is_some() {
+                    // 21.1.3: the wrapper holds `[[NumberData]]`.
+                    return Self::wrapper(
+                        ObjectKind::NumberWrapper(number),
+                        realm.number_prototype(heap)?,
+                        heap,
+                    );
                 }
-                Ok(Value::from_f64(primitive_number(argument, heap)?))
+                Ok(Value::from_f64(number))
             }
             // 20.3.1.1: ToBoolean of the argument, which is false for no
             // argument at all. `new` makes the Boolean exotic object of
             // 20.3.3, whose [[BooleanData]] this engine has not built.
             Intrinsic::BooleanConstructor => {
+                let boolean = Self::to_boolean(self.call_argument(&call, 0)?, heap)?;
                 if call.construct.is_some() {
-                    return Err(VMError::Unsupported("a Boolean exotic object"));
+                    // 20.3.3: the wrapper holds `[[BooleanData]]`.
+                    return Self::wrapper(
+                        ObjectKind::BooleanWrapper(boolean),
+                        realm.boolean_prototype(heap)?,
+                        heap,
+                    );
                 }
-                Ok(Value::from_bool(Self::to_boolean(
-                    self.call_argument(&call, 0)?,
-                    heap,
-                )?))
+                Ok(Value::from_bool(boolean))
+            }
+            // 21.1.3.7 and 20.3.3.3 answer the data the wrapper holds, and
+            // 21.1.3.6 and 20.3.3.2 its text. A receiver of another kind is a
+            // TypeError, which is what `thisNumberValue` and
+            // `thisBooleanValue` say.
+            Intrinsic::NumberPrototypeValueOf
+            | Intrinsic::NumberPrototypeToString
+            | Intrinsic::BooleanPrototypeValueOf
+            | Intrinsic::BooleanPrototypeToString => {
+                self.wrapped_value(intrinsic, &call, heap, realm)
             }
             Intrinsic::NumberIsFinite
             | Intrinsic::NumberIsInteger
@@ -2300,6 +2320,89 @@ impl RegisterVM {
         Ok(Value::from_object(descriptor))
     }
 
+    /// A wrapper object of 20.3.3, 21.1.3 or 22.1.4, holding one primitive.
+    fn wrapper(
+        kind: ObjectKind,
+        prototype: Value,
+        heap: &mut GenerationalHeap,
+    ) -> Result<Value, VMError> {
+        let shape = heap.shapes.root_shape();
+        let object = heap.allocate_object(shape, prototype)?;
+        heap.set_object_kind(object, kind)?;
+        Ok(Value::from_object(object))
+    }
+
+    /// `thisNumberValue` of 21.1.3 and `thisBooleanValue` of 20.3.3, as the
+    /// method that asked for it answers.
+    fn wrapped_value(
+        &self,
+        intrinsic: Intrinsic,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let number = matches!(
+            intrinsic,
+            Intrinsic::NumberPrototypeValueOf | Intrinsic::NumberPrototypeToString
+        );
+        let receiver = call.receiver;
+        let held = if number {
+            receiver.as_f64().or_else(|| {
+                match receiver
+                    .as_object()
+                    .and_then(|object| heap.get_object(object))
+                {
+                    Some(object) => match object.kind {
+                        ObjectKind::NumberWrapper(number) => Some(number),
+                        _ => None,
+                    },
+                    None => None,
+                }
+            })
+        } else {
+            receiver
+                .as_boolean()
+                .or_else(|| {
+                    match receiver
+                        .as_object()
+                        .and_then(|object| heap.get_object(object))
+                    {
+                        Some(object) => match object.kind {
+                            ObjectKind::BooleanWrapper(boolean) => Some(boolean),
+                            _ => None,
+                        },
+                        None => None,
+                    }
+                })
+                .map(|boolean| f64::from(u8::from(boolean)))
+        };
+        let Some(held) = held else {
+            return Err(type_error(
+                heap,
+                realm,
+                "this value is not of the type the method belongs to",
+            ));
+        };
+        match intrinsic {
+            Intrinsic::NumberPrototypeValueOf => Ok(Value::from_f64(held)),
+            Intrinsic::BooleanPrototypeValueOf => Ok(Value::from_bool(held != 0.0)),
+            Intrinsic::BooleanPrototypeToString => {
+                let text = if held == 0.0 { "false" } else { "true" };
+                let units: Vec<u16> = text.encode_utf16().collect();
+                self.allocate_string(heap, &units)
+            }
+            // 21.1.3.6 takes a radix, and only 10 is 6.1.6.1.20.
+            _ => {
+                let radix = self.call_argument(call, 0)?;
+                if !radix.is_undefined() && integer_argument(radix, heap)? != 10 {
+                    return Err(VMError::Unsupported("Number.prototype.toString(radix)"));
+                }
+                let units: Vec<u16> = crate::number::decimal_string(held).encode_utf16().collect();
+                self.allocate_string(heap, &units)
+            }
+        }
+    }
+
     /// The argument an intrinsic sends through 7.1.17 before it does anything
     /// else, and which it therefore may be run again for.
     ///
@@ -3023,8 +3126,8 @@ impl RegisterVM {
     /// `Object ( value )` of 20.1.1.1.
     ///
     /// undefined and null make an ordinary object, and every other value goes
-    /// through `ToObject`, which answers an Object unchanged and needs for a
-    /// primitive a wrapper this engine has not built.
+    /// through `ToObject`, which answers an Object unchanged and wraps a
+    /// primitive.
     fn construct_object(
         value: Value,
         heap: &mut GenerationalHeap,
@@ -3039,9 +3142,7 @@ impl RegisterVM {
         if value.as_object().is_some() {
             return Ok(value);
         }
-        Err(VMError::Unsupported(
-            "ToObject of a primitive for the Object constructor",
-        ))
+        Ok(Value::from_object(Self::coerce_object(value, heap, realm)?))
     }
 
     /// `Array ( ...values )` of 23.1.1.1.
@@ -4234,13 +4335,14 @@ impl RegisterVM {
             // 21.3 gives `%Math%` an @@toStringTag, which this Realm has not
             // built, so `[object Math]` is not an answer it can give.
             ObjectKind::Math => Some("the @@toStringTag of %Math%"),
-            // 22.1.3.28, 21.1.3.7 and 20.3.3.3 answer the wrapped primitive.
+            // 22.1.3.28 answers the wrapped primitive, where 21.1.3.6 and
+            // 20.3.3.2 are built.
             ObjectKind::StringWrapper(_) => Some("String.prototype.toString"),
-            ObjectKind::NumberWrapper(_) => Some("Number.prototype.toString"),
-            ObjectKind::BooleanWrapper(_) => Some("Boolean.prototype.toString"),
             // 20.1.3.6 is the right answer for these, and 23.1.3.37 is
             // implemented.
             ObjectKind::Ordinary
+            | ObjectKind::NumberWrapper(_)
+            | ObjectKind::BooleanWrapper(_)
             | ObjectKind::Array { .. }
             | ObjectKind::ArrayIterator { .. }
             // The state of a walk of 23.1.3 and the pair of 6.1.7.1 are
@@ -5097,16 +5199,25 @@ impl RegisterVM {
         if let Some(object) = value.as_object() {
             return Ok(object);
         }
-        let kind = if let Some(boolean) = value.as_boolean() {
-            ObjectKind::BooleanWrapper(boolean)
+        // 7.1.18 gives each wrapper the Prototype of its own constructor.
+        let (kind, prototype) = if let Some(boolean) = value.as_boolean() {
+            (
+                ObjectKind::BooleanWrapper(boolean),
+                realm.boolean_prototype(heap)?,
+            )
         } else if let Some(number) = value.as_f64() {
-            ObjectKind::NumberWrapper(number)
+            (
+                ObjectKind::NumberWrapper(number),
+                realm.number_prototype(heap)?,
+            )
         } else if value.is_string() {
-            ObjectKind::StringWrapper(value)
+            (
+                ObjectKind::StringWrapper(value),
+                realm.string_prototype(heap)?,
+            )
         } else {
             return Err(type_error(heap, realm, "cannot box null or undefined"));
         };
-        let prototype = realm.object_prototype(heap)?;
         let shape = heap.shapes.root_shape();
         let boxed = heap.allocate_object(shape, prototype)?;
         heap.set_object_kind(boxed, kind)?;

@@ -727,12 +727,14 @@ fn the_object_constructor_answers_what_its_realm_built() -> Result<(), Error> {
         "let o={a:1};Object(o).a",
         "typeof new Object()",
         "let f=function(o){return Object(o)===o};f({})",
+        // 7.1.18 wraps a primitive in the object of its own constructor.
+        "typeof Object(1)",
+        "Object(1).valueOf()",
     ] {
         differential(source)?;
     }
-    // 20.1.2 gives `%Object%` names this Realm has not built, and `ToObject`
-    // of a primitive needs a wrapper it has not built either.
-    for source in ["Object.keys", "Object.create", "typeof Object(1)"] {
+    // 20.1.2 gives `%Object%` names this Realm has not built.
+    for source in ["Object.keys", "Object.create"] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
         assert!(
@@ -4930,5 +4932,54 @@ fn a_descriptor_for_an_index_reaches_the_element_store() -> Result<(), Error> {
     ] {
         differential(source)?;
     }
+    Ok(())
+}
+
+#[test]
+fn new_number_and_new_boolean_make_the_wrapper_objects() -> Result<(), Error> {
+    // 21.1.3 and 20.3.3 wrap one primitive, and 21.1.3.7, 21.1.3.6, 20.3.3.3
+    // and 20.3.3.2 answer it. 7.1.18 gives each wrapper the Prototype of the
+    // constructor it belongs to.
+    for source in [
+        "typeof new Number(1)",
+        "new Number(1).valueOf()",
+        "new Number(1)+1",
+        "new Number(1.5).toString()",
+        "String(new Number(42))",
+        "new Number(1) instanceof Number",
+        "Object.getPrototypeOf(new Number(1))===Number.prototype",
+        "typeof new Boolean(1)",
+        "new Boolean(1).valueOf()",
+        "new Boolean(0).valueOf()",
+        "new Boolean(1).toString()",
+        "String(new Boolean(0))",
+        "new Boolean(1) instanceof Boolean",
+        "Object.getPrototypeOf(new Boolean(1))===Boolean.prototype",
+        // A primitive receiver reaches the same method through 7.1.18.
+        "Object(5).valueOf()",
+        "Object(true).valueOf()",
+        "Object.getPrototypeOf(Object(5))===Number.prototype",
+        // 20.1.3.6 tags each by its kind.
+        "Object.prototype.toString.call(new Number(1))",
+        "Object.prototype.toString.call(new Boolean(1))",
+        // The methods belong to their own kind.
+        "var r=0;try{Number.prototype.valueOf.call({})}catch(e){r=e instanceof TypeError}r",
+        "var r=0;try{Boolean.prototype.valueOf.call({})}catch(e){r=e instanceof TypeError}r",
+    ] {
+        differential(source)?;
+    }
+    // 21.1.3.6 with a radix other than 10 is 6.1.6.1.20 for another base,
+    // which this engine has not built.
+    let source = "new Number(255).toString(16)";
+    let program = compile(source, Limits::default())?;
+    assert!(program.uses_register_backend(), "{source}");
+    assert!(
+        matches!(
+            Runtime::with_backend(Limits::default(), Backend::Engine)
+                .run(&program, &mut SilentHost),
+            Err(Error::Unsupported { .. })
+        ),
+        "{source}"
+    );
     Ok(())
 }

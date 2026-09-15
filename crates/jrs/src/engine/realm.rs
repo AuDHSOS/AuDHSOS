@@ -485,6 +485,14 @@ pub enum Intrinsic {
     ReflectOwnKeys,
     /// `Reflect.preventExtensions` (28.1.11).
     ReflectPreventExtensions,
+    /// `Number.prototype.valueOf`, 21.1.3.7.
+    NumberPrototypeValueOf,
+    /// `Number.prototype.toString`, 21.1.3.6.
+    NumberPrototypeToString,
+    /// `Boolean.prototype.valueOf`, 20.3.3.3.
+    BooleanPrototypeValueOf,
+    /// `Boolean.prototype.toString`, 20.3.3.2.
+    BooleanPrototypeToString,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -514,11 +522,15 @@ pub enum IntrinsicHolder {
     Math,
     /// `%Reflect%`, the namespace object of 28.1.
     Reflect,
+    /// `%Number.prototype%`, which carries the methods 21.1.3 gives it.
+    NumberPrototype,
+    /// `%Boolean.prototype%`, which carries the methods 20.3.3 gives it.
+    BooleanPrototype,
 }
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 111] = [
+    pub const ALL: [Self; 115] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -630,6 +642,10 @@ impl Intrinsic {
         Self::ReflectIsExtensible,
         Self::ReflectOwnKeys,
         Self::ReflectPreventExtensions,
+        Self::NumberPrototypeValueOf,
+        Self::NumberPrototypeToString,
+        Self::BooleanPrototypeValueOf,
+        Self::BooleanPrototypeToString,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -721,6 +737,12 @@ impl Intrinsic {
             | Self::ReflectIsExtensible
             | Self::ReflectOwnKeys
             | Self::ReflectPreventExtensions => IntrinsicHolder::Reflect,
+            Self::NumberPrototypeValueOf | Self::NumberPrototypeToString => {
+                IntrinsicHolder::NumberPrototype
+            }
+            Self::BooleanPrototypeValueOf | Self::BooleanPrototypeToString => {
+                IntrinsicHolder::BooleanPrototype
+            }
             Self::ErrorConstructor
             | Self::EvalErrorConstructor
             | Self::RangeErrorConstructor
@@ -875,6 +897,10 @@ impl Intrinsic {
             Self::ReflectIsExtensible => 108,
             Self::ReflectOwnKeys => 109,
             Self::ReflectPreventExtensions => 110,
+            Self::NumberPrototypeValueOf => 111,
+            Self::NumberPrototypeToString => 112,
+            Self::BooleanPrototypeValueOf => 113,
+            Self::BooleanPrototypeToString => 114,
         }
     }
 
@@ -996,6 +1022,10 @@ impl Intrinsic {
             Self::ReflectIsExtensible => 108,
             Self::ReflectOwnKeys => 109,
             Self::ReflectPreventExtensions => 110,
+            Self::NumberPrototypeValueOf => 111,
+            Self::NumberPrototypeToString => 112,
+            Self::BooleanPrototypeValueOf => 113,
+            Self::BooleanPrototypeToString => 114,
         }
     }
 
@@ -1118,6 +1148,10 @@ impl Intrinsic {
             108 => Some(Self::ReflectIsExtensible),
             109 => Some(Self::ReflectOwnKeys),
             110 => Some(Self::ReflectPreventExtensions),
+            111 => Some(Self::NumberPrototypeValueOf),
+            112 => Some(Self::NumberPrototypeToString),
+            113 => Some(Self::BooleanPrototypeValueOf),
+            114 => Some(Self::BooleanPrototypeToString),
             _ => None,
         }
     }
@@ -1133,7 +1167,11 @@ impl Intrinsic {
             Self::ObjectPrototypeHasOwnProperty => "hasOwnProperty",
             Self::ObjectPrototypeIsPrototypeOf => "isPrototypeOf",
             Self::ObjectPrototypePropertyIsEnumerable => "propertyIsEnumerable",
-            Self::ObjectPrototypeToString | Self::ArrayPrototypeToString => "toString",
+            Self::ObjectPrototypeToString
+            | Self::ArrayPrototypeToString
+            | Self::NumberPrototypeToString
+            | Self::BooleanPrototypeToString => "toString",
+            Self::NumberPrototypeValueOf | Self::BooleanPrototypeValueOf => "valueOf",
             Self::ArrayConstructor => "Array",
             Self::ObjectConstructor => "Object",
             Self::FunctionConstructor => "Function",
@@ -1320,6 +1358,9 @@ impl Intrinsic {
             | Self::ReflectIsExtensible
             | Self::ReflectOwnKeys
             | Self::ReflectPreventExtensions
+            | Self::NumberPrototypeValueOf
+            | Self::BooleanPrototypeValueOf
+            | Self::BooleanPrototypeToString
             | Self::ObjectGetOwnPropertyNames => false,
             // 20.1.2.4, 20.1.2.8 and 20.1.2.13 apply ToPropertyKey to the
             // second argument.
@@ -1354,6 +1395,9 @@ impl Intrinsic {
     pub const fn length(self) -> u32 {
         match self {
             Self::ObjectPrototypeToString
+            | Self::NumberPrototypeValueOf
+            | Self::BooleanPrototypeValueOf
+            | Self::BooleanPrototypeToString
             | Self::StringPrototypeTrim
             | Self::StringPrototypeTrimEnd
             | Self::StringPrototypeTrimStart
@@ -1438,6 +1482,7 @@ impl Intrinsic {
             | Self::NumberIsNaN
             | Self::NumberIsSafeInteger
             | Self::BooleanConstructor
+            | Self::NumberPrototypeToString
             | Self::ReflectGetPrototypeOf
             | Self::ReflectIsExtensible
             | Self::ReflectOwnKeys
@@ -1991,6 +2036,8 @@ struct Holders {
     global_object: Root,
     math: Root,
     reflect: Root,
+    number_prototype: Root,
+    boolean_prototype: Root,
 }
 
 /// Global Environment Record of 9.1.1.4.
@@ -2106,6 +2153,8 @@ impl Realm {
                 global_object,
                 math,
                 reflect,
+                number_prototype,
+                boolean_prototype,
             },
         )?;
 
@@ -2610,6 +2659,8 @@ impl Realm {
                 }
                 IntrinsicHolder::Math => Self::rooted(heap, holders.math)?,
                 IntrinsicHolder::Reflect => Self::rooted(heap, holders.reflect)?,
+                IntrinsicHolder::NumberPrototype => Self::rooted(heap, holders.number_prototype)?,
+                IntrinsicHolder::BooleanPrototype => Self::rooted(heap, holders.boolean_prototype)?,
                 IntrinsicHolder::ObjectConstructor => Self::rooted(
                     heap,
                     *intrinsics
