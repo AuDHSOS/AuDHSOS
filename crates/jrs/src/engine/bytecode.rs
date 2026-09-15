@@ -525,6 +525,19 @@ pub enum Instruction {
     CreateRegExp(u16),
     /// Creates an empty object `{}` in `acc`.
     CreateObject,
+    /// `CopyDataProperties` of 7.3.25 for the rest element of an object
+    /// pattern (14.3.3.3), leaving the new object in `acc`.
+    ///
+    /// Every own enumerable key of `source` that none of the `excluded`
+    /// registers names becomes a data property of it.
+    CopyDataProperties {
+        /// Register holding the object the properties come from.
+        source: Reg,
+        /// First of the `excluded` consecutive registers.
+        excluded: Reg,
+        /// How many of them there are.
+        count: u16,
+    },
     /// Creates an empty array `[]` in `acc` with initial capacity.
     CreateArray(u32),
     /// Creates a callable closure for one entry in the shared function table.
@@ -1016,6 +1029,23 @@ impl BytecodeFunction {
             | Instruction::CreateArray(_)
             | Instruction::Throw
             | Instruction::Return => None,
+            Instruction::CopyDataProperties {
+                source,
+                excluded,
+                count,
+            } => {
+                self.verify_register(pc, source)?;
+                for offset in 0..count {
+                    let register = excluded.0.checked_add(offset).ok_or(
+                        VerificationError::RegisterOutOfBounds {
+                            pc,
+                            register: excluded,
+                        },
+                    )?;
+                    self.verify_register(pc, Reg(register))?;
+                }
+                None
+            }
             Instruction::IteratorNext { state } => {
                 for offset in 0..2 {
                     let register = state.0.checked_add(offset).ok_or(

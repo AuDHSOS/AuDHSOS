@@ -5202,20 +5202,10 @@ fn an_object_pattern_reads_a_value_with_no_known_layout() -> Result<(), Error> {
     ] {
         differential_scripts(&[source])?;
     }
-    // A rest element collects the own keys of a shape the lowering does not
-    // know.
     // 14.3.3.3 requires the source to be coercible to an Object, which a
     // pattern that reads no property still checks.
     differential("function f(o){let {}=o;return 1}f({})")?;
     differential("function f(o){let {}=o;return 1}f(null)")?;
-    let source = "function f(o){let {a,...r}=o;return r}f({a:1,b:2})";
-    let program = compile(source, Limits::default())?;
-    assert!(!program.uses_register_backend(), "{source}");
-    assert_eq!(
-        program.register_refusal,
-        Some("a rest element of an object pattern"),
-        "{source}"
-    );
     Ok(())
 }
 
@@ -6392,5 +6382,43 @@ fn a_function_answers_its_own_source_text() -> Result<(), Error> {
     ] {
         differential_scripts(&[source])?;
     }
+    Ok(())
+}
+
+/// 14.3.3.3 collects the rest of an object pattern with `CopyDataProperties`
+/// of 7.3.25, which over a value the lowering could not name reads the own
+/// enumerable keys at run time.
+#[test]
+fn an_object_rest_element_copies_what_the_pattern_left() -> Result<(), Error> {
+    for source in [
+        "function f(o){var {a,...r}=o;return a+','+r.b}f({a:1,b:2})",
+        "function f(o){var {...r}=o;return ''+r.a}f({a:5})",
+        "function f(o){var {a,...r}=o;return Object.keys(r).join()}f({a:1,b:2,c:3})",
+        "function f(o){var {a,...r}=o;return typeof r}f(1)",
+        "function f(o){var {...r}=o;return ''+Object.keys(r).length}f([1,2])",
+        "function f(o){var {...r}=o;return ''+r[0]}f([7,8])",
+        "function f(o){var {...r}=o;return Object.keys(r).join()}f('ab')",
+        "function f(o){var {...r}=o;return r[1]}f('ab')",
+        "function f(o){var {...r}=o;return ''+Object.keys(r).length}f(5)",
+        "function f(o){var {...r}=o;return ''+Object.keys(r).length}f(true)",
+        "function f(o){var {a,...r}=o;return Object.keys(r).length===0}f({a:1})",
+        "function f(o){var a,r;({a,...r}=o);return a+','+r.b}f({a:1,b:2})",
+        "var a,r;({a,...r}={a:1,b:2});''+r.b",
+        "var o={a:1,b:2};var {a,...r}=o;''+r.b",
+        "function f(o){var {...r}=o;return typeof r}f(null)",
+        // 7.3.25 copies only the own enumerable keys.
+        "function f(o){var {...r}=o;return Object.keys(r).join()}\
+         f(Object.defineProperty({a:1},'b',{value:2}))",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // A property that is an accessor runs its getter, which a copy has no
+    // frame for.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    assert!(matches!(
+        realm.evaluate("function f(o){var {...r}=o;return r.a}f({get a(){return 1}})"),
+        Err(Error::Unsupported { .. })
+    ));
     Ok(())
 }

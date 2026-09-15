@@ -9168,6 +9168,76 @@ impl RegisterVM {
                     let oref = self.allocate_object(active_code, heap, realm, root_shape)?;
                     self.acc = Value::from_object(oref);
                 }
+                Instruction::CopyDataProperties {
+                    source,
+                    excluded,
+                    count,
+                } => {
+                    let target = self.read_reg(source)?;
+                    let root_shape = heap.shapes.root_shape();
+                    let rest = self.allocate_object(active_code, heap, realm, root_shape)?;
+                    self.acc = Value::from_object(rest);
+                    let mut names = Vec::new();
+                    for offset in 0..count {
+                        let register = Reg(excluded.0.saturating_add(offset));
+                        names.push(property_key(self.read_reg(register)?, heap)?);
+                    }
+                    // 10.4.3 gives the String exotic object 7.1.18 would make
+                    // one own property per code unit, all of them enumerable.
+                    if target.is_string() {
+                        let length = heap
+                            .strings
+                            .length_of(target)
+                            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+                        for index in 0..u32::try_from(length).unwrap_or(u32::MAX) {
+                            self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+                            let key = PropertyKey::String(heap.intern_index(index)?);
+                            if names.contains(&key) {
+                                continue;
+                            }
+                            let unit = usize::try_from(index)
+                                .ok()
+                                .and_then(|index| heap.strings.char_code_at(target, index))
+                                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+                            let value = self.allocate_string(heap, &[unit])?;
+                            let rest = self.acc.as_object().ok_or(VMError::TypeError)?;
+                            heap.define_own_named(
+                                rest,
+                                key,
+                                value,
+                                PropertyFlags::ordinary_data(),
+                            )?;
+                        }
+                    }
+                    // 7.3.25 step 3: undefined and null copy nothing at all.
+                    if let Some(object) = target.as_object() {
+                        for (key, enumerable) in heap.own_keys(object)? {
+                            if !enumerable || names.contains(&key) {
+                                continue;
+                            }
+                            self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+                            if heap.own_property_count(rest).unwrap_or(usize::MAX)
+                                >= self.property_limit
+                            {
+                                return Err(VMError::PropertyLimit);
+                            }
+                            if heap
+                                .own_named_flags(object, key)?
+                                .is_some_and(|flags| flags.is_accessor)
+                            {
+                                return Err(VMError::Unsupported("a property that is an accessor"));
+                            }
+                            let indexed = Self::element_index_of(object, key, heap);
+                            let value = Self::own_property_value(object, key, indexed, heap)?;
+                            heap.define_own_named(
+                                rest,
+                                key,
+                                value,
+                                PropertyFlags::ordinary_data(),
+                            )?;
+                        }
+                    }
+                }
                 Instruction::CreateArguments(target) => {
                     self.create_arguments(active_code, target, heap, realm)?;
                 }

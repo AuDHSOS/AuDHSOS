@@ -1050,15 +1050,10 @@ impl RegisterLowerer {
                 // A layout the lowering tracks answers each property from
                 // what it knows; every other value is read at run time.
                 let tracked = value_type.is_object();
-                if !tracked {
-                    // 14.3.3.3 collects the rest from the own keys, which the
-                    // lowering knows only for a layout it tracks.
-                    if object.rest.is_some() {
-                        self.refuse("a rest element of an object pattern");
-                        return None;
-                    }
-                }
-                if object.rest.is_some() && !matches!(value_type, RegisterType::Object(_)) {
+                if object.rest.is_some()
+                    && tracked
+                    && !matches!(value_type, RegisterType::Object(_))
+                {
                     return None;
                 }
                 if !tracked {
@@ -1102,8 +1097,14 @@ impl RegisterLowerer {
                     self.bind_pattern(property_type, &property.pattern)?;
                 }
                 if let Some(rest) = &object.rest {
-                    let (rest_type, rest_object) =
-                        self.lower_object_rest_from_register(source, value_type, &excluded)?;
+                    let (rest_type, rest_object) = if tracked {
+                        self.lower_object_rest_from_register(source, value_type, &excluded)?
+                    } else {
+                        // 7.3.25 collects every own enumerable key of a value
+                        // the lowering could not name, which only the run time
+                        // knows.
+                        self.lower_copied_data_properties(source, &excluded)?
+                    };
                     self.code.emit(Instruction::Ldar(rest_object));
                     self.bind_pattern(rest_type, &parser::BindingPattern::Name(rest.clone()))?;
                     self.release_register(rest_object)?;
@@ -2145,9 +2146,7 @@ impl RegisterLowerer {
                 self.release_register(source)?;
             }
             parser::AssignmentPattern::Object(object) => {
-                if object.rest.is_some() && !matches!(value_type, RegisterType::Object(_)) {
-                    return None;
-                }
+                let tracked = matches!(value_type, RegisterType::Object(_));
                 if !value_type.is_object() {
                     // 13.15.5.5 step 1 refuses undefined and null before it
                     // reads any property.
@@ -2186,8 +2185,11 @@ impl RegisterLowerer {
                 }
                 if let Some(rest) = &object.rest {
                     let prepared = self.prepare_assignment_reference(rest)?;
-                    let (rest_type, rest_object) =
-                        self.lower_object_rest_from_register(source, value_type, &excluded)?;
+                    let (rest_type, rest_object) = if tracked {
+                        self.lower_object_rest_from_register(source, value_type, &excluded)?
+                    } else {
+                        self.lower_copied_data_properties(source, &excluded)?
+                    };
                     self.code.emit(Instruction::Ldar(rest_object));
                     self.release_register(rest_object)?;
                     self.finish_assignment_reference(rest_type, rest, prepared)?;
@@ -4334,6 +4336,40 @@ impl RegisterLowerer {
             elements.insert(offset, value_type);
         }
         Some((RegisterType::Array(rest_id), rest_array))
+    }
+
+    /// `CopyDataProperties` of 7.3.25 over a value whose layout the lowering
+    /// does not know: the names the pattern already took go in registers of
+    /// their own, which the instruction reads.
+    fn lower_copied_data_properties(
+        &mut self,
+        source: crate::engine::bytecode::Reg,
+        excluded: &[Vec<u16>],
+    ) -> Option<(RegisterType, crate::engine::bytecode::Reg)> {
+        use crate::engine::bytecode::Instruction;
+        let count = u16::try_from(excluded.len()).ok()?;
+        let mut registers = Vec::with_capacity(excluded.len());
+        for name in excluded {
+            let constant = self.string_constant(name)?;
+            self.code.emit(Instruction::LdaString(constant));
+            let register = self.allocate_register()?;
+            self.code.emit(Instruction::Star(register));
+            registers.push(register);
+        }
+        let first = registers.first().copied().unwrap_or(source);
+        self.code.emit(Instruction::CopyDataProperties {
+            source,
+            excluded: first,
+            count,
+        });
+        // The names are read before the object is made, so their registers go
+        // back before the one that holds it is taken.
+        for register in registers.into_iter().rev() {
+            self.release_register(register)?;
+        }
+        let rest_object = self.allocate_register()?;
+        self.code.emit(Instruction::Star(rest_object));
+        Some((RegisterType::Unknown, rest_object))
     }
 
     fn lower_object_rest_from_register(
