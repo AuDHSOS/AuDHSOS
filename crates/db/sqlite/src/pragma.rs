@@ -181,6 +181,13 @@ pub static HELD: &[Keeps] = &[
         fixed: false,
     },
     Keeps {
+        name: b"ignore_check_constraints",
+        fallback: 0,
+        written: Written::Truth,
+        answers: false,
+        fixed: false,
+    },
+    Keeps {
         name: b"automatic_index",
         fallback: 1,
         written: Written::Truth,
@@ -357,8 +364,8 @@ pub fn of_name(name: &[u8]) -> Option<Setting> {
         | b"full_column_names"
         | b"empty_result_callbacks"
         | b"cache_spill"
-        | b"ignore_check_constraints"
         | b"case_sensitive_like"
+        | b"writable_schema"
         | b"shrink_memory"
         | b"optimize" => Setting::Ignored,
         _ => {

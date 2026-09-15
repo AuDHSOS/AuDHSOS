@@ -100,6 +100,13 @@ fn refusal(sql: &str) -> Error {
 fn what_is_not_written_yet_refuses_rather_than_guessing() {
     assert_eq!(refusal("a"), Error::NoColumn(b"a".to_vec()));
     assert_eq!(refusal("t.a"), Error::NoColumn(b"t.a".to_vec()));
+    // `resolveExprStep` asks whether a name written in double quotes
+    // was meant to be text, which it is where no table answers it.
+    assert_eq!(
+        refusal("\"hello\""),
+        Error::NoColumn(b"\"hello\" - should this be a string literal in single-quotes?".to_vec())
+    );
+    assert_eq!(refusal("\"t\".\"a\""), Error::NoColumn(b"t.a".to_vec()));
     assert_eq!(
         refusal("nosuchfunction(1)"),
         Error::NoFunction(b"nosuchfunction".to_vec())

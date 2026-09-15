@@ -1222,12 +1222,17 @@ impl Writer {
     /// carry, which `PRAGMA foreign_keys` turns on and which a
     /// connection told nothing leaves off.
     fn holding(&self) -> bool {
+        self.told(b"foreign_keys") != 0
+    }
+
+    /// What the connection was told for the pragma `name`, or what the
+    /// pragma falls back to where it was told nothing.
+    fn told(&self, name: &[u8]) -> i64 {
         crate::pragma::HELD
             .iter()
-            .position(|keeps| keeps.name == b"foreign_keys")
+            .position(|keeps| keeps.name == name)
             .and_then(|at| self.kept.get(at).copied().flatten())
             .unwrap_or(0)
-            != 0
     }
 
     /// Whether every foreign key of a row points at a row that is
@@ -2827,6 +2832,11 @@ impl Writer {
             random: &self.random,
             outer: None,
         };
+        // `PRAGMA ignore_check_constraints` leaves every `CHECK` of
+        // the table unread.
+        if self.told(b"ignore_check_constraints") != 0 {
+            return Ok(true);
+        }
         let Some(shown) = database.refused_check(&table.name, &row)? else {
             return Ok(true);
         };

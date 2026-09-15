@@ -393,6 +393,15 @@ foreach cmd {
   proc ::$cmd {args} "error \"this harness has no [set cmd]\""
 }
 
+# What a file sets and reads back, which this engine answers the same
+# way for every setting: the value it was given.
+proc sqlite3_db_config {args} { return [lindex $args 2] }
+
+# What a file holds the extended error code to, which this engine has
+# none of: the case is not run rather than scored against a made-up
+# code.
+proc verify_ex_errcode {args} {}
+
 # What the suite asks of the machine and not of the library.
 proc atomic_batch_write {args} { return 0 }
 proc nonzero_reserved_bytes {} { return 0 }

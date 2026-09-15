@@ -421,18 +421,9 @@ fn answer(
                 // to, written without quotes and without a table in
                 // front of it, is the number one where it is `true` and
                 // nought where it is `false`.
-                let truth = truth_of(named).filter(|_| table.is_none()).ok_or_else(|| {
-                    // The name as the statement wrote it, which is
-                    // what `sqlite3ErrorMsg` writes after `no such
-                    // column: `.
-                    let mut written = Vec::new();
-                    for part in [schema, table].into_iter().flatten() {
-                        written.extend_from_slice(part.text(sql));
-                        written.push(b'.');
-                    }
-                    written.extend_from_slice(named);
-                    Error::NoColumn(written)
-                })?;
+                let truth = truth_of(named)
+                    .filter(|_| table.is_none())
+                    .ok_or_else(|| Error::NoColumn(missed(schema, table, named, sql)))?;
                 return Ok(Answer::plain(Value::Int(i64::from(truth))));
             };
             Ok(Answer {
@@ -1202,6 +1193,29 @@ pub fn rows_placed(arena: &Arena) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+/// The name a statement wrote where no table answers it, which is what
+/// `resolveExprStep` writes after `no such column: `: the parts with
+/// their quotes taken off and a dot between them, and a name written
+/// in double quotes alone with the question the C library asks.
+fn missed(schema: Option<Span>, table: Option<Span>, column: &[u8], sql: &[u8]) -> Vec<u8> {
+    let mut written = Vec::new();
+    for part in [schema, table].into_iter().flatten() {
+        written.extend_from_slice(&crate::schema::dequote(part.text(sql)));
+        written.push(b'.');
+    }
+    if !written.is_empty() {
+        written.extend_from_slice(&crate::schema::dequote(column));
+        return written;
+    }
+    if column.first() != Some(&b'"') {
+        return column.to_vec();
+    }
+    written.push(b'"');
+    written.extend_from_slice(&crate::schema::dequote(column));
+    written.extend_from_slice(b"\" - should this be a string literal in single-quotes?");
+    written
 }
 
 /// Whether the node is a row of values, which `(a, b)` is and `(a)` is

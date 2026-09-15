@@ -211,6 +211,36 @@ fn a_check_of_the_table_holds_every_row_it_is_written_with() {
 }
 
 #[test]
+fn a_check_of_the_table_is_left_unread_where_the_pragma_says_so() {
+    // `PRAGMA ignore_check_constraints` leaves every `CHECK` of the
+    // table unread, which is what `sqlite3GenerateConstraintChecks`
+    // does under `SQLITE_IgnoreChecks`.
+    let mut writer = connection();
+    assert_eq!(
+        refusal(
+            &mut writer,
+            &[
+                "CREATE TABLE t(a CHECK(a>0))",
+                "PRAGMA ignore_check_constraints=1",
+                "INSERT INTO t VALUES(0)",
+            ]
+        ),
+        ""
+    );
+    assert_eq!(rows(&writer, "SELECT a FROM t"), ["0"]);
+    assert_eq!(
+        refusal(
+            &mut writer,
+            &[
+                "PRAGMA ignore_check_constraints=0",
+                "INSERT INTO t VALUES(0)"
+            ]
+        ),
+        "CHECK constraint failed: a>0"
+    );
+}
+
+#[test]
 fn the_key_a_row_is_written_under_is_one_the_table_does_not_hold() {
     // `sqlite3GenerateConstraintChecks` holds the key of the row
     // against the keys the table holds, whether the key is the rowid

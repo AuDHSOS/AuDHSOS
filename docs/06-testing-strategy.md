@@ -4892,6 +4892,15 @@ D-230, document 16 step Q8.
 - `IGNORE` passes the row over, `REPLACE` writes what the column falls
   back to, and `FAIL` stops the statement and keeps the rows before it.
 
+### 6.6.154 The pragmas a constraint is read under (`db-sqlite`)
+
+D-231, document 16 step Q8.
+
+- `PRAGMA ignore_check_constraints` leaves every `CHECK` unread while
+  it is on, and reads them again when it is off.
+- A name written in double quotes that no table answers carries the
+  question the C library asks.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`
