@@ -729,8 +729,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same, on the register engine (focused) | focused | `dfbad4f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Function/prototype/bind --summary` | 100 | 200 | 136 (68.00%) | 24 (12.00%) | 40 (20.00%) |
 | `String.prototype.match` and `search`, after the made `RegExp` (focused) | focused | `248f5f0` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/String/prototype/match test/built-ins/String/prototype/search --summary` | 94 | 188 | 172 (91.49%) | 0 (0.00%) | 16 (8.51%) |
 | The same two, on the register engine (focused) | focused | `248f5f0` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/String/prototype/match test/built-ins/String/prototype/search --summary` | 94 | 188 | 130 (69.15%) | 8 (4.26%) | 50 (26.60%) |
-| Complete pinned suite, including staging and Intl | full | `248f5f0` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `248f5f0` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 26,833 (26.07%) | 19,462 (18.91%) | 56,630 (55.02%) |
+| `copyWithin` and `slice`, after the intrinsic base (focused) | focused | `710ba34` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/prototype/copyWithin test/built-ins/Array/prototype/slice --summary` | 110 | 220 | 198 (90.00%) | 18 (8.18%) | 4 (1.82%) |
+| The same two, on the register engine (focused) | focused | `710ba34` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/prototype/copyWithin test/built-ins/Array/prototype/slice --summary` | 110 | 220 | 144 (65.45%) | 38 (17.27%) | 38 (17.27%) |
+| Complete pinned suite, including staging and Intl | full | `710ba34` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `710ba34` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 26,909 (26.14%) | 19,466 (18.91%) | 56,550 (54.94%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1509,7 +1511,10 @@ beside the bound arguments were measured at tree
 that step gained 36 variants and lost none. The `match` and `search` runs and
 both full runs beside the made `RegExp` were measured at tree
 `1f8b830e2f66b00ffee0e939a845914aa1403472`, which is the tree of `248f5f0`;
-that step gained 56 variants and lost none.
+that step gained 56 variants and lost none. The `copyWithin` and `slice` runs
+and both full runs beside the intrinsic base were measured at tree
+`0bf8201e3fcd983cc0fccbd1a81990dad0301443`, which is the tree of `710ba34`;
+that step gained 76 variants and lost none.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
