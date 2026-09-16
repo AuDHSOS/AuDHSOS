@@ -243,6 +243,16 @@ fn names_column(statement: &[u8], column: &[u8]) -> Option<Vec<u8>> {
     })
 }
 
+/// What a `CREATE` makes, which says what it is refused with where the
+/// schema already holds the name.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Making {
+    /// A table or a view, which are one kind to a `CREATE INDEX`.
+    Table,
+    /// An index.
+    Index,
+}
+
 /// Whether the schema already names a table, an index or a view, which
 /// are one namespace; a trigger is named in its own, so a trigger and
 /// an index may share a name.
@@ -366,6 +376,10 @@ pub struct Writer {
     saved: Vec<Saved>,
     /// The rows the `RETURNING` of the statement running now answered.
     returned: Vec<Vec<Value>>,
+    /// Whether the statement running now is one this crate writes for
+    /// itself, which is what `sqlite3CheckObjectName` lets name a table
+    /// SQLite keeps for itself.
+    making_own: bool,
 }
 
 /// One open savepoint: its name, and the file as it stood when the
@@ -407,6 +421,7 @@ impl Writer {
             stopped: false,
             saved: Vec::new(),
             returned: Vec::new(),
+            making_own: false,
             header: Header {
                 page_size,
                 write_version: 1,
@@ -465,6 +480,7 @@ impl Writer {
             stopped: false,
             saved: Vec::new(),
             returned: Vec::new(),
+            making_own: false,
         })
     }
 
@@ -1105,7 +1121,7 @@ impl Writer {
             let scope = named.as_ref().and_then(|_| tables.first().cloned());
             self.unstat(scope.as_deref())?;
         } else {
-            self.ran(b"CREATE TABLE sqlite_stat1(tbl,idx,stat)")?;
+            self.own_table(b"CREATE TABLE sqlite_stat1(tbl,idx,stat)")?;
         }
         let (root, stats) = {
             let bytes = self.image();
@@ -1575,7 +1591,7 @@ impl Writer {
         sql: &[u8],
     ) -> Result<(), Error> {
         let name = crate::schema::dequote(table.name.text(sql));
-        if self.already(&name, table.if_not_exists)? {
+        if self.already(&name, table.if_not_exists, Making::Table)? {
             return Ok(());
         }
         let (answer, affinities) = {
@@ -1649,11 +1665,12 @@ impl Writer {
             if database.table(&over).is_none() {
                 return Err(Error::NoTable(over));
             }
+            self.reserved(&name)?;
             if database.trigger(&name).is_some() {
                 if trigger.if_not_exists {
                     return Ok(());
                 }
-                return Err(Error::Exists);
+                return Err(Error::Exists(b"trigger".to_vec(), name));
             }
         }
         let mut written = b"CREATE TRIGGER ".to_vec();
@@ -2202,7 +2219,7 @@ impl Writer {
                 )
             }
         };
-        if self.already(&name, already)? {
+        if self.may_name(&name, already, &definition)? {
             return Ok(());
         }
         let root = self.rooted(kind)?;
@@ -2256,10 +2273,23 @@ impl Writer {
             // The two rows are one change of the schema, so the cookie
             // the statement raised already counts for both.
             let cookie = self.header.schema_cookie;
-            self.ran(b"CREATE TABLE sqlite_sequence(name,seq)")?;
+            self.own_table(b"CREATE TABLE sqlite_sequence(name,seq)")?;
             self.header.schema_cookie = cookie;
         }
         Ok(())
+    }
+
+    /// One table this crate writes for itself, which is a name SQLite
+    /// keeps and a statement no connection wrote.
+    ///
+    /// # Errors
+    ///
+    /// Whatever making the table refuses.
+    fn own_table(&mut self, sql: &[u8]) -> Result<(), Error> {
+        self.making_own = true;
+        let made = self.ran(sql);
+        self.making_own = false;
+        made.map(|_| ())
     }
 
     /// Whether the database holds the table `name`.
@@ -2272,16 +2302,85 @@ impl Writer {
     /// already holds the name and the statement wrote `IF NOT EXISTS`.
     ///
     /// Reading the schema costs O(n) in its rows.
-    fn already(&self, name: &[u8], if_not_exists: bool) -> Result<bool, Error> {
+    fn already(&self, name: &[u8], if_not_exists: bool, making: Making) -> Result<bool, Error> {
         let bytes = self.image();
         let database = Database::open(&bytes)?;
-        if !names(&database, name) {
+        let held: Option<&[u8]> = if database.table(name).is_some() {
+            Some(b"table")
+        } else if database.view(name).is_some() {
+            Some(b"view")
+        } else if database.index(name).is_some() {
+            Some(b"index")
+        } else {
+            None
+        };
+        let Some(held) = held else {
             return Ok(false);
-        }
+        };
         if if_not_exists {
             return Ok(true);
         }
-        Err(Error::Exists)
+        // `sqlite3StartTable` and `sqlite3CreateIndex`: a name the same
+        // kind holds is one that already exists, and a name the other
+        // kind holds is one that is already named.
+        let same = match making {
+            Making::Index => held == b"index",
+            Making::Table => held != b"index",
+        };
+        if same {
+            return Err(Error::Exists(held.to_vec(), name.to_vec()));
+        }
+        let kind = if making == Making::Index {
+            b"table"
+        } else {
+            b"index"
+        };
+        Err(Error::AlreadyNamed(kind.to_vec(), name.to_vec()))
+    }
+
+    /// Whether the schema may hold the name a `CREATE` writes, and
+    /// whether it holds it already under an `IF NOT EXISTS`, which is
+    /// `sqlite3StartTable` and `sqlite3CreateIndex`.
+    ///
+    /// Reading the schema costs O(n) in its rows.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Reserved`] for a name SQLite keeps for itself, and
+    /// whatever [`Writer::already`] refuses.
+    fn may_name(
+        &self,
+        name: &[u8],
+        if_not_exists: bool,
+        definition: &Definition,
+    ) -> Result<bool, Error> {
+        let making = if matches!(definition, Definition::Index(_)) {
+            Making::Index
+        } else {
+            Making::Table
+        };
+        self.reserved(name)?;
+        self.already(name, if_not_exists, making)
+    }
+
+    /// Whether the name is one this crate may write, which is
+    /// `sqlite3CheckObjectName`: a name that begins `sqlite_` is one
+    /// SQLite keeps for itself, unless the connection set `PRAGMA
+    /// writable_schema` or this crate writes the table for itself.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Reserved`] names the name it kept.
+    fn reserved(&self, name: &[u8]) -> Result<(), Error> {
+        if self.making_own
+            || self.told(b"writable_schema") != 0
+            || !name
+                .get(..7)
+                .is_some_and(|head| head.eq_ignore_ascii_case(b"sqlite_"))
+        {
+            return Ok(());
+        }
+        Err(Error::Reserved(name.to_vec()))
     }
 
     /// One index of a table's own, written: a page for its tree and a
@@ -2396,8 +2495,18 @@ impl Writer {
         let answer = database.rows_under(arena, statement.select, sql, outer)?;
         let mut rows = Vec::new();
         for row in &answer.rows {
+            // `sqlite3Insert` counts the values against the columns the
+            // statement named, or against the columns of the table where
+            // it named none.
             if row.len() != places.len() {
-                return Err(Error::Unsupported);
+                if named.is_empty() {
+                    return Err(Error::ColumnCount(
+                        table.name.clone(),
+                        places.len(),
+                        row.len(),
+                    ));
+                }
+                return Err(Error::ValueCount(row.len(), places.len()));
             }
             let mut values = falls_back.clone();
             let mut key = Value::Null;
@@ -4002,7 +4111,9 @@ fn places(table: &Table, named: &[Vec<u8>]) -> Result<Vec<Option<usize>>, Error>
             match at {
                 Some(at) => Ok(Some(at)),
                 None if is_rowid(name) => Ok(None),
-                None => Err(Error::Unsupported),
+                // `sqlite3Insert` names the table and the column it does
+                // not hold.
+                None => Err(Error::NoNamedColumn(table.name.clone(), name.clone())),
             }
         })
         .collect()
@@ -4145,7 +4256,7 @@ impl Writer {
                     // `rowid` names the column the key is another name
                     // for, where the table has one.
                     None if is_rowid(&column) => Ok(table.rowid_alias),
-                    None => Err(Error::Unsupported),
+                    None => Err(Error::Eval(crate::eval::Error::NoColumn(column.clone()))),
                 }
             })
             .collect::<Result<_, Error>>()?;

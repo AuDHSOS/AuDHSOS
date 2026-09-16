@@ -96,10 +96,18 @@ pub enum Error {
     /// A `BEGIN` on a connection that already has a transaction open,
     /// which `sqlite3BeginTransaction` refuses.
     Nested,
-    /// A `CREATE` of a name the schema already holds, which
-    /// `sqlite3StartTable` and `sqlite3CreateIndex` refuse unless the
-    /// statement writes `IF NOT EXISTS`.
-    Exists,
+    /// A `CREATE` of a name the schema already holds, with the word for
+    /// what holds it and that name, which `sqlite3StartTable` and
+    /// `sqlite3CreateIndex` refuse unless the statement writes `IF NOT
+    /// EXISTS`.
+    Exists(Vec<u8>, Vec<u8>),
+    /// A `CREATE` of an index whose name a table or a view holds, or of
+    /// a table or a view whose name an index holds, with the word for
+    /// what holds it and that name.
+    AlreadyNamed(Vec<u8>, Vec<u8>),
+    /// A `CREATE` of a name SQLite keeps for itself, which is one that
+    /// begins `sqlite_`.
+    Reserved(Vec<u8>),
     /// A `COMMIT` or a `ROLLBACK` on a connection with no transaction
     /// open.
     NoTransaction,
@@ -109,6 +117,16 @@ pub enum Error {
     /// An `ALTER TABLE ... DROP COLUMN` of a column the table does not
     /// hold, with the name as it was written.
     NoSuchColumn(Vec<u8>),
+    /// An `INSERT` that names a column the table does not hold, with the
+    /// table and the column.
+    NoNamedColumn(Vec<u8>, Vec<u8>),
+    /// An `INSERT` that names columns and answers another number of
+    /// values, with the values and the columns.
+    ValueCount(usize, usize),
+    /// An `INSERT` that names no column and answers another number of
+    /// values than the table has columns, with the table, its columns
+    /// and the values.
+    ColumnCount(Vec<u8>, usize, usize),
     /// An `ALTER TABLE ... DROP COLUMN` of a column a key of the table
     /// is over, with the word of that key and the name of the column.
     KeyColumn(Vec<u8>, Vec<u8>),
@@ -196,9 +214,36 @@ impl Error {
                 "CHECK constraint failed: {}",
                 alloc::string::String::from_utf8_lossy(shown)
             ),
+            Error::Exists(kind, name) => alloc::format!(
+                "{} {} already exists",
+                alloc::string::String::from_utf8_lossy(kind),
+                alloc::string::String::from_utf8_lossy(name)
+            ),
+            Error::AlreadyNamed(kind, name) => alloc::format!(
+                "there is already {} {} named {}",
+                if kind == b"index" { "an" } else { "a" },
+                alloc::string::String::from_utf8_lossy(kind),
+                alloc::string::String::from_utf8_lossy(name)
+            ),
+            Error::Reserved(name) => alloc::format!(
+                "object name reserved for internal use: {}",
+                alloc::string::String::from_utf8_lossy(name)
+            ),
             Error::Nested => "cannot start a transaction within a transaction".to_string(),
             Error::NoTransaction => "cannot commit - no transaction is active".to_string(),
             Error::Mismatch => "datatype mismatch".to_string(),
+            Error::NoNamedColumn(table, column) => alloc::format!(
+                "table {} has no column named {}",
+                alloc::string::String::from_utf8_lossy(table),
+                alloc::string::String::from_utf8_lossy(column)
+            ),
+            Error::ValueCount(values, columns) => {
+                alloc::format!("{values} values for {columns} columns")
+            }
+            Error::ColumnCount(table, columns, values) => alloc::format!(
+                "table {} has {columns} columns but {values} values were supplied",
+                alloc::string::String::from_utf8_lossy(table)
+            ),
             Error::NoSuchColumn(name) => alloc::format!(
                 "no such column: \"{}\"",
                 alloc::string::String::from_utf8_lossy(name)

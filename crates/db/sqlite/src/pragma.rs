@@ -66,7 +66,8 @@ pub enum Setting {
 pub enum Written {
     /// A whole number.
     Number,
-    /// A truth value, which is `sqlite3GetBoolean`.
+    /// A truth value, which is `sqlite3GetBoolean` with nought for a
+    /// word it does not know.
     Truth,
     /// `normal` or `exclusive`, which the pragma answers back as the
     /// word it was written as.
@@ -230,6 +231,13 @@ pub static HELD: &[Keeps] = &[
         fixed: false,
     },
     Keeps {
+        name: b"writable_schema",
+        fallback: 0,
+        written: Written::Truth,
+        answers: false,
+        fixed: false,
+    },
+    Keeps {
         name: b"synchronous",
         fallback: 2,
         written: Written::Syncing,
@@ -288,7 +296,9 @@ pub fn kept(at: usize, value: i64) -> Value {
 pub fn keeping(at: usize, text: &[u8]) -> Option<i64> {
     let written: Vec<u8> = crate::schema::dequote(text).to_ascii_lowercase();
     match HELD.get(at).map(|keeps| keeps.written) {
-        Some(Written::Truth) => truth(&written).map(i64::from),
+        // `PragTyp_FLAG` reads `sqlite3GetBoolean(zRight, 0)`, so a
+        // word that names no truth value turns the flag off.
+        Some(Written::Truth) => Some(i64::from(truth(&written).unwrap_or(false))),
         Some(Written::Locking) => match written.as_slice() {
             b"normal" => Some(0),
             b"exclusive" => Some(1),
@@ -365,7 +375,6 @@ pub fn of_name(name: &[u8]) -> Option<Setting> {
         | b"empty_result_callbacks"
         | b"cache_spill"
         | b"case_sensitive_like"
-        | b"writable_schema"
         | b"shrink_memory"
         | b"optimize" => Setting::Ignored,
         _ => {

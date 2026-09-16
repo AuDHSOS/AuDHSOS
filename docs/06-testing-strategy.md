@@ -5071,6 +5071,31 @@ Document 16 step Q8.
 - A row written past the last of them goes on a page of its own, which
   is the one place the quick balance holds.
 
+### 6.6.166 The words a statement that writes is refused with (`db-sqlite`)
+
+Document 16 step Q8.
+
+- An `INSERT` that names a column the table does not hold is refused
+  `table t has no column named zz`.
+- An `INSERT` that names columns and answers another count of values is
+  refused `3 values for 2 columns`.
+- An `INSERT` that names no column and answers another count of values
+  than the table has columns is refused `table t has 2 columns but 3
+  values were supplied`.
+- An `UPDATE` that sets a column the table does not hold is refused `no
+  such column: zz`.
+- A `CREATE TABLE` of a name a table or a view holds is refused `table t
+  already exists`, and of a name an index holds `there is already an
+  index named ti`.
+- A `CREATE INDEX` of a name an index holds is refused `index ti already
+  exists`, and of a name a table or a view holds `there is already a
+  table named t`.
+- A `CREATE TABLE`, a `CREATE INDEX`, a `CREATE VIEW` and a `CREATE
+  TRIGGER` of a name that begins `sqlite_` are refused `object name
+  reserved for internal use: sqlite_x`.
+- `sqlite_sequence` and `sqlite_stat1` are still written, because the
+  crate and not a connection writes them.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

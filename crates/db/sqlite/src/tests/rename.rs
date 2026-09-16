@@ -110,6 +110,7 @@ fn a_name_that_is_not_a_table_of_its_own_is_refused() {
     writer.run(b"CREATE TABLE t(a)").unwrap();
     writer.run(b"CREATE TABLE s(b)").unwrap();
     writer.run(b"CREATE VIEW v AS SELECT 1").unwrap();
+    writer.run(b"CREATE INDEX ti ON t(a)").unwrap();
     writer.run(b"INSERT INTO t VALUES(1)").unwrap();
     writer.run(b"ANALYZE").unwrap();
     for (sql, message) in [
@@ -124,6 +125,10 @@ fn a_name_that_is_not_a_table_of_its_own_is_refused() {
         (
             b"ALTER TABLE t RENAME TO v",
             "there is already another table or index with this name: v",
+        ),
+        (
+            b"ALTER TABLE t RENAME TO ti",
+            "there is already another table or index with this name: ti",
         ),
         (b"ALTER TABLE v RENAME TO w", "view v may not be altered"),
         (

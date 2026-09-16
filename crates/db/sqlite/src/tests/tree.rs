@@ -1020,11 +1020,15 @@ fn what_a_statement_that_changes_a_database_refuses() {
     ));
     assert!(matches!(
         refuse(&["CREATE TABLE t(a)", "INSERT INTO t(b) VALUES (1)"]),
-        Error::Unsupported
+        Error::NoNamedColumn(_, _)
     ));
     assert!(matches!(
         refuse(&["CREATE TABLE t(a)", "INSERT INTO t VALUES (1,2)"]),
-        Error::Unsupported
+        Error::ColumnCount(_, _, _)
+    ));
+    assert!(matches!(
+        refuse(&["CREATE TABLE t(a,b)", "INSERT INTO t(a,b) VALUES (1)"]),
+        Error::ValueCount(_, _)
     ));
     // A key that is not a whole number.
     assert!(matches!(
@@ -3259,6 +3263,11 @@ fn the_pragmas_a_connection_keeps_answer_what_it_was_told() {
         b"PRAGMA temp_store=1",
         b"PRAGMA synchronous=3",
         b"PRAGMA foreign_keys=ON",
+        // `PragTyp_FLAG` reads `sqlite3GetBoolean(zRight, 0)`, so a
+        // word that names no truth value turns the flag off.
+        b"PRAGMA query_only=maybe",
+        b"PRAGMA writable_schema=ON",
+        b"PRAGMA writable_schema=RESET",
     ] {
         assert!(writer.run(sql).unwrap().is_empty(), "{sql:?}");
     }
@@ -3276,7 +3285,6 @@ fn the_pragmas_a_connection_keeps_answer_what_it_was_told() {
     assert!(writer.run(b"PRAGMA locking_mode=sometimes").is_err());
     assert!(writer.run(b"PRAGMA mmap_size=lots").is_err());
     assert!(writer.run(b"PRAGMA mmap_size=''").is_err());
-    assert!(writer.run(b"PRAGMA query_only=maybe").is_err());
     assert!(writer.run(b"PRAGMA synchronous=sometimes").is_err());
     assert!(writer.run(b"PRAGMA temp_store=disk").is_err());
     assert!(writer.run(b"PRAGMA secure_delete=sometimes").is_err());
@@ -4283,9 +4291,11 @@ fn a_name_the_schema_holds_is_refused_unless_the_statement_allows_it() {
         b"CREATE TABLE t AS SELECT 1",
         b"CREATE TRIGGER g AFTER INSERT ON t BEGIN SELECT 1; END",
     ] {
-        assert_eq!(
-            writer.run(sql).err(),
-            Some(Error::Exists),
+        assert!(
+            matches!(
+                writer.run(sql).err(),
+                Some(Error::Exists(_, _) | Error::AlreadyNamed(_, _))
+            ),
             "{}",
             alloc::string::String::from_utf8_lossy(sql)
         );

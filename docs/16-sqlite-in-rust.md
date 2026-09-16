@@ -727,6 +727,9 @@ Size: L.
     `RENAME COLUMN` is open.
 21. `RETURNING`, and `INSERT INTO t DEFAULT VALUES`. Built, which
     D-241 records.
+22. The words a statement that writes is refused with, which
+    `sqlite3Insert`, `sqlite3StartTable`, `sqlite3CreateIndex` and
+    `sqlite3CheckObjectName` write. Built, which D-242 records.
 
 ### Done when
 
@@ -736,8 +739,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 72 218 cases in 705 files, 56 933
-pass, 4481 answer differently, and 10 804 name something the engine
+under the `tclsh` of the machine. Of 72 359 cases in 705 files, 57 100
+pass, 4454 answer differently, and 10 805 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts

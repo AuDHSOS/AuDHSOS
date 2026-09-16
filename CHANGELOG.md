@@ -7,6 +7,24 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` refuses a statement that writes with the words the C
+  library writes. `sqlite3Insert` names the table and the column a
+  statement names that the table does not hold, counts the values
+  against the columns the statement named, and counts them against the
+  columns of the table where the statement named none. `sqlite3StartTable`
+  and `sqlite3CreateIndex` split a name the schema already holds into
+  `KIND NAME already exists` for a name the same kind holds and `there is
+  already a/an KIND named NAME` for a name the other kind holds.
+  `sqlite3CheckObjectName` refuses a name that begins `sqlite_`, which
+  `PRAGMA writable_schema=ON` lifts and which the crate lifts for the two
+  tables it writes for itself. D-242 records it. Catalog 6.6.166.
+
+- `PRAGMA writable_schema` is a value the connection keeps rather than a
+  pragma `db-sqlite` ignores, and every pragma written as a truth value
+  reads `sqlite3GetBoolean(zRight, 0)`: a word that names no truth value
+  turns the flag off rather than refusing the statement, which
+  `PRAGMA writable_schema=RESET` needs.
+
 - The files of SQLite's own suite run beside each other rather than one
   after another: `sh tools/xtask.sh sqlite-suite` starts
   `process::test_jobs` processes at once, the count `AUDHSOS_TEST_JOBS`
