@@ -6538,3 +6538,25 @@ fn error_prototype_to_string_joins_the_name_and_the_message() -> Result<(), Erro
     }
     Ok(())
 }
+
+/// 28.1.2 calls a constructor with a List 7.3.18 makes and the object 10.1.13
+/// makes for the `newTarget` it was given.
+#[test]
+fn reflect_construct_calls_a_constructor_with_a_list() -> Result<(), Error> {
+    for source in [
+        "function F(a){this.a=a}var o=Reflect.construct(F,[7]);''+o.a+(o instanceof F)",
+        "function F(){}function G(){}var o=Reflect.construct(F,[],G);\
+         ''+(o instanceof G)+(o instanceof F)",
+        "function F(a,b){this.s=a+b}''+Reflect.construct(F,[1,2]).s",
+        "function F(){return {own:1}}''+Reflect.construct(F,[]).own",
+        "function isC(f){try{Reflect.construct(function(){},[],f)}catch(e){return false}\
+         return true}''+isC(Array)+isC(Array.prototype.map)+isC(function(){})",
+        "var t=false;try{Reflect.construct(function(){},1)}catch(e){t=e instanceof TypeError}t",
+        "var t=false;try{Reflect.construct(1,[])}catch(e){t=e instanceof TypeError}t",
+        "''+Reflect.construct.length+Reflect.construct.name",
+        "function F(){this.n=arguments.length}''+Reflect.construct(F,{length:2,0:'a',1:'b'}).n",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}

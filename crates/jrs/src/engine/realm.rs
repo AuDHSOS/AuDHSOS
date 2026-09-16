@@ -375,6 +375,8 @@ pub enum Intrinsic {
     FunctionPrototype,
     /// `Error.prototype.toString` (20.5.3.4).
     ErrorPrototypeToString,
+    /// `Reflect.construct` (28.1.2).
+    ReflectConstruct,
     /// `Array.prototype.values`, which is also `%Array.prototype%[@@iterator]`
     /// (23.1.3.38 and 23.1.3.40).
     ArrayPrototypeValues,
@@ -629,7 +631,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 148] = [
+    pub const ALL: [Self; 149] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -778,6 +780,7 @@ impl Intrinsic {
         Self::ObjectPrototypeValueOf,
         Self::FunctionPrototype,
         Self::ErrorPrototypeToString,
+        Self::ReflectConstruct,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -871,6 +874,7 @@ impl Intrinsic {
             | Self::MathFround
             | Self::MathSin => IntrinsicHolder::Math,
             Self::ReflectApply
+            | Self::ReflectConstruct
             | Self::ReflectSetPrototypeOf
             | Self::ReflectDefineProperty
             | Self::ReflectDeleteProperty
@@ -1101,6 +1105,7 @@ impl Intrinsic {
             Self::ObjectPrototypeValueOf => 145,
             Self::FunctionPrototype => 146,
             Self::ErrorPrototypeToString => 147,
+            Self::ReflectConstruct => 148,
         }
     }
 
@@ -1259,6 +1264,7 @@ impl Intrinsic {
             Self::ObjectPrototypeValueOf => 145,
             Self::FunctionPrototype => 146,
             Self::ErrorPrototypeToString => 147,
+            Self::ReflectConstruct => 148,
         }
     }
 
@@ -1418,6 +1424,7 @@ impl Intrinsic {
             145 => Some(Self::ObjectPrototypeValueOf),
             146 => Some(Self::FunctionPrototype),
             147 => Some(Self::ErrorPrototypeToString),
+            148 => Some(Self::ReflectConstruct),
             _ => None,
         }
     }
@@ -1459,6 +1466,7 @@ impl Intrinsic {
             Self::FunctionConstructor => "Function",
             Self::FunctionPrototypeCall => "call",
             Self::FunctionPrototypeApply | Self::ReflectApply => "apply",
+            Self::ReflectConstruct => "construct",
             Self::FunctionPrototypeBind => "bind",
             Self::MathPow => "pow",
             Self::ErrorConstructor => "Error",
@@ -1796,6 +1804,7 @@ impl Intrinsic {
             | Self::ReflectDeleteProperty
             | Self::ReflectGet
             | Self::ReflectGetOwnPropertyDescriptor
+            | Self::ReflectConstruct
             | Self::ReflectHas => index == 1,
             // 20.1.3.2 and 20.1.3.4 apply ToPropertyKey to the first argument.
             Self::ObjectPrototypeHasOwnProperty | Self::ObjectPrototypePropertyIsEnumerable => {
@@ -1964,6 +1973,7 @@ impl Intrinsic {
             | Self::FunctionPrototypeApply
             | Self::ObjectSetPrototypeOf
             | Self::ReflectSetPrototypeOf
+            | Self::ReflectConstruct
             | Self::StringPrototypeSplit => 2,
         }
     }

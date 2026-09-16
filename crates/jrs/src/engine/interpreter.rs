@@ -1309,6 +1309,11 @@ impl RegisterVM {
                 }
                 // 20.2.3.1 and 28.1.1 do not answer here either: they leave
                 // to call what they were given, with the List 7.3.18 makes.
+                // 28.1.2 leaves too, with the object 10.1.13 makes for the
+                // `newTarget` it was given.
+                if intrinsic == Intrinsic::ReflectConstruct {
+                    return self.begin_reflect_construct(call, units, active_feedback, heap, realm);
+                }
                 if matches!(
                     intrinsic,
                     Intrinsic::FunctionPrototypeApply | Intrinsic::ReflectApply
@@ -1542,6 +1547,9 @@ impl RegisterVM {
                 Self::own_property_test(intrinsic, self.call_argument(&call, 0)?, call, heap, realm)
             }
             Intrinsic::ObjectPrototypeToString => self.object_to_string(call.receiver, heap, realm),
+            // 28.1.2 leaves to the constructor it was given, so it never
+            // answers here.
+            Intrinsic::ReflectConstruct => Err(VMError::InvalidFeedbackVector),
             // 20.5.3.4 joins the `name` and the `message` the Error holds.
             Intrinsic::ErrorPrototypeToString => self.error_text(call.receiver, heap, realm),
             // 20.2.3 accepts any argument and answers undefined.
@@ -3004,6 +3012,152 @@ impl RegisterVM {
             ..call
         };
         self.enter_call_value(target, units, active_feedback, heap, realm, call)
+    }
+
+    /// `Reflect.construct` of 28.1.2.
+    ///
+    /// The arguments are a List 7.3.18 makes, like 28.1.1, and the object the
+    /// frame starts from is the one 10.1.13 makes for `newTarget`.
+    fn begin_reflect_construct(
+        &mut self,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let target = self.call_argument(&call, 0)?;
+        let list = self.call_argument(&call, 1)?;
+        let new_target = if call.arg_count > 2 {
+            self.call_argument(&call, 2)?
+        } else {
+            target
+        };
+        // Steps 1 and 3 ask both for `[[Construct]]`.
+        if !Self::constructs(target, heap) || !Self::constructs(new_target, heap) {
+            return Err(type_error(heap, realm, "value is not a constructor"));
+        }
+        if !Self::is_script_function(target, heap) {
+            return Err(VMError::Unsupported(
+                "construct of a constructor written in Rust",
+            ));
+        }
+        // Step 4: 7.3.18 asks for an Object and makes a List of its indices.
+        let Some(source) = list.as_object() else {
+            return Err(type_error(
+                heap,
+                realm,
+                "the arguments of construct are not an object",
+            ));
+        };
+        let length = Self::array_like_length(heap, source, realm)?;
+        let length = u16::try_from(length)
+            .map_err(|_| VMError::Unsupported("a call of more arguments than a frame passes"))?;
+        let mut collected = Vec::with_capacity(usize::from(length));
+        for index in 0..u32::from(length) {
+            self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+            collected.push(Self::element_at(heap, source, index)?.unwrap_or(VALUE_UNDEFINED));
+        }
+        let arg_count = u16::try_from(collected.len()).map_err(|_| VMError::TypeError)?;
+        let arguments = Self::array_of(collected, heap, realm)?;
+        // The List outlives every frame the call opens, so it is a root of a
+        // scope of its own, which the return leaves.
+        heap.enter_scope();
+        let arguments = heap.push_root(arguments)?;
+        // The `newTarget` and the callee are read out of registers, which the
+        // collector forwards across the allocation between the two reads.
+        let new_target = if call.arg_count > 2 {
+            Reg(call.arg_start.0.saturating_add(2))
+        } else {
+            call.arg_start
+        };
+        let object = self.create_from_new_target(heap, realm, new_target)?;
+        // The new object goes where the List came in: the caller has no use
+        // for that register any more, and the collector sees it there.
+        let held = Reg(call.arg_start.0.saturating_add(1));
+        self.write_reg(held, Value::from_object(object))?;
+        let target = self.read_reg(call.arg_start)?;
+        let call = Call {
+            receiver: Value::from_object(object),
+            arg_count,
+            resume: Some(Resume::Spread { arguments }),
+            construct: Some(held),
+            ..call
+        };
+        self.enter_call_value(target, units, active_feedback, heap, realm, call)
+    }
+
+    /// `OrdinaryCreateFromConstructor` of 10.1.13 for a `newTarget` that need
+    /// not be the function the call enters.
+    fn create_from_new_target(
+        &self,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+        new_target: Reg,
+    ) -> Result<ObjectRef, VMError> {
+        let shape = heap.shapes.root_shape();
+        let prototype = realm.object_prototype(heap)?;
+        let object = heap.allocate_object(shape, prototype)?;
+        // The register is a root the collector forwards, so it names the same
+        // function on the other side of the allocation above.
+        let function = self
+            .read_reg(new_target)?
+            .as_object()
+            .ok_or(VMError::TypeError)?;
+        let name = PropertyKey::String(heap.strings.intern("prototype")?);
+        let Some(property) = heap.lookup_named(function, name)? else {
+            return Err(type_error(heap, realm, "value is not a constructor"));
+        };
+        let prototype = Self::plain_value(property)?;
+        if prototype.as_object().is_some() {
+            heap.set_object_prototype(object, prototype)?;
+        }
+        Ok(object)
+    }
+
+    /// Whether the value has a `[[Construct]]`, which 7.2.4 asks.
+    ///
+    /// A function a Script wrote carries one where 10.2.5 gave it a
+    /// `prototype`; an arrow and a method have none. A native has one where
+    /// the Realm builds the object it would make.
+    fn constructs(value: Value, heap: &GenerationalHeap) -> bool {
+        let Some(object) = value.as_object() else {
+            return false;
+        };
+        let Some(entry) = heap.get_object(object) else {
+            return false;
+        };
+        match entry.kind {
+            ObjectKind::Function { .. } => heap
+                .strings
+                .lookup_interned_units(&PROTOTYPE_NAME)
+                .and_then(|name| {
+                    heap.own_named_flags(object, PropertyKey::String(name))
+                        .ok()
+                        .flatten()
+                })
+                .is_some(),
+            ObjectKind::NativeFunction { id, .. } => matches!(
+                Intrinsic::from_id(id),
+                Some(
+                    Intrinsic::ArrayConstructor
+                        | Intrinsic::ObjectConstructor
+                        | Intrinsic::ErrorConstructor
+                        | Intrinsic::EvalErrorConstructor
+                        | Intrinsic::RangeErrorConstructor
+                        | Intrinsic::ReferenceErrorConstructor
+                        | Intrinsic::SyntaxErrorConstructor
+                        | Intrinsic::TypeErrorConstructor
+                        | Intrinsic::UriErrorConstructor
+                        | Intrinsic::StringConstructor
+                        | Intrinsic::NumberConstructor
+                        | Intrinsic::BooleanConstructor
+                        | Intrinsic::RegExpConstructor
+                        | Intrinsic::FunctionConstructor
+                )
+            ),
+            _ => false,
+        }
     }
 
     /// Whether the value is a function a Script wrote, which answers through a
@@ -10222,6 +10376,9 @@ fn integer_argument(value: Value, heap: &GenerationalHeap) -> Result<i64, VMErro
 
 /// UTF-16 code units of the property name `"length"`.
 const LENGTH_NAME: [u16; 6] = [0x6C, 0x65, 0x6E, 0x67, 0x74, 0x68];
+
+/// The `prototype` 10.2.5 gives a constructor, as code units.
+const PROTOTYPE_NAME: [u16; 9] = [0x70, 0x72, 0x6F, 0x74, 0x6F, 0x74, 0x79, 0x70, 0x65];
 
 /// `description`, which 20.4.3.2 gives a Symbol.
 const DESCRIPTION_NAME: [u16; 11] = [

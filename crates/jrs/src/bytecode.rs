@@ -7858,6 +7858,7 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ObjectPrototypeValueOf
         | crate::engine::realm::Intrinsic::FunctionPrototypeApply
         | crate::engine::realm::Intrinsic::ReflectApply
+        | crate::engine::realm::Intrinsic::ReflectConstruct
         | crate::engine::realm::Intrinsic::FunctionPrototypeBind
         | crate::engine::realm::Intrinsic::MathPow
         | crate::engine::realm::Intrinsic::ErrorConstructor
