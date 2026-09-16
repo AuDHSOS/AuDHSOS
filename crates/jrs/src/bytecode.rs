@@ -566,6 +566,10 @@ const NEW_TARGET_BINDING: &str = "*newTarget";
 /// reads the Prototype of. No Script can name it.
 const CALLEE_BINDING: &str = "*callee";
 
+/// The name the register of the capability of 27.7.5.2 is declared under, so
+/// the frame reserves a slot for it that no name of a Script can reach.
+const PROMISE_BINDING: &str = "*promise";
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RegisterType {
     Array(u32),
@@ -2083,6 +2087,12 @@ impl RegisterLowerer {
             ExprKind::Assign(name, operator, right) => {
                 self.lower_assignment(name, *operator, right, expression.strict)?
             }
+            // 27.7.5.3: the operand is evaluated and the body waits for it.
+            ExprKind::Await(inner) => {
+                self.lower(inner)?;
+                self.code.emit(crate::engine::bytecode::Instruction::Await);
+                RegisterType::Unknown
+            }
             ExprKind::Destructure(pattern, right) => {
                 self.lower_destructuring_assignment(pattern, right)?
             }
@@ -2700,7 +2710,11 @@ impl RegisterLowerer {
         // 10.2.5 gives an ordinary function a `[[Construct]]` and a `prototype`,
         // and withholds both from a method and an arrow. The body is told
         // before it is lowered, because a constructor may construct itself.
-        let child_constructible = function.constructible && !function.arrow;
+        // 27.7.4 gives an async function no `[[Construct]]` and no
+        // `prototype`.
+        let child_constructible = function.constructible
+            && !function.arrow
+            && function.async_kind == parser::AsyncKind::Sync;
         child.constructible.clone_from(&self.constructible);
         if child_constructible {
             child.constructible.insert(code_id);
@@ -2997,9 +3011,6 @@ impl RegisterLowerer {
     /// not, so that the refusal names the parameter list or the kind and not
     /// the expression the function was written as.
     fn function_refusal(function: &Function, class: bool) -> Option<&'static str> {
-        if function.async_kind != parser::AsyncKind::Sync {
-            return Some("an async function");
-        }
         let kind_allowed = match function.constructor_kind {
             parser::ConstructorKind::Ordinary => true,
             parser::ConstructorKind::BaseClass | parser::ConstructorKind::DerivedClass => class,
@@ -3158,6 +3169,20 @@ impl RegisterLowerer {
         // `this` binding, whatever the body names.
         // 9.4.3 answers the `[[NewTarget]]` of the call, which an arrow takes
         // from the function it was made in; 15.3.4 gives it none of its own.
+        // 27.7.5.2 makes the capability before the body runs and keeps it in
+        // a register of the frame, where the collector sees it and where a
+        // continuation of 27.7.5.3 takes it along.
+        if function.async_kind != parser::AsyncKind::Sync {
+            child.code.asynchronous = true;
+            child.declare(PROMISE_BINDING, false)?;
+            let RegisterBindingStorage::Register(register) =
+                child.bindings.get(PROMISE_BINDING)?.storage
+            else {
+                return None;
+            };
+            child.bindings.remove(PROMISE_BINDING);
+            child.code.promise_register = Some(register);
+        }
         if derived || register_body_reads_new_target(&function.body) {
             if function.arrow {
                 return None;
@@ -8319,7 +8344,10 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::PromiseAllSettledRejected
         // 22.2.6.8 answers an Array or null, 22.2.6.14 an Array of parts.
         | crate::engine::realm::Intrinsic::RegExpPrototypeMatch
-        | crate::engine::realm::Intrinsic::RegExpPrototypeSplit => RegisterType::Unknown,
+        | crate::engine::realm::Intrinsic::RegExpPrototypeSplit
+        // 27.7.5.3 answers nothing: the job queue is its only caller.
+        | crate::engine::realm::Intrinsic::AsyncResume
+        | crate::engine::realm::Intrinsic::AsyncThrow => RegisterType::Unknown,
         // 22.2.6.12 answers the index of the match.
         crate::engine::realm::Intrinsic::RegExpPrototypeSearch
         | crate::engine::realm::Intrinsic::StringPrototypeCharCodeAt
@@ -9202,7 +9230,9 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
             }
             false
         }
-        ExprKind::Await(_) | ExprKind::Spread(_) => {
+        // 27.7.5.3 evaluates its operand like any other expression.
+        ExprKind::Await(inner) => register_expression_writes_names(inner, names)?,
+        ExprKind::Spread(_) => {
             return None;
         }
     })
@@ -9518,7 +9548,8 @@ fn register_expression_references(
                 register_expression_references(expression, names, nested_free_names)?;
             }
         }
-        ExprKind::Await(_) | ExprKind::Spread(_) => {
+        ExprKind::Await(inner) => register_expression_references(inner, names, nested_free_names)?,
+        ExprKind::Spread(_) => {
             return None;
         }
     }

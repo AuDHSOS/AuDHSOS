@@ -743,6 +743,30 @@ pub enum Compiled {
     Refused,
 }
 
+/// Where a job of 9.5 left the run.
+#[derive(Clone, Copy)]
+enum Resumption {
+    /// The queue is empty and the run ends.
+    Idle,
+    /// A frame is open and the run continues there.
+    At {
+        /// The code the frame runs, or none for the root of the unit.
+        code_id: Option<u32>,
+        /// The offset it continues at.
+        pc: usize,
+    },
+    /// 27.7.5.3 took the body of an async function back by throwing, so the
+    /// run continues at the handler that protects the wait.
+    Throwing {
+        /// The code the frame runs.
+        code_id: Option<u32>,
+        /// The offset after the wait, which the handler search starts from.
+        pc: usize,
+        /// The value the wait answered with.
+        value: Value,
+    },
+}
+
 /// How a run of one unit ended.
 pub enum Outcome {
     /// The unit ran to its end and answered this value.
@@ -1622,6 +1646,12 @@ impl RegisterVM {
             self.current_context =
                 Some(self.allocate_context(callee, heap, self.current_context, slot_count)?);
         }
+        // 27.7.5.2 step 2 makes the capability before the body runs, and the
+        // frame keeps it in a register of its own.
+        if let Some(register) = callee.promise_register {
+            let capability = promise::capability(heap, realm)?;
+            self.write_reg(register, capability)?;
+        }
         self.acc = VALUE_UNDEFINED;
         Ok(Some(code_id))
     }
@@ -1787,6 +1817,11 @@ impl RegisterVM {
                 )?;
                 Ok(VALUE_UNDEFINED)
             }
+            // 27.7.5.3 makes the pair for the job queue of 9.5, which takes
+            // the body back itself instead of calling either of them.
+            Intrinsic::AsyncResume | Intrinsic::AsyncThrow => Err(VMError::Unsupported(
+                "the resumption of an async function outside its job",
+            )),
             Intrinsic::Print => self.print_line(&call, heap, realm),
             Intrinsic::PromiseAll | Intrinsic::PromiseRace | Intrinsic::PromiseAllSettled => {
                 self.promise_combinator(intrinsic, &call, heap, realm)
@@ -8303,9 +8338,11 @@ impl RegisterVM {
             | ObjectKind::Math
             | ObjectKind::Array { .. }
             | ObjectKind::ArrayIterator { .. }
-            // The state of a walk of 23.1.3 and the pair of 6.1.7.1 are
-            // reachable from no Script, so no conversion of them is owed.
+            // The state of a walk of 23.1.3, the pair of 6.1.7.1 and the
+            // suspended body of 27.7.5.3 are reachable from no Script, so no
+            // conversion of them is owed.
             | ObjectKind::ArrayIteration { .. }
+            | ObjectKind::Continuation { .. }
             | ObjectKind::Accessor { .. }
             | ObjectKind::RegExp { .. }
             // 27.2.5.5 tags a Promise through @@toStringTag.
@@ -9076,6 +9113,7 @@ impl RegisterVM {
                 | ObjectKind::Promise { .. }
                 | ObjectKind::ArrayIterator { .. }
                 | ObjectKind::ArrayIteration { .. }
+                | ObjectKind::Continuation { .. }
                 | ObjectKind::Accessor { .. }
                 | ObjectKind::Reflect
                 | ObjectKind::Json
@@ -12020,6 +12058,163 @@ impl RegisterVM {
         Ok(VALUE_UNDEFINED)
     }
 
+    /// The continuation a closure of 27.7.5.3 carries, and nothing for any
+    /// other callable.
+    fn async_continuation(value: Value, heap: &GenerationalHeap) -> Option<(Intrinsic, ObjectRef)> {
+        let object = value.as_object()?;
+        let ObjectKind::NativeFunction { id, state, .. } = heap.get_object(object)?.kind else {
+            return None;
+        };
+        let intrinsic = Intrinsic::from_id(id).filter(|intrinsic| {
+            matches!(intrinsic, Intrinsic::AsyncResume | Intrinsic::AsyncThrow)
+        })?;
+        Some((intrinsic, state.as_object()?))
+    }
+
+    /// 27.7.5.3: copies the frame into a continuation of the heap.
+    fn suspend_frame(
+        &self,
+        code: &BytecodeFunction,
+        pc: usize,
+        code_id: Option<u32>,
+        capability: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let count = u32::from(code.register_count);
+        let registers = realm.array(heap, count)?;
+        for index in 0..count {
+            let value = self.read_reg(Reg(
+                u16::try_from(index).map_err(|_| VMError::StackOverflow)?
+            ))?;
+            heap.set_array_element(registers, index, value)?;
+        }
+        let prototype = realm.object_prototype(heap)?;
+        let object = heap.allocate_object(heap.shapes.root_shape(), prototype)?;
+        heap.set_object_kind(
+            object,
+            ObjectKind::Continuation {
+                unit: self.unit,
+                code_id: code_id.unwrap_or(u32::MAX),
+                pc: u32::try_from(pc).map_err(|_| VMError::StackOverflow)?,
+                bindings: u16::try_from(self.active_binding_count)
+                    .map_err(|_| VMError::BindingStackOverflow)?,
+                registers: Value::from_object(registers),
+                capability,
+                context: self.current_context,
+            },
+        )?;
+        Ok(Value::from_object(object))
+    }
+
+    /// 27.7.5.3: takes the body back where it waited.
+    ///
+    /// The frame stands on no caller, as a job does, so its return reaches the
+    /// drain and settles the capability it carries.
+    fn resume_frame(
+        &mut self,
+        continuation: ObjectRef,
+        value: Value,
+        throwing: bool,
+        heap: &GenerationalHeap,
+    ) -> Result<Resumption, VMError> {
+        let Some(&ObjectKind::Continuation {
+            unit,
+            code_id,
+            pc,
+            bindings,
+            registers,
+            context,
+            ..
+        }) = heap.get_object(continuation).map(|entry| &entry.kind)
+        else {
+            return Err(VMError::TypeError);
+        };
+        let list = registers.as_object().ok_or(VMError::TypeError)?;
+        let Some(&ObjectKind::Array { length: count, .. }) =
+            heap.get_object(list).map(|entry| &entry.kind)
+        else {
+            return Err(VMError::TypeError);
+        };
+        self.fp = 0;
+        self.unit = unit;
+        self.current_context = context;
+        self.active_binding_count = usize::from(bindings);
+        if self.active_binding_count > self.binding_limit {
+            return Err(VMError::BindingStackOverflow);
+        }
+        for index in 0..count {
+            let held = promise::slot(heap, registers, index);
+            self.write_reg(
+                Reg(u16::try_from(index).map_err(|_| VMError::StackOverflow)?),
+                held,
+            )?;
+        }
+        let code_id = (code_id != u32::MAX).then_some(code_id);
+        let pc = usize::try_from(pc).map_err(|_| VMError::StackOverflow)?;
+        if throwing {
+            return Ok(Resumption::Throwing { code_id, pc, value });
+        }
+        self.acc = value;
+        Ok(Resumption::At { code_id, pc })
+    }
+
+    /// 27.7.5.3: the body waits for what the accumulator holds.
+    ///
+    /// The frame leaves, the value goes through 27.2.4.7.1, and the pair this
+    /// makes takes the body back once the promise settles.
+    fn begin_await(
+        &self,
+        code: &BytecodeFunction,
+        pc: usize,
+        code_id: Option<u32>,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let register = code.promise_register.ok_or(VMError::InvalidBytecode(
+            VerificationError::FunctionOutOfBounds {
+                pc,
+                index: code_id.unwrap_or(u32::MAX),
+            },
+        ))?;
+        let capability = self.read_reg(register)?;
+        let awaited = self.resolved_promise(self.acc, heap, realm)?;
+        let continuation = self.suspend_frame(code, pc, code_id, capability, heap, realm)?;
+        let parent = realm.function_prototype(heap)?;
+        let resume = heap.allocate_native(parent, Intrinsic::AsyncResume.id(), 1, continuation)?;
+        let throw = heap.allocate_native(parent, Intrinsic::AsyncThrow.id(), 1, continuation)?;
+        self.perform_then(
+            awaited,
+            Value::from_object(resume),
+            Value::from_object(throw),
+            VALUE_UNDEFINED,
+            heap,
+            realm,
+        )?;
+        Ok(promise::slot(heap, capability, promise::CAPABILITY_PROMISE))
+    }
+
+    /// 27.7.5.2 step 4: the body ended, so its capability takes the answer.
+    fn settle_async_body(
+        &self,
+        code: &BytecodeFunction,
+        value: Value,
+        rejected: bool,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let register = code.promise_register.ok_or(VMError::InvalidRegister)?;
+        let capability = self.read_reg(register)?;
+        let index = if rejected {
+            promise::CAPABILITY_REJECT
+        } else {
+            promise::CAPABILITY_RESOLVE
+        };
+        let settle = promise::slot(heap, capability, index);
+        self.settle_through(settle, value, rejected, heap, realm)?;
+        Ok(promise::slot(heap, capability, promise::CAPABILITY_PROMISE))
+    }
+
     /// The job queue of 9.5 this run enqueues into.
     fn job_queue(&self, heap: &GenerationalHeap) -> Value {
         self.jobs
@@ -12464,10 +12659,10 @@ impl RegisterVM {
         active_feedback: &mut FeedbackVector,
         heap: &mut GenerationalHeap,
         realm: &Realm,
-    ) -> Result<Option<u32>, VMError> {
+    ) -> Result<Resumption, VMError> {
         loop {
             let Some(job) = self.take_job(heap)? else {
-                return Ok(None);
+                return Ok(Resumption::Idle);
             };
             self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
             let kind = promise::slot(heap, job, promise::JOB_KIND)
@@ -12483,6 +12678,18 @@ impl RegisterVM {
                 continue;
             }
             let first = promise::slot(heap, job, promise::JOB_FIRST);
+            // 27.7.5.3 made the pair this job calls, and the body it waits
+            // for is a frame of this run: the drain takes it back itself
+            // instead of calling a function that has no frame to open.
+            if let Some((intrinsic, continuation)) = Self::async_continuation(function, heap) {
+                self.clear_job(heap)?;
+                return self.resume_frame(
+                    continuation,
+                    first,
+                    intrinsic == Intrinsic::AsyncThrow,
+                    heap,
+                );
+            }
             if !Self::is_script_function(function, heap) {
                 let receiver = promise::slot(heap, job, promise::JOB_RECEIVER);
                 let second = promise::slot(heap, job, promise::JOB_SECOND);
@@ -12517,10 +12724,13 @@ impl RegisterVM {
                 return_pc: 0,
                 caller_code_id: None,
             };
-            let entered =
-                self.enter_call_value(function, units, active_feedback, heap, realm, call)?;
-            if entered.is_some() {
-                return Ok(entered);
+            if let Some(code_id) =
+                self.enter_call_value(function, units, active_feedback, heap, realm, call)?
+            {
+                return Ok(Resumption::At {
+                    code_id: Some(code_id),
+                    pc: 0,
+                });
             }
             self.settle_job(job, self.acc, false, heap, realm)?;
             self.clear_job(heap)?;
@@ -12547,7 +12757,7 @@ impl RegisterVM {
         active_feedback: &mut FeedbackVector,
         heap: &mut GenerationalHeap,
         realm: &Realm,
-    ) -> Result<Option<u32>, VMError> {
+    ) -> Result<Resumption, VMError> {
         let running = self
             .running_job
             .and_then(|root| heap.root_value(root))
@@ -12598,6 +12808,29 @@ impl RegisterVM {
                 self.write_reg(handler.exception, value)?;
                 self.acc = VALUE_UNDEFINED;
                 return Ok((handler.handler_pc as usize, current_code_id));
+            }
+            // 27.7.5.2 step 4: no handler of the body took the value, so the
+            // capability of the async function takes it and the caller takes
+            // the promise, as it does for a body that returned.
+            if active_code.asynchronous {
+                let promise = self.settle_async_body(active_code, value, true, heap, realm)?;
+                let Some(frame) = self.frames.pop() else {
+                    // The body was taken back by a job of 9.5, which the drain
+                    // ends the way it ends every other one.
+                    self.fp = 0;
+                    self.active_binding_count = 0;
+                    self.current_context = None;
+                    return Err(VMError::Thrown(value, native));
+                };
+                self.fp = frame.caller_fp;
+                self.active_binding_count = frame.caller_binding_count;
+                self.current_context = frame.caller_context;
+                self.unit = frame.caller_unit;
+                self.acc = promise;
+                if let Some(target) = frame.construct {
+                    self.write_reg(target, promise)?;
+                }
+                return Ok((frame.return_pc, frame.caller_code_id));
             }
             let Some(frame) = self.frames.pop() else {
                 self.fp = 0;
@@ -12863,18 +13096,44 @@ impl RegisterVM {
                                 heap,
                                 realm,
                             )?;
-                            let Some(code_id) = next else {
-                                self.fp = 0;
-                                self.active_binding_count = 0;
-                                self.current_context = None;
-                                return Ok(Outcome::Done(
-                                    self.completion
-                                        .and_then(|root| heap.root_value(root))
-                                        .unwrap_or(VALUE_UNDEFINED),
-                                ));
-                            };
-                            current_code_id = Some(code_id);
-                            pc = 0;
+                            match next {
+                                Resumption::Idle => {
+                                    self.fp = 0;
+                                    self.active_binding_count = 0;
+                                    self.current_context = None;
+                                    return Ok(Outcome::Done(
+                                        self.completion
+                                            .and_then(|root| heap.root_value(root))
+                                            .unwrap_or(VALUE_UNDEFINED),
+                                    ));
+                                }
+                                Resumption::At {
+                                    code_id,
+                                    pc: resumed,
+                                } => {
+                                    current_code_id = code_id;
+                                    pc = resumed;
+                                }
+                                Resumption::Throwing {
+                                    code_id,
+                                    pc: resumed,
+                                    value: thrown,
+                                } => {
+                                    current_code_id = code_id;
+                                    pc = resumed;
+                                    let (next_pc, next_code_id) = self.unwind(
+                                        units,
+                                        pc.saturating_sub(1),
+                                        current_code_id,
+                                        thrown,
+                                        None,
+                                        heap,
+                                        realm,
+                                    )?;
+                                    pc = next_pc;
+                                    current_code_id = next_code_id;
+                                }
+                            }
                         }
                         Err(error) => return Err(error),
                     }
@@ -14776,12 +15035,23 @@ impl RegisterVM {
                     self.acc = self.for_in_next(active_code, state, heap, realm)?;
                 }
                 Instruction::Throw => return Err(VMError::Thrown(self.acc, None)),
-                Instruction::Return => {
-                    // 10.2.2 step 13: a derived constructor answers the object
-                    // its own `this` binding holds, and refuses every other
-                    // value but undefined.
-                    if active_code.derived {
+
+                Instruction::Await | Instruction::Return => {
+                    if matches!(inst, Instruction::Await) {
+                        // 27.7.5.3: the frame leaves with the promise of the
+                        // body and comes back through the pair it registered.
+                        self.acc =
+                            self.begin_await(active_code, pc, current_code_id, heap, realm)?;
+                    } else if active_code.derived {
+                        // 10.2.2 step 13: a derived constructor answers the
+                        // object its own `this` binding holds, and refuses
+                        // every other value but undefined.
                         self.acc = self.derived_result(active_code, heap, realm)?;
+                    } else if active_code.asynchronous {
+                        // 27.7.5.2 step 4: the body ended, so its capability
+                        // takes the answer and the caller takes the promise.
+                        self.acc =
+                            self.settle_async_body(active_code, self.acc, false, heap, realm)?;
                     }
                     if let Some(frame) = self.frames.pop() {
                         self.fp = frame.caller_fp;
@@ -14806,18 +15076,34 @@ impl RegisterVM {
                                 .ok_or(VMError::InvalidFeedbackVector)?;
                             let next =
                                 self.continue_jobs(None, units, unit_feedback, heap, realm)?;
-                            let Some(code_id) = next else {
-                                self.fp = 0;
-                                self.active_binding_count = 0;
-                                self.current_context = None;
-                                return Ok(Some(
-                                    self.completion
-                                        .and_then(|root| heap.root_value(root))
-                                        .unwrap_or(VALUE_UNDEFINED),
-                                ));
-                            };
-                            current_code_id = Some(code_id);
-                            pc = 0;
+                            match next {
+                                Resumption::Idle => {
+                                    self.fp = 0;
+                                    self.active_binding_count = 0;
+                                    self.current_context = None;
+                                    return Ok(Some(
+                                        self.completion
+                                            .and_then(|root| heap.root_value(root))
+                                            .unwrap_or(VALUE_UNDEFINED),
+                                    ));
+                                }
+                                Resumption::At {
+                                    code_id,
+                                    pc: resumed,
+                                } => {
+                                    current_code_id = code_id;
+                                    pc = resumed;
+                                }
+                                Resumption::Throwing {
+                                    code_id,
+                                    pc: resumed,
+                                    value,
+                                } => {
+                                    current_code_id = code_id;
+                                    pc = resumed;
+                                    return Err(VMError::Thrown(value, None));
+                                }
+                            }
                         } else if let Some(resume) = frame.resume {
                             // An operation of the caller is waiting for this
                             // answer, and runs again once it has one. It belongs
@@ -14939,12 +15225,25 @@ impl RegisterVM {
                         {
                             heap.set_root(root, self.acc)?;
                         }
-                        if let Some(code_id) =
-                            self.continue_jobs(None, units, active_feedback, heap, realm)?
-                        {
-                            current_code_id = Some(code_id);
-                            pc = 0;
-                            return Ok(None);
+                        match self.continue_jobs(None, units, active_feedback, heap, realm)? {
+                            Resumption::Idle => {}
+                            Resumption::At {
+                                code_id,
+                                pc: resumed,
+                            } => {
+                                current_code_id = code_id;
+                                pc = resumed;
+                                return Ok(None);
+                            }
+                            Resumption::Throwing {
+                                code_id,
+                                pc: resumed,
+                                value,
+                            } => {
+                                current_code_id = code_id;
+                                pc = resumed;
+                                return Err(VMError::Thrown(value, None));
+                            }
                         }
                         self.fp = 0;
                         self.active_binding_count = 0;

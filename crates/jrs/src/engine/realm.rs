@@ -678,6 +678,11 @@ pub enum Intrinsic {
     RegExpPrototypeSearch,
     /// `RegExp.prototype[@@split]`, 22.2.6.14.
     RegExpPrototypeSplit,
+    /// The fulfilled closure of 27.7.5.3, which takes the body of an async
+    /// function back where it waited.
+    AsyncResume,
+    /// The rejected closure of 27.7.5.3, which takes it back by throwing.
+    AsyncThrow,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -731,7 +736,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 194] = [
+    pub const ALL: [Self; 196] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -926,6 +931,8 @@ impl Intrinsic {
         Self::RegExpPrototypeMatch,
         Self::RegExpPrototypeSearch,
         Self::RegExpPrototypeSplit,
+        Self::AsyncResume,
+        Self::AsyncThrow,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -1115,6 +1122,10 @@ impl Intrinsic {
             | Self::PromiseAllElement
             | Self::PromiseAllSettledFulfilled
             | Self::PromiseAllSettledRejected
+            // 27.7.5.3 stands on no object either: the job queue is the only
+            // caller of the pair it makes.
+            | Self::AsyncResume
+            | Self::AsyncThrow
             | Self::Print => IntrinsicHolder::Global,
             Self::ArrayIsArray | Self::ArrayOf | Self::ArrayFrom => {
                 IntrinsicHolder::ArrayConstructor
@@ -1346,6 +1357,8 @@ impl Intrinsic {
             Self::RegExpPrototypeMatch => 191,
             Self::RegExpPrototypeSearch => 192,
             Self::RegExpPrototypeSplit => 193,
+            Self::AsyncResume => 194,
+            Self::AsyncThrow => 195,
         }
     }
 
@@ -1550,6 +1563,8 @@ impl Intrinsic {
             Self::RegExpPrototypeMatch => 191,
             Self::RegExpPrototypeSearch => 192,
             Self::RegExpPrototypeSplit => 193,
+            Self::AsyncResume => 194,
+            Self::AsyncThrow => 195,
         }
     }
 
@@ -1755,6 +1770,8 @@ impl Intrinsic {
             191 => Some(Self::RegExpPrototypeMatch),
             192 => Some(Self::RegExpPrototypeSearch),
             193 => Some(Self::RegExpPrototypeSplit),
+            194 => Some(Self::AsyncResume),
+            195 => Some(Self::AsyncThrow),
             _ => None,
         }
     }
@@ -1792,7 +1809,9 @@ impl Intrinsic {
             | Self::PromiseRejectFunction
             | Self::PromiseAllElement
             | Self::PromiseAllSettledFulfilled
-            | Self::PromiseAllSettledRejected => "",
+            | Self::PromiseAllSettledRejected
+            | Self::AsyncResume
+            | Self::AsyncThrow => "",
             Self::SpeciesGetter => "get [Symbol.species]",
             Self::RegExpPrototypeFlags => "get flags",
             Self::RegExpPrototypeSource => "get source",
@@ -2465,6 +2484,8 @@ impl Intrinsic {
             | Self::PromiseAllSettledRejected
             | Self::RegExpPrototypeMatch
             | Self::RegExpPrototypeSearch
+            | Self::AsyncResume
+            | Self::AsyncThrow
             | Self::Print => 1,
             Self::ObjectDefineProperty | Self::ReflectDefineProperty | Self::ReflectApply => 3,
             Self::MathPow
@@ -4166,6 +4187,8 @@ impl Realm {
             if matches!(
                 intrinsic,
                 Intrinsic::ThrowTypeError
+                    | Intrinsic::AsyncResume
+                    | Intrinsic::AsyncThrow
                     | Intrinsic::PromiseResolveFunction
                     | Intrinsic::PromiseRejectFunction
                     | Intrinsic::PromiseAllElement

@@ -264,6 +264,13 @@ pub enum Instruction {
     /// method of the Script: the primitive comes back into the register and the
     /// instruction runs again.
     ToText(Reg),
+    /// 27.7.5.3: the body waits for what the accumulator holds and leaves.
+    ///
+    /// The frame is copied into a continuation of the heap, the value is sent
+    /// through 27.2.4.7.1, and the pair of 27.7.5.3 takes the body back where
+    /// it stopped. The accumulator holds the promise of the body on the way
+    /// out, and the value the wait answered on the way back.
+    Await,
     /// `acc = ToNumeric(reg)` of 7.1.4, which 13.4 applies to the old value of
     /// an update.
     ///
@@ -742,6 +749,12 @@ pub struct BytecodeFunction {
     /// Whether this function is the constructor of a class, which 15.7.14
     /// gives a `[[Call]]` that throws.
     pub class_constructor: bool,
+    /// Whether this body is the one of an async function, which 27.7.5.2
+    /// answers a promise for and 27.7.5.3 may leave before it ends.
+    pub asynchronous: bool,
+    /// The register the capability of 27.7.5.2 is entered in, which the body
+    /// resolves when it ends and answers when it waits.
+    pub promise_register: Option<Reg>,
     /// The `name` 10.2.10 gives the function, as an index into this unit's
     /// own string constants. A function 8.5.2 gives no name has none.
     pub name: Option<u16>,
@@ -790,6 +803,8 @@ impl BytecodeFunction {
             constructible: false,
             strict: false,
             class_constructor: false,
+            asynchronous: false,
+            promise_register: None,
             name: None,
             source: None,
             realm_script: false,
@@ -1160,6 +1175,7 @@ impl BytecodeFunction {
             | Instruction::CreateRegExp(_)
             | Instruction::CreateArray(_)
             | Instruction::Throw
+            | Instruction::Await
             | Instruction::Return => None,
             Instruction::CopyDataProperties {
                 source,

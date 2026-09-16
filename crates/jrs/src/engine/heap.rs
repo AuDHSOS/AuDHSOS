@@ -2106,9 +2106,7 @@ impl<'heap> Evacuator<'heap> {
         for value in object.kind.values_mut().into_iter().flatten() {
             self.evacuate_value(value)?;
         }
-        if let ObjectKind::Function { context, .. } = &mut object.kind
-            && let Some(reference) = context
-        {
+        if let Some(reference) = object.kind.context_mut() {
             *reference = self.evacuate_context(*reference)?;
         }
         if let Some(elements) = &mut object.elements {
@@ -2313,7 +2311,10 @@ fn object_contains_young(object: &JSObject) -> bool {
             .into_iter()
             .flatten()
             .any(value_is_young)
-        || matches!(&object.kind, ObjectKind::Function { context: Some(context), .. } if context.is_young())
+        || object
+            .kind
+            .context()
+            .is_some_and(super::context::ContextRef::is_young)
         || object.elements.is_some_and(ElementsRef::is_young)
 }
 
@@ -2369,12 +2370,8 @@ fn trace_object_work(object: &JSObject, work: &mut Vec<Work>) {
     for value in object.kind.values().into_iter().flatten() {
         push_value_work(work, value);
     }
-    if let ObjectKind::Function {
-        context: Some(context),
-        ..
-    } = &object.kind
-    {
-        work.push(Work::Context(*context));
+    if let Some(context) = object.kind.context() {
+        work.push(Work::Context(context));
     }
     if let Some(elements) = object.elements {
         work.push(Work::Elements(elements));

@@ -198,6 +198,28 @@ pub enum ObjectKind {
         /// undefined once the promise is settled.
         reject: Value,
     },
+    /// The suspended body of an async function, which 27.7.5.3 leaves behind
+    /// when it awaits and 27.7.5.2 resumes.
+    ///
+    /// A frame of this engine is a window of the register stack, so a body
+    /// that leaves before it ends puts that window in the heap and takes it
+    /// back where it stopped.
+    Continuation {
+        /// The unit the body was compiled with.
+        unit: u32,
+        /// Its index in that unit.
+        code_id: u32,
+        /// The offset the body continues at.
+        pc: u32,
+        /// How many parameter and local bindings the frame holds.
+        bindings: u16,
+        /// The registers of the frame, as the Array they were copied into.
+        registers: Value,
+        /// The capability 27.7.5.2 answers the caller with.
+        capability: Value,
+        /// The lexical context the frame ran in.
+        context: Option<ContextRef>,
+    },
     /// Bound function exotic object, the slots of 10.4.1.
     BoundFunction {
         /// `[[BoundTargetFunction]]`.
@@ -229,6 +251,11 @@ impl ObjectKind {
                 reject,
                 ..
             } => [Some(*value), Some(*fulfill), Some(*reject), None, None],
+            Self::Continuation {
+                registers,
+                capability,
+                ..
+            } => [Some(*registers), Some(*capability), None, None, None],
             Self::BoundFunction {
                 target,
                 receiver,
@@ -256,6 +283,26 @@ impl ObjectKind {
         }
     }
 
+    /// The lexical context this kind holds.
+    ///
+    /// The collector reaches a context through its own work list, so a kind
+    /// that holds one says so here and nowhere else.
+    #[must_use]
+    pub const fn context(&self) -> Option<ContextRef> {
+        match self {
+            Self::Function { context, .. } | Self::Continuation { context, .. } => *context,
+            _ => None,
+        }
+    }
+
+    /// The same context, to be forwarded by a collection.
+    pub const fn context_mut(&mut self) -> Option<&mut ContextRef> {
+        match self {
+            Self::Function { context, .. } | Self::Continuation { context, .. } => context.as_mut(),
+            _ => None,
+        }
+    }
+
     /// Every `Value` this kind holds, to be forwarded by a collection.
     pub const fn values_mut(&mut self) -> [Option<&mut Value>; 5] {
         match self {
@@ -269,6 +316,11 @@ impl ObjectKind {
                 reject,
                 ..
             } => [Some(value), Some(fulfill), Some(reject), None, None],
+            Self::Continuation {
+                registers,
+                capability,
+                ..
+            } => [Some(registers), Some(capability), None, None, None],
             Self::BoundFunction {
                 target,
                 receiver,

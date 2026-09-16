@@ -13,7 +13,7 @@ fn a_realm_on_the_engine_backend_refuses_what_it_cannot_lower() -> Result<(), Er
 
     // The two paths hold separate object models, so a Script the lowering does
     // not take is refused instead of running on the stack path.
-    let source = "{ let z = async function(){} }";
+    let source = "{ let z = function(...rest){} }";
     assert!(
         matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
         "{source}"
@@ -103,7 +103,7 @@ fn a_realm_on_the_engine_backend_evaluates_and_refuses_without_poisoning() -> Re
     // A Script the lowering does not take is refused before anything runs, so
     // the realm stays usable.
     assert!(matches!(
-        realm.evaluate("{ let z = async function(){} }"),
+        realm.evaluate("{ let z = function(...rest){} }"),
         Err(Error::Unsupported { .. })
     ));
     assert_eq!(realm.evaluate("1+1")?, Value::Number(2.0));
@@ -3153,7 +3153,6 @@ fn returned_closures_outlive_register_frames_and_keep_distinct_contexts() -> Res
 )]
 fn register_function_calls_preserve_limits_and_reject_unlowered_semantics() -> Result<(), Error> {
     for source in [
-        "async function f(){return 1}f()",
         "function f(a,a){return a}f(1,2)",
         "function f(...a){return a.length}f(1)",
         "let f=function inner(){return inner===f};f()",
@@ -7690,6 +7689,53 @@ fn a_promise_settles_through_the_job_queue_of_both_backends() -> Result<(), Erro
         let expected = stack.evaluate("l.join('|')")?;
         assert_eq!(engine.evaluate("l.join('|')")?, expected, "{source}");
     }
+    Ok(())
+}
+
+#[test]
+fn an_async_function_answers_a_promise_and_waits_in_the_job_queue() -> Result<(), Error> {
+    // 27.7.5.2 answers a capability before the body runs, and 27.7.5.3 leaves
+    // the frame at every wait and takes it back from a job of 9.5. The log is
+    // read by a second Script of the same Realm, after the queue is drained.
+    for source in [
+        // The body runs to its first wait before the caller goes on.
+        "var l=[];async function f(x){l.push('a'+x);return x+1}f(1).then(function(v){l.push('r'+v)});l.push('s');0",
+        // Every wait is one turn of the queue.
+        "var l=[];async function g(){l.push('g0');await 1;l.push('g1');await 2;l.push('g2');return 'd'}g().then(function(v){l.push(v)});0",
+        // A handler of the body takes what a rejected wait throws.
+        "var l=[];async function h(){try{await Promise.reject('b');l.push('no')}catch(e){l.push('c'+e)}return 1}h().then(function(v){l.push('h'+v)});0",
+        // A body that throws rejects its capability.
+        "var l=[];async function t(){throw 'tt'}t().catch(function(e){l.push('t'+e)});0",
+        // The shapes a body takes: an expression, an arrow, a method and one
+        // of a class, each with a wait in it.
+        "var l=[];var a=async function(x,y){return x+await y};a(1,2).then(function(v){l.push('a'+v)});0",
+        "var l=[];var a=async (x)=>{var y=await x;return y*2};a(5).then(function(v){l.push('a'+v)});0",
+        "var l=[];var o={async m(x){return (await x)+1}};o.m(9).then(function(v){l.push('m'+v)});0",
+        "var l=[];class C{constructor(){this.n=100}async k(x){return (await x)+this.n}}new C().k(1).then(function(v){l.push('k'+v)});0",
+        // A wait inside a loop, and a capture that outlives one.
+        "var l=[];async function p(){var t=0;for(var i=0;i<3;i++){t+=await i}return t}p().then(function(v){l.push('p'+v)});0",
+        "var l=[];async function c(){var x=7;var g=function(){return x};await 0;return g()+x}c().then(function(v){l.push('c'+v)});0",
+        // One body waiting for another.
+        "var l=[];async function inner(){return 3}async function outer(){return await inner()}outer().then(function(v){l.push('o'+v)});0",
+        // A wait that outlives a collection of the Nursery.
+        "var l=[];async function k(){var o={v:1};await 0;for(var i=0;i<400;i++){var x={p:i}}await 0;return o.v}k().then(function(v){l.push('k'+v)});0",
+    ] {
+        let mut engine_host = SilentHost;
+        let mut engine = Realm::with_backend(Limits::default(), &mut engine_host, Backend::Engine)?;
+        let mut stack_host = SilentHost;
+        let mut stack = Realm::with_backend(Limits::default(), &mut stack_host, Backend::Stack)?;
+        engine.evaluate(source)?;
+        stack.evaluate(source)?;
+        let expected = stack.evaluate("l.join('|')")?;
+        assert_eq!(engine.evaluate("l.join('|')")?, expected, "{source}");
+    }
+    // 27.7.4 gives an async function no `[[Construct]]`.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    assert_eq!(
+        realm.evaluate("async function f(){};''+(f.prototype===undefined)")?,
+        Value::string("true")
+    );
     Ok(())
 }
 
