@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` refuses a name more than one side of a `FROM` answers to
+  with `ambiguous column name: a`, naming it as it was written, where it
+  answered `no such column: a` before. A name one `USING` or one
+  `NATURAL` matched is answered by the side before it and is no refusal.
+  D-265 records it. Catalog 6.6.189.
+
 - `db-sqlite` refuses an aggregate written where no group has been made
   in the words the C library refuses it with: one in a `WHERE`, inside
   another aggregate, in a `FILTER`, or in an `INSERT`, an `UPDATE` or a

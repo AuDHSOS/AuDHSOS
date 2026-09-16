@@ -10,6 +10,7 @@
 
 #![allow(clippy::arithmetic_side_effects, clippy::indexing_slicing)]
 
+mod ambiguous;
 mod balance;
 mod bytes;
 mod constraint;

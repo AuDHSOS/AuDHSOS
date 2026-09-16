@@ -5225,6 +5225,36 @@ impl<'a> Cursor<'a> {
             .unwrap_or(Value::Null)
     }
 
+    /// What the sides answer for one name, which is `lookupName`
+    /// counting the columns a name matches: it reads every side, so it
+    /// is O(sides) per name.
+    fn answering(&self, schema: Option<&[u8]>, table: Option<&[u8]>, column: &[u8]) -> Answering {
+        if schema.is_some_and(|named| !is_main(named)) {
+            return Answering::Nothing;
+        }
+        let mut found = Answering::Nothing;
+        for (at, held) in self.held.iter().enumerate() {
+            // A name in front of a column names a side, or one of the
+            // tables inside brackets a side holds the columns of.
+            let answered = match table {
+                Some(named) if held.named(named) => held.column(column, self.collation),
+                Some(named) => held.column_of(named, column, self.collation),
+                // A bare name does not reach the side a `USING` or a
+                // `NATURAL` matched; the side before it answers.
+                None if held.hides(column) => continue,
+                None => held.column(column, self.collation),
+            };
+            let Some((value, affinity, collation)) = answered else {
+                continue;
+            };
+            if matches!(found, Answering::One(..)) {
+                return Answering::Many;
+            }
+            found = Answering::One(at, value, affinity, collation);
+        }
+        found
+    }
+
     /// A cursor that holds no side, which is a statement with no
     /// `FROM` before it reads its one row of nothing.
     const fn new(collation: Collation, encoding: Encoding, reach: Reach<'a>) -> Self {
@@ -5287,34 +5317,12 @@ impl eval::Row for Cursor<'_> {
         table: Option<&[u8]>,
         column: &[u8],
     ) -> Option<(Value, Affinity, Collation)> {
-        if schema.is_some_and(|named| !is_main(named)) {
-            return None;
-        }
-        let mut found: Option<(usize, Value, Affinity, Collation)> = None;
-        for (at, held) in self.held.iter().enumerate() {
-            // A name in front of a column names a side, or one of the
-            // tables inside brackets a side holds the columns of.
-            let answered = match table {
-                Some(named) if held.named(named) => held.column(column, self.collation),
-                Some(named) => held.column_of(named, column, self.collation),
-                // A bare name does not reach the side a `USING` or a
-                // `NATURAL` matched; the side before it answers.
-                None if held.hides(column) => continue,
-                None => held.column(column, self.collation),
-            };
-            let Some((value, affinity, collation)) = answered else {
-                continue;
-            };
-            if found.is_some() {
-                // A name two tables answer is ambiguous, which is a
-                // refusal and not a choice.
-                return None;
-            }
-            found = Some((at, value, affinity, collation));
-        }
-        let Some((at, value, affinity, collation)) = found else {
+        let Answering::One(at, value, affinity, collation) = self.answering(schema, table, column)
+        else {
             // A name no side of this statement answers is the enclosing
-            // statement's, which is what makes a statement correlated.
+            // statement's, which is what makes a statement correlated,
+            // and a name more than one side answers is a refusal the
+            // walk asks `ambiguous` for.
             return self
                 .reach
                 .scope
@@ -5329,6 +5337,22 @@ impl eval::Row for Cursor<'_> {
         };
         Some((value, affinity, collation))
     }
+
+    fn ambiguous(&self, schema: Option<&[u8]>, table: Option<&[u8]>, column: &[u8]) -> bool {
+        matches!(self.answering(schema, table, column), Answering::Many)
+    }
+}
+
+/// What the sides of one row answer for a name.
+enum Answering {
+    /// No side answers to the name.
+    Nothing,
+    /// One side answers, with its place, its value, and what a
+    /// comparison against it does.
+    One(usize, Value, Affinity, Collation),
+    /// More than one side answers, which `lookupName` refuses rather
+    /// than choosing between.
+    Many,
 }
 
 /// One window function call of a statement.

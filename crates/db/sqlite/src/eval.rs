@@ -27,6 +27,9 @@ use crate::value::{Affinity, Collation, Value, apply_comparison, cast, compare, 
 pub enum Error {
     /// A name that is not a column of this row, as it was written.
     NoColumn(Vec<u8>),
+    /// A name more than one side of the `FROM` answers to, as it was
+    /// written.
+    Ambiguous(Vec<u8>),
     /// A function this engine does not have, by the name it was
     /// called under.
     NoFunction(Vec<u8>),
@@ -111,6 +114,7 @@ impl Error {
         let shown = |name: &[u8]| alloc::string::String::from_utf8_lossy(name).into_owned();
         match self {
             Error::NoColumn(name) => alloc::format!("no such column: {}", shown(name)),
+            Error::Ambiguous(name) => alloc::format!("ambiguous column name: {}", shown(name)),
             Error::NoFunction(name) => alloc::format!("no such function: {}", shown(name)),
             Error::NoCollation(name) => {
                 alloc::format!("no such collation sequence: {}", shown(name))
@@ -222,6 +226,13 @@ pub trait Row {
         table: Option<&[u8]>,
         column: &[u8],
     ) -> Option<(Value, Affinity, Collation)>;
+
+    /// Whether more than one side of this row answers to the name,
+    /// which `lookupName` refuses rather than choosing between. The
+    /// walk asks this only where `column` answered nothing.
+    fn ambiguous(&self, _schema: Option<&[u8]>, _table: Option<&[u8]>, _column: &[u8]) -> bool {
+        false
+    }
 
     /// The collation a comparison uses where nothing writes one, which
     /// is `BINARY` over whatever encoding the database keeps its text
@@ -487,6 +498,13 @@ fn answer(
                 &crate::schema::dequote(named),
             );
             let Some((value, affinity, collation)) = found else {
+                if row.ambiguous(
+                    schema.map(text).as_deref(),
+                    table.map(text).as_deref(),
+                    &crate::schema::dequote(named),
+                ) {
+                    return Err(Error::Ambiguous(written(schema, table, named, sql)));
+                }
                 // `sqlite3ExprIdToTrueFalse`: a name no table answers
                 // to, written without quotes and without a table in
                 // front of it, is the number one where it is `true` and
@@ -1310,22 +1328,28 @@ pub fn rows_placed(arena: &Arena) -> Result<(), Error> {
 /// their quotes taken off and a dot between them, and a name written
 /// in double quotes alone with the question the C library asks.
 fn missed(schema: Option<Span>, table: Option<Span>, column: &[u8], sql: &[u8]) -> Vec<u8> {
-    let mut written = Vec::new();
-    for part in [schema, table].into_iter().flatten() {
-        written.extend_from_slice(&crate::schema::dequote(part.text(sql)));
-        written.push(b'.');
-    }
-    if !written.is_empty() {
-        written.extend_from_slice(&crate::schema::dequote(column));
-        return written;
+    if schema.is_some() || table.is_some() {
+        return written(schema, table, column, sql);
     }
     if column.first() != Some(&b'"') {
         return column.to_vec();
     }
-    written.push(b'"');
-    written.extend_from_slice(&crate::schema::dequote(column));
-    written.extend_from_slice(b"\" - should this be a string literal in single-quotes?");
-    written
+    let mut shown = alloc::vec![b'"'];
+    shown.extend_from_slice(&crate::schema::dequote(column));
+    shown.extend_from_slice(b"\" - should this be a string literal in single-quotes?");
+    shown
+}
+
+/// The name as it was written, with its quotes off and the schema and
+/// the table it names in front of it.
+fn written(schema: Option<Span>, table: Option<Span>, column: &[u8], sql: &[u8]) -> Vec<u8> {
+    let mut shown = Vec::new();
+    for part in [schema, table].into_iter().flatten() {
+        shown.extend_from_slice(&crate::schema::dequote(part.text(sql)));
+        shown.push(b'.');
+    }
+    shown.extend_from_slice(&crate::schema::dequote(column));
+    shown
 }
 
 /// Whether the node is a row of values, which `(a, b)` is and `(a)` is

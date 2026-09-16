@@ -5514,6 +5514,19 @@ Document 16 step Q8.
   of a window function `DISTINCT is not supported for window functions`,
   while a scalar reads it and drops it.
 
+### 6.6.189 A name more than one side answers (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A bare name two tables of the `FROM` hold is refused `ambiguous column
+  name: a`, and so are the three names the rowid answers to.
+- A name written with an alias two sides carry is refused `ambiguous
+  column name: x.a`, naming it as it was written.
+- An `ORDER BY` term is read the same way, so `ORDER BY a` over two
+  tables that hold `a` is refused.
+- A name one `USING` or one `NATURAL` matched is answered by the side
+  before it and is no refusal.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

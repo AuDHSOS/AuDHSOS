@@ -781,6 +781,8 @@ Size: L.
 43. The words a window is refused with. Built, which D-263 records.
 44. The words an aggregate written where no group has been made is
     refused with. Built, which D-264 records.
+45. A name more than one side of a `FROM` answers to. Built, which
+    D-265 records.
 
 ### Done when
 
@@ -790,8 +792,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 72 345 cases in 703 files, 59 327
-pass, 3047 answer differently, and 9971 name something the engine
+under the `tclsh` of the machine. Of 72 390 cases in 703 files, 59 381
+pass, 3038 answer differently, and 9971 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts
