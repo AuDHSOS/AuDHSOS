@@ -116,14 +116,14 @@ pub enum ObjectKind {
         /// Whether the call in flight is the getter of an accessor element
         /// rather than the callback of the clause.
         getter: bool,
-        /// Whether the call in flight is the getter of the `length` 7.1.20
-        /// reads, or a method of 7.1.1 converting what that read answered.
-        /// Both run before the walk begins.
-        pending_length: bool,
-        /// Which method 7.1.1 has already asked for the `length`: 0 before
-        /// any, 1 after the getter, 2 after `valueOf`, 3 after `toString`.
-        /// The object being converted waits in `element`.
-        length_step: u8,
+        /// Which value the walk is still converting before it begins: none,
+        /// the `length` 7.1.20 reads, or the index 7.1.5 makes of the
+        /// argument a scan starts from.
+        converting: u8,
+        /// Which method 7.1.1 has already asked for the value in flight: 0
+        /// before any, 1 after the getter, 2 after `valueOf`, 3 after
+        /// `toString`. The object being converted waits in `element`.
+        convert_step: u8,
     },
     /// The `%Reflect%` namespace object of 28.1, which is ordinary in every
     /// way but one: a name it should own and this Realm has not built is a

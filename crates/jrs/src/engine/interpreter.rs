@@ -141,6 +141,13 @@ const NUMBER_HINT: [u16; 6] = [0x6E, 0x75, 0x6D, 0x62, 0x65, 0x72];
 /// The text 25.5.2.4 gives null and a Number that is not finite.
 const NULL_UNITS: [u16; 4] = [0x6E, 0x75, 0x6C, 0x6C];
 
+/// A walk of 23.1.3 converts nothing before it begins.
+const CONVERTING_NOTHING: u8 = 0;
+/// It is converting the `length` 7.1.20 reads.
+const CONVERTING_LENGTH: u8 = 1;
+/// It is converting the index 7.1.5 makes of what a scan starts from.
+const CONVERTING_FROM: u8 = 2;
+
 /// The state of one walk of 23.1.3, read out of the object that holds it.
 ///
 /// A plain record, so the walk can be reasoned about in one place; it is
@@ -160,11 +167,10 @@ struct ArrayWalk {
     /// Whether the call in flight is the getter of an accessor element
     /// rather than the callback of the clause.
     getter: bool,
-    /// Whether the call in flight is the getter of the `length` 7.1.20 reads,
-    /// or a method of 7.1.1 converting what that read answered.
-    pending_length: bool,
-    /// Which method 7.1.1 has already asked for the `length`.
-    length_step: u8,
+    /// Which value the walk is still converting before it begins.
+    converting: u8,
+    /// Which method 7.1.1 has already asked for the value in flight.
+    convert_step: u8,
 }
 
 impl ArrayWalk {
@@ -1309,42 +1315,7 @@ impl RegisterVM {
                         realm,
                     );
                 }
-                // 20.2.3.1 and 28.1.1 do not answer here either: they leave
-                // to call what they were given, with the List 7.3.18 makes.
-                // 28.1.2 leaves too, with the object 10.1.13 makes for the
-                // `newTarget` it was given.
-                if intrinsic == Intrinsic::ReflectConstruct {
-                    return self.begin_reflect_construct(call, units, active_feedback, heap, realm);
-                }
-                if matches!(
-                    intrinsic,
-                    Intrinsic::FunctionPrototypeApply | Intrinsic::ReflectApply
-                ) {
-                    return self.begin_spread_call(
-                        intrinsic,
-                        call,
-                        units,
-                        active_feedback,
-                        heap,
-                        realm,
-                    );
-                }
-                // A method of 23.1.3 that asks the Script about each element
-                // does not answer here: it leaves to make the first call and
-                // comes back through the frame that call opens.
-                if Self::iterates_with_callback(intrinsic) {
-                    return self.begin_array_iteration(
-                        intrinsic,
-                        call,
-                        units,
-                        active_feedback,
-                        heap,
-                        realm,
-                    );
-                }
-                let value = self.call_intrinsic(intrinsic, call, units, heap, realm)?;
-                self.acc = value;
-                return Ok(None);
+                return self.dispatch_native(intrinsic, call, units, active_feedback, heap, realm);
             }
             _ => return Err(type_error(heap, realm, "value is not callable")),
         };
@@ -2866,6 +2837,12 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Option<(u16, PrimitiveHint)>, VMError> {
+        // A clause of 23.1.3 that walks reads the `length` before it converts
+        // the argument it starts from, so the walk converts it where 7.1.5
+        // stands and this conversion does not run at all.
+        if Self::iterates_with_callback(intrinsic) {
+            return Ok(None);
+        }
         for (index, hint) in intrinsic.coerced_arguments() {
             if *index >= call.arg_count || self.call_argument(call, *index)?.as_object().is_none() {
                 continue;
@@ -2886,6 +2863,47 @@ impl RegisterVM {
             }
             return Ok(Some((*index, *hint)));
         }
+        Ok(None)
+    }
+
+    /// Runs a native operation once its arguments need no conversion.
+    ///
+    /// Three of them open a frame instead of answering, so the call site takes
+    /// the unit they entered rather than the accumulator.
+    fn dispatch_native(
+        &mut self,
+        intrinsic: Intrinsic,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        // 20.2.3.1 and 28.1.1 leave to call what they were given, with the
+        // List 7.3.18 makes; 28.1.2 leaves with the object 10.1.13 makes for
+        // the `newTarget` it was given.
+        if intrinsic == Intrinsic::ReflectConstruct {
+            return self.begin_reflect_construct(call, units, active_feedback, heap, realm);
+        }
+        if matches!(
+            intrinsic,
+            Intrinsic::FunctionPrototypeApply | Intrinsic::ReflectApply
+        ) {
+            return self.begin_spread_call(intrinsic, call, units, active_feedback, heap, realm);
+        }
+        // A method of 23.1.3 that asks the Script about each element leaves to
+        // make the first call and comes back through the frame it opens.
+        if Self::iterates_with_callback(intrinsic) {
+            return self.begin_array_iteration(
+                intrinsic,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
+        self.acc = self.call_intrinsic(intrinsic, call, units, heap, realm)?;
         Ok(None)
     }
 
@@ -4113,8 +4131,12 @@ impl RegisterVM {
                 length,
                 started,
                 getter: false,
-                pending_length: pending.is_some() || converts,
-                length_step: 0,
+                converting: if pending.is_some() || converts {
+                    CONVERTING_LENGTH
+                } else {
+                    CONVERTING_NOTHING
+                },
+                convert_step: 0,
             },
         )?;
         // The state outlives every frame the walk opens, so it is a root of a
@@ -4131,24 +4153,25 @@ impl RegisterVM {
             call.resume = Some(Resume::Iteration { state });
             call.construct = None;
             let mut walk = Self::read_iteration(state, heap)?;
-            walk.length_step = 1;
+            walk.convert_step = 1;
             Self::write_iteration(state, &walk, heap)?;
             return self.enter_call_value(getter, units, active_feedback, heap, realm, call);
         }
         if converts {
-            return self.convert_pending_length(state, call, units, active_feedback, heap, realm);
+            return self.convert_pending_value(state, call, units, active_feedback, heap, realm);
         }
         self.begin_array_walk(state, call, units, active_feedback, heap, realm)
     }
 
-    /// Asks the next method of 7.1.1 for the `length` the walk read, with the
-    /// hint `number`.
+    /// Asks the next method of 7.1.1 for the value the walk is converting,
+    /// with the hint `number`.
     ///
     /// The object waits in `element` of the walk state, which the collector
-    /// traces; `length_step` says which method has already answered. A method
-    /// of the Realm answers without a frame, so the loop takes that answer and
-    /// goes on rather than leaving.
-    fn convert_pending_length(
+    /// traces; `convert_step` says which method has already answered, and
+    /// `converting` which value the answer is for. A
+    /// method of the Realm answers without a frame, so the loop takes that
+    /// answer and goes on rather than leaving.
+    fn convert_pending_value(
         &mut self,
         state: Root,
         call: Call,
@@ -4166,17 +4189,17 @@ impl RegisterVM {
             // 7.1.1 step 1 would ask @@toPrimitive first, which takes the hint
             // as an argument and so a register of the caller. A walk has none
             // to give, so an object that carries one is a gap.
-            if walk.length_step < 2
+            if walk.convert_step < 2
                 && heap
                     .lookup_named(object, super::realm::WellKnownSymbol::ToPrimitive.key())?
                     .is_some()
             {
                 heap.exit_scope();
                 return Err(VMError::Unsupported(
-                    "the @@toPrimitive of an array-like length",
+                    "the @@toPrimitive of an argument a walk of 23.1.3 converts",
                 ));
             }
-            let step = walk.length_step.max(1).saturating_add(1);
+            let step = walk.convert_step.max(1).saturating_add(1);
             let name = match step {
                 2 => "valueOf",
                 3 => "toString",
@@ -4185,7 +4208,7 @@ impl RegisterVM {
                     return Err(type_error(heap, realm, "an object has no primitive value"));
                 }
             };
-            walk.length_step = step;
+            walk.convert_step = step;
             Self::write_iteration(state, &walk, heap)?;
             let key = PropertyKey::String(heap.strings.intern(name)?);
             let object = Self::read_iteration(state, heap)?
@@ -4214,22 +4237,40 @@ impl RegisterVM {
             // A method of the Realm answered without a frame of its own.
             let answer = self.acc;
             if !answer.is_object() {
-                let mut walk = Self::read_iteration(state, heap)?;
-                walk.pending_length = false;
-                let length = integer_argument(answer, heap)?.max(0);
-                if let Err(refused) = Self::refuse_long_array(walk.intrinsic, length, heap, realm) {
-                    heap.exit_scope();
-                    return Err(refused);
-                }
-                walk.length = u32::try_from(length).unwrap_or(u32::MAX);
-                if walk.backwards() {
-                    walk.index = walk.length;
-                }
-                walk.element = VALUE_UNDEFINED;
-                Self::write_iteration(state, &walk, heap)?;
+                Self::take_converted(state, answer, heap, realm)?;
                 return self.begin_array_walk(state, call, units, active_feedback, heap, realm);
             }
         }
+    }
+
+    /// Puts the primitive 7.1.1 answered where the walk was waiting for it.
+    fn take_converted(
+        state: Root,
+        answer: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let mut walk = Self::read_iteration(state, heap)?;
+        walk.element = VALUE_UNDEFINED;
+        walk.convert_step = 0;
+        if walk.converting == CONVERTING_FROM {
+            walk.converting = CONVERTING_NOTHING;
+            walk.output = answer;
+            Self::write_iteration(state, &walk, heap)?;
+            return Ok(());
+        }
+        walk.converting = CONVERTING_NOTHING;
+        let length = integer_argument(answer, heap)?.max(0);
+        if let Err(refused) = Self::refuse_long_array(walk.intrinsic, length, heap, realm) {
+            heap.exit_scope();
+            return Err(refused);
+        }
+        walk.length = u32::try_from(length).unwrap_or(u32::MAX);
+        if walk.backwards() {
+            walk.index = walk.length;
+        }
+        Self::write_iteration(state, &walk, heap)?;
+        Ok(())
     }
 
     /// The value the `length` of an array-like holds, before 7.1.20 converts
@@ -4328,6 +4369,22 @@ impl RegisterVM {
     ) -> Result<Option<u32>, VMError> {
         let mut walk = Self::read_iteration(state, heap)?;
         if Self::scans_for_an_element(walk.intrinsic) {
+            // 7.1.5 converts that argument only after the `length` is read, so
+            // an Object there runs its methods here and not before the walk.
+            if walk.started && walk.output.is_object() {
+                walk.converting = CONVERTING_FROM;
+                walk.convert_step = 1;
+                walk.element = walk.output;
+                Self::write_iteration(state, &walk, heap)?;
+                return self.convert_pending_value(
+                    state,
+                    call,
+                    units,
+                    active_feedback,
+                    heap,
+                    realm,
+                );
+            }
             // 23.1.3.16, 23.1.3.17 and 23.1.3.20 take the index they start
             // from out of the argument they were given, against the length
             // they have just read.
@@ -4430,17 +4487,17 @@ impl RegisterVM {
         // from the checks 23.1.3 makes once it knows it.
         if let Some(answer) = answered {
             let mut walk = Self::read_iteration(state, heap)?;
-            if walk.pending_length {
+            if walk.converting != CONVERTING_NOTHING {
                 // 7.1.1 asks the next method when the one that answered gave
                 // an Object. The getter answered the value to convert; a
                 // method of 7.1.1.1 answered something 7.1.1.1 discards, and
                 // the next method is asked of the same object.
                 if answer.is_object() {
-                    if walk.length_step <= 1 {
+                    if walk.convert_step <= 1 {
                         walk.element = answer;
                         Self::write_iteration(state, &walk, heap)?;
                     }
-                    return self.convert_pending_length(
+                    return self.convert_pending_value(
                         state,
                         call,
                         units,
@@ -4449,17 +4506,7 @@ impl RegisterVM {
                         realm,
                     );
                 }
-                walk.pending_length = false;
-                let length = integer_argument(answer, heap)?.max(0);
-                if let Err(refused) = Self::refuse_long_array(walk.intrinsic, length, heap, realm) {
-                    heap.exit_scope();
-                    return Err(refused);
-                }
-                walk.length = u32::try_from(length).unwrap_or(u32::MAX);
-                if walk.backwards() {
-                    walk.index = walk.length;
-                }
-                Self::write_iteration(state, &walk, heap)?;
+                Self::take_converted(state, answer, heap, realm)?;
                 return self.begin_array_walk(state, call, units, active_feedback, heap, realm);
             }
         }
@@ -4616,8 +4663,8 @@ impl RegisterVM {
             length,
             started,
             getter,
-            pending_length,
-            length_step,
+            converting,
+            convert_step,
         } = heap
             .get_object(reference)
             .ok_or(VMError::Heap(HeapError::InvalidReference))?
@@ -4637,8 +4684,8 @@ impl RegisterVM {
             length,
             started,
             getter,
-            pending_length,
-            length_step,
+            converting,
+            convert_step,
         })
     }
 
@@ -4666,8 +4713,8 @@ impl RegisterVM {
                 length: walk.length,
                 started: walk.started,
                 getter: walk.getter,
-                pending_length: walk.pending_length,
-                length_step: walk.length_step,
+                converting: walk.converting,
+                convert_step: walk.convert_step,
             },
         )?;
         Ok(())
@@ -5973,13 +6020,17 @@ impl RegisterVM {
                 realm,
             );
         }
-        self.acc = self.call_intrinsic(intrinsic, call, units, heap, realm)?;
+        // The operation takes the path a call of it takes, so one that opens
+        // a frame of its own still does after a conversion.
+        let entered = self.dispatch_native(intrinsic, call, units, active_feedback, heap, realm)?;
         // 23.1.1.1 and 20.5.1.1 answer an object of their own, which the
         // instruction keeps where the collector sees it.
-        if let Some(target) = construct {
+        if entered.is_none()
+            && let Some(target) = construct
+        {
             self.write_reg(target, self.acc)?;
         }
-        Ok(None)
+        Ok(entered)
     }
 
     /// The method of 7.1.1.1 this Realm still owes an object of this kind.

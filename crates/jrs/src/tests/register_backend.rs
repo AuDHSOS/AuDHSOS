@@ -6622,3 +6622,27 @@ fn an_array_like_length_that_is_an_object_is_converted_in_a_frame() -> Result<()
     }
     Ok(())
 }
+
+/// A native that converts an argument runs again from the beginning, and the
+/// operation it runs is the one a call of it runs: a clause of 23.1.3 that
+/// opens a frame still opens one after the conversion.
+#[test]
+fn a_coerced_argument_leaves_the_clause_on_the_path_a_call_takes() -> Result<(), Error> {
+    for source in [
+        "var o={0:1};Object.defineProperty(o,'length',{get:function(){return 1},\
+         configurable:true});''+Array.prototype.indexOf.call(o,1,{valueOf:function(){return 0}})",
+        "''+[1,2,3].indexOf(2,{valueOf:function(){return 0}})",
+        "''+[1,2,3].lastIndexOf(2,{valueOf:function(){return 2}})",
+        "''+[1,2,3].includes(2,{valueOf:function(){return 0}})",
+        "var n=0;var o={0:1,1:2};Object.defineProperty(o,'length',{get:function(){n++;return 2},\
+         configurable:true});''+Array.prototype.indexOf.call(o,2,{valueOf:function(){return 0}})+n",
+        // 7.1.5 converts that argument after the `length` is read.
+        "var r='';var o={0:1};Object.defineProperty(o,'length',\
+         {get:function(){r+='L';return 1},configurable:true});\
+         Array.prototype.indexOf.call(o,1,{valueOf:function(){r+='F';return 0}});r",
+        "''+[1,2,3].indexOf(2,1)+[1,2,3].indexOf(2,-1)",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
