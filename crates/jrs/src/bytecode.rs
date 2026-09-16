@@ -562,6 +562,10 @@ const HOME_BINDING: &str = "*home";
 /// can name it.
 const NEW_TARGET_BINDING: &str = "*newTarget";
 
+/// The binding that holds the function object of the running call, which 9.4.4
+/// reads the Prototype of. No Script can name it.
+const CALLEE_BINDING: &str = "*callee";
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RegisterType {
     Array(u32),
@@ -1728,6 +1732,15 @@ impl RegisterLowerer {
 
     fn load_binding(&mut self, binding: RegisterBinding) {
         use crate::engine::bytecode::Instruction;
+        // 9.4.5 refuses the `this` binding of a derived constructor until
+        // 13.3.7.1 has made it, whichever expression reads it.
+        if self.code.derived
+            && let RegisterBindingStorage::Register(register) = binding.storage
+            && self.code.this_register == Some(register)
+        {
+            self.code.emit(Instruction::ThisBinding { register });
+            return;
+        }
         self.code.emit(match binding.storage {
             RegisterBindingStorage::Register(register) => Instruction::Ldar(register),
             RegisterBindingStorage::Context { depth, slot } => {
@@ -1906,6 +1919,22 @@ impl RegisterLowerer {
                     }
                     None => return None,
                 }
+            }
+            // 15.7.14 step 10: the default constructor of a derived class is
+            // a super call of the arguments its own call was given.
+            ExprKind::DefaultSuper => {
+                let this_register = self.code.this_register?;
+                let register = self.allocate_register()?;
+                let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
+                self.code.emit(Instruction::SuperCall {
+                    arg_start: register,
+                    arg_count: 0,
+                    forwarded: true,
+                    slot,
+                });
+                self.code.emit(Instruction::Star(this_register));
+                self.release_register(register)?;
+                RegisterType::Unknown
             }
             // 9.4.3 answers the `[[NewTarget]]` of the call, which the frame
             // holds in a register of its own.
@@ -2766,13 +2795,23 @@ impl RegisterLowerer {
         name: Option<&[u16]>,
     ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
-        // 15.7 derives a class from another through `super`, which needs the
-        // [[HomeObject]] of every method.
-        if class.heritage.is_some() {
-            self.refuse("a class that extends another");
-            return None;
-        }
+        // 15.7.14 step 5 evaluates the heritage before the constructor is
+        // made, and the register keeps it where the collector sees it.
+        let heritage = match &class.heritage {
+            Some(heritage) => {
+                self.lower(heritage)?;
+                let register = self.allocate_register()?;
+                self.code.emit(Instruction::Star(register));
+                Some(register)
+            }
+            None => None,
+        };
         let value_type = self.lower_callable(&class.constructor, true, name)?;
+        // 15.7.14 steps 6 through 8 tie the class to its heritage while the
+        // class is still in the accumulator.
+        if let Some(heritage) = heritage {
+            self.code.emit(Instruction::DeriveClass { heritage });
+        }
         let constructor = self.allocate_register()?;
         self.code.emit(Instruction::Star(constructor));
         // 15.7.14 puts every method the body defines on the prototype the
@@ -2836,6 +2875,9 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Ldar(constructor));
         self.release_register(prototype)?;
         self.release_register(constructor)?;
+        if let Some(heritage) = heritage {
+            self.release_register(heritage)?;
+        }
         Some(value_type)
     }
 
@@ -2882,8 +2924,7 @@ impl RegisterLowerer {
         }
         let kind_allowed = match function.constructor_kind {
             parser::ConstructorKind::Ordinary => true,
-            parser::ConstructorKind::BaseClass => class,
-            parser::ConstructorKind::DerivedClass => false,
+            parser::ConstructorKind::BaseClass | parser::ConstructorKind::DerivedClass => class,
         };
         if !kind_allowed {
             return Some("a class constructor");
@@ -2980,7 +3021,20 @@ impl RegisterLowerer {
                 child.bindings.get_mut(&name)?.value_type = Some(RegisterType::Unknown);
             }
         }
-        let self_register = if let Some(name) = &function.name {
+        // 9.4.4 answers the Prototype of the running function, which 13.3.7.1
+        // constructs; the entry fills the register with the callee.
+        let derived = function.constructor_kind == parser::ConstructorKind::DerivedClass;
+        child.code.derived = derived;
+        let self_register = if derived && function.name.is_none() {
+            child.declare(CALLEE_BINDING, false)?;
+            let RegisterBindingStorage::Register(register) =
+                child.bindings.get(CALLEE_BINDING)?.storage
+            else {
+                return None;
+            };
+            child.bindings.remove(CALLEE_BINDING);
+            Some(register)
+        } else if let Some(name) = &function.name {
             if function
                 .parameters
                 .iter()
@@ -3022,9 +3076,11 @@ impl RegisterLowerer {
             child.mapped_parameters = function.parameters.len();
             child.code.arguments_register = Some(register);
         }
+        // 10.2.2 and 13.3.7.1 read the `[[NewTarget]]` of the call and the
+        // `this` binding, whatever the body names.
         // 9.4.3 answers the `[[NewTarget]]` of the call, which an arrow takes
         // from the function it was made in; 15.3.4 gives it none of its own.
-        if register_body_reads_new_target(&function.body) {
+        if derived || register_body_reads_new_target(&function.body) {
             if function.arrow {
                 return None;
             }
@@ -3054,7 +3110,7 @@ impl RegisterLowerer {
             child.bindings.remove(HOME_BINDING);
             child.code.home_register = Some(register);
         }
-        if register_body_reads_this(&function.body) {
+        if derived || register_body_reads_this(&function.body) {
             // An arrow function has no Function Environment Record of its own
             // (10.2.1.1), so its `this` is the one of the enclosing function
             // and not the receiver of its call.
@@ -3335,6 +3391,11 @@ impl RegisterLowerer {
 
     fn lower_call(&mut self, callee: &Expr, arguments: &[Expr]) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
+        // 13.3.7.1 constructs the Prototype of the running function and binds
+        // the answer as the `this` of the derived constructor.
+        if matches!(callee.kind, ExprKind::Super) {
+            return self.lower_super_construct(arguments);
+        }
         if let ExprKind::Member(base, key) = &callee.kind {
             if matches!(base.kind, ExprKind::Super) {
                 return self.lower_super_call(key, arguments);
@@ -3756,6 +3817,47 @@ impl RegisterLowerer {
     /// 13.3.6.1 passes as the `this` value. Every argument must be a primitive:
     /// the lowering cannot say which function answers, and it compiled every
     /// candidate under the assumption that its parameters are primitives.
+    /// `SuperCall` of 13.3.7.1, whose answer 13.3.7.1 step 8 binds as `this`.
+    fn lower_super_construct(&mut self, arguments: &[Expr]) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let this_register = self.code.this_register?;
+        let mut argument_registers = Vec::new();
+        let mut argument_types = Vec::new();
+        for argument in arguments {
+            let argument_type = self.lower(argument)?;
+            let register = self.allocate_register()?;
+            self.code.emit(Instruction::Star(register));
+            argument_registers.push(register);
+            argument_types.push(argument_type);
+        }
+        let dummy = if argument_registers.is_empty() {
+            let register = self.allocate_register()?;
+            self.code.emit(Instruction::LdaUndefined);
+            self.code.emit(Instruction::Star(register));
+            Some(register)
+        } else {
+            None
+        };
+        let arg_start = argument_registers.first().copied().or(dummy)?;
+        let arg_count = u16::try_from(arguments.len()).ok()?;
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
+        self.code.emit(Instruction::SuperCall {
+            arg_start,
+            arg_count,
+            forwarded: false,
+            slot,
+        });
+        self.code.emit(Instruction::Star(this_register));
+        if let Some(dummy) = dummy {
+            self.release_register(dummy)?;
+        }
+        for register in argument_registers.into_iter().rev() {
+            self.release_register(register)?;
+        }
+        self.escape(&argument_types);
+        Some(RegisterType::Unknown)
+    }
+
     /// `MakeSuperPropertyReference` of 13.3.7.3, in a register of its own.
     fn super_base(&mut self) -> Option<crate::engine::bytecode::Reg> {
         use crate::engine::bytecode::Instruction;
@@ -8797,8 +8899,10 @@ fn register_statement_reads(statement: &Stmt, what: Reads) -> bool {
 fn register_expression_reads(expression: &Expr, what: Reads) -> bool {
     match &expression.kind {
         // A class body the lowering does not take at all.
-        ExprKind::Class(_) => true,
-        ExprKind::Super | ExprKind::DefaultSuper => !matches!(what, Reads::NewTarget),
+        // A class body the lowering takes as a unit of its own, and the
+        // default constructor of 15.7.14 reads all three.
+        ExprKind::Class(_) | ExprKind::DefaultSuper => true,
+        ExprKind::Super => !matches!(what, Reads::NewTarget),
         ExprKind::NewTarget => matches!(what, Reads::This | Reads::NewTarget),
         ExprKind::This => matches!(what, Reads::This),
         ExprKind::Literal(_) | ExprKind::Name(_) | ExprKind::Regex(_, _) | ExprKind::Update(..) => {
@@ -8915,6 +9019,7 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
         | ExprKind::Name(_)
         | ExprKind::This
         | ExprKind::Super
+        | ExprKind::DefaultSuper
         | ExprKind::NewTarget
         | ExprKind::Regex(_, _) => false,
         ExprKind::Destructure(pattern, right) => {
@@ -8929,7 +9034,7 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
             }
             false
         }
-        ExprKind::Await(_) | ExprKind::DefaultSuper | ExprKind::Spread(_) => {
+        ExprKind::Await(_) | ExprKind::Spread(_) => {
             return None;
         }
     })
@@ -9000,9 +9105,7 @@ fn register_class_writes_names(class: &parser::Class, names: &BTreeSet<String>) 
     {
         return Some(true);
     }
-    // 15.7 derives a class through `super`, which the lowering refuses by
-    // name; its constructor is not a body this analysis walks.
-    if class.heritage.is_none() && register_function_writes_names(&class.constructor, names)? {
+    if register_function_writes_names(&class.constructor, names)? {
         return Some(true);
     }
     for (_, method) in &class.methods {
@@ -9024,9 +9127,7 @@ fn register_class_references(
     if let Some(heritage) = &class.heritage {
         register_expression_references(heritage, names, nested_free_names)?;
     }
-    if class.heritage.is_none() {
-        nested_free_names.extend(register_function_scope(&class.constructor)?.free_names);
-    }
+    nested_free_names.extend(register_function_scope(&class.constructor)?.free_names);
     for (_, method) in &class.methods {
         register_expression_references(&method.key, names, nested_free_names)?;
         register_expression_references(&method.value, names, nested_free_names)?;
@@ -9237,6 +9338,7 @@ fn register_expression_references(
         ExprKind::Literal(_)
         | ExprKind::This
         | ExprKind::Super
+        | ExprKind::DefaultSuper
         | ExprKind::NewTarget
         | ExprKind::Regex(_, _) => {}
         ExprKind::Destructure(pattern, right) => {
@@ -9248,7 +9350,7 @@ fn register_expression_references(
                 register_expression_references(expression, names, nested_free_names)?;
             }
         }
-        ExprKind::Await(_) | ExprKind::DefaultSuper | ExprKind::Spread(_) => {
+        ExprKind::Await(_) | ExprKind::Spread(_) => {
             return None;
         }
     }

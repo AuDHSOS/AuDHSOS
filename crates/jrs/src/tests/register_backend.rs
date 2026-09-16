@@ -13,7 +13,7 @@ fn a_realm_on_the_engine_backend_refuses_what_it_cannot_lower() -> Result<(), Er
 
     // The two paths hold separate object models, so a Script the lowering does
     // not take is refused instead of running on the stack path.
-    let source = "{ let z = class extends Object {} }";
+    let source = "{ let z = async function(){} }";
     assert!(
         matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
         "{source}"
@@ -103,7 +103,7 @@ fn a_realm_on_the_engine_backend_evaluates_and_refuses_without_poisoning() -> Re
     // A Script the lowering does not take is refused before anything runs, so
     // the realm stays usable.
     assert!(matches!(
-        realm.evaluate("{ let z = class extends Object {} }"),
+        realm.evaluate("{ let z = async function(){} }"),
         Err(Error::Unsupported { .. })
     ));
     assert_eq!(realm.evaluate("1+1")?, Value::Number(2.0));
@@ -632,6 +632,43 @@ fn a_function_that_captures_itself_leaves_an_intrinsic_once() -> Result<(), Erro
         "(function(){function G(){return G}return typeof Object.keys(G)})()",
         "(function(){function G(){return typeof G}return Reflect.construct(G,[],G)===undefined})()",
         "(function(){function G(){return new.target===G}return Reflect.construct(G,[],G)!==undefined})()",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn a_class_derives_from_another_and_super_binds_its_this() -> Result<(), Error> {
+    for source in [
+        // 15.7.14 steps 6 through 8 tie the class and its prototype to the
+        // heritage.
+        "(function(){class A{}class B extends A{constructor(){super()}}return new B() instanceof A})()",
+        "(function(){class A{}class B extends A{}return Object.getPrototypeOf(B)===A})()",
+        "(function(){class A{}class B extends A{}return Object.getPrototypeOf(B.prototype)===A.prototype})()",
+        "(function(){class B extends null{constructor(){return {}}}return Object.getPrototypeOf(B.prototype)===null})()",
+        "(function(){try{class B extends 1{}}catch(e){return e instanceof TypeError}return false})()",
+        // 13.3.7.1 constructs the Prototype with the `[[NewTarget]]` of the
+        // call and binds the answer as `this`.
+        "(function(){class A{constructor(){this.a=1}}class B extends A{constructor(){super();this.b=2}}let o=new B();return o.a+o.b})()",
+        "(function(){class A{constructor(x){this.x=x}}class B extends A{constructor(){super(5)}}return new B().x})()",
+        "(function(){class A{}class B extends A{constructor(){super()}}class C extends B{constructor(){super()}}return new C() instanceof A})()",
+        // 15.7.14 step 10: the default constructor passes what it was given.
+        "(function(){class A{constructor(x){this.x=x}}class B extends A{}return new B(7).x})()",
+        "(function(){class A{constructor(a,b){this.s=a+b}}class B extends A{}return new B(2,3).s})()",
+        // 9.4.5 refuses the binding until the super call has made it, and
+        // 13.3.7.1 makes it once.
+        "(function(){class A{}class B extends A{constructor(){var t=this;super()}}try{new B()}catch(e){return e instanceof ReferenceError}})()",
+        "(function(){class A{}class B extends A{constructor(){this.e=1;super()}}try{new B()}catch(e){return e instanceof ReferenceError}})()",
+        "(function(){class A{}class B extends A{constructor(){}}try{new B()}catch(e){return e instanceof ReferenceError}})()",
+        "(function(){class A{}class B extends A{constructor(){super();super()}}try{new B()}catch(e){return e instanceof ReferenceError}})()",
+        // 10.2.2 step 13: the body answers an Object or the binding.
+        "(function(){class A{}class B extends A{constructor(){super();return {z:1}}}return new B().z})()",
+        "(function(){class A{}class B extends A{constructor(){super();return}}return new B() instanceof B})()",
+        // 13.3.7 reads a property of the chain the heritage made.
+        "(function(){class A{m(){return 'A'}}class B extends A{constructor(){super()}m(){return super.m()+'B'}}return new B().m()})()",
+        // 15.7.14 gives the class a `prototype` no ordinary function has.
+        "(function(){class A{}class B extends A{}let d=Object.getOwnPropertyDescriptor(B,'prototype');return d.writable+':'+d.enumerable+':'+d.configurable})()",
     ] {
         differential(source)?;
     }
@@ -5508,16 +5545,9 @@ fn a_class_body_builds_its_constructor_and_its_prototype() -> Result<(), Error> 
     }
     // 15.7.14 gives the constructor a `[[Call]]` that throws.
     differential_scripts(&["class C{};var r=0;try{C()}catch(e){r=e instanceof TypeError};r"])?;
-    // 15.7 derives a class through `super`, which needs every method's
-    // [[HomeObject]].
-    let source = "class C extends Object{};0";
-    let program = compile(source, Limits::default())?;
-    assert!(!program.uses_register_backend(), "{source}");
-    assert_eq!(
-        program.register_refusal,
-        Some("a class that extends another"),
-        "{source}"
-    );
+    // 15.7 derives a class through a native constructor, which 13.3.7.1 has
+    // no frame to enter.
+    differential_scripts(&["class C extends Object{};0"])?;
     Ok(())
 }
 

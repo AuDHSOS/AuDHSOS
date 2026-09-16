@@ -488,6 +488,38 @@ pub enum Instruction {
         /// Property-name index in the heap-independent UTF-16 constant pool.
         name: u16,
     },
+    /// 15.7.14 steps 6 through 8 and 14: ties the class in `acc` to the value
+    /// in `heritage`.
+    ///
+    /// The class takes the heritage as its `[[Prototype]]` and its `prototype`
+    /// takes the `prototype` of the heritage; `null` gives the class
+    /// `%Function.prototype%` and its `prototype` no Prototype at all.
+    DeriveClass {
+        /// Register holding the value the `extends` clause produced.
+        heritage: Reg,
+    },
+    /// `SuperCall` of 13.3.7.1: constructs the Prototype of the running
+    /// function with the `[[NewTarget]]` of the call.
+    ///
+    /// The answer is the `this` the derived constructor binds, which the
+    /// instruction that follows writes into the register of the binding.
+    SuperCall {
+        /// First argument register.
+        arg_start: Reg,
+        /// Number of arguments.
+        arg_count: u16,
+        /// Set for the default constructor of 15.7.14, which passes the
+        /// arguments its own call was given.
+        forwarded: bool,
+        /// Feedback vector slot for the call.
+        slot: u16,
+    },
+    /// `GetThisBinding` of 9.4.5 for a derived constructor, whose binding is
+    /// uninitialized until 13.3.7.1 has run.
+    ThisBinding {
+        /// Register of the `this` binding.
+        register: Reg,
+    },
     /// `MakeMethod` of 10.2.11: gives the function in `acc` the object in
     /// `home` as its `[[HomeObject]]`, which 13.3.7.3 reads the Prototype of.
     ///
@@ -690,6 +722,10 @@ pub struct BytecodeFunction {
     /// Register the arguments object of the call is built in (10.4.4), when
     /// the body reads it.
     pub arguments_register: Option<Reg>,
+    /// Whether this function is the constructor of a class with a heritage,
+    /// which 10.2.2 gives no `this` of its own and whose return answers the
+    /// binding 13.3.7.1 made.
+    pub derived: bool,
     /// Whether this function has a `[[Construct]]` method, which 10.2.5 gives an
     /// ordinary function and withholds from a method and an arrow.
     pub constructible: bool,
@@ -743,6 +779,7 @@ impl BytecodeFunction {
             home_register: None,
             new_target_register: None,
             arguments_register: None,
+            derived: false,
             constructible: false,
             strict: false,
             class_constructor: false,
@@ -948,7 +985,9 @@ impl BytecodeFunction {
             | Instruction::TestGreaterThanOrEqual(register)
             | Instruction::TestInstanceOf(register)
             | Instruction::TestIn(register)
-            | Instruction::CreateArguments(register) => Some(register),
+            | Instruction::CreateArguments(register)
+            // 9.4.5 reads the register the binding lives in.
+            | Instruction::ThisBinding { register } => Some(register),
             Instruction::Mov { src, dst } => {
                 self.verify_register(pc, src)?;
                 Some(dst)
@@ -999,6 +1038,24 @@ impl BytecodeFunction {
             Instruction::GetArrayLength { obj } => Some(obj),
             Instruction::SuperBase { target } => Some(target),
             Instruction::MakeMethod { home } => Some(home),
+            Instruction::DeriveClass { heritage } => Some(heritage),
+            Instruction::SuperCall {
+                arg_start,
+                arg_count,
+                forwarded,
+                slot,
+            } => {
+                self.verify_feedback(pc, slot, FeedbackKind::Call)?;
+                if forwarded {
+                    None
+                } else {
+                    let end = u32::from(arg_start.0).saturating_add(u32::from(arg_count));
+                    if end > u32::from(self.register_count) {
+                        return Err(VerificationError::CallArgumentsOutOfBounds { pc });
+                    }
+                    Some(arg_start)
+                }
+            }
             Instruction::GetSuper { base, name } => {
                 self.verify_string_constant(pc, name)?;
                 Some(base)

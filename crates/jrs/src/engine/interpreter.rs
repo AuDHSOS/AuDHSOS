@@ -27,7 +27,7 @@ use super::{
     string::StringError,
     value::{
         ObjectRef, PropertyKey, StringRef, SymbolRef, VALUE_FALSE, VALUE_NAN, VALUE_NULL,
-        VALUE_TRUE, VALUE_UNDEFINED, Value,
+        VALUE_TRUE, VALUE_UNDEFINED, VALUE_UNINITIALIZED, Value,
     },
 };
 use alloc::vec::Vec;
@@ -5667,6 +5667,244 @@ impl RegisterVM {
             .this_register
             .ok_or(VMError::Unsupported("super in a function with no this"))?;
         self.read_reg(register)
+    }
+
+    /// 15.7.14 steps 6 through 8 and 14: ties the class in the accumulator to
+    /// the value its `extends` clause produced.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a heritage that is
+    /// neither `null` nor a constructor, and for one whose `prototype` is
+    /// neither `null` nor an Object.
+    fn derive_class(
+        &self,
+        heritage: Reg,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let class = self.acc.as_object().ok_or(VMError::TypeError)?;
+        let name = PropertyKey::String(heap.strings.intern("prototype")?);
+        let prototype = heap
+            .lookup_named(class, name)?
+            .map_or(VALUE_UNDEFINED, |property| property.value)
+            .as_object()
+            .ok_or(VMError::TypeError)?;
+        let value = self.read_reg(heritage)?;
+        // Step 6.a: a class of `extends null` inherits nothing and is
+        // constructed like any other ordinary function.
+        let (proto_parent, class_parent) = if value.is_null() {
+            (VALUE_NULL, realm.function_prototype(heap)?)
+        } else {
+            if !Self::constructs(value, heap) {
+                return Err(type_error(heap, realm, "class extends a non-constructor"));
+            }
+            let parent = value.as_object().ok_or(VMError::TypeError)?;
+            let found = heap
+                .lookup_named(parent, name)?
+                .map(Self::plain_value)
+                .transpose()?
+                .unwrap_or(VALUE_UNDEFINED);
+            if !found.is_null() && found.as_object().is_none() {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "the prototype of a superclass is not an object",
+                ));
+            }
+            (found, value)
+        };
+        heap.set_object_prototype(class, class_parent)
+            .map_err(VMError::Heap)?;
+        heap.set_object_prototype(prototype, proto_parent)
+            .map_err(VMError::Heap)?;
+        Ok(())
+    }
+
+    /// `SuperCall` of 13.3.7.1.
+    ///
+    /// 9.4.4 answers the Prototype of the running function, which 7.3.15
+    /// constructs with the `[[NewTarget]]` of this call. The instruction that
+    /// follows writes the answer into the register of the `this` binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `ReferenceError` for a binding
+    /// 13.3.7.1 already made, and with a `TypeError` for a Prototype that is
+    /// no constructor.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a super call opens a frame, which needs what a call needs"
+    )]
+    fn super_call(
+        &mut self,
+        arg_start: Reg,
+        arg_count: u16,
+        forwarded: bool,
+        slot: u16,
+        return_pc: usize,
+        caller_code_id: Option<u32>,
+        code: &BytecodeFunction,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let this_register = code
+            .this_register
+            .ok_or(VMError::Unsupported("a super call with no this binding"))?;
+        // Step 8: the binding is made once.
+        if self.read_reg(this_register)? != VALUE_UNINITIALIZED {
+            return Err(raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::ReferenceError,
+                "this is already initialized",
+            ));
+        }
+        let self_register = code
+            .self_register
+            .ok_or(VMError::Unsupported("a super call with no callee"))?;
+        let new_target_register = code
+            .new_target_register
+            .ok_or(VMError::Unsupported("a super call with no new target"))?;
+        let active = self
+            .read_reg(self_register)?
+            .as_object()
+            .ok_or(VMError::TypeError)?;
+        // 9.4.4 answers the Prototype of the running function.
+        let parent = heap
+            .get_object(active)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?
+            .prototype;
+        if !Self::constructs(parent, heap) {
+            return Err(type_error(heap, realm, "super is not a constructor"));
+        }
+        if !Self::is_script_function(parent, heap) {
+            return Err(VMError::Unsupported(
+                "a super call of a constructor written in Rust",
+            ));
+        }
+        // 15.7.14 step 10: the default constructor passes the arguments its
+        // own call was given, which are registers of the caller and not of
+        // this frame, so they travel as the List of 7.3.15.
+        let (arg_start, arg_count, spread) = if forwarded {
+            let passed = self.passed_arguments()?;
+            let count = u16::try_from(passed.len()).map_err(|_| VMError::TypeError)?;
+            let list = Self::array_of(passed, heap, realm)?;
+            heap.enter_scope();
+            let list = heap.push_root(list)?;
+            (Reg(0), count, Some(Resume::Spread { arguments: list }))
+        } else {
+            (arg_start, arg_count, None)
+        };
+        // 10.2.2 creates the object from the `[[NewTarget]]`, and a derived
+        // parent creates none of its own until its own super call.
+        let receiver = if Self::derives(parent, units, heap) {
+            VALUE_UNINITIALIZED
+        } else {
+            let object = self.create_from_new_target(heap, realm, new_target_register)?;
+            Value::from_object(object)
+        };
+        self.write_reg(this_register, receiver)?;
+        self.pending_new_target = self.read_reg(new_target_register)?;
+        let parent = self.read_reg(self_register)?;
+        let parent = heap
+            .get_object(parent.as_object().ok_or(VMError::TypeError)?)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?
+            .prototype;
+        let call = Call {
+            receiver,
+            func: self_register,
+            arg_start,
+            arg_count,
+            slot,
+            resume: spread,
+            construct: Some(this_register),
+            return_pc,
+            caller_code_id,
+        };
+        self.enter_call_value(parent, units, active_feedback, heap, realm, call)
+    }
+
+    /// The arguments the running call was given, which 10.4.4 and 15.7.14 read
+    /// out of the registers of the caller.
+    fn passed_arguments(&self) -> Result<Vec<Value>, VMError> {
+        let frame = *self.frames.last().ok_or(VMError::InvalidRegister)?;
+        let arguments = frame.arguments.ok_or(VMError::Unsupported(
+            "the arguments of a call the engine did not open",
+        ))?;
+        let mut passed = Vec::with_capacity(usize::from(arguments.count));
+        for index in 0..arguments.count {
+            let slot = frame
+                .caller_fp
+                .checked_add(arguments.start.0 as usize)
+                .and_then(|start| start.checked_add(index as usize))
+                .ok_or(VMError::InvalidRegister)?;
+            passed.push(
+                self.stack
+                    .get(slot)
+                    .copied()
+                    .ok_or(VMError::InvalidRegister)?,
+            );
+        }
+        Ok(passed)
+    }
+
+    /// 10.2.2 step 13 for a derived constructor: the value the body answered
+    /// when it is an Object, and the `this` binding of 13.3.7.1 otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a value that is
+    /// neither an Object nor undefined, and with a `ReferenceError` for a
+    /// binding no super call made.
+    fn derived_result(
+        &self,
+        code: &BytecodeFunction,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if self.acc.as_object().is_some() {
+            return Ok(self.acc);
+        }
+        if !self.acc.is_undefined() {
+            return Err(type_error(
+                heap,
+                realm,
+                "a derived constructor answered a value that is not an object",
+            ));
+        }
+        let register = code
+            .this_register
+            .ok_or(VMError::Unsupported("a derived constructor with no this"))?;
+        let value = self.read_reg(register)?;
+        if value == VALUE_UNINITIALIZED {
+            return Err(raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::ReferenceError,
+                "this is not initialized",
+            ));
+        }
+        Ok(value)
+    }
+
+    /// Whether the function is the constructor of a class with a heritage.
+    fn derives(value: Value, units: CodeUnits<'_>, heap: &GenerationalHeap) -> bool {
+        let Some(object) = value.as_object() else {
+            return false;
+        };
+        let Some(ObjectKind::Function { unit, code_id, .. }) =
+            heap.get_object(object).map(|object| object.kind.clone())
+        else {
+            return false;
+        };
+        units
+            .table
+            .root(unit)
+            .and_then(|root| code_unit(root, Some(code_id)))
+            .is_some_and(|code| code.derived)
     }
 
     /// `MakeMethod` of 10.2.11: 13.2.5.5 and 15.7.14 give the function the
@@ -11588,6 +11826,44 @@ impl RegisterVM {
                         return Err(type_error(heap, realm, message));
                     }
                 }
+                Instruction::ThisBinding { register } => {
+                    let value = self.read_reg(register)?;
+                    if value == VALUE_UNINITIALIZED {
+                        return Err(raise(
+                            heap,
+                            realm,
+                            super::realm::NativeErrorKind::ReferenceError,
+                            "this is not initialized",
+                        ));
+                    }
+                    self.acc = value;
+                }
+                Instruction::DeriveClass { heritage } => {
+                    self.derive_class(heritage, heap, realm)?;
+                }
+                Instruction::SuperCall {
+                    arg_start,
+                    arg_count,
+                    forwarded,
+                    slot,
+                } => {
+                    if let Some(code_id) = self.super_call(
+                        arg_start,
+                        arg_count,
+                        forwarded,
+                        slot,
+                        pc,
+                        current_code_id,
+                        active_code,
+                        units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    )? {
+                        current_code_id = Some(code_id);
+                        pc = 0;
+                    }
+                }
                 Instruction::MakeMethod { home } => {
                     let target = self.read_reg(home)?.as_object().ok_or(VMError::TypeError)?;
                     Self::make_method(self.acc, target, heap)?;
@@ -11909,9 +12185,17 @@ impl RegisterVM {
                     }
                     // 7.3.15 refuses a callee without `[[Construct]]`, which here
                     // is a callee without the `prototype` 10.2.5 installs.
-                    let object =
-                        self.ordinary_create_from_constructor(active_code, heap, realm, func)?;
-                    self.write_reg(target, Value::from_object(object))?;
+                    // 10.2.2 step 5 creates the object for a base constructor
+                    // and leaves a derived one to make its own with 13.3.7.1.
+                    let receiver = if Self::derives(self.read_reg(func)?, units, heap) {
+                        self.write_reg(target, VALUE_UNDEFINED)?;
+                        VALUE_UNINITIALIZED
+                    } else {
+                        let object =
+                            self.ordinary_create_from_constructor(active_code, heap, realm, func)?;
+                        self.write_reg(target, Value::from_object(object))?;
+                        Value::from_object(object)
+                    };
                     // 13.3.5.1 gives the call the constructor it named, and
                     // nothing allocates between here and the frame.
                     self.pending_new_target = self.read_reg(func)?;
@@ -11921,7 +12205,7 @@ impl RegisterVM {
                         heap,
                         realm,
                         Call {
-                            receiver: Value::from_object(object),
+                            receiver,
                             func,
                             arg_start,
                             arg_count,
@@ -12000,6 +12284,12 @@ impl RegisterVM {
                 }
                 Instruction::Throw => return Err(VMError::Thrown(self.acc, None)),
                 Instruction::Return => {
+                    // 10.2.2 step 13: a derived constructor answers the object
+                    // its own `this` binding holds, and refuses every other
+                    // value but undefined.
+                    if active_code.derived {
+                        self.acc = self.derived_result(active_code, heap, realm)?;
+                    }
                     if let Some(frame) = self.frames.pop() {
                         self.fp = frame.caller_fp;
                         pc = frame.return_pc;
