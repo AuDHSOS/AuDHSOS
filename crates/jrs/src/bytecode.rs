@@ -8222,8 +8222,13 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::PromiseWithResolvers
         | crate::engine::realm::Intrinsic::PromiseAllElement
         | crate::engine::realm::Intrinsic::PromiseAllSettledFulfilled
-        | crate::engine::realm::Intrinsic::PromiseAllSettledRejected => RegisterType::Unknown,
-        crate::engine::realm::Intrinsic::StringPrototypeCharCodeAt
+        | crate::engine::realm::Intrinsic::PromiseAllSettledRejected
+        // 22.2.6.8 answers an Array or null, 22.2.6.14 an Array of parts.
+        | crate::engine::realm::Intrinsic::RegExpPrototypeMatch
+        | crate::engine::realm::Intrinsic::RegExpPrototypeSplit => RegisterType::Unknown,
+        // 22.2.6.12 answers the index of the match.
+        crate::engine::realm::Intrinsic::RegExpPrototypeSearch
+        | crate::engine::realm::Intrinsic::StringPrototypeCharCodeAt
         | crate::engine::realm::Intrinsic::StringPrototypeIndexOf
         | crate::engine::realm::Intrinsic::StringPrototypeLastIndexOf
         | crate::engine::realm::Intrinsic::ArrayPrototypeIndexOf

@@ -672,6 +672,12 @@ pub enum Intrinsic {
     PromiseAllSettledFulfilled,
     /// The reject element function of 27.2.4.2.3.
     PromiseAllSettledRejected,
+    /// `RegExp.prototype[@@match]`, 22.2.6.8.
+    RegExpPrototypeMatch,
+    /// `RegExp.prototype[@@search]`, 22.2.6.12.
+    RegExpPrototypeSearch,
+    /// `RegExp.prototype[@@split]`, 22.2.6.14.
+    RegExpPrototypeSplit,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -725,7 +731,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 191] = [
+    pub const ALL: [Self; 194] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -917,6 +923,9 @@ impl Intrinsic {
         Self::PromiseAllElement,
         Self::PromiseAllSettledFulfilled,
         Self::PromiseAllSettledRejected,
+        Self::RegExpPrototypeMatch,
+        Self::RegExpPrototypeSearch,
+        Self::RegExpPrototypeSplit,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -1046,7 +1055,10 @@ impl Intrinsic {
             Self::RegExpPrototypeExec
             | Self::RegExpPrototypeReplace
             | Self::RegExpPrototypeTest
-            | Self::RegExpPrototypeToString => IntrinsicHolder::RegExpPrototype,
+            | Self::RegExpPrototypeToString
+            | Self::RegExpPrototypeMatch
+            | Self::RegExpPrototypeSearch
+            | Self::RegExpPrototypeSplit => IntrinsicHolder::RegExpPrototype,
             Self::ErrorPrototypeToString => IntrinsicHolder::ErrorPrototype,
             Self::JsonParse | Self::JsonStringify => IntrinsicHolder::Json,
             Self::PromisePrototypeThen | Self::PromisePrototypeCatch => {
@@ -1331,6 +1343,9 @@ impl Intrinsic {
             Self::PromiseAllElement => 188,
             Self::PromiseAllSettledFulfilled => 189,
             Self::PromiseAllSettledRejected => 190,
+            Self::RegExpPrototypeMatch => 191,
+            Self::RegExpPrototypeSearch => 192,
+            Self::RegExpPrototypeSplit => 193,
         }
     }
 
@@ -1532,6 +1547,9 @@ impl Intrinsic {
             Self::PromiseAllElement => 188,
             Self::PromiseAllSettledFulfilled => 189,
             Self::PromiseAllSettledRejected => 190,
+            Self::RegExpPrototypeMatch => 191,
+            Self::RegExpPrototypeSearch => 192,
+            Self::RegExpPrototypeSplit => 193,
         }
     }
 
@@ -1734,6 +1752,9 @@ impl Intrinsic {
             188 => Some(Self::PromiseAllElement),
             189 => Some(Self::PromiseAllSettledFulfilled),
             190 => Some(Self::PromiseAllSettledRejected),
+            191 => Some(Self::RegExpPrototypeMatch),
+            192 => Some(Self::RegExpPrototypeSearch),
+            193 => Some(Self::RegExpPrototypeSplit),
             _ => None,
         }
     }
@@ -1807,6 +1828,9 @@ impl Intrinsic {
             Self::PromiseRace => "race",
             Self::PromiseAllSettled => "allSettled",
             Self::PromiseWithResolvers => "withResolvers",
+            Self::RegExpPrototypeMatch => "[Symbol.match]",
+            Self::RegExpPrototypeSearch => "[Symbol.search]",
+            Self::RegExpPrototypeSplit => "[Symbol.split]",
             Self::RegExpPrototypeTest => "test",
             Self::ArrayConstructor => "Array",
             Self::ObjectConstructor => "Object",
@@ -1964,8 +1988,12 @@ impl Intrinsic {
             | Self::ParseFloat
             // 20.4.2.2 applies `ToString` to its key.
             | Self::SymbolFor
-            // 22.2.7.1 and 22.2.6.16 apply `ToString` to the text they search.
+            // 22.2.7.1 and 22.2.6.16 apply `ToString` to the text they search,
+            // and so do the Symbol-keyed methods of 22.2.6.
             | Self::RegExpPrototypeExec
+            | Self::RegExpPrototypeMatch
+            | Self::RegExpPrototypeSearch
+            | Self::RegExpPrototypeSplit
             | Self::RegExpPrototypeTest
             // 20.1.3.2 and 20.1.3.4 apply `ToPropertyKey` to the name, which
             // sends an Object through 7.1.1 with the hint `string`.
@@ -2435,6 +2463,8 @@ impl Intrinsic {
             | Self::PromiseAllElement
             | Self::PromiseAllSettledFulfilled
             | Self::PromiseAllSettledRejected
+            | Self::RegExpPrototypeMatch
+            | Self::RegExpPrototypeSearch
             | Self::Print => 1,
             Self::ObjectDefineProperty | Self::ReflectDefineProperty | Self::ReflectApply => 3,
             Self::MathPow
@@ -2467,6 +2497,7 @@ impl Intrinsic {
             | Self::StringPrototypeReplace
             | Self::RegExpPrototypeReplace
             | Self::StringPrototypeSplit
+            | Self::RegExpPrototypeSplit
             | Self::PromisePrototypeThen => 2,
         }
     }
@@ -4175,14 +4206,15 @@ impl Realm {
                 )?;
                 continue;
             }
-            // 22.2.6.11 is a Symbol-keyed property of %RegExp.prototype%.
-            if intrinsic == Intrinsic::RegExpPrototypeReplace {
-                heap.define_own_named(
-                    holder,
-                    WellKnownSymbol::Replace.key(),
-                    function,
-                    builtin_data(),
-                )?;
+            // 22.2.6 gives %RegExp.prototype% four Symbol-keyed methods.
+            if let Some(key) = match intrinsic {
+                Intrinsic::RegExpPrototypeReplace => Some(WellKnownSymbol::Replace.key()),
+                Intrinsic::RegExpPrototypeMatch => Some(WellKnownSymbol::Match.key()),
+                Intrinsic::RegExpPrototypeSearch => Some(WellKnownSymbol::Search.key()),
+                Intrinsic::RegExpPrototypeSplit => Some(WellKnownSymbol::Split.key()),
+                _ => None,
+            } {
+                heap.define_own_named(holder, key, function, builtin_data())?;
                 continue;
             }
             let key = PropertyKey::String(heap.strings.intern(intrinsic.name())?);

@@ -1878,6 +1878,11 @@ impl RegisterVM {
             // 22.1.3.19 gives the search value its own say through
             // `@@replace`, which 22.2.6.11 answers for a RegExp.
             Intrinsic::StringPrototypeReplace => self.string_replace(&call, units, heap, realm),
+            Intrinsic::RegExpPrototypeMatch
+            | Intrinsic::RegExpPrototypeSearch
+            | Intrinsic::RegExpPrototypeSplit => {
+                self.call_regexp_symbol_intrinsic(intrinsic, &call, heap, realm)
+            }
             Intrinsic::RegExpPrototypeReplace => {
                 let text = property_name_units(self.call_argument(&call, 0, heap)?, heap)?;
                 let receiver = call
@@ -8325,11 +8330,24 @@ impl RegisterVM {
     fn absent_well_known(
         target: Value,
         object: ObjectRef,
+        symbol: Option<super::realm::WellKnownSymbol>,
         heap: &GenerationalHeap,
+        realm: &Realm,
     ) -> Result<Value, VMError> {
         const GAP: VMError = VMError::Unsupported("a well-known Symbol of an unbuilt Prototype");
         if target.is_string() {
             return Err(GAP);
+        }
+        // 22.2.6 gives `%RegExp.prototype%` five Symbol-keyed methods, and
+        // this Realm has not built `@@matchAll`.
+        if symbol == Some(super::realm::WellKnownSymbol::MatchAll)
+            && (realm.regexp_prototype(heap)?.as_object() == Some(object)
+                || matches!(
+                    heap.get_object(object).map(|entry| &entry.kind),
+                    Some(&ObjectKind::RegExp { .. })
+                ))
+        {
+            return Err(VMError::Unsupported("a property of %RegExp.prototype%"));
         }
         match heap.get_object(object).map(|object| &object.kind) {
             Some(
@@ -9375,6 +9393,81 @@ impl RegisterVM {
             return self.regexp_split(&text, &pattern, call, heap, realm);
         }
         self.string_split(&text, call, heap, realm)
+    }
+
+    /// `RegExp.prototype[@@match]`, `[@@search]` and `[@@split]` of 22.2.6.
+    ///
+    /// Each one reads the text with 22.2.7.1, which calls the `exec` of the
+    /// object: one of the Script is a call the clause has no frame to make, so
+    /// only the `exec` of this Realm answers here. 22.2.6.14 constructs the
+    /// splitter with `SpeciesConstructor`, which is this Realm's `%RegExp%`
+    /// alone.
+    fn call_regexp_symbol_intrinsic(
+        &mut self,
+        intrinsic: Intrinsic,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let Some(receiver) = call.receiver.as_object() else {
+            return Err(type_error(
+                heap,
+                realm,
+                "a method of 22.2.6 called on a value that is no Object",
+            ));
+        };
+        let Some(pattern) = Self::regexp_pattern(receiver, heap) else {
+            return Err(VMError::Unsupported(
+                "a method of 22.2.6 on a receiver that is no RegExp",
+            ));
+        };
+        let key = PropertyKey::String(heap.strings.intern("exec")?);
+        let exec = match heap.lookup_named(receiver, key)? {
+            Some(found) => Self::plain_value(found)?,
+            None => VALUE_UNDEFINED,
+        };
+        if !Self::is_intrinsic(exec, Intrinsic::RegExpPrototypeExec, heap) {
+            return Err(VMError::Unsupported("an exec of the Script"));
+        }
+        let text = property_name_units(self.call_argument(call, 0, heap)?, heap)?;
+        if intrinsic == Intrinsic::RegExpPrototypeSearch {
+            // Step 3 keeps `lastIndex` as it found it, and step 4 searches
+            // from the start.
+            let key = PropertyKey::String(heap.strings.intern("lastIndex")?);
+            let held = heap
+                .lookup_named(receiver, key)?
+                .map_or(VALUE_UNDEFINED, |property| property.value);
+            Self::set_last_index(receiver, Value::from_smi(0), heap, realm)?;
+            let matched = self.regexp_exec(receiver, &pattern, &text, heap, realm)?;
+            Self::set_last_index(receiver, held, heap, realm)?;
+            let Some(matched) = matched else {
+                return Ok(Value::from_smi(-1));
+            };
+            let start = i32::try_from(matched.range.start).map_err(|_| VMError::StringLimit)?;
+            return Ok(Value::from_smi(start));
+        }
+        if intrinsic == Intrinsic::RegExpPrototypeSplit {
+            let name = PropertyKey::String(heap.strings.intern("constructor")?);
+            let constructor = match heap.lookup_named(receiver, name)? {
+                Some(found) => Self::plain_value(found)?,
+                None => VALUE_UNDEFINED,
+            };
+            if !Self::is_intrinsic(constructor, Intrinsic::RegExpConstructor, heap) {
+                return Err(VMError::Unsupported(
+                    "a splitter of a constructor that is not %RegExp%",
+                ));
+            }
+            return self.regexp_split(&text, &pattern, call, heap, realm);
+        }
+        // Step 6: a pattern without `g` answers what 22.2.7.2 answers.
+        if !pattern.global {
+            let matched = self.regexp_exec(receiver, &pattern, &text, heap, realm)?;
+            let Some(matched) = matched else {
+                return Ok(VALUE_NULL);
+            };
+            return self.match_array(&text, &matched, heap, realm);
+        }
+        self.global_match(receiver, &pattern, &text, heap, realm)
     }
 
     /// `RegExp.prototype[@@split]` of 22.2.6.14.
@@ -10575,14 +10668,27 @@ impl RegisterVM {
             };
             return self.match_array(&text, &matched, heap, realm);
         }
-        // A global pattern walks the whole text from index zero and answers
-        // the matched substrings alone. The ranges are collected before
-        // anything is allocated, so no String is held unrooted.
+        self.global_match(receiver, &pattern, &text, heap, realm)
+    }
+
+    /// Step 8 of 22.2.6.8: a global pattern walks the whole text from index
+    /// zero and answers the matched substrings alone.
+    ///
+    /// The ranges are collected before anything is allocated, so no String of
+    /// a match is held unrooted while the next one is made.
+    fn global_match(
+        &mut self,
+        receiver: ObjectRef,
+        pattern: &crate::regexp::RegExp,
+        text: &[u16],
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
         Self::set_last_index(receiver, Value::from_smi(0), heap, realm)?;
         let mut parts: Vec<Option<&[u16]>> = Vec::new();
         loop {
             self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
-            let Some(matched) = self.regexp_exec(receiver, &pattern, &text, heap, realm)? else {
+            let Some(matched) = self.regexp_exec(receiver, pattern, text, heap, realm)? else {
                 break;
             };
             let part = text
@@ -10592,8 +10698,8 @@ impl RegisterVM {
             if parts.len() > self.string_units_limit {
                 return Err(VMError::PropertyLimit);
             }
-            // 22.2.6.8 step 8.f.iii: an empty match advances by one code unit,
-            // which `AdvanceStringIndex` of 22.2.7.3 does.
+            // Step 8.f.iii: an empty match advances by one code unit, which
+            // `AdvanceStringIndex` of 22.2.7.3 does.
             if matched.range.is_empty() {
                 let next = i32::try_from(matched.range.end.saturating_add(1))
                     .map_err(|_| VMError::StringLimit)?;
@@ -13319,7 +13425,9 @@ impl RegisterVM {
                         // A Prototype this Realm has not finished building
                         // owns the Symbol; answering undefined would say the
                         // value is not iterable, which is a different thing.
-                        None => Self::absent_well_known(target, object, heap)?,
+                        None => {
+                            Self::absent_well_known(target, object, Some(*symbol), heap, realm)?
+                        }
                     };
                 }
                 Instruction::GetNamed {
@@ -13648,7 +13756,13 @@ impl RegisterVM {
                             Some(property) => property.value,
                             // A Prototype this Realm has not finished building
                             // may own the Symbol.
-                            None => Self::absent_well_known(target, oref, heap)?,
+                            None => Self::absent_well_known(
+                                target,
+                                oref,
+                                super::realm::WellKnownSymbol::from_reference(symbol),
+                                heap,
+                                realm,
+                            )?,
                         };
                         return Ok(None);
                     }

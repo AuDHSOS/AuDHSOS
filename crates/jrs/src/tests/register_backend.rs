@@ -7735,6 +7735,51 @@ fn a_promise_settles_through_the_job_queue_of_both_backends() -> Result<(), Erro
 }
 
 #[test]
+fn the_symbol_keyed_methods_of_22_2_6_answer_what_the_string_methods_do() -> Result<(), Error> {
+    for source in [
+        // 22.2.6.8 answers the Array of 22.2.7.2 for a pattern without `g`.
+        "JSON.stringify(/a(b)/[Symbol.match]('zab'))",
+        "''+/q/[Symbol.match]('ab')",
+        // Step 8 answers the matched substrings alone for a global pattern.
+        "JSON.stringify(/a/g[Symbol.match]('aXa'))",
+        // 22.2.6.12 answers the index, and leaves `lastIndex` as it found it.
+        "''+/b/[Symbol.search]('abc')",
+        "''+/q/[Symbol.search]('abc')",
+        "var g=/a/g;g.lastIndex=1;''+g[Symbol.search]('aa')+'/'+g.lastIndex",
+        // 22.2.6.14 cuts the text at every match.
+        "/,/[Symbol.split]('a,b,c').join('|')",
+        // 10.3.3 names each of the three.
+        "''+/a/[Symbol.match].name+'/'+/a/[Symbol.search].name+'/'+/a/[Symbol.split].name",
+        "''+/a/[Symbol.match].length+'/'+/a/[Symbol.search].length+'/'+/a/[Symbol.split].length",
+    ] {
+        let mut engine_host = SilentHost;
+        let mut engine = Realm::with_backend(Limits::default(), &mut engine_host, Backend::Engine)?;
+        let mut stack_host = SilentHost;
+        let mut stack = Realm::with_backend(Limits::default(), &mut stack_host, Backend::Stack)?;
+        assert_eq!(
+            engine.evaluate(source)?,
+            stack.evaluate(source)?,
+            "{source}"
+        );
+    }
+    // 22.2.7.1 calls the `exec` of the object, and one of the Script is a call
+    // these clauses have no frame to make.
+    for source in [
+        "var r=/a/;r.exec=function(){return null};r[Symbol.match]('a')",
+        "var r=/a/;r.constructor=function(){};r[Symbol.split]('a')",
+        "RegExp.prototype[Symbol.matchAll]",
+    ] {
+        let mut host = SilentHost;
+        let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+        assert!(
+            matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn a_clause_of_23_1_3_writes_the_length_the_way_7_3_4_does() -> Result<(), Error> {
     for source in [
         // 10.4.2.1 step 3.g: an index at or above a length 7.3.15 made
