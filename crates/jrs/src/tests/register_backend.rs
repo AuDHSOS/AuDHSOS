@@ -7694,6 +7694,40 @@ fn a_promise_settles_through_the_job_queue_of_both_backends() -> Result<(), Erro
 }
 
 #[test]
+fn a_class_body_reaches_the_class_through_a_binding_of_its_own() -> Result<(), Error> {
+    // 15.7.14 steps 3, 4 and 17 give the class body a binding for the class
+    // name that every method reaches and nothing can write.
+    for source in [
+        "class C{m(){return C}}var cls=C;C=null;''+(cls.prototype.m()===cls)+'/'+C",
+        "class C{static s(){return C}}var cls=C;C=null;''+(cls.s()===cls)",
+        "var K=class C{m(){return C}};''+(new K().m()===K)",
+        // The binding of the body shadows one of the same name outside it.
+        "var C=1;var K=class C{m(){return C}};''+(new K().m()===K)+'/'+C",
+        // A class without a name creates no binding.
+        "class D{};typeof D",
+    ] {
+        let mut engine_host = SilentHost;
+        let mut engine = Realm::with_backend(Limits::default(), &mut engine_host, Backend::Engine)?;
+        let mut stack_host = SilentHost;
+        let mut stack = Realm::with_backend(Limits::default(), &mut stack_host, Backend::Stack)?;
+        assert_eq!(
+            engine.evaluate(source)?,
+            stack.evaluate(source)?,
+            "{source}"
+        );
+    }
+    // 15.7.14 step 3 makes the binding immutable, which the lowering has no
+    // instruction to refuse at run time.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    assert!(matches!(
+        realm.evaluate("class C{m(){C=1}}"),
+        Err(Error::Unsupported { .. })
+    ));
+    Ok(())
+}
+
+#[test]
 fn a_clause_of_a_case_block_is_an_entry_point_of_its_own() -> Result<(), Error> {
     // 14.12.4 dispatches into each clause and falls through to the next, so
     // both reach it with the bindings the statement began with. The lowering

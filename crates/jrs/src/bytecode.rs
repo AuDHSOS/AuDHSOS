@@ -2821,6 +2821,10 @@ impl RegisterLowerer {
         self.lower_class_with(class, Some(name))
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function carries a class from its heritage to its methods"
+    )]
     fn lower_class_with(
         &mut self,
         class: &parser::Class,
@@ -2828,13 +2832,37 @@ impl RegisterLowerer {
     ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         // 15.7.14 step 5 evaluates the heritage before the constructor is
-        // made, and the register keeps it where the collector sees it.
+        // made, and the register keeps it where the collector sees it. The
+        // binding of the class name is in its Temporal Dead Zone there, which
+        // the lowering answers by not carrying it yet.
         let heritage = match &class.heritage {
             Some(heritage) => {
                 self.lower(heritage)?;
                 let register = self.allocate_register()?;
                 self.code.emit(Instruction::Star(register));
                 Some(register)
+            }
+            None => None,
+        };
+        // 15.7.14 steps 3 and 4 give the class body a binding of its own for
+        // the class name, which the constructor and every method reach and
+        // nothing can write.
+        let inner = class.name.clone();
+        let inner = match &inner {
+            Some(inner) => {
+                let register = self.allocate_register()?;
+                self.active_binding_count = self.active_binding_count.checked_add(1)?;
+                self.max_binding_count = self.max_binding_count.max(self.active_binding_count);
+                let shadowed = self.bindings.insert(
+                    inner.clone(),
+                    RegisterBinding {
+                        storage: RegisterBindingStorage::Register(register),
+                        value_type: Some(RegisterType::Unknown),
+                        mutable: false,
+                        stable_function_identity: false,
+                    },
+                );
+                Some((inner.clone(), register, shadowed))
             }
             None => None,
         };
@@ -2846,6 +2874,16 @@ impl RegisterLowerer {
         }
         let constructor = self.allocate_register()?;
         self.code.emit(Instruction::Star(constructor));
+        // 15.7.14 step 17 initializes the binding of the class name with the
+        // class, which every method and every computed key after this reads.
+        // The constructor may already have captured it, which moved it out of
+        // the register and into a context slot, so the write goes where the
+        // binding is now and not where it started.
+        if let Some((name, _, _)) = &inner {
+            let binding = *self.bindings.get(name)?;
+            self.code.emit(Instruction::Ldar(constructor));
+            self.store_binding(binding);
+        }
         // 15.7.14 puts every method the body defines on the prototype the
         // constructor carries, and a static one on the constructor itself.
         let prototype = self.allocate_register()?;
@@ -2907,6 +2945,14 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Ldar(constructor));
         self.release_register(prototype)?;
         self.release_register(constructor)?;
+        if let Some((name, register, shadowed)) = inner {
+            match shadowed {
+                Some(shadowed) => self.bindings.insert(name, shadowed),
+                None => self.bindings.remove(&name),
+            };
+            self.active_binding_count = self.active_binding_count.checked_sub(1)?;
+            self.release_register(register)?;
+        }
         if let Some(heritage) = heritage {
             self.release_register(heritage)?;
         }
