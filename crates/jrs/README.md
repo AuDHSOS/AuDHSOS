@@ -1600,7 +1600,10 @@ at tree `881bc1573c8579661c411a239ba324b83c3dacab`, which is the tree of
 `c9b1598`; that step gained 79 variants and lost none. The `for`-`of` runs and
 both full runs beside 14.7.5.6 were measured at tree
 `37417685097fb03d4cd4e069f5c218dbf3cc8fe9`, which is the tree of `f9d7537`;
-that step gained 128 variants and lost none.
+that step gained 128 variants and lost none. The `var` head of a nested
+iteration landed in `b56e60f` after it and moved no variant of the suite, which
+has no standalone variant of that shape; the engine output of `b56e60f` is
+byte-identical to that of `f9d7537`.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
