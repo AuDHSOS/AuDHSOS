@@ -3258,12 +3258,18 @@ impl RegisterLowerer {
     /// at run time.
     fn escape(&mut self, escaped: &[RegisterType]) {
         let mut pending: Vec<RegisterType> = escaped.to_vec();
+        let mut followed: BTreeSet<u32> = BTreeSet::new();
         while let Some(value_type) = pending.pop() {
             // A function leaves with everything its closure can reach: the
             // callee may call it, and the call writes the captured bindings.
             // Following one twice adds nothing, because the first pass left
             // every binding it captures with a type this lowering cannot name.
+            // A function that captures itself would be followed forever, so
+            // each one is followed once.
             if let RegisterType::Function(code_id) = value_type {
+                if !followed.insert(code_id) {
+                    continue;
+                }
                 let captured: Vec<String> = self
                     .function_capture_effects
                     .get(&code_id)

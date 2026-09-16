@@ -621,6 +621,23 @@ fn new_target_is_the_constructor_the_call_named() -> Result<(), Error> {
     Ok(())
 }
 
+#[test]
+fn a_function_that_captures_itself_leaves_an_intrinsic_once() -> Result<(), Error> {
+    // The lowering follows everything a function that leaves can reach. One
+    // that captures itself was followed again on every pass, so the lowering
+    // never ended and no limit of the embedding could stop it.
+    for source in [
+        "function G(){return typeof G}function H(){return Reflect.construct(G,[])}typeof H",
+        "(function(){function G(){return typeof G}return Object.keys(G).length})()",
+        "(function(){function G(){return G}return typeof Object.keys(G)})()",
+        "(function(){function G(){return typeof G}return Reflect.construct(G,[],G)===undefined})()",
+        "(function(){function G(){return new.target===G}return Reflect.construct(G,[],G)!==undefined})()",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
 fn differential_scripts(scripts: &[&str]) -> Result<(), Error> {
     let outcome = |backend| -> Result<Result<Value, Error>, Error> {
         let mut host = SilentHost;
