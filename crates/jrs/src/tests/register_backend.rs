@@ -7015,3 +7015,27 @@ fn a_copying_clause_of_23_1_3_makes_its_answer_with_array_species_create() -> Re
     ));
     Ok(())
 }
+
+/// 20.2.1.1 builds the source text of a function and compiles it at run time.
+/// The engine holds no units, so the run stops, the embedding makes one, and
+/// the call instruction runs again with it.
+#[test]
+fn the_function_constructor_compiles_a_body_at_run_time() -> Result<(), Error> {
+    for source in [
+        "var f=Function('a','b','return a+b');''+f(1,2)",
+        "var f=new Function('return 7');''+f()",
+        "var f=Function('');typeof f",
+        "''+Function('a','return a').length",
+        "Function('a','return a').name",
+        "var t=false;try{Function('(')}catch(e){t=e instanceof SyntaxError}''+t",
+        "''+(Function('return 1') instanceof Function)",
+        "var f=Function('return this');typeof f()",
+        "''+Function()()",
+        "var f=Function('a,b','return b');''+f(1,2)",
+        "var f=Function('return Function(\"return 5\")()');''+f()",
+        "''+(typeof Function('return 1').prototype)",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}

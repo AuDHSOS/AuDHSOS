@@ -586,6 +586,23 @@ impl Execution<'_> {
     ///
     /// A unit is never dropped, so its position is a name a function object of
     /// an earlier Script still resolves against.
+    /// Compiles the body 20.2.1.1 built and gives it a unit of this Realm.
+    ///
+    /// A text no Script accepts, and one the register lowering does not take,
+    /// both answer `None`, which 20.2.1.1 step 12 turns into a `SyntaxError`.
+    fn compile_dynamic_unit(&mut self, source: &[u16]) -> crate::engine::interpreter::Compiled {
+        let mut compiled = || {
+            let text = alloc::string::String::from_utf16(source).ok()?;
+            let program = crate::compile(&text, self.limits).ok()?;
+            let code = program.register_code.as_ref()?;
+            self.register_unit(code).ok()
+        };
+        compiled().map_or(
+            crate::engine::interpreter::Compiled::Refused,
+            crate::engine::interpreter::Compiled::Unit,
+        )
+    }
+
     fn register_unit(
         &mut self,
         code: &Rc<crate::engine::bytecode::BytecodeFunction>,
@@ -623,6 +640,10 @@ impl Execution<'_> {
     /// completion that cannot cross to the embedding is not a failure: the
     /// Script ran to a defined end, and only its value has no identity outside
     /// the engine.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one run of a Script, with the compilations 20.2.1.1 asks for"
+    )]
     fn execute_register_program(
         &mut self,
         code: &Rc<crate::engine::bytecode::BytecodeFunction>,
@@ -652,28 +673,48 @@ impl Execution<'_> {
         // of an earlier Script resolves in the table that Script was compiled
         // into. The code is borrowed separately from the feedback because one
         // run reads the code of every unit and writes the feedback of the one
-        // it is executing.
-        let roots: Vec<Rc<crate::engine::bytecode::BytecodeFunction>> = self
-            .register_code
-            .iter()
-            .map(|state| Rc::clone(&state.code))
-            .collect();
-        let roots: Vec<&crate::engine::bytecode::BytecodeFunction> =
-            roots.iter().map(Rc::as_ref).collect();
-        let mut vectors: Vec<&mut crate::engine::feedback::FeedbackVector> = self
-            .register_code
-            .iter_mut()
-            .map(|state| &mut state.vector)
-            .collect();
-        let result = vm.run_unit(
-            crate::engine::interpreter::CodeTable::new(&roots),
-            &mut vectors,
-            unit,
-            &[],
-            &mut agent.heap,
-            &agent.realm,
-        );
-        drop(vectors);
+        // it is executing. 20.2.1.1 compiles a body at run time, which adds a
+        // unit: the run stops, the Script is compiled here, and the run
+        // continues with the table that holds it.
+        let mut compiled: Option<crate::engine::interpreter::Compiled> = None;
+        let result = loop {
+            let held: Vec<Rc<crate::engine::bytecode::BytecodeFunction>> = self
+                .register_code
+                .iter()
+                .map(|state| Rc::clone(&state.code))
+                .collect();
+            let roots: Vec<&crate::engine::bytecode::BytecodeFunction> =
+                held.iter().map(Rc::as_ref).collect();
+            let mut vectors: Vec<&mut crate::engine::feedback::FeedbackVector> = self
+                .register_code
+                .iter_mut()
+                .map(|state| &mut state.vector)
+                .collect();
+            let table = crate::engine::interpreter::CodeTable::new(&roots);
+            let outcome = match compiled.take() {
+                None => vm.run_unit(
+                    table,
+                    &mut vectors,
+                    unit,
+                    &[],
+                    &mut agent.heap,
+                    &agent.realm,
+                ),
+                Some(added) => {
+                    vm.resume_unit(table, &mut vectors, added, &mut agent.heap, &agent.realm)
+                }
+            };
+            drop(vectors);
+            drop(roots);
+            drop(held);
+            match outcome {
+                Ok(crate::engine::interpreter::Outcome::Done(value)) => break Ok(value),
+                Ok(crate::engine::interpreter::Outcome::Compile(source)) => {
+                    compiled = Some(self.compile_dynamic_unit(&source));
+                }
+                Err(error) => break Err(error),
+            }
+        };
         self.fuel = vm.fuel;
         let result = match result {
             Ok(value) => match register_primitive(value, &agent.heap) {

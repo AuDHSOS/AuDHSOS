@@ -588,6 +588,35 @@ pub struct RegisterVM {
     /// How deep a `ToString` of 7.1.17 is nested in methods of this Realm,
     /// which bounds what a cyclic Array spends the Rust stack on.
     conversion_depth: usize,
+    /// The source text 20.2.1.1 asked the embedding to compile, which stops
+    /// the run until a unit of it exists.
+    pending_source: Option<alloc::rc::Rc<[u16]>>,
+    /// Where the run continues once that unit exists.
+    resume_pc: usize,
+    /// The bytecode function the run continues in.
+    resume_code_id: Option<u32>,
+    /// What the embedding answered for the text it was given.
+    compiled_unit: Option<Compiled>,
+}
+
+/// What the embedding made of the text 20.2.1.1 gave it.
+#[derive(Clone, Copy)]
+pub enum Compiled {
+    /// The unit it compiled the text into.
+    Unit(u32),
+    /// It took the text for no Script, which 20.2.1.1 step 12 answers with a
+    /// `SyntaxError`.
+    Refused,
+}
+
+/// How a run of one unit ended.
+pub enum Outcome {
+    /// The unit ran to its end and answered this value.
+    Done(Value),
+    /// 20.2.1.1 compiles a body at run time, which only the embedding that
+    /// holds the units of the Realm can do. The run continues where it
+    /// stopped once [`RegisterVM::resume_unit`] is given the unit.
+    Compile(alloc::rc::Rc<[u16]>),
 }
 
 impl Default for RegisterVM {
@@ -628,6 +657,10 @@ impl RegisterVM {
             current_context: None,
             context_roots: Vec::with_capacity(register_capacity.saturating_add(1)),
             conversion_depth: 0,
+            pending_source: None,
+            resume_pc: 0,
+            resume_code_id: None,
+            compiled_unit: None,
         }
     }
 
@@ -1689,8 +1722,12 @@ impl RegisterVM {
             | Intrinsic::ArrayPrototypeToReversed => {
                 self.call_array_edit_intrinsic(intrinsic, call, None, heap, realm)
             }
+            // 20.2.1.1 builds the source text of a function and asks the
+            // embedding for a unit of it.
+            Intrinsic::FunctionConstructor => {
+                self.create_dynamic_function(&call, units, heap, realm)
+            }
             Intrinsic::ArrayIsArray
-            | Intrinsic::FunctionConstructor
             | Intrinsic::FunctionPrototypeCall
             | Intrinsic::MathPow
             | Intrinsic::MathAbs
@@ -4325,9 +4362,8 @@ impl RegisterVM {
         heap: &GenerationalHeap,
     ) -> Result<Value, VMError> {
         match intrinsic {
-            Intrinsic::FunctionConstructor => Err(VMError::Unsupported(
-                "the Function constructor, which compiles a body at run time",
-            )),
+            // 20.2.1.1 does not answer here: it stops the run for a unit.
+            Intrinsic::FunctionConstructor => Err(VMError::InvalidFeedbackVector),
             // 21.3.2.26 is Number::exponentiate of 6.1.6.1.3 on the two
             // arguments, after 7.1.4 has made numbers of them.
             Intrinsic::MathPow => Ok(Value::from_f64(audhsos_math::pow(
@@ -8362,6 +8398,92 @@ impl RegisterVM {
         Ok(true)
     }
 
+    /// `CreateDynamicFunction` of 20.2.1.1.
+    ///
+    /// The source text is built here and compiled by the embedding, which is
+    /// the only side that holds the units of the Realm: the run stops, the
+    /// instruction runs again, and the second pass makes the function object
+    /// of the unit it was given.
+    fn create_dynamic_function(
+        &mut self,
+        call: &Call,
+        units: CodeUnits<'_>,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if let Some(compiled) = self.compiled_unit.take() {
+            // Step 12: a text no Script accepts is a `SyntaxError`.
+            let Compiled::Unit(unit) = compiled else {
+                return Err(raise(
+                    heap,
+                    realm,
+                    super::realm::NativeErrorKind::SyntaxError,
+                    "invalid function body",
+                ));
+            };
+            let expected = units
+                .table
+                .root(unit)
+                .and_then(|root| root.functions.first())
+                .ok_or(VMError::InvalidBytecode(
+                    VerificationError::FunctionOutOfBounds { pc: 0, index: unit },
+                ))?
+                .expected_arguments;
+            let prototype = realm.function_prototype(heap)?;
+            let function = heap.allocate_function(unit, 0, None)?;
+            heap.set_object_prototype(function, prototype)?;
+            self.acc = Value::from_object(function);
+            Self::set_function_length(function, expected, heap)?;
+            let name = heap.strings.allocate_str("anonymous")?;
+            let key = PropertyKey::String(heap.strings.intern("name")?);
+            heap.define_own_named(
+                function,
+                key,
+                Value::from_string(name),
+                super::realm::builtin_metadata(),
+            )?;
+            // 10.2.5 gives it the `prototype` every ordinary function has.
+            self.make_constructor(units.active, heap, realm)?;
+            return Ok(self.acc);
+        }
+        // Steps 3 to 11 join every argument but the last with commas and take
+        // the last as the body.
+        let mut text: Vec<u16> = "(function anonymous(".encode_utf16().collect();
+        let parameters = call.arg_count.saturating_sub(1);
+        for index in 0..parameters {
+            if index > 0 {
+                text.push(0x2C);
+            }
+            let part = self.call_argument(call, index)?;
+            let part = self.text_of(part, units, heap, realm)?;
+            text.extend(
+                heap.strings
+                    .to_utf16(part)
+                    .ok_or(VMError::Heap(HeapError::InvalidReference))?,
+            );
+        }
+        text.extend("\n) {\n".encode_utf16());
+        if call.arg_count > 0 {
+            let body = self.call_argument(call, call.arg_count.saturating_sub(1))?;
+            let body = self.text_of(body, units, heap, realm)?;
+            text.extend(
+                heap.strings
+                    .to_utf16(body)
+                    .ok_or(VMError::Heap(HeapError::InvalidReference))?,
+            );
+        }
+        text.extend("\n})".encode_utf16());
+        if text.len() > self.string_units_limit {
+            return Err(VMError::StringLimit);
+        }
+        self.pending_source = Some(alloc::rc::Rc::from(text));
+        // The call instruction runs again once the unit exists; its callee and
+        // its arguments are still in the registers it read them from.
+        self.resume_pc = call.return_pc.saturating_sub(1);
+        self.resume_code_id = call.caller_code_id;
+        Ok(VALUE_UNDEFINED)
+    }
+
     /// The value a register holds as a property key, with an Object sent
     /// through 7.1.1 the way 7.1.19 step 2 asks.
     fn text_key(
@@ -9570,14 +9692,21 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        self.run_unit(
+        // A single unit has no embedding to compile a body for it, so
+        // 20.2.1.1 is a gap on this entry point.
+        match self.run_unit(
             CodeTable::new(&[code]),
             &mut [feedback],
             0,
             arguments,
             heap,
             realm,
-        )
+        )? {
+            Outcome::Done(value) => Ok(value),
+            Outcome::Compile(_) => Err(VMError::Unsupported(
+                "the Function constructor, which compiles a body at run time",
+            )),
+        }
     }
 
     /// Executes one unit of a Realm whose other units it may call into.
@@ -9598,7 +9727,7 @@ impl RegisterVM {
         arguments: &[Value],
         heap: &mut GenerationalHeap,
         realm: &Realm,
-    ) -> Result<Value, VMError> {
+    ) -> Result<Outcome, VMError> {
         self.fp = 0;
         self.frames.clear();
         self.current_context = None;
@@ -9624,8 +9753,8 @@ impl RegisterVM {
             .fuel
             .checked_sub(code.entry_fuel_cost)
             .ok_or(VMError::OutOfFuel)?;
-        let mut pc: usize = 0;
-        let mut current_code_id = None;
+        let pc: usize = 0;
+        let current_code_id = None;
         let frame_end = self
             .fp
             .checked_add(code.register_count as usize)
@@ -9650,11 +9779,48 @@ impl RegisterVM {
         if let Some(slot_count) = code.own_context_slot_count {
             self.current_context = Some(self.allocate_context(code, heap, None, slot_count)?);
         }
+        self.run_loop(units, feedback, heap, realm, pc, current_code_id)
+    }
 
+    /// Continues a run that stopped for [`Outcome::Compile`], with the unit
+    /// the embedding made of the text, or `None` where it refused it.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`RegisterVM::run_unit`], from where the run stopped.
+    pub fn resume_unit(
+        &mut self,
+        units: CodeTable<'_>,
+        feedback: &mut [&mut FeedbackVector],
+        compiled: Compiled,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Outcome, VMError> {
+        self.compiled_unit = Some(compiled);
+        let (pc, code_id) = (self.resume_pc, self.resume_code_id);
+        self.run_loop(units, feedback, heap, realm, pc, code_id)
+    }
+
+    /// Runs instructions until the unit answers or asks for a compilation.
+    fn run_loop(
+        &mut self,
+        units: CodeTable<'_>,
+        feedback: &mut [&mut FeedbackVector],
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+        mut pc: usize,
+        mut current_code_id: Option<u32>,
+    ) -> Result<Outcome, VMError> {
         loop {
             match self.step(units, feedback, heap, realm, &mut pc, &mut current_code_id) {
-                Ok(None) => {}
-                Ok(Some(value)) => return Ok(value),
+                Ok(None) => {
+                    // 20.2.1.1 stopped the run where the call stands, and the
+                    // instruction runs again once the unit exists.
+                    if let Some(source) = self.pending_source.take() {
+                        return Ok(Outcome::Compile(source));
+                    }
+                }
+                Ok(Some(value)) => return Ok(Outcome::Done(value)),
                 // 14.15: a thrown value looks for a handler from the throwing
                 // instruction outwards before it leaves the outermost frame.
                 Err(VMError::Thrown(value, native)) => {
