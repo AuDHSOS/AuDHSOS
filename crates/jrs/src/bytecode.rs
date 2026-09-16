@@ -5977,28 +5977,41 @@ impl RegisterLowerer {
         let mut value_type = RegisterType::Undefined;
         for (_, body) in clauses {
             starts.push(self.code.instructions.len());
+            // Every clause is an entry point of its own, which the dispatch
+            // reaches with the bindings the statement began with.
+            self.bindings.clone_from(&bindings_before);
+            self.object_layouts.clone_from(&layouts_before);
             // A clause is entered by a jump as well as by fallthrough, and in
             // both cases the accumulator has to hold the value accumulated so
             // far, not the discriminant the dispatch left behind.
             self.code.emit(Instruction::Ldar(result_register));
+            let mut abrupt = false;
             for statement in body {
-                let flow = self.lower_statement(statement)?;
-                // Every clause body is an entry point of its own, so a body
-                // that changes a tracked binding type has no single type at the
-                // next one.
-                if self.bindings != bindings_before || self.object_layouts != layouts_before {
-                    return None;
-                }
-                match flow {
+                match self.lower_statement(statement)? {
                     RegisterFlow::Value(clause_type) => {
                         value_type = value_type.merge(clause_type);
                         self.code.emit(Instruction::Star(result_register));
                     }
                     RegisterFlow::Empty => {}
-                    RegisterFlow::Abrupt => break,
+                    RegisterFlow::Abrupt => {
+                        abrupt = true;
+                        break;
+                    }
                 }
             }
+            // 14.12.4 falls through to the next clause, which the jumps of the
+            // dispatch reach with the bindings of the statement: what falls
+            // through has to fit them. A clause that ends abruptly falls
+            // through to nothing.
+            if !abrupt
+                && (!register_bindings_fit(&self.bindings, &bindings_before)
+                    || !self.loop_layouts_match(&layouts_before))
+            {
+                return None;
+            }
         }
+        self.bindings.clone_from(&bindings_before);
+        self.object_layouts.clone_from(&layouts_before);
         self.completions.pop()?;
         let loop_state = self.loops.pop()?;
 

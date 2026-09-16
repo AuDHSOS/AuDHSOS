@@ -7694,6 +7694,35 @@ fn a_promise_settles_through_the_job_queue_of_both_backends() -> Result<(), Erro
 }
 
 #[test]
+fn a_clause_of_a_case_block_is_an_entry_point_of_its_own() -> Result<(), Error> {
+    // 14.12.4 dispatches into each clause and falls through to the next, so
+    // both reach it with the bindings the statement began with. The lowering
+    // asked for those bindings unchanged after every statement of a clause
+    // and refused a clause that narrowed a tracked type.
+    for source in [
+        "var p=0,r=0;switch(1){case 1:r=p;r+=1;break;default:r=2}r",
+        "var r;switch(1){case 1:r='a';break;case 2:r='b';break;default:r='c'}r",
+        "var r=0,x;switch(2){case 1:x=1;r+=1;case 2:x='s';r+=2;default:r+=4}''+r+x",
+        "var r=0;switch(9){case 1:r=1;break}r",
+        "var r='';for(var i=0;i<3;i++){switch(i){case 0:r+='a';continue;case 1:r+='b';break;default:r+='c'}r+='.'}r",
+        // A clause that ends abruptly falls through to nothing, so what it
+        // left behind takes no part in the comparison.
+        "var s='ab',p=0;(function(){var e=p;while(e<s.length){var c=s[e];switch(c){case '_':e+=1;break;default:return 'd'+e}}return 'e'+e})()",
+    ] {
+        let mut engine_host = SilentHost;
+        let mut engine = Realm::with_backend(Limits::default(), &mut engine_host, Backend::Engine)?;
+        let mut stack_host = SilentHost;
+        let mut stack = Realm::with_backend(Limits::default(), &mut stack_host, Backend::Stack)?;
+        assert_eq!(
+            engine.evaluate(source)?,
+            stack.evaluate(source)?,
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn a_jump_leaves_the_lexical_declarations_of_the_blocks_it_ends() -> Result<(), Error> {
     // 14.9 and 14.10 leave every block between the jump and its target, so a
     // lexical declaration of one of those blocks is a name the target does not
