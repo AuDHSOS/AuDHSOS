@@ -634,6 +634,17 @@ impl Execution<'_> {
                 Ok(crate::engine::interpreter::Outcome::Compile(source)) => {
                     compiled = Some(self.compile_dynamic_unit(&source));
                 }
+                Ok(crate::engine::interpreter::Outcome::Print(text)) => {
+                    let line = Value::String(Rc::from(&*text));
+                    // A host that refuses the line stops the run: the Script
+                    // has no way to see the refusal, so it is not a throw.
+                    if self.host.print(&[line]).is_err() {
+                        return Err(crate::engine::interpreter::VMError::Unsupported(
+                            "a line the embedding refused to write",
+                        ));
+                    }
+                    compiled = Some(crate::engine::interpreter::Compiled::Printed);
+                }
                 Ok(crate::engine::interpreter::Outcome::Evaluate(source)) => {
                     self.fuel = vm.fuel;
                     let answer = self.evaluate_nested_script(agent, &source, depth);

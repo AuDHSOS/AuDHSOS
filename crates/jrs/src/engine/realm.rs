@@ -639,6 +639,25 @@ pub enum Intrinsic {
     JsonParse,
     /// `JSON.stringify`, 25.5.2.
     JsonStringify,
+    /// `Promise`, 27.2.3.1.
+    PromiseConstructor,
+    /// `Promise.resolve`, 27.2.4.7.
+    PromiseResolve,
+    /// `Promise.reject`, 27.2.4.6.
+    PromiseReject,
+    /// `Promise.prototype.then`, 27.2.5.4.
+    PromisePrototypeThen,
+    /// `Promise.prototype.catch`, 27.2.5.1.
+    PromisePrototypeCatch,
+    /// The resolve function of 27.2.1.3.2, which 27.2.1.3 makes anew for each
+    /// promise and gives the pair's shared state.
+    PromiseResolveFunction,
+    /// The reject function of 27.2.1.3.1.
+    PromiseRejectFunction,
+    /// `print`, which no clause of the specification names: the embedding
+    /// gives the global object one, and a Test262 file of the flag `async`
+    /// reports through it.
+    Print,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -684,11 +703,15 @@ pub enum IntrinsicHolder {
     SymbolConstructor,
     /// `%Error.prototype%`, which carries the methods 20.5.3 gives it.
     ErrorPrototype,
+    /// `%Promise.prototype%`, which carries the methods 27.2.5 gives it.
+    PromisePrototype,
+    /// `%Promise%`, which carries the functions 27.2.4 gives the constructor.
+    PromiseConstructor,
 }
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 176] = [
+    pub const ALL: [Self; 184] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -865,6 +888,14 @@ impl Intrinsic {
         Self::RegExpPrototypeUnicode,
         Self::RegExpPrototypeUnicodeSets,
         Self::RegExpPrototypeSticky,
+        Self::PromiseConstructor,
+        Self::PromiseResolve,
+        Self::PromiseReject,
+        Self::PromisePrototypeThen,
+        Self::PromisePrototypeCatch,
+        Self::PromiseResolveFunction,
+        Self::PromiseRejectFunction,
+        Self::Print,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -997,6 +1028,10 @@ impl Intrinsic {
             | Self::RegExpPrototypeToString => IntrinsicHolder::RegExpPrototype,
             Self::ErrorPrototypeToString => IntrinsicHolder::ErrorPrototype,
             Self::JsonParse | Self::JsonStringify => IntrinsicHolder::Json,
+            Self::PromisePrototypeThen | Self::PromisePrototypeCatch => {
+                IntrinsicHolder::PromisePrototype
+            }
+            Self::PromiseResolve | Self::PromiseReject => IntrinsicHolder::PromiseConstructor,
             Self::StringFromCharCode | Self::StringFromCodePoint | Self::StringRaw => {
                 IntrinsicHolder::StringConstructor
             }
@@ -1031,7 +1066,13 @@ impl Intrinsic {
             | Self::IsNaN
             | Self::IsFinite
             | Self::ParseInt
-            | Self::ParseFloat => IntrinsicHolder::Global,
+            | Self::ParseFloat
+            // 27.2.1.3 stands on no object, so the Global holder never
+            // installs either resolving function.
+            | Self::PromiseConstructor
+            | Self::PromiseResolveFunction
+            | Self::PromiseRejectFunction
+            | Self::Print => IntrinsicHolder::Global,
             Self::ArrayIsArray | Self::ArrayOf | Self::ArrayFrom => {
                 IntrinsicHolder::ArrayConstructor
             }
@@ -1244,6 +1285,14 @@ impl Intrinsic {
             Self::RegExpPrototypeUnicode => 166,
             Self::RegExpPrototypeUnicodeSets => 167,
             Self::RegExpPrototypeSticky => 168,
+            Self::PromiseConstructor => 176,
+            Self::PromiseResolve => 177,
+            Self::PromiseReject => 178,
+            Self::PromisePrototypeThen => 179,
+            Self::PromisePrototypeCatch => 180,
+            Self::PromiseResolveFunction => 181,
+            Self::PromiseRejectFunction => 182,
+            Self::Print => 183,
         }
     }
 
@@ -1430,6 +1479,14 @@ impl Intrinsic {
             Self::RegExpPrototypeUnicode => 166,
             Self::RegExpPrototypeUnicodeSets => 167,
             Self::RegExpPrototypeSticky => 168,
+            Self::PromiseConstructor => 176,
+            Self::PromiseResolve => 177,
+            Self::PromiseReject => 178,
+            Self::PromisePrototypeThen => 179,
+            Self::PromisePrototypeCatch => 180,
+            Self::PromiseResolveFunction => 181,
+            Self::PromiseRejectFunction => 182,
+            Self::Print => 183,
         }
     }
 
@@ -1617,6 +1674,14 @@ impl Intrinsic {
             166 => Some(Self::RegExpPrototypeUnicode),
             167 => Some(Self::RegExpPrototypeUnicodeSets),
             168 => Some(Self::RegExpPrototypeSticky),
+            176 => Some(Self::PromiseConstructor),
+            177 => Some(Self::PromiseResolve),
+            178 => Some(Self::PromiseReject),
+            179 => Some(Self::PromisePrototypeThen),
+            180 => Some(Self::PromisePrototypeCatch),
+            181 => Some(Self::PromiseResolveFunction),
+            182 => Some(Self::PromiseRejectFunction),
+            183 => Some(Self::Print),
             _ => None,
         }
     }
@@ -1646,7 +1711,12 @@ impl Intrinsic {
             | Self::SymbolPrototypeValueOf
             | Self::StringPrototypeValueOf
             | Self::ObjectPrototypeValueOf => "valueOf",
-            Self::ThrowTypeError | Self::FunctionPrototype => "",
+            // 27.2.1.3 makes the pair of resolving functions with no name,
+            // as 10.2.4.1 and 20.2.3 carry none either.
+            Self::ThrowTypeError
+            | Self::FunctionPrototype
+            | Self::PromiseResolveFunction
+            | Self::PromiseRejectFunction => "",
             Self::SpeciesGetter => "get [Symbol.species]",
             Self::RegExpPrototypeFlags => "get flags",
             Self::RegExpPrototypeSource => "get source",
@@ -1671,6 +1741,13 @@ impl Intrinsic {
             Self::RegExpPrototypeExec => "exec",
             Self::JsonParse => "parse",
             Self::JsonStringify => "stringify",
+            Self::PromiseConstructor => "Promise",
+            Self::PromiseResolve => "resolve",
+            Self::PromiseReject => "reject",
+            Self::PromisePrototypeThen => "then",
+            Self::PromisePrototypeCatch => "catch",
+
+            Self::Print => "print",
             Self::RegExpPrototypeTest => "test",
             Self::ArrayConstructor => "Array",
             Self::ObjectConstructor => "Object",
@@ -1834,7 +1911,10 @@ impl Intrinsic {
             // 20.1.3.2 and 20.1.3.4 apply `ToPropertyKey` to the name, which
             // sends an Object through 7.1.1 with the hint `string`.
             | Self::ObjectPrototypeHasOwnProperty
-            | Self::ObjectPrototypePropertyIsEnumerable => TEXT,
+            | Self::ObjectPrototypePropertyIsEnumerable
+            // The embedding writes one line of text, so its argument takes
+            // the conversion of 7.1.17 like every other text.
+            | Self::Print => TEXT,
             // 22.1.3: one position, which `ToIntegerOrInfinity` converts.
             Self::StringPrototypeCharAt
             | Self::StringPrototypeCharCodeAt
@@ -2128,6 +2208,7 @@ impl Intrinsic {
                 | Self::StringConstructor
                 | Self::NumberConstructor
                 | Self::BooleanConstructor
+                | Self::PromiseConstructor
         )
     }
 
@@ -2281,7 +2362,14 @@ impl Intrinsic {
             | Self::ArrayPrototypeToSorted
             | Self::ArrayFrom
             | Self::Eval
-            | Self::ObjectGetOwnPropertyNames => 1,
+            | Self::ObjectGetOwnPropertyNames
+            | Self::PromiseConstructor
+            | Self::PromiseResolve
+            | Self::PromiseReject
+            | Self::PromisePrototypeCatch
+            | Self::PromiseResolveFunction
+            | Self::PromiseRejectFunction
+            | Self::Print => 1,
             Self::ObjectDefineProperty | Self::ReflectDefineProperty | Self::ReflectApply => 3,
             Self::MathPow
             | Self::ObjectGetOwnPropertyDescriptor
@@ -2312,7 +2400,8 @@ impl Intrinsic {
             | Self::ArrayPrototypeToSpliced
             | Self::StringPrototypeReplace
             | Self::RegExpPrototypeReplace
-            | Self::StringPrototypeSplit => 2,
+            | Self::StringPrototypeSplit
+            | Self::PromisePrototypeThen => 2,
         }
     }
 }
@@ -2620,6 +2709,31 @@ pub fn string_constructor_owns(name: &[u16]) -> bool {
             .any(|owned| owned.encode_utf16().eq(name.iter().copied()))
 }
 
+/// The property names 27.2.4 gives `%Promise%` beyond what 17 gives every
+/// built-in function, and this Realm has not built.
+pub const PROMISE_CONSTRUCTOR_PROPERTIES: [&str; 6] =
+    ["all", "allSettled", "any", "race", "try", "withResolvers"];
+
+/// Whether `%Promise%` owns a property of this name that this Realm has not
+/// built.
+#[must_use]
+pub fn promise_constructor_owns(name: &[u16]) -> bool {
+    function_prototype_owns(name)
+        || PROMISE_CONSTRUCTOR_PROPERTIES
+            .into_iter()
+            .any(|owned| owned.encode_utf16().eq(name.iter().copied()))
+}
+
+/// The property names 27.2.5 gives `%Promise.prototype%`.
+pub const PROMISE_PROTOTYPE_PROPERTIES: [&str; 4] = ["catch", "constructor", "finally", "then"];
+
+/// Whether `%Promise.prototype%` or `%Object.prototype%` owns a property of
+/// this name, which a Promise resolves on its Prototype Chain.
+#[must_use]
+pub fn promise_prototype_owns(name: &[u16]) -> bool {
+    wrapper_prototype_owns(&PROMISE_PROTOTYPE_PROPERTIES, name)
+}
+
 /// The property names 25.5 gives `%JSON%`.
 pub const JSON_PROPERTIES: [&str; 4] = ["isRawJSON", "parse", "rawJSON", "stringify"];
 
@@ -2896,6 +3010,7 @@ pub struct Realm {
     boolean_prototype: Root,
     regexp_prototype: Root,
     symbol_prototype: Root,
+    promise_prototype: Root,
     array_iterator_prototype: Root,
     error_prototype: Root,
     native_error_prototypes: [Root; NATIVE_ERROR_COUNT],
@@ -2937,6 +3052,7 @@ struct Holders {
     boolean_prototype: Root,
     regexp_prototype: Root,
     symbol_prototype: Root,
+    promise_prototype: Root,
 }
 
 /// Global Environment Record of 9.1.1.4.
@@ -3019,6 +3135,10 @@ impl Realm {
         let regexp_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
         let regexp_prototype = heap.push_root(Value::from_object(regexp_prototype))?;
 
+        // 27.2.5: %Promise.prototype% is an ordinary object and not a Promise.
+        let promise_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
+        let promise_prototype = heap.push_root(Value::from_object(promise_prototype))?;
+
         // 20.4.3: %Symbol.prototype% is an ordinary object and not a Symbol.
         let symbol_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
         let symbol_prototype = heap.push_root(Value::from_object(symbol_prototype))?;
@@ -3088,6 +3208,7 @@ impl Realm {
                 boolean_prototype,
                 regexp_prototype,
                 symbol_prototype,
+                promise_prototype,
             },
         )?;
 
@@ -3100,6 +3221,7 @@ impl Realm {
             (Intrinsic::BooleanConstructor, boolean_prototype),
             (Intrinsic::RegExpConstructor, regexp_prototype),
             (Intrinsic::SymbolConstructor, symbol_prototype),
+            (Intrinsic::PromiseConstructor, promise_prototype),
         ] {
             Self::pair_constructor_with_prototype(heap, &intrinsics, constructor, prototype)?;
         }
@@ -3121,6 +3243,7 @@ impl Realm {
                 (reflect, "Reflect"),
                 (symbol_prototype, "Symbol"),
                 (array_iterator_prototype, "Array Iterator"),
+                (promise_prototype, "Promise"),
             ],
         )?;
 
@@ -3160,6 +3283,7 @@ impl Realm {
             boolean_prototype,
             regexp_prototype,
             symbol_prototype,
+            promise_prototype,
             array_iterator_prototype,
             error_prototype,
             native_error_prototypes,
@@ -3776,7 +3900,11 @@ impl Realm {
                 .get(Intrinsic::SpeciesGetter.index())
                 .ok_or(HeapError::InvalidReference)?,
         )?;
-        for constructor in [Intrinsic::ArrayConstructor, Intrinsic::RegExpConstructor] {
+        for constructor in [
+            Intrinsic::ArrayConstructor,
+            Intrinsic::RegExpConstructor,
+            Intrinsic::PromiseConstructor,
+        ] {
             let holder = Self::rooted(
                 heap,
                 *intrinsics
@@ -3894,6 +4022,13 @@ impl Realm {
                 IntrinsicHolder::NumberPrototype => Self::rooted(heap, holders.number_prototype)?,
                 IntrinsicHolder::BooleanPrototype => Self::rooted(heap, holders.boolean_prototype)?,
                 IntrinsicHolder::RegExpPrototype => Self::rooted(heap, holders.regexp_prototype)?,
+                IntrinsicHolder::PromisePrototype => Self::rooted(heap, holders.promise_prototype)?,
+                IntrinsicHolder::PromiseConstructor => Self::rooted(
+                    heap,
+                    *intrinsics
+                        .get(Intrinsic::PromiseConstructor.index())
+                        .ok_or(HeapError::InvalidReference)?,
+                )?,
                 IntrinsicHolder::SymbolPrototype => Self::rooted(heap, holders.symbol_prototype)?,
                 IntrinsicHolder::SymbolConstructor => Self::rooted(
                     heap,
@@ -3935,6 +4070,8 @@ impl Realm {
             if matches!(
                 intrinsic,
                 Intrinsic::ThrowTypeError
+                    | Intrinsic::PromiseResolveFunction
+                    | Intrinsic::PromiseRejectFunction
                     | Intrinsic::FunctionPrototype
                     | Intrinsic::SpeciesGetter
                     | Intrinsic::RegExpPrototypeFlags
@@ -4188,6 +4325,15 @@ impl Realm {
     /// Returns [`HeapError`] when the root no longer names the object.
     pub fn symbol_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
         Self::rooted(heap, self.symbol_prototype)
+    }
+
+    /// `%Promise.prototype%` of 27.2.5.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when the root is gone.
+    pub fn promise_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.promise_prototype)
     }
 
     /// %`ArrayIteratorPrototype`%.

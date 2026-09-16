@@ -8204,7 +8204,18 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ArrayPrototypeReduce
         | crate::engine::realm::Intrinsic::ArrayPrototypeReduceRight
         // 23.1.3.15 answers undefined.
-        | crate::engine::realm::Intrinsic::ArrayPrototypeForEach => RegisterType::Unknown,
+        | crate::engine::realm::Intrinsic::ArrayPrototypeForEach
+        // 27.2 answers a Promise, a settled value, or nothing; none of the
+        // four has a tracked layout.
+        | crate::engine::realm::Intrinsic::PromiseConstructor
+        | crate::engine::realm::Intrinsic::PromiseResolve
+        | crate::engine::realm::Intrinsic::PromiseReject
+        | crate::engine::realm::Intrinsic::PromisePrototypeThen
+        | crate::engine::realm::Intrinsic::PromisePrototypeCatch
+        | crate::engine::realm::Intrinsic::PromiseResolveFunction
+        | crate::engine::realm::Intrinsic::PromiseRejectFunction
+        // The embedding answers nothing for a line it wrote.
+        | crate::engine::realm::Intrinsic::Print => RegisterType::Unknown,
         crate::engine::realm::Intrinsic::StringPrototypeCharCodeAt
         | crate::engine::realm::Intrinsic::StringPrototypeIndexOf
         | crate::engine::realm::Intrinsic::StringPrototypeLastIndexOf

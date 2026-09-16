@@ -7688,3 +7688,106 @@ fn eval_runs_a_script_of_the_same_realm() -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[test]
+fn a_promise_settles_through_the_job_queue_of_both_backends() -> Result<(), Error> {
+    // 9.5 runs every job the Script enqueued after the Script has answered, so
+    // the log is read by a second Script of the same Realm.
+    for source in [
+        // 27.2.3.1: the executor runs at once and the reaction after it.
+        "var l=[];new Promise(function(r){l.push('e');r(1)}).then(function(v){l.push('t'+v)});l.push('s');0",
+        // 27.2.5.4: a chain runs one reaction per turn.
+        "var l=[];Promise.resolve(1).then(function(v){l.push('a'+v);return v+1}).then(function(v){l.push('b'+v)});0",
+        // 27.2.4.6 and 27.2.5.1.
+        "var l=[];Promise.reject('x').catch(function(e){l.push('c'+e)});0",
+        // 27.2.3.1 step 7: a throw of the executor rejects the promise.
+        "var l=[];new Promise(function(){throw 'q'}).catch(function(e){l.push('x'+e)});0",
+        // 27.2.2.1 step 5: a throw of a handler rejects the capability.
+        "var l=[];Promise.resolve(1).then(function(){throw 'h'}).catch(function(e){l.push('h'+e)});0",
+        // 27.2.1.3.2 step 8: a thenable is adopted through a job of its own.
+        "var l=[];new Promise(function(r){r({then:function(a){l.push('n');a(5)}})}).then(function(v){l.push('t'+v)});0",
+        // A promise resolved with a promise takes two more turns.
+        "var l=[];var i=Promise.resolve('i');new Promise(function(r){r(i)}).then(function(v){l.push('p'+v)});Promise.resolve().then(function(){l.push('1')}).then(function(){l.push('2')}).then(function(){l.push('3')});0",
+        // 27.2.1.3.2 step 6: a promise resolved with itself rejects.
+        "var l=[];var f;var p=new Promise(function(r){f=r});f(p);p.catch(function(e){l.push('self'+(e instanceof TypeError))});0",
+        // 27.2.1.3.1: the pair settles once.
+        "var l=[];var f;var p=new Promise(function(r,j){f=r;j('late')});f('first');p.then(function(v){l.push('f'+v)},function(e){l.push('r'+e)});0",
+        // 27.2.5.4.1 steps 3 and 4: a handler that is not callable is empty.
+        "var l=[];Promise.resolve('v').then(null).then(undefined,null).then(function(v){l.push('p'+v)});Promise.reject('w').then(1).catch(function(e){l.push('q'+e)});0",
+        // 27.2.4.7 step 2 answers the argument itself.
+        "var l=[];var i=Promise.resolve(1);l.push('same'+(Promise.resolve(i)===i));0",
+        // 10.4.4 in a handler, which takes its arguments from the job.
+        "var l=[];Promise.resolve(9).then(function(a){l.push('n'+arguments.length+a)});0",
+        // The two reaction lists of one promise run in the order they were
+        // added.
+        "var l=[];var p=Promise.resolve(0);p.then(function(){l.push('A')});p.then(function(){l.push('B')});0",
+    ] {
+        let mut engine_host = SilentHost;
+        let mut engine = Realm::with_backend(Limits::default(), &mut engine_host, Backend::Engine)?;
+        let mut stack_host = SilentHost;
+        let mut stack = Realm::with_backend(Limits::default(), &mut stack_host, Backend::Stack)?;
+        engine.evaluate(source)?;
+        stack.evaluate(source)?;
+        let expected = stack.evaluate("l.join('|')")?;
+        assert_eq!(engine.evaluate("l.join('|')")?, expected, "{source}");
+    }
+    Ok(())
+}
+
+#[test]
+fn the_engine_names_the_parts_of_clause_27_it_has_not_built() -> Result<(), Error> {
+    // 27.2.4 gives `%Promise%` five combinators and 27.2.5.3 gives the
+    // prototype `finally`; a read of one of them is a gap and not undefined.
+    // A gap is fatal, so each one is read in a Realm of its own.
+    for source in [
+        "Promise.all",
+        "Promise.race",
+        "Promise.any",
+        "Promise.allSettled",
+        "Promise.withResolvers",
+        "Promise.prototype.finally",
+        // A Promise of a subclass needs the `newTarget` of 10.1.13, which this
+        // engine does not carry into a constructor written in Rust.
+        "class C extends Promise{}; new C(function(){})",
+    ] {
+        let mut host = SilentHost;
+        let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+        assert!(
+            matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn the_engine_answers_the_shape_of_the_resolving_functions() -> Result<(), Error> {
+    for backend in [Backend::Engine, Backend::Stack] {
+        let mut host = SilentHost;
+        let mut realm = Realm::with_backend(Limits::default(), &mut host, backend)?;
+        // 27.2.5.5 tags the prototype, so 20.1.3.6 answers through it.
+        assert_eq!(
+            realm.evaluate("Object.prototype.toString.call(Promise.resolve(1))")?,
+            Value::string("[object Promise]")
+        );
+        assert_eq!(
+            realm.evaluate("Promise.prototype[Symbol.toStringTag]")?,
+            Value::string("Promise")
+        );
+        // 27.2.4.8 answers the constructor itself.
+        assert_eq!(
+            realm.evaluate("Promise[Symbol.species]===Promise")?,
+            Value::Boolean(true)
+        );
+    }
+    // 27.2.1.3 gives each of the pair the `length` and `name` of 10.3.3. The
+    // stack backend gives them neither, so only the engine answers here.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    realm.evaluate("var a,b;new Promise(function(r,j){a=r;b=j});0")?;
+    assert_eq!(realm.evaluate("a.length")?, Value::Number(1.0));
+    assert_eq!(realm.evaluate("b.length")?, Value::Number(1.0));
+    assert_eq!(realm.evaluate("a.name")?, Value::string(""));
+    assert_eq!(realm.evaluate("typeof a")?, Value::string("function"));
+    Ok(())
+}

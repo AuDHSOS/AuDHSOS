@@ -477,8 +477,56 @@ impl GenerationalHeap {
     ) -> Result<ObjectRef, HeapError> {
         let shape = self.shapes.root_shape();
         let mut object = JSObject::new(shape, prototype);
-        object.kind = ObjectKind::NativeFunction { id, length };
+        object.kind = ObjectKind::NativeFunction {
+            id,
+            length,
+            state: VALUE_UNDEFINED,
+        };
         self.old_gen.allocate_object(object)
+    }
+
+    /// Bump-allocates a closure of the specification in the Nursery: a native
+    /// callable that carries `state` besides its identifier, as the pair of
+    /// resolving functions of 27.2.1.3 carries the promise it settles.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::NurseryFull`] when a Safe Point is required, or
+    /// [`HeapError::ReferenceSpaceExhausted`] when no tagged index remains.
+    pub fn allocate_native(
+        &mut self,
+        prototype: Value,
+        id: u32,
+        length: u32,
+        state: Value,
+    ) -> Result<ObjectRef, HeapError> {
+        let reference = self.allocate_object(self.shapes.root_shape(), prototype)?;
+        self.object_mut(reference)?.kind = ObjectKind::NativeFunction { id, length, state };
+        Ok(reference)
+    }
+
+    /// Bump-allocates a Promise instance in the Nursery, pending and with two
+    /// empty reaction lists (27.2.4.7.1).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::NurseryFull`] when a Safe Point is required, or
+    /// [`HeapError::ReferenceSpaceExhausted`] when no tagged index remains.
+    pub fn allocate_promise(
+        &mut self,
+        prototype: Value,
+        fulfill: Value,
+        reject: Value,
+    ) -> Result<ObjectRef, HeapError> {
+        let reference = self.allocate_object(self.shapes.root_shape(), prototype)?;
+        self.object_mut(reference)?.kind = ObjectKind::Promise {
+            state: 0,
+            handled: false,
+            value: VALUE_UNDEFINED,
+            fulfill,
+            reject,
+        };
+        Ok(reference)
     }
 
     /// Allocates an immortal Array and its elements store in the Old Generation.

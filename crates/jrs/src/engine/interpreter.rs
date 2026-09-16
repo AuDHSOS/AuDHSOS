@@ -22,6 +22,7 @@ use super::{
     feedback::{BinaryOpFeedback, FeedbackVector, NamedAccessCase},
     heap::{GenerationalHeap, HeapError, NamedProperty, Root},
     object::{ArrayIterationKind, ObjectKind},
+    promise,
     realm::{Intrinsic, Realm},
     shape::{PropertyFlags, ShapeId},
     string::StringError,
@@ -502,6 +503,29 @@ pub enum Resume {
         /// Register `new` keeps its object in, when this was a construct.
         construct: Option<Reg>,
     },
+    /// A job of 9.5 called its handler.
+    ///
+    /// The frame stands on no caller: the unit that enqueued the job has
+    /// answered, so the return settles the job's capability and the next job
+    /// follows, and a value thrown out of the frame stops here.
+    Job {
+        /// Root holding the List the handler's arguments travel in.
+        arguments: Root,
+    },
+    /// 27.2.3.1 step 6 called the executor of a new Promise.
+    ///
+    /// The constructor answers the promise whatever the executor answers, and
+    /// step 7 rejects the promise with a value the executor throws rather than
+    /// letting it reach the caller, so this frame catches.
+    Executor {
+        /// Root holding the promise the constructor answers.
+        promise: Root,
+        /// Root holding the state the pair of 27.2.1.3 shares, which step 7
+        /// rejects through.
+        state: Root,
+        /// Root holding the List the two resolving functions travel in.
+        arguments: Root,
+    },
     /// `[[Set]]` of 10.1.9.2 called the setter of an accessor property.
     ///
     /// A setter answers nothing, and 13.15.2 answers the value assigned, so
@@ -562,6 +586,23 @@ impl Resume {
             },
             other => other,
         }
+    }
+
+    /// The List the frame takes its parameters from, for a call that has no
+    /// registers of a caller to take them from.
+    const fn list(self) -> Option<Root> {
+        match self {
+            Self::Spread { arguments }
+            | Self::Job { arguments }
+            | Self::Executor { arguments, .. } => Some(arguments),
+            _ => None,
+        }
+    }
+
+    /// Whether a value thrown out of this frame stops here instead of looking
+    /// for a handler of the caller.
+    const fn catches(self) -> bool {
+        matches!(self, Self::Executor { .. } | Self::Job { .. })
     }
 }
 
@@ -654,16 +695,34 @@ pub struct RegisterVM {
     /// Whether that text is a Script 19.2.1 asked to have evaluated, rather
     /// than a unit 20.2.1.1 asked to have compiled.
     pending_script: bool,
+    /// Whether that text is a line the embedding was asked to write.
+    pending_print: bool,
     /// Where the run continues once that unit exists.
     resume_pc: usize,
     /// The bytecode function the run continues in.
     resume_code_id: Option<u32>,
     /// What the embedding answered for the text it was given.
     compiled_unit: Option<Compiled>,
+    /// Root of the job queue of 9.5, the Array of the job records this run
+    /// has still to make.
+    jobs: Option<Root>,
+    /// Root of the job record whose handler holds a frame, which settles when
+    /// that frame returns or throws.
+    running_job: Option<Root>,
+    /// Root of the List a job's arguments travel in, which the frame the job
+    /// opens takes its parameters from.
+    job_arguments: Option<Root>,
+    /// Root of the value the unit answered, held while the queue drains.
+    completion: Option<Root>,
+    /// How many jobs of the queue have run, which is where the next one is
+    /// taken from; the queue is emptied once the index reaches its end.
+    job_head: u32,
 }
 
 /// What the embedding made of the text the run gave it.
 pub enum Compiled {
+    /// It wrote the line the run gave it.
+    Printed,
     /// The unit it compiled the text into.
     Unit(u32),
     /// How the Script it evaluated ended.
@@ -684,6 +743,9 @@ pub enum Outcome {
     /// 19.2.1 evaluates a Script of the same Realm, which the embedding runs
     /// on the heap and Realm this one is using.
     Evaluate(alloc::rc::Rc<[u16]>),
+    /// The Script called `print`, which only the embedding can answer: it
+    /// writes the line and the call instruction runs again.
+    Print(alloc::rc::Rc<[u16]>),
 }
 
 impl Default for RegisterVM {
@@ -727,9 +789,15 @@ impl RegisterVM {
             pending_new_target: VALUE_UNDEFINED,
             pending_source: None,
             pending_script: false,
+            pending_print: false,
             resume_pc: 0,
             resume_code_id: None,
             compiled_unit: None,
+            jobs: None,
+            running_job: None,
+            job_arguments: None,
+            completion: None,
+            job_head: 0,
         }
     }
 
@@ -1583,7 +1651,7 @@ impl RegisterVM {
                     .ok_or(VMError::StackOverflow)? =
                     heap.root_value(value).unwrap_or(VALUE_UNDEFINED);
             }
-        } else if let Some(Resume::Spread { arguments }) = call.resume {
+        } else if let Some(arguments) = call.resume.and_then(Resume::list) {
             // 20.2.3.1 and 28.1.1 pass a List, which the Array the root names
             // holds; the frame takes as many of them as it has parameters.
             let list = heap
@@ -1684,6 +1752,35 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Value, VMError> {
         match intrinsic {
+            // 27.2.3.1 step 6 calls the executor, which only a frame the
+            // instruction opens can do.
+            Intrinsic::PromiseConstructor => {
+                if call.construct.is_some() {
+                    return Err(VMError::Unsupported("a Promise of a derived class"));
+                }
+                Err(type_error(
+                    heap,
+                    realm,
+                    "Promise cannot be called without new",
+                ))
+            }
+            Intrinsic::PromiseResolveFunction | Intrinsic::PromiseRejectFunction => {
+                let function = self.read_reg(call.func)?;
+                let value = self.call_argument(&call, 0, heap)?;
+                self.settle_through(
+                    function,
+                    value,
+                    intrinsic == Intrinsic::PromiseRejectFunction,
+                    heap,
+                    realm,
+                )?;
+                Ok(VALUE_UNDEFINED)
+            }
+            Intrinsic::Print => self.print_line(&call, heap, realm),
+            Intrinsic::PromiseResolve => self.promise_resolve(call, heap, realm),
+            Intrinsic::PromiseReject => self.promise_reject(call, heap, realm),
+            Intrinsic::PromisePrototypeThen => self.promise_then(call, heap, realm),
+            Intrinsic::PromisePrototypeCatch => self.promise_catch(call, heap, realm),
             Intrinsic::ObjectPrototypeIsPrototypeOf => Self::is_prototype_of(
                 self.call_argument(&call, 0, heap)?,
                 call.receiver,
@@ -2441,6 +2538,7 @@ impl RegisterVM {
                     | Intrinsic::NumberConstructor
                     | Intrinsic::BooleanConstructor
                     | Intrinsic::FunctionConstructor
+                    | Intrinsic::PromiseConstructor
             )
         })
     }
@@ -3379,6 +3477,10 @@ impl RegisterVM {
     ///
     /// Three of them open a frame instead of answering, so the call site takes
     /// the unit they entered rather than the accumulator.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function names every native that leaves before it answers"
+    )]
     fn dispatch_native(
         &mut self,
         intrinsic: Intrinsic,
@@ -3393,6 +3495,10 @@ impl RegisterVM {
         // the `newTarget` it was given.
         if intrinsic == Intrinsic::ReflectConstruct {
             return self.begin_reflect_construct(call, units, active_feedback, heap, realm);
+        }
+        // 27.2.3.1 calls the executor before it answers, which needs a frame.
+        if intrinsic == Intrinsic::PromiseConstructor && call.construct.is_some() {
+            return self.begin_promise(call, units, active_feedback, heap, realm);
         }
         if matches!(
             intrinsic,
@@ -4558,6 +4664,7 @@ impl RegisterVM {
                         | Intrinsic::NumberConstructor
                         | Intrinsic::BooleanConstructor
                         | Intrinsic::RegExpConstructor
+                        | Intrinsic::PromiseConstructor
                         | Intrinsic::FunctionConstructor
                 )
             ),
@@ -8111,6 +8218,8 @@ impl RegisterVM {
             | ObjectKind::ArrayIteration { .. }
             | ObjectKind::Accessor { .. }
             | ObjectKind::RegExp { .. }
+            // 27.2.5.5 tags a Promise through @@toStringTag.
+            | ObjectKind::Promise { .. }
             | ObjectKind::Json
             | ObjectKind::Reflect => None,
         }
@@ -8159,6 +8268,11 @@ impl RegisterVM {
                 realm.boolean_prototype(heap)?,
                 super::realm::boolean_prototype_owns,
                 "a property of %Boolean.prototype%",
+            ),
+            (
+                realm.promise_prototype(heap)?,
+                super::realm::promise_prototype_owns,
+                "a property of %Promise.prototype%",
             ),
         ] {
             if prototype.as_object() == Some(object) && owns(name) {
@@ -8267,6 +8381,20 @@ impl RegisterVM {
                     && super::realm::string_constructor_owns(name) =>
             {
                 Err(VMError::Unsupported("a property of %String%"))
+            }
+            // 27.2.4 gives `%Promise%` five combinators and the pair of
+            // 27.2.4.9, none of which this Realm builds.
+            Some(ObjectKind::NativeFunction { id, .. })
+                if Intrinsic::from_id(id) == Some(Intrinsic::PromiseConstructor)
+                    && super::realm::promise_constructor_owns(name) =>
+            {
+                Err(VMError::Unsupported("a property of %Promise%"))
+            }
+            // 27.2.5 gives `%Promise.prototype%` the `finally` of 27.2.5.3.
+            Some(ObjectKind::Promise { .. })
+                if chain && super::realm::promise_prototype_owns(name) =>
+            {
+                Err(VMError::Unsupported("a property of %Promise.prototype%"))
             }
             // 20.4.2 gives `%Symbol%` more than the thirteen of table 1.
             Some(ObjectKind::NativeFunction { id, .. })
@@ -8842,6 +8970,7 @@ impl RegisterVM {
                 // of 21.3, 25.5 and 28.1 and the iterator of 23.1.5.2.2.
                 ObjectKind::Ordinary
                 | ObjectKind::SymbolWrapper(_)
+                | ObjectKind::Promise { .. }
                 | ObjectKind::ArrayIterator { .. }
                 | ObjectKind::ArrayIteration { .. }
                 | ObjectKind::Accessor { .. }
@@ -9905,7 +10034,7 @@ impl RegisterVM {
                     super::realm::NativeErrorKind::SyntaxError,
                     "invalid eval source",
                 )),
-                Compiled::Unit(_) => Err(VMError::InvalidFeedbackVector),
+                Compiled::Unit(_) | Compiled::Printed => Err(VMError::InvalidFeedbackVector),
             };
         }
         // Step 2: anything but a String is the answer itself.
@@ -11063,7 +11192,7 @@ impl RegisterVM {
         // 28.1.1 passed a List no register of the caller holds, and every
         // other call passed registers the allocation below does not move.
         let mut passed: Vec<Value> = Vec::with_capacity(count);
-        if let Some(Resume::Spread { arguments: list }) = frame.resume {
+        if let Some(list) = frame.resume.and_then(Resume::list) {
             let list = heap
                 .root_value(list)
                 .and_then(Value::as_object)
@@ -11279,10 +11408,575 @@ impl RegisterVM {
         }
     }
 
+    /// `print`: the run stops, the embedding writes the line, and the call
+    /// instruction runs again with nothing to write.
+    fn print_line(
+        &mut self,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if self.compiled_unit.take().is_some() {
+            return Ok(VALUE_UNDEFINED);
+        }
+        let argument = self.call_argument(call, 0, heap)?;
+        let text = self.primitive_string(argument, heap, realm)?;
+        let units = heap
+            .strings
+            .to_utf16(text)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        self.pending_print = true;
+        self.pending_source = Some(alloc::rc::Rc::from(units));
+        self.resume_pc = call.return_pc.saturating_sub(1);
+        self.resume_code_id = call.caller_code_id;
+        Ok(VALUE_UNDEFINED)
+    }
+
+    /// The job queue of 9.5 this run enqueues into.
+    fn job_queue(&self, heap: &GenerationalHeap) -> Value {
+        self.jobs
+            .and_then(|root| heap.root_value(root))
+            .unwrap_or(VALUE_UNDEFINED)
+    }
+
+    /// What a closure of the specification written in Rust carries besides its
+    /// code (27.2.1.3.1).
+    fn native_state(value: Value, heap: &GenerationalHeap) -> Option<Value> {
+        let object = value.as_object()?;
+        match heap.get_object(object)?.kind {
+            ObjectKind::NativeFunction { state, .. } => Some(state),
+            _ => None,
+        }
+    }
+
+    /// 27.2.3.1: `new Promise(executor)`, which calls the executor at once
+    /// with the pair of 27.2.1.3 and answers the promise whatever it does.
+    fn begin_promise(
+        &mut self,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let target = call
+            .construct
+            .ok_or_else(|| type_error(heap, realm, "Promise cannot be called without new"))?;
+        let executor = self.call_argument(&call, 0, heap)?;
+        if !Self::is_callable(executor, heap) {
+            return Err(type_error(heap, realm, "Promise executor is not callable"));
+        }
+        // The executor takes its two arguments from a List, which only a
+        // frame of a Script function reads.
+        if !Self::is_script_function(executor, heap) {
+            return Err(VMError::Unsupported(
+                "a Promise executor that is not a Script function",
+            ));
+        }
+        let prototype = realm.promise_prototype(heap)?;
+        let promise = Value::from_object(promise::create(heap, realm, prototype)?);
+        let (resolve, reject) = promise::resolving_functions(heap, realm, promise)?;
+        let state = Self::native_state(resolve, heap).ok_or(VMError::TypeError)?;
+        let list = promise::record(heap, realm, &[resolve, reject])?;
+        self.write_reg(target, promise)?;
+        // The three outlive the frame the executor opens, so they are roots of
+        // a scope of their own, which the return and the catch both leave.
+        heap.enter_scope();
+        let resume = Resume::Executor {
+            promise: heap.push_root(promise)?,
+            state: heap.push_root(state)?,
+            arguments: heap.push_root(list)?,
+        };
+        let call = Call {
+            receiver: VALUE_UNDEFINED,
+            func: Reg(0),
+            arg_start: Reg(0),
+            arg_count: 2,
+            slot: 0,
+            resume: Some(resume),
+            construct: None,
+            return_pc: call.return_pc,
+            caller_code_id: call.caller_code_id,
+        };
+        self.enter_call_value(executor, units, active_feedback, heap, realm, call)
+    }
+
+    /// 27.2.1.3.2 and 27.2.1.3.1: settles the promise the pair of resolving
+    /// functions was made for, once.
+    fn settle_through(
+        &self,
+        function: Value,
+        value: Value,
+        reject: bool,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let state = Self::native_state(function, heap).ok_or(VMError::TypeError)?;
+        if promise::take_resolution(heap, state)? {
+            return Ok(());
+        }
+        let promise = promise::slot(heap, state, promise::STATE_PROMISE);
+        let queue = self.job_queue(heap);
+        if reject {
+            promise::settle(heap, realm, queue, promise, promise::REJECTED, value)?;
+            return Ok(());
+        }
+        // 27.2.1.3.2 step 6: a promise resolved with itself rejects with a
+        // TypeError rather than waiting for a settlement that cannot come.
+        if value == promise {
+            let error = realm.create_native_error(
+                heap,
+                super::realm::NativeErrorKind::TypeError,
+                "a promise cannot be resolved with itself",
+            )?;
+            let error = Value::from_object(error);
+            promise::settle(heap, realm, queue, promise, promise::REJECTED, error)?;
+            return Ok(());
+        }
+        let then = Self::thenable_then(value, heap)?;
+        promise::resolve(heap, realm, queue, promise, value, then)?;
+        Ok(())
+    }
+
+    /// The callable `then` of 27.2.1.3.2 step 8, and nothing for a value that
+    /// is no thenable.
+    ///
+    /// A throw of step 8 is the rejection of step 9, which the caller makes;
+    /// an accessor `then` is a call of the Script that the resolution has no
+    /// frame to make.
+    fn thenable_then(value: Value, heap: &mut GenerationalHeap) -> Result<Option<Value>, VMError> {
+        let Some(object) = value.as_object() else {
+            return Ok(None);
+        };
+        let key = PropertyKey::String(heap.strings.intern("then")?);
+        let Some(found) = heap.lookup_named(object, key)? else {
+            return Ok(None);
+        };
+        let then = Self::plain_value(found)?;
+        Ok(Self::is_callable(then, heap).then_some(then))
+    }
+
+    /// The constructor 27.2.5.4 step 3 reads, refused unless it is `%Promise%`
+    /// itself: every other one makes a promise of a subclass.
+    fn promise_species(promise: Value, heap: &mut GenerationalHeap) -> Result<(), VMError> {
+        let object = promise.as_object().ok_or(VMError::TypeError)?;
+        let key = PropertyKey::String(heap.strings.intern("constructor")?);
+        let constructor = match heap.lookup_named(object, key)? {
+            Some(found) => Self::plain_value(found)?,
+            None => VALUE_UNDEFINED,
+        };
+        if !Self::is_intrinsic(constructor, Intrinsic::PromiseConstructor, heap) {
+            return Err(VMError::Unsupported(
+                "a Promise whose constructor is not %Promise%",
+            ));
+        }
+        let species = match heap.lookup_named(
+            constructor.as_object().ok_or(VMError::TypeError)?,
+            super::realm::WellKnownSymbol::Species.key(),
+        )? {
+            Some(found) if !found.flags.is_accessor => Self::plain_value(found)?,
+            // 27.2.4.8 is the species getter of this Realm, which answers the
+            // constructor itself.
+            Some(_) => constructor,
+            None => VALUE_UNDEFINED,
+        };
+        if species != constructor {
+            return Err(VMError::Unsupported(
+                "a Promise whose @@species is not %Promise%",
+            ));
+        }
+        Ok(())
+    }
+
+    /// 27.2.5.4: `Promise.prototype.then`.
+    fn promise_then(
+        &self,
+        call: Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let promise = call.receiver;
+        if promise::state_of(promise, heap).is_none() {
+            return Err(type_error(
+                heap,
+                realm,
+                "Promise.prototype.then called on a value that is no Promise",
+            ));
+        }
+        let on_fulfilled = self.call_argument(&call, 0, heap)?;
+        let on_rejected = self.call_argument(&call, 1, heap)?;
+        self.then_of(promise, on_fulfilled, on_rejected, heap, realm)
+    }
+
+    /// 27.2.5.4 steps 3 to 5 with the two handlers as values, which the job of
+    /// 27.2.2.2 has and the registers of no caller hold.
+    fn then_of(
+        &self,
+        promise: Value,
+        on_fulfilled: Value,
+        on_rejected: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if promise::state_of(promise, heap).is_none() {
+            return Err(type_error(
+                heap,
+                realm,
+                "Promise.prototype.then called on a value that is no Promise",
+            ));
+        }
+        Self::promise_species(promise, heap)?;
+        let capability = promise::capability(heap, realm)?;
+        self.perform_then(promise, on_fulfilled, on_rejected, capability, heap, realm)?;
+        Ok(promise::slot(heap, capability, promise::CAPABILITY_PROMISE))
+    }
+
+    /// The function of a job that is written in Rust rather than in the
+    /// Script, which has no frame to take its arguments from.
+    ///
+    /// 27.2.2.2 reaches `%Promise.prototype.then%` whenever a promise is
+    /// resolved with a promise, which is the one call this answers besides the
+    /// pair of 27.2.1.3.
+    fn call_native_job(
+        &self,
+        function: Value,
+        receiver: Value,
+        first: Value,
+        second: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let gap = VMError::Unsupported("a job whose handler is not a Script function");
+        let Some(intrinsic) = Self::native_state(function, heap)
+            .and(function.as_object())
+            .and_then(|object| match heap.get_object(object)?.kind {
+                ObjectKind::NativeFunction { id, .. } => Intrinsic::from_id(id),
+                _ => None,
+            })
+        else {
+            return Err(gap);
+        };
+        match intrinsic {
+            Intrinsic::PromisePrototypeThen => self.then_of(receiver, first, second, heap, realm),
+            Intrinsic::PromisePrototypeCatch => {
+                self.then_of(receiver, VALUE_UNDEFINED, first, heap, realm)
+            }
+            Intrinsic::PromiseResolveFunction | Intrinsic::PromiseRejectFunction => {
+                self.settle_through(
+                    function,
+                    first,
+                    intrinsic == Intrinsic::PromiseRejectFunction,
+                    heap,
+                    realm,
+                )?;
+                Ok(VALUE_UNDEFINED)
+            }
+            _ => Err(gap),
+        }
+    }
+
+    /// 27.2.5.1: `Promise.prototype.catch`, which 27.2.5.1 step 2 reaches
+    /// through the `then` of the object it was called on.
+    fn promise_catch(
+        &self,
+        call: Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if call.receiver.is_undefined() || call.receiver.is_null() {
+            return Err(type_error(
+                heap,
+                realm,
+                "Promise.prototype.catch called on undefined or null",
+            ));
+        }
+        // 27.2.5.1 step 2 reads `then` of the boxed receiver, which for a
+        // primitive is a method of a Prototype and never this intrinsic.
+        let Some(object) = call.receiver.as_object() else {
+            return Err(VMError::Unsupported(
+                "a `then` that is not %Promise.prototype.then%",
+            ));
+        };
+        let key = PropertyKey::String(heap.strings.intern("then")?);
+        let then = match heap.lookup_named(object, key)? {
+            Some(found) => Self::plain_value(found)?,
+            None => VALUE_UNDEFINED,
+        };
+        if !Self::is_intrinsic(then, Intrinsic::PromisePrototypeThen, heap) {
+            return Err(VMError::Unsupported(
+                "a `then` that is not %Promise.prototype.then%",
+            ));
+        }
+        let on_rejected = self.call_argument(&call, 0, heap)?;
+        self.then_of(call.receiver, VALUE_UNDEFINED, on_rejected, heap, realm)
+    }
+
+    /// 27.2.5.4.1: a handler that is not callable is empty, and a settled
+    /// promise owes its job at once.
+    fn perform_then(
+        &self,
+        promise: Value,
+        on_fulfilled: Value,
+        on_rejected: Value,
+        capability: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let fulfilled = if Self::is_callable(on_fulfilled, heap) {
+            on_fulfilled
+        } else {
+            VALUE_UNDEFINED
+        };
+        let rejected = if Self::is_callable(on_rejected, heap) {
+            on_rejected
+        } else {
+            VALUE_UNDEFINED
+        };
+        let queue = self.job_queue(heap);
+        promise::react(heap, realm, queue, promise, fulfilled, rejected, capability)?;
+        Ok(())
+    }
+
+    /// 27.2.4.7: `Promise.resolve`.
+    fn promise_resolve(
+        &self,
+        call: Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if !Self::is_intrinsic(call.receiver, Intrinsic::PromiseConstructor, heap) {
+            if call.receiver.as_object().is_none() {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "Promise.resolve called on a value that is no Object",
+                ));
+            }
+            return Err(VMError::Unsupported(
+                "Promise.resolve of a constructor that is not %Promise%",
+            ));
+        }
+        let value = self.call_argument(&call, 0, heap)?;
+        // Step 2: a promise of this constructor is answered unchanged.
+        if promise::state_of(value, heap).is_some() {
+            let object = value.as_object().ok_or(VMError::TypeError)?;
+            let key = PropertyKey::String(heap.strings.intern("constructor")?);
+            let constructor = match heap.lookup_named(object, key)? {
+                Some(found) => Self::plain_value(found)?,
+                None => VALUE_UNDEFINED,
+            };
+            if constructor == call.receiver {
+                return Ok(value);
+            }
+        }
+        let capability = promise::capability(heap, realm)?;
+        let resolve = promise::slot(heap, capability, promise::CAPABILITY_RESOLVE);
+        self.settle_through(resolve, value, false, heap, realm)?;
+        Ok(promise::slot(heap, capability, promise::CAPABILITY_PROMISE))
+    }
+
+    /// 27.2.4.6: `Promise.reject`.
+    fn promise_reject(
+        &self,
+        call: Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if !Self::is_intrinsic(call.receiver, Intrinsic::PromiseConstructor, heap) {
+            if call.receiver.as_object().is_none() {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "Promise.reject called on a value that is no Object",
+                ));
+            }
+            return Err(VMError::Unsupported(
+                "Promise.reject of a constructor that is not %Promise%",
+            ));
+        }
+        let value = self.call_argument(&call, 0, heap)?;
+        let capability = promise::capability(heap, realm)?;
+        let reject = promise::slot(heap, capability, promise::CAPABILITY_REJECT);
+        self.settle_through(reject, value, true, heap, realm)?;
+        Ok(promise::slot(heap, capability, promise::CAPABILITY_PROMISE))
+    }
+
+    /// The next job of 9.5, taken from the queue and held for the frame it
+    /// opens.
+    fn take_job(&mut self, heap: &mut GenerationalHeap) -> Result<Option<Value>, VMError> {
+        let queue = self.job_queue(heap);
+        let length = promise::length_of(heap, queue);
+        if self.job_head >= length {
+            // Every job the queue held has run, so the slots holding them are
+            // released before the next one is enqueued.
+            if length > 0 {
+                let object = queue.as_object().ok_or(VMError::TypeError)?;
+                heap.set_array_length(object, 0)?;
+            }
+            self.job_head = 0;
+            self.clear_job(heap)?;
+            return Ok(None);
+        }
+        let job = promise::slot(heap, queue, self.job_head);
+        self.job_head = self.job_head.saturating_add(1);
+        if let Some(root) = self.running_job {
+            heap.set_root(root, job)?;
+        }
+        Ok(Some(job))
+    }
+
+    /// Settles the capability of the job whose handler has answered.
+    fn settle_job(
+        &self,
+        job: Value,
+        value: Value,
+        threw: bool,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let kind = promise::slot(heap, job, promise::JOB_KIND)
+            .as_smi()
+            .unwrap_or(0);
+        if kind == promise::JOB_THENABLE {
+            // 27.2.2.2 step 2: only a throw of `then` is answered, through the
+            // pair the job was given.
+            if threw {
+                let reject = promise::slot(heap, job, promise::JOB_SECOND);
+                self.settle_through(reject, value, true, heap, realm)?;
+            }
+            return Ok(());
+        }
+        let capability = promise::slot(heap, job, promise::JOB_CAPABILITY);
+        if capability.is_undefined() {
+            return Ok(());
+        }
+        let index = if threw {
+            promise::CAPABILITY_REJECT
+        } else {
+            promise::CAPABILITY_RESOLVE
+        };
+        let function = promise::slot(heap, capability, index);
+        self.settle_through(function, value, threw, heap, realm)
+    }
+
+    /// Runs the jobs of 9.5 until one opens a frame or the queue is empty.
+    ///
+    /// A job whose handler is empty settles here and the next one follows; one
+    /// with a handler of the Script takes a frame that stands on no caller, so
+    /// its return reaches this drain again.
+    fn drain_jobs(
+        &mut self,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        loop {
+            let Some(job) = self.take_job(heap)? else {
+                return Ok(None);
+            };
+            self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+            let kind = promise::slot(heap, job, promise::JOB_KIND)
+                .as_smi()
+                .unwrap_or(0);
+            let function = promise::slot(heap, job, promise::JOB_FUNCTION);
+            if !Self::is_callable(function, heap) {
+                // 27.2.2.1 step 4: an empty handler passes the argument on
+                // with the type the reaction list it came from names.
+                let argument = promise::slot(heap, job, promise::JOB_FIRST);
+                self.settle_job(job, argument, kind == promise::JOB_REJECT, heap, realm)?;
+                self.clear_job(heap)?;
+                continue;
+            }
+            let first = promise::slot(heap, job, promise::JOB_FIRST);
+            if !Self::is_script_function(function, heap) {
+                let receiver = promise::slot(heap, job, promise::JOB_RECEIVER);
+                let second = promise::slot(heap, job, promise::JOB_SECOND);
+                match self.call_native_job(function, receiver, first, second, heap, realm) {
+                    Ok(answer) => self.settle_job(job, answer, false, heap, realm)?,
+                    Err(VMError::Thrown(value, _)) => {
+                        self.settle_job(job, value, true, heap, realm)?;
+                    }
+                    Err(error) => return Err(error),
+                }
+                self.clear_job(heap)?;
+                continue;
+            }
+            let arguments = if kind == promise::JOB_THENABLE {
+                let second = promise::slot(heap, job, promise::JOB_SECOND);
+                promise::record(heap, realm, &[first, second])?
+            } else {
+                promise::record(heap, realm, &[first])?
+            };
+            let Some(list) = self.job_arguments else {
+                return Err(VMError::Heap(HeapError::InvalidReference));
+            };
+            heap.set_root(list, arguments)?;
+            let call = Call {
+                receiver: promise::slot(heap, job, promise::JOB_RECEIVER),
+                func: Reg(0),
+                arg_start: Reg(0),
+                arg_count: if kind == promise::JOB_THENABLE { 2 } else { 1 },
+                slot: 0,
+                resume: Some(Resume::Job { arguments: list }),
+                construct: None,
+                return_pc: 0,
+                caller_code_id: None,
+            };
+            let entered =
+                self.enter_call_value(function, units, active_feedback, heap, realm, call)?;
+            if entered.is_some() {
+                return Ok(entered);
+            }
+            self.settle_job(job, self.acc, false, heap, realm)?;
+            self.clear_job(heap)?;
+        }
+    }
+
+    /// Forgets the job that has settled, so that the next return settles no
+    /// job twice.
+    fn clear_job(&self, heap: &mut GenerationalHeap) -> Result<(), VMError> {
+        if let Some(root) = self.running_job {
+            heap.set_root(root, VALUE_UNDEFINED)?;
+        }
+        Ok(())
+    }
+
+    /// Settles the job whose frame has just ended and starts the next one.
+    ///
+    /// Answers the code the run continues in, and nothing once the queue is
+    /// empty.
+    fn continue_jobs(
+        &mut self,
+        threw: Option<Value>,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let running = self
+            .running_job
+            .and_then(|root| heap.root_value(root))
+            .unwrap_or(VALUE_UNDEFINED);
+        if !running.is_undefined() {
+            let value = threw.unwrap_or(self.acc);
+            self.settle_job(running, value, threw.is_some(), heap, realm)?;
+            self.clear_job(heap)?;
+        }
+        self.fp = 0;
+        self.active_binding_count = 0;
+        self.current_context = None;
+        self.drain_jobs(units, active_feedback, heap, realm)
+    }
+
     /// Transfers control to the innermost handler protecting the throwing
     /// instruction, unwinding call frames until one is found (14.15).
     ///
     /// `pc` is the offset of the instruction that threw, not the next one.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a frame that catches settles a promise, which needs the heap"
+    )]
     fn unwind(
         &mut self,
         table: CodeTable<'_>,
@@ -11290,6 +11984,8 @@ impl RegisterVM {
         mut current_code_id: Option<u32>,
         value: Value,
         native: Option<(super::realm::NativeErrorKind, &'static str)>,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
     ) -> Result<(usize, Option<u32>), VMError> {
         loop {
             let code = table.root(self.unit).ok_or(VMError::InvalidBytecode(
@@ -11320,6 +12016,29 @@ impl RegisterVM {
             self.current_context = frame.caller_context;
             current_code_id = frame.caller_code_id;
             self.unit = frame.caller_unit;
+            // 27.2.3.1 step 7: the executor of a new Promise rejects it with
+            // what it throws, and the constructor answers as it does for an
+            // executor that returned.
+            // A job of 9.5 stands on no caller, so a value it throws looks
+            // for no handler beyond its own frame: the drain rejects the
+            // capability of the job with it.
+            if matches!(frame.resume, Some(Resume::Job { .. })) {
+                self.frames.clear();
+                return Err(VMError::Thrown(value, native));
+            }
+            if let Some(Resume::Executor { promise, state, .. }) =
+                frame.resume.filter(|resume| resume.catches())
+            {
+                let promise = heap.root_value(promise).unwrap_or(VALUE_UNDEFINED);
+                let state = heap.root_value(state).unwrap_or(VALUE_UNDEFINED);
+                heap.exit_scope();
+                if !promise::take_resolution(heap, state)? {
+                    let queue = self.job_queue(heap);
+                    promise::settle(heap, realm, queue, promise, promise::REJECTED, value)?;
+                }
+                self.acc = promise;
+                return Ok((frame.return_pc, frame.caller_code_id));
+            }
             // The saved offset resumes after the call, so the protected
             // instruction is the call itself.
             pc = frame.return_pc.saturating_sub(1);
@@ -11370,9 +12089,9 @@ impl RegisterVM {
             realm,
         )? {
             Outcome::Done(value) => Ok(value),
-            Outcome::Compile(_) | Outcome::Evaluate(_) => Err(VMError::Unsupported(
-                "a body compiled at run time, which needs the units of a Realm",
-            )),
+            Outcome::Compile(_) | Outcome::Evaluate(_) | Outcome::Print(_) => Err(
+                VMError::Unsupported("a call only the embedding of a Realm can answer"),
+            ),
         }
     }
 
@@ -11399,6 +12118,15 @@ impl RegisterVM {
         self.frames.clear();
         self.current_context = None;
         self.unit = unit;
+        // 9.5 drains the queue after the unit answers, so the queue and what
+        // the drain holds are rooted before the first instruction and stay
+        // rooted for the whole run.
+        let queue = Value::from_object(realm.array(heap, 0)?);
+        self.jobs = Some(heap.push_root(queue)?);
+        self.running_job = Some(heap.push_root(VALUE_UNDEFINED)?);
+        self.job_arguments = Some(heap.push_root(VALUE_UNDEFINED)?);
+        self.completion = Some(heap.push_root(VALUE_UNINITIALIZED)?);
+        self.job_head = 0;
         let code = units.root(unit).ok_or(VMError::InvalidBytecode(
             VerificationError::FunctionOutOfBounds { pc: 0, index: unit },
         ))?;
@@ -11484,6 +12212,9 @@ impl RegisterVM {
                     // 20.2.1.1 stopped the run where the call stands, and the
                     // instruction runs again once the unit exists.
                     if let Some(source) = self.pending_source.take() {
+                        if core::mem::take(&mut self.pending_print) {
+                            return Ok(Outcome::Print(source));
+                        }
                         if core::mem::take(&mut self.pending_script) {
                             return Ok(Outcome::Evaluate(source));
                         }
@@ -11494,10 +12225,65 @@ impl RegisterVM {
                 // 14.15: a thrown value looks for a handler from the throwing
                 // instruction outwards before it leaves the outermost frame.
                 Err(VMError::Thrown(value, native)) => {
-                    let (next_pc, next_code_id) =
-                        self.unwind(units, pc.saturating_sub(1), current_code_id, value, native)?;
-                    pc = next_pc;
-                    current_code_id = next_code_id;
+                    match self.unwind(
+                        units,
+                        pc.saturating_sub(1),
+                        current_code_id,
+                        value,
+                        native,
+                        heap,
+                        realm,
+                    ) {
+                        Ok((next_pc, next_code_id)) => {
+                            pc = next_pc;
+                            current_code_id = next_code_id;
+                        }
+                        // 27.2.2.1 step 5: a handler that throws rejects the
+                        // capability of its job, and the drain goes on. Every
+                        // other value that reaches an empty frame stack leaves
+                        // the run.
+                        Err(VMError::Thrown(value, native)) => {
+                            if self.running_job.is_none_or(|root| {
+                                heap.root_value(root)
+                                    .unwrap_or(VALUE_UNDEFINED)
+                                    .is_undefined()
+                            }) {
+                                return Err(VMError::Thrown(value, native));
+                            }
+                            let code = units.root(self.unit).ok_or(VMError::InvalidBytecode(
+                                VerificationError::FunctionOutOfBounds {
+                                    pc,
+                                    index: self.unit,
+                                },
+                            ))?;
+                            let unit_feedback: &mut FeedbackVector = feedback
+                                .get_mut(self.unit as usize)
+                                .ok_or(VMError::InvalidFeedbackVector)?;
+                            let next = self.continue_jobs(
+                                Some(value),
+                                CodeUnits {
+                                    table: units,
+                                    active: code,
+                                },
+                                unit_feedback,
+                                heap,
+                                realm,
+                            )?;
+                            let Some(code_id) = next else {
+                                self.fp = 0;
+                                self.active_binding_count = 0;
+                                self.current_context = None;
+                                return Ok(Outcome::Done(
+                                    self.completion
+                                        .and_then(|root| heap.root_value(root))
+                                        .unwrap_or(VALUE_UNDEFINED),
+                                ));
+                            };
+                            current_code_id = Some(code_id);
+                            pc = 0;
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
                 Err(error) => return Err(error),
             }
@@ -13131,6 +13917,15 @@ impl RegisterVM {
                             }
                             return Ok(None);
                         }
+                        if intrinsic == Intrinsic::PromiseConstructor {
+                            if let Some(code_id) =
+                                self.begin_promise(call, units, active_feedback, heap, realm)?
+                            {
+                                current_code_id = Some(code_id);
+                                pc = 0;
+                            }
+                            return Ok(None);
+                        }
                         self.acc = self.call_intrinsic(intrinsic, call, units, heap, realm)?;
                         self.write_reg(target, self.acc)?;
                         return Ok(None);
@@ -13256,7 +14051,28 @@ impl RegisterVM {
                         {
                             self.acc = self.read_reg(target)?;
                         }
-                        if let Some(resume) = frame.resume {
+                        if matches!(frame.resume, Some(Resume::Job { .. })) {
+                            // 9.5: the job has answered, so its capability
+                            // settles and the next job follows; the run ends
+                            // with what the unit answered once none is left.
+                            let unit_feedback: &mut FeedbackVector = feedback
+                                .get_mut(self.unit as usize)
+                                .ok_or(VMError::InvalidFeedbackVector)?;
+                            let next =
+                                self.continue_jobs(None, units, unit_feedback, heap, realm)?;
+                            let Some(code_id) = next else {
+                                self.fp = 0;
+                                self.active_binding_count = 0;
+                                self.current_context = None;
+                                return Ok(Some(
+                                    self.completion
+                                        .and_then(|root| heap.root_value(root))
+                                        .unwrap_or(VALUE_UNDEFINED),
+                                ));
+                            };
+                            current_code_id = Some(code_id);
+                            pc = 0;
+                        } else if let Some(resume) = frame.resume {
                             // An operation of the caller is waiting for this
                             // answer, and runs again once it has one. It belongs
                             // to the caller's unit, which the frame restored.
@@ -13288,6 +14104,8 @@ impl RegisterVM {
                                 | Resume::Descriptor { .. }
                                 | Resume::Getter
                                 | Resume::Spread { .. }
+                                | Resume::Executor { .. }
+                                | Resume::Job { .. }
                                 | Resume::Setter { .. } => Reg(0),
                             };
                             let call = Call {
@@ -13337,11 +14155,20 @@ impl RegisterVM {
                                     realm,
                                 )?,
                                 // The getter answered the value of the
-                                // property, and the accumulator holds it.
-                                Resume::Getter => None,
+                                // property, and the accumulator holds it. The
+                                // job branch above answers every job, so the
+                                // dispatcher reaches none of those.
+                                Resume::Getter | Resume::Job { .. } => None,
                                 // The call answered, and the List its
                                 // arguments were is no longer reachable.
                                 Resume::Spread { .. } => {
+                                    heap.exit_scope();
+                                    None
+                                }
+                                // 27.2.3.1 step 8 answers the promise, not
+                                // what the executor answered.
+                                Resume::Executor { promise, .. } => {
+                                    self.acc = heap.root_value(promise).unwrap_or(VALUE_UNDEFINED);
                                     heap.exit_scope();
                                     None
                                 }
@@ -13359,10 +14186,28 @@ impl RegisterVM {
                             }
                         }
                     } else {
+                        // 9.5: the unit has answered, and the run ends only
+                        // once every job it enqueued has run too.
+                        if let Some(root) = self.completion
+                            && heap.root_value(root) == Some(VALUE_UNINITIALIZED)
+                        {
+                            heap.set_root(root, self.acc)?;
+                        }
+                        if let Some(code_id) =
+                            self.continue_jobs(None, units, active_feedback, heap, realm)?
+                        {
+                            current_code_id = Some(code_id);
+                            pc = 0;
+                            return Ok(None);
+                        }
                         self.fp = 0;
                         self.active_binding_count = 0;
                         self.current_context = None;
-                        return Ok(Some(self.acc));
+                        return Ok(Some(
+                            self.completion
+                                .and_then(|root| heap.root_value(root))
+                                .unwrap_or(self.acc),
+                        ));
                     }
                 }
             }

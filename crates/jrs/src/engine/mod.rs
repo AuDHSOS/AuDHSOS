@@ -21,6 +21,7 @@ pub mod feedback;
 pub mod heap;
 pub mod interpreter;
 pub mod object;
+pub mod promise;
 pub mod realm;
 pub mod shape;
 pub mod string;

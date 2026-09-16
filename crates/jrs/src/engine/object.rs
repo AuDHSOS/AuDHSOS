@@ -83,6 +83,11 @@ pub enum ObjectKind {
         id: u32,
         /// Formatted arity length.
         length: u32,
+        /// What a closure of the specification carries besides its code: the
+        /// `[[Promise]]` and `[[AlreadyResolved]]` of 27.2.1.3.1, held as the
+        /// Array the pair of resolving functions shares. Undefined for an
+        /// intrinsic that closes over nothing.
+        state: Value,
     },
     /// Boxed Boolean primitive.
     BooleanWrapper(bool),
@@ -178,6 +183,21 @@ pub enum ObjectKind {
         /// it was compiled into and 22.2.3.1 makes at run time.
         pattern: PatternRef,
     },
+    /// Promise instance, the slots of 27.2.6.
+    Promise {
+        /// `[[PromiseState]]`: 0 pending, 1 fulfilled, 2 rejected.
+        state: u8,
+        /// `[[PromiseIsHandled]]`.
+        handled: bool,
+        /// `[[PromiseResult]]`, undefined while the promise is pending.
+        value: Value,
+        /// `[[PromiseFulfillReactions]]`, as the Array of reaction records,
+        /// undefined once the promise is settled.
+        fulfill: Value,
+        /// `[[PromiseRejectReactions]]`, as the Array of reaction records,
+        /// undefined once the promise is settled.
+        reject: Value,
+    },
     /// Bound function exotic object, the slots of 10.4.1.
     BoundFunction {
         /// `[[BoundTargetFunction]]`.
@@ -201,7 +221,14 @@ impl ObjectKind {
         match self {
             Self::StringWrapper(value)
             | Self::ArrayIterator { target: value, .. }
+            | Self::NativeFunction { state: value, .. }
             | Self::Function { home: value, .. } => [Some(*value), None, None, None, None],
+            Self::Promise {
+                value,
+                fulfill,
+                reject,
+                ..
+            } => [Some(*value), Some(*fulfill), Some(*reject), None, None],
             Self::BoundFunction {
                 target,
                 receiver,
@@ -234,7 +261,14 @@ impl ObjectKind {
         match self {
             Self::StringWrapper(value)
             | Self::ArrayIterator { target: value, .. }
+            | Self::NativeFunction { state: value, .. }
             | Self::Function { home: value, .. } => [Some(value), None, None, None, None],
+            Self::Promise {
+                value,
+                fulfill,
+                reject,
+                ..
+            } => [Some(value), Some(fulfill), Some(reject), None, None],
             Self::BoundFunction {
                 target,
                 receiver,
