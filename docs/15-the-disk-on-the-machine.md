@@ -29,6 +29,8 @@ At the end of the track, two things are true that are not true now:
 1. A program can create, read, write and delete a file on a disk.
 2. The root task starts programs by reading them off that disk, instead
    of reading them out of the archive in the boot image.
+3. The boot volume carries what the firmware and the loader read, and the
+   scratch volume carries every other file the system reads (15.21).
 
 ## 15.3 What is already built
 
@@ -210,6 +212,9 @@ this loader does not use and works only where the firmware is UEFI.
 | S7 | The machine carries the disk automatically | built | S4 | S |
 | S8 | The end-to-end tests | built | S6, S7 | M |
 | S9 | Programs move onto the volume | built | S6, S8, D4 (15.19) | L |
+| S10 | The build writes the system volume | planned | D5 (15.21) | M |
+| S11 | The root task reads the programs off the scratch volume | planned | S10, D6 (15.22) | S |
+| S12 | Every run carries the disk | planned | S10, S11 | M |
 
 S5 depends on nothing. It can be built at any time before S6. Every other
 step depends on the step before it.
@@ -788,7 +793,7 @@ so a dump of the bus is readable; nothing depends on that order.
 | # | Option | What it costs |
 |---|--------|---------------|
 | 1 | A driver for the AHCI controller. | A driver crate the size of `driver-virtio-blk`, its own host tests, and a second transport under `fs-fat`. |
-| 3 | Put the programs on the scratch disk. | It contradicts D-136: the scratch disk is what the system writes and arrives blank, and the image writer would have to prepare it. |
+| 3 | Put the programs on the scratch disk. | It contradicts D-136: the scratch disk is what the system writes and arrives blank, and the image writer would have to prepare it. Taken later, in D5 (15.21), where the image writer does prepare it. |
 
 **What it settled.**
 
@@ -816,3 +821,181 @@ writes to the scratch volume in the same boot.
 | 5 | The server formats a blank disk. | A test passes on an empty disk and fails on a real volume. | The server reads where a volume exists and formats only where none does. The persistence test boots the same disk twice. |
 | 6 | An 8.3 name is too small for a program name. | File names are hard to read. | This is D-09's known limit. Long file names are 8.18's later work. |
 | 7 | The server keeps a table per client and learns of no client that ends. | Sixteen programs that open a file and exit take every table, and the seventeenth is answered `OutOfHandles` for as long as the machine runs. | Nothing yet. The display server watches a client through the process capability that client hands it (D-106), and the file protocol carries no handle at all, so this costs a message that gives one. It is the first thing to add to 15.14. |
+
+## 15.21 Decision D5: which volume carries the programs
+
+**The decision: every file the system reads after the kernel is on the
+scratch volume, and the build writes it there.** This is option 3 of
+15.19, which D4 did not take. It covers the fourteen programs outside the
+boot set (`archive::ON_THE_VOLUME`) and the trust anchor table of D-148.
+
+Reason 1: the loader reads three files — `EFI/BOOT/BOOTX64.EFI`,
+`AUDHSOS/KERNEL.ELF` and `AUDHSOS/BOOT.IMG` (D-08) — and the boot volume
+carries those three and nothing else, so a volume the system may not
+write holds only what the firmware reads.
+
+Reason 2: the build already writes a FAT32 volume per run.
+`written_scratch_image` (`crates/tools/xtask/src/commands.rs:2115`) puts
+the Secure Shell material there (D-146) and the TLS material there
+(D-150); the programs are the same writer with more files.
+
+Reason 3: one volume holds everything a run is given, so the root task
+reading a program and a program reading its configuration read the same
+volume, and a run is one disk file.
+
+Reason 4 (against D-136 as it stood): D-136 says the system writes the
+scratch disk and the disk arrives blank. The disk now arrives written by
+the host and the system writes it afterwards, which is what D-146 and
+D-150 already do for three and two files.
+
+**What it costs.**
+
+| # | Cost | Size |
+|---|------|------|
+| 1 | Every machine needs the second disk. | 15.22 (D6) |
+| 2 | The build writes the programs once per run disk, not once per image. | 54.4 MiB per run, three runs in `test --e2e` |
+| 3 | A scratch disk of 64 MiB holds the programs with 8.5 MiB free. | The disk grows to 128 MiB (15.25) |
+
+**The option not taken.** Leave the programs on the boot volume, as S9
+built it. It costs a boot image of 130 MB per build, a second place a
+program reads configuration from, and a write path to the volume the
+firmware reads for every file the build adds.
+
+## 15.22 Decision D6: a machine without a scratch disk
+
+**The decision: the root task starts the boot set, reports the missing
+volume, and starts no further program.**
+
+Reason 1: every program outside the boot set is on that volume, so the
+root task has nothing to start after `server-fs`.
+
+Reason 2: a machine that starts the boot set and waits is a machine a
+person reads as hung. One line naming the volume is what says otherwise.
+
+Reason 3: the file system server answers `NotFound` on `file::ROOT` for a
+machine that mounted no scratch volume (`crates/user/proto/src/file.rs:84`),
+so the root task needs one open of `AUDHSOS/BIN` and no new message.
+
+**What it costs.** The run without a framebuffer carries a scratch disk
+from now on, and `cargo xtask run` attaches one whether it was asked for
+or not.
+
+**The option not taken.** Start the boot set and carry on. It costs a boot
+that reports success and then fails once per program.
+
+## 15.23 S10. The build writes the system volume
+
+Status: planned.
+Depends on: D5 (15.21).
+Size: M.
+
+### Needs (already built)
+
+- `image::fat32::write`, which formats a volume and writes files into it
+  (D-53).
+- `volume_programs`, which reads the fourteen binaries and spells their
+  8.3 names (`crates/tools/xtask/src/commands.rs:2012`).
+- `anchors::table`, which reads `anchors/` and encodes the table (D-148).
+
+### Does
+
+1. `volume_programs` becomes `system_files`: the fourteen programs under
+   `AUDHSOS/BIN/`, and the anchor table under `AUDHSOS/ANCHORS.BIN`.
+2. `image` writes the boot volume from three files: the loader, the
+   kernel, and the boot image.
+3. `system_image(root, profile, extra)` builds the bytes of a scratch
+   volume from `system_files` and the files of the run.
+4. `image` writes `target/scratch.img` with no run files.
+5. Every run builds its own disk with `system_image` and its own run
+   files: the Secure Shell run three (D-146), the TLS run two (D-150),
+   the end-to-end run none.
+
+### Produces
+
+| File | Content | Size |
+|------|---------|------|
+| `target/audhsos.img` | loader, kernel, boot image | 64 MiB, 26.1 MiB used |
+| `target/scratch.img` | fourteen programs, anchor table | 128 MiB, 54.4 MiB used |
+| `target/qemu/<run>.scratch.img` | the same, plus the files of the run | 128 MiB |
+
+### Done when
+
+1. `cargo xtask image` reports three files on the boot volume and fifteen
+   on the scratch volume.
+2. `target/audhsos.img` is 67 108 864 bytes, down from 130 023 424.
+3. A host test reads `AUDHSOS/BIN/APPHELLO.ELF` back out of the bytes
+   `system_image` returned.
+
+## 15.24 S11. The root task reads the programs off the scratch volume
+
+Status: planned.
+Depends on: S10.
+Size: S.
+
+### Needs (already built)
+
+- `file::ROOT`, the root of the volume the system writes
+  (`crates/user/proto/src/file.rs:76`).
+- `read_program`, which opens `AUDHSOS/BIN` once and keeps it
+  (`crates/user/programs/src/bin/server_init.rs:710`).
+
+### Does
+
+1. `read_program` opens `AUDHSOS/BIN` under `file::ROOT` instead of
+   `file::BOOT`.
+2. The root task opens that directory before the first program outside
+   the boot set. Where the open is refused, it writes
+   `[init] no program volume` with the refusal and starts no further
+   program (D6).
+3. `app-tls` reads `AUDHSOS/ANCHORS.BIN` under `file::ROOT`.
+
+### Done when
+
+1. The end-to-end run reaches `[hello] ready` with the programs on the
+   scratch volume.
+2. A run started without the second disk writes `[init] no program
+   volume` and the machine ends by itself.
+3. No program of `crates/user` names `file::BOOT` except the file system
+   server, which mounts the boot volume and reports it.
+
+## 15.25 S12. Every run carries the disk
+
+Status: planned.
+Depends on: S10, S11.
+Size: M.
+
+### Does
+
+1. `SCRATCH_SIZE` becomes 128 MiB, and `SCRATCH_CLUSTERS` the count of
+   that disk.
+2. `test_without_a_framebuffer` attaches a scratch disk, because it
+   waits for `[hello] ready`.
+3. `cargo xtask run` attaches a disk whether `--scratch` was given or
+   not; `--scratch` keeps the disk of the previous run of that name
+   instead of writing it again.
+4. `boot_volume_lines` stops judging by half the clusters. The boot
+   volume is 26.1 MiB of 64 MiB, so more than half of it is free; what
+   it checks instead is that at least 20 000 clusters are taken, which
+   the boot image alone fills at 18.4 MiB.
+5. `block_lines` checks the cluster count of the scratch volume against
+   `SCRATCH_CLUSTERS` as before, and that the volume was mounted and not
+   formatted: a volume the host wrote reports the programs' clusters
+   taken.
+
+### Done when
+
+1. `sh tools/xtask-check.sh` exits with 0.
+2. `sh tools/xtask.sh test --e2e` passes, the persistence test included:
+   the second boot reads what the first boot wrote off a disk that also
+   carries the programs.
+3. A unit test of the xtask asserts `SCRATCH_CLUSTERS` against the
+   geometry `system_image` reports.
+
+## 15.26 Risks of the move
+
+| # | Risk | Effect | What reduces it |
+|---|------|--------|-----------------|
+| 8 | The scratch disk fills up. | The build writes 54.4 MiB of programs and a test that writes finds no cluster free. | The disk is 128 MiB, which leaves 73 MiB. `system_image` fails the build where the files do not fit. |
+| 9 | The host writer and the guest formatter disagree on the geometry. | The end-to-end run reads a cluster count it does not expect. | Both use `fs-fat`'s defaults (D-53). The unit test of S12 asserts the count the host writes. |
+| 10 | A run boots with a disk an older build wrote. | The programs are the previous build's. | Every run except `run --scratch` writes the disk before the machine starts. |
+| 11 | The three runs of `test --e2e` write 384 MiB. | The check takes longer. | The files are sparse and written once per run, against a run that boots for minutes. |
