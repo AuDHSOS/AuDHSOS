@@ -8703,3 +8703,21 @@ fn a_clause_of_23_1_3_moves_the_elements_of_an_array_like() -> Result<(), Error>
     }
     Ok(())
 }
+
+#[test]
+fn a_body_that_throws_after_a_wait_rejects_its_capability() -> Result<(), Error> {
+    // 27.7.5.2 step 4 rejects the capability of a body that threw, and the
+    // drain of 9.5 goes on with the reaction that takes the rejection. The
+    // body stands on no caller once a job took it back, which ended the run
+    // with the thrown value rather than with the queue.
+    for source in [
+        "var l=[];async function f(){await Promise.reject('o')}f().then(function(v){l.push('res'+v)},function(v){l.push('rej'+v)});0",
+        "var l=[];async function f(){await 1;throw 't'}f().then(function(v){l.push('res'+v)},function(v){l.push('rej'+v)});0",
+        "var l=[];async function f(){try{await Promise.reject('b')}catch(e){return 'c'+e}}f().then(function(v){l.push('res'+v)},function(v){l.push('rej'+v)});0",
+        "var l=[];async function f(){try{0}finally{await Promise.reject('o')}}f().then(function(v){l.push('res'+v)},function(v){l.push('rej'+v)});0",
+        "var l=[];async function f(){try{return 'e'}finally{await Promise.reject('o')}}f().then(function(v){l.push('res'+v)},function(v){l.push('rej'+v)});0",
+    ] {
+        differential_scripts(&[source, "l.join('|')"])?;
+    }
+    Ok(())
+}

@@ -720,6 +720,10 @@ pub struct RegisterVM {
     /// Root of the job record whose handler holds a frame, which settles when
     /// that frame returns or throws.
     running_job: Option<Root>,
+    /// Whether 27.7.5.2 step 4 rejected the capability of an async body that
+    /// stood on no caller, so the throw that reached it is settled and the
+    /// drain of 9.5 goes on rather than the run ending.
+    settled_async_body: bool,
     /// Root of the List a job's arguments travel in, which the frame the job
     /// opens takes its parameters from.
     job_arguments: Option<Root>,
@@ -832,6 +836,7 @@ impl RegisterVM {
             compiled_unit: None,
             jobs: None,
             running_job: None,
+            settled_async_body: false,
             job_arguments: None,
             completion: None,
             job_head: 0,
@@ -13325,10 +13330,12 @@ impl RegisterVM {
                 let promise = self.settle_async_body(active_code, value, true, heap, realm)?;
                 let Some(frame) = self.frames.pop() else {
                     // The body was taken back by a job of 9.5, which the drain
-                    // ends the way it ends every other one.
+                    // ends the way it ends every other one. The capability has
+                    // the value, so the drain goes on with the next job.
                     self.fp = 0;
                     self.active_binding_count = 0;
                     self.current_context = None;
+                    self.settled_async_body = true;
                     return Err(VMError::Thrown(value, native));
                 };
                 self.fp = frame.caller_fp;
@@ -13533,6 +13540,10 @@ impl RegisterVM {
     }
 
     /// Runs instructions until the unit answers or asks for a compilation.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one loop keeps the run, the unwinding and the drain of 9.5 together"
+    )]
     fn run_loop(
         &mut self,
         units: CodeTable<'_>,
@@ -13579,11 +13590,14 @@ impl RegisterVM {
                         // other value that reaches an empty frame stack leaves
                         // the run.
                         Err(VMError::Thrown(value, native)) => {
-                            if self.running_job.is_none_or(|root| {
-                                heap.root_value(root)
-                                    .unwrap_or(VALUE_UNDEFINED)
-                                    .is_undefined()
-                            }) {
+                            let settled = core::mem::take(&mut self.settled_async_body);
+                            if !settled
+                                && self.running_job.is_none_or(|root| {
+                                    heap.root_value(root)
+                                        .unwrap_or(VALUE_UNDEFINED)
+                                        .is_undefined()
+                                })
+                            {
                                 return Err(VMError::Thrown(value, native));
                             }
                             let code = units.root(self.unit).ok_or(VMError::InvalidBytecode(
@@ -13596,7 +13610,7 @@ impl RegisterVM {
                                 .get_mut(self.unit as usize)
                                 .ok_or(VMError::InvalidFeedbackVector)?;
                             let next = self.continue_jobs(
-                                Some(value),
+                                (!settled).then_some(value),
                                 CodeUnits {
                                     table: units,
                                     active: code,
