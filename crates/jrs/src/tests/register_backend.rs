@@ -8736,3 +8736,38 @@ fn the_throw_type_error_of_10_2_4_1_is_frozen() -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[test]
+fn an_initializer_of_8_6_2_reads_an_earlier_parameter() -> Result<(), Error> {
+    // 10.2.11 makes a parameter a captured name where a later Initializer
+    // reads it, so its binding lives in the context of the call rather than
+    // in a register and the Initializer reaches it there.
+    for source in [
+        "function f(a=1,b=a+1){return ''+a+b}f()",
+        "function f(a=1,b=a){return ''+a+b}f()",
+        "function f(a=1,b=a+1){return ''+a+b}f(5)",
+        "function f(a=1,b=a+1){return ''+a+b}f(5,7)",
+        "function f([x,y]=[1,2],z=x+y){return ''+x+y+z}f()",
+        // A parameter no Initializer reads keeps its register.
+        "function f(a=1,b=2){return ''+a+b}f()",
+        "function f(a,b=a+1){return ''+a+b}f(5)",
+        // A nested function reads the parameter when it is called, not while
+        // the Initializer runs.
+        "function f(a=function(){return a}){return typeof a()}f()",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // 10.2.11 leaves the parameter an Initializer binds, and every one the
+    // list binds after it, in a temporal dead zone. The registers of the frame
+    // hold undefined there and say nothing of the two apart.
+    for source in [
+        "function f(x=x){return 1}f()",
+        "function f(x=y,y){return 1}f()",
+    ] {
+        assert!(
+            !compile(source, Limits::default())?.uses_register_backend(),
+            "{source}"
+        );
+    }
+    Ok(())
+}

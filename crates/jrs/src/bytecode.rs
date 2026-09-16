@@ -3353,7 +3353,15 @@ impl RegisterLowerer {
                 .count()
                 == 1
         });
-        duplicated.then_some("a duplicated parameter name")
+        if duplicated {
+            return Some("a duplicated parameter name");
+        }
+        // 10.2.11 initializes the parameters in order, so an Initializer that
+        // reads the parameter it binds, or one the list binds after it, reads
+        // a binding of its temporal dead zone. The registers of the frame hold
+        // undefined there and say nothing of the two apart.
+        register_initializer_reads_a_later_parameter(function)
+            .then_some("a parameter Initializer that reads a parameter of its dead zone")
     }
 
     #[expect(
@@ -3659,15 +3667,15 @@ impl RegisterLowerer {
                 parser::BindingPattern::Name(name) => name.clone(),
                 _ => register_argument_name(index),
             };
+            // An Initializer of a later parameter reads this one, which makes
+            // it a captured name of 10.2.11, so the binding may live in the
+            // own context rather than in a register.
             let binding = *self.bindings.get(&name)?;
-            let RegisterBindingStorage::Register(register) = binding.storage else {
-                return None;
-            };
             if let Some(default) = &parameter.default {
-                self.code.emit(Instruction::Ldar(register));
+                self.load_binding(binding);
                 let present = self.code.emit(Instruction::JumpIfNotUndefined(0));
                 let value_type = self.lower(default)?;
-                self.code.emit(Instruction::Star(register));
+                self.store_binding(binding);
                 let after = self.code.instructions.len();
                 self.patch_jump(present, after)?;
                 // The parameter holds either the argument, whose type the
@@ -3676,9 +3684,9 @@ impl RegisterLowerer {
                     Some(RegisterType::Unknown.merge(value_type));
             }
             // 8.6.2 then binds the names the pattern names, out of the
-            // argument the register holds.
+            // argument the binding holds.
             if !named {
-                self.code.emit(Instruction::Ldar(register));
+                self.load_binding(binding);
                 self.bind_pattern(RegisterType::Unknown, &parameter.pattern)?;
             }
         }
@@ -9474,6 +9482,35 @@ fn register_body_reads_arguments(body: &[Stmt]) -> Option<bool> {
         return None;
     }
     Some(names.contains(ARGUMENTS))
+}
+
+/// Whether an Initializer of 8.6.2 reads the parameter it binds or one the
+/// list binds after it, which 10.2.11 leaves in its temporal dead zone.
+fn register_initializer_reads_a_later_parameter(function: &Function) -> bool {
+    let mut bound: Vec<BTreeSet<String>> = Vec::with_capacity(function.parameters.len());
+    for parameter in &function.parameters {
+        let mut names = Vec::new();
+        parameter.pattern.names(&mut names);
+        bound.push(names.into_iter().collect());
+    }
+    for (index, parameter) in function.parameters.iter().enumerate() {
+        let Some(default) = &parameter.default else {
+            continue;
+        };
+        let mut direct = BTreeSet::new();
+        let mut nested = BTreeSet::new();
+        if register_expression_references(default, &mut direct, &mut nested).is_none() {
+            continue;
+        }
+        let dead = bound.get(index..).unwrap_or_default();
+        if dead
+            .iter()
+            .any(|names| names.iter().any(|name| direct.contains(name)))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Whether 10.4.4.7 maps the indices of this function's arguments object.
