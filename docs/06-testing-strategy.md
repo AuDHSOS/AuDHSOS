@@ -5120,6 +5120,22 @@ Document 16 step Q8.
   and a partial index answers every row, which a lookup in either index
   would not.
 
+### 6.6.168 The key an `ON CONFLICT` clause names (`db-sqlite`)
+
+Document 16 step Q8.
+
+- Against `CREATE UNIQUE INDEX xyz1 ON xyz(d,c,b COLLATE nocase)`, the
+  clauses `(b COLLATE nocase, c, d)`, `(b, c, d)`, `(b, c, d) WHERE
+  a!=0` and the clause that names no column all name that key.
+- `(b, c COLLATE nocase, d)` and `(b COLLATE nocase, c COLLATE nocase,
+  d)` write a collation the key does not hold the column in, and
+  `(d, c, c)` names one column twice and another not at all; each is
+  refused `ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE
+  constraint`.
+- `(a)` names the key of the table, so the row reaches the resolution of
+  the statement and is refused `UNIQUE constraint failed: xyz.d, xyz.c,
+  xyz.b`.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

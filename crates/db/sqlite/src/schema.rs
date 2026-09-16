@@ -463,7 +463,7 @@ fn qualified(arena: &Arena, id: ExprId) -> bool {
 /// A term written as text names a column, which is `sqlite3StringToId`
 /// turning `TK_STRING` into `TK_ID` before `sqlite3CreateIndex` reads
 /// the term.
-fn collated(arena: &Arena, id: ExprId, sql: &[u8]) -> (Option<Span>, Option<Collation>) {
+pub(crate) fn collated(arena: &Arena, id: ExprId, sql: &[u8]) -> (Option<Span>, Option<Collation>) {
     match arena.node(id) {
         Some(Node::Collate { value, name }) => (
             collated(arena, value, sql).0,

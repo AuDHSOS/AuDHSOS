@@ -733,6 +733,9 @@ Size: L.
 23. An index over an expression and an index over fewer rows than the
     table has. Built, which D-243 records; a statement is planned
     against neither and walks the table.
+24. The key an `ON CONFLICT` clause names, by the columns and the
+    collations of that key. Built, which D-244 records; a clause that
+    names an index over an expression or over fewer rows is open.
 
 ### Done when
 
@@ -742,8 +745,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 72 502 cases in 705 files, 57 355
-pass, 4438 answer differently, and 10 709 name something the engine
+under the `tclsh` of the machine. Of 72 548 cases in 705 files, 57 416
+pass, 4422 answer differently, and 10 710 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts

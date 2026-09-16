@@ -643,8 +643,9 @@ pub struct Insert {
 /// One `ON CONFLICT` clause of an `INSERT`, which is `sqlite3UpsertNew`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Upsert {
-    /// The columns the clause names, or an empty run where it names
-    /// none, which is the clause every conflict reaches.
+    /// The terms the clause names, written as the columns of an index
+    /// are, or an empty run where it names none, which is the clause
+    /// every conflict reaches.
     pub targets: Range,
     /// The `WHERE` that names a partial index, where one was written.
     pub over: Option<ExprId>,

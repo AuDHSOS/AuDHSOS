@@ -3353,21 +3353,14 @@ impl Writer {
     /// [`Error::NoUpsertKey`] where a clause names any other columns.
     fn upsert_keys(into: &Insertion<'_>) -> Result<(), Error> {
         for clause in into.upserts {
-            let targets: Vec<Vec<u8>> = into
-                .arena
-                .names(clause.targets)
-                .iter()
-                .map(|span| crate::schema::dequote(span.text(into.sql)))
-                .collect();
-            if targets.is_empty() {
+            if clause.targets.is_empty() {
                 continue;
             }
-            let keys = (0..into.kept.len())
-                .map(|at| Self::key_columns(into.table, into.kept, at))
-                .chain(core::iter::once(alloc::vec![Self::key_column(
-                    into.table, into.alias
-                )]));
-            if !keys.into_iter().any(|key| same_columns(&key, &targets)) {
+            let targets = targets_of(into.arena, into.sql, clause).ok_or(Error::NoUpsertKey)?;
+            let mut keys = (0..into.kept.len())
+                .filter_map(|at| Self::key_columns(into.table, into.kept, at))
+                .chain(core::iter::once(Self::key_column(into.table, into.alias)));
+            if !keys.any(|key| names_key(&key, &targets)) {
                 return Err(Error::NoUpsertKey);
             }
         }
@@ -3395,8 +3388,8 @@ impl Writer {
         let taken = into.alias.is_some() && crate::tree::holds(&self.pages, into.root, rowid)?;
         let clause = taken
             .then(|| {
-                let column = Self::key_column(into.table, into.alias);
-                upsert_of(into.arena, into.sql, into.upserts, &[column])
+                let key = Self::key_column(into.table, into.alias);
+                upsert_of(into.arena, into.sql, into.upserts, &key)
             })
             .flatten();
         if let Some(clause) = clause {
@@ -3422,7 +3415,7 @@ impl Writer {
         else {
             return Ok(Conflicted::Write);
         };
-        let columns = Self::key_columns(into.table, into.kept, index);
+        let columns = Self::key_columns(into.table, into.kept, index).unwrap_or_default();
         if let Some(clause) = upsert_of(into.arena, into.sql, into.upserts, &columns) {
             // The entry the row shares a key with ends with the key of
             // the row it belongs to.
@@ -4115,6 +4108,27 @@ impl crate::eval::Row for Excluded<'_> {
     }
 }
 
+/// The columns of one key, each with the collation its entries are held
+/// in, which is what an `ON CONFLICT` clause is held to.
+type Keys = Vec<(Vec<u8>, Collation)>;
+
+/// One term of an `ON CONFLICT` clause: the column by name, and the
+/// collation the clause writes on it where it writes one.
+type Target = (Vec<u8>, Option<Collation>);
+
+/// The terms an `ON CONFLICT` clause names, and nothing where a term is
+/// not a column.
+fn targets_of(arena: &Arena, sql: &[u8], clause: &crate::ast::Upsert) -> Option<Vec<Target>> {
+    arena
+        .orders(clause.targets)
+        .iter()
+        .map(|term| {
+            let (named, written) = crate::schema::collated(arena, term.expr, sql);
+            Some((crate::schema::dequote(named?.text(sql)), written))
+        })
+        .collect()
+}
+
 /// Which `ON CONFLICT` clause a conflict reaches, which is
 /// `sqlite3UpsertOfIndex`: the clause whose columns are the columns of
 /// the index the row shares a key with, or the clause that names no
@@ -4123,25 +4137,30 @@ fn upsert_of<'a>(
     arena: &'a Arena,
     sql: &[u8],
     upserts: &'a [crate::ast::Upsert],
-    wanted: &[Vec<u8>],
+    wanted: &Keys,
 ) -> Option<&'a crate::ast::Upsert> {
     upserts.iter().find(|clause| {
-        let targets: Vec<Vec<u8>> = arena
-            .names(clause.targets)
-            .iter()
-            .map(|span| crate::schema::dequote(span.text(sql)))
-            .collect();
-        targets.is_empty() || same_columns(wanted, &targets)
+        clause.targets.is_empty()
+            || targets_of(arena, sql, clause).is_some_and(|targets| names_key(wanted, &targets))
     })
 }
 
-/// Whether two lists name the same columns, in whatever order, which is
-/// how `sqlite3UpsertAnalyzeTarget` holds a clause to an index.
-fn same_columns(one: &[Vec<u8>], other: &[Vec<u8>]) -> bool {
-    one.len() == other.len()
-        && other
-            .iter()
-            .all(|name| one.iter().any(|held| held.eq_ignore_ascii_case(name)))
+/// Whether an `ON CONFLICT` clause names a key, which is
+/// `sqlite3UpsertAnalyzeTarget`: the clause names as many terms as the
+/// key has columns, and every column of the key is one the clause names
+/// under the collation the key holds it in or under none, because
+/// `sqlite3ExprCompare` answers one rather than two for a `COLLATE` one
+/// side writes and the other does not.
+///
+/// Comparing a key of `k` columns costs O(k^2).
+fn names_key(key: &Keys, targets: &[Target]) -> bool {
+    key.len() == targets.len()
+        && key.iter().all(|(name, collation)| {
+            targets.iter().any(|(wanted, written)| {
+                wanted.eq_ignore_ascii_case(name)
+                    && written.is_none_or(|written| written == *collation)
+            })
+        })
 }
 
 /// Where each value of a row belongs among the columns of the table, or
@@ -4765,25 +4784,34 @@ impl Writer {
 
     /// The column the key of the table is another name for, or an empty
     /// name where the table has none.
-    fn key_column(table: &Table, alias: Option<usize>) -> Vec<u8> {
-        alias
+    fn key_column(table: &Table, alias: Option<usize>) -> Keys {
+        let name = alias
             .and_then(|at| table.columns.get(at))
             .map(|column| column.name.clone())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // The key of a table is one whole number, which no collation
+        // reads.
+        alloc::vec![(name, Collation::Binary)]
     }
 
-    /// The columns the index `at` is over, by name.
-    fn key_columns(table: &Table, kept: &[Kept], at: usize) -> Vec<Vec<u8>> {
-        kept.get(at)
-            .map(|held| {
-                held.index
-                    .columns
-                    .iter()
-                    .filter_map(|keyed| keyed.place().and_then(|at| table.columns.get(at)))
-                    .map(|column| column.name.clone())
-                    .collect()
+    /// The columns the index `at` is over, each with the collation its
+    /// entries are held in.
+    fn key_columns(table: &Table, kept: &[Kept], at: usize) -> Option<Keys> {
+        let held = kept.get(at)?;
+        // An `ON CONFLICT` clause names no index that holds a place
+        // over an expression, and none that holds entries for fewer
+        // rows than the table has.
+        if held.index.filter.is_some() {
+            return None;
+        }
+        held.index
+            .columns
+            .iter()
+            .map(|keyed| {
+                let column = keyed.place().and_then(|at| table.columns.get(at))?;
+                Some((column.name.clone(), keyed.collation))
             })
-            .unwrap_or_default()
+            .collect()
     }
 
     /// The key a message names, as `sqlite3UniqueConstraint` writes it:

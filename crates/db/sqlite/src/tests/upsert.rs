@@ -473,3 +473,52 @@ fn a_row_the_statement_took_out_of_the_key_s_own_tree_is_passed_over() {
         Some(&Value::Text(b"ok".to_vec()))
     );
 }
+
+#[test]
+fn the_key_a_clause_names_is_held_to_its_columns_and_their_collations() {
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE xyz(a INTEGER PRIMARY KEY,b,c,d)")
+        .unwrap();
+    writer
+        .run(b"CREATE UNIQUE INDEX xyz1 ON xyz(d,c,b COLLATE nocase)")
+        .unwrap();
+    writer.run(b"INSERT INTO xyz VALUES(10,1,1,'one')").unwrap();
+    // A term that writes the collation the index holds the column in,
+    // and a term that writes none, both name the key.
+    for clause in [
+        b"(b COLLATE nocase, c, d)".as_slice(),
+        b"(b, c, d)",
+        b"",
+        b"(b, c, d) WHERE a!=0",
+    ] {
+        let mut sql = b"INSERT INTO xyz VALUES(11,1,1,'one') ON CONFLICT ".to_vec();
+        sql.extend_from_slice(clause);
+        sql.extend_from_slice(b" DO NOTHING");
+        assert!(writer.run(&sql).is_ok(), "{clause:?}");
+    }
+    // A term that writes another collation, and a list that names one
+    // column twice and another not at all, name no key.
+    for clause in [
+        b"(b, c COLLATE nocase, d)".as_slice(),
+        b"(d, c, c)",
+        b"(b COLLATE nocase, c COLLATE nocase, d)",
+    ] {
+        let mut sql = b"INSERT INTO xyz VALUES(11,1,1,'one') ON CONFLICT ".to_vec();
+        sql.extend_from_slice(clause);
+        sql.extend_from_slice(b" DO NOTHING");
+        assert_eq!(
+            writer.run(&sql).unwrap_err().message(),
+            "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint",
+            "{clause:?}"
+        );
+    }
+    // The key the index holds is the one the message names.
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO xyz VALUES(11,1,1,'one') ON CONFLICT (a) DO NOTHING")
+            .unwrap_err()
+            .message(),
+        "UNIQUE constraint failed: xyz.d, xyz.c, xyz.b"
+    );
+}

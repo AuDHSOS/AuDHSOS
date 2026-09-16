@@ -861,30 +861,17 @@ impl<'a> Parser<'a> {
     /// `sqlite3UpsertNew`: the columns the clause is for, and what it
     /// does where a row conflicts on them.
     fn upsert(&mut self) -> Result<crate::ast::Upsert, Error> {
-        let mut targets = Vec::new();
+        // A target is written as an indexed column, with the collation
+        // and the order of one, which is what names the index.
+        let mut targets = Range::default();
         let mut over = None;
         if self.eat(Kind::Lp) {
-            loop {
-                targets.push(self.name()?);
-                // A target is an indexed column, so it may carry a
-                // collation and an order, which name the index and are
-                // not read again here.
-                if self.eat_keyword(Keyword::Collate) {
-                    self.name()?;
-                }
-                if !self.eat_keyword(Keyword::Asc) {
-                    self.eat_keyword(Keyword::Desc);
-                }
-                if !self.eat(Kind::Comma) {
-                    break;
-                }
-            }
+            targets = self.sort_list()?;
             self.expect(Kind::Rp, Expected::CloseParen)?;
             if self.eat_keyword(Keyword::Where) {
                 over = Some(self.expression()?);
             }
         }
-        let targets = self.arena.push_names(&targets);
         self.expect_keyword(Keyword::Do, Expected::Do)?;
         if self.eat_keyword(Keyword::Nothing) {
             return Ok(crate::ast::Upsert {

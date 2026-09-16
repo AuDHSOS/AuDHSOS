@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- An `ON CONFLICT` clause in `db-sqlite` names a key by its columns and
+  their collations rather than by its columns alone, which is
+  `sqlite3UpsertAnalyzeTarget`. A term carries the collation and the
+  order of an indexed column, which the parser dropped before, so a
+  clause whose term writes another collation than the key holds the
+  column in, and a clause that names one column twice and another not at
+  all, are both refused. D-244 records it. Catalog 6.6.168.
+
 - `db-sqlite` refuses a statement that writes with the words the C
   library writes. `sqlite3Insert` names the table and the column a
   statement names that the table does not hold, counts the values
