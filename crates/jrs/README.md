@@ -758,8 +758,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same four, on the register engine (focused) | focused | `3f8b9e8` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Function/prototype/bind test/built-ins/Function/prototype/caller-arguments test/built-ins/Number/prototype test/built-ins/Boolean/prototype --summary` | 295 | 589 | 415 (70.46%) | 20 (3.40%) | 154 (26.15%) |
 | `%RegExp.prototype%` (focused) | focused | `81433dd` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/RegExp/prototype --summary` | 487 | 972 | 770 (79.22%) | 52 (5.35%) | 150 (15.43%) |
 | The same, on the register engine (focused) | focused | `81433dd` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/RegExp/prototype --summary` | 487 | 972 | 446 (45.88%) | 292 (30.04%) | 234 (24.07%) |
-| Complete pinned suite, including staging and Intl | full | `81433dd` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `81433dd` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 28,593 (27.78%) | 19,308 (18.76%) | 55,024 (53.46%) |
+| `getOwnPropertyDescriptor` and `%Function.prototype%` (focused) | focused | `c9b1598` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object/getOwnPropertyDescriptor test/built-ins/Function/prototype --summary` | 619 | 1,222 | 961 (78.64%) | 211 (17.27%) | 50 (4.09%) |
+| The same two, on the register engine (focused) | focused | `c9b1598` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object/getOwnPropertyDescriptor test/built-ins/Function/prototype --summary` | 619 | 1,222 | 818 (66.94%) | 140 (11.46%) | 264 (21.60%) |
+| Complete pinned suite, including staging and Intl | full | `c9b1598` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `c9b1598` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 28,672 (27.86%) | 19,414 (18.86%) | 54,839 (53.28%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1590,7 +1592,10 @@ it and which `%Function.prototype%.caller` now refuses; the other two reach
 `%String.prototype%[@@iterator]`, which is a named gap of an unbuilt
 Prototype. The `%RegExp.prototype%` runs and both full runs beside 22.2.6 were
 measured at tree `c78edeb26ca9e93b1fc63b46b0c6a7ab4b26edbd`, which is the tree
-of `81433dd`; that step gained 194 variants and lost none.
+of `81433dd`; that step gained 194 variants and lost none. The
+`getOwnPropertyDescriptor` runs and both full runs beside 10.1.5 were measured
+at tree `881bc1573c8579661c411a239ba324b83c3dacab`, which is the tree of
+`c9b1598`; that step gained 79 variants and lost none.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
