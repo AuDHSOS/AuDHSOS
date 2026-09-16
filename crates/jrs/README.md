@@ -725,8 +725,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%RegExp%`, after the constructor, on the register engine (focused) | focused | `d684811` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/RegExp --summary` | 1,879 | 3,756 | 1,026 (27.32%) | 626 (16.67%) | 2,104 (56.02%) |
 | `@@species` of `%Array%` and `%RegExp%` (focused) | focused | `4036ed2` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/Symbol.species test/built-ins/RegExp/Symbol.species --summary` | 8 | 16 | 16 (100.00%) | 0 (0.00%) | 0 (0.00%) |
 | The same two, on the register engine (focused) | focused | `4036ed2` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/Symbol.species test/built-ins/RegExp/Symbol.species --summary` | 8 | 16 | 12 (75.00%) | 4 (25.00%) | 0 (0.00%) |
-| Complete pinned suite, including staging and Intl | full | `4036ed2` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `4036ed2` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 26,741 (25.98%) | 19,486 (18.93%) | 56,698 (55.09%) |
+| `Function.prototype.bind`, after the bound arguments (focused) | focused | `dfbad4f` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Function/prototype/bind --summary` | 100 | 200 | 190 (95.00%) | 4 (2.00%) | 6 (3.00%) |
+| The same, on the register engine (focused) | focused | `dfbad4f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Function/prototype/bind --summary` | 100 | 200 | 136 (68.00%) | 24 (12.00%) | 40 (20.00%) |
+| Complete pinned suite, including staging and Intl | full | `dfbad4f` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `dfbad4f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 26,777 (26.02%) | 19,458 (18.91%) | 56,690 (55.08%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1499,7 +1501,10 @@ runs beside the constructor were measured at tree
 that step gained 521 variants and lost none. The `@@species` runs and both
 full runs beside the getter were measured at tree
 `787dfb9c356d4c4b24f80070b484ad49f3a67512`, which is the tree of `4036ed2`;
-that step gained 14 variants and lost none.
+that step gained 14 variants and lost none. The `bind` runs and both full runs
+beside the bound arguments were measured at tree
+`75de2993e1aac9d35561588351d57bbd75eae703`, which is the tree of `dfbad4f`;
+that step gained 36 variants and lost none.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
