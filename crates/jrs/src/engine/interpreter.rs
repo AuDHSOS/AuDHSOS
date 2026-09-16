@@ -424,6 +424,29 @@ pub enum Resume {
     /// instruction that reads a property leaves the value, so the read is
     /// finished the moment the call returns.
     Getter,
+    /// A clause of 23.1.3 called the getter of an accessor `length`.
+    ///
+    /// 7.3.18 reads the length once, before the clause does anything else, so
+    /// the operation starts again with the length it answered rather than
+    /// reading it a second time.
+    Length {
+        /// The intrinsic that asked, by [`Intrinsic::id`].
+        intrinsic: u32,
+        /// Root holding the `this` value of the call.
+        receiver: Root,
+        /// Root holding the value 7.1.20 is converting, where the read
+        /// answered an Object.
+        held: Root,
+        /// Which method 7.1.1 has already asked: 0 before any, 1 after
+        /// `valueOf`, 2 after `toString`.
+        step: u8,
+        /// First argument register of the call.
+        arg_start: Reg,
+        /// Number of arguments the call passed.
+        arg_count: u16,
+        /// Register `new` keeps its object in, when this was a construct.
+        construct: Option<Reg>,
+    },
     /// `[[Set]]` of 10.1.9.2 called the setter of an accessor property.
     ///
     /// A setter answers nothing, and 13.15.2 answers the value assigned, so
@@ -1626,7 +1649,7 @@ impl RegisterVM {
             | Intrinsic::ArrayPrototypeReverse
             | Intrinsic::ArrayPrototypeSlice
             | Intrinsic::ArrayPrototypeToString => {
-                self.call_array_intrinsic(intrinsic, call, units, heap, realm)
+                self.call_array_intrinsic(intrinsic, call, None, units, heap, realm)
             }
             // Never reached: `enter_call_value` sends these to the walk of
             // 23.1.3 before an intrinsic is called at all.
@@ -1653,7 +1676,7 @@ impl RegisterVM {
             | Intrinsic::ArrayPrototypeToSorted
             | Intrinsic::ArrayPrototypeToSpliced
             | Intrinsic::ArrayPrototypeToReversed => {
-                self.call_array_edit_intrinsic(intrinsic, call, heap, realm)
+                self.call_array_edit_intrinsic(intrinsic, call, None, heap, realm)
             }
             Intrinsic::ArrayIsArray
             | Intrinsic::FunctionConstructor
@@ -3065,8 +3088,307 @@ impl RegisterVM {
                 realm,
             );
         }
+        // 7.3.18 reads the `length` before the clause does anything else. A
+        // getter there runs a method of the Script, and so does 7.1.20 of an
+        // Object the read answered.
+        if Self::reads_an_array_like_length(intrinsic) {
+            let object = Self::coerce_object(call.receiver, heap, realm)?;
+            let getter = Self::array_like_length_getter(heap, object)?;
+            let raw = if getter.is_some() {
+                VALUE_UNDEFINED
+            } else {
+                Self::array_like_length_value(heap, object, realm)?
+            };
+            if getter.is_some() || raw.is_object() {
+                heap.enter_scope();
+                let receiver = heap.push_root(Value::from_object(object))?;
+                let held = heap.push_root(raw)?;
+                let resume = Resume::Length {
+                    intrinsic: intrinsic.id(),
+                    receiver,
+                    held,
+                    step: 0,
+                    arg_start: call.arg_start,
+                    arg_count: call.arg_count,
+                    construct: call.construct,
+                };
+                let mut call = call;
+                call.resume = Some(resume);
+                call.receiver = Value::from_object(object);
+                call.arg_count = 0;
+                call.arg_start = Reg(0);
+                call.construct = None;
+                if let Some(getter) = getter {
+                    return self.enter_call_value(
+                        getter,
+                        units,
+                        active_feedback,
+                        heap,
+                        realm,
+                        call,
+                    );
+                }
+                return self.convert_array_like_length(
+                    resume,
+                    call,
+                    units,
+                    active_feedback,
+                    heap,
+                    realm,
+                );
+            }
+        }
         self.acc = self.call_intrinsic(intrinsic, call, units, heap, realm)?;
         Ok(None)
+    }
+
+    /// Whether the clause begins with `LengthOfArrayLike` of 7.3.18, which a
+    /// getter of the Script can answer.
+    const fn reads_an_array_like_length(intrinsic: Intrinsic) -> bool {
+        matches!(
+            intrinsic,
+            Intrinsic::ArrayPrototypeAt
+                | Intrinsic::ArrayPrototypeJoin
+                | Intrinsic::ArrayPrototypePop
+                | Intrinsic::ArrayPrototypePush
+                | Intrinsic::ArrayPrototypeReverse
+                | Intrinsic::ArrayPrototypeSlice
+                | Intrinsic::ArrayPrototypeToString
+                | Intrinsic::ArrayPrototypeIncludes
+                | Intrinsic::ArrayPrototypeShift
+                | Intrinsic::ArrayPrototypeUnshift
+                | Intrinsic::ArrayPrototypeSplice
+                | Intrinsic::ArrayPrototypeFill
+                | Intrinsic::ArrayPrototypeCopyWithin
+                | Intrinsic::ArrayPrototypeConcat
+                | Intrinsic::ArrayPrototypeWith
+                | Intrinsic::ArrayPrototypeFlat
+                | Intrinsic::ArrayPrototypeSort
+                | Intrinsic::ArrayPrototypeToSorted
+                | Intrinsic::ArrayPrototypeToSpliced
+                | Intrinsic::ArrayPrototypeToReversed
+        )
+    }
+
+    /// Whether the clause edits the object it was called on, which decides
+    /// which of the two tables answers it.
+    const fn edits_an_array(intrinsic: Intrinsic) -> bool {
+        matches!(
+            intrinsic,
+            Intrinsic::ArrayPrototypeShift
+                | Intrinsic::ArrayPrototypeUnshift
+                | Intrinsic::ArrayPrototypeSplice
+                | Intrinsic::ArrayPrototypeFill
+                | Intrinsic::ArrayPrototypeCopyWithin
+                | Intrinsic::ArrayPrototypeConcat
+                | Intrinsic::ArrayPrototypeWith
+                | Intrinsic::ArrayPrototypeFlat
+                | Intrinsic::ArrayPrototypeSort
+                | Intrinsic::ArrayPrototypeToSorted
+                | Intrinsic::ArrayPrototypeToSpliced
+                | Intrinsic::ArrayPrototypeToReversed
+        )
+    }
+
+    /// Takes what a method answered for the `length` and either runs the
+    /// clause or asks the next method of 7.1.1.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a clause runs again where a call does, with what a call has"
+    )]
+    fn finish_array_like_length(
+        &mut self,
+        resume: Resume,
+        return_pc: usize,
+        caller_code_id: Option<u32>,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let Resume::Length {
+            intrinsic,
+            receiver,
+            held,
+            step,
+            arg_start,
+            arg_count,
+            construct,
+        } = resume
+        else {
+            return Ok(None);
+        };
+        let call = Call {
+            receiver: heap.root_value(receiver).unwrap_or(VALUE_UNDEFINED),
+            func: arg_start,
+            arg_start,
+            arg_count,
+            slot: 0,
+            resume: Some(resume),
+            construct,
+            return_pc,
+            caller_code_id,
+        };
+        let answered = self.acc;
+        // 7.1.1 asks the next method when the one that answered gave an
+        // Object; the getter answered the value 7.1.20 converts.
+        if answered.is_object() {
+            // The getter answered the value 7.1.20 converts; a method of
+            // 7.1.1.1 answered something it discards, and the next method is
+            // asked of the same object.
+            let held = if step == 0 {
+                heap.push_root(answered)?
+            } else {
+                held
+            };
+            let resume = Resume::Length {
+                intrinsic,
+                receiver,
+                held,
+                step,
+                arg_start,
+                arg_count,
+                construct,
+            };
+            return self.convert_array_like_length(
+                resume,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
+        heap.exit_scope();
+        let intrinsic = Intrinsic::from_id(intrinsic).ok_or(VMError::TypeError)?;
+        let length = integer_argument(answered, heap, realm)?.max(0);
+        let call = Call {
+            resume: None,
+            ..call
+        };
+        self.acc = if Self::edits_an_array(intrinsic) {
+            self.call_array_edit_intrinsic(intrinsic, call, Some(length), heap, realm)?
+        } else {
+            self.call_array_intrinsic(intrinsic, call, Some(length), units, heap, realm)?
+        };
+        if let Some(target) = construct {
+            self.write_reg(target, self.acc)?;
+        }
+        Ok(None)
+    }
+
+    /// Asks the next method of 7.1.1 for the `length` the clause read, with
+    /// the hint `number`.
+    ///
+    /// The object waits in a root, which the collector traces. A method of the
+    /// Realm answers without a frame, so the loop takes that answer and goes
+    /// on rather than leaving.
+    fn convert_array_like_length(
+        &mut self,
+        resume: Resume,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let Resume::Length {
+            intrinsic,
+            receiver,
+            mut held,
+            mut step,
+            arg_start,
+            arg_count,
+            construct,
+        } = resume
+        else {
+            return Ok(None);
+        };
+        loop {
+            let object = heap
+                .root_value(held)
+                .and_then(Value::as_object)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            // 7.1.1 step 1 would pass a hint to `@@toPrimitive`, which needs a
+            // register of the caller this clause has none of.
+            if step == 0
+                && heap
+                    .lookup_named(object, super::realm::WellKnownSymbol::ToPrimitive.key())?
+                    .is_some()
+            {
+                heap.exit_scope();
+                return Err(VMError::Unsupported(
+                    "the @@toPrimitive of an array-like length",
+                ));
+            }
+            step = step.saturating_add(1);
+            let name = match step {
+                1 => "valueOf",
+                2 => "toString",
+                _ => {
+                    heap.exit_scope();
+                    return Err(type_error(heap, realm, "an object has no primitive value"));
+                }
+            };
+            let key = PropertyKey::String(heap.strings.intern(name)?);
+            let object = heap
+                .root_value(held)
+                .and_then(Value::as_object)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let method = heap
+                .lookup_named(object, key)?
+                .map(Self::plain_value)
+                .transpose()?
+                .filter(|method| Self::is_callable(*method, heap));
+            let Some(method) = method else {
+                continue;
+            };
+            let mut next = call;
+            next.receiver = Value::from_object(object);
+            next.arg_count = 0;
+            next.arg_start = Reg(0);
+            next.construct = None;
+            next.resume = Some(Resume::Length {
+                intrinsic,
+                receiver,
+                held,
+                step,
+                arg_start,
+                arg_count,
+                construct,
+            });
+            if let Some(code_id) =
+                self.enter_call_value(method, units, active_feedback, heap, realm, next)?
+            {
+                return Ok(Some(code_id));
+            }
+            // A method of the Realm answered without a frame of its own.
+            let answered = self.acc;
+            if !answered.is_object() {
+                // The receiver is read while its root still stands.
+                let call = Call {
+                    receiver: heap.root_value(receiver).unwrap_or(VALUE_UNDEFINED),
+                    resume: None,
+                    arg_start,
+                    arg_count,
+                    construct,
+                    ..call
+                };
+                heap.exit_scope();
+                let intrinsic = Intrinsic::from_id(intrinsic).ok_or(VMError::TypeError)?;
+                let length = integer_argument(answered, heap, realm)?.max(0);
+                self.acc = if Self::edits_an_array(intrinsic) {
+                    self.call_array_edit_intrinsic(intrinsic, call, Some(length), heap, realm)?
+                } else {
+                    self.call_array_intrinsic(intrinsic, call, Some(length), units, heap, realm)?
+                };
+                if let Some(target) = construct {
+                    self.write_reg(target, self.acc)?;
+                }
+                return Ok(None);
+            }
+            held = heap.push_root(answered)?;
+        }
     }
 
     /// Leaves a native operation to convert one of its arguments (7.1.17).
@@ -5313,11 +5635,16 @@ impl RegisterVM {
         &mut self,
         intrinsic: Intrinsic,
         call: Call,
+        known: Option<i64>,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
         let object = Self::coerce_object(call.receiver, heap, realm)?;
-        let length = Self::array_like_length(heap, object, realm)?;
+        // 7.3.18 read it once already where a getter answered it.
+        let length = match known {
+            Some(length) => length,
+            None => Self::array_like_length(heap, object, realm)?,
+        };
         // Each of these walks the whole `length`, which a Script can make
         // 2^32-1 without holding one element. The walk is charged before it
         // starts, so a budget that cannot pay for it ends here rather than
@@ -5831,12 +6158,17 @@ impl RegisterVM {
         &mut self,
         intrinsic: Intrinsic,
         call: Call,
+        known: Option<i64>,
         units: CodeUnits<'_>,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
         let object = Self::coerce_object(call.receiver, heap, realm)?;
-        let length = Self::array_like_length(heap, object, realm)?;
+        // 7.3.18 read it once already where a getter answered it.
+        let length = match known {
+            Some(length) => length,
+            None => Self::array_like_length(heap, object, realm)?,
+        };
         // A clause that walks the whole `length` is charged for it before it
         // starts, because a Script can make one 2^32-1 without holding an
         // element. 23.1.3.1 reads a single index, and the three that search
@@ -5912,6 +6244,7 @@ impl RegisterVM {
                             arg_count: 0,
                             ..call
                         },
+                        None,
                         units,
                         heap,
                         realm,
@@ -10804,6 +11137,7 @@ impl RegisterVM {
                                 Resume::Primitive { register, .. }
                                 | Resume::Coercion { register, .. } => register,
                                 Resume::Iteration { .. }
+                                | Resume::Length { .. }
                                 | Resume::Getter
                                 | Resume::Spread { .. }
                                 | Resume::Setter { .. } => Reg(0),
@@ -10831,6 +11165,15 @@ impl RegisterVM {
                                     state,
                                     Some(self.acc),
                                     call,
+                                    units,
+                                    feedback,
+                                    heap,
+                                    realm,
+                                )?,
+                                Resume::Length { .. } => self.finish_array_like_length(
+                                    resume,
+                                    pc,
+                                    current_code_id,
                                     units,
                                     feedback,
                                     heap,

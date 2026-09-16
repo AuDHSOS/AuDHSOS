@@ -6882,3 +6882,38 @@ fn an_object_property_key_goes_through_to_property_key() -> Result<(), Error> {
     ));
     Ok(())
 }
+
+/// 7.3.18 reads the `length` before the clause does anything else, and a
+/// getter there runs a method of the Script: the clause enters it and starts
+/// again with the length it answered, so the getter runs exactly once.
+#[test]
+fn an_accessor_length_runs_its_getter_once_for_a_clause_of_23_1_3() -> Result<(), Error> {
+    for source in [
+        "var n=0;var o={0:'a',1:'b'};\
+         Object.defineProperty(o,'length',{get:function(){n++;return 2}});\
+         ''+Array.prototype.join.call(o,'-')+n",
+        "var o={0:1,1:2};Object.defineProperty(o,'length',{get:function(){return 2}});\
+         ''+Array.prototype.slice.call(o,0)",
+        "var o={0:1};Object.defineProperty(o,'length',{get:function(){throw new TypeError()}});\
+         var t=false;try{Array.prototype.copyWithin.call(o,0,0)}catch(e){t=e instanceof TypeError}\
+         ''+t",
+        "var o={0:1,1:2};Object.defineProperty(o,'length',{get:function(){return 2}});\
+         ''+Array.prototype.indexOf.call(o,2)",
+        "var o={0:3,1:1};Object.defineProperty(o,'length',{get:function(){return 2}});\
+         ''+Array.prototype.toSorted.call(o)",
+        "''+[1,2].join('-')",
+        // 7.1.20 converts the value the read answered, and an Object there
+        // runs `valueOf` and then `toString` of the Script.
+        "var o={0:1,1:2,length:{valueOf:function(){return 2}}};\
+         ''+Array.prototype.slice.call(o,0)",
+        "var o={0:1,1:2,length:{valueOf:function(){return {}},\
+         toString:function(){return 2}}};''+Array.prototype.slice.call(o,0)",
+        "var o={0:1,length:{}};''+Array.prototype.slice.call(o,0).length",
+        "var n=0;var o={0:'a',1:'b'};Object.defineProperty(o,'length',\
+         {get:function(){n++;return {valueOf:function(){return 2}}}});\
+         ''+Array.prototype.join.call(o,'-')+n",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
