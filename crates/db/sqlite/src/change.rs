@@ -1770,7 +1770,7 @@ impl Writer {
                 let Some((parent, _)) = database.table(&key.table) else {
                     continue;
                 };
-                let places = parent_places(key, parent)?;
+                let places = parent_places(&database, (&name, key), parent)?;
                 for (rowid, values) in database.rows_of(&name)? {
                     let wanted: Vec<Value> = key
                         .columns
@@ -1812,7 +1812,11 @@ impl Writer {
     fn keep(&mut self, at: usize, text: &[u8]) -> Result<Vec<Vec<Value>>, Error> {
         let value = crate::pragma::keeping(at, text).ok_or(Error::Unsupported)?;
         let keeps = crate::pragma::HELD.get(at);
-        if !keeps.is_some_and(|keeps| keeps.fixed) {
+        // `PragTyp_FLAG` takes `SQLITE_ForeignKeys` out of the mask
+        // where the connection has a transaction open, so a statement
+        // there changes nothing.
+        let held = self.began.is_some() && keeps.is_some_and(|keeps| keeps.name == b"foreign_keys");
+        if !held && !keeps.is_some_and(|keeps| keeps.fixed) {
             for slot in self.kept.iter_mut().skip(at).take(1) {
                 *slot = Some(value);
             }
@@ -2050,15 +2054,22 @@ impl Writer {
         let bytes = self.image();
         let database = Database::open(&bytes)?;
         for key in &table.foreign {
+            // `sqlite3FkLocateIndex` runs where the statement is read
+            // and not where a row is written, so a key that names no
+            // key of the parent is refused whatever the row holds.
+            let (parent, _) = database
+                .table(&key.table)
+                .ok_or_else(|| Error::ForeignMismatch(table.name.clone(), key.table.clone()))?;
+            let places = parent_places(&database, (&table.name, key), parent)?;
             let mut wanted = Vec::new();
             for at in &key.columns {
                 wanted.push(at_place(table, values, rowid, *at));
             }
+            // A row that holds nothing in a column of the key points at
+            // no row, which is `R-...`: such a row is held to nothing.
             if wanted.contains(&Value::Null) {
                 continue;
             }
-            let (parent, _) = database.table(&key.table).ok_or(Error::ForeignMismatch)?;
-            let places = parent_places(key, parent)?;
             if !found_parent(&database, &key.table, parent, &places, &wanted)? {
                 return Err(Error::Foreign);
             }
@@ -2090,8 +2101,10 @@ impl Writer {
             let places = {
                 let bytes = self.image();
                 let database = Database::open(&bytes)?;
-                let (parent, _) = database.table(name).ok_or(Error::ForeignMismatch)?;
-                parent_places(&points.key, parent)?
+                // The table is the one the statement changes, so it is
+                // there wherever this is reached.
+                let (parent, _) = database.table(name).ok_or(Error::NoTable(Vec::new()))?;
+                parent_places(&database, (&points.child, &points.key), parent)?
             };
             let mut wanted = Vec::new();
             for at in &places {
@@ -2125,15 +2138,35 @@ impl Writer {
     fn pointing(&self, name: &[u8]) -> Result<Vec<Points>, Error> {
         let bytes = self.image();
         let database = Database::open(&bytes)?;
+        // The table is the one the statement changes, so it is there
+        // wherever this is reached.
+        let (parent, _) = database.table(name).ok_or(Error::NoTable(Vec::new()))?;
         let mut out = Vec::new();
         for table in database.tables() {
             for key in &table.foreign {
-                if key.table.eq_ignore_ascii_case(name) {
-                    out.push(Points {
-                        child: table.name.clone(),
-                        key: key.clone(),
-                    });
+                if !key.table.eq_ignore_ascii_case(name) {
+                    continue;
                 }
+                // `R-04240-13860`: the affinity and the collation of the
+                // parent's column decide, so a child column written
+                // under another collation is compared under the
+                // parent's.
+                let under = parent_places(&database, (&table.name, key), parent)?
+                    .iter()
+                    .map(|at| {
+                        parent
+                            .columns
+                            .get(*at)
+                            .map_or((Affinity::None, Collation::Binary), |column| {
+                                (column.affinity, column.collation)
+                            })
+                    })
+                    .collect();
+                out.push(Points {
+                    child: table.name.clone(),
+                    key: key.clone(),
+                    under,
+                });
             }
         }
         Ok(out)
@@ -2195,7 +2228,7 @@ impl Writer {
             if held.contains(&Value::Null) {
                 continue;
             }
-            if alike_values(&held, wanted, child, &points.key.columns) {
+            if alike_values(&held, wanted, &points.under) {
                 out.push((rowid, values));
             }
         }
@@ -5472,6 +5505,10 @@ struct Points {
     child: Vec<u8>,
     /// The key itself.
     key: crate::schema::Foreign,
+    /// What each column of the key is compared under, which is the
+    /// affinity and the collation of the column of the parent, not of
+    /// the child.
+    under: Vec<(Affinity, Collation)>,
 }
 
 /// The places the parent columns of a foreign key take in the table it
@@ -5480,14 +5517,20 @@ struct Points {
 ///
 /// `sqlite3FkLocateIndex` refuses a key whose columns are not the
 /// primary key and carry no unique index of their own.
-fn parent_places(key: &crate::schema::Foreign, parent: &Table) -> Result<Vec<usize>, Error> {
+fn parent_places(
+    database: &Database<'_>,
+    over: (&[u8], &crate::schema::Foreign),
+    parent: &Table,
+) -> Result<Vec<usize>, Error> {
+    let (child, key) = over;
+    let mismatch = || Error::ForeignMismatch(child.to_vec(), parent.name.clone());
     if key.parent.is_empty() {
         let mut places: Vec<usize> = (0..parent.columns.len())
             .filter(|at| parent.columns.get(*at).is_some_and(|column| column.key > 0))
             .collect();
         places.sort_by_key(|at| parent.columns.get(*at).map_or(0, |column| column.key));
         if places.len() != key.columns.len() {
-            return Err(Error::ForeignMismatch);
+            return Err(mismatch());
         }
         return Ok(places);
     }
@@ -5497,11 +5540,11 @@ fn parent_places(key: &crate::schema::Foreign, parent: &Table) -> Result<Vec<usi
             .columns
             .iter()
             .position(|column| column.name.eq_ignore_ascii_case(name))
-            .ok_or(Error::ForeignMismatch)?;
+            .ok_or_else(mismatch)?;
         places.push(at);
     }
     if places.len() != key.columns.len() {
-        return Err(Error::ForeignMismatch);
+        return Err(mismatch());
     }
     // The columns pointed at must be unique, which is the primary key
     // or a `UNIQUE` over exactly those columns.
@@ -5537,7 +5580,32 @@ fn parent_places(key: &crate::schema::Foreign, parent: &Table) -> Result<Vec<usi
     if unique {
         return Ok(places);
     }
-    Err(Error::ForeignMismatch)
+    // `sqlite3FkLocateIndex`: an index of the parent's own counts where
+    // it is unique, holds those columns and holds them in the collation
+    // each column compares under.
+    let indexed = database.indexes(&parent.name).iter().any(|kept| {
+        if !kept.index.unique {
+            return false;
+        }
+        let named: Vec<Vec<u8>> = kept
+            .index
+            .columns
+            .iter()
+            .filter(|keyed| {
+                keyed
+                    .place()
+                    .and_then(|at| parent.columns.get(at))
+                    .is_some_and(|column| column.collation == keyed.collation)
+            })
+            .filter_map(|keyed| keyed.place().and_then(|at| parent.columns.get(at)))
+            .map(|column| column.name.clone())
+            .collect();
+        named.len() == kept.index.columns.len() && whole(&named)
+    });
+    if indexed {
+        return Ok(places);
+    }
+    Err(mismatch())
 }
 
 /// The value a row answers for a place, which is the rowid where the
@@ -5583,18 +5651,15 @@ fn found_parent(
 
 /// Whether two runs of values are the same under the affinities and
 /// collations of the columns they came from.
-fn alike_values(held: &[Value], wanted: &[Value], table: &Table, places: &[usize]) -> bool {
+fn alike_values(held: &[Value], wanted: &[Value], under: &[(Affinity, Collation)]) -> bool {
     held.iter()
         .zip(wanted)
-        .zip(places)
-        .all(|((one, other), at)| {
-            let column = table.columns.get(*at);
-            let affinity = column.map_or(Affinity::None, |column| column.affinity);
-            let collation = column.map_or(Collation::Binary, |column| column.collation);
+        .zip(under)
+        .all(|((one, other), (affinity, collation))| {
             let mut left = one.clone();
             let mut right = other.clone();
-            crate::value::apply_comparison(&mut left, &mut right, affinity);
-            crate::value::compare(&left, &right, collation) == core::cmp::Ordering::Equal
+            crate::value::apply_comparison(&mut left, &mut right, *affinity);
+            crate::value::compare(&left, &right, *collation) == core::cmp::Ordering::Equal
         })
 }
 

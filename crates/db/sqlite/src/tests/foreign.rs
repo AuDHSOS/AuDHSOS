@@ -149,9 +149,11 @@ fn a_foreign_key_that_points_at_no_unique_columns_is_a_mismatch() {
             "CREATE TABLE sideways(a REFERENCES keyed(y))",
         ])
         .unwrap();
-        assert_eq!(
-            writer.run(sql.as_bytes()),
-            Err(Error::ForeignMismatch),
+        assert!(
+            matches!(
+                writer.run(sql.as_bytes()),
+                Err(Error::ForeignMismatch(_, _))
+            ),
             "{sql}"
         );
     }
@@ -418,7 +420,10 @@ fn the_rows_that_point_at_no_row_are_answered_whatever_the_pragma_says() {
 #[test]
 fn the_text_a_refusal_is_written_as() {
     assert_eq!(Error::Foreign.message(), "FOREIGN KEY constraint failed");
-    assert_eq!(Error::ForeignMismatch.message(), "foreign key mismatch");
+    assert_eq!(
+        Error::ForeignMismatch(b"child".to_vec(), b"parent".to_vec()).message(),
+        "foreign key mismatch - \"child\" referencing \"parent\""
+    );
     assert_eq!(
         Error::Unique(b"t1.a, t1.b".to_vec()).message(),
         "UNIQUE constraint failed: t1.a, t1.b"
@@ -486,5 +491,89 @@ fn the_text_a_refusal_is_written_as() {
     assert_eq!(
         Error::Eval(crate::eval::Error::Unsupported).message(),
         "Unsupported"
+    );
+}
+
+#[test]
+fn the_column_of_the_parent_says_how_the_keys_are_compared() {
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys = ON",
+        "CREATE TABLE t1(a COLLATE nocase PRIMARY KEY)",
+        "CREATE TABLE t2(b REFERENCES t1)",
+        "INSERT INTO t1 VALUES('ONE')",
+        "INSERT INTO t2 VALUES('OnE')",
+    ])
+    .unwrap();
+    // The child column compares under `BINARY` and the parent's under
+    // `NOCASE`, so the row that points is found under the parent's.
+    assert_eq!(
+        writer
+            .run(b"DELETE FROM t1 WHERE rowid=1")
+            .unwrap_err()
+            .message(),
+        "FOREIGN KEY constraint failed"
+    );
+}
+
+#[test]
+fn an_index_of_the_parents_own_says_the_columns_are_a_key() {
+    // A unique index over the columns pointed at is enough.
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys = ON",
+        "CREATE TABLE t1(x)",
+        "CREATE UNIQUE INDEX t1i ON t1(x)",
+        "CREATE TABLE t2(a REFERENCES t1(x))",
+    ])
+    .unwrap();
+    assert!(writer.run(b"INSERT INTO t2 VALUES(NULL)").is_ok());
+    // An index held in another collation than the column compares
+    // under is not, and neither is a table with no key at all; the
+    // refusal is read where the statement is read, so a row that holds
+    // nothing reaches it.
+    for made in [
+        "CREATE UNIQUE INDEX u1i ON u1(x COLLATE nocase)",
+        "CREATE INDEX u1i ON u1(x)",
+    ] {
+        let (mut writer, _) = ran(&[
+            "PRAGMA foreign_keys = ON",
+            "CREATE TABLE u1(x)",
+            made,
+            "CREATE TABLE u2(a REFERENCES u1(x))",
+        ])
+        .unwrap();
+        assert_eq!(
+            writer
+                .run(b"INSERT INTO u2 VALUES(NULL)")
+                .unwrap_err()
+                .message(),
+            "foreign key mismatch - \"u2\" referencing \"u1\"",
+            "{made}"
+        );
+    }
+}
+
+#[test]
+fn the_foreign_keys_pragma_stands_while_a_transaction_is_open() {
+    let (mut writer, _) = ran(&["PRAGMA foreign_keys = ON", "BEGIN"]).unwrap();
+    // `PragTyp_FLAG` takes the flag out of the mask while the
+    // connection has a transaction open, so the statement changes
+    // nothing.
+    writer.run(b"PRAGMA foreign_keys = OFF").unwrap();
+    assert_eq!(
+        writer.run(b"PRAGMA foreign_keys").unwrap(),
+        [[Value::Int(1)]]
+    );
+    // Every other pragma the connection keeps is set there all the
+    // same, because the mask holds only that one flag back.
+    writer.run(b"PRAGMA cache_size = 100").unwrap();
+    assert_eq!(
+        writer.run(b"PRAGMA cache_size").unwrap(),
+        [[Value::Int(100)]]
+    );
+    writer.run(b"COMMIT").unwrap();
+    writer.run(b"PRAGMA foreign_keys = OFF").unwrap();
+    assert_eq!(
+        writer.run(b"PRAGMA foreign_keys").unwrap(),
+        [[Value::Int(0)]]
     );
 }

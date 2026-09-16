@@ -5210,6 +5210,22 @@ Document 16 step Q8.
 - A statement whose tokens run out, and one that holds a byte no rule
   accepts, name no constraint.
 
+### 6.6.172 What a foreign key is compared under (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A child column written under `BINARY` that points at a parent column
+  written under `NOCASE` is compared under `NOCASE`, so a `DELETE` of
+  the parent row is refused `FOREIGN KEY constraint failed`.
+- A unique index of the parent's own over the columns pointed at says
+  they are a key.
+- An index held in another collation than the column compares under, and
+  an index that is not unique, do not; both are refused `foreign key
+  mismatch - "u2" referencing "u1"`, which a row that holds nothing in
+  the key reaches because the key is read where the statement is.
+- `PRAGMA foreign_keys` set while a transaction is open changes nothing,
+  and every other pragma the connection keeps is set there.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

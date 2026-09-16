@@ -200,7 +200,7 @@ pub enum Error {
     /// A foreign key whose parent columns are not the primary key of
     /// the table it names and carry no unique index of their own,
     /// which `sqlite3FkLocateIndex` refuses as `foreign key mismatch`.
-    ForeignMismatch,
+    ForeignMismatch(Vec<u8>, Vec<u8>),
 }
 
 impl Error {
@@ -280,7 +280,11 @@ impl Error {
                 alloc::string::String::from_utf8_lossy(name)
             ),
             Error::Foreign => "FOREIGN KEY constraint failed".to_string(),
-            Error::ForeignMismatch => "foreign key mismatch".to_string(),
+            Error::ForeignMismatch(child, parent) => alloc::format!(
+                "foreign key mismatch - \"{}\" referencing \"{}\"",
+                alloc::string::String::from_utf8_lossy(child),
+                alloc::string::String::from_utf8_lossy(parent)
+            ),
             Error::Unique(columns) => alloc::format!(
                 "UNIQUE constraint failed: {}",
                 alloc::string::String::from_utf8_lossy(columns)

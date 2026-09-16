@@ -744,6 +744,9 @@ Size: L.
 27. `ALTER TABLE ... DROP CONSTRAINT`, `... ALTER COLUMN ... DROP NOT
     NULL`, `... ALTER COLUMN ... SET NOT NULL` and `... ADD
     [CONSTRAINT name] CHECK (...)`. Built, which D-247 records.
+28. What a foreign key is compared under, which is the affinity and
+    the collation of the parent's column, and what says the columns
+    pointed at are a key. Built, which D-248 records.
 
 ### Done when
 
@@ -753,8 +756,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 72 289 cases in 705 files, 57 396
-pass, 4301 answer differently, and 10 592 name something the engine
+under the `tclsh` of the machine. Of 72 420 cases in 705 files, 57 588
+pass, 4240 answer differently, and 10 592 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts
