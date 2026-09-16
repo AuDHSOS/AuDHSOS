@@ -768,8 +768,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same two, on the register engine (focused) | focused | `80c7268` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/super test/language/expressions/object/method-definition --summary` | 397 | 741 | 108 (14.57%) | 9 (1.21%) | 624 (84.21%) |
 | `new.target` (focused) | focused | `9e0a0fb` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/new.target --summary` | 14 | 28 | 22 (78.57%) | 0 (0.00%) | 6 (21.43%) |
 | The same, on the register engine (focused) | focused | `9e0a0fb` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/new.target --summary` | 14 | 28 | 16 (57.14%) | 0 (0.00%) | 12 (42.86%) |
-| Complete pinned suite, including staging and Intl | full | `9e0a0fb` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `9e0a0fb` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 28,972 (28.15%) | 19,438 (18.89%) | 54,515 (52.96%) |
+| Subclasses and `super` (focused) | focused | `756642a` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/class/subclass test/language/statements/class/super --summary` | 117 | 233 | 182 (78.11%) | 36 (15.45%) | 15 (6.44%) |
+| The same two, on the register engine (focused) | focused | `756642a` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/class/subclass test/language/statements/class/super --summary` | 117 | 233 | 74 (31.76%) | 14 (6.01%) | 145 (62.23%) |
+| Complete pinned suite, including staging and Intl | full | `756642a` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `756642a` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 29,158 (28.33%) | 19,510 (18.96%) | 54,257 (52.72%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1623,7 +1625,9 @@ fixed in `88c10fa` after it: a function that captures itself was followed again
 on every pass of the escape walk, so `compile` never returned and no limit of
 the embedding could stop it. That step moved no variant of the suite, which has
 no variant of the shape, and the engine output of `88c10fa` is byte-identical
-to that of `9e0a0fb`.
+to that of `9e0a0fb`. The subclass runs and both full runs beside 15.7.14 were
+measured at tree `ca30bd03d37896e9193884cee843d4fd99987461`, which is the tree
+of `756642a`; that step gained 186 variants and lost none.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
