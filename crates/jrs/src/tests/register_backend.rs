@@ -776,6 +776,20 @@ fn a_descriptor_field_that_is_a_getter_runs_once_and_in_order() -> Result<(), Er
         // A descriptor of plain fields is read as before.
         "let o={};Object.defineProperty(o,'x',{value:3});o.x",
         "let o={};Object.defineProperty(o,'x',{get:function(){return 6}});o.x",
+        // 7.3.25 reads one descriptor per key, and the key itself may be a
+        // getter of the Script too.
+        "let o=Object.create(null,{x:{get value(){return 5},enumerable:true}});o.x",
+        "let o={};Object.defineProperties(o,{x:{get value(){return 1}},y:{value:2}});o.x+':'+o.y",
+        "(function(){let n=[];let p={};Object.defineProperty(p,'x',{get:function(){n.push('g');return {value:1}},enumerable:true});let o={};Object.defineProperties(o,p);return n.join()+':'+o.x})()",
+        "let n=[];let props={a:{get value(){n.push('a');return 1}},b:{get value(){n.push('b');return 2}}};let o={};Object.defineProperties(o,props);n.join()+':'+o.a+o.b",
+        "let props={x:{get value(){throw 3}}};try{Object.defineProperties({},props)}catch(e){e}",
+        "(function(){let props={x:1};try{Object.defineProperties({},props)}catch(e){return e instanceof TypeError}})()",
+        // A key the properties object does not enumerate is not read.
+        "(function(){let props={};Object.defineProperty(props,'x',{value:{get value(){return 9}},enumerable:false});let o={};Object.defineProperties(o,props);return typeof o.x})()",
+        "let o=Object.create(Object.prototype,{x:{get value(){return 7},enumerable:true}});o.x+':'+(Object.getPrototypeOf(o)===Object.prototype)",
+        // The plain form is read as before.
+        "let o={};Object.defineProperties(o,{x:{value:1},y:{value:2}});''+(o.x+o.y)",
+        "let o=Object.create(null,{x:{value:1,enumerable:true}});o.x",
     ] {
         differential(source)?;
     }
