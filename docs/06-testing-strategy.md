@@ -5032,6 +5032,19 @@ D-239, document 16 step Q8.
   was read is passed over.
 - The walk of `PRAGMA integrity_check` answers `ok` after each of them.
 
+### 6.6.163 A column dropped (`db-sqlite`)
+
+D-240, document 16 step Q8.
+
+- The column goes out of the text that made the table and out of every
+  row, and the first column and the last take the comma beside them.
+- An index over a column that stayed answers the rows it held, and the
+  walk of `PRAGMA integrity_check` answers `ok`.
+- A column no table holds, a column a key of its own is over, and the
+  one column of a table are each refused.
+- A statement of the schema that still names the column refuses the
+  whole statement, and the file is what it was.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

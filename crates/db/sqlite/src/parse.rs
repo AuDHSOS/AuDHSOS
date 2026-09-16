@@ -1097,6 +1097,15 @@ impl<'a> Parser<'a> {
                 name,
             }));
         }
+        if self.eat_keyword(Keyword::Drop) {
+            self.eat_keyword(Keyword::Column);
+            let column = self.name()?;
+            return Ok(Definition::DropColumn(crate::ast::DropColumn {
+                schema,
+                table,
+                column,
+            }));
+        }
         self.expect_keyword(Keyword::Add, Expected::Add)?;
         self.eat_keyword(Keyword::Column);
         let start = self.peek().map_or(self.end, |token| token.start);
@@ -1488,6 +1497,7 @@ impl<'a> Parser<'a> {
     /// One column: a name, a type where one is written, and whatever
     /// follows.
     fn column_def(&mut self) -> Result<ColumnDef, Error> {
+        let start = self.peek().map_or(self.end, |token| token.start);
         let name = self.name()?;
         let ty = if self.at_type_word() {
             Some(self.type_name()?)
@@ -1500,6 +1510,10 @@ impl<'a> Parser<'a> {
         }
         let constraints = self.arena.push_column_constraints(&constraints);
         Ok(ColumnDef {
+            written: Span {
+                start,
+                len: self.end.saturating_sub(start),
+            },
             name,
             ty,
             constraints,

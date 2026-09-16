@@ -451,6 +451,9 @@ pub enum ColumnConstraint {
 /// One column of a table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ColumnDef {
+    /// The whole of it, from the name to the last word that follows it,
+    /// which is the text a column takes out of the statement.
+    pub written: Span,
     /// The name.
     pub name: Span,
     /// The declared type, where one was written.
@@ -553,6 +556,17 @@ pub struct AddColumn {
     pub written: Span,
     /// The column, read.
     pub column: ColumnDef,
+}
+
+/// `ALTER TABLE [schema.]name DROP [COLUMN] name`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DropColumn {
+    /// The schema, where one was named.
+    pub schema: Option<Span>,
+    /// The table.
+    pub table: Span,
+    /// The column it loses.
+    pub column: Span,
 }
 
 /// `ALTER TABLE [schema.]name RENAME TO name`.
@@ -732,6 +746,8 @@ pub enum Definition {
     AddColumn(AddColumn),
     /// `ALTER TABLE ... RENAME TO`.
     Rename(RenameTable),
+    /// `ALTER TABLE ... DROP COLUMN`.
+    DropColumn(DropColumn),
     /// `CREATE TRIGGER`.
     Trigger(CreateTrigger),
     /// `DROP TABLE`, `DROP INDEX`, `DROP VIEW` and `DROP TRIGGER`.

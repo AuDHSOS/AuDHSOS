@@ -37,6 +37,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `ALTER TABLE ... DROP COLUMN` in `db-sqlite`. The column goes out of
+  the text that made the table and out of every row of it. A column a
+  key of its own is over, and the one column of a table, are refused,
+  and so is a drop that leaves a statement of the schema naming a column
+  that is gone. D-240 records it.
+
 - Statements written inside the expressions of a statement that writes,
   in `db-sqlite`: `EXISTS`, `IN (SELECT ...)`, `IN table` and a
   statement that stands for a value are answered under an `INSERT`, an

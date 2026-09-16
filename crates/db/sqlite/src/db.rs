@@ -106,6 +106,19 @@ pub enum Error {
     /// An `ALTER TABLE ... RENAME TO` whose new name the schema already
     /// holds, with that name.
     Named(Vec<u8>),
+    /// An `ALTER TABLE ... DROP COLUMN` of a column the table does not
+    /// hold, with the name as it was written.
+    NoSuchColumn(Vec<u8>),
+    /// An `ALTER TABLE ... DROP COLUMN` of a column a key of the table
+    /// is over, with the word of that key and the name of the column.
+    KeyColumn(Vec<u8>, Vec<u8>),
+    /// An `ALTER TABLE ... DROP COLUMN` of the one column a table has,
+    /// with its name.
+    LastColumn(Vec<u8>),
+    /// A statement of the schema that no longer reads after a column
+    /// was dropped: what it makes, its name, and what reading it
+    /// refused.
+    AfterDrop(Vec<u8>, Vec<u8>, alloc::string::String),
     /// A value written where the key of the table stands that is no
     /// whole number, which `sqlite3_column_int64` of the key refuses.
     Mismatch,
@@ -186,6 +199,25 @@ impl Error {
             Error::Nested => "cannot start a transaction within a transaction".to_string(),
             Error::NoTransaction => "cannot commit - no transaction is active".to_string(),
             Error::Mismatch => "datatype mismatch".to_string(),
+            Error::NoSuchColumn(name) => alloc::format!(
+                "no such column: \"{}\"",
+                alloc::string::String::from_utf8_lossy(name)
+            ),
+            Error::KeyColumn(key, name) => alloc::format!(
+                "cannot drop {} column: \"{}\"",
+                alloc::string::String::from_utf8_lossy(key),
+                alloc::string::String::from_utf8_lossy(name)
+            ),
+            Error::LastColumn(name) => alloc::format!(
+                "cannot drop column \"{}\": no other columns exist",
+                alloc::string::String::from_utf8_lossy(name)
+            ),
+            Error::AfterDrop(kind, name, refused) => alloc::format!(
+                "error in {} {} after drop column: {}",
+                alloc::string::String::from_utf8_lossy(kind),
+                alloc::string::String::from_utf8_lossy(name),
+                refused
+            ),
             Error::NoUpsertKey => {
                 "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint".to_string()
             }

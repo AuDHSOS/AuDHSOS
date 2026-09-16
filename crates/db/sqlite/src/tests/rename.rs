@@ -261,3 +261,194 @@ fn a_statement_that_names_another_table_names_nothing_of_this_one() {
     let sql = b"CREATE TRIGGER tr AFTER INSERT ON t BEGIN DELETE FROM t; UPDATE other SET a=1; SELECT 1; END";
     assert_eq!(crate::rename::places(sql, b"t").len(), 2);
 }
+
+#[test]
+fn a_column_dropped_goes_out_of_the_statement_and_out_of_every_row() {
+    let mut writer = writer();
+    for sql in [
+        b"CREATE TABLE t(a int, b text DEFAULT 'x', c blob, d)".as_slice(),
+        b"CREATE INDEX i ON t(d)",
+        b"INSERT INTO t VALUES(1,'p',x'01',4),(2,'q',x'02',5)",
+        b"ALTER TABLE t DROP COLUMN b",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    assert_eq!(
+        schema(&writer),
+        concat!(
+            "table|t|t|CREATE TABLE t(a int, c blob, d)|\n",
+            "index|i|t|CREATE INDEX i ON t(d)|\n",
+        )
+    );
+    let image = writer.written();
+    let database = Database::open(&image).unwrap();
+    let answer = database
+        .query(b"SELECT a||'/'||quote(c)||'/'||d FROM t ORDER BY a")
+        .unwrap();
+    let shown: Vec<Vec<u8>> = answer
+        .rows
+        .iter()
+        .filter_map(|row| row.first().and_then(crate::value::Value::text))
+        .collect();
+    assert_eq!(
+        shown,
+        alloc::vec![b"1/X'01'/4".to_vec(), b"2/X'02'/5".to_vec()]
+    );
+    // The index over a column that stayed answers the rows it held.
+    assert_eq!(
+        database
+            .query(b"SELECT a FROM t WHERE d=5")
+            .unwrap()
+            .rows
+            .first()
+            .and_then(|row| row.first()),
+        Some(&crate::value::Value::Int(2))
+    );
+    assert_eq!(
+        database
+            .query(b"PRAGMA integrity_check")
+            .unwrap()
+            .rows
+            .first()
+            .and_then(|row| row.first()),
+        Some(&crate::value::Value::Text(b"ok".to_vec()))
+    );
+}
+
+#[test]
+fn the_first_column_and_the_last_take_the_comma_beside_them() {
+    let mut writer = writer();
+    writer.run(b"CREATE TABLE t(a int, b text)").unwrap();
+    writer.run(b"ALTER TABLE t DROP COLUMN a").unwrap();
+    assert_eq!(schema(&writer), "table|t|t|CREATE TABLE t(b text)|\n");
+    let mut other = writer;
+    other.run(b"CREATE TABLE u(a int, b text)").unwrap();
+    other.run(b"ALTER TABLE u DROP COLUMN b").unwrap();
+    assert_eq!(
+        schema(&other),
+        concat!(
+            "table|t|t|CREATE TABLE t(b text)|\n",
+            "table|u|u|CREATE TABLE u(a int)|\n",
+        )
+    );
+}
+
+#[test]
+fn a_column_a_key_is_over_or_the_one_column_of_a_table_is_not_dropped() {
+    let mut writer = writer();
+    for sql in [
+        b"CREATE TABLE u(a PRIMARY KEY, b UNIQUE, c)".as_slice(),
+        b"CREATE TABLE w(a)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    for (sql, message) in [
+        (
+            b"ALTER TABLE u DROP COLUMN zz".as_slice(),
+            "no such column: \"zz\"",
+        ),
+        (
+            b"ALTER TABLE u DROP COLUMN a",
+            "cannot drop PRIMARY KEY column: \"a\"",
+        ),
+        (
+            b"ALTER TABLE u DROP COLUMN b",
+            "cannot drop UNIQUE column: \"b\"",
+        ),
+        (
+            b"ALTER TABLE w DROP COLUMN a",
+            "cannot drop column \"a\": no other columns exist",
+        ),
+        (b"ALTER TABLE nope DROP COLUMN a", "no such table: nope"),
+        (
+            b"ALTER TABLE sqlite_schema DROP COLUMN a",
+            "table sqlite_master may not be altered",
+        ),
+    ] {
+        assert_eq!(writer.run(sql).unwrap_err().message(), message, "{sql:?}");
+    }
+}
+
+#[test]
+fn a_statement_that_names_the_column_holds_it_where_it_is() {
+    for (made, sql, message) in [
+        (
+            alloc::vec![b"CREATE TABLE x(a,b)".as_slice(), b"CREATE INDEX i ON x(a)"],
+            b"ALTER TABLE x DROP COLUMN a".as_slice(),
+            "error in index i after drop column: no such column: a",
+        ),
+        (
+            alloc::vec![
+                b"CREATE TABLE y(a,b)",
+                b"CREATE TABLE other(x UNIQUE)",
+                b"CREATE VIEW v AS SELECT 1+1, a FROM y",
+            ],
+            b"ALTER TABLE y DROP COLUMN a",
+            "error in view v after drop column: no such column: a",
+        ),
+        (
+            alloc::vec![b"CREATE TABLE z(a,b, CHECK(a>0))"],
+            b"ALTER TABLE z DROP COLUMN a",
+            "error in table z after drop column: no such column: a",
+        ),
+        (
+            alloc::vec![
+                b"CREATE TABLE q(a,b)",
+                b"CREATE TABLE log(what)",
+                b"CREATE TRIGGER tr AFTER INSERT ON q BEGIN INSERT INTO log VALUES(new.a); END",
+            ],
+            b"ALTER TABLE q DROP COLUMN a",
+            "error in trigger tr after drop column: no such column: new.a",
+        ),
+    ] {
+        let mut writer = writer();
+        for statement in made {
+            writer.run(statement).unwrap();
+        }
+        let before = writer.written();
+        assert_eq!(writer.run(sql).unwrap_err().message(), message, "{sql:?}");
+        // The statement is refused, so the file is what it was.
+        assert_eq!(writer.written(), before, "{sql:?}");
+    }
+}
+
+/// The statement of a table that writes no columns out, and one that
+/// writes a column a key of its own is over, which the text a drop
+/// answers is read against.
+#[test]
+fn what_the_text_of_a_dropped_column_is_read_against() {
+    assert!(matches!(
+        crate::change::without_column(b"CREATE INDEX i ON t(a)", b"a"),
+        Err(crate::db::Error::NoTable(_))
+    ));
+    assert!(matches!(
+        crate::change::without_column(b"CREATE TABLE t AS SELECT 1 AS a", b"a"),
+        Err(crate::db::Error::NoTable(_))
+    ));
+    assert_eq!(
+        crate::change::without_column(b"CREATE TABLE t(a, b)", b"a").unwrap(),
+        b"CREATE TABLE t(b)".to_vec()
+    );
+    assert!(matches!(
+        crate::change::without_column(b"CREATE TABLE t(a, b)", b"zz"),
+        Err(crate::db::Error::NoSuchColumn(_))
+    ));
+}
+
+#[test]
+fn what_the_parser_reads_of_a_dropped_column() {
+    let sql = b"ALTER TABLE a.t DROP COLUMN c";
+    let (_, definition) = crate::parse::definition(sql).unwrap();
+    let crate::ast::Definition::DropColumn(asked) = definition else {
+        panic!("a dropped column was written");
+    };
+    assert_eq!(
+        asked.schema.map(|span| span.text(sql)),
+        Some(b"a".as_slice())
+    );
+    assert_eq!(asked.table.text(sql), b"t");
+    assert_eq!(asked.column.text(sql), b"c");
+    // The word `COLUMN` may be left out, and a name must follow.
+    assert!(crate::parse::definition(b"ALTER TABLE t DROP c").is_ok());
+    assert!(crate::parse::definition(b"ALTER TABLE t DROP COLUMN").is_err());
+}

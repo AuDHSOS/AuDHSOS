@@ -125,6 +125,124 @@ fn renamed(values: &mut [Value], from: &[u8], to: &[u8]) -> bool {
     changed
 }
 
+/// Whether `ALTER TABLE` may alter the table `name`, which is
+/// `sqlite3AlterRenameTable` locating it and `isAlterableTable` holding
+/// it.
+///
+/// # Errors
+///
+/// [`Error::NoTable`] where the schema holds no such table or view,
+/// [`Error::NotAlterable`] for a table SQLite keeps for itself, and
+/// [`Error::NotATable`] for a view.
+fn alterable(database: &Database<'_>, name: &[u8]) -> Result<(), Error> {
+    let view = database.view(name).is_some();
+    if database.table(name).is_none() && !view {
+        return Err(Error::NoTable(name.to_vec()));
+    }
+    // A table SQLite keeps for itself is read and not altered, and the
+    // schema's own table answers under the name it is written with.
+    if name
+        .get(..7)
+        .is_some_and(|head| head.eq_ignore_ascii_case(b"sqlite_"))
+    {
+        let held = if crate::db::schema_named(name) {
+            b"sqlite_master".to_vec()
+        } else {
+            name.to_vec()
+        };
+        return Err(Error::NotAlterable(held));
+    }
+    // A view is not a table, so it is not what these statements alter.
+    if view {
+        return Err(Error::NotATable(name.to_vec()));
+    }
+    Ok(())
+}
+
+/// The statement of a table with the column `column` taken out of it,
+/// which is `sqlite_drop_column`: the text of the column goes, and the
+/// comma that stood beside it goes with it.
+///
+/// # Errors
+///
+/// [`Error::NoTable`] where the statement makes no table of columns
+/// written out, [`Error::NoSuchColumn`] where it writes no such column,
+/// and [`Error::KeyColumn`] where the column carries a key of its own.
+pub(crate) fn without_column(statement: &[u8], column: &[u8]) -> Result<Vec<u8>, Error> {
+    let (arena, definition) = crate::parse::definition(statement)?;
+    let Definition::Table(made) = definition else {
+        return Err(Error::NoTable(Vec::new()));
+    };
+    let crate::ast::TableBody::Columns { columns, .. } = made.body else {
+        return Err(Error::NoTable(Vec::new()));
+    };
+    let held = arena.columns(columns);
+    let at = held
+        .iter()
+        .position(|def| {
+            crate::schema::dequote(def.name.text(statement)).eq_ignore_ascii_case(column)
+        })
+        .ok_or_else(|| Error::NoSuchColumn(column.to_vec()))?;
+    // `sqlite3AlterDropColumn`: a column that carries a key of its own
+    // is not one a statement drops.
+    let def = held.get(at).ok_or(Error::NoSuchColumn(Vec::new()))?;
+    for constraint in arena.column_constraints(def.constraints) {
+        let key = match constraint {
+            crate::ast::ColumnConstraint::PrimaryKey { .. } => b"PRIMARY KEY".to_vec(),
+            crate::ast::ColumnConstraint::Unique(_) => b"UNIQUE".to_vec(),
+            _ => continue,
+        };
+        return Err(Error::KeyColumn(key, column.to_vec()));
+    }
+    if held.len() <= 1 {
+        return Err(Error::LastColumn(column.to_vec()));
+    }
+    // The text of the column goes with the comma in front of it, or
+    // with the comma after it where it is the first column.
+    let span = def.written;
+    let (start, end) = match held.get(at.saturating_add(1)) {
+        Some(next) => (span.start, next.written.start),
+        None => (
+            statement
+                .get(..span.start)
+                .and_then(|head| head.iter().rposition(|byte| *byte == b','))
+                .unwrap_or(span.start),
+            span.start.saturating_add(span.len),
+        ),
+    };
+    let mut out = statement.get(..start).unwrap_or_default().to_vec();
+    out.extend_from_slice(statement.get(end..).unwrap_or_default());
+    Ok(out)
+}
+
+/// Where a statement names the column `column`, as the statement wrote
+/// it, which is what says the statement no longer reads once the column
+/// is gone. A name written with a table in front of it carries that
+/// table, which is what `renameTestSchema` answers.
+fn names_column(statement: &[u8], column: &[u8]) -> Option<Vec<u8>> {
+    let (arena, _) = crate::parse::definition(statement).ok()?;
+    arena.all().find_map(|(_, node)| {
+        let crate::ast::Node::Column {
+            table,
+            column: named,
+            ..
+        } = node
+        else {
+            return None;
+        };
+        if !crate::schema::dequote(named.text(statement)).eq_ignore_ascii_case(column) {
+            return None;
+        }
+        let mut shown = Vec::new();
+        if let Some(held) = table {
+            shown.extend_from_slice(&crate::schema::dequote(held.text(statement)));
+            shown.push(b'.');
+        }
+        shown.extend_from_slice(&crate::schema::dequote(named.text(statement)));
+        Some(shown)
+    })
+}
+
 /// Whether the schema already names a table, an index or a view, which
 /// are one namespace; a trigger is named in its own, so a trigger and
 /// an index may share a name.
@@ -506,29 +624,7 @@ impl Writer {
         let to = crate::schema::dequote(asked.name.text(sql));
         let bytes = self.image();
         let database = Database::open(&bytes)?;
-        let view = database.view(&from).is_some();
-        if database.table(&from).is_none() && !view {
-            return Err(Error::NoTable(from));
-        }
-        // `isAlterableTable`: a table SQLite keeps for itself is read
-        // and not altered, and the schema's own table answers under the
-        // name it is written with.
-        if from
-            .get(..7)
-            .is_some_and(|head| head.eq_ignore_ascii_case(b"sqlite_"))
-        {
-            let held = if crate::db::schema_named(&from) {
-                b"sqlite_master".to_vec()
-            } else {
-                from
-            };
-            return Err(Error::NotAlterable(held));
-        }
-        // `sqlite3AlterRenameTable`: a view is not a table, so it is not
-        // what this statement alters.
-        if view {
-            return Err(Error::NotATable(from));
-        }
+        alterable(&database, &from)?;
         if names(&database, &to) {
             return Err(Error::Named(to));
         }
@@ -546,6 +642,118 @@ impl Writer {
         }
         self.rename_sequence(&from, &to)?;
         self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
+        Ok(())
+    }
+
+    /// `ALTER TABLE ... DROP COLUMN`: the column goes out of the text
+    /// that made the table and out of every row of it, which is
+    /// `sqlite3AlterDropColumn`.
+    ///
+    /// Rewriting the rows costs O(n) in them and O(log n) per row, and
+    /// reading the schema again costs O(m) in its rows.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoSuchColumn`] where the table holds no such column,
+    /// [`Error::KeyColumn`] where the column carries a key of its own,
+    /// [`Error::LastColumn`] where it is the one column the table has,
+    /// and [`Error::AfterDrop`] where a statement of the schema no
+    /// longer reads without it.
+    fn drop_column(&mut self, asked: &crate::ast::DropColumn, sql: &[u8]) -> Result<(), Error> {
+        let name = crate::schema::dequote(asked.table.text(sql));
+        let column = crate::schema::dequote(asked.column.text(sql));
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        alterable(&database, &name)?;
+        // The table was located above, so these refusals carry no name
+        // of their own.
+        let (table, root) = database.table(&name).ok_or(Error::NoTable(Vec::new()))?;
+        let at = table
+            .columns
+            .iter()
+            .position(|held| held.name.eq_ignore_ascii_case(&column))
+            .ok_or_else(|| Error::NoSuchColumn(column.clone()))?;
+        let (statement, _) = database
+            .written_as(&name)
+            .ok_or(Error::NoTable(Vec::new()))?;
+        let text = without_column(statement, &column)?;
+        let affinities: Vec<Affinity> = table
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(place, _)| *place != at)
+            .map(|(_, held)| held.affinity)
+            .collect();
+        let rows = database.rows_of(&name)?;
+        let schema_rowid = self.row_of(&name)?;
+        drop(database);
+        let value = |bytes: &[u8]| Value::Text(crate::value::stored(bytes, self.header.encoding));
+        let row = crate::record::write(
+            &[
+                value(b"table"),
+                value(&name),
+                value(&name),
+                Value::Int(i64::from(root)),
+                value(&text),
+            ],
+            &SCHEMA,
+            4,
+        );
+        let schema = crate::image::SCHEMA_ROOT;
+        crate::tree::update(&mut self.pages, schema, schema_rowid, &row)?;
+        // `sqlite3AlterDropColumn` writes every row again with the
+        // value of that column left out.
+        for (key, values) in rows {
+            let held: Vec<Value> = values
+                .into_iter()
+                .enumerate()
+                .filter(|(place, _)| *place != at)
+                .map(|(_, value)| value)
+                .collect();
+            let record = crate::record::write(&held, &affinities, 4);
+            crate::tree::update(&mut self.pages, root, key, &record)?;
+        }
+        self.reads_without(&name, &column)?;
+        self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
+        Ok(())
+    }
+
+    /// Whether every statement of the schema still reads now that the
+    /// column is gone, which is `renameTestSchema` under the words
+    /// `after drop column`.
+    ///
+    /// Reading the schema costs O(n) in its rows.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AfterDrop`] names the statement that no longer reads.
+    fn reads_without(&self, name: &[u8], column: &[u8]) -> Result<(), Error> {
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        for (_, values) in database.rows_of(SCHEMA_TABLE)? {
+            let text = |at: usize| match values.get(at) {
+                Some(Value::Text(bytes)) => bytes.clone(),
+                _ => Vec::new(),
+            };
+            let (kind, held, over, statement) = (text(0), text(1), text(2), text(4));
+            // A statement that names the table may name its columns:
+            // the table's own, an index and a trigger over it, and a
+            // view that reads it. One that was not written out names
+            // nothing at all.
+            if statement.is_empty()
+                || !over.eq_ignore_ascii_case(name)
+                    && crate::rename::places(&statement, name).is_empty()
+            {
+                continue;
+            }
+            if let Some(shown) = names_column(&statement, column) {
+                let refused = alloc::format!(
+                    "no such column: {}",
+                    alloc::string::String::from_utf8_lossy(&shown)
+                );
+                return Err(Error::AfterDrop(kind, held, refused));
+            }
+        }
         Ok(())
     }
 
@@ -1891,6 +2099,7 @@ impl Writer {
             Definition::Drop(asked) => return self.drop_object(&asked, sql),
             Definition::AddColumn(asked) => return self.add_column(arena, &asked, sql),
             Definition::Rename(asked) => return self.rename_table(&asked, sql),
+            Definition::DropColumn(asked) => return self.drop_column(&asked, sql),
             Definition::Trigger(trigger) => return self.create_trigger(&trigger, sql),
             Definition::Table(table) => {
                 if let TableBody::Select(select) = table.body {

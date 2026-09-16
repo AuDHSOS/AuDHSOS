@@ -651,7 +651,7 @@ a foreign key holds the rows of both tables it names, and the JSON
 functions answer what the shell answers; the rest is open.
 Depends on: Q6. Recorded in D-172 to D-174, D-182, D-186, D-187, D-189,
 D-191, D-193, D-195, D-196, D-205 to D-211, D-216 to D-218, D-219,
-D-224 to D-232 and D-234 to D-239.
+D-224 to D-232 and D-234 to D-240.
 Size: L.
 
 ### Does
@@ -670,8 +670,8 @@ Size: L.
    `DROP VIEW`, which D-195 records, `DROP TABLE` and `DROP INDEX`,
    which D-191 records, and `CREATE TRIGGER` and `DROP TRIGGER`, which
    D-204 records. `ALTER TABLE ... ADD COLUMN` is built, which D-196 records, and
-   `ALTER TABLE ... RENAME TO`, which D-237 records; `RENAME COLUMN`
-   and `DROP COLUMN` are open.
+   `ALTER TABLE ... RENAME TO`, which D-237 records, and `DROP COLUMN`,
+   which D-240 records; `RENAME COLUMN` is open.
 3. Subqueries, `WITH`, and the window clauses. A `WITH` term that reads
    itself is built, which D-198 records, and the window clauses are
    built, which D-219 records.
@@ -722,6 +722,9 @@ Size: L.
 19. The statements written inside the expressions of a statement that
     writes: `EXISTS`, `IN (SELECT ...)` and a statement that stands for
     a value. Built, which D-239 records.
+20. `ALTER TABLE ... DROP COLUMN`: the column out of the text that
+    made the table and out of every row. Built, which D-240 records;
+    `RENAME COLUMN` is open.
 
 ### Done when
 
@@ -731,8 +734,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 72 326 cases in 705 files, 56 736
-pass, 4497 answer differently, and 11 093 name something the engine
+under the `tclsh` of the machine. Of 72 334 cases in 705 files, 56 779
+pass, 4481 answer differently, and 11 074 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts
