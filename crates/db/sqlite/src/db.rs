@@ -188,6 +188,9 @@ pub enum Error {
     /// A token the tokenizer read as no token at all, as it was
     /// written.
     Unrecognized(Vec<u8>),
+    /// The table an `UPDATE` changes named again in its `FROM`, as it
+    /// was written there.
+    TargetInFrom(Vec<u8>),
     /// A table an `ALTER TABLE` left in a state the schema cannot be
     /// read from, with the table, the words for the kind of alter, and
     /// what reading the schema refused.
@@ -264,6 +267,10 @@ impl Error {
             Error::Unrecognized(token) => {
                 alloc::format!("unrecognized token: \"{}\"", shown(token))
             }
+            Error::TargetInFrom(name) => alloc::format!(
+                "target object/alias may not appear in FROM clause: {}",
+                shown(name)
+            ),
             Error::OrderedDistinct(name) => alloc::format!(
                 "DISTINCT not allowed on ordered-set aggregate {}()",
                 shown(name)
@@ -491,6 +498,9 @@ impl Error {
         if error.expected == parse::Expected::Unrecognized {
             return Error::Unrecognized(held.unwrap_or_default().to_vec());
         }
+        if error.expected == parse::Expected::TargetInFrom {
+            return Error::TargetInFrom(held.unwrap_or_default().to_vec());
+        }
         match held.filter(|token| !token.is_empty()) {
             Some(token) => Error::Syntax(token.to_vec()),
             None => Error::Incomplete,
@@ -656,6 +666,19 @@ impl Shape {
                 || name.eq_ignore_ascii_case(b"_rowid_"));
         rowid.then_some(Reached::Key)
     }
+}
+
+/// One column the `FROM` of an `UPDATE` answers.
+#[derive(Clone, Debug)]
+pub struct Beside {
+    /// The name it answers under.
+    pub name: Vec<u8>,
+    /// The table it came from, which a name written `t.a` matches.
+    pub from: Vec<u8>,
+    /// What is converted before it is compared.
+    pub affinity: Affinity,
+    /// How its text is compared.
+    pub collation: Collation,
 }
 
 /// What a statement answered, and what a comparison against each of its
@@ -1210,6 +1233,40 @@ impl<'a> Database<'a> {
             crate::schema::Table::viewed(viewed.name, &columns),
             viewed.rows,
         ))
+    }
+
+    /// The columns and the rows the `FROM` of an `UPDATE` answers.
+    ///
+    /// The statement is answered once, so the cost is what that
+    /// statement costs.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the statement of the clause refuses.
+    pub fn joined(
+        &self,
+        arena: &Arena,
+        id: SelectId,
+        sql: &[u8],
+    ) -> Result<(Vec<Beside>, Vec<Vec<Value>>), Error> {
+        let scope = Scope {
+            terms: &[],
+            outer: None,
+            views: 0,
+        };
+        let answered = self.statement(arena, id, sql, scope)?;
+        let columns = answered
+            .shape
+            .columns
+            .iter()
+            .map(|column| Beside {
+                name: column.name.clone(),
+                from: column.from.clone(),
+                affinity: column.affinity,
+                collation: column.collation.unwrap_or(self.collation()),
+            })
+            .collect();
+        Ok((columns, answered.answer.rows))
     }
 
     /// The columns of a row that are computed, filled in from the

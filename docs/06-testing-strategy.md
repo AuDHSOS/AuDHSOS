@@ -5427,6 +5427,29 @@ Document 16 step Q8.
   does not have names its own place: `SELECT 1,2,3 ORDER BY 1,9` is
   refused `2nd ORDER BY term out of range - should be between 1 and 3`.
 
+### 6.6.185 The tables an `UPDATE` reads beside its own (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `UPDATE t1 SET z=v FROM d WHERE x=k` writes each row of `t1` with the
+  row of `d` the `WHERE` holds for, and counts only the rows of `t1` it
+  wrote.
+- A row of the table the clause holds more than one row for takes the
+  last of them.
+- `WITH data(k,v) AS (VALUES ...) UPDATE t1 SET z=v FROM data WHERE x=k`
+  reads the term of the `WITH` as a table of the clause.
+- Two tables of a clause are one join, and a column names the table it
+  came from.
+- A source is a table under the one schema a file holds, a statement in
+  brackets with or without a name of its own, or a term of the `WITH`.
+- An `UPDATE ... FROM` of a trigger's body reads `new` and `old` through
+  the row of the clause.
+- An `INSTEAD OF UPDATE` trigger of a view runs once per row of the
+  join, duplicates included.
+- `UPDATE t1 SET z='z' FROM t1` and `... FROM d AS t1` are refused
+  `target object/alias may not appear in FROM clause: t1`, and a table
+  under another schema is another object.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

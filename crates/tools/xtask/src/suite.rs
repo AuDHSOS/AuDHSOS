@@ -144,7 +144,7 @@ const DEADLINE: Duration = Duration::from_secs(60);
 
 /// The capabilities an `ifcapable` may name that this engine does not
 /// have. Every other name is answered as held.
-const MISSING: [&str; 21] = [
+const MISSING: [&str; 22] = [
     "vtab",
     "fts1",
     "fts2",
@@ -166,6 +166,7 @@ const MISSING: [&str; 21] = [
     "compound_select",
     "unlock_notify",
     "session",
+    "update_delete_limit",
 ];
 
 /// Runs every file of the suite, or the one `only` names, and answers

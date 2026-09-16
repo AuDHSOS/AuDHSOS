@@ -772,6 +772,10 @@ Size: L.
 40. The digit separators a number is written with, and the words a
     token the tokenizer read as no token at all is refused with. Built,
     which D-260 records.
+41. `UPDATE ... FROM`, and the `WITH` before such a statement. Built,
+    which D-261 records; `UPDATE` and `DELETE` with an `ORDER BY` and a
+    `LIMIT` are still open, which the suite reads as
+    `update_delete_limit`.
 
 ### Done when
 
@@ -781,8 +785,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 72 320 cases in 706 files, 58 957
-pass, 3252 answer differently, and 10 111 name something the engine
+under the `tclsh` of the machine. Of 72 411 cases in 703 files, 59 220
+pass, 3208 answer differently, and 9983 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts

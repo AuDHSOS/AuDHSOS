@@ -149,6 +149,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `UPDATE ... FROM` in `db-sqlite`, and the `WITH` before such a
+  statement. Every row of the table is written against the row of the
+  clause the `WHERE` holds for, and against the last of them where the
+  clause holds more than one; a view runs its `INSTEAD OF` triggers once
+  per row of the join. The table the statement changes may not be named
+  again in the clause. D-261 records it. Catalog 6.6.185.
+
 - `median`, `percentile`, `percentile_cont` and `percentile_disc` in
   `db-sqlite`, and the `WITHIN GROUP (ORDER BY Y)` clause that names
   their values, which the parser reads as the first argument of the

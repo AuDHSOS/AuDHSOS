@@ -732,6 +732,10 @@ pub struct Update {
     pub name: Span,
     /// The columns written, each with what it is written with.
     pub sets: Range,
+    /// The tables a `FROM` names, as the statement that answers their
+    /// columns: `UPDATE t SET ... FROM x` reads the columns of `x` in
+    /// its `SET` clauses and in its `WHERE`.
+    pub from: Option<SelectId>,
     /// The `WHERE` clause, where one was written.
     pub filter: Option<ExprId>,
     /// The columns a `RETURNING` answers, or an empty run.

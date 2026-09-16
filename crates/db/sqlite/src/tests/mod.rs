@@ -48,6 +48,7 @@ mod separator;
 mod strict;
 mod token;
 mod tree;
+mod upfrom;
 mod upsert;
 mod utf8;
 mod value;

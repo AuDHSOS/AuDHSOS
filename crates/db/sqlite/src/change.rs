@@ -3190,39 +3190,58 @@ impl Writer {
                 .counting(self.counted);
             let (table, held) = database.viewing(name)?;
             let places = set_places(&table, &columns)?;
+            let joined = match statement.from {
+                None => None,
+                Some(id) => Some(database.joined(arena, id, sql)?),
+            };
+            let (of, sides) = beside(joined.as_ref());
             let mut written = Vec::new();
             for values in &held {
-                let row = Held {
-                    table: &table,
-                    values,
-                    rowid: None,
-                    encoding: self.header.encoding,
-                    random: &self.random,
-                    counted: self.counted,
-                    outer,
-                    reading: Some(Reading {
-                        database: &database,
-                        arena,
-                        sql,
-                    }),
-                };
-                let keep = match statement.filter {
-                    None => true,
-                    Some(filter) => {
-                        crate::eval::evaluate_row(arena, filter, sql, &row)?.truth(false)
+                // A view runs its triggers once per row the clause
+                // holds, which is what `sqlite3Update` leaves an
+                // `INSTEAD OF` trigger reading: the rows of the join
+                // rather than the rows of the view.
+                for side in &sides {
+                    let aside = side.map(|row| Aside {
+                        columns: of,
+                        values: row,
+                        outer,
+                    });
+                    let row = Held {
+                        table: &table,
+                        values,
+                        rowid: None,
+                        encoding: self.header.encoding,
+                        random: &self.random,
+                        counted: self.counted,
+                        outer: aside
+                            .as_ref()
+                            .map(|one| -> &dyn crate::eval::Row { one })
+                            .or(outer),
+                        reading: Some(Reading {
+                            database: &database,
+                            arena,
+                            sql,
+                        }),
+                    };
+                    let keep = match statement.filter {
+                        None => true,
+                        Some(filter) => {
+                            crate::eval::evaluate_row(arena, filter, sql, &row)?.truth(false)
+                        }
+                    };
+                    if !keep {
+                        continue;
                     }
-                };
-                if !keep {
-                    continue;
-                }
-                let mut next = values.clone();
-                for (at, set) in places.iter().zip(sets) {
-                    let value = crate::eval::evaluate_row(arena, set.value, sql, &row)?;
-                    for slot in next.iter_mut().skip(at.unwrap_or(usize::MAX)).take(1) {
-                        *slot = stored(&value, self.header.encoding);
+                    let mut next = values.clone();
+                    for (at, set) in places.iter().zip(sets) {
+                        let value = crate::eval::evaluate_row(arena, set.value, sql, &row)?;
+                        for slot in next.iter_mut().skip(at.unwrap_or(usize::MAX)).take(1) {
+                            *slot = stored(&value, self.header.encoding);
+                        }
                     }
+                    written.push((values.clone(), next));
                 }
-                written.push((values.clone(), next));
             }
             (table, written)
         };
@@ -3865,6 +3884,11 @@ impl Writer {
                     .ok_or(Error::Unsupported)
             })
             .collect::<Result<_, Error>>()?;
+        let joined = match statement.from {
+            None => None,
+            Some(id) => Some(database.joined(arena, id, sql)?),
+        };
+        let (columns, sides) = beside(joined.as_ref());
         let mut out = Vec::new();
         for values in database.keyed_rows_of(name)? {
             let reading = Reading {
@@ -3872,27 +3896,49 @@ impl Writer {
                 arena,
                 sql,
             };
-            if !self.keeps(statement.filter, table, &values, outer, reading)? {
-                continue;
-            }
-            let held = Held {
-                table,
-                values: &values,
-                rowid: None,
-                encoding: self.header.encoding,
-                random: &self.random,
-                counted: self.counted,
-                outer,
-                reading: Some(reading),
-            };
-            let mut next = values.clone();
-            for (at, set) in places.iter().zip(sets) {
-                let value = crate::eval::evaluate_row(arena, set.value, sql, &held)?;
-                for slot in next.iter_mut().skip(*at).take(1) {
-                    *slot = stored(&value, self.header.encoding);
+            // A row of the table that the clause holds more than one
+            // row for is written with the last of them.
+            let mut found: Option<Vec<Value>> = None;
+            for side in &sides {
+                let aside = side.map(|row| Aside {
+                    columns,
+                    values: row,
+                    outer,
+                });
+                let held = Held {
+                    table,
+                    values: &values,
+                    rowid: None,
+                    encoding: self.header.encoding,
+                    random: &self.random,
+                    counted: self.counted,
+                    outer: aside
+                        .as_ref()
+                        .map(|one| -> &dyn crate::eval::Row { one })
+                        .or(outer),
+                    reading: Some(reading),
+                };
+                let keep = match statement.filter {
+                    None => true,
+                    Some(filter) => {
+                        crate::eval::evaluate_row(arena, filter, sql, &held)?.truth(false)
+                    }
+                };
+                if !keep {
+                    continue;
                 }
+                let mut next = values.clone();
+                for (at, set) in places.iter().zip(sets) {
+                    let value = crate::eval::evaluate_row(arena, set.value, sql, &held)?;
+                    for slot in next.iter_mut().skip(*at).take(1) {
+                        *slot = stored(&value, self.header.encoding);
+                    }
+                }
+                found = Some(next);
             }
-            out.push((values, next));
+            if let Some(next) = found {
+                out.push((values, next));
+            }
         }
         Ok(Rewriting {
             root,
@@ -5102,6 +5148,57 @@ struct Keying<'a> {
     returning: crate::ast::Range,
 }
 
+/// The columns the `FROM` of an `UPDATE` answers and the rows of it to
+/// write each row of the table against, which is one row of nothing
+/// where the statement wrote no clause.
+fn beside(
+    joined: Option<&(Vec<crate::db::Beside>, Vec<Vec<Value>>)>,
+) -> (&[crate::db::Beside], Vec<Option<&Vec<Value>>>) {
+    match joined {
+        None => (&[], alloc::vec![None]),
+        Some((columns, rows)) => (columns.as_slice(), rows.iter().map(Some).collect()),
+    }
+}
+
+/// One row of the `FROM` of an `UPDATE`, which the row of the table
+/// reads the columns of the other tables through.
+struct Aside<'a> {
+    /// The columns the clause answers.
+    columns: &'a [crate::db::Beside],
+    /// The values of this row.
+    values: &'a [Value],
+    /// The row a trigger's body reads, where the statement is one of a
+    /// body.
+    outer: Option<&'a dyn crate::eval::Row>,
+}
+
+impl crate::eval::Row for Aside<'_> {
+    fn column(
+        &self,
+        schema: Option<&[u8]>,
+        table: Option<&[u8]>,
+        column: &[u8],
+    ) -> Option<(Value, Affinity, Collation)> {
+        if schema.is_some_and(|name| !name.eq_ignore_ascii_case(b"main")) {
+            return None;
+        }
+        let found = self.columns.iter().enumerate().find(|(_, held)| {
+            held.name.eq_ignore_ascii_case(column)
+                && table.is_none_or(|name| name.eq_ignore_ascii_case(&held.from))
+        });
+        let Some((at, held)) = found else {
+            return self
+                .outer
+                .and_then(|outer| outer.column(schema, table, column));
+        };
+        Some((
+            self.values.get(at).cloned().unwrap_or(Value::Null),
+            held.affinity,
+            held.collation,
+        ))
+    }
+}
+
 /// The row a `DO UPDATE` reads: the row the conflict found under the
 /// name of the table, and the row the statement would have written
 /// under the name `excluded`, which is `sqlite3UpsertDoUpdate`.
@@ -5479,46 +5576,74 @@ impl Writer {
             })
             .collect::<Result<_, Error>>()?;
         let affinities = ordered_affinities(table);
+        // The tables of a `FROM` are answered once, and every row of
+        // the table is written against the first row of theirs the
+        // `WHERE` holds for, which is what `sqlite3Update` does with a
+        // join that answers each row of the table once.
+        let joined = match statement.from {
+            None => None,
+            Some(id) => Some(database.joined(arena, id, sql)?),
+        };
+        let (columns, sides) = beside(joined.as_ref());
         let mut written = Vec::new();
         for (rowid, values) in database.rows_of(name)? {
-            let held = Held {
-                table,
-                values: &values,
-                rowid: Some(rowid),
-                encoding: self.header.encoding,
-                random: &self.random,
-                counted: self.counted,
-                outer,
-                reading: Some(Reading {
-                    database: &database,
-                    arena,
-                    sql,
-                }),
-            };
-            let keep = match statement.filter {
-                None => true,
-                Some(filter) => crate::eval::evaluate_row(arena, filter, sql, &held)?.truth(false),
-            };
-            if !keep {
-                continue;
-            }
-            let mut next = values.clone();
-            let mut key = rowid;
-            for (at, set) in places.iter().zip(sets) {
-                let value = crate::eval::evaluate_row(arena, set.value, sql, &held)?;
-                match at {
-                    Some(at) => {
-                        for slot in next.iter_mut().skip(*at).take(1) {
-                            *slot = stored(&value, self.header.encoding);
-                        }
+            // A row of the table that the clause holds more than one
+            // row for is written with the last of them, which is the
+            // ephemeral table `sqlite3Update` writes the rows into.
+            let mut found: Option<(i64, Vec<Value>)> = None;
+            for side in &sides {
+                let aside = side.map(|row| Aside {
+                    columns,
+                    values: row,
+                    outer,
+                });
+                let held = Held {
+                    table,
+                    values: &values,
+                    rowid: Some(rowid),
+                    encoding: self.header.encoding,
+                    random: &self.random,
+                    counted: self.counted,
+                    outer: aside
+                        .as_ref()
+                        .map(|one| -> &dyn crate::eval::Row { one })
+                        .or(outer),
+                    reading: Some(Reading {
+                        database: &database,
+                        arena,
+                        sql,
+                    }),
+                };
+                let keep = match statement.filter {
+                    None => true,
+                    Some(filter) => {
+                        crate::eval::evaluate_row(arena, filter, sql, &held)?.truth(false)
                     }
-                    None => match value {
-                        Value::Int(given) => key = given,
-                        _ => return Err(Error::Mismatch),
-                    },
+                };
+                if !keep {
+                    continue;
                 }
+                let mut next = values.clone();
+                let mut key = rowid;
+                for (at, set) in places.iter().zip(sets) {
+                    let value = crate::eval::evaluate_row(arena, set.value, sql, &held)?;
+                    match at {
+                        Some(at) => {
+                            for slot in next.iter_mut().skip(*at).take(1) {
+                                *slot = stored(&value, self.header.encoding);
+                            }
+                        }
+                        None => match value {
+                            Value::Int(given) => key = given,
+                            _ => return Err(Error::Mismatch),
+                        },
+                    }
+                }
+                found = Some((key, next));
             }
-            written.push((rowid, key, values, next));
+            if let Some((key, next)) = found {
+                written.push((rowid, key, values, next));
+            }
         }
         Ok(Updating {
             root,

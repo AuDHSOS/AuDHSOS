@@ -82,6 +82,9 @@ pub enum Expected {
     /// Nothing: a token the tokenizer read as no token at all, which
     /// the span names.
     Unrecognized,
+    /// Nothing: the table an `UPDATE` changes named again in its
+    /// `FROM`, which the span names.
+    TargetInFrom,
     /// `AS`, in a `WITH` clause.
     WithAs,
     /// `SELECT`, `VALUES` or `WITH`.
@@ -801,9 +804,23 @@ impl<'a> Parser<'a> {
             Range::default()
         };
         if self.at_keyword(Keyword::Update) {
-            let statement = self.update()?;
+            let mut statement = self.update()?;
             if !ctes.is_empty() {
-                return Err(self.error(None, Expected::Select));
+                // A `WITH` before an `UPDATE` names tables its `FROM`
+                // reads, which is the statement that clause is
+                // answered as; a `WHERE` that names one is not
+                // answered yet.
+                let id = statement
+                    .from
+                    .ok_or_else(|| self.error(None, Expected::Select))?;
+                // The statement was pushed just above, so the arena
+                // holds it.
+                let mut select = self
+                    .arena
+                    .select(id)
+                    .ok_or(self.error(None, Expected::Select))?;
+                select.ctes = ctes;
+                statement.from = Some(self.arena.push_select(select));
             }
             return Ok(Change::Update(statement));
         }
@@ -957,6 +974,21 @@ impl<'a> Parser<'a> {
             }
         }
         let sets = self.arena.push_sets(&sets);
+        // The tables of a `FROM` are answered as the statement
+        // `SELECT * FROM ...` answers them, which is what
+        // `sqlite3Update` builds them into.
+        let from = if self.eat_keyword(Keyword::From) {
+            let tables = self.tables()?;
+            self.refused_target((schema, name), tables)?;
+            let columns = self.arena.push_results(&[ResultColumn::Star]);
+            Some(self.arena.push_select(Select {
+                columns,
+                from: tables,
+                ..Select::default()
+            }))
+        } else {
+            None
+        };
         let filter = if self.eat_keyword(Keyword::Where) {
             Some(self.expression()?)
         } else {
@@ -968,6 +1000,7 @@ impl<'a> Parser<'a> {
             schema,
             name,
             sets,
+            from,
             filter,
             returning,
         })
@@ -2992,6 +3025,56 @@ impl<'a> Parser<'a> {
             len: token.map_or(0, |found| found.len),
             expected,
         }
+    }
+
+    /// The table an `UPDATE` changes named again in its `FROM`, which
+    /// `sqlite3Update` refuses because the clause would join the table
+    /// with itself.
+    ///
+    /// Reading the sources costs O(n) in them.
+    ///
+    /// # Errors
+    ///
+    /// [`Expected::TargetInFrom`] where a source or its alias names the
+    /// table the statement changes.
+    fn refused_target(&self, target: (Option<Span>, Span), tables: Range) -> Result<(), Error> {
+        let (schema, target) = target;
+        let held = self.schema_named(schema);
+        let wanted = crate::schema::dequote(target.text(self.sql));
+        for source in self.arena.sources(tables) {
+            let (named, under) = match source.kind {
+                SourceKind::Table { schema, name, .. } => (Some(name), self.schema_named(schema)),
+                _ => (None, held.clone()),
+            };
+            // A table of another schema is another object, whatever it
+            // is named.
+            if under != held {
+                continue;
+            }
+            if let Some(span) = source.alias.or(named)
+                && crate::schema::dequote(span.text(self.sql)).eq_ignore_ascii_case(&wanted)
+            {
+                return Err(Error {
+                    at: span.start,
+                    len: span.len,
+                    expected: Expected::TargetInFrom,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// The schema a name stands under, which is `main` where the
+    /// statement wrote none.
+    fn schema_named(&self, schema: Option<Span>) -> Vec<u8> {
+        schema.map_or_else(
+            || b"main".to_vec(),
+            |span| {
+                let mut name = crate::schema::dequote(span.text(self.sql));
+                name.make_ascii_lowercase();
+                name
+            },
+        )
     }
 
     /// A number written with digit separators, as the literal it is
