@@ -7824,6 +7824,7 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::SymbolPrototypeToString
         | crate::engine::realm::Intrinsic::FunctionPrototypeToString
         | crate::engine::realm::Intrinsic::ErrorPrototypeToString
+        | crate::engine::realm::Intrinsic::StringPrototypeReplace
         | crate::engine::realm::Intrinsic::ArrayPrototypeToString => RegisterType::String,
 
         // 23.1.3.38 answers an Array Iterator and 23.1.5.2.1 a result object,
@@ -7876,6 +7877,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ReflectApply
         | crate::engine::realm::Intrinsic::ReflectConstruct
         | crate::engine::realm::Intrinsic::SpeciesGetter
+        // 22.2.6.11 answers the String it built, which no lowering names.
+        | crate::engine::realm::Intrinsic::RegExpPrototypeReplace
         // 23.1.3.14, 23.1.3.30, 23.1.3.34 and 23.1.3.35 answer an Array whose
         // elements this lowering did not make.
         | crate::engine::realm::Intrinsic::ArrayPrototypeFlat

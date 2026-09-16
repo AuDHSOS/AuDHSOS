@@ -6765,3 +6765,41 @@ fn an_intrinsic_read_off_an_instance_carries_the_methods_of_20_2_3() -> Result<(
     }
     Ok(())
 }
+
+/// 22.1.3.19 gives the search value its own say through `@@replace`, which
+/// 22.2.6.11 answers for a `RegExp`; a search value that is a String takes the
+/// first occurrence alone.
+#[test]
+fn replace_substitutes_the_first_match_or_every_global_one() -> Result<(), Error> {
+    for source in [
+        "'abcb'.replace('b','x')",
+        "'abcb'.replace(/b/g,'x')",
+        "'abcb'.replace(/b/,'[$&]')",
+        "'abc'.replace('b','$$')",
+        "typeof ''.replace",
+        "''+''.replace.length",
+        "'abc'.replace('x','y')",
+        "'aaa'.replace(/a/g,'')",
+        "'abc'.replace(/(b)/,'<$1>')",
+        "'abc'.replace('','X')",
+        "'abc'.replace(/x*/g,'-')",
+        "'abc'.replace(/b/,\"[$`|$']\")",
+        "'abc'.replace(/(a)(b)/,'$2$1')",
+        "'abc'.replace(/b/,'$9')",
+        "var r=/b/g;'abcb'.replace(r,'x');''+r.lastIndex",
+        "'aaa'.replace(/a/,'$&$&')",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // Step 8 calls a replace value that is callable, which needs a frame.
+    let program = compile(
+        "'abc'.replace('b',function(){return 'x'})",
+        Limits::default(),
+    )?;
+    assert!(program.uses_register_backend());
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
+    Ok(())
+}

@@ -388,6 +388,10 @@ pub enum Intrinsic {
     /// `get [Symbol.species]` of 23.1.2.5 and 22.2.5.2, which answers the
     /// `this` value.
     SpeciesGetter,
+    /// `String.prototype.replace` (22.1.3.19).
+    StringPrototypeReplace,
+    /// `%RegExp.prototype%[@@replace]` (22.2.6.11).
+    RegExpPrototypeReplace,
     /// `Array.prototype.values`, which is also `%Array.prototype%[@@iterator]`
     /// (23.1.3.38 and 23.1.3.40).
     ArrayPrototypeValues,
@@ -642,7 +646,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 154] = [
+    pub const ALL: [Self; 156] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -797,6 +801,8 @@ impl Intrinsic {
         Self::ArrayPrototypeToSorted,
         Self::ArrayPrototypeToSpliced,
         Self::SpeciesGetter,
+        Self::StringPrototypeReplace,
+        Self::RegExpPrototypeReplace,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -831,6 +837,7 @@ impl Intrinsic {
             | Self::StringPrototypeTrimEnd
             | Self::StringPrototypeTrimStart
             | Self::StringPrototypeSplit
+            | Self::StringPrototypeReplace
             | Self::StringPrototypeMatch
             | Self::StringPrototypeSearch => IntrinsicHolder::StringPrototype,
             Self::ArrayPrototypeValues
@@ -919,6 +926,7 @@ impl Intrinsic {
             }
             Self::SymbolFor | Self::SymbolKeyFor => IntrinsicHolder::SymbolConstructor,
             Self::RegExpPrototypeExec
+            | Self::RegExpPrototypeReplace
             | Self::RegExpPrototypeTest
             | Self::RegExpPrototypeToString => IntrinsicHolder::RegExpPrototype,
             Self::ErrorPrototypeToString => IntrinsicHolder::ErrorPrototype,
@@ -1132,6 +1140,8 @@ impl Intrinsic {
             Self::ArrayPrototypeToSorted => 151,
             Self::ArrayPrototypeToSpliced => 152,
             Self::SpeciesGetter => 153,
+            Self::StringPrototypeReplace => 154,
+            Self::RegExpPrototypeReplace => 155,
         }
     }
 
@@ -1296,6 +1306,8 @@ impl Intrinsic {
             Self::ArrayPrototypeToSorted => 151,
             Self::ArrayPrototypeToSpliced => 152,
             Self::SpeciesGetter => 153,
+            Self::StringPrototypeReplace => 154,
+            Self::RegExpPrototypeReplace => 155,
         }
     }
 
@@ -1461,6 +1473,8 @@ impl Intrinsic {
             151 => Some(Self::ArrayPrototypeToSorted),
             152 => Some(Self::ArrayPrototypeToSpliced),
             153 => Some(Self::SpeciesGetter),
+            154 => Some(Self::StringPrototypeReplace),
+            155 => Some(Self::RegExpPrototypeReplace),
             _ => None,
         }
     }
@@ -1597,6 +1611,8 @@ impl Intrinsic {
             Self::StringPrototypeTrimEnd => "trimEnd",
             Self::StringPrototypeTrimStart => "trimStart",
             Self::StringPrototypeSplit => "split",
+            Self::StringPrototypeReplace => "replace",
+            Self::RegExpPrototypeReplace => "[Symbol.replace]",
             Self::StringPrototypeMatch => "match",
             Self::StringPrototypeSearch => "search",
             Self::ParseInt => "parseInt",
@@ -1738,6 +1754,8 @@ impl Intrinsic {
             | Self::FunctionPrototype
             | Self::ErrorPrototypeToString
             | Self::SpeciesGetter
+            | Self::StringPrototypeReplace
+            | Self::RegExpPrototypeReplace
             | Self::ArrayPrototypeSort
             | Self::ArrayPrototypeToSorted
             | Self::ArrayPrototypeValues
@@ -2026,6 +2044,8 @@ impl Intrinsic {
             | Self::ReflectSetPrototypeOf
             | Self::ReflectConstruct
             | Self::ArrayPrototypeToSpliced
+            | Self::StringPrototypeReplace
+            | Self::RegExpPrototypeReplace
             | Self::StringPrototypeSplit => 2,
         }
     }
@@ -3430,6 +3450,16 @@ impl Realm {
                 heap.define_own_named(
                     holder,
                     WellKnownSymbol::Iterator.key(),
+                    function,
+                    builtin_data(),
+                )?;
+                continue;
+            }
+            // 22.2.6.11 is a Symbol-keyed property of %RegExp.prototype%.
+            if intrinsic == Intrinsic::RegExpPrototypeReplace {
+                heap.define_own_named(
+                    holder,
+                    WellKnownSymbol::Replace.key(),
                     function,
                     builtin_data(),
                 )?;

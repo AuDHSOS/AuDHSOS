@@ -1591,6 +1591,18 @@ impl RegisterVM {
             Intrinsic::StringPrototypeMatch | Intrinsic::StringPrototypeSearch => {
                 self.call_string_regexp_intrinsic(intrinsic, &call, units, heap, realm)
             }
+            // 22.1.3.19 gives the search value its own say through
+            // `@@replace`, which 22.2.6.11 answers for a RegExp.
+            Intrinsic::StringPrototypeReplace => self.string_replace(&call, units, heap, realm),
+            Intrinsic::RegExpPrototypeReplace => {
+                let text = property_name_units(self.call_argument(&call, 0)?, heap)?;
+                let receiver = call
+                    .receiver
+                    .as_object()
+                    .ok_or_else(|| type_error(heap, realm, "this value is not a RegExp"))?;
+                let replacement = self.call_argument(&call, 1)?;
+                self.regexp_replace(receiver, &text, replacement, heap, realm)
+            }
             // 27.1.2.1, 23.1.2.5 and 22.2.5.2 answer the value they were
             // called on.
             Intrinsic::IteratorPrototypeIterator | Intrinsic::SpeciesGetter => Ok(call.receiver),
@@ -7830,6 +7842,204 @@ impl RegisterVM {
         Ok(true)
     }
 
+    /// `String.prototype.replace` of 22.1.3.19.
+    ///
+    /// Step 2 gives the search value its own say through `@@replace`; a
+    /// method of the Script there needs a frame this native has none of, as
+    /// does a replace value that is callable (step 8).
+    fn string_replace(
+        &mut self,
+        call: &Call,
+        units: CodeUnits<'_>,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let search = self.call_argument(call, 0)?;
+        let replacement = self.call_argument(call, 1)?;
+        if Self::is_callable(replacement, heap) {
+            return Err(VMError::Unsupported("a replace value that is callable"));
+        }
+        // Step 2: `@@replace` of the search value answers in place of this
+        // clause, and 22.2.6.11 is the only one this Realm builds.
+        if let Some(object) = search.as_object() {
+            let method = heap
+                .lookup_named(object, super::realm::WellKnownSymbol::Replace.key())?
+                .map(Self::plain_value)
+                .transpose()?
+                .unwrap_or(VALUE_UNDEFINED);
+            if !method.is_undefined() {
+                let native = method
+                    .as_object()
+                    .and_then(|method| heap.get_object(method))
+                    .and_then(|method| match method.kind {
+                        ObjectKind::NativeFunction { id, .. } => Intrinsic::from_id(id),
+                        _ => None,
+                    });
+                if native != Some(Intrinsic::RegExpPrototypeReplace) {
+                    return Err(VMError::Unsupported("a @@replace of the Script"));
+                }
+                let text = self.receiver_units(call.receiver, units, heap, realm)?;
+                return self.regexp_replace(object, &text, replacement, heap, realm);
+            }
+            return Err(VMError::Unsupported("ToString of an Object"));
+        }
+        let text = self.receiver_units(call.receiver, units, heap, realm)?;
+        let search = property_name_units(search, heap)?;
+        let replacement = property_name_units(replacement, heap)?;
+        // Steps 6 and 7: the first occurrence alone, and the String itself
+        // where there is none.
+        let Some(position) = text
+            .windows(search.len().max(1))
+            .position(|window| search.is_empty() || window == search.as_slice())
+            .filter(|_| search.len() <= text.len())
+            .or_else(|| search.is_empty().then_some(0))
+        else {
+            return self.allocate_string(heap, &text);
+        };
+        let mut out: Vec<u16> = text.get(..position).unwrap_or_default().to_vec();
+        Self::append_substitution(&mut out, &search, &text, position, &[], &replacement);
+        out.extend_from_slice(
+            text.get(position.saturating_add(search.len())..)
+                .unwrap_or_default(),
+        );
+        self.allocate_string(heap, &out)
+    }
+
+    /// `%RegExp.prototype%[@@replace]` of 22.2.6.11.
+    ///
+    /// The matches are taken before anything is built, which is the order the
+    /// clause reads and writes `lastIndex` in.
+    fn regexp_replace(
+        &mut self,
+        receiver: ObjectRef,
+        text: &[u16],
+        replacement: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if Self::is_callable(replacement, heap) {
+            return Err(VMError::Unsupported("a replace value that is callable"));
+        }
+        let pattern = Self::regexp_pattern(receiver, heap)
+            .ok_or_else(|| type_error(heap, realm, "this value is not a RegExp"))?;
+        // 22.2.7.1 uses an `exec` the object carries where that is callable,
+        // which runs a method of the Script.
+        let key = PropertyKey::String(heap.strings.intern("exec")?);
+        if heap.own_named_flags(receiver, key)?.is_some() {
+            return Err(VMError::Unsupported("an exec of the Script"));
+        }
+        let replacement = property_name_units(replacement, heap)?;
+        if pattern.global {
+            Self::set_last_index(receiver, Value::from_smi(0), heap, realm)?;
+        }
+        let mut out: Vec<u16> = Vec::new();
+        let mut taken = 0usize;
+        while let Some(found) = self.regexp_exec(receiver, &pattern, text, heap, realm)? {
+            let start = found.range.start.min(text.len());
+            let end = found.range.end.min(text.len());
+            out.extend_from_slice(text.get(taken..start).unwrap_or_default());
+            let matched = text.get(start..end).unwrap_or_default().to_vec();
+            let captures: Vec<Option<Vec<u16>>> = found
+                .captures
+                .iter()
+                .map(|range| {
+                    range
+                        .as_ref()
+                        .map(|range| text.get(range.clone()).unwrap_or_default().to_vec())
+                })
+                .collect();
+            Self::append_substitution(&mut out, &matched, text, start, &captures, &replacement);
+            taken = end.max(start);
+            if !pattern.global {
+                break;
+            }
+            // 22.2.6.11 step 11.c advances over an empty match, which
+            // otherwise matches at the same index for ever.
+            if start == end {
+                let next = end.saturating_add(1);
+                if next > text.len() {
+                    break;
+                }
+                Self::set_last_index(
+                    receiver,
+                    Value::from_smi(i32::try_from(next).map_err(|_| VMError::StringLimit)?),
+                    heap,
+                    realm,
+                )?;
+            }
+            self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+        }
+        out.extend_from_slice(text.get(taken..).unwrap_or_default());
+        self.allocate_string(heap, &out)
+    }
+
+    /// `GetSubstitution` of 22.1.3.19.1 for a replacement that is a String.
+    fn append_substitution(
+        out: &mut Vec<u16>,
+        matched: &[u16],
+        text: &[u16],
+        position: usize,
+        captures: &[Option<Vec<u16>>],
+        replacement: &[u16],
+    ) {
+        let tail = position.saturating_add(matched.len());
+        let mut index = 0;
+        while let Some(&unit) = replacement.get(index) {
+            index = index.saturating_add(1);
+            if unit != 0x24 {
+                out.push(unit);
+                continue;
+            }
+            let Some(&next) = replacement.get(index) else {
+                out.push(0x24);
+                continue;
+            };
+            index = index.saturating_add(1);
+            match next {
+                // `$$`
+                0x24 => out.push(0x24),
+                // `$&`
+                0x26 => out.extend_from_slice(matched),
+                // `` $` ``
+                0x60 => out.extend_from_slice(text.get(..position).unwrap_or_default()),
+                // `$'`
+                0x27 => out.extend_from_slice(text.get(tail..).unwrap_or_default()),
+                // `$n` and `$nn`, which name a capture in opening order.
+                0x30..=0x39 => {
+                    let single = usize::from(next.saturating_sub(0x30));
+                    let double = replacement
+                        .get(index)
+                        .filter(|unit| (0x30..=0x39).contains(*unit))
+                        .map(|unit| {
+                            single
+                                .saturating_mul(10)
+                                .saturating_add(usize::from(unit.saturating_sub(0x30)))
+                        })
+                        .filter(|number| *number >= 1 && *number <= captures.len());
+                    let group =
+                        double
+                            .or(Some(single)
+                                .filter(|number| *number >= 1 && *number <= captures.len()));
+                    let Some(group) = group else {
+                        out.push(0x24);
+                        out.push(next);
+                        continue;
+                    };
+                    if double.is_some() {
+                        index = index.saturating_add(1);
+                    }
+                    if let Some(Some(text)) = captures.get(group.saturating_sub(1)) {
+                        out.extend_from_slice(text);
+                    }
+                }
+                _ => {
+                    out.push(0x24);
+                    out.push(next);
+                }
+            }
+        }
+    }
+
     /// The methods 22.2.6 gives `%RegExp.prototype%` that this Realm builds.
     fn call_regexp_intrinsic(
         &mut self,
@@ -7926,9 +8136,9 @@ impl RegisterVM {
             let held = heap
                 .lookup_named(receiver, key)?
                 .map_or(VALUE_UNDEFINED, |property| property.value);
-            Self::set_last_index(receiver, Value::from_smi(0), heap)?;
+            Self::set_last_index(receiver, Value::from_smi(0), heap, realm)?;
             let matched = self.regexp_exec(receiver, &pattern, &text, heap, realm)?;
-            Self::set_last_index(receiver, held, heap)?;
+            Self::set_last_index(receiver, held, heap, realm)?;
             let Some(matched) = matched else {
                 return Ok(Value::from_smi(-1));
             };
@@ -7946,7 +8156,7 @@ impl RegisterVM {
         // A global pattern walks the whole text from index zero and answers
         // the matched substrings alone. The ranges are collected before
         // anything is allocated, so no String is held unrooted.
-        Self::set_last_index(receiver, Value::from_smi(0), heap)?;
+        Self::set_last_index(receiver, Value::from_smi(0), heap, realm)?;
         let mut parts: Vec<Option<&[u16]>> = Vec::new();
         loop {
             self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
@@ -7965,7 +8175,7 @@ impl RegisterVM {
             if matched.range.is_empty() {
                 let next = i32::try_from(matched.range.end.saturating_add(1))
                     .map_err(|_| VMError::StringLimit)?;
-                Self::set_last_index(receiver, Value::from_smi(next), heap)?;
+                Self::set_last_index(receiver, Value::from_smi(next), heap, realm)?;
             }
         }
         if parts.is_empty() {
@@ -7980,8 +8190,17 @@ impl RegisterVM {
         receiver: ObjectRef,
         value: Value,
         heap: &mut GenerationalHeap,
+        realm: &Realm,
     ) -> Result<(), VMError> {
         let key = PropertyKey::String(heap.strings.intern("lastIndex")?);
+        // 7.3.4 asks 10.1.9.1 to write it and throws where that refuses,
+        // which an own `lastIndex` that is not writable does.
+        let writable = heap
+            .own_named_flags(receiver, key)?
+            .is_none_or(|flags| flags.writable && !flags.is_accessor);
+        if !writable {
+            return Err(type_error(heap, realm, "lastIndex is not writable"));
+        }
         heap.define_own_named(
             receiver,
             key,
@@ -8093,18 +8312,7 @@ impl RegisterVM {
         if stateful {
             let end = report.matched.as_ref().map_or(0, |found| found.range.end);
             let end = i32::try_from(end).map_err(|_| VMError::StringLimit)?;
-            let _ = realm;
-            heap.define_own_named(
-                receiver,
-                key,
-                Value::from_smi(end),
-                PropertyFlags {
-                    writable: true,
-                    enumerable: false,
-                    configurable: false,
-                    is_accessor: false,
-                },
-            )?;
+            Self::set_last_index(receiver, Value::from_smi(end), heap, realm)?;
         }
         Ok(report.matched)
     }
