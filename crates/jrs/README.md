@@ -735,8 +735,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same two, on the register engine (focused) | focused | `7c92bf7` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/String/prototype/replace test/built-ins/RegExp/prototype/Symbol.replace --summary` | 125 | 246 | 94 (38.21%) | 18 (7.32%) | 134 (54.47%) |
 | `join` and the property accessors, after `ToString` of an Object (focused) | focused | `88370c5` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/prototype/join test/language/expressions/property-accessors --summary` | 44 | 88 | 72 (81.82%) | 16 (18.18%) | 0 (0.00%) |
 | The same two, on the register engine (focused) | focused | `88370c5` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/prototype/join test/language/expressions/property-accessors --summary` | 44 | 88 | 54 (61.36%) | 6 (6.82%) | 28 (31.82%) |
-| Complete pinned suite, including staging and Intl | full | `88370c5` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `88370c5` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 27,030 (26.26%) | 19,390 (18.84%) | 56,505 (54.90%) |
+| `%Array.prototype%`, after the answered length (focused) | focused | `64f7a69` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/prototype --summary` | 2,811 | 5,583 | 4,744 (84.97%) | 809 (14.49%) | 30 (0.54%) |
+| `%Array.prototype%`, after the answered length, on the register engine (focused) | focused | `64f7a69` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/prototype --summary` | 2,811 | 5,583 | 4,509 (80.76%) | 600 (10.75%) | 474 (8.49%) |
+| Complete pinned suite, including staging and Intl | full | `64f7a69` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `64f7a69` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 27,056 (26.29%) | 19,400 (18.85%) | 56,469 (54.86%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1525,7 +1527,10 @@ that step gained 110 variants and lost 2, both of them tests that used to pass
 because `@@replace` was absent and now reach the `exec` of the Script that
 22.2.7.1 would call. The `join` runs and both full runs beside `ToString` of
 an Object were measured at tree `cfee7fb52e9d04033205033eb049875bf8a218c8`,
-which is the tree of `88370c5`; that step gained 13 variants and lost none.
+which is the tree of `88370c5`; that step gained 13 variants and lost none. The
+`%Array.prototype%` runs and both full runs beside the answered length were
+measured at tree `d497e660c1f0346e56cff9825ed0a25c8e83f9ef`, which is the tree
+of `64f7a69`; that step gained 26 variants and lost none.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
