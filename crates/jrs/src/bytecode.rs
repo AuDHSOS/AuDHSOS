@@ -1312,7 +1312,8 @@ impl RegisterLowerer {
                     {
                         let mut element_type = RegisterType::Unknown;
                         if let Some(initializer) = initializer {
-                            element_type = self.lower_binding_default(element_type, initializer)?;
+                            element_type =
+                                self.lower_assignment_default(element_type, initializer, target)?;
                         }
                         self.finish_assignment_pattern_target(element_type, target, prepared?)?;
                     }
@@ -1446,12 +1447,32 @@ impl RegisterLowerer {
         Some(())
     }
 
-    fn lower_binding_default(
+    /// The Initializer of one element of an assignment pattern, named after
+    /// the target where 13.15.5.2 and 13.15.5.4 name it: a target that is a
+    /// plain identifier reference and nothing else.
+    fn lower_assignment_default(
         &mut self,
         value_type: RegisterType,
         initializer: &Expr,
+        target: &parser::AssignmentPattern,
     ) -> Option<RegisterType> {
-        self.lower_binding_default_named(value_type, initializer, None)
+        let named = Self::assignment_target_name(target);
+        self.lower_binding_default_named(value_type, initializer, named.as_deref())
+    }
+
+    /// The name of an assignment target that is a plain identifier reference.
+    fn assignment_target_name(target: &parser::AssignmentPattern) -> Option<Vec<u16>> {
+        fn named(expression: &Expr) -> Option<Vec<u16>> {
+            match &expression.kind {
+                ExprKind::Group(inner) => named(inner),
+                ExprKind::Name(name) => Some(name.encode_utf16().collect()),
+                _ => None,
+            }
+        }
+        match target {
+            parser::AssignmentPattern::Target(expression) => named(expression),
+            parser::AssignmentPattern::Array(_) | parser::AssignmentPattern::Object(_) => None,
+        }
     }
 
     /// The Initializer itself, named after its binding where 8.5.2 names it.
@@ -2188,7 +2209,8 @@ impl RegisterLowerer {
                     let mut element_type =
                         self.lower_array_index_from_register(source, value_type, index)?;
                     if let Some(initializer) = initializer {
-                        element_type = self.lower_binding_default(element_type, initializer)?;
+                        element_type =
+                            self.lower_assignment_default(element_type, initializer, target)?;
                     }
                     self.finish_assignment_pattern_target(element_type, target, prepared)?;
                 }
@@ -2233,7 +2255,11 @@ impl RegisterLowerer {
                         self.lower_unknown_property_from_register(source, &property.key, keyed)?
                     };
                     if let Some(initializer) = &property.initializer {
-                        property_type = self.lower_binding_default(property_type, initializer)?;
+                        property_type = self.lower_assignment_default(
+                            property_type,
+                            initializer,
+                            &property.target,
+                        )?;
                     }
                     self.finish_assignment_pattern_target(
                         property_type,

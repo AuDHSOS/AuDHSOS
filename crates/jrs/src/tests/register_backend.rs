@@ -7735,6 +7735,36 @@ fn a_promise_settles_through_the_job_queue_of_both_backends() -> Result<(), Erro
 }
 
 #[test]
+fn a_destructuring_assignment_names_the_function_of_its_default() -> Result<(), Error> {
+    // 13.15.5.2 and 13.15.5.4 name an anonymous function of an Initializer
+    // after the target, where that target is a plain identifier reference.
+    for source in [
+        "var a;[a = function(){}] = [];a.name",
+        "var a;({a = function(){}} = {});a.name",
+        "var a;({x: a = function(){}} = {});a.name",
+        "var a;[a = class{}] = [];a.name",
+        "var a;[a = ()=>{}] = [];a.name",
+        // A named function expression keeps its own name.
+        "var a;[a = function q(){}] = [];a.name",
+        // A target that is no identifier reference names nothing.
+        "var o={};[o.p = function(){}] = [];o.p.name",
+        // The iterator path of 13.15.5.5 names it the same way.
+        "var a;for ([a = function(){}] of [[]]) {}a.name",
+    ] {
+        let mut engine_host = SilentHost;
+        let mut engine = Realm::with_backend(Limits::default(), &mut engine_host, Backend::Engine)?;
+        let mut stack_host = SilentHost;
+        let mut stack = Realm::with_backend(Limits::default(), &mut stack_host, Backend::Stack)?;
+        assert_eq!(
+            engine.evaluate(source)?,
+            stack.evaluate(source)?,
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn an_array_answers_its_length_and_its_indices_as_own_properties() -> Result<(), Error> {
     for source in [
         // 10.4.2.1 keeps `length` beside the Shape, so 6.2.6.4 reads it from
