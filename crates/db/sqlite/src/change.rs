@@ -1967,13 +1967,10 @@ impl Writer {
                 let held: &[u8] = if on_view { b"view" } else { b"table" };
                 return Err(Error::Timed(word.to_vec(), held.to_vec(), over));
             }
-            if instead {
-                return Err(Error::Unsupported);
-            }
             // `sqlite3TriggerBeginStep` names the schema the table
             // would stand in, which a trigger of the temporary schema
             // names no schema for.
-            if database.table(&over).is_none() {
+            if !instead && database.table(&over).is_none() {
                 let named = if trigger.temporary {
                     over
                 } else {
@@ -2971,6 +2968,239 @@ impl Writer {
         self.fire(before, &[], &row)
     }
 
+    /// Whether the schema holds a view of that name.
+    ///
+    /// Reading the schema costs O(n) in its rows.
+    fn is_view(&self, name: &[u8]) -> Result<bool, Error> {
+        let bytes = self.image();
+        Ok(Database::open(&bytes)?.view(name).is_some())
+    }
+
+    /// The `INSTEAD OF` triggers of a view for one event, which is what
+    /// `sqlite3ViewIsEditable` holds a statement that writes a view to.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ViewWrite`] where the view carries no `INSTEAD OF`
+    /// trigger of that event.
+    fn instead_of(
+        &self,
+        name: &[u8],
+        event: TriggerEvent,
+    ) -> Result<Vec<crate::db::Trigger>, Error> {
+        let triggers = self.triggers_for(name, event, TriggerTime::InsteadOf)?;
+        if triggers.is_empty() {
+            return Err(Error::ViewWrite(name.to_vec()));
+        }
+        Ok(triggers)
+    }
+
+    /// `INSERT INTO v` over a view: the row the statement writes is put
+    /// in `new` and the `INSTEAD OF` triggers of the view run over it,
+    /// the view itself keeping no row.
+    ///
+    /// The statement of the view is answered for its columns, so one
+    /// row costs what that statement costs and what the triggers cost.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ViewWrite`] where the view carries no `INSTEAD OF
+    /// INSERT` trigger, and whatever a statement of a body refuses.
+    fn insert_view(
+        &mut self,
+        arena: &Arena,
+        statement: &crate::ast::Insert,
+        sql: &[u8],
+        name: &[u8],
+        outer: Option<&dyn crate::eval::Row>,
+    ) -> Result<i64, Error> {
+        let triggers = self.instead_of(name, TriggerEvent::Insert)?;
+        let named: Vec<Vec<u8>> = arena
+            .names(statement.columns)
+            .iter()
+            .map(|span: &Span| crate::schema::dequote(span.text(sql)))
+            .collect();
+        let (table, rows) = {
+            let bytes = self.image();
+            let database = Database::open(&bytes)?.seeded(self.random.word());
+            let (table, _) = database.viewing(name)?;
+            let places = places(&table, &named)?;
+            let blank = alloc::vec![Value::Null; table.columns.len()];
+            // A view holds no `DEFAULT`, so `DEFAULT VALUES` writes one
+            // row of nothing.
+            let mut rows = alloc::vec![blank.clone()];
+            if !statement.defaults {
+                let answer = database.rows_under(arena, statement.select, sql, outer)?;
+                rows.clear();
+                for row in &answer.rows {
+                    if row.len() != places.len() {
+                        if named.is_empty() {
+                            return Err(Error::ColumnCount(table.name, places.len(), row.len()));
+                        }
+                        return Err(Error::ValueCount(row.len(), places.len()));
+                    }
+                    let mut values = blank.clone();
+                    // A value the statement wrote for the key of the
+                    // view goes nowhere, because a view has no key.
+                    for (at, value) in places.iter().zip(row) {
+                        for slot in values.iter_mut().skip(at.unwrap_or(usize::MAX)).take(1) {
+                            *slot = stored(value, self.header.encoding);
+                        }
+                    }
+                    rows.push(values);
+                }
+            }
+            (table, rows)
+        };
+        for values in &rows {
+            let row = Fired::inserted(&table, values, self.header.encoding);
+            self.fire(&triggers, &[], &row)?;
+        }
+        // `sqlite3_changes` counts the rows a statement wrote, and a
+        // statement over a view writes none.
+        Ok(0)
+    }
+
+    /// `UPDATE v` over a view: each row the `WHERE` keeps is put in
+    /// `old`, the row the `SET` clauses make of it in `new`, and the
+    /// `INSTEAD OF` triggers of the view run over the pair.
+    ///
+    /// The statement of the view is answered once, so the cost is what
+    /// that statement costs plus what the triggers cost per row.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ViewWrite`] where the view carries no `INSTEAD OF
+    /// UPDATE` trigger, [`Error::Eval`] for a column the view does not
+    /// answer, and whatever a statement of a body refuses.
+    fn update_view(
+        &mut self,
+        arena: &Arena,
+        statement: &crate::ast::Update,
+        sql: &[u8],
+        name: &[u8],
+        outer: Option<&dyn crate::eval::Row>,
+    ) -> Result<i64, Error> {
+        let triggers = self.instead_of(name, TriggerEvent::Update)?;
+        let sets = arena.sets(statement.sets);
+        let columns: Vec<Vec<u8>> = sets
+            .iter()
+            .map(|set| crate::schema::dequote(set.column.text(sql)))
+            .collect();
+        let (table, written) = {
+            let bytes = self.image();
+            let database = Database::open(&bytes)?.seeded(self.random.word());
+            let (table, held) = database.viewing(name)?;
+            let places = set_places(&table, &columns)?;
+            let mut written = Vec::new();
+            for values in &held {
+                let row = Held {
+                    table: &table,
+                    values,
+                    rowid: None,
+                    encoding: self.header.encoding,
+                    random: &self.random,
+                    outer,
+                    reading: Some(Reading {
+                        database: &database,
+                        arena,
+                        sql,
+                    }),
+                };
+                let keep = match statement.filter {
+                    None => true,
+                    Some(filter) => {
+                        crate::eval::evaluate_row(arena, filter, sql, &row)?.truth(false)
+                    }
+                };
+                if !keep {
+                    continue;
+                }
+                let mut next = values.clone();
+                for (at, set) in places.iter().zip(sets) {
+                    let value = crate::eval::evaluate_row(arena, set.value, sql, &row)?;
+                    for slot in next.iter_mut().skip(at.unwrap_or(usize::MAX)).take(1) {
+                        *slot = stored(&value, self.header.encoding);
+                    }
+                }
+                written.push((values.clone(), next));
+            }
+            (table, written)
+        };
+        for (old, new) in &written {
+            let row = Fired {
+                table: &table,
+                old: Some((old, 0)),
+                new: Some((new, 0)),
+                encoding: self.header.encoding,
+            };
+            self.fire(&triggers, &columns, &row)?;
+        }
+        Ok(0)
+    }
+
+    /// `DELETE FROM v` over a view: each row the `WHERE` keeps is put
+    /// in `old` and the `INSTEAD OF` triggers of the view run over it.
+    ///
+    /// The statement of the view is answered once, so the cost is what
+    /// that statement costs plus what the triggers cost per row.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ViewWrite`] where the view carries no `INSTEAD OF
+    /// DELETE` trigger, and whatever a statement of a body refuses.
+    fn delete_view(
+        &mut self,
+        arena: &Arena,
+        statement: &crate::ast::Delete,
+        sql: &[u8],
+        name: &[u8],
+        outer: Option<&dyn crate::eval::Row>,
+    ) -> Result<i64, Error> {
+        let triggers = self.instead_of(name, TriggerEvent::Delete)?;
+        let (table, taken) = {
+            let bytes = self.image();
+            let database = Database::open(&bytes)?.seeded(self.random.word());
+            let (table, held) = database.viewing(name)?;
+            let mut taken = Vec::new();
+            for values in &held {
+                let row = Held {
+                    table: &table,
+                    values,
+                    rowid: None,
+                    encoding: self.header.encoding,
+                    random: &self.random,
+                    outer,
+                    reading: Some(Reading {
+                        database: &database,
+                        arena,
+                        sql,
+                    }),
+                };
+                let keep = match statement.filter {
+                    None => true,
+                    Some(filter) => {
+                        crate::eval::evaluate_row(arena, filter, sql, &row)?.truth(false)
+                    }
+                };
+                if keep {
+                    taken.push(values.clone());
+                }
+            }
+            (table, taken)
+        };
+        for values in &taken {
+            let row = Fired {
+                table: &table,
+                old: Some((values, 0)),
+                new: None,
+                encoding: self.header.encoding,
+            };
+            self.fire(&triggers, &[], &row)?;
+        }
+        Ok(0)
+    }
+
     /// Whether the table `name` keeps its rows in the key's own tree.
     ///
     /// Reading the schema costs O(n) in its rows.
@@ -3589,6 +3819,9 @@ impl Writer {
         outer: Option<&dyn crate::eval::Row>,
     ) -> Result<i64, Error> {
         let name = crate::schema::dequote(statement.name.text(sql));
+        if self.is_view(&name)? {
+            return self.insert_view(arena, statement, sql, &name, outer);
+        }
         let inserting = self.inserting(arena, statement, sql, outer, &name)?;
         let upserts = arena.upserts(statement.upserts);
         if inserting.table.without_rowid {
@@ -4629,6 +4862,30 @@ fn places(table: &Table, named: &[Vec<u8>]) -> Result<Vec<Option<usize>>, Error>
         .collect()
 }
 
+/// Where each `SET` clause of an `UPDATE` over a view writes, or
+/// nothing where the clause names the key of the view, which a view has
+/// none of and `sqlite3Update` writes nowhere.
+///
+/// # Errors
+///
+/// [`Error::Eval`] for a column the view does not answer.
+fn set_places(table: &Table, columns: &[Vec<u8>]) -> Result<Vec<Option<usize>>, Error> {
+    columns
+        .iter()
+        .map(|column| {
+            let at = table
+                .columns
+                .iter()
+                .position(|held| held.name.eq_ignore_ascii_case(column));
+            match at {
+                Some(at) => Ok(Some(at)),
+                None if is_rowid(column) => Ok(None),
+                None => Err(Error::Eval(crate::eval::Error::NoColumn(column.clone()))),
+            }
+        })
+        .collect()
+}
+
 /// Whether `name` is one of the three names the key of a table answers
 /// to.
 fn is_rowid(name: &[u8]) -> bool {
@@ -4653,6 +4910,9 @@ impl Writer {
     ) -> Result<i64, Error> {
         let name = crate::schema::dequote(statement.name.text(sql));
         written_to(&name)?;
+        if self.is_view(&name)? {
+            return self.delete_view(arena, statement, sql, &name, outer);
+        }
         if self.keeps_rows(&name)? {
             return self.delete_keyed(arena, statement, sql, outer, &name);
         }
@@ -4832,6 +5092,9 @@ impl Writer {
         outer: Option<&dyn crate::eval::Row>,
     ) -> Result<i64, Error> {
         let name = crate::schema::dequote(statement.name.text(sql));
+        if self.is_view(&name)? {
+            return self.update_view(arena, statement, sql, &name, outer);
+        }
         if self.keeps_rows(&name)? {
             return self.update_keyed(arena, statement, sql, outer, &name);
         }

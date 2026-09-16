@@ -4440,12 +4440,6 @@ fn what_a_create_and_a_drop_name_in_a_refusal() {
             b"CREATE TRIGGER t2 AFTER INSERT ON sqlite_master BEGIN SELECT 1; END",
             "cannot create trigger on system table",
         ),
-        // An `INSTEAD OF` trigger over a view is the one shape this
-        // crate writes no row of.
-        (
-            b"CREATE TRIGGER t2 INSTEAD OF INSERT ON v BEGIN SELECT 1; END",
-            "Unsupported",
-        ),
     ] {
         assert_eq!(
             writer.run(sql).unwrap_err().message(),

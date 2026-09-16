@@ -5287,6 +5287,24 @@ Document 16 step Q8.
 - `CREATE TABLE t AS SELECT 1 WITHOUT ROWID` is refused `near "ROWID":
   syntax error`.
 
+### 6.6.177 A statement over a view (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `INSERT INTO v`, `UPDATE v` and `DELETE FROM v` over a view run the
+  `INSTEAD OF` triggers of the view and write no row of the view.
+- A view that carries no `INSTEAD OF` trigger of that event refuses the
+  statement `cannot modify v because it is a view`.
+- A view column converts nothing, so `INSERT INTO v VALUES('5', 7)` puts
+  text and an integer in `new`.
+- A column an `INSERT` names no value for holds nothing, `DEFAULT
+  VALUES` writes one row of nothing, and a value written for `rowid`
+  goes nowhere.
+- `UPDATE v SET rowid = 1` writes nowhere, and `UPDATE v SET zz = 1` is
+  refused `no such column: zz`.
+- `CREATE TRIGGER ... INSTEAD OF INSERT ON t` over a table is refused
+  `cannot create INSTEAD OF trigger on table: t`.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

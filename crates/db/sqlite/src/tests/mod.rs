@@ -25,6 +25,7 @@ mod header;
 mod image;
 mod index;
 mod indexexpr;
+mod insteadof;
 mod journal;
 mod json;
 mod key_tree;

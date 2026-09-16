@@ -128,6 +128,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` answers an `INSERT`, an `UPDATE` or a `DELETE` over a view
+  with the `INSTEAD OF` triggers of the view, which read the row in
+  `new` and `old` and write no row of the view. A view that carries no
+  `INSTEAD OF` trigger of that event refuses the statement `cannot
+  modify NAME because it is a view`. D-253 records it. Catalog 6.6.177.
+
 - A foreign key over a table that keeps its rows in the key's own tree in
   `db-sqlite`. A key names a row by its key and not by a rowid, so the
   rows a key points at, the rows that point, and the row one action

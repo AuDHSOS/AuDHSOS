@@ -179,6 +179,10 @@ pub enum Error {
     NotAlterable(Vec<u8>),
     /// An `ALTER TABLE` over a view, with the name of the view.
     NotATable(Vec<u8>),
+    /// An `INSERT`, an `UPDATE` or a `DELETE` over a view the schema
+    /// carries no `INSTEAD OF` trigger of that event for, with the name
+    /// of the view.
+    ViewWrite(Vec<u8>),
     /// A `RELEASE` or a `ROLLBACK TO` that names a savepoint the
     /// connection does not hold open, with the name as it was written.
     NoSavepoint(Vec<u8>),
@@ -291,6 +295,10 @@ impl Error {
         match self {
             Error::NoTable(name) => alloc::format!(
                 "no such table: {}",
+                alloc::string::String::from_utf8_lossy(name)
+            ),
+            Error::ViewWrite(name) => alloc::format!(
+                "cannot modify {} because it is a view",
                 alloc::string::String::from_utf8_lossy(name)
             ),
             Error::Syntax(token) => alloc::format!(
@@ -1072,6 +1080,36 @@ impl<'a> Database<'a> {
             rows: answered.answer.rows,
             name: view.name.clone(),
         })
+    }
+
+    /// A view as a table of the columns it answers, with the rows it
+    /// holds now, which is what an `INSTEAD OF` trigger reads `old` and
+    /// `new` out of.
+    ///
+    /// The statement of the view is answered here, so the cost is what
+    /// that statement costs.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoTable`] where the schema holds no view of that name,
+    /// and whatever the statement of the view refuses.
+    pub fn viewing(&self, name: &[u8]) -> Result<(crate::schema::Table, Vec<Vec<Value>>), Error> {
+        let scope = Scope {
+            terms: &[],
+            outer: None,
+            views: 0,
+        };
+        let viewed = self.viewed(name, scope)?;
+        let columns: Vec<Vec<u8>> = viewed
+            .shape
+            .columns
+            .iter()
+            .map(|column| column.name.clone())
+            .collect();
+        Ok((
+            crate::schema::Table::viewed(viewed.name, &columns),
+            viewed.rows,
+        ))
     }
 
     /// The statement the table of `name` was written with, and where a

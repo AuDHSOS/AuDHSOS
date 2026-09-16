@@ -142,6 +142,57 @@ pub struct Table {
     pub checks: Vec<Checked>,
 }
 
+impl Table {
+    /// A table of the columns a view answers, which carries no
+    /// constraint, no key and no tree of its own.
+    ///
+    /// An `INSTEAD OF` trigger reads `old` and `new` out of such a
+    /// table, so a column of it converts nothing and is compared byte
+    /// by byte, which is what `sqlite3ViewGetColumnNames` leaves a view
+    /// column with where the statement of the view names no table
+    /// column.
+    ///
+    /// Building it costs O(n) in the columns.
+    #[must_use]
+    pub fn viewed(name: Vec<u8>, columns: &[Vec<u8>]) -> Self {
+        Table {
+            name,
+            columns: columns
+                .iter()
+                .map(|held| Column::bare(held.clone()))
+                .collect(),
+            without_rowid: false,
+            strict: false,
+            rowid_alias: None,
+            autoincrement: false,
+            add_at: None,
+            keys: Vec::new(),
+            foreign: Vec::new(),
+            checks: Vec::new(),
+        }
+    }
+}
+
+impl Column {
+    /// A column of no declared type, which holds what it is given.
+    #[must_use]
+    pub const fn bare(name: Vec<u8>) -> Self {
+        Column {
+            name,
+            declared: Vec::new(),
+            affinity: Affinity::None,
+            collation: Collation::Binary,
+            not_null: false,
+            null_conflict: crate::ast::Conflict::Unspecified,
+            default: None,
+            falls_back: None,
+            key: 0,
+            generated: Generated::Never,
+            computed: None,
+        }
+    }
+}
+
 /// One `CHECK` of a table: what every row is held to, and what the
 /// message names it by.
 #[derive(Clone, Debug, PartialEq, Eq)]

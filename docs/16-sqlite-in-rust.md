@@ -752,9 +752,11 @@ Size: L.
 30. A foreign key over a table that keeps its rows in the key's own
     tree. Built, which D-250 records.
 31. What a `CREATE` and a `DROP` name in a refusal. Built, which D-251
-    records; an `INSTEAD OF` trigger over a view is still open.
+    records.
 32. The token a statement the parser refuses is named by. Built, which
     D-252 records.
+33. `INSERT`, `UPDATE` and `DELETE` over a view, which the `INSTEAD OF`
+    triggers of the view answer. Built, which D-253 records.
 
 ### Done when
 
@@ -764,8 +766,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 72 477 cases in 705 files, 58 374
-pass, 3530 answer differently, and 10 573 name something the engine
+under the `tclsh` of the machine. Of 72 406 cases in 706 files, 58 381
+pass, 3514 answer differently, and 10 511 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts
