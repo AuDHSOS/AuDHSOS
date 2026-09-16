@@ -1821,7 +1821,14 @@ fn test_without_a_framebuffer(machine: &Machine, path: &Path, root: &Path) -> Re
 }
 
 /// What a machine without a graphics adapter has to say.
-const NO_VGA_LINES: [(&str, &str); 4] = [
+///
+/// The four lines of the run stand between checkpoints, as `tls_lines`
+/// has them: each entry gets [`E2E_TIMEOUT`] to itself, and the two lines
+/// a program writes come after the root task has read ten more programs
+/// off the volume, one message of two kibibytes at a time. Without the
+/// checkpoints one timeout covers that whole reading, which is what the
+/// run in CI spent it on.
+const NO_VGA_LINES: [(&str, &str); 7] = [
     (
         "[info] framebuffer=absent",
         "the kernel did not report that the machine has no framebuffer",
@@ -1829,6 +1836,18 @@ const NO_VGA_LINES: [(&str, &str); 4] = [
     (
         "[display] no framebuffer",
         "the display server did not report that there is no screen",
+    ),
+    (
+        "[init] started app-hello",
+        "the machine did not get as far as the first application",
+    ),
+    (
+        "[init] started server-net",
+        "the machine did not get as far as the network server",
+    ),
+    (
+        "[init] started app-files",
+        "the machine did not read the last program of the table off the volume",
     ),
     (
         "[paint] nothing drawn: ",
@@ -1842,13 +1861,17 @@ const NO_VGA_LINES: [(&str, &str); 4] = [
 
 /// The lines the run without the two network lines has to carry: the bus is
 /// walked, the device is not there, and the machine ends by itself.
-const NO_NETWORK_LINES: [(&str, &str); 7] = [
+const NO_NETWORK_LINES: [(&str, &str); 8] = [
     // The bus walk is read off the volume like every program outside the
     // boot set, so the run reaches it one program at a time rather than
     // waiting once for a line minutes away.
     (
         "[files] boot volume: clusters=",
         "the run without a network mounted no boot volume",
+    ),
+    (
+        "[init] started app-hello",
+        "the run without a network did not get as far as the first application",
     ),
     (
         "[init] started app-lspci",
