@@ -574,7 +574,8 @@ negative-test passes. Other parser/builtin completeness gaps remain open.
 
 ### Current Test262 result
 
-The latest measurements were run on 2026-09-14 and 2026-09-15 against Test262
+The latest measurements were run on 2026-09-14, 2026-09-15 and 2026-09-16
+against Test262
 revision
 `419d3e0a2273ba01a3bfcbec423f2801425b8e93`; the rows carry the implementation
 commit each one measured, and the compound-assignment rows and the full runs
@@ -749,8 +750,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Function%`, after the dynamic body, on the register engine (focused) | focused | `7e8a7bb` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Function --summary` | 509 | 893 | 542 (60.69%) | 209 (23.40%) | 142 (15.90%) |
 | `eval` code (focused) | focused | `7cd7ebb` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/eval-code test/annexB/language/eval-code --summary` | 816 | 924 | 273 (29.55%) | 542 (58.66%) | 109 (11.80%) |
 | `eval` code, on the register engine (focused) | focused | `7cd7ebb` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/eval-code test/annexB/language/eval-code --summary` | 816 | 924 | 85 (9.20%) | 369 (39.94%) | 470 (50.87%) |
-| Complete pinned suite, including staging and Intl | full | `7cd7ebb` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `7cd7ebb` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 28,033 (27.24%) | 19,835 (19.27%) | 55,057 (53.49%) |
+| `Object.prototype.toString` and `%Symbol%` (focused) | focused | `174f264` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object/prototype/toString test/built-ins/Symbol --summary` | 139 | 274 | 142 (51.82%) | 90 (32.85%) | 42 (15.33%) |
+| The same two, on the register engine (focused) | focused | `174f264` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object/prototype/toString test/built-ins/Symbol --summary` | 139 | 274 | 150 (54.74%) | 64 (23.36%) | 60 (21.90%) |
+| Complete pinned suite, including staging and Intl | full | `174f264` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `174f264` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 28,125 (27.33%) | 19,735 (19.17%) | 55,065 (53.50%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1565,7 +1568,11 @@ measured at tree `072aa8b7f5ddea45133998ad65dbe07412dea52a`, which is the tree
 of `7e8a7bb`; that step gained 324 variants and lost none. The `eval` runs and
 both full runs beside 19.2.1 were measured at tree
 `0f96e64ab3105aafb802a650cd4e1ebb5335e113`, which is the tree of `7cd7ebb`;
-that step gained 595 variants and lost none.
+that step gained 595 variants and lost none. The `Object.prototype.toString`
+runs and both full runs beside 20.1.3.6 were measured at tree
+`9603dd114fe7e4d75465681c6d3d1e424c6df860`, which is the tree of `174f264`;
+that step gained 92 variants and lost none, and the register engine passes
+eight variants more than the stack backend on that focused pair.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
