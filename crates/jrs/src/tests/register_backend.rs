@@ -7735,6 +7735,37 @@ fn a_promise_settles_through_the_job_queue_of_both_backends() -> Result<(), Erro
 }
 
 #[test]
+fn a_clause_of_23_1_3_writes_the_length_the_way_7_3_4_does() -> Result<(), Error> {
+    for source in [
+        // 10.4.2.1 step 3.g: an index at or above a length 7.3.15 made
+        // unwritable needs the length to grow, which 10.4.2.4 refuses.
+        "var a=[];Object.defineProperty(a,'length',{writable:false});var r='none';try{a.push(1)}catch(e){r=''+(e instanceof TypeError)};r",
+        // 23.1.3.36 step 4.e writes the length with 7.3.4, which throws.
+        "var r='none';try{Object.freeze([]).unshift(1)}catch(e){r=''+(e instanceof TypeError)};r",
+        "var a=[1];Object.defineProperty(a,'length',{writable:false});var r='none';try{a.unshift(0)}catch(e){r=''+(e instanceof TypeError)};r",
+        // The clauses that shorten an Array already wrote it that way.
+        "var a=[1,2];Object.defineProperty(a,'length',{writable:false});var r='none';try{a.pop()}catch(e){r=''+(e instanceof TypeError)};r",
+        // A push that fits under an unwritable length is no error.
+        "var a=[0];a.length=2;Object.defineProperty(a,'length',{writable:false});var r='none';try{a[1]=7}catch(e){r='threw'};r+'/'+a[1]",
+        // 23.1.3 gives the callback of a walk three arguments, whatever the
+        // callback declares.
+        "var o={0:11,length:1},t={},r='';Array.prototype.forEach.call(o,function(){r=''+(this===t)+arguments[0]+arguments[1]+(arguments[2]===o)+arguments.length},t);r",
+        "var o={0:5,length:1},r='';Array.prototype.map.call(o,function(){r=''+arguments.length+arguments[0]});r",
+    ] {
+        let mut engine_host = SilentHost;
+        let mut engine = Realm::with_backend(Limits::default(), &mut engine_host, Backend::Engine)?;
+        let mut stack_host = SilentHost;
+        let mut stack = Realm::with_backend(Limits::default(), &mut stack_host, Backend::Stack)?;
+        assert_eq!(
+            engine.evaluate(source)?,
+            stack.evaluate(source)?,
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn a_write_under_a_symbol_key_reads_the_property_of_the_chain_first() -> Result<(), Error> {
     // 10.1.9.2 reads the property before it writes, whatever kind its key is.
     for source in [

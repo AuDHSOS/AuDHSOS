@@ -7108,13 +7108,20 @@ impl RegisterVM {
                         Self::place_element(heap, object, elements, target, moved, realm)?;
                     }
                     for offset in 0..call.arg_count {
-                        heap.set_array_element(
+                        Self::set_element(
                             object,
                             u32::from(offset),
                             self.call_argument(&call, offset, heap)?,
+                            heap,
+                            realm,
                         )?;
                     }
                 }
+                // Step 4.e sets the length with 7.3.4, which throws where
+                // 10.4.2.4 refuses it.
+                let written = u32::try_from(length.saturating_add(count))
+                    .map_err(|_| VMError::PropertyLimit)?;
+                Self::set_array_like_length(object, written, heap, realm)?;
                 Ok(index_value(length.saturating_add(count)))
             }
             // 23.1.3.31: the removed elements answer as an Array of their own,
@@ -7369,6 +7376,17 @@ impl RegisterVM {
         if heap.array_length(object).is_none() {
             return Err(VMError::Unsupported(
                 "an indexed write to a receiver that is not an Array",
+            ));
+        }
+        // 10.4.2.1 step 3.g: an index at or above the length needs the length
+        // to grow, which 10.4.2.4 refuses once 7.3.15 made it unwritable.
+        if !heap.array_length_is_writable(object).unwrap_or(true)
+            && index >= heap.array_length(object).unwrap_or(0)
+        {
+            return Err(type_error(
+                heap,
+                realm,
+                "cannot write a property that is not writable",
             ));
         }
         // 7.3.4 writes with `Throw` true, so a write 10.1.9.2 refuses raises a
@@ -7883,6 +7901,10 @@ impl RegisterVM {
                     )?;
                     next = next.saturating_add(1);
                 }
+                // Step 5 sets the length with 7.3.4, which throws where
+                // 10.4.2.4 refuses it.
+                let written = u32::try_from(next).map_err(|_| VMError::PropertyLimit)?;
+                Self::set_array_like_length(object, written, heap, realm)?;
                 Ok(index_value(next))
             }
             // 23.1.3.22: the last element leaves the Array, which is then one
@@ -11204,7 +11226,14 @@ impl RegisterVM {
         // 28.1.1 passed a List no register of the caller holds, and every
         // other call passed registers the allocation below does not move.
         let mut passed: Vec<Value> = Vec::with_capacity(count);
-        if let Some(list) = frame.resume.and_then(Resume::list) {
+        // A walk of 23.1.3 has no frame of a caller either: the arguments of
+        // its callback come from the state the collector traces.
+        if let Some(Resume::Iteration { state }) = frame.resume {
+            let passed_in = Self::iteration_arguments(state, heap)?;
+            for index in 0..count.min(passed_in.len()) {
+                passed.push(*passed_in.get(index).unwrap_or(&VALUE_UNDEFINED));
+            }
+        } else if let Some(list) = frame.resume.and_then(Resume::list) {
             let list = heap
                 .root_value(list)
                 .and_then(Value::as_object)
