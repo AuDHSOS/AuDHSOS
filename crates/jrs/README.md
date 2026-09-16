@@ -776,8 +776,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same, on the register engine (focused) | focused | `c1c4f04` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/String/prototype --summary` | 1,073 | 2,144 | 1,456 (67.91%) | 38 (1.77%) | 650 (30.32%) |
 | The integrity levels of 20.1.2 (focused) | focused | `a1f9e31` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object/freeze test/built-ins/Object/seal test/built-ins/Object/isFrozen test/built-ins/Object/isSealed --summary` | 239 | 474 | 376 (79.32%) | 94 (19.83%) | 4 (0.84%) |
 | The same four, on the register engine (focused) | focused | `a1f9e31` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object/freeze test/built-ins/Object/seal test/built-ins/Object/isFrozen test/built-ins/Object/isSealed --summary` | 239 | 474 | 378 (79.75%) | 6 (1.27%) | 90 (18.99%) |
-| Complete pinned suite, including staging and Intl | full | `a1f9e31` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `a1f9e31` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 29,424 (28.59%) | 19,501 (18.95%) | 54,000 (52.47%) |
+| `defineProperty` of 20.1.2.4 and 28.1.3 (focused) | focused | `a3e49ee` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object/defineProperty test/built-ins/Reflect/defineProperty --summary` | 1,143 | 2,274 | 2,204 (96.92%) | 68 (2.99%) | 2 (0.09%) |
+| The same two, on the register engine (focused) | focused | `a3e49ee` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object/defineProperty test/built-ins/Reflect/defineProperty --summary` | 1,143 | 2,274 | 2,077 (91.34%) | 74 (3.25%) | 123 (5.41%) |
+| Complete pinned suite, including staging and Intl | full | `a3e49ee` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `a3e49ee` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 29,510 (28.67%) | 19,501 (18.95%) | 53,914 (52.38%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1643,7 +1645,10 @@ that step gained 104 variants and lost none. The integrity-level runs and both
 full runs beside 7.3.15 were measured at tree
 `90443aa5d1de991eeaf06ee05961001c79e704fc`, which is the tree of `a1f9e31`;
 that step gained 40 variants and lost none, and the register engine passes two
-variants more than the stack backend on that focused set.
+variants more than the stack backend on that focused set. The `defineProperty`
+runs and both full runs beside 6.2.6.5 were measured at tree
+`2f9c0bc92aed95599932eeb048aa00cf98d787a3`, which is the tree of `a3e49ee`;
+that step gained 86 variants and lost none.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
