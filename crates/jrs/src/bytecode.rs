@@ -3014,15 +3014,24 @@ impl RegisterLowerer {
             .checked_add(self.function_table_base)?;
         let first_child_object_id = self.next_object_id;
         let inherited_layouts = self.object_layouts.clone();
-        let scope = register_function_scope(function)?;
+        // The scan of the names a body reads and writes stops at a construct
+        // it does not walk, and the lowering would report nothing of it.
+        let Some(scope) = register_function_scope(function) else {
+            self.refuse("a name of a function body the scan does not reach");
+            return None;
+        };
         let mut captures = BTreeMap::new();
         for name in &scope.free_names {
             if self.bindings.contains_key(name) {
                 captures.insert(name.clone(), self.capture_binding(name)?);
             }
         }
-        let (mut child, self_register) =
-            self.register_function_child(function, code_id, &captures, &scope.captured_names)?;
+        let Some((mut child, self_register)) =
+            self.register_function_child(function, code_id, &captures, &scope.captured_names)
+        else {
+            self.refuse("a frame of a call the lowering does not prepare");
+            return None;
+        };
         if !captures.is_empty() {
             child.code.outer_context_slot_counts = self.context_slot_counts()?;
         }
@@ -3065,6 +3074,9 @@ impl RegisterLowerer {
             })
             .collect();
         if !return_type.is_returnable() {
+            // The value of a `return` carries a type the lowering named
+            // and cannot hand to a caller, which is the lowering's own gap.
+            self.refuse("a return of a value the lowering cannot type");
             return None;
         }
         self.next_object_id = child.next_object_id;
@@ -5800,6 +5812,7 @@ impl RegisterLowerer {
                     RegisterType::Undefined
                 };
                 if !return_type.is_returnable() {
+                    self.refuse("a return of a value the lowering cannot type");
                     return None;
                 }
                 self.return_type = Some(
@@ -10729,7 +10742,10 @@ fn lower_register_body(
         .emit(crate::engine::bytecode::Instruction::Return);
     lowerer.code.register_count = lowerer.register_count;
     lowerer.code.binding_count = lowerer.max_binding_count;
-    lowerer.code.verify().ok()?;
+    if lowerer.code.verify().is_err() {
+        lowerer.refuse("bytecode the verifier of the engine refuses");
+        return None;
+    }
     Some(core::mem::replace(
         &mut lowerer.code,
         crate::engine::bytecode::BytecodeFunction::new(0, 0),
