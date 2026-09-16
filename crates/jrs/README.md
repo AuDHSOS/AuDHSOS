@@ -711,8 +711,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same three, after the four answers, on the register engine (focused) | focused | `83ca8c2` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Function/prototype test/language/expressions/instanceof test/built-ins/Array/prototype/concat --summary` | 421 | 824 | 293 (35.56%) | 240 (29.13%) | 291 (35.32%) |
 | `%Array.prototype%`, after the String receiver (focused) | focused | `9e8eb35` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/prototype --summary` | 2,811 | 5,583 | 4,744 (84.97%) | 809 (14.49%) | 30 (0.54%) |
 | `%Array.prototype%`, after the String receiver, on the register engine (focused) | focused | `9e8eb35` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/prototype --summary` | 2,811 | 5,583 | 3,974 (71.18%) | 586 (10.50%) | 1,023 (18.32%) |
-| Complete pinned suite, including staging and Intl | full | `9e8eb35` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `9e8eb35` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 25,529 (24.80%) | 19,871 (19.31%) | 57,525 (55.89%) |
+| `%Error%`, after `Error.prototype.toString` (focused) | focused | `a21f844` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Error --summary` | 93 | 186 | 86 (46.24%) | 92 (49.46%) | 8 (4.30%) |
+| `%Error%`, after `Error.prototype.toString`, on the register engine (focused) | focused | `a21f844` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Error --summary` | 93 | 186 | 74 (39.78%) | 86 (46.24%) | 26 (13.98%) |
+| Complete pinned suite, including staging and Intl | full | `a21f844` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `a21f844` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 25,563 (24.84%) | 19,850 (19.29%) | 57,512 (55.88%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1461,7 +1463,11 @@ beside the four answers were measured at tree
 `d2bff07c4c68c06757ee22646a378334210f4236`, which is the tree of `83ca8c2`. The `%Array.prototype%` runs and both full
 runs beside the String receiver were measured at tree
 `5457a7bac07ee697dee898c6c3230fcd0d03aef9`, which is the tree of `9e8eb35`;
-that step gained 154 variants and lost none.
+that step gained 154 variants and lost none. The `%Error%` runs and both full
+runs beside 20.5.3.4 were measured at tree
+`f0d2589a1620728ee27a2f7e9a35572eba2a2c97`, which is the tree of `a21f844`;
+that step gained 34 variants, lost none, and left the stack backend's own
+result lines unchanged.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
