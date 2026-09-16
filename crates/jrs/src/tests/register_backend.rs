@@ -4199,10 +4199,10 @@ fn register_lowering_rejects_exception_shapes_it_cannot_type() -> Result<(), Err
     for source in [
         // A Block beside a Finally Block must not change a tracked type.
         "let x=1;try{x='a'}finally{}x",
-        // A Finally Block cannot run before a control transfer leaves it.
+        // A Finally Block cannot run before a `break` or a `continue` leaves
+        // it; a `return` takes the path 14.15.3 gives it.
         "let i=0;while(i<2){try{i++;break}finally{i+=10}}i",
         "let i=0;while(i<2){try{i++}finally{continue}}i",
-        "function f(){try{return 1}finally{2}}f()",
     ] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
@@ -4927,7 +4927,7 @@ fn a_script_the_lowering_refuses_says_what_it_holds() -> Result<(), Error> {
         // stopped them and not the expression the function was written as.
         ("var f=function(...r){return r}; f()", "a rest parameter"),
         (
-            "var f=function(){try{return 1}finally{}}; f()",
+            "var f=function(){while(1){try{break}finally{}}}; f()",
             "a jump out of a try with a Finally Block",
         ),
     ] {
@@ -8623,6 +8623,41 @@ fn a_destructuring_assignment_takes_a_primitive_value() -> Result<(), Error> {
         "var r={};({}=true);''+typeof r",
     ] {
         differential_scripts(&[source])?;
+    }
+    Ok(())
+}
+
+#[test]
+fn a_return_runs_the_finally_block_before_it_leaves() -> Result<(), Error> {
+    for source in [
+        // 14.15.3 runs the Finally Block on the path the `return` takes.
+        "function f(){try{return 'a'}finally{}}f()",
+        "var l='';function f(){try{l+='t';return 'r'}finally{l+='f'}}f()+l",
+        // A `return` of the Finally Block replaces the one of the try Block.
+        "function f(){try{return 1}finally{return 2}}f()",
+        // A Catch Block's `return` takes the same path.
+        "function f(){try{throw 'x'}catch(e){return 'c'}finally{}}f()",
+        // Each Block of a nest runs, innermost first.
+        "var o='';function f(){try{try{return 'a'}finally{o+='1'}}finally{o+='2'}}f()+o",
+        // A throw still leaves the statement after the Block has run.
+        "var o='';function f(){try{throw 'e'}finally{o+='f'}}var r;try{f()}catch(e){r=e}r+o",
+        // A `return` inside a loop inside the try Block leaves the function.
+        "function f(){for(var i=0;i<3;i++){try{if(i===1)return 'i'+i}finally{}}return 'n'}f()",
+        // A Block that carries on keeps the completion of the statement.
+        "function f(){try{}finally{}return 'z'}f()",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // 14.15.3 would have to run the Block before a `break` or a `continue`
+    // leaves the statement, which the lowering does not do.
+    for source in [
+        "function f(){while(1){try{break}finally{}}}f()",
+        "function f(){var i=0;while(i<2){try{i++}finally{continue}}return i}f()",
+    ] {
+        assert!(
+            !compile(source, Limits::default())?.uses_register_backend(),
+            "{source}"
+        );
     }
     Ok(())
 }

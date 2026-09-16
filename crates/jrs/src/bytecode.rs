@@ -744,6 +744,9 @@ struct RegisterLowerer {
     function_layout_effects: BTreeMap<u32, BTreeMap<u32, RegisterObjectLayout>>,
     binding_type_hints: BTreeMap<String, RegisterType>,
     allow_return: bool,
+    /// The Finally Blocks a `return` of 14.15.3 has to run before it leaves,
+    /// innermost last.
+    finallies: Vec<RegisterFinally>,
     /// The iterators of the enclosing `for`-`of` statements, innermost last,
     /// which 7.4.9 closes where a `return` leaves them. Each pair is the
     /// iterator and the register the close reads its `return` method into.
@@ -878,6 +881,22 @@ enum RegisterLoopHead {
     Escaped,
 }
 
+/// One `try` statement with a Finally Block, while its protected Block or its
+/// Catch Block is lowered.
+///
+/// 14.15.3 runs the Finally Block on the path a `return` takes out of the
+/// statement, so the `return` writes its value and a flag and jumps to the
+/// Block instead of leaving.
+#[derive(Clone)]
+struct RegisterFinally {
+    /// Holds the value the `return` answers.
+    value: crate::engine::bytecode::Reg,
+    /// Holds 1 on the path of a `return` and 0 on every other one.
+    returning: crate::engine::bytecode::Reg,
+    /// The jumps to the first instruction of the Finally Block.
+    jumps: Vec<usize>,
+}
+
 #[derive(Clone)]
 struct RegisterSnapshot {
     instructions: usize,
@@ -938,6 +957,7 @@ impl RegisterLowerer {
             function_layout_effects: BTreeMap::new(),
             binding_type_hints: BTreeMap::new(),
             allow_return: false,
+            finallies: Vec::new(),
             open_iterators: Vec::new(),
             arguments_binding: None,
             mapped_parameters: 0,
@@ -5779,7 +5799,7 @@ impl RegisterLowerer {
                         .map_or(return_type, |current| current.merge(return_type)),
                 );
                 self.close_open_iterators()?;
-                self.code.emit(crate::engine::bytecode::Instruction::Return);
+                self.leave_with_return()?;
                 RegisterFlow::Abrupt
             }
             Stmt::Throw(value) => {
@@ -5837,10 +5857,16 @@ impl RegisterLowerer {
         let parameter = catch.and_then(|(parameter, _)| parameter.as_ref());
         let name = parameter.and_then(BindingPattern::identifier);
         let destructured = parameter.is_some() && name.is_none();
-        // A `break`, `continue` or `return` inside a protected Block has to run
-        // the Finally Block before it leaves, which this lowering does not do.
+        // 14.15.3 runs the Finally Block on the path a `break` or a `continue`
+        // takes out of the statement, which this lowering does not do. A
+        // `return` takes the path below. An open iterator of an enclosing
+        // `for`-`of` would be closed before the Block rather than after it,
+        // which is the other order, so a return inside one is refused too.
         if finally.is_some()
-            && try_statements(body, catch, finally).any(register_statement_transfers_control)
+            && (try_statements(body, catch, finally).any(register_statement_breaks_control)
+                || !self.open_iterators.is_empty()
+                    && try_statements(body, catch, finally)
+                        .any(register_statement_transfers_control))
         {
             self.refuse("a jump out of a try with a Finally Block");
             return None;
@@ -5851,11 +5877,26 @@ impl RegisterLowerer {
             Some(_) => Some(self.allocate_register()?),
             None => None,
         };
+        // 14.15.3 keeps the value a `return` of the protected Block or of the
+        // Catch Block answers until the Finally Block has run.
+        let returning = match finally {
+            Some(_) => Some((self.allocate_register()?, self.allocate_register()?)),
+            None => None,
+        };
         self.code.emit(Instruction::LdaUndefined);
         self.code.emit(Instruction::Star(result_register));
         if let Some(token_register) = token_register {
             self.code.emit(Instruction::LdaSmi(0));
             self.code.emit(Instruction::Star(token_register));
+        }
+        if let Some((value, flag)) = returning {
+            self.code.emit(Instruction::LdaSmi(0));
+            self.code.emit(Instruction::Star(flag));
+            self.finallies.push(RegisterFinally {
+                value,
+                returning: flag,
+                jumps: Vec::new(),
+            });
         }
 
         // An exception can be thrown at any point of a protected range, so a
@@ -6043,8 +6084,16 @@ impl RegisterLowerer {
             exception: exception_register,
         });
 
+        let routed = match returning {
+            Some(_) => self.finallies.pop()?,
+            None => RegisterFinally {
+                value: result_register,
+                returning: result_register,
+                jumps: Vec::new(),
+            },
+        };
         let finally_start = self.code.instructions.len();
-        for exit in exits {
+        for exit in exits.into_iter().chain(routed.jumps.iter().copied()) {
             self.patch_jump(exit, finally_start)?;
         }
         if let Some(finally) = finally {
@@ -6058,12 +6107,30 @@ impl RegisterLowerer {
                 self.refuse("a Finally Block that changes a tracked type");
                 return None;
             }
-            self.code.emit(Instruction::Ldar(token_register?));
-            let normal = self.code.emit(Instruction::JumpIfFalse(0));
+            // 14.15.3 keeps the completion the Block was reached with: a
+            // `return` leaves with its value, a throw is raised again, and
+            // every other path goes on after the statement. A Block reached
+            // only by a throw or a `return` has no path that goes on, and the
+            // test for one would leave the function able to run off its end.
+            let carries_on = body_flow != RegisterFlow::Abrupt
+                || catch.is_some() && handler_flow != RegisterFlow::Abrupt;
+            self.code.emit(Instruction::Ldar(routed.returning));
+            let leaving = self.code.emit(Instruction::JumpIfTrue(0));
+            let normal = carries_on.then(|| {
+                self.code
+                    .emit(Instruction::Ldar(token_register.unwrap_or(routed.value)));
+                self.code.emit(Instruction::JumpIfFalse(0))
+            });
             self.code.emit(Instruction::Ldar(exception_register));
             self.code.emit(Instruction::Throw);
+            let leave = self.code.instructions.len();
+            self.patch_jump(leaving, leave)?;
+            self.code.emit(Instruction::Ldar(routed.value));
+            self.leave_with_return()?;
             let after = self.code.instructions.len();
-            self.patch_jump(normal, after)?;
+            if let Some(normal) = normal {
+                self.patch_jump(normal, after)?;
+            }
         }
         self.object_layouts = layouts_after_body;
         self.object_layouts.retain(|id, layout| {
@@ -6071,6 +6138,10 @@ impl RegisterLowerer {
         });
         self.bindings = merge_register_bindings(&bindings_after_body, &bindings_after_handler)?;
         self.code.emit(Instruction::Ldar(result_register));
+        if let Some((value, flag)) = returning {
+            self.release_register(flag)?;
+            self.release_register(value)?;
+        }
         if let Some(token_register) = token_register {
             self.release_register(token_register)?;
         }
@@ -7413,6 +7484,25 @@ impl RegisterLowerer {
     ///
     /// The accumulator holds the value the return answers, which the close
     /// overwrites, so it waits in a register of its own.
+    /// Leaves the running function with the value in the accumulator.
+    ///
+    /// 14.15.3 runs every Finally Block the `return` stands in before it
+    /// leaves, so inside one the value and a flag are written and the jump
+    /// goes to that Block, which leaves in turn.
+    fn leave_with_return(&mut self) -> Option<()> {
+        use crate::engine::bytecode::Instruction;
+        let Some(finally) = self.finallies.last().cloned() else {
+            self.code.emit(Instruction::Return);
+            return Some(());
+        };
+        self.code.emit(Instruction::Star(finally.value));
+        self.code.emit(Instruction::LdaSmi(1));
+        self.code.emit(Instruction::Star(finally.returning));
+        let jump = self.code.emit(Instruction::Jump(0));
+        self.finallies.last_mut()?.jumps.push(jump);
+        Some(())
+    }
+
     fn close_open_iterators(&mut self) -> Option<()> {
         use crate::engine::bytecode::Instruction;
         if self.open_iterators.is_empty() {
@@ -8975,6 +9065,35 @@ fn try_statements<'a>(
     body.iter()
         .chain(catch.into_iter().flat_map(|(_, body)| body.iter()))
         .chain(finally.into_iter().flatten())
+}
+
+/// Whether a statement holds a `break` or a `continue`, which 14.15.3 would
+/// have to run a Finally Block before.
+fn register_statement_breaks_control(statement: &Stmt) -> bool {
+    match statement {
+        Stmt::Break | Stmt::Continue => true,
+        Stmt::Block(body) => body.iter().any(register_statement_breaks_control),
+        Stmt::If(_, yes, no) => {
+            register_statement_breaks_control(yes)
+                || no.as_deref().is_some_and(register_statement_breaks_control)
+        }
+        Stmt::While(_, body)
+        | Stmt::DoWhile(body, _)
+        | Stmt::For(_, _, _, body)
+        | Stmt::ForIn { body, .. }
+        | Stmt::ForOf { body, .. } => register_statement_breaks_control(body),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => try_statements(body, catch.as_ref(), finally.as_deref())
+            .any(register_statement_breaks_control),
+        Stmt::Switch(_, clauses) => clauses
+            .iter()
+            .flat_map(|(_, body)| body)
+            .any(register_statement_breaks_control),
+        _ => false,
+    }
 }
 
 fn register_statement_transfers_control(statement: &Stmt) -> bool {
