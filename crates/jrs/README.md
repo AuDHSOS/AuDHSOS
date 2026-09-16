@@ -745,8 +745,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same two, with the mapper, on the register engine (focused) | focused | `92ee3db` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/from test/built-ins/Array/of --summary` | 63 | 122 | 40 (32.79%) | 24 (19.67%) | 58 (47.54%) |
 | The five copying clauses, after 23.1.3.4 (focused) | focused | `b84ccb9` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/prototype/map test/built-ins/Array/prototype/filter test/built-ins/Array/prototype/slice test/built-ins/Array/prototype/splice test/built-ins/Array/prototype/concat --summary` | 679 | 1,350 | 1,262 (93.48%) | 64 (4.74%) | 24 (1.78%) |
 | The same five, on the register engine (focused) | focused | `b84ccb9` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/prototype/map test/built-ins/Array/prototype/filter test/built-ins/Array/prototype/slice test/built-ins/Array/prototype/splice test/built-ins/Array/prototype/concat --summary` | 679 | 1,350 | 1,034 (76.59%) | 141 (10.44%) | 175 (12.96%) |
-| Complete pinned suite, including staging and Intl | full | `b84ccb9` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `b84ccb9` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 27,114 (26.34%) | 19,314 (18.77%) | 56,497 (54.89%) |
+| `%Function%`, after the dynamic body (focused) | focused | `7e8a7bb` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Function --summary` | 509 | 893 | 753 (84.32%) | 68 (7.61%) | 72 (8.06%) |
+| `%Function%`, after the dynamic body, on the register engine (focused) | focused | `7e8a7bb` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Function --summary` | 509 | 893 | 542 (60.69%) | 209 (23.40%) | 142 (15.90%) |
+| Complete pinned suite, including staging and Intl | full | `7e8a7bb` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `7e8a7bb` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 27,438 (26.66%) | 19,348 (18.80%) | 56,139 (54.54%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1556,7 +1558,9 @@ that step gained 22 variants and lost 14, all fourteen tests of a species
 constructor of the Script that the engine used to pass while ignoring
 `@@species` altogether. Ninety-eight variants moved from failed to
 unsupported in the same step, which is that wrong answer becoming a named
-gap.
+gap. The `%Function%` runs and both full runs beside the dynamic body were
+measured at tree `072aa8b7f5ddea45133998ad65dbe07412dea52a`, which is the tree
+of `7e8a7bb`; that step gained 324 variants and lost none.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
