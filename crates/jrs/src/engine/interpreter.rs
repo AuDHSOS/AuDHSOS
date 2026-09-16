@@ -13728,15 +13728,59 @@ impl RegisterVM {
                     // is an index or a name of the element store.
                     if let Some(symbol) = key_val.as_symbol() {
                         let name = PropertyKey::Symbol(symbol);
-                        if heap.own_named_flags(oref, name)?.is_none() {
-                            if heap.own_property_count(oref).unwrap_or(usize::MAX)
-                                >= self.property_limit
-                            {
-                                return Err(VMError::PropertyLimit);
-                            }
-                            if !define && Self::refuses_a_new_property(oref, strict, heap, realm)? {
+                        // 10.1.9.2 reads the property of the chain before it
+                        // writes: an accessor takes the value through its
+                        // setter, and a data property that is not writable
+                        // takes none.
+                        let found = if define {
+                            None
+                        } else {
+                            heap.lookup_named(oref, name)?
+                        };
+                        if let Some(found) = found {
+                            if found.flags.is_accessor {
+                                if let Some(code_id) = self.enter_accessor(
+                                    found.value,
+                                    target,
+                                    Some(val),
+                                    pc,
+                                    current_code_id,
+                                    code_units,
+                                    active_feedback,
+                                    heap,
+                                    realm,
+                                )? {
+                                    current_code_id = Some(code_id);
+                                    pc = 0;
+                                }
                                 return Ok(None);
                             }
+                            if !found.flags.writable {
+                                if strict {
+                                    return Err(type_error(
+                                        heap,
+                                        realm,
+                                        "cannot write a property that is not writable",
+                                    ));
+                                }
+                                return Ok(None);
+                            }
+                        }
+                        // An own property keeps the attributes it was given,
+                        // so the write goes to its slot and not through
+                        // 10.1.6.3, which would make it an ordinary one.
+                        let shape = heap.get_object(oref).ok_or(VMError::TypeError)?.shape_id;
+                        if let Some(location) = heap.shapes.lookup(shape, name) {
+                            heap.set_object_slot(oref, location.slot_offset, val)?;
+                            return Ok(None);
+                        }
+                        if heap.own_property_count(oref).unwrap_or(usize::MAX)
+                            >= self.property_limit
+                        {
+                            return Err(VMError::PropertyLimit);
+                        }
+                        if !define && Self::refuses_a_new_property(oref, strict, heap, realm)? {
+                            return Ok(None);
                         }
                         heap.define_own_named(oref, name, val, PropertyFlags::ordinary_data())?;
                         return Ok(None);

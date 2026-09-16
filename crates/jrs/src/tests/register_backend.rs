@@ -7735,6 +7735,38 @@ fn a_promise_settles_through_the_job_queue_of_both_backends() -> Result<(), Erro
 }
 
 #[test]
+fn a_write_under_a_symbol_key_reads_the_property_of_the_chain_first() -> Result<(), Error> {
+    // 10.1.9.2 reads the property before it writes, whatever kind its key is.
+    for source in [
+        // A data property that is not writable takes no value.
+        "var s=Symbol('a'),o={};Object.defineProperty(o,s,{value:1,writable:false,configurable:true});o[s]=9;''+o[s]",
+        // An own property keeps the attributes it was given.
+        "var s=Symbol('a'),o={};Object.defineProperty(o,s,{value:1,writable:true,enumerable:false,configurable:false});o[s]=2;var d=Object.getOwnPropertyDescriptor(o,s);''+d.value+d.writable+d.enumerable+d.configurable",
+        // A setter of the Prototype Chain takes the value, and the receiver
+        // gains no own property.
+        "var s=Symbol('b'),p={},seen;Object.defineProperty(p,s,{set:function(v){seen=v},configurable:true});var q=Object.create(p);q[s]=7;''+seen+'/'+Object.getOwnPropertyDescriptor(q,s)",
+        // A data property of the Chain that is not writable refuses the write.
+        "var s=Symbol('c'),r={};Object.defineProperty(r,s,{value:5,writable:false});var t=Object.create(r);t[s]=6;''+t[s]",
+        // 10.1.6.3 step 2 refuses a new property of an object that is not
+        // extensible.
+        "var s=Symbol('d'),f=Object.freeze({});f[s]=1;''+(f[s]===undefined)",
+        // Strict evaluation raises what sloppy evaluation drops.
+        "var s=Symbol('e'),o={};Object.defineProperty(o,s,{value:1,writable:false});var g=function(){'use strict';o[s]=4};var r='none';try{g()}catch(e){r=''+(e instanceof TypeError)};r",
+    ] {
+        let mut engine_host = SilentHost;
+        let mut engine = Realm::with_backend(Limits::default(), &mut engine_host, Backend::Engine)?;
+        let mut stack_host = SilentHost;
+        let mut stack = Realm::with_backend(Limits::default(), &mut stack_host, Backend::Stack)?;
+        assert_eq!(
+            engine.evaluate(source)?,
+            stack.evaluate(source)?,
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn the_combinators_of_27_2_4_settle_one_promise_for_many() -> Result<(), Error> {
     for source in [
         // 27.2.4.1 answers the values in the order of the iterable, whatever
