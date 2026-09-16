@@ -517,6 +517,26 @@ fn a_return_out_of_a_for_of_closes_its_iterator() -> Result<(), Error> {
     Ok(())
 }
 
+#[test]
+fn a_var_head_of_a_nested_iteration_carries_the_top_of_the_lattice() -> Result<(), Error> {
+    for source in [
+        // 14.7.5.6 step 7.g writes the head of each step, so the declared type
+        // of a `var` head says only that the name exists.
+        "var n=0;for(var a of [1,2]){for(var b of [3,4]){n+=b}}''+n",
+        "var n=0;for(var a of [1,2]){for(var b in {p:1,q:2}){n+=1}}''+n",
+        "var n=0;for(var a in {x:1}){for(var b of [3]){n+=b}}''+n",
+        "var n=0;for(var a of [1,2]){for(var b of [3,4]){for(var c of [5]){n+=c}}}''+n",
+        "var n='';for(var a of ['x','y']){for(var b of ['p']){n+=a+b}}n",
+        "(function(){var m=0;for(var a of [1,2]){for(var b of [3,4]){m+=b}}return m})()",
+        // A single `var` head still carries what the loop writes.
+        "var n=0;for(var a of [1,2]){n+=a}''+n",
+        "var n='';for(var a of ['x','y']){n+=a}n",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
+
 fn differential_scripts(scripts: &[&str]) -> Result<(), Error> {
     let outcome = |backend| -> Result<Result<Value, Error>, Error> {
         let mut host = SilentHost;

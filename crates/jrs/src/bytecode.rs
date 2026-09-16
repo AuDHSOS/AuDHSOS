@@ -8285,10 +8285,19 @@ fn infer_register_var_types(
                 infer_register_var_types(no, bindings, widen)?;
             }
         }
-        Stmt::While(_, body)
-        | Stmt::DoWhile(body, _)
-        | Stmt::ForIn { body, .. }
-        | Stmt::ForOf { body, .. } => {
+        Stmt::While(_, body) | Stmt::DoWhile(body, _) => {
+            infer_register_var_types(body, bindings, widen)?;
+        }
+        // 14.7.5.6 step 7.g and 14.7.5.7 write the head of each step, so a
+        // `var` head carries the top of the lattice from the head on. The
+        // declaration itself is hoisted and says only that the name exists.
+        Stmt::ForIn { binding, body, .. } | Stmt::ForOf { binding, body, .. } => {
+            if let Some((pattern, None)) = binding
+                && let Some(name) = pattern.identifier()
+                && let Some(declared) = bindings.get_mut(name)
+            {
+                declared.value_type = Some(RegisterType::Unknown);
+            }
             infer_register_var_types(body, bindings, widen)?;
         }
         Stmt::For(initializer, _, _, body) => {
