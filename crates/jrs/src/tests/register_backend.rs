@@ -796,6 +796,60 @@ fn a_descriptor_field_that_is_a_getter_runs_once_and_in_order() -> Result<(), Er
     Ok(())
 }
 
+#[test]
+fn the_string_constructor_carries_the_three_functions_of_22_1_2() -> Result<(), Error> {
+    // 22.1.2.1 is the only one of the three the stack backend built, so the
+    // rest are checked against the clause rather than against it.
+    for source in ["String.fromCharCode(97,98,99)", "String.fromCharCode()"] {
+        differential(source)?;
+    }
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    for (source, expected) in [
+        // 22.1.2.1 step 2.a takes each argument as a code unit.
+        ("String.fromCharCode(65536+97)", "a"),
+        // 22.1.2.2 takes each as a code point.
+        ("String.fromCodePoint(97,98)", "ab"),
+        ("String.fromCodePoint()", ""),
+        ("String.fromCodePoint(0x1F600).length+''", "2"),
+        ("String.fromCodePoint(0xD800).length+''", "1"),
+        // 22.1.2.4 puts one substitution between each pair of literals.
+        ("String.raw({raw:['a','b','c']},1,2)", "a1b2c"),
+        ("String.raw({raw:['a']})", "a"),
+        ("String.raw({raw:['a','b']})", "ab"),
+        ("String.raw({raw:[]})", ""),
+        // 17 gives each the name and the length its clause names.
+        ("String.fromCharCode.name", "fromCharCode"),
+        ("String.fromCodePoint.name", "fromCodePoint"),
+        ("String.raw.name", "raw"),
+        (
+            "String.fromCharCode.length+':'+String.fromCodePoint.length+':'+String.raw.length",
+            "1:1:1",
+        ),
+    ] {
+        assert_eq!(
+            realm.evaluate(source)?,
+            Value::String(
+                expected
+                    .encode_utf16()
+                    .collect::<alloc::vec::Vec<u16>>()
+                    .into()
+            ),
+            "{source}"
+        );
+    }
+    // 22.1.2.2 step 2.c refuses a code point that is not an integer of the
+    // Unicode range.
+    for source in [
+        "String.fromCodePoint(-1)",
+        "String.fromCodePoint(1.5)",
+        "String.fromCodePoint(0x110000)",
+    ] {
+        assert!(realm.evaluate(source).is_err(), "{source}");
+    }
+    Ok(())
+}
+
 fn differential_scripts(scripts: &[&str]) -> Result<(), Error> {
     let outcome = |backend| -> Result<Result<Value, Error>, Error> {
         let mut host = SilentHost;

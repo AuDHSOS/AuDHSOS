@@ -8059,6 +8059,10 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // 22.1.1.1 answers a String whichever argument it took; `new` answers
         // no value at all, because the exotic object it would make is a gap.
         crate::engine::realm::Intrinsic::StringConstructor
+        // 22.1.2.1, 22.1.2.2 and 22.1.2.4 answer a String of what they read.
+        | crate::engine::realm::Intrinsic::StringFromCharCode
+        | crate::engine::realm::Intrinsic::StringFromCodePoint
+        | crate::engine::realm::Intrinsic::StringRaw
         // 22.2.6.4 and 22.2.6.13 answer a String for every receiver they take.
         | crate::engine::realm::Intrinsic::RegExpPrototypeFlags
         | crate::engine::realm::Intrinsic::RegExpPrototypeSource

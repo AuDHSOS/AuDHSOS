@@ -398,6 +398,12 @@ pub enum Intrinsic {
     ArrayFrom,
     /// `eval` (19.2.1).
     Eval,
+    /// `String.fromCharCode` (22.1.2.1).
+    StringFromCharCode,
+    /// `String.fromCodePoint` (22.1.2.2).
+    StringFromCodePoint,
+    /// `String.raw` (22.1.2.4).
+    StringRaw,
     /// `get flags` of 22.2.6.4.
     RegExpPrototypeFlags,
     /// `get source` of 22.2.6.13.
@@ -662,6 +668,8 @@ pub enum IntrinsicHolder {
     RegExpPrototype,
     /// `%JSON%`, the namespace object of 25.5.
     Json,
+    /// `%String%`, which carries the functions 22.1.2 gives the constructor.
+    StringConstructor,
     /// `%Symbol.prototype%`, which carries the methods 20.4.3 gives it.
     SymbolPrototype,
     /// `%Symbol%`, which carries the functions 20.4.2 gives the constructor.
@@ -672,7 +680,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 169] = [
+    pub const ALL: [Self; 172] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -832,6 +840,9 @@ impl Intrinsic {
         Self::ArrayOf,
         Self::ArrayFrom,
         Self::Eval,
+        Self::StringFromCharCode,
+        Self::StringFromCodePoint,
+        Self::StringRaw,
         Self::RegExpPrototypeFlags,
         Self::RegExpPrototypeSource,
         Self::RegExpPrototypeHasIndices,
@@ -970,6 +981,9 @@ impl Intrinsic {
             | Self::RegExpPrototypeToString => IntrinsicHolder::RegExpPrototype,
             Self::ErrorPrototypeToString => IntrinsicHolder::ErrorPrototype,
             Self::JsonParse | Self::JsonStringify => IntrinsicHolder::Json,
+            Self::StringFromCharCode | Self::StringFromCodePoint | Self::StringRaw => {
+                IntrinsicHolder::StringConstructor
+            }
             // 10.2.4.1 stands on no object: the `callee` of a strict
             // arguments object is the only way to reach it, and nothing
             // installs it on the holder this names.
@@ -1197,6 +1211,9 @@ impl Intrinsic {
             Self::ArrayOf => 156,
             Self::ArrayFrom => 157,
             Self::Eval => 158,
+            Self::StringFromCharCode => 169,
+            Self::StringFromCodePoint => 170,
+            Self::StringRaw => 171,
             Self::RegExpPrototypeFlags => 159,
             Self::RegExpPrototypeSource => 160,
             Self::RegExpPrototypeHasIndices => 161,
@@ -1376,6 +1393,9 @@ impl Intrinsic {
             Self::ArrayOf => 156,
             Self::ArrayFrom => 157,
             Self::Eval => 158,
+            Self::StringFromCharCode => 169,
+            Self::StringFromCodePoint => 170,
+            Self::StringRaw => 171,
             Self::RegExpPrototypeFlags => 159,
             Self::RegExpPrototypeSource => 160,
             Self::RegExpPrototypeHasIndices => 161,
@@ -1556,6 +1576,9 @@ impl Intrinsic {
             156 => Some(Self::ArrayOf),
             157 => Some(Self::ArrayFrom),
             158 => Some(Self::Eval),
+            169 => Some(Self::StringFromCharCode),
+            170 => Some(Self::StringFromCodePoint),
+            171 => Some(Self::StringRaw),
             159 => Some(Self::RegExpPrototypeFlags),
             160 => Some(Self::RegExpPrototypeSource),
             161 => Some(Self::RegExpPrototypeHasIndices),
@@ -1608,6 +1631,10 @@ impl Intrinsic {
             Self::RegExpPrototypeUnicodeSets => "get unicodeSets",
             Self::RegExpPrototypeSticky => "get sticky",
             Self::SymbolConstructor => "Symbol",
+            Self::StringFromCharCode => "fromCharCode",
+            Self::StringFromCodePoint => "fromCodePoint",
+            Self::StringRaw => "raw",
+
             Self::RegExpConstructor => "RegExp",
             Self::RegExpPrototypeExec => "exec",
             Self::JsonParse => "parse",
@@ -2121,7 +2148,10 @@ impl Intrinsic {
             | Self::ArrayPrototypeFlat
             | Self::ArrayOf
             | Self::ArrayPrototypeToReversed => 0,
-            Self::ObjectPrototypeHasOwnProperty
+            Self::StringFromCharCode
+            | Self::StringFromCodePoint
+            | Self::StringRaw
+            | Self::ObjectPrototypeHasOwnProperty
             | Self::ObjectPrototypeIsPrototypeOf
             | Self::ObjectPrototypePropertyIsEnumerable
             | Self::StringPrototypeMatch
@@ -3839,6 +3869,12 @@ impl Realm {
                     heap,
                     *intrinsics
                         .get(Intrinsic::ObjectConstructor.index())
+                        .ok_or(HeapError::InvalidReference)?,
+                )?,
+                IntrinsicHolder::StringConstructor => Self::rooted(
+                    heap,
+                    *intrinsics
+                        .get(Intrinsic::StringConstructor.index())
                         .ok_or(HeapError::InvalidReference)?,
                 )?,
                 IntrinsicHolder::ArrayConstructor => Self::rooted(

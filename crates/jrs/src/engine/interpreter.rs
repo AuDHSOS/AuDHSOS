@@ -1957,6 +1957,62 @@ impl RegisterVM {
             }
             // 20.4.1.1: `Symbol` is not a constructor, and its description
             // is undefined or the text of its argument.
+            // 22.1.2.1: each argument is a code unit of the answer.
+            Intrinsic::StringFromCharCode => {
+                let mut units = Vec::with_capacity(usize::from(call.arg_count));
+                for index in 0..call.arg_count {
+                    let argument = self.call_argument(&call, index, heap)?;
+                    // 7.1.7 keeps the low sixteen bits, which is the code unit.
+                    let unit = crate::value::number_uint32(primitive_number(argument, heap)?);
+                    units.push(u16::try_from(unit & 0xFFFF).unwrap_or_default());
+                }
+                if units.len() > self.string_units_limit {
+                    return Err(VMError::StringLimit);
+                }
+                self.allocate_string(heap, &units)
+            }
+            // 22.1.2.2: each argument is a code point, which step 2.c refuses
+            // where it is not an integer of the Unicode range.
+            Intrinsic::StringFromCodePoint => {
+                let mut units = Vec::with_capacity(usize::from(call.arg_count));
+                for index in 0..call.arg_count {
+                    let argument = self.call_argument(&call, index, heap)?;
+                    let number = primitive_number(argument, heap)?;
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        clippy::cast_sign_loss,
+                        reason = "the range is checked before the cast is used"
+                    )]
+                    let point = number as u32;
+                    #[expect(
+                        clippy::float_cmp,
+                        reason = "step 2.c asks for an integral binary64 value"
+                    )]
+                    let integral = number.is_finite() && f64::from(point) == number;
+                    if !integral || point > 0x0010_FFFF {
+                        return Err(raise(
+                            heap,
+                            realm,
+                            super::realm::NativeErrorKind::RangeError,
+                            "not a valid code point",
+                        ));
+                    }
+                    match char::from_u32(point) {
+                        Some(point) => {
+                            let mut buffer = [0u16; 2];
+                            units.extend_from_slice(point.encode_utf16(&mut buffer));
+                        }
+                        // A lone surrogate is a code point of the language and
+                        // no character of Rust, so it is its own code unit.
+                        None => units.push(u16::try_from(point & 0xFFFF).unwrap_or_default()),
+                    }
+                }
+                if units.len() > self.string_units_limit {
+                    return Err(VMError::StringLimit);
+                }
+                self.allocate_string(heap, &units)
+            }
+            Intrinsic::StringRaw => self.string_raw(&call, heap, realm),
             Intrinsic::SymbolConstructor => {
                 if call.construct.is_some() {
                     return Err(type_error(heap, realm, "Symbol is not a constructor"));
@@ -8684,6 +8740,65 @@ impl RegisterVM {
             PropertyFlags::ordinary_data(),
         )?;
         Ok(Value::from_object(result))
+    }
+
+    /// `String.raw` of 22.1.2.4.
+    ///
+    /// The literals come out of the `raw` of the template and the
+    /// substitutions out of the arguments that follow it, one between each
+    /// pair of literals.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] where the template or its `raw` is not an
+    /// object, and a gap where a value only a frame could convert stands in
+    /// either list.
+    fn string_raw(
+        &self,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let template = self.call_argument(call, 0, heap)?;
+        let cooked = Self::coerce_object(template, heap, realm)?;
+        let key = PropertyKey::String(heap.strings.intern("raw")?);
+        let raw = heap
+            .lookup_named(cooked, key)?
+            .map(Self::plain_value)
+            .transpose()?
+            .unwrap_or(VALUE_UNDEFINED);
+        let raw = Self::coerce_object(raw, heap, realm)?;
+        let length = Self::array_like_length(heap, raw, realm)?;
+        let mut units: Vec<u16> = Vec::new();
+        for index in Self::scan_range(0, length) {
+            let literal = Self::element_at(heap, raw, index)?.unwrap_or(VALUE_UNDEFINED);
+            if literal.is_object() {
+                return Err(VMError::Unsupported("ToString of an Object"));
+            }
+            units.extend(property_name_units(literal, heap)?);
+            // Step 4.e: the last literal has no substitution after it.
+            if i64::from(index).saturating_add(1) >= length {
+                break;
+            }
+            let Ok(offset) = u16::try_from(index.saturating_add(1)) else {
+                break;
+            };
+            if offset >= call.arg_count {
+                continue;
+            }
+            let substitution = self.call_argument(call, offset, heap)?;
+            if substitution.is_object() {
+                return Err(VMError::Unsupported("ToString of an Object"));
+            }
+            units.extend(property_name_units(substitution, heap)?);
+            if units.len() > self.string_units_limit {
+                return Err(VMError::StringLimit);
+            }
+        }
+        if units.len() > self.string_units_limit {
+            return Err(VMError::StringLimit);
+        }
+        self.allocate_string(heap, &units)
     }
 
     /// `Object.prototype.toString` of 20.1.3.6.
