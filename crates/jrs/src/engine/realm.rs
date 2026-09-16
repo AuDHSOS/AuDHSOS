@@ -373,6 +373,8 @@ pub enum Intrinsic {
     /// `%Function.prototype%` (20.2.3), which is itself a built-in function
     /// that takes any argument and answers undefined.
     FunctionPrototype,
+    /// `Error.prototype.toString` (20.5.3.4).
+    ErrorPrototypeToString,
     /// `Array.prototype.values`, which is also `%Array.prototype%[@@iterator]`
     /// (23.1.3.38 and 23.1.3.40).
     ArrayPrototypeValues,
@@ -621,11 +623,13 @@ pub enum IntrinsicHolder {
     SymbolPrototype,
     /// `%Symbol%`, which carries the functions 20.4.2 gives the constructor.
     SymbolConstructor,
+    /// `%Error.prototype%`, which carries the methods 20.5.3 gives it.
+    ErrorPrototype,
 }
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 147] = [
+    pub const ALL: [Self; 148] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -773,6 +777,7 @@ impl Intrinsic {
         Self::FunctionPrototypeToString,
         Self::ObjectPrototypeValueOf,
         Self::FunctionPrototype,
+        Self::ErrorPrototypeToString,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -892,6 +897,7 @@ impl Intrinsic {
             Self::RegExpPrototypeExec
             | Self::RegExpPrototypeTest
             | Self::RegExpPrototypeToString => IntrinsicHolder::RegExpPrototype,
+            Self::ErrorPrototypeToString => IntrinsicHolder::ErrorPrototype,
             Self::JsonParse | Self::JsonStringify => IntrinsicHolder::Json,
             // 10.2.4.1 stands on no object: the `callee` of a strict
             // arguments object is the only way to reach it, and nothing
@@ -1094,6 +1100,7 @@ impl Intrinsic {
             Self::FunctionPrototypeToString => 144,
             Self::ObjectPrototypeValueOf => 145,
             Self::FunctionPrototype => 146,
+            Self::ErrorPrototypeToString => 147,
         }
     }
 
@@ -1251,6 +1258,7 @@ impl Intrinsic {
             Self::FunctionPrototypeToString => 144,
             Self::ObjectPrototypeValueOf => 145,
             Self::FunctionPrototype => 146,
+            Self::ErrorPrototypeToString => 147,
         }
     }
 
@@ -1409,6 +1417,7 @@ impl Intrinsic {
             144 => Some(Self::FunctionPrototypeToString),
             145 => Some(Self::ObjectPrototypeValueOf),
             146 => Some(Self::FunctionPrototype),
+            147 => Some(Self::ErrorPrototypeToString),
             _ => None,
         }
     }
@@ -1431,6 +1440,7 @@ impl Intrinsic {
             | Self::RegExpPrototypeToString
             | Self::SymbolPrototypeToString
             | Self::FunctionPrototypeToString
+            | Self::ErrorPrototypeToString
             | Self::StringPrototypeToString => "toString",
             Self::NumberPrototypeValueOf
             | Self::BooleanPrototypeValueOf
@@ -1674,6 +1684,7 @@ impl Intrinsic {
             | Self::ObjectPrototypeToString
             | Self::ObjectPrototypeValueOf
             | Self::FunctionPrototype
+            | Self::ErrorPrototypeToString
             | Self::ArrayPrototypeValues
             | Self::ArrayPrototypeKeys
             | Self::ArrayPrototypeEntries
@@ -1814,6 +1825,7 @@ impl Intrinsic {
             | Self::RegExpPrototypeToString
             | Self::ObjectPrototypeToString
             | Self::ObjectPrototypeValueOf
+            | Self::ErrorPrototypeToString
             | Self::NumberPrototypeValueOf
             | Self::BooleanPrototypeValueOf
             | Self::BooleanPrototypeToString
@@ -2536,6 +2548,7 @@ pub enum BindingOutcome {
 /// The objects the intrinsic functions of a new Realm are installed on.
 struct Holders {
     object_prototype: Root,
+    error_prototype: Root,
     function_prototype: Root,
     string_prototype: Root,
     array_prototype: Root,
@@ -2672,6 +2685,7 @@ impl Realm {
             heap,
             &Holders {
                 object_prototype,
+                error_prototype,
                 function_prototype,
                 string_prototype,
                 array_prototype,
@@ -3245,6 +3259,7 @@ impl Realm {
                 IntrinsicHolder::Math => Self::rooted(heap, holders.math)?,
                 IntrinsicHolder::Reflect => Self::rooted(heap, holders.reflect)?,
                 IntrinsicHolder::Json => Self::rooted(heap, holders.json)?,
+                IntrinsicHolder::ErrorPrototype => Self::rooted(heap, holders.error_prototype)?,
                 IntrinsicHolder::NumberPrototype => Self::rooted(heap, holders.number_prototype)?,
                 IntrinsicHolder::BooleanPrototype => Self::rooted(heap, holders.boolean_prototype)?,
                 IntrinsicHolder::RegExpPrototype => Self::rooted(heap, holders.regexp_prototype)?,

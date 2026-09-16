@@ -179,13 +179,8 @@ fn a_catch_parameter_widens_when_the_range_can_throw_an_error_object() -> Result
     // Only `throw` carries a value the lowering saw. Every other instruction
     // that throws raises an error object of the Realm, whose type it does not
     // know, so the parameter is a value the lowering cannot name and `|`
-    // reaches the conversion that names the gap (7.1.6 over 7.1.4).
-    let program = compile("try{f}catch(e){e|5}", Limits::default())?;
-    assert!(program.uses_register_backend());
-    assert!(matches!(
-        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
-        Err(Error::Unsupported { .. })
-    ));
+    // reaches the conversion of 7.1.6 over 7.1.4, which 20.5.3.4 answers.
+    differential("try{f}catch(e){e|5}")?;
     // A member of a value that is not an object is not lowered at all, so
     // these never reach the conversion.
     for source in [
@@ -6516,6 +6511,28 @@ fn a_string_receiver_and_an_empty_reduce_answer_as_their_clauses_do() -> Result<
         "var a=[,,,];Array.prototype[1]='p';\
          var r=a.reduce(function(x,y){return y});delete Array.prototype[1];''+r",
         "var a=[,];Array.prototype[0]='p';var r=a.indexOf('p');delete Array.prototype[0];''+r",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
+
+/// 20.5.3.4 joins the `name` and the `message` an Error holds, which is also
+/// what 7.1.1 reaches for one.
+#[test]
+fn error_prototype_to_string_joins_the_name_and_the_message() -> Result<(), Error> {
+    for source in [
+        "var e=new Error('m');e.toString()",
+        "new TypeError().toString()",
+        "new Error().toString()",
+        "var e=new Error('m');e.name='X';e.toString()",
+        "Error.prototype.toString.call({name:'A',message:'b'})",
+        "Error.prototype.toString.call({name:''})",
+        "Error.prototype.toString.call({message:'only'})",
+        "''+new Error('m')",
+        "String(new TypeError('x'))",
+        "''+Error.prototype.toString.length",
+        "var t=false;try{Error.prototype.toString.call(1)}catch(e){t=e instanceof TypeError}t",
     ] {
         differential_scripts(&[source])?;
     }

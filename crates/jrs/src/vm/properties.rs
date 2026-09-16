@@ -184,7 +184,15 @@ impl Execution<'_> {
             Error::Syntax { .. } | Error::UnverifiedSyntax { .. } => Builtin::SyntaxError,
             _ => Builtin::Error,
         };
-        self.new_error(kind, &[Value::string(&alloc::format!("{error}"))])
+        // 20.5.3.2 gives the object the message alone. The name in front of
+        // it belongs to 20.5.3.4, which puts it back where it is asked for.
+        let text = alloc::format!("{error}");
+        let prefix = super::errors::error_name(kind).map(|name| alloc::format!("{name}: "));
+        let message = prefix
+            .as_deref()
+            .and_then(|prefix| text.strip_prefix(prefix))
+            .unwrap_or(&text);
+        self.new_error(kind, &[Value::string(message)])
     }
     pub(super) fn object_ref(&self, value: &Value) -> Result<&Object, Error> {
         if has_constructor_storage(value) {

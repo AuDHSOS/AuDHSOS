@@ -7807,6 +7807,7 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ArrayPrototypeJoin
         | crate::engine::realm::Intrinsic::SymbolPrototypeToString
         | crate::engine::realm::Intrinsic::FunctionPrototypeToString
+        | crate::engine::realm::Intrinsic::ErrorPrototypeToString
         | crate::engine::realm::Intrinsic::ArrayPrototypeToString => RegisterType::String,
 
         // 23.1.3.38 answers an Array Iterator and 23.1.5.2.1 a result object,

@@ -1542,6 +1542,8 @@ impl RegisterVM {
                 Self::own_property_test(intrinsic, self.call_argument(&call, 0)?, call, heap, realm)
             }
             Intrinsic::ObjectPrototypeToString => self.object_to_string(call.receiver, heap, realm),
+            // 20.5.3.4 joins the `name` and the `message` the Error holds.
+            Intrinsic::ErrorPrototypeToString => self.error_text(call.receiver, heap, realm),
             // 20.2.3 accepts any argument and answers undefined.
             Intrinsic::FunctionPrototype => Ok(VALUE_UNDEFINED),
             // 20.1.3.7 is `ToObject(this value)` and nothing else.
@@ -2136,6 +2138,56 @@ impl RegisterVM {
             Err(HeapError::PrototypeCycle) => Ok(false),
             Err(error) => Err(VMError::Heap(error)),
         }
+    }
+
+    /// `Error.prototype.toString` of 20.5.3.4.
+    ///
+    /// The clause reads `name` and `message` with 7.3.2 and sends each
+    /// through `ToString`. A value only a frame could convert is a gap here,
+    /// because this native has none.
+    fn error_text(
+        &self,
+        receiver: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let Some(object) = receiver.as_object() else {
+            return Err(type_error(heap, realm, "this value is not an object"));
+        };
+        let mut parts: [Vec<u16>; 2] = [Vec::new(), Vec::new()];
+        for (slot, (field, absent)) in [("name", "Error"), ("message", "")].into_iter().enumerate()
+        {
+            let key = PropertyKey::String(heap.strings.intern(field)?);
+            let found = heap
+                .lookup_named(object, key)?
+                .map(Self::plain_value)
+                .transpose()?
+                .unwrap_or(VALUE_UNDEFINED);
+            let text = if found.is_undefined() {
+                absent.encode_utf16().collect()
+            } else if found.is_object() {
+                return Err(NUMERIC_CONVERSION_GAP);
+            } else {
+                let string = self.primitive_string(found, heap, realm)?;
+                heap.strings
+                    .to_utf16(string)
+                    .ok_or(VMError::Heap(HeapError::InvalidReference))?
+            };
+            *parts.get_mut(slot).ok_or(VMError::TypeError)? = text;
+        }
+        let [name, message] = parts;
+        // Steps 6 and 7: an empty half leaves the other one alone.
+        let joined = if name.is_empty() {
+            message
+        } else if message.is_empty() {
+            name
+        } else {
+            let mut joined = name;
+            joined.extend(": ".encode_utf16());
+            joined.extend_from_slice(&message);
+            joined
+        };
+        self.allocate_string(heap, &joined)
     }
 
     /// The number of code units a String exotic object of 10.4.3 wraps.
@@ -5449,17 +5501,16 @@ impl RegisterVM {
     /// rather than a missing feature. Naming the gap keeps it a gap.
     const fn unimplemented_conversion(kind: &ObjectKind) -> Option<&'static str> {
         match kind {
-            // 20.5.3.4 answers "name: message".
-            ObjectKind::Error => Some("Error.prototype.toString"),
             // 21.3 gives `%Math%` an @@toStringTag, which this Realm has not
             // built, so `[object Math]` is not an answer it can give.
             ObjectKind::Math => Some("the @@toStringTag of %Math%"),
 
-            // 20.1.3.6 is the right answer for these, and 23.1.3.37 is
-            // implemented.
+            // 20.1.3.6 is the right answer for these, 23.1.3.37 and 20.5.3.4
+            // are implemented.
             // 20.2.3.5 answers the source text of the function, which
             // %Function.prototype% carries.
-            ObjectKind::Function { .. }
+            ObjectKind::Error
+            | ObjectKind::Function { .. }
             | ObjectKind::NativeFunction { .. }
             | ObjectKind::BoundFunction { .. }
             | ObjectKind::Ordinary
