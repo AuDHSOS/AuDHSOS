@@ -30,6 +30,7 @@ mod number;
 mod page;
 mod parse;
 mod record;
+mod rename;
 mod reopen;
 mod rowvalue;
 mod savepoint;

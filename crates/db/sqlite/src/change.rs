@@ -61,6 +61,10 @@ const STAT: &[u8] = b"sqlite_stat1";
 /// The table a key that counts up is counted in.
 const SEQUENCE: &[u8] = b"sqlite_sequence";
 
+/// The name of the schema's own table, which a rename reads its rows
+/// out of.
+const SCHEMA_TABLE: &[u8] = b"sqlite_schema";
+
 /// Refuses a statement that writes the schema's own table, which is
 /// `sqlite3SchemaMayNotBeModified`: the table is read and not written,
 /// whatever the statement says.
@@ -74,6 +78,51 @@ const fn written_to(name: &[u8]) -> Result<(), Error> {
 /// Whether a row of `sqlite_sequence` names the table `wanted`.
 fn named_row(values: &[Value], wanted: &[u8]) -> bool {
     matches!(values.first(), Some(Value::Text(text)) if text.eq_ignore_ascii_case(wanted))
+}
+
+/// One row of `sqlite_schema` written again under the new name of a
+/// table, and whether the row changed at all.
+///
+/// The row's own name changes where the row is the table itself or an
+/// index SQLite made for a key of it, its `tbl_name` changes where it
+/// named the table, and its text is written again wherever the
+/// statement names the table.
+fn renamed(values: &mut [Value], from: &[u8], to: &[u8]) -> bool {
+    let text = |value: Option<&Value>| match value {
+        Some(Value::Text(bytes)) => bytes.clone(),
+        _ => Vec::new(),
+    };
+    let kind = text(values.first());
+    let name = text(values.get(1));
+    let over = text(values.get(2));
+    let sql = text(values.get(4));
+    let places = crate::rename::places(&sql, from);
+    let automatic = crate::rename::automatic(&name, from, to);
+    let mut changed = false;
+    let mut write = |at: usize, bytes: &[u8]| {
+        for slot in values.iter_mut().skip(at).take(1) {
+            *slot = Value::Text(bytes.to_vec());
+        }
+    };
+    // The table is the row of its own name, and an index SQLite made
+    // for a key of it carries the name of the table in its own.
+    if kind.eq_ignore_ascii_case(b"table") && name.eq_ignore_ascii_case(from) {
+        write(1, to);
+        changed = true;
+    } else if let Some(made) = automatic {
+        write(1, &made);
+        changed = true;
+    }
+    // An index and a trigger both carry the table they are over.
+    if over.eq_ignore_ascii_case(from) {
+        write(2, to);
+        changed = true;
+    }
+    if !places.is_empty() {
+        write(4, &crate::rename::written(&sql, &places, to));
+        changed = true;
+    }
+    changed
 }
 
 /// Whether the schema already names a table, an index or a view, which
@@ -438,6 +487,96 @@ impl Writer {
             }
         }
         Err(Error::NoTable(name.to_vec()))
+    }
+
+    /// `ALTER TABLE ... RENAME TO`: every row of `sqlite_schema` that
+    /// names the table is written again under the new name, which is
+    /// `sqlite3AlterRenameTable`.
+    ///
+    /// The tree of the table stays where it is, so the rename writes the
+    /// schema and nothing else. Reading the schema costs O(n) in its
+    /// rows, and each row is written again at O(m) in its text.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoTable`] where the schema holds no such table, and
+    /// [`Error::Named`] where it already holds the new name.
+    fn rename_table(&mut self, asked: &crate::ast::RenameTable, sql: &[u8]) -> Result<(), Error> {
+        let from = crate::schema::dequote(asked.table.text(sql));
+        let to = crate::schema::dequote(asked.name.text(sql));
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        let view = database.view(&from).is_some();
+        if database.table(&from).is_none() && !view {
+            return Err(Error::NoTable(from));
+        }
+        // `isAlterableTable`: a table SQLite keeps for itself is read
+        // and not altered, and the schema's own table answers under the
+        // name it is written with.
+        if from
+            .get(..7)
+            .is_some_and(|head| head.eq_ignore_ascii_case(b"sqlite_"))
+        {
+            let held = if crate::db::schema_named(&from) {
+                b"sqlite_master".to_vec()
+            } else {
+                from
+            };
+            return Err(Error::NotAlterable(held));
+        }
+        // `sqlite3AlterRenameTable`: a view is not a table, so it is not
+        // what this statement alters.
+        if view {
+            return Err(Error::NotATable(from));
+        }
+        if names(&database, &to) {
+            return Err(Error::Named(to));
+        }
+        let mut written: Vec<(i64, Vec<Value>)> = Vec::new();
+        for (rowid, values) in database.rows_of(SCHEMA_TABLE)? {
+            let mut values = values;
+            if renamed(&mut values, &from, &to) {
+                written.push((rowid, values));
+            }
+        }
+        drop(database);
+        for (rowid, values) in written {
+            let record = crate::record::write(&values, &SCHEMA, 4);
+            crate::tree::update(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &record)?;
+        }
+        self.rename_sequence(&from, &to)?;
+        self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
+        Ok(())
+    }
+
+    /// The row of `sqlite_sequence` that counts for the table, written
+    /// again under the new name, which is what `sqlite3AlterRenameTable`
+    /// writes where the table counts up.
+    ///
+    /// Reading the rows costs O(n) in them.
+    fn rename_sequence(&mut self, from: &[u8], to: &[u8]) -> Result<(), Error> {
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        if database.table(SEQUENCE).is_none() {
+            return Ok(());
+        }
+        let (_, root) = database.table(SEQUENCE).ok_or(Error::NoTable(Vec::new()))?;
+        let held: Vec<(i64, Vec<Value>)> = database
+            .rows_of(SEQUENCE)?
+            .iter()
+            .filter(|(_, values)| named_row(values, from))
+            .cloned()
+            .collect();
+        drop(database);
+        for (rowid, values) in held {
+            let mut values = values;
+            for slot in values.iter_mut().take(1) {
+                *slot = Value::Text(to.to_vec());
+            }
+            let record = crate::record::write(&values, &[Affinity::None; 2], 4);
+            crate::tree::update(&mut self.pages, root, rowid, &record)?;
+        }
+        Ok(())
     }
 
     /// `DROP TABLE` and `DROP INDEX`: the rows of `sqlite_schema` that
@@ -1751,6 +1890,7 @@ impl Writer {
         let (kind, name, over, already, written) = match definition {
             Definition::Drop(asked) => return self.drop_object(&asked, sql),
             Definition::AddColumn(asked) => return self.add_column(arena, &asked, sql),
+            Definition::Rename(asked) => return self.rename_table(&asked, sql),
             Definition::Trigger(trigger) => return self.create_trigger(&trigger, sql),
             Definition::Table(table) => {
                 if let TableBody::Select(select) = table.body {
@@ -1851,7 +1991,11 @@ impl Writer {
         // table that counts its keys up, and the row of that table is
         // written before it.
         if counts && !self.holds(SEQUENCE)? {
+            // The two rows are one change of the schema, so the cookie
+            // the statement raised already counts for both.
+            let cookie = self.header.schema_cookie;
             self.ran(b"CREATE TABLE sqlite_sequence(name,seq)")?;
+            self.header.schema_cookie = cookie;
         }
         Ok(())
     }

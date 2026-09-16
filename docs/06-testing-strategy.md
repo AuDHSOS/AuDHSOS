@@ -4978,6 +4978,27 @@ D-236, document 16 step Q8.
   a transaction leaves, are the files the shell wrote for the same
   statements, byte for byte.
 
+### 6.6.160 A table renamed (`db-sqlite`)
+
+D-237, document 16 step Q8.
+
+- Every statement of the schema that names the table is written again
+  under the new name: the table's own, an index over it, a trigger on
+  it, and a view that reads it.
+- An index SQLite made for a key of the table carries the new name.
+- The row of `sqlite_sequence` that counts the key up carries it too.
+- The rows of the table are read under the new name, and the index over
+  it answers them.
+- A column, a string and a `WITH` term that read like the table are left
+  as they are.
+- A new name is written in double quotes, with a quote inside it
+  doubled.
+- A name that is no table of its own is refused: one the schema does not
+  hold, a view, a table whose name begins `sqlite_`, and a new name the
+  schema already holds.
+- The file this crate writes for a rename is the file the shell wrote
+  for the same statements, byte for byte.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

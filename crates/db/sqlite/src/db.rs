@@ -103,6 +103,14 @@ pub enum Error {
     /// A `COMMIT` or a `ROLLBACK` on a connection with no transaction
     /// open.
     NoTransaction,
+    /// An `ALTER TABLE ... RENAME TO` whose new name the schema already
+    /// holds, with that name.
+    Named(Vec<u8>),
+    /// An `ALTER TABLE` over a table SQLite keeps for itself, with the
+    /// name of that table.
+    NotAlterable(Vec<u8>),
+    /// An `ALTER TABLE` over a view, with the name of the view.
+    NotATable(Vec<u8>),
     /// A `RELEASE` or a `ROLLBACK TO` that names a savepoint the
     /// connection does not hold open, with the name as it was written.
     NoSavepoint(Vec<u8>),
@@ -171,6 +179,18 @@ impl Error {
             ),
             Error::Nested => "cannot start a transaction within a transaction".to_string(),
             Error::NoTransaction => "cannot commit - no transaction is active".to_string(),
+            Error::NotAlterable(name) => alloc::format!(
+                "table {} may not be altered",
+                alloc::string::String::from_utf8_lossy(name)
+            ),
+            Error::NotATable(name) => alloc::format!(
+                "view {} may not be altered",
+                alloc::string::String::from_utf8_lossy(name)
+            ),
+            Error::Named(name) => alloc::format!(
+                "there is already another table or index with this name: {}",
+                alloc::string::String::from_utf8_lossy(name)
+            ),
             Error::NoSavepoint(name) => alloc::format!(
                 "no such savepoint: {}",
                 alloc::string::String::from_utf8_lossy(name)

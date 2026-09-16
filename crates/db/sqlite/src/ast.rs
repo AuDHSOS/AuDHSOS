@@ -555,6 +555,17 @@ pub struct AddColumn {
     pub column: ColumnDef,
 }
 
+/// `ALTER TABLE [schema.]name RENAME TO name`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RenameTable {
+    /// The schema, where one was named.
+    pub schema: Option<Span>,
+    /// The table as it is named now.
+    pub table: Span,
+    /// The name it takes.
+    pub name: Span,
+}
+
 /// `CREATE VIEW [IF NOT EXISTS] name [(columns)] AS select`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct CreateView {
@@ -700,6 +711,8 @@ pub enum Definition {
     View(CreateView),
     /// `ALTER TABLE ... ADD COLUMN`.
     AddColumn(AddColumn),
+    /// `ALTER TABLE ... RENAME TO`.
+    Rename(RenameTable),
     /// `CREATE TRIGGER`.
     Trigger(CreateTrigger),
     /// `DROP TABLE`, `DROP INDEX`, `DROP VIEW` and `DROP TRIGGER`.
@@ -1456,6 +1469,22 @@ impl Arena {
         let start = usize::try_from(range.start).unwrap_or(usize::MAX);
         let end = start.saturating_add(range.len());
         self.sources.get(start..end).unwrap_or_default()
+    }
+
+    /// Every table of every `FROM` clause the arena holds, in the order
+    /// they were read.
+    pub fn all_sources(&self) -> impl Iterator<Item = Source> {
+        self.sources.iter().copied()
+    }
+
+    /// Every table of every `WITH` clause the arena holds.
+    pub fn all_ctes(&self) -> impl Iterator<Item = Cte> {
+        self.ctes.iter().copied()
+    }
+
+    /// Every statement of every trigger body the arena holds.
+    pub fn all_steps(&self) -> impl Iterator<Item = TriggerStep> {
+        self.steps.iter().copied()
     }
 
     /// Adds a run of sort terms.

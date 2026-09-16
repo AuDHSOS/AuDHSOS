@@ -31,6 +31,7 @@ pub mod parse;
 pub mod pragma;
 pub mod random;
 pub mod record;
+pub mod rename;
 pub mod schema;
 pub mod token;
 pub mod tree;

@@ -155,9 +155,9 @@ fn walk_definition(arena: &Arena, definition: Definition) {
                 }
             }
         }
-        // A `DROP` names a table, an index, a view or a trigger and
-        // holds no expression.
-        Definition::Drop(_) => {}
+        // A `DROP` names a table, an index, a view or a trigger, and a
+        // `RENAME` names two tables; neither holds an expression.
+        Definition::Drop(_) | Definition::Rename(_) => {}
     }
 }
 

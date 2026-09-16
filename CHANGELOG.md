@@ -37,6 +37,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `ALTER TABLE ... RENAME TO` in `db-sqlite`. Every statement of the
+  schema that names the table is written again under the new name: the
+  table's own, an index over it, a trigger on it, and a view that reads
+  it, along with the index SQLite made for a key of the table and the
+  row of `sqlite_sequence` that counts that key up. Where a statement
+  names the table is marked from the tree the parser built, so a column,
+  a string and a `WITH` term that read like the table are left alone.
+  D-237 records it.
+
 - The JSON functions in `db-sqlite`: the twenty-six scalar names from
   `json` to `jsonb_array_insert`, the four aggregates, and the operators
   `->` and `->>`. A document is held in the binary form `src/json.c`

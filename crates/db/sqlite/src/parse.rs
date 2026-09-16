@@ -926,7 +926,7 @@ impl<'a> Parser<'a> {
             return Ok(Definition::Drop(self.drop_statement()?));
         }
         if self.eat_keyword(Keyword::Alter) {
-            return Ok(Definition::AddColumn(self.alter_table()?));
+            return self.alter_table();
         }
         self.expect_keyword(Keyword::Create, Expected::Create)?;
         let temporary = self.at_temporary();
@@ -1011,14 +1011,23 @@ impl<'a> Parser<'a> {
     /// the last byte of its last token. `sqlite3AlterFinishAddColumn`
     /// takes the trailing semicolon and the space before it off there,
     /// which a span that ends on a token never holds.
-    fn alter_table(&mut self) -> Result<crate::ast::AddColumn, Error> {
+    fn alter_table(&mut self) -> Result<Definition, Error> {
         self.expect_keyword(Keyword::Table, Expected::Table)?;
         let (schema, table) = self.qualified_name()?;
+        if self.eat_keyword(Keyword::Rename) {
+            self.expect_keyword(Keyword::To, Expected::To)?;
+            let name = self.name()?;
+            return Ok(Definition::Rename(crate::ast::RenameTable {
+                schema,
+                table,
+                name,
+            }));
+        }
         self.expect_keyword(Keyword::Add, Expected::Add)?;
         self.eat_keyword(Keyword::Column);
         let start = self.peek().map_or(self.end, |token| token.start);
         let column = self.column_def()?;
-        Ok(crate::ast::AddColumn {
+        Ok(Definition::AddColumn(crate::ast::AddColumn {
             schema,
             table,
             written: Span {
@@ -1026,7 +1035,7 @@ impl<'a> Parser<'a> {
                 len: self.end.saturating_sub(start),
             },
             column,
-        })
+        }))
     }
 
     /// What follows `CREATE VIEW`: the name, the names it answers its
