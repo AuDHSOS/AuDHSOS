@@ -7735,6 +7735,25 @@ fn a_promise_settles_through_the_job_queue_of_both_backends() -> Result<(), Erro
 }
 
 #[test]
+fn a_lexical_declaration_of_a_realm_script_names_its_function() -> Result<(), Error> {
+    // 14.3.1.2 step 4: an anonymous function takes the name the declaration
+    // binds it to, and 16.1.7 puts that binding on the Global Environment
+    // Record rather than in a register.
+    for backend in [Backend::Engine, Backend::Stack] {
+        let mut host = SilentHost;
+        let mut realm = Realm::with_backend(Limits::default(), &mut host, backend)?;
+        realm.evaluate("let a = function(){}, b = () => {}, c = class {};")?;
+        realm.evaluate("const d = function(){}; let named = function q(){};")?;
+        realm.evaluate("var v = function(){};")?;
+        assert_eq!(
+            realm.evaluate("[a.name,b.name,c.name,d.name,named.name,v.name].join('|')")?,
+            Value::string("a|b|c|d|q|v")
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn the_symbol_keyed_methods_of_22_2_6_answer_what_the_string_methods_do() -> Result<(), Error> {
     for source in [
         // 22.2.6.8 answers the Array of 22.2.7.2 for a pattern without `g`.

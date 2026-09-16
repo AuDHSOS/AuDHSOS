@@ -1629,7 +1629,10 @@ impl RegisterLowerer {
             return Some(());
         };
         let value_type = if let Some(initializer) = initializer {
-            self.lower(initializer)?
+            // 14.3.1.2 step 4: an anonymous function takes the name the
+            // declaration binds it to, with 8.5.2.
+            let units: Vec<u16> = name.encode_utf16().collect();
+            self.lower_named(initializer, &units)?
         } else {
             self.code.emit(Instruction::LdaUndefined);
             RegisterType::Undefined
