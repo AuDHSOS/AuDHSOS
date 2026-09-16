@@ -5039,7 +5039,23 @@ impl RegisterVM {
             } else {
                 walk.length
             };
-            let created = realm.array(heap, wanted)?;
+            // 23.1.3.21 and 23.1.3.8 make their answer with 23.1.3.4;
+            // 23.1.2.1 makes an ordinary Array of the Realm.
+            let created = if walk.intrinsic == Intrinsic::ArrayFrom {
+                realm.array(heap, wanted)?
+            } else {
+                let object = walk
+                    .target
+                    .as_object()
+                    .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+                match Self::array_species_create(object, wanted, heap, realm) {
+                    Ok(created) => created,
+                    Err(refused) => {
+                        heap.exit_scope();
+                        return Err(refused);
+                    }
+                }
+            };
             walk.output = Value::from_object(created);
             Self::write_iteration(state, &walk, heap)?;
         }
@@ -5776,9 +5792,12 @@ impl RegisterVM {
                         .clamp(0, length.saturating_sub(start))
                 };
                 let inserted = i64::from(call.arg_count.saturating_sub(2));
-                let result = realm.array(
-                    heap,
+                // 23.1.3.31 step 8 makes the answer with 23.1.3.4.
+                let result = Self::array_species_create(
+                    object,
                     u32::try_from(removed).map_err(|_| VMError::PropertyLimit)?,
+                    heap,
+                    realm,
                 )?;
                 let mut target = 0u32;
                 for index in Self::scan_range(start, start.saturating_add(removed)) {
@@ -5858,7 +5877,8 @@ impl RegisterVM {
                         None => values.push(Some(item)),
                     }
                 }
-                Self::array_from_holes(values, heap, realm)
+                // 23.1.3.1 step 2 makes the answer with 23.1.3.4.
+                Self::array_species_of_holes(object, values, heap, realm)
             }
             // 23.1.3.14: every index of an Array element becomes an index of
             // the answer, as deep as the depth allows.
@@ -5869,7 +5889,8 @@ impl RegisterVM {
                     integer_argument(self.call_argument(&call, 0)?, heap, realm)?
                 };
                 let values = self.flatten(object, length, depth, heap, realm)?;
-                Self::array_from_holes(values, heap, realm)
+                // 23.1.3.14 step 4 makes the answer with 23.1.3.4.
+                Self::array_species_of_holes(object, values, heap, realm)
             }
             // 23.1.3.35: a copy with one range replaced, which reads every
             // index it passes and so answers no hole.
@@ -6191,6 +6212,99 @@ impl RegisterVM {
         Ok(())
     }
 
+    /// The Array 23.1.3.4 makes for this receiver, holding these values.
+    fn array_species_of_holes(
+        original: ObjectRef,
+        values: Vec<Option<Value>>,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let count = u32::try_from(values.len()).map_err(|_| VMError::PropertyLimit)?;
+        let array = Self::array_species_create(original, count, heap, realm)?;
+        for (index, value) in values.into_iter().enumerate() {
+            let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+            if let Some(value) = value {
+                heap.set_array_element(array, index, value)?;
+            }
+        }
+        Ok(Value::from_object(array))
+    }
+
+    /// `ArraySpeciesCreate` of 23.1.3.4.
+    ///
+    /// The Realm has one `%Array%`, so step 3 never sets `C` aside; a
+    /// `constructor` or an `@@species` of the Script decides the answer and
+    /// needs a frame, which the clause names rather than making an Array of
+    /// its own.
+    fn array_species_create(
+        original: ObjectRef,
+        length: u32,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<ObjectRef, VMError> {
+        // Step 1: only an Array asks its constructor at all.
+        if !Self::is_array(Value::from_object(original), heap) {
+            return Ok(realm.array(heap, length)?);
+        }
+        let key = PropertyKey::String(heap.strings.intern("constructor")?);
+        let found = heap.lookup_named(original, key)?;
+        let constructor = match found {
+            None => VALUE_UNDEFINED,
+            Some(property) if property.flags.is_accessor => {
+                return Err(VMError::Unsupported("a constructor that is an accessor"));
+            }
+            Some(property) => property.value,
+        };
+        if constructor.is_undefined() {
+            return Ok(realm.array(heap, length)?);
+        }
+        // Step 4 asks an Object for its `@@species`; anything else reaches
+        // step 6 as a value that is no constructor.
+        let Some(object) = constructor.as_object() else {
+            return Err(type_error(
+                heap,
+                realm,
+                "the constructor is not a constructor",
+            ));
+        };
+        let species = heap.lookup_named(object, super::realm::WellKnownSymbol::Species.key())?;
+        let species = match species {
+            None => VALUE_UNDEFINED,
+            Some(property) if property.flags.is_accessor => {
+                let (get, _) = Self::accessor_parts(property.value, heap)?;
+                let native = get
+                    .as_object()
+                    .and_then(|get| heap.get_object(get))
+                    .and_then(|get| match get.kind {
+                        ObjectKind::NativeFunction { id, .. } => Intrinsic::from_id(id),
+                        _ => None,
+                    });
+                if native != Some(Intrinsic::SpeciesGetter) {
+                    return Err(VMError::Unsupported("an @@species of the Script"));
+                }
+                // 23.1.2.5 answers the constructor it was read off.
+                constructor
+            }
+            Some(property) => property.value,
+        };
+        if species.is_undefined() || species.is_null() {
+            return Ok(realm.array(heap, length)?);
+        }
+        if !Self::constructs(species, heap) {
+            return Err(type_error(heap, realm, "the species is not a constructor"));
+        }
+        // Step 7 constructs it, which for `%Array%` is the Array 23.1.1.1
+        // makes and for anything else a frame of the Script.
+        if species.as_object()
+            == realm
+                .intrinsic(heap, Intrinsic::ArrayConstructor)?
+                .as_object()
+        {
+            return Ok(realm.array(heap, length)?);
+        }
+        Err(VMError::Unsupported("a species constructor of the Script"))
+    }
+
     /// An Array of the Realm holding these values, where a `None` stays the
     /// hole 10.4.2 lets an Array have.
     fn array_from_holes(
@@ -6399,9 +6513,8 @@ impl RegisterVM {
                 }
                 Ok(call.receiver)
             }
-            // 23.1.3.28: the elements of a range, in a new Array. 10.4.2.3
-            // answers ArrayCreate here, because %Array.prototype% carries no
-            // "constructor" in this Realm and the species is undefined.
+            // 23.1.3.28: the elements of a range, in the Array 23.1.3.4
+            // makes.
             Intrinsic::ArrayPrototypeSlice => {
                 let start =
                     absolute_index(integer_argument(search, heap, realm)?, length).clamp(0, length);
@@ -6412,9 +6525,11 @@ impl RegisterVM {
                     absolute_index(integer_argument(last, heap, realm)?, length).clamp(0, length)
                 };
                 let count = end.saturating_sub(start).max(0);
-                let result = realm.array(
-                    heap,
+                let result = Self::array_species_create(
+                    object,
                     u32::try_from(count).map_err(|_| VMError::PropertyLimit)?,
+                    heap,
+                    realm,
                 )?;
                 let mut target = 0u32;
                 for index in Self::scan_range(start, end) {

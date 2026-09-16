@@ -6978,3 +6978,40 @@ fn array_of_and_array_from_build_an_array_of_what_they_were_given() -> Result<()
     }
     Ok(())
 }
+
+/// 23.1.3.4 asks the `constructor` of an Array and its `@@species` before it
+/// makes the answer of 23.1.3.21, 23.1.3.8, 23.1.3.28, 23.1.3.31, 23.1.3.1 and
+/// 23.1.3.14.
+#[test]
+fn a_copying_clause_of_23_1_3_makes_its_answer_with_array_species_create() -> Result<(), Error> {
+    for source in [
+        "''+[1,2].map(function(x){return x*2})",
+        "''+[1,2,3].filter(function(x){return x>1})",
+        "''+[1,2,3].slice(1)",
+        "var a=[1,2,3];''+a.splice(1,1)+a",
+        "''+[1].concat([2])",
+        "''+[1,[2]].flat()",
+        "var a=[1];Object.defineProperty(a,'constructor',{value:Array});''+a.slice(0)",
+        "var a=[1];Object.defineProperty(a,'constructor',{value:{}});''+a.slice(0)",
+        "var a=[1];Object.defineProperty(a,'constructor',{value:undefined});''+a.slice(0)",
+        "var a=[1];Object.defineProperty(a,'constructor',{value:null});var t=false;\
+         try{a.slice(0)}catch(e){t=e instanceof TypeError}''+t",
+        "var a=[1];Object.defineProperty(a,'constructor',{value:null});var t=false;\
+         try{a.concat()}catch(e){t=e instanceof TypeError}''+t",
+        "var a=[1];Object.defineProperty(a,'constructor',{value:null});var t=false;\
+         try{a.map(function(x){return x})}catch(e){t=e instanceof TypeError}''+t",
+        "var o={0:1,length:1};''+Array.prototype.slice.call(o,0)",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // A species that is a constructor of the Script is a frame this clause
+    // has none of.
+    let source = "var a=[1];Object.defineProperty(a,'constructor',{value:function(){}});a.slice(0)";
+    let program = compile(source, Limits::default())?;
+    assert!(program.uses_register_backend(), "{source}");
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
+    Ok(())
+}
