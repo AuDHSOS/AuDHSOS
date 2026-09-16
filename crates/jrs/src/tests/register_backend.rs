@@ -856,6 +856,56 @@ fn the_string_constructor_carries_the_three_functions_of_22_1_2() -> Result<(), 
     Ok(())
 }
 
+#[test]
+fn the_string_methods_22_1_3_and_annex_b_add() -> Result<(), Error> {
+    // 22.1.3.9 and 22.1.3.29 are the two the stack backend built.
+    for source in [
+        "'abc'.isWellFormed()",
+        "String.fromCharCode(0xD800).isWellFormed()",
+        "'ab\u{1F600}'.isWellFormed()",
+        "String.fromCharCode(0xD800,97).toWellFormed().charCodeAt(0)+''",
+    ] {
+        differential(source)?;
+    }
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    for (source, expected) in [
+        // B.2.2.1 takes a length and not an end, and counts a negative start
+        // from the end of the text.
+        ("'abcdef'.substr(1,3)", "bcd"),
+        ("'abcdef'.substr(-2)", "ef"),
+        ("'abcdef'.substr(2)", "cdef"),
+        ("'abcdef'.substr(0,-1)", ""),
+        ("'abcdef'.substr(-99,2)", "ab"),
+        ("'abcdef'.substr(99)", ""),
+        // 17 gives each the length its clause names.
+        (
+            "'abc'.substr.length+':'+'abc'.isWellFormed.length+':'+'a'.localeCompare.length",
+            "2:0:1",
+        ),
+    ] {
+        assert_eq!(
+            realm.evaluate(source)?,
+            Value::String(
+                expected
+                    .encode_utf16()
+                    .collect::<alloc::vec::Vec<u16>>()
+                    .into()
+            ),
+            "{source}"
+        );
+    }
+    // 22.1.3.12 orders by the code units.
+    for (source, expected) in [
+        ("'a'.localeCompare('b')", -1.0),
+        ("'b'.localeCompare('a')", 1.0),
+        ("'a'.localeCompare('a')", 0.0),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::Number(expected), "{source}");
+    }
+    Ok(())
+}
+
 fn differential_scripts(scripts: &[&str]) -> Result<(), Error> {
     let outcome = |backend| -> Result<Result<Value, Error>, Error> {
         let mut host = SilentHost;

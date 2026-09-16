@@ -8063,6 +8063,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ArrayPrototypeSome
         | crate::engine::realm::Intrinsic::BooleanPrototypeValueOf
         | crate::engine::realm::Intrinsic::RegExpPrototypeTest
+        // 22.1.3.9 answers whether the text has a lone surrogate.
+        | crate::engine::realm::Intrinsic::StringPrototypeIsWellFormed
         | crate::engine::realm::Intrinsic::ArrayIsArray => RegisterType::Boolean,
         // 22.1.1.1 answers a String whichever argument it took; `new` answers
         // no value at all, because the exotic object it would make is a gap.
@@ -8079,6 +8081,9 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::BooleanPrototypeToString
         | crate::engine::realm::Intrinsic::RegExpPrototypeToString
         | crate::engine::realm::Intrinsic::JsonStringify
+        // 22.1.3.29 and B.2.2.1 answer a String of the text.
+        | crate::engine::realm::Intrinsic::StringPrototypeToWellFormed
+        | crate::engine::realm::Intrinsic::StringPrototypeSubstr
         | crate::engine::realm::Intrinsic::StringPrototypeToString
         | crate::engine::realm::Intrinsic::StringPrototypeValueOf
         | crate::engine::realm::Intrinsic::StringPrototypeCharAt
@@ -8207,6 +8212,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ArrayPrototypeLastIndexOf
         | crate::engine::realm::Intrinsic::ArrayPrototypePush
         | crate::engine::realm::Intrinsic::ArrayPrototypeUnshift
+        // 22.1.3.12 answers the order of the two texts.
+        | crate::engine::realm::Intrinsic::StringPrototypeLocaleCompare
         | crate::engine::realm::Intrinsic::ArrayPrototypeFindIndex
         // 21.3.2 answers a Number for every one of these.
         | crate::engine::realm::Intrinsic::MathAbs

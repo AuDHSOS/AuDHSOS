@@ -404,6 +404,14 @@ pub enum Intrinsic {
     StringFromCodePoint,
     /// `String.raw` (22.1.2.4).
     StringRaw,
+    /// `String.prototype.isWellFormed` (22.1.3.9).
+    StringPrototypeIsWellFormed,
+    /// `String.prototype.toWellFormed` (22.1.3.29).
+    StringPrototypeToWellFormed,
+    /// `String.prototype.substr` (B.2.2.1).
+    StringPrototypeSubstr,
+    /// `String.prototype.localeCompare` (22.1.3.12).
+    StringPrototypeLocaleCompare,
     /// `get flags` of 22.2.6.4.
     RegExpPrototypeFlags,
     /// `get source` of 22.2.6.13.
@@ -680,7 +688,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 172] = [
+    pub const ALL: [Self; 176] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -843,6 +851,10 @@ impl Intrinsic {
         Self::StringFromCharCode,
         Self::StringFromCodePoint,
         Self::StringRaw,
+        Self::StringPrototypeIsWellFormed,
+        Self::StringPrototypeToWellFormed,
+        Self::StringPrototypeSubstr,
+        Self::StringPrototypeLocaleCompare,
         Self::RegExpPrototypeFlags,
         Self::RegExpPrototypeSource,
         Self::RegExpPrototypeHasIndices,
@@ -868,7 +880,11 @@ impl Intrinsic {
             | Self::ObjectPrototypePropertyIsEnumerable
             | Self::ObjectPrototypeToString
             | Self::ObjectPrototypeValueOf => IntrinsicHolder::ObjectPrototype,
-            Self::StringPrototypeCharAt
+            Self::StringPrototypeIsWellFormed
+            | Self::StringPrototypeToWellFormed
+            | Self::StringPrototypeSubstr
+            | Self::StringPrototypeLocaleCompare
+            | Self::StringPrototypeCharAt
             | Self::StringPrototypeCharCodeAt
             | Self::StringPrototypeIndexOf
             | Self::StringPrototypeAt
@@ -1214,6 +1230,10 @@ impl Intrinsic {
             Self::StringFromCharCode => 169,
             Self::StringFromCodePoint => 170,
             Self::StringRaw => 171,
+            Self::StringPrototypeIsWellFormed => 172,
+            Self::StringPrototypeToWellFormed => 173,
+            Self::StringPrototypeSubstr => 174,
+            Self::StringPrototypeLocaleCompare => 175,
             Self::RegExpPrototypeFlags => 159,
             Self::RegExpPrototypeSource => 160,
             Self::RegExpPrototypeHasIndices => 161,
@@ -1396,6 +1416,10 @@ impl Intrinsic {
             Self::StringFromCharCode => 169,
             Self::StringFromCodePoint => 170,
             Self::StringRaw => 171,
+            Self::StringPrototypeIsWellFormed => 172,
+            Self::StringPrototypeToWellFormed => 173,
+            Self::StringPrototypeSubstr => 174,
+            Self::StringPrototypeLocaleCompare => 175,
             Self::RegExpPrototypeFlags => 159,
             Self::RegExpPrototypeSource => 160,
             Self::RegExpPrototypeHasIndices => 161,
@@ -1579,6 +1603,10 @@ impl Intrinsic {
             169 => Some(Self::StringFromCharCode),
             170 => Some(Self::StringFromCodePoint),
             171 => Some(Self::StringRaw),
+            172 => Some(Self::StringPrototypeIsWellFormed),
+            173 => Some(Self::StringPrototypeToWellFormed),
+            174 => Some(Self::StringPrototypeSubstr),
+            175 => Some(Self::StringPrototypeLocaleCompare),
             159 => Some(Self::RegExpPrototypeFlags),
             160 => Some(Self::RegExpPrototypeSource),
             161 => Some(Self::RegExpPrototypeHasIndices),
@@ -1634,6 +1662,10 @@ impl Intrinsic {
             Self::StringFromCharCode => "fromCharCode",
             Self::StringFromCodePoint => "fromCodePoint",
             Self::StringRaw => "raw",
+            Self::StringPrototypeIsWellFormed => "isWellFormed",
+            Self::StringPrototypeToWellFormed => "toWellFormed",
+            Self::StringPrototypeSubstr => "substr",
+            Self::StringPrototypeLocaleCompare => "localeCompare",
 
             Self::RegExpConstructor => "RegExp",
             Self::RegExpPrototypeExec => "exec",
@@ -2147,6 +2179,8 @@ impl Intrinsic {
             | Self::IteratorPrototypeIterator
             | Self::ArrayPrototypeFlat
             | Self::ArrayOf
+            | Self::StringPrototypeIsWellFormed
+            | Self::StringPrototypeToWellFormed
             | Self::ArrayPrototypeToReversed => 0,
             Self::StringFromCharCode
             | Self::StringFromCodePoint
@@ -2161,6 +2195,7 @@ impl Intrinsic {
             | Self::ParseFloat
             | Self::SymbolFor
             | Self::SymbolKeyFor
+            | Self::StringPrototypeLocaleCompare
             | Self::StringPrototypeCharAt
             | Self::StringPrototypeCharCodeAt
             | Self::StringPrototypeIndexOf
@@ -2259,6 +2294,7 @@ impl Intrinsic {
             | Self::ReflectGetOwnPropertyDescriptor
             | Self::ReflectHas
             | Self::StringPrototypeSlice
+            | Self::StringPrototypeSubstr
             | Self::StringPrototypeSubstring
             | Self::ArrayPrototypeSlice
             | Self::ArrayPrototypeSplice

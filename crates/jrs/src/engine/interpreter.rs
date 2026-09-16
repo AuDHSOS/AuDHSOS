@@ -1727,7 +1727,11 @@ impl RegisterVM {
             | Intrinsic::StringPrototypePadStart
             | Intrinsic::StringPrototypeTrim
             | Intrinsic::StringPrototypeTrimEnd
-            | Intrinsic::StringPrototypeTrimStart => {
+            | Intrinsic::StringPrototypeTrimStart
+            | Intrinsic::StringPrototypeIsWellFormed
+            | Intrinsic::StringPrototypeToWellFormed
+            | Intrinsic::StringPrototypeSubstr
+            | Intrinsic::StringPrototypeLocaleCompare => {
                 self.call_string_intrinsic(intrinsic, call, units, heap, realm)
             }
             Intrinsic::StringPrototypeSplit => self.call_split_intrinsic(&call, units, heap, realm),
@@ -9106,6 +9110,61 @@ impl RegisterVM {
                     result.extend_from_slice(&pad);
                 }
                 self.allocate_string(heap, &result)
+            }
+            // 22.1.3.9 answers whether the text has a lone surrogate, and
+            // 22.1.3.29 replaces each of them with U+FFFD.
+            Intrinsic::StringPrototypeIsWellFormed | Intrinsic::StringPrototypeToWellFormed => {
+                let tests = intrinsic == Intrinsic::StringPrototypeIsWellFormed;
+                let mut out: Option<Vec<u16>> = None;
+                let mut index = 0usize;
+                while let Some((_, width, lone)) = audhsos_utf16::code_point_at(&units, index) {
+                    if lone {
+                        if tests {
+                            return Ok(VALUE_FALSE);
+                        }
+                        let buffer = out.get_or_insert_with(|| units.clone());
+                        *buffer.get_mut(index).ok_or(VMError::TypeError)? = 0xFFFD;
+                    }
+                    index = index.saturating_add(width);
+                }
+                if tests {
+                    return Ok(VALUE_TRUE);
+                }
+                self.allocate_string(heap, &out.unwrap_or(units))
+            }
+            // B.2.2.1: the second argument is a length and not an end, and a
+            // negative start counts from the end of the text.
+            Intrinsic::StringPrototypeSubstr => {
+                let size = i64::try_from(units.len()).map_err(|_| VMError::PropertyLimit)?;
+                let start = integer_argument(self.call_argument(&call, 0, heap)?, heap, realm)?;
+                let start = if start < 0 {
+                    size.saturating_add(start).max(0)
+                } else {
+                    start.min(size)
+                };
+                let length = self.call_argument(&call, 1, heap)?;
+                let length = if length.is_undefined() {
+                    size.saturating_sub(start)
+                } else {
+                    integer_argument(length, heap, realm)?.clamp(0, size.saturating_sub(start))
+                };
+                let end = start.saturating_add(length);
+                let (Ok(start), Ok(end)) = (usize::try_from(start), usize::try_from(end)) else {
+                    return Err(VMError::PropertyLimit);
+                };
+                let part = units.get(start..end).unwrap_or_default().to_vec();
+                self.allocate_string(heap, &part)
+            }
+            // 22.1.3.12 orders by the code units, which is the order this
+            // Realm has no locale data to refine.
+            Intrinsic::StringPrototypeLocaleCompare => {
+                let other = property_name_units(self.call_argument(&call, 0, heap)?, heap)?;
+                let order = match units.cmp(&other) {
+                    core::cmp::Ordering::Less => -1,
+                    core::cmp::Ordering::Equal => 0,
+                    core::cmp::Ordering::Greater => 1,
+                };
+                Ok(Value::from_smi(order))
             }
             // 22.1.3.32 to 22.1.3.34: TrimString removes the white space and
             // line terminators of 11.2 and 11.3 from the named ends.
