@@ -368,6 +368,8 @@ pub enum Intrinsic {
     ReflectSetPrototypeOf,
     /// `Function.prototype.toString` (20.2.3.5).
     FunctionPrototypeToString,
+    /// `Object.prototype.valueOf` (20.1.3.7).
+    ObjectPrototypeValueOf,
     /// `Array.prototype.values`, which is also `%Array.prototype%[@@iterator]`
     /// (23.1.3.38 and 23.1.3.40).
     ArrayPrototypeValues,
@@ -620,7 +622,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 145] = [
+    pub const ALL: [Self; 146] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -766,6 +768,7 @@ impl Intrinsic {
         Self::ObjectSetPrototypeOf,
         Self::ReflectSetPrototypeOf,
         Self::FunctionPrototypeToString,
+        Self::ObjectPrototypeValueOf,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -779,7 +782,8 @@ impl Intrinsic {
             Self::ObjectPrototypeHasOwnProperty
             | Self::ObjectPrototypeIsPrototypeOf
             | Self::ObjectPrototypePropertyIsEnumerable
-            | Self::ObjectPrototypeToString => IntrinsicHolder::ObjectPrototype,
+            | Self::ObjectPrototypeToString
+            | Self::ObjectPrototypeValueOf => IntrinsicHolder::ObjectPrototype,
             Self::StringPrototypeCharAt
             | Self::StringPrototypeCharCodeAt
             | Self::StringPrototypeIndexOf
@@ -1083,6 +1087,7 @@ impl Intrinsic {
             Self::ObjectSetPrototypeOf => 142,
             Self::ReflectSetPrototypeOf => 143,
             Self::FunctionPrototypeToString => 144,
+            Self::ObjectPrototypeValueOf => 145,
         }
     }
 
@@ -1238,6 +1243,7 @@ impl Intrinsic {
             Self::ObjectSetPrototypeOf => 142,
             Self::ReflectSetPrototypeOf => 143,
             Self::FunctionPrototypeToString => 144,
+            Self::ObjectPrototypeValueOf => 145,
         }
     }
 
@@ -1394,6 +1400,7 @@ impl Intrinsic {
             142 => Some(Self::ObjectSetPrototypeOf),
             143 => Some(Self::ReflectSetPrototypeOf),
             144 => Some(Self::FunctionPrototypeToString),
+            145 => Some(Self::ObjectPrototypeValueOf),
             _ => None,
         }
     }
@@ -1420,7 +1427,8 @@ impl Intrinsic {
             Self::NumberPrototypeValueOf
             | Self::BooleanPrototypeValueOf
             | Self::SymbolPrototypeValueOf
-            | Self::StringPrototypeValueOf => "valueOf",
+            | Self::StringPrototypeValueOf
+            | Self::ObjectPrototypeValueOf => "valueOf",
             Self::ThrowTypeError => "",
             Self::SymbolConstructor => "Symbol",
             Self::RegExpConstructor => "RegExp",
@@ -1656,6 +1664,7 @@ impl Intrinsic {
             // 23.1.5.2.1 takes none.
             Self::ObjectPrototypeIsPrototypeOf
             | Self::ObjectPrototypeToString
+            | Self::ObjectPrototypeValueOf
             | Self::ArrayPrototypeValues
             | Self::ArrayPrototypeKeys
             | Self::ArrayPrototypeEntries
@@ -1794,6 +1803,7 @@ impl Intrinsic {
             | Self::SymbolConstructor
             | Self::RegExpPrototypeToString
             | Self::ObjectPrototypeToString
+            | Self::ObjectPrototypeValueOf
             | Self::NumberPrototypeValueOf
             | Self::BooleanPrototypeValueOf
             | Self::BooleanPrototypeToString

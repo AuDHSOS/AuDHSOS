@@ -1140,7 +1140,7 @@ fn a_read_that_reaches_an_unbuilt_prototype_is_a_gap() -> Result<(), Error> {
     // so the miss is a gap. A static read is refused by the lowering; a
     // computed one reaches the engine and used to answer undefined.
     for source in [
-        "let o={a:1};let k='valueOf';typeof o[k]",
+        "let o={a:1};let k='toLocaleString';typeof o[k]",
         "let a=[1];let k='flat';typeof a[k]",
     ] {
         let program = compile(source, Limits::default())?;
@@ -6449,5 +6449,25 @@ fn a_break_out_of_a_for_of_closes_its_iterator() -> Result<(), Error> {
         Some("a return out of a for-of, which 7.4.9 closes"),
         "{source}"
     );
+    Ok(())
+}
+
+/// 20.1.3.7 answers the object `ToObject` made of the `this` value, which is
+/// what 7.1.1 reaches for an object that carries no `valueOf` of its own.
+#[test]
+fn object_prototype_value_of_answers_the_object() -> Result<(), Error> {
+    for source in [
+        "var o={};o.valueOf()===o",
+        "var o={};''+o",
+        "var o={};''+(o*1)",
+        "var o={valueOf:function(){return 7}};''+(o*2)",
+        "var o={toString:function(){return 'x'}};''+o",
+        "''+Object.prototype.valueOf.length",
+        "var d=Object.getOwnPropertyDescriptor(Object.prototype,'valueOf');\
+         ''+d.writable+d.enumerable+d.configurable",
+        "var o={};o.valueOf.call(1)*2===2",
+    ] {
+        differential_scripts(&[source])?;
+    }
     Ok(())
 }

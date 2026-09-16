@@ -1536,6 +1536,10 @@ impl RegisterVM {
                 Self::own_property_test(intrinsic, self.call_argument(&call, 0)?, call, heap, realm)
             }
             Intrinsic::ObjectPrototypeToString => self.object_to_string(call.receiver, heap, realm),
+            // 20.1.3.7 is `ToObject(this value)` and nothing else.
+            Intrinsic::ObjectPrototypeValueOf => {
+                Self::coerce_object(call.receiver, heap, realm).map(Value::from_object)
+            }
             Intrinsic::StringPrototypeCharAt
             | Intrinsic::StringPrototypeCharCodeAt
             | Intrinsic::StringPrototypeIndexOf
