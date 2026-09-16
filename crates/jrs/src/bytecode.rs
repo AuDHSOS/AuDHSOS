@@ -8580,7 +8580,12 @@ fn infer_register_var_types(
                 };
                 let observed = register_expression_type(initializer, bindings)
                     .unwrap_or(RegisterType::Unknown);
-                let binding = bindings.get_mut(name)?;
+                // 16.1.7 puts a `var` of a Realm Script on the Global
+                // Environment Record, where it carries no tracked type and
+                // this pass has nothing to widen.
+                let Some(binding) = bindings.get_mut(name) else {
+                    continue;
+                };
                 binding.value_type =
                     merge_optional_register_types(binding.value_type, Some(observed));
             }

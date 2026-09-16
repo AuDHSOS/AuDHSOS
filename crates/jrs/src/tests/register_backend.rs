@@ -7694,6 +7694,28 @@ fn a_promise_settles_through_the_job_queue_of_both_backends() -> Result<(), Erro
 }
 
 #[test]
+fn a_loop_of_a_realm_script_takes_a_var_of_its_body() -> Result<(), Error> {
+    // 16.1.7 puts a `var` of a Realm Script on the Global Environment Record.
+    // The pass that widens the type of every name a loop body writes looked
+    // each one up among the register bindings, so a loop whose body declared
+    // one with an initializer was refused.
+    for backend in [Backend::Engine, Backend::Stack] {
+        let mut host = SilentHost;
+        let mut realm = Realm::with_backend(Limits::default(), &mut host, backend)?;
+        realm.evaluate("for (var i = 0; i < 2; i++) { var a = i; }")?;
+        realm.evaluate("while (false) { var b = 1; }")?;
+        realm.evaluate("for (var k in {x:1}) { var c = k; }")?;
+        realm.evaluate("for (var v of [3]) { var d = v; }")?;
+        realm.evaluate("do { var e = 5; } while (false);")?;
+        assert_eq!(
+            realm.evaluate("[a,b,c,d,e].join('|')")?,
+            Value::string("1||x|3|5")
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn a_computed_key_of_the_script_is_converted_where_it_is_read() -> Result<(), Error> {
     for source in [
         // 7.1.19 step 2 sends an Object key through 7.1.1 with the hint
