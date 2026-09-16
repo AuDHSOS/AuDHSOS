@@ -1618,7 +1618,12 @@ runs beside 13.3.7 were measured at tree
 that step gained 40 variants and lost none. The `new.target` runs and both full
 runs beside 9.4.3 were measured at tree
 `eae44881c9c0a5f0ac537f0ccd1b94244064dcc2`, which is the tree of `9e0a0fb`;
-that step gained 20 variants and lost none.
+that step gained 20 variants and lost none. A lowering that never ended was
+fixed in `88c10fa` after it: a function that captures itself was followed again
+on every pass of the escape walk, so `compile` never returned and no limit of
+the embedding could stop it. That step moved no variant of the suite, which has
+no variant of the shape, and the engine output of `88c10fa` is byte-identical
+to that of `9e0a0fb`.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
