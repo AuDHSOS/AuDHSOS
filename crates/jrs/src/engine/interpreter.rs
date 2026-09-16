@@ -391,6 +391,10 @@ pub enum Resume {
         step: PrimitiveStep,
         /// The hint 7.1.1 was given, which decides the order of the methods.
         hint: PrimitiveHint,
+        /// Root holding the value the instruction still has to write, where
+        /// the conversion is of the key of a write: the accumulator holds it
+        /// and the frame this opens would take that place.
+        held: Option<Root>,
     },
     /// A native operation asked the Script for a primitive argument.
     ///
@@ -544,6 +548,7 @@ impl Resume {
                 register,
                 step,
                 hint,
+                ..
             }
             | Self::Coercion {
                 register,
@@ -558,10 +563,16 @@ impl Resume {
     /// The same conversion, waiting for the next method of 7.1.1.
     const fn with_step(self, next: PrimitiveStep) -> Self {
         match self {
-            Self::Primitive { register, hint, .. } => Self::Primitive {
+            Self::Primitive {
+                register,
+                hint,
+                held,
+                ..
+            } => Self::Primitive {
                 register,
                 step: next,
                 hint,
+                held,
             },
             Self::Coercion {
                 intrinsic,
@@ -8115,6 +8126,15 @@ impl RegisterVM {
             } else {
                 self.write_reg(register, value)?;
             }
+            // 13.15.2 has the value in the accumulator, which the frame of
+            // the conversion took; the root it travelled in gives it back.
+            if let Resume::Primitive {
+                held: Some(root), ..
+            } = resume
+            {
+                self.acc = heap.root_value(root).unwrap_or(VALUE_UNDEFINED);
+                heap.exit_scope();
+            }
             return self.finish_coerced(
                 resume,
                 call.return_pc,
@@ -10282,20 +10302,72 @@ impl RegisterVM {
         Ok(VALUE_UNDEFINED)
     }
 
-    /// The value a register holds as a property key, with an Object sent
-    /// through 7.1.1 the way 7.1.19 step 2 asks.
-    fn text_key(
+    /// 7.1.19 of the key of a computed property access.
+    ///
+    /// An Object key reaches 7.1.1 with the hint `string`, which runs a method
+    /// of the Script: the primitive comes back into the register and the
+    /// instruction runs again. `held` is the value the instruction still has
+    /// to write, which the accumulator holds and the frame would take; it
+    /// travels in a root of a scope of its own.
+    ///
+    /// Answers whether the instruction has to run again.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a conversion runs where the instruction does, with what it has"
+    )]
+    fn convert_key(
         &mut self,
         key: Reg,
+        held: Option<Value>,
+        pc: &mut usize,
+        current_code_id: &mut Option<u32>,
         units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
         heap: &mut GenerationalHeap,
         realm: &Realm,
-    ) -> Result<Value, VMError> {
+    ) -> Result<bool, VMError> {
         let value = self.read_reg(key)?;
-        if value.is_object() {
-            return self.text_of(value, units, heap, realm);
+        let Some(object) = value.as_object() else {
+            return Ok(false);
+        };
+        let root = match held {
+            Some(held) => {
+                heap.enter_scope();
+                Some(heap.push_root(held)?)
+            }
+            None => None,
+        };
+        let call = Call {
+            receiver: Value::from_object(object),
+            func: key,
+            arg_start: key,
+            arg_count: 0,
+            slot: 0,
+            resume: Some(Resume::Primitive {
+                register: key,
+                step: PrimitiveStep::Exotic,
+                hint: PrimitiveHint::String,
+                held: root,
+            }),
+            return_pc: pc.saturating_sub(1),
+            caller_code_id: *current_code_id,
+            construct: None,
+        };
+        match self.convert_to_primitive(call, units, active_feedback, heap, realm)? {
+            Conversion::Done(value) => {
+                self.write_reg(key, value)?;
+                if let Some(root) = root {
+                    self.acc = heap.root_value(root).unwrap_or(VALUE_UNDEFINED);
+                    heap.exit_scope();
+                }
+                *pc = pc.saturating_sub(1);
+            }
+            Conversion::Suspended(code_id) => {
+                *current_code_id = Some(code_id);
+                *pc = 0;
+            }
         }
-        Ok(value)
+        Ok(true)
     }
 
     /// `ToString` of 7.1.17, where an Object goes through 7.1.1 with the hint
@@ -13064,6 +13136,7 @@ impl RegisterVM {
                                 register,
                                 step: PrimitiveStep::Exotic,
                                 hint: PrimitiveHint::Number,
+                                held: None,
                             }),
                             return_pc: pc.saturating_sub(1),
                             caller_code_id: current_code_id,
@@ -13109,6 +13182,7 @@ impl RegisterVM {
                                 register,
                                 step: PrimitiveStep::Exotic,
                                 hint: PrimitiveHint::String,
+                                held: None,
                             }),
                             return_pc: pc.saturating_sub(1),
                             caller_code_id: current_code_id,
@@ -13278,6 +13352,7 @@ impl RegisterVM {
                                 step: PrimitiveStep::Exotic,
                                 // 13.15.3 and 7.1.3 take no hint.
                                 hint: PrimitiveHint::Default,
+                                held: None,
                             }),
                             return_pc: pc.saturating_sub(1),
                             caller_code_id: current_code_id,
@@ -13769,7 +13844,19 @@ impl RegisterVM {
                     let code_units = units;
                     // 7.1.19 step 2 sends an Object key through 7.1.1 with the
                     // hint `string`, which runs before the base is read again.
-                    let key_val = self.text_key(key, code_units, heap, realm)?;
+                    if self.convert_key(
+                        key,
+                        None,
+                        &mut pc,
+                        &mut current_code_id,
+                        code_units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    )? {
+                        return Ok(None);
+                    }
+                    let key_val = self.read_reg(key)?;
                     let target = self.read_reg(obj)?;
                     if target.is_string() {
                         let name = property_key(key_val, heap)?;
@@ -13913,9 +14000,21 @@ impl RegisterVM {
                 } => {
                     let code_units = units;
                     // 7.1.19 step 2 sends an Object key through 7.1.1 with the
-                    // hint `string`, which runs before the base and the value
-                    // are read again.
-                    let key_val = self.text_key(key, code_units, heap, realm)?;
+                    // hint `string`. 6.2.5.5 reaches it after the value, which
+                    // waits in a root while the method runs.
+                    if self.convert_key(
+                        key,
+                        Some(self.acc),
+                        &mut pc,
+                        &mut current_code_id,
+                        code_units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    )? {
+                        return Ok(None);
+                    }
+                    let key_val = self.read_reg(key)?;
                     let target = self.read_reg(obj)?;
                     let Some(oref) = target.as_object() else {
                         return Err(property_store_error(target, heap, realm));
@@ -14144,8 +14243,24 @@ impl RegisterVM {
                     let target = self.read_reg(obj)?;
                     self.acc = delete_reference(target, name, index, strict, heap, realm)?;
                 }
-                Instruction::DeleteByValue { obj, key, strict } => {
-                    let key = self.text_key(key, units, heap, realm)?;
+                Instruction::DeleteByValue {
+                    obj,
+                    key: key_register,
+                    strict,
+                } => {
+                    if self.convert_key(
+                        key_register,
+                        None,
+                        &mut pc,
+                        &mut current_code_id,
+                        units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    )? {
+                        return Ok(None);
+                    }
+                    let key = self.read_reg(key_register)?;
                     let target = self.read_reg(obj)?;
                     let index = array_index(key, heap)?;
                     // 7.1.19 keeps a Symbol as the key it is.
@@ -14240,7 +14355,19 @@ impl RegisterVM {
                 Instruction::GetSuperByValue { base, key } => {
                     let code_units = units;
                     // 13.3.7.2 makes the key before the base is read again.
-                    let key_value = self.text_key(key, code_units, heap, realm)?;
+                    if self.convert_key(
+                        key,
+                        None,
+                        &mut pc,
+                        &mut current_code_id,
+                        code_units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    )? {
+                        return Ok(None);
+                    }
+                    let key_value = self.read_reg(key)?;
                     let name = property_key(key_value, heap)?;
                     if let Some(code_id) = self.read_super(
                         base,

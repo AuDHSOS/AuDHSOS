@@ -2011,15 +2011,9 @@ fn observable_object_binding_defaults_stay_on_legacy_backend() -> Result<(), Err
         assert!(!program.uses_register_backend(), "{source}");
         Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
     }
-    // 7.1.19 sends the key through 7.1.1, and a `toString` of the Script needs
-    // a frame the binding has none of.
-    let source = "let key={toString(){return 'x'}};let {[key]:x}={x:42};x";
-    let program = compile(source, Limits::default())?;
-    assert!(program.uses_register_backend(), "{source}");
-    assert!(matches!(
-        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
-        Err(Error::Unsupported { .. })
-    ));
+    // 7.1.19 sends the key through 7.1.1, and the binding opens a frame for a
+    // `toString` of the Script.
+    differential("let key={toString(){return 'x'}};let {[key]:x}={x:42};x")?;
     Ok(())
 }
 
@@ -2181,15 +2175,9 @@ fn observable_destructuring_assignments_stay_on_legacy_backend() -> Result<(), E
         let _ = Runtime::with_backend(Limits::default(), Backend::Engine)
             .run(&program, &mut SilentHost);
     }
-    // 7.1.19 sends the key through 7.1.1, and a `toString` of the Script needs
-    // a frame the access has none of.
-    let source = "let target={},key={toString(){return 'x'}};[target[key]]=[42];target.x";
-    let program = compile(source, Limits::default())?;
-    assert!(program.uses_register_backend(), "{source}");
-    assert!(matches!(
-        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
-        Err(Error::Unsupported { .. })
-    ));
+    // 7.1.19 sends the key through 7.1.1, and the access opens a frame for a
+    // `toString` of the Script.
+    differential("let target={},key={toString(){return 'x'}};[target[key]]=[42];target.x")?;
     Ok(())
 }
 
@@ -2715,15 +2703,9 @@ fn ordinary_objects_read_primitive_bracket_keys_through_keyed_caches() -> Result
         );
     }
 
-    // 7.1.19 sends the key through 7.1.1, and a `toString` of the Script needs
-    // a frame the read has none of.
-    let observable = "let key={toString(){return 'x'}};let o={x:42};o[key]";
-    let program = compile(observable, Limits::default())?;
-    assert!(program.uses_register_backend());
-    assert!(matches!(
-        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
-        Err(Error::Unsupported { .. })
-    ));
+    // 7.1.19 sends the key through 7.1.1, and the read opens a frame for a
+    // `toString` of the Script.
+    differential("let key={toString(){return 'x'}};let o={x:42};o[key]")?;
     Ok(())
 }
 
@@ -7480,16 +7462,8 @@ fn an_object_property_key_goes_through_to_property_key() -> Result<(), Error> {
     ] {
         differential_scripts(&[source])?;
     }
-    // A `toString` of the Script needs a frame the access has none of.
-    let program = compile(
-        "var o={a:1};o[{toString:function(){return 'a'}}]",
-        Limits::default(),
-    )?;
-    assert!(program.uses_register_backend());
-    assert!(matches!(
-        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
-        Err(Error::Unsupported { .. })
-    ));
+    // A `toString` of the Script runs in the frame the access opens for it.
+    differential_scripts(&["var o={a:1};o[{toString:function(){return 'a'}}]"])?;
     Ok(())
 }
 
@@ -7716,6 +7690,46 @@ fn a_promise_settles_through_the_job_queue_of_both_backends() -> Result<(), Erro
         let expected = stack.evaluate("l.join('|')")?;
         assert_eq!(engine.evaluate("l.join('|')")?, expected, "{source}");
     }
+    Ok(())
+}
+
+#[test]
+fn a_computed_key_of_the_script_is_converted_where_it_is_read() -> Result<(), Error> {
+    for source in [
+        // 7.1.19 step 2 sends an Object key through 7.1.1 with the hint
+        // `string`, which for a `toString` of the Script is a call.
+        "var k={toString(){return 'p'}},t={p:1};''+t[k]",
+        "var k={toString(){return 'p'}},t={};t[k]=5;''+t.p",
+        "var k={toString(){return 'p'}},t={p:1};t[k]+=1;''+t.p",
+        "var k={toString(){return 'p'}},t={p:1};t[k]++;''+t.p",
+        "var k={toString(){return 'p'}},t={p:1};''+(delete t[k])+'/'+('p' in t)",
+        "var k={[Symbol.toPrimitive](){return 'p'}},t={p:4};''+t[k]",
+        // A method that throws leaves the access with its value.
+        "var k={toString(){throw 3}},t={},r;try{t[k]=1}catch(e){r=e};''+r",
+        // 7.1.19 keeps a Symbol as the key it is.
+        "var s=Symbol('x'),t={};t[s]=1;''+t[s]",
+    ] {
+        let mut engine_host = SilentHost;
+        let mut engine = Realm::with_backend(Limits::default(), &mut engine_host, Backend::Engine)?;
+        let mut stack_host = SilentHost;
+        let mut stack = Realm::with_backend(Limits::default(), &mut stack_host, Backend::Stack)?;
+        assert_eq!(
+            engine.evaluate(source)?,
+            stack.evaluate(source)?,
+            "{source}"
+        );
+    }
+    // 13.3.3 note 2: `a[b] = c` reaches ToPropertyKey after `c`, which the
+    // stack backend does before it; the two answer different orders and only
+    // the engine answers the order of the specification.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    assert_eq!(
+        realm.evaluate(
+            "var l=[],k={toString(){l.push('k');return 'p'}},t={};t[k]=(l.push('v'),7);l.join('')"
+        )?,
+        Value::string("vk")
+    );
     Ok(())
 }
 
