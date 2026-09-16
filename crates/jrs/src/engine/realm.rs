@@ -37,6 +37,18 @@ pub enum NativeErrorKind {
 /// The implemented intrinsic of one holder that has this name.
 #[must_use]
 pub fn holder_intrinsic(holder: IntrinsicHolder, name: &[u16]) -> Option<Intrinsic> {
+    // B.2.2.12 and B.2.2.13 give `%String.prototype%` two names for the two
+    // function objects of 22.1.3.31 and 22.1.3.32.
+    if holder == IntrinsicHolder::StringPrototype {
+        for (alias, intrinsic) in [
+            ("trimLeft", Intrinsic::StringPrototypeTrimStart),
+            ("trimRight", Intrinsic::StringPrototypeTrimEnd),
+        ] {
+            if alias.encode_utf16().eq(name.iter().copied()) {
+                return Some(intrinsic);
+            }
+        }
+    }
     Intrinsic::ALL.into_iter().find(|intrinsic| {
         intrinsic.holder() == holder && intrinsic.name().encode_utf16().eq(name.iter().copied())
     })
@@ -683,6 +695,32 @@ pub enum Intrinsic {
     AsyncResume,
     /// The rejected closure of 27.7.5.3, which takes it back by throwing.
     AsyncThrow,
+    /// `String.prototype.anchor`, B.2.2.
+    StringPrototypeAnchor,
+    /// `String.prototype.big`, B.2.2.
+    StringPrototypeBig,
+    /// `String.prototype.blink`, B.2.2.
+    StringPrototypeBlink,
+    /// `String.prototype.bold`, B.2.2.
+    StringPrototypeBold,
+    /// `String.prototype.fixed`, B.2.2.
+    StringPrototypeFixed,
+    /// `String.prototype.fontcolor`, B.2.2.
+    StringPrototypeFontcolor,
+    /// `String.prototype.fontsize`, B.2.2.
+    StringPrototypeFontsize,
+    /// `String.prototype.italics`, B.2.2.
+    StringPrototypeItalics,
+    /// `String.prototype.link`, B.2.2.
+    StringPrototypeLink,
+    /// `String.prototype.small`, B.2.2.
+    StringPrototypeSmall,
+    /// `String.prototype.strike`, B.2.2.
+    StringPrototypeStrike,
+    /// `String.prototype.sub`, B.2.2.
+    StringPrototypeSub,
+    /// `String.prototype.sup`, B.2.2.
+    StringPrototypeSup,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -736,7 +774,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 196] = [
+    pub const ALL: [Self; 209] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -933,6 +971,19 @@ impl Intrinsic {
         Self::RegExpPrototypeSplit,
         Self::AsyncResume,
         Self::AsyncThrow,
+        Self::StringPrototypeAnchor,
+        Self::StringPrototypeBig,
+        Self::StringPrototypeBlink,
+        Self::StringPrototypeBold,
+        Self::StringPrototypeFixed,
+        Self::StringPrototypeFontcolor,
+        Self::StringPrototypeFontsize,
+        Self::StringPrototypeItalics,
+        Self::StringPrototypeLink,
+        Self::StringPrototypeSmall,
+        Self::StringPrototypeStrike,
+        Self::StringPrototypeSub,
+        Self::StringPrototypeSup,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -973,7 +1024,21 @@ impl Intrinsic {
             | Self::StringPrototypeSplit
             | Self::StringPrototypeReplace
             | Self::StringPrototypeMatch
-            | Self::StringPrototypeSearch => IntrinsicHolder::StringPrototype,
+            | Self::StringPrototypeSearch
+            | Self::StringPrototypeAnchor
+            | Self::StringPrototypeBig
+            | Self::StringPrototypeBlink
+            | Self::StringPrototypeBold
+            | Self::StringPrototypeFixed
+            | Self::StringPrototypeFontcolor
+            | Self::StringPrototypeFontsize
+            | Self::StringPrototypeItalics
+            | Self::StringPrototypeLink
+            | Self::StringPrototypeSmall
+            | Self::StringPrototypeStrike
+            | Self::StringPrototypeSub
+            | Self::StringPrototypeSup
+            => IntrinsicHolder::StringPrototype,
             Self::ArrayPrototypeValues
             | Self::ArrayPrototypeAt
             | Self::ArrayPrototypeIncludes
@@ -1359,6 +1424,19 @@ impl Intrinsic {
             Self::RegExpPrototypeSplit => 193,
             Self::AsyncResume => 194,
             Self::AsyncThrow => 195,
+            Self::StringPrototypeAnchor => 196,
+            Self::StringPrototypeBig => 197,
+            Self::StringPrototypeBlink => 198,
+            Self::StringPrototypeBold => 199,
+            Self::StringPrototypeFixed => 200,
+            Self::StringPrototypeFontcolor => 201,
+            Self::StringPrototypeFontsize => 202,
+            Self::StringPrototypeItalics => 203,
+            Self::StringPrototypeLink => 204,
+            Self::StringPrototypeSmall => 205,
+            Self::StringPrototypeStrike => 206,
+            Self::StringPrototypeSub => 207,
+            Self::StringPrototypeSup => 208,
         }
     }
 
@@ -1565,6 +1643,19 @@ impl Intrinsic {
             Self::RegExpPrototypeSplit => 193,
             Self::AsyncResume => 194,
             Self::AsyncThrow => 195,
+            Self::StringPrototypeAnchor => 196,
+            Self::StringPrototypeBig => 197,
+            Self::StringPrototypeBlink => 198,
+            Self::StringPrototypeBold => 199,
+            Self::StringPrototypeFixed => 200,
+            Self::StringPrototypeFontcolor => 201,
+            Self::StringPrototypeFontsize => 202,
+            Self::StringPrototypeItalics => 203,
+            Self::StringPrototypeLink => 204,
+            Self::StringPrototypeSmall => 205,
+            Self::StringPrototypeStrike => 206,
+            Self::StringPrototypeSub => 207,
+            Self::StringPrototypeSup => 208,
         }
     }
 
@@ -1772,6 +1863,19 @@ impl Intrinsic {
             193 => Some(Self::RegExpPrototypeSplit),
             194 => Some(Self::AsyncResume),
             195 => Some(Self::AsyncThrow),
+            196 => Some(Self::StringPrototypeAnchor),
+            197 => Some(Self::StringPrototypeBig),
+            198 => Some(Self::StringPrototypeBlink),
+            199 => Some(Self::StringPrototypeBold),
+            200 => Some(Self::StringPrototypeFixed),
+            201 => Some(Self::StringPrototypeFontcolor),
+            202 => Some(Self::StringPrototypeFontsize),
+            203 => Some(Self::StringPrototypeItalics),
+            204 => Some(Self::StringPrototypeLink),
+            205 => Some(Self::StringPrototypeSmall),
+            206 => Some(Self::StringPrototypeStrike),
+            207 => Some(Self::StringPrototypeSub),
+            208 => Some(Self::StringPrototypeSup),
             _ => None,
         }
     }
@@ -1812,6 +1916,19 @@ impl Intrinsic {
             | Self::PromiseAllSettledRejected
             | Self::AsyncResume
             | Self::AsyncThrow => "",
+            Self::StringPrototypeAnchor => "anchor",
+            Self::StringPrototypeBig => "big",
+            Self::StringPrototypeBlink => "blink",
+            Self::StringPrototypeBold => "bold",
+            Self::StringPrototypeFixed => "fixed",
+            Self::StringPrototypeFontcolor => "fontcolor",
+            Self::StringPrototypeFontsize => "fontsize",
+            Self::StringPrototypeItalics => "italics",
+            Self::StringPrototypeLink => "link",
+            Self::StringPrototypeSmall => "small",
+            Self::StringPrototypeStrike => "strike",
+            Self::StringPrototypeSub => "sub",
+            Self::StringPrototypeSup => "sup",
             Self::SpeciesGetter => "get [Symbol.species]",
             Self::RegExpPrototypeFlags => "get flags",
             Self::RegExpPrototypeSource => "get source",
@@ -2020,7 +2137,12 @@ impl Intrinsic {
             | Self::ObjectPrototypePropertyIsEnumerable
             // The embedding writes one line of text, so its argument takes
             // the conversion of 7.1.17 like every other text.
-            | Self::Print => TEXT,
+            | Self::Print
+            // B.2.2.2.1 step 4 applies `ToString` to the attribute value.
+            | Self::StringPrototypeAnchor
+            | Self::StringPrototypeFontcolor
+            | Self::StringPrototypeFontsize
+            | Self::StringPrototypeLink => TEXT,
             // 22.1.3: one position, which `ToIntegerOrInfinity` converts.
             Self::StringPrototypeCharAt
             | Self::StringPrototypeCharCodeAt
@@ -2369,7 +2491,16 @@ impl Intrinsic {
             | Self::StringPrototypeIsWellFormed
             | Self::StringPrototypeToWellFormed
             | Self::ArrayPrototypeToReversed
-            | Self::PromiseWithResolvers => 0,
+            | Self::PromiseWithResolvers
+            | Self::StringPrototypeBig
+            | Self::StringPrototypeBlink
+            | Self::StringPrototypeBold
+            | Self::StringPrototypeFixed
+            | Self::StringPrototypeItalics
+            | Self::StringPrototypeSmall
+            | Self::StringPrototypeStrike
+            | Self::StringPrototypeSub
+            | Self::StringPrototypeSup => 0,
             Self::StringFromCharCode
             | Self::StringFromCodePoint
             | Self::StringRaw
@@ -2486,6 +2617,10 @@ impl Intrinsic {
             | Self::RegExpPrototypeSearch
             | Self::AsyncResume
             | Self::AsyncThrow
+            | Self::StringPrototypeAnchor
+            | Self::StringPrototypeFontcolor
+            | Self::StringPrototypeFontsize
+            | Self::StringPrototypeLink
             | Self::Print => 1,
             Self::ObjectDefineProperty | Self::ReflectDefineProperty | Self::ReflectApply => 3,
             Self::MathPow
@@ -3351,6 +3486,7 @@ impl Realm {
         Self::define_species_getters(heap, &intrinsics)?;
         Self::define_restricted_properties(heap, &intrinsics, function_prototype)?;
         Self::define_regexp_accessors(heap, &intrinsics, regexp_prototype)?;
+        Self::define_trim_aliases(heap, &intrinsics, string_prototype)?;
         Self::define_unscopables(heap, array_prototype)?;
         Self::define_to_string_tags(
             heap,
@@ -3955,6 +4091,32 @@ impl Realm {
     /// # Errors
     ///
     /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    /// B.2.2.12 and B.2.2.13: `trimLeft` and `trimRight` are the same
+    /// function objects as `trimStart` and `trimEnd`.
+    fn define_trim_aliases(
+        heap: &mut GenerationalHeap,
+        intrinsics: &[Root],
+        string_prototype: Root,
+    ) -> Result<(), HeapError> {
+        let holder = Self::rooted(heap, string_prototype)?
+            .as_object()
+            .ok_or(HeapError::InvalidReference)?;
+        for (intrinsic, alias) in [
+            (Intrinsic::StringPrototypeTrimStart, "trimLeft"),
+            (Intrinsic::StringPrototypeTrimEnd, "trimRight"),
+        ] {
+            let function = Self::rooted(
+                heap,
+                *intrinsics
+                    .get(intrinsic.index())
+                    .ok_or(HeapError::InvalidReference)?,
+            )?;
+            let key = PropertyKey::String(heap.strings.intern(alias)?);
+            heap.define_own_named(holder, key, function, builtin_data())?;
+        }
+        Ok(())
+    }
+
     fn define_regexp_accessors(
         heap: &mut GenerationalHeap,
         intrinsics: &[Root],

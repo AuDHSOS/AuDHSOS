@@ -1886,6 +1886,19 @@ impl RegisterVM {
             | Intrinsic::StringPrototypeIsWellFormed
             | Intrinsic::StringPrototypeToWellFormed
             | Intrinsic::StringPrototypeSubstr
+            | Intrinsic::StringPrototypeAnchor
+            | Intrinsic::StringPrototypeBig
+            | Intrinsic::StringPrototypeBlink
+            | Intrinsic::StringPrototypeBold
+            | Intrinsic::StringPrototypeFixed
+            | Intrinsic::StringPrototypeFontcolor
+            | Intrinsic::StringPrototypeFontsize
+            | Intrinsic::StringPrototypeItalics
+            | Intrinsic::StringPrototypeLink
+            | Intrinsic::StringPrototypeSmall
+            | Intrinsic::StringPrototypeStrike
+            | Intrinsic::StringPrototypeSub
+            | Intrinsic::StringPrototypeSup
             | Intrinsic::StringPrototypeLocaleCompare => {
                 self.call_string_intrinsic(intrinsic, call, units, heap, realm)
             }
@@ -7513,6 +7526,47 @@ impl RegisterVM {
         Self::to_boolean(spreadable, heap)
     }
 
+    /// `CreateHTML` of B.2.2.2.1.
+    ///
+    /// The attribute value takes every `"` of 7.1.17 as `&quot;`, which is the
+    /// one escape the clause makes.
+    fn create_html(
+        &self,
+        call: &Call,
+        units: &[u16],
+        tag: &str,
+        attribute: &str,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let mut out: Vec<u16> = Vec::new();
+        out.push(u16::from(b'<'));
+        out.extend(tag.encode_utf16());
+        if !attribute.is_empty() {
+            let value = self.call_argument(call, 0, heap)?;
+            let value = property_name_units(self.primitive_string(value, heap, realm)?, heap)?;
+            out.push(u16::from(b' '));
+            out.extend(attribute.encode_utf16());
+            out.push(u16::from(b'='));
+            out.push(u16::from(b'"'));
+            for unit in value {
+                if unit == u16::from(b'"') {
+                    out.extend("&quot;".encode_utf16());
+                } else {
+                    out.push(unit);
+                }
+            }
+            out.push(u16::from(b'"'));
+        }
+        out.push(u16::from(b'>'));
+        out.extend_from_slice(units);
+        out.push(u16::from(b'<'));
+        out.push(u16::from(b'/'));
+        out.extend(tag.encode_utf16());
+        out.push(u16::from(b'>'));
+        self.allocate_string(heap, &out)
+    }
+
     /// `Set(O, "length", 𝔽(length), true)` of 7.3.4.
     ///
     /// An Array keeps its length where 10.4.2 puts it; any other array-like
@@ -9400,6 +9454,45 @@ impl RegisterVM {
                     return Ok(VALUE_TRUE);
                 }
                 self.allocate_string(heap, &out.unwrap_or(units))
+            }
+            // B.2.2.2.1 wraps the text in a tag, with one attribute where the
+            // method names one.
+            Intrinsic::StringPrototypeAnchor => {
+                self.create_html(&call, &units, "a", "name", heap, realm)
+            }
+            Intrinsic::StringPrototypeBig => {
+                self.create_html(&call, &units, "big", "", heap, realm)
+            }
+            Intrinsic::StringPrototypeBlink => {
+                self.create_html(&call, &units, "blink", "", heap, realm)
+            }
+            Intrinsic::StringPrototypeBold => self.create_html(&call, &units, "b", "", heap, realm),
+            Intrinsic::StringPrototypeFixed => {
+                self.create_html(&call, &units, "tt", "", heap, realm)
+            }
+            Intrinsic::StringPrototypeFontcolor => {
+                self.create_html(&call, &units, "font", "color", heap, realm)
+            }
+            Intrinsic::StringPrototypeFontsize => {
+                self.create_html(&call, &units, "font", "size", heap, realm)
+            }
+            Intrinsic::StringPrototypeItalics => {
+                self.create_html(&call, &units, "i", "", heap, realm)
+            }
+            Intrinsic::StringPrototypeLink => {
+                self.create_html(&call, &units, "a", "href", heap, realm)
+            }
+            Intrinsic::StringPrototypeSmall => {
+                self.create_html(&call, &units, "small", "", heap, realm)
+            }
+            Intrinsic::StringPrototypeStrike => {
+                self.create_html(&call, &units, "strike", "", heap, realm)
+            }
+            Intrinsic::StringPrototypeSub => {
+                self.create_html(&call, &units, "sub", "", heap, realm)
+            }
+            Intrinsic::StringPrototypeSup => {
+                self.create_html(&call, &units, "sup", "", heap, realm)
             }
             // B.2.2.1: the second argument is a length and not an end, and a
             // negative start counts from the end of the text.

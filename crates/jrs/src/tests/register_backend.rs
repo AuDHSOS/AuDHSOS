@@ -7693,6 +7693,48 @@ fn a_promise_settles_through_the_job_queue_of_both_backends() -> Result<(), Erro
 }
 
 #[test]
+fn the_html_methods_of_b_2_2_wrap_the_text_in_a_tag() -> Result<(), Error> {
+    // B.2.2.2.1 builds the tag, one attribute where the method names one, and
+    // the text between the two ends. The stack backend carries none of the
+    // thirteen, so only the engine answers here.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    for (source, expected) in [
+        ("'x'.anchor('y')", "<a name=\"y\">x</a>"),
+        ("'x'.anchor('a\"b')", "<a name=\"a&quot;b\">x</a>"),
+        ("'x'.link('u')", "<a href=\"u\">x</a>"),
+        ("'x'.fontcolor('c')", "<font color=\"c\">x</font>"),
+        ("'x'.fontsize(3)", "<font size=\"3\">x</font>"),
+        ("'x'.bold()", "<b>x</b>"),
+        ("'x'.italics()", "<i>x</i>"),
+        ("'x'.fixed()", "<tt>x</tt>"),
+        ("'x'.big()", "<big>x</big>"),
+        ("'x'.small()", "<small>x</small>"),
+        ("'x'.blink()", "<blink>x</blink>"),
+        ("'x'.strike()", "<strike>x</strike>"),
+        ("'x'.sub()", "<sub>x</sub>"),
+        ("'x'.sup()", "<sup>x</sup>"),
+        // B.2.2.12 and B.2.2.13 are the function objects of 22.1.3.31 and
+        // 22.1.3.32 under a second name.
+        ("'  a '.trimLeft()", "a "),
+        ("'  a '.trimRight()", "  a"),
+        (
+            "''+(String.prototype.trimLeft===String.prototype.trimStart)",
+            "true",
+        ),
+        ("''+'x'.trimLeft.name", "trimStart"),
+        // 10.3.3 gives each one the length B.2.2 names.
+        (
+            "''+'x'.anchor.length+'/'+'x'.bold.length+'/'+'x'.anchor.name",
+            "1/0/anchor",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(expected), "{source}");
+    }
+    Ok(())
+}
+
+#[test]
 fn a_spread_element_takes_every_value_of_its_iterator() -> Result<(), Error> {
     for source in [
         // 13.2.4.2: an Array literal.

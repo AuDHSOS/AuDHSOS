@@ -8473,9 +8473,22 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::BooleanPrototypeToString
         | crate::engine::realm::Intrinsic::RegExpPrototypeToString
         | crate::engine::realm::Intrinsic::JsonStringify
-        // 22.1.3.29 and B.2.2.1 answer a String of the text.
+        // 22.1.3.29 and B.2.2 answer a String of the text.
         | crate::engine::realm::Intrinsic::StringPrototypeToWellFormed
         | crate::engine::realm::Intrinsic::StringPrototypeSubstr
+        | crate::engine::realm::Intrinsic::StringPrototypeAnchor
+        | crate::engine::realm::Intrinsic::StringPrototypeBig
+        | crate::engine::realm::Intrinsic::StringPrototypeBlink
+        | crate::engine::realm::Intrinsic::StringPrototypeBold
+        | crate::engine::realm::Intrinsic::StringPrototypeFixed
+        | crate::engine::realm::Intrinsic::StringPrototypeFontcolor
+        | crate::engine::realm::Intrinsic::StringPrototypeFontsize
+        | crate::engine::realm::Intrinsic::StringPrototypeItalics
+        | crate::engine::realm::Intrinsic::StringPrototypeLink
+        | crate::engine::realm::Intrinsic::StringPrototypeSmall
+        | crate::engine::realm::Intrinsic::StringPrototypeStrike
+        | crate::engine::realm::Intrinsic::StringPrototypeSub
+        | crate::engine::realm::Intrinsic::StringPrototypeSup
         | crate::engine::realm::Intrinsic::StringPrototypeToString
         | crate::engine::realm::Intrinsic::StringPrototypeValueOf
         | crate::engine::realm::Intrinsic::StringPrototypeCharAt
