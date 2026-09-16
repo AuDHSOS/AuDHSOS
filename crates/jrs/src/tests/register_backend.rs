@@ -6698,3 +6698,36 @@ fn the_species_getter_answers_the_constructor_it_was_read_off() -> Result<(), Er
     }
     Ok(())
 }
+
+/// 20.2.3.2 keeps every argument after the `this` value, and 10.4.1.1 puts
+/// them in front of the ones the call site passes.
+#[test]
+fn a_bound_function_keeps_the_arguments_the_bind_gave_it() -> Result<(), Error> {
+    for source in [
+        "function f(a,b){}f.name",
+        "function f(a,b){}var b=f.bind(null,1);''+b.length",
+        "function f(a,b){return a+b}var b=f.bind(null,1);''+b(2)",
+        "function f(a,b){}var b=f.bind(null,1);b.name+b.length",
+        "function f(){return this.x}var b=f.bind({x:7});''+b()",
+        "function f(a,b,c){return a+b+c}''+f.bind(null,1).bind(null,2)(3)",
+        "var b=(function f(){}).bind(null);b.name+b.length",
+        "function f(){return arguments.length}''+f.bind(null,1,2)(3)",
+        "(function(){}).bind(null).bind(null).name",
+        "function f(a,b,c){}''+f.bind(null,1,2,3,4).length",
+        "function f(){return this===undefined}''+f.bind()()",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // 10.4.1.2 constructs the target with the arguments the bind kept and the
+    // `newTarget` the call site gave, which this engine has not built.
+    let program = compile(
+        "function f(a){this.a=a}new (f.bind(null,1))()",
+        Limits::default(),
+    )?;
+    assert!(program.uses_register_backend());
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
+    Ok(())
+}

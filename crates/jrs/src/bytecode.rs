@@ -1568,8 +1568,11 @@ impl RegisterLowerer {
         for name in &function_names {
             self.code.emit(Instruction::VerifyGlobalFunction(*name));
         }
-        for ((_, function), constant) in functions.iter().zip(&function_names) {
-            self.lower_function(function)?;
+        for ((declared, function), constant) in functions.iter().zip(&function_names) {
+            // 10.2.10 names a declaration after the binding it makes, which
+            // 16.1.7 puts on the Global Environment Record.
+            let units: Vec<u16> = declared.encode_utf16().collect();
+            self.lower_callable(function, false, Some(&units))?;
             self.code
                 .emit(Instruction::DeclareGlobalFunction(*constant));
         }

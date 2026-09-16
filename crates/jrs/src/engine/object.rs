@@ -174,6 +174,9 @@ pub enum ObjectKind {
         target: Value,
         /// `[[BoundThis]]`.
         receiver: Value,
+        /// `[[BoundArguments]]`, as the Array holding them, or undefined
+        /// where 20.2.3.2 was given none.
+        arguments: Value,
     },
 }
 
@@ -189,8 +192,12 @@ impl ObjectKind {
             Self::StringWrapper(value) | Self::ArrayIterator { target: value, .. } => {
                 [Some(*value), None, None, None, None]
             }
-            Self::BoundFunction { target, receiver }
-            | Self::Accessor {
+            Self::BoundFunction {
+                target,
+                receiver,
+                arguments,
+            } => [Some(*target), Some(*receiver), Some(*arguments), None, None],
+            Self::Accessor {
                 get: target,
                 set: receiver,
             } => [Some(*target), Some(*receiver), None, None, None],
@@ -218,8 +225,12 @@ impl ObjectKind {
             Self::StringWrapper(value) | Self::ArrayIterator { target: value, .. } => {
                 [Some(value), None, None, None, None]
             }
-            Self::BoundFunction { target, receiver }
-            | Self::Accessor {
+            Self::BoundFunction {
+                target,
+                receiver,
+                arguments,
+            } => [Some(target), Some(receiver), Some(arguments), None, None],
+            Self::Accessor {
                 get: target,
                 set: receiver,
             } => [Some(target), Some(receiver), None, None, None],

@@ -833,10 +833,13 @@ impl RegisterVM {
         let Some(function) = self.read_reg(func)?.as_object() else {
             return Err(type_error(heap, realm, "value is not a constructor"));
         };
-        if !matches!(
-            heap.get_object(function).ok_or(VMError::TypeError)?.kind,
-            ObjectKind::Function { .. }
-        ) {
+        let kind = &heap.get_object(function).ok_or(VMError::TypeError)?.kind;
+        // 10.4.1.2 constructs the target with the arguments the bind kept and
+        // the `newTarget` the call site gave, which this engine has not built.
+        if matches!(kind, ObjectKind::BoundFunction { .. }) {
+            return Err(VMError::Unsupported("new of a bound function"));
+        }
+        if !matches!(kind, ObjectKind::Function { .. }) {
             return Err(type_error(heap, realm, "value is not a constructor"));
         }
         let shape = heap.shapes.root_shape();
@@ -1278,6 +1281,11 @@ impl RegisterVM {
         call: Call,
     ) -> Result<Option<u32>, VMError> {
         let mut call = call;
+        // 10.4.1.1 puts the arguments a bind kept in front of the ones the
+        // call site passes, which no register of the caller holds together.
+        if Self::bound_with_arguments(function, heap) {
+            return self.begin_bound_call(function, call, units, active_feedback, heap, realm);
+        }
         let function_ref = self.resolve_callee(function, &mut call, heap, realm)?;
         let kind = heap
             .get_object(function_ref)
@@ -1879,9 +1887,6 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        if call.arg_count > 1 {
-            return Err(VMError::Unsupported("bind with a bound argument"));
-        }
         let target = call.receiver;
         if !Self::is_callable(target, heap) {
             return Err(type_error(
@@ -1895,14 +1900,153 @@ impl RegisterVM {
         } else {
             self.read_reg(call.arg_start)?
         };
-        // 10.4.1.3 gives the bound function the Prototype of its target and
-        // the `length` and `name` 20.2.3.2 derives from it. The two values it
-        // binds travel in the object, so they are written after it exists.
-        let prototype = realm.function_prototype(heap)?;
-        let shape = heap.shapes.root_shape();
-        let bound = heap.allocate_object(shape, prototype)?;
-        heap.set_object_kind(bound, ObjectKind::BoundFunction { target, receiver })?;
-        Ok(Value::from_object(bound))
+        // Step 2 keeps every argument after the `this` value, which 10.4.1.1
+        // puts in front of the ones the call site passes. Everything the bind
+        // holds becomes a root of its own, because the allocations below move
+        // what a register of the caller does not name.
+        heap.enter_scope();
+        let bound = (|| {
+            let held_target = heap.push_root(target)?;
+            let held_receiver = heap.push_root(receiver)?;
+            let mut held_arguments = Vec::new();
+            for index in 1..call.arg_count {
+                held_arguments.push(heap.push_root(self.call_argument(&call, index)?)?);
+            }
+            let count = held_arguments.len();
+            // 20.2.3.2 steps 5 and 8 read the target before the bind exists,
+            // so no allocation stands between the read and the object.
+            let target_object = target.as_object().ok_or(VMError::TypeError)?;
+            let name = Self::bound_name(target_object, heap)?;
+            let length = Self::bound_length(target_object, count, heap)?;
+            let arguments = if count == 0 {
+                VALUE_UNDEFINED
+            } else {
+                let array = realm.array(heap, u32::try_from(count).unwrap_or(u32::MAX))?;
+                for (index, held) in held_arguments.into_iter().enumerate() {
+                    let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+                    let value = heap.root_value(held).unwrap_or(VALUE_UNDEFINED);
+                    heap.set_array_element(array, index, value)?;
+                }
+                Value::from_object(array)
+            };
+            let held_arguments = heap.push_root(arguments)?;
+            // 10.4.1.3 step 1 gives the bound function the Prototype of its
+            // target.
+            let target_object = heap
+                .root_value(held_target)
+                .and_then(Value::as_object)
+                .ok_or(VMError::TypeError)?;
+            let prototype = heap
+                .get_object(target_object)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?
+                .prototype;
+            let shape = heap.shapes.root_shape();
+            let bound = heap.allocate_object(shape, prototype)?;
+            heap.set_object_kind(
+                bound,
+                ObjectKind::BoundFunction {
+                    target: heap.root_value(held_target).unwrap_or(VALUE_UNDEFINED),
+                    receiver: heap.root_value(held_receiver).unwrap_or(VALUE_UNDEFINED),
+                    arguments: heap.root_value(held_arguments).unwrap_or(VALUE_UNDEFINED),
+                },
+            )?;
+            let held_bound = heap.push_root(Value::from_object(bound))?;
+            Self::define_bound_length_and_name(held_bound, length, &name, heap)?;
+            heap.root_value(held_bound).ok_or(VMError::TypeError)
+        })();
+        heap.exit_scope();
+        bound
+    }
+
+    /// The `length` 20.2.3.2 step 5 gives a bound function: an own `length` of
+    /// the target that is a Number, less the arguments the bind kept, and zero
+    /// where the target has no such property.
+    fn bound_length(
+        target: ObjectRef,
+        count: usize,
+        heap: &mut GenerationalHeap,
+    ) -> Result<f64, VMError> {
+        let key = PropertyKey::String(heap.strings.intern("length")?);
+        let held = heap
+            .own_named_flags(target, key)?
+            .filter(|flags| !flags.is_accessor)
+            .and(heap.lookup_named(target, key)?)
+            .map(|property| property.value)
+            .and_then(Value::as_f64);
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "an argument count is below 2^16"
+        )]
+        let taken = count as f64;
+        Ok(held.map_or(0.0, |length| (length - taken).max(0.0)))
+    }
+
+    /// The `name` 20.2.3.2 step 8 gives a bound function: "bound " before the
+    /// `name` of the target where that is a String.
+    fn bound_name(target: ObjectRef, heap: &mut GenerationalHeap) -> Result<Vec<u16>, VMError> {
+        let key = PropertyKey::String(heap.strings.intern("name")?);
+        let held = heap
+            .lookup_named(target, key)?
+            .filter(|property| !property.flags.is_accessor)
+            .map(|property| property.value)
+            .filter(|value| value.is_string())
+            .and_then(|value| heap.strings.to_utf16(value))
+            .unwrap_or_default();
+        let mut units: Vec<u16> = "bound ".encode_utf16().collect();
+        units.extend_from_slice(&held);
+        Ok(units)
+    }
+
+    /// Writes the `length` and `name` 20.2.3.2 gives a bound function.
+    fn define_bound_length_and_name(
+        bound: Root,
+        length: f64,
+        name: &[u16],
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        let key = PropertyKey::String(heap.strings.intern("length")?);
+        let object = heap
+            .root_value(bound)
+            .and_then(Value::as_object)
+            .ok_or(VMError::TypeError)?;
+        heap.define_own_named(
+            object,
+            key,
+            Value::from_f64(length),
+            super::realm::builtin_metadata(),
+        )?;
+        let key = PropertyKey::String(heap.strings.intern("name")?);
+        let text = heap.strings.allocate_units(name)?;
+        let object = heap
+            .root_value(bound)
+            .and_then(Value::as_object)
+            .ok_or(VMError::TypeError)?;
+        heap.define_own_named(
+            object,
+            key,
+            Value::from_string(text),
+            super::realm::builtin_metadata(),
+        )?;
+        Ok(())
+    }
+
+    /// Whether a bound function of the chain carries arguments of its own,
+    /// which 10.4.1.1 puts in front of the ones the call site passes.
+    fn bound_with_arguments(function: Value, heap: &GenerationalHeap) -> bool {
+        let mut current = function;
+        while let Some(object) = current.as_object() {
+            let Some(ObjectKind::BoundFunction {
+                target, arguments, ..
+            }) = heap.get_object(object).map(|entry| &entry.kind)
+            else {
+                return false;
+            };
+            if !arguments.is_undefined() {
+                return true;
+            }
+            current = *target;
+        }
+        false
     }
 
     /// The object a call finally reaches, and the call that reaches it.
@@ -1935,7 +2079,9 @@ impl RegisterVM {
             );
             // 10.4.1.1 calls the target with the `this` value the bind gave
             // it, whatever the call site passed.
-            if let ObjectKind::BoundFunction { target, receiver } = heap
+            if let ObjectKind::BoundFunction {
+                target, receiver, ..
+            } = heap
                 .get_object(function_ref)
                 .ok_or(VMError::Heap(HeapError::InvalidReference))?
                 .kind
@@ -3036,6 +3182,70 @@ impl RegisterVM {
             ..call
         };
         self.enter_call_value(target, units, active_feedback, heap, realm, call)
+    }
+
+    /// `[[Call]]` of 10.4.1.1 for a bound function that kept arguments.
+    ///
+    /// The List the target is called with is every bound argument of the
+    /// chain, outermost bind last, followed by the arguments of the call
+    /// site. No frame of the caller holds the two together, so the call
+    /// carries the Array 7.3.18 would make.
+    fn begin_bound_call(
+        &mut self,
+        function: Value,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        if call.construct.is_some() {
+            return Err(VMError::Unsupported(
+                "new of a bound function that kept arguments",
+            ));
+        }
+        let mut arguments = Vec::new();
+        for index in 0..call.arg_count {
+            arguments.push(self.call_argument(&call, index)?);
+        }
+        let mut current = function;
+        let mut receiver = call.receiver;
+        while let Some(object) = current.as_object() {
+            let Some(ObjectKind::BoundFunction {
+                target,
+                receiver: bound,
+                arguments: held,
+            }) = heap.get_object(object).map(|entry| entry.kind.clone())
+            else {
+                break;
+            };
+            let mut prefix = Vec::new();
+            if let Some(list) = held.as_object() {
+                let length = Self::array_like_length(heap, list, realm)?;
+                for index in Self::scan_range(0, length) {
+                    prefix.push(Self::element_at(heap, list, index)?.unwrap_or(VALUE_UNDEFINED));
+                }
+            }
+            prefix.append(&mut arguments);
+            arguments = prefix;
+            receiver = bound;
+            current = target;
+        }
+        let arg_count = u16::try_from(arguments.len())
+            .map_err(|_| VMError::Unsupported("a call of more arguments than a frame passes"))?;
+        let list = Self::array_of(arguments, heap, realm)?;
+        // The List outlives every frame the call opens, so it is a root of a
+        // scope of its own, which the return leaves.
+        heap.enter_scope();
+        let arguments = heap.push_root(list)?;
+        let call = Call {
+            receiver,
+            arg_count,
+            resume: Some(Resume::Spread { arguments }),
+            construct: None,
+            ..call
+        };
+        self.enter_call_value(current, units, active_feedback, heap, realm, call)
     }
 
     /// `Reflect.construct` of 28.1.2.
@@ -7798,6 +8008,12 @@ impl RegisterVM {
         }
         if !Self::is_callable(receiver, heap) {
             return Err(type_error(heap, realm, "value is not callable"));
+        }
+        // 10.4.1 is a `NativeFunction` string without a name: the "bound f"
+        // of 20.2.3.2 is not the name of a grammar node.
+        if matches!(kind, ObjectKind::BoundFunction { .. }) {
+            let text: Vec<u16> = "function () { [native code] }".encode_utf16().collect();
+            return self.allocate_string(heap, &text);
         }
         // Step 3: a function no grammar node of a Script produced answers a
         // `NativeFunction` string, which carries its name where it has one.
