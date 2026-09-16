@@ -631,8 +631,13 @@ pub struct Insert {
     pub columns: Range,
     /// Where the rows come from, which is a `VALUES` or a `SELECT`.
     pub select: SelectId,
+    /// Whether `DEFAULT VALUES` was written, which writes one row of
+    /// what every column falls back to and reads no statement.
+    pub defaults: bool,
     /// The `ON CONFLICT` clauses, in the order they were written.
     pub upserts: Range,
+    /// The columns a `RETURNING` answers, or an empty run.
+    pub returning: Range,
 }
 
 /// One `ON CONFLICT` clause of an `INSERT`, which is `sqlite3UpsertNew`.
@@ -662,6 +667,8 @@ pub struct Delete {
     /// The `WHERE` clause, where one was written; a statement without
     /// one takes every row out.
     pub filter: Option<ExprId>,
+    /// The columns a `RETURNING` answers, or an empty run.
+    pub returning: Range,
 }
 
 /// One `column = value` of an `UPDATE`.
@@ -686,6 +693,8 @@ pub struct Update {
     pub sets: Range,
     /// The `WHERE` clause, where one was written.
     pub filter: Option<ExprId>,
+    /// The columns a `RETURNING` answers, or an empty run.
+    pub returning: Range,
 }
 
 /// `ANALYZE [[schema.]name]`, which writes `sqlite_stat1` out of what

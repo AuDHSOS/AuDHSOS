@@ -32,6 +32,7 @@ mod parse;
 mod record;
 mod rename;
 mod reopen;
+mod returning;
 mod rowvalue;
 mod savepoint;
 mod schema;

@@ -364,6 +364,8 @@ pub struct Writer {
     /// The savepoints open now, the outermost first, each holding the
     /// file as it stood when the `SAVEPOINT` ran.
     saved: Vec<Saved>,
+    /// The rows the `RETURNING` of the statement running now answered.
+    returned: Vec<Vec<Value>>,
 }
 
 /// One open savepoint: its name, and the file as it stood when the
@@ -404,6 +406,7 @@ impl Writer {
             began: None,
             stopped: false,
             saved: Vec::new(),
+            returned: Vec::new(),
             header: Header {
                 page_size,
                 write_version: 1,
@@ -461,6 +464,7 @@ impl Writer {
             began: None,
             stopped: false,
             saved: Vec::new(),
+            returned: Vec::new(),
         })
     }
 
@@ -715,6 +719,49 @@ impl Writer {
         }
         self.reads_without(&name, &column)?;
         self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
+        Ok(())
+    }
+
+    /// The row a `RETURNING` answers for one row the statement wrote,
+    /// which is `sqlite3AddReturning` over the row as it stands.
+    ///
+    /// Reading one row costs O(c) in the columns the clause answers.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Eval`] names what the clause could not answer.
+    fn returns(
+        &mut self,
+        arena: &Arena,
+        returning: crate::ast::Range,
+        sql: &[u8],
+        row: (&Table, &[Value], Option<i64>),
+    ) -> Result<(), Error> {
+        if returning.is_empty() {
+            return Ok(());
+        }
+        let (table, values, rowid) = row;
+        let held = Held {
+            table,
+            values,
+            rowid,
+            encoding: self.header.encoding,
+            random: &self.random,
+            outer: None,
+            reading: None,
+        };
+        let mut answered = Vec::new();
+        for column in arena.results(returning) {
+            match column {
+                crate::ast::ResultColumn::Star | crate::ast::ResultColumn::TableStar(_) => {
+                    answered.extend(values.iter().cloned());
+                }
+                crate::ast::ResultColumn::Expr { expr, .. } => {
+                    answered.push(crate::eval::evaluate_row(arena, *expr, sql, &held)?);
+                }
+            }
+        }
+        self.returned.push(answered);
         Ok(())
     }
 
@@ -987,6 +1034,7 @@ impl Writer {
         }
         let held = self.header;
         self.stopped = false;
+        self.returned.clear();
         let ran = self.ran(sql);
         // A statement that refuses what it was given leaves the file
         // as it found it, which is what `OE_Abort` does: the pages go
@@ -1016,6 +1064,11 @@ impl Writer {
         // unit of work.
         if self.began.is_none() {
             self.commit(&was)?;
+        }
+        // A statement that writes a `RETURNING` answers one row per row
+        // it wrote, which is `sqlite3AddReturning`.
+        if !self.returned.is_empty() {
+            return Ok(core::mem::take(&mut self.returned));
         }
         // `PRAGMA count_changes`: a statement that changes rows answers
         // how many it changed, which is one row of one column.
@@ -2326,9 +2379,21 @@ impl Writer {
             .iter()
             .map(|value| stored(value, self.header.encoding))
             .collect();
-        let answer = database.rows_under(arena, statement.select, sql, outer)?;
         let affinities: Vec<Affinity> =
             table.columns.iter().map(|column| column.affinity).collect();
+        // `INSERT INTO t DEFAULT VALUES` writes one row of what every
+        // column falls back to and reads no statement of its own.
+        if statement.defaults {
+            return Ok(Inserting {
+                root,
+                alias: table.rowid_alias,
+                affinities,
+                rows: alloc::vec![(Value::Null, falls_back)],
+                kept,
+                table: table.clone(),
+            });
+        }
+        let answer = database.rows_under(arena, statement.select, sql, outer)?;
         let mut rows = Vec::new();
         for row in &answer.rows {
             if row.len() != places.len() {
@@ -2478,6 +2543,7 @@ impl Writer {
             self.unindex_row(&kept, &values, &key)?;
             crate::tree::remove_entry(&mut self.pages, root, &key, &collations)?;
             taken = taken.saturating_add(1);
+            self.returns(arena, statement.returning, sql, (&table, &values, None))?;
             if fires {
                 self.fire(&after, &[], &row)?;
             }
@@ -2492,10 +2558,13 @@ impl Writer {
     /// Writing one row costs O(log n) in the rows of the table.
     fn insert_keyed(
         &mut self,
+        arena: &Arena,
+        statement: &crate::ast::Insert,
+        sql: &[u8],
         name: &[u8],
-        written: Conflict,
         inserting: Inserting,
     ) -> Result<i64, Error> {
+        let written = statement.conflict;
         let Inserting {
             root,
             rows,
@@ -2539,6 +2608,7 @@ impl Writer {
             let record = crate::record::write(&stored, &affinities, 4);
             crate::tree::insert_entry(&mut self.pages, root, &record, &key, &collations, false)?;
             count = count.saturating_add(1);
+            self.returns(arena, statement.returning, sql, (&table, &named, None))?;
             if fires {
                 let row = Fired::inserted(&table, &named, self.header.encoding);
                 self.fire(&after, &[], &row)?;
@@ -2807,6 +2877,7 @@ impl Writer {
             let record = crate::record::write(&stored, &affinities, 4);
             crate::tree::insert_entry(&mut self.pages, root, &record, &key, &collations, false)?;
             changed = changed.saturating_add(1);
+            self.returns(arena, statement.returning, sql, (&table, &named, None))?;
             if fires {
                 let row = Fired {
                     table: &table,
@@ -2979,7 +3050,7 @@ impl Writer {
             if !upserts.is_empty() {
                 return Err(Error::Unsupported);
             }
-            return self.insert_keyed(&name, statement.conflict, inserting);
+            return self.insert_keyed(arena, statement, sql, &name, inserting);
         }
         let Inserting {
             root,
@@ -2999,22 +3070,13 @@ impl Writer {
             alias,
             affinities: &affinities,
             conflict: statement.conflict,
+            returning: statement.returning,
         };
         Self::upsert_keys(&into)?;
         let before = self.triggers_for(&name, TriggerEvent::Insert, TriggerTime::Before)?;
         let after = self.triggers_for(&name, TriggerEvent::Insert, TriggerTime::After)?;
         let fires = !before.is_empty() || !after.is_empty();
-        let mut next = largest(&self.pages, root)?.unwrap_or(0);
-        // `autoIncBegin`: a key that counts up never gives a key back,
-        // so the next one is past the largest the table ever held and
-        // not past the largest it holds.
-        let counted = table
-            .autoincrement
-            .then(|| self.counted(&name))
-            .transpose()?;
-        if let Some(held) = counted {
-            next = next.max(held);
-        }
+        let (mut next, counted) = self.counting_from(root, &table, &name)?;
         let mut written = 0_i64;
         for (key, mut values) in rows {
             // A trigger's body may write the table this statement
@@ -3080,6 +3142,8 @@ impl Writer {
             self.index_row(&kept, &named, &keyed_as(rowid))?;
             insert(&mut self.pages, root, rowid, &record)?;
             written = written.saturating_add(1);
+            let answered = (&table, named.as_slice(), Some(rowid));
+            self.returns(arena, statement.returning, sql, answered)?;
             if fires {
                 self.fire(&after, &[], &row)?;
             }
@@ -3093,6 +3157,31 @@ impl Writer {
             self.count_up(&name, next)?;
         }
         Ok(written)
+    }
+
+    /// The largest key the table ever held and the one `sqlite_sequence`
+    /// counts, where the table counts its keys up.
+    ///
+    /// `autoIncBegin`: a key that counts up never gives a key back, so
+    /// the next one is past the largest the table ever held and not
+    /// past the largest it holds. Reading it costs O(log n).
+    ///
+    /// # Errors
+    ///
+    /// Whatever reading the tree of the table or the row that counts
+    /// refuses.
+    fn counting_from(
+        &self,
+        root: u32,
+        table: &Table,
+        name: &[u8],
+    ) -> Result<(i64, Option<i64>), Error> {
+        let largest = largest(&self.pages, root)?.unwrap_or(0);
+        let counted = table
+            .autoincrement
+            .then(|| self.counted(name))
+            .transpose()?;
+        Ok((largest.max(counted.unwrap_or(0)), counted))
     }
 
     /// Whether every `ON CONFLICT` clause names the columns of a key of
@@ -3233,6 +3322,7 @@ impl Writer {
             proposed,
             given,
             rowid,
+            returning: into.returning,
         };
         Ok(i64::from(self.upserted(&wanted)?))
     }
@@ -3382,6 +3472,8 @@ impl Writer {
         } else {
             crate::tree::update(&mut self.pages, wanted.root, rowid, &record)?;
         }
+        let answered = (table, named.as_slice(), Some(key));
+        self.returns(wanted.arena, wanted.returning, wanted.sql, answered)?;
         if fires {
             self.fire(&after, columns, &row)?;
         }
@@ -3757,6 +3849,8 @@ struct Insertion<'a> {
     affinities: &'a [Affinity],
     /// What the statement says to do where a row shares a key.
     conflict: Conflict,
+    /// The columns the `RETURNING` of the statement answers.
+    returning: crate::ast::Range,
 }
 
 /// What a row that shares a key with one the table holds does.
@@ -3795,6 +3889,8 @@ struct Upserting<'a> {
     given: i64,
     /// The key of the row the conflict found.
     rowid: i64,
+    /// The columns the `RETURNING` of the statement answers.
+    returning: crate::ast::Range,
 }
 
 /// The row a `DO UPDATE` reads: the row the conflict found under the
@@ -3997,6 +4093,8 @@ impl Writer {
             self.unindex_row(&kept, &values, &keyed_as(key))?;
             crate::tree::remove(&mut self.pages, root, key)?;
             taken = taken.saturating_add(1);
+            let answered = (&table, values.as_slice(), Some(key));
+            self.returns(arena, statement.returning, sql, answered)?;
             if fires {
                 self.fire(&after, &[], &row)?;
             }
@@ -4222,6 +4320,7 @@ impl Writer {
                 crate::tree::update(&mut self.pages, root, rowid, &record)?;
             }
             changed = changed.saturating_add(1);
+            self.returns(arena, statement.returning, sql, (&table, &named, Some(key)))?;
             if fires {
                 self.fire(&after, &columns, &row)?;
             }

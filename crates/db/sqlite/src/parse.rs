@@ -125,6 +125,8 @@ pub enum Expected {
     Savepoint,
     /// `TO`, after `ROLLBACK`.
     To,
+    /// `VALUES`, after `DEFAULT` in an `INSERT`.
+    Values,
     /// `ADD`, after the table of an `ALTER TABLE`.
     Add,
     /// `WHERE`, in the `FILTER` of a window function.
@@ -827,20 +829,31 @@ impl<'a> Parser<'a> {
             self.expect(Kind::Rp, Expected::CloseParen)?;
         }
         let columns = self.arena.push_names(&columns);
-        let select = self.select()?;
+        // `INSERT INTO t DEFAULT VALUES` reads no statement: it writes
+        // one row of what every column falls back to.
+        let defaults = self.eat_keyword(Keyword::Default);
+        let select = if defaults {
+            self.expect_keyword(Keyword::Values, Expected::Values)?;
+            self.arena.push_select(crate::ast::Select::default())
+        } else {
+            self.select()?
+        };
         let mut upserts = Vec::new();
         while self.eat_keyword(Keyword::On) {
             self.expect_keyword(Keyword::Conflict, Expected::Conflict)?;
             upserts.push(self.upsert()?);
         }
         let upserts = self.arena.push_upserts(&upserts);
+        let returning = self.returning()?;
         Ok(Insert {
             conflict,
             schema,
             name,
             columns,
             select,
+            defaults,
             upserts,
+            returning,
         })
     }
 
@@ -935,12 +948,14 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        let returning = self.returning()?;
         Ok(Update {
             conflict,
             schema,
             name,
             sets,
             filter,
+            returning,
         })
     }
 
@@ -954,11 +969,22 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        let returning = self.returning()?;
         Ok(Delete {
             schema,
             name,
             filter,
+            returning,
         })
+    }
+
+    /// The columns a `RETURNING` answers, or an empty run where the
+    /// statement writes none, which is `sqlite3AddReturning`.
+    fn returning(&mut self) -> Result<Range, Error> {
+        if !self.eat_keyword(Keyword::Returning) {
+            return Ok(Range::default());
+        }
+        self.result_columns()
     }
 
     /// What follows `INSERT OR`.

@@ -37,6 +37,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `RETURNING` and `INSERT INTO t DEFAULT VALUES` in `db-sqlite`. An
+  `INSERT`, an `UPDATE`, a `DELETE` and the `DO UPDATE` of an `ON
+  CONFLICT` answer one row per row they wrote, `*` answering the columns
+  of the table. D-241 records it.
+
 - `ALTER TABLE ... DROP COLUMN` in `db-sqlite`. The column goes out of
   the text that made the table and out of every row of it. A column a
   key of its own is over, and the one column of a table, are refused,

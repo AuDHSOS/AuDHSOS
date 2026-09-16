@@ -5045,6 +5045,21 @@ D-240, document 16 step Q8.
 - A statement of the schema that still names the column refuses the
   whole statement, and the file is what it was.
 
+### 6.6.164 The rows a statement that writes answers (`db-sqlite`)
+
+D-241, document 16 step Q8.
+
+- An `INSERT`, an `UPDATE` and a `DELETE` answer one row per row they
+  wrote, and a statement that wrote none answers none.
+- `*` answers the columns of the table, and an expression beside it is
+  read against the row.
+- A `DO UPDATE` of an `ON CONFLICT` answers the row it wrote, and a `DO
+  NOTHING` answers none.
+- A table that keeps its rows in the key's own tree answers them the
+  same way.
+- `INSERT INTO t DEFAULT VALUES` writes one row of what every column
+  falls back to.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`
