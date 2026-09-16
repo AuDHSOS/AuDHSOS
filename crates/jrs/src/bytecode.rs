@@ -3026,6 +3026,27 @@ impl RegisterLowerer {
                 captures.insert(name.clone(), self.capture_binding(name)?);
             }
         }
+        // 10.2.1.1 gives an arrow no Function Environment Record, so 9.4.2
+        // answers its `this` out of the one this function has. The binding is
+        // captured like any other name the arrow reads. A Realm Script has
+        // none, and 9.4.2 answers the `[[GlobalThisValue]]` there.
+        if function.arrow
+            && register_body_reads_this(&function.body)
+            && self.bindings.contains_key(THIS_BINDING)
+        {
+            // 9.4.5 refuses the `this` binding of a derived constructor until
+            // 13.3.7.1 has made it. The register carries that state and a copy
+            // of it into the context does not, so an arrow that reads it there
+            // is a named gap.
+            if self.code.derived {
+                self.refuse("the `this` of a derived constructor, read by an arrow");
+                return None;
+            }
+            captures.insert(
+                String::from(THIS_BINDING),
+                self.capture_binding(THIS_BINDING)?,
+            );
+        }
         let Some((mut child, self_register)) =
             self.register_function_child(function, code_id, &captures, &scope.captured_names)
         else {
@@ -3563,13 +3584,10 @@ impl RegisterLowerer {
             child.bindings.remove(HOME_BINDING);
             child.code.home_register = Some(register);
         }
-        if derived || register_body_reads_this(&function.body) {
-            // An arrow function has no Function Environment Record of its own
-            // (10.2.1.1), so its `this` is the one of the enclosing function
-            // and not the receiver of its call.
-            if function.arrow {
-                return None;
-            }
+        // 10.2.1.1 gives an arrow no Function Environment Record of its own,
+        // so its `this` is the binding the enclosing function captured into
+        // the context and not the receiver of its call.
+        if (derived || register_body_reads_this(&function.body)) && !function.arrow {
             child.declare(THIS_BINDING, false)?;
             let RegisterBindingStorage::Register(register) =
                 child.bindings.get(THIS_BINDING)?.storage

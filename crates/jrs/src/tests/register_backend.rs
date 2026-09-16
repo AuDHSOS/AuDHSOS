@@ -8771,3 +8771,24 @@ fn an_initializer_of_8_6_2_reads_an_earlier_parameter() -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[test]
+fn an_arrow_takes_the_this_of_the_function_it_was_made_in() -> Result<(), Error> {
+    for source in [
+        // 10.2.1.1 gives an arrow no Function Environment Record, so 9.4.2
+        // answers its `this` out of the one the enclosing function has.
+        "var o={v:7,m:function(){var f=()=>this.v;return f()}};o.m()",
+        "var o={v:7,m:function(){return (()=>this.v)()}};o.m()",
+        "var o={v:7,m:function(){var f=()=>this;return f().v}};o.m()",
+        "function F(){this.v=3;this.g=()=>this.v}var x=new F();x.g()",
+        // 10.2.1.1: the arrow's `this` is not the receiver of its own call.
+        "var o={v:1,m:function(){var f=()=>this.v;return f.call({v:9})}};o.m()",
+        // The arrow outlives the call it was made in and keeps that `this`.
+        "var o={v:5,m:function(){return ()=>this.v}};var f=o.m();f()",
+        // An arrow inside an arrow reaches the same binding.
+        "var o={v:4,m:function(){return (()=>(()=>this.v)())()}};o.m()",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
