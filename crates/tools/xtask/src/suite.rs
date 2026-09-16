@@ -289,6 +289,42 @@ pub(crate) fn beside(me: &Path, files: &[PathBuf], jobs: usize) -> Result<Vec<As
     Ok(done.into_iter().map(|(_, aside)| aside).collect())
 }
 
+/// How long a run waits for a descriptor another thread holds open to
+/// the binary to be closed.
+const BUSY: Duration = Duration::from_secs(5);
+
+/// The process of one file, started.
+///
+/// A thread that forks while another writes a file holds a descriptor
+/// open to it, so `execve` refuses the binary as busy for as long as
+/// that descriptor stands; the run waits it out rather than answering
+/// the refusal.
+///
+/// # Errors
+///
+/// [`Error`] names what starting the process refused.
+fn started(me: &Path, path: &Path) -> Result<std::process::Child, Error> {
+    let over = Instant::now();
+    loop {
+        let started = Command::new(me)
+            .arg("sqlite-suite")
+            .arg("--one")
+            .arg(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn();
+        match started {
+            Ok(child) => return Ok(child),
+            Err(source)
+                if source.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && over.elapsed() < BUSY => {}
+            Err(source) => return Err(Error::io("starting the run of one file", source)),
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// One file in a process of its own, ended where the deadline passes.
 ///
 /// The standard output is read after the process ended and not while it
@@ -296,15 +332,7 @@ pub(crate) fn beside(me: &Path, files: &[PathBuf], jobs: usize) -> Result<Vec<As
 /// deadline ends, and reading along would score cases that a run of one
 /// file after another never counted.
 fn apart(me: &Path, path: &Path) -> Result<Aside, Error> {
-    let mut child = Command::new(me)
-        .arg("sqlite-suite")
-        .arg("--one")
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|source| Error::io("starting the run of one file", source))?;
+    let mut child = started(me, path)?;
     let over = Instant::now();
     let ended = loop {
         match child.try_wait() {

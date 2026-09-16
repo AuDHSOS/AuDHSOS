@@ -738,6 +738,9 @@ Size: L.
 25. `ALTER TABLE ... RENAME COLUMN`: every statement of the schema
     that names the column written again under the new name. Built,
     which D-245 records.
+26. The order a row is held to the keys of a table in, which the `ON
+    CONFLICT` clauses name. Built, which D-246 records; a table that
+    keeps its rows in the key's own tree reaches no clause.
 
 ### Done when
 
@@ -747,8 +750,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 72 400 cases in 705 files, 57 359
-pass, 4397 answer differently, and 10 644 name something the engine
+under the `tclsh` of the machine. Of 72 345 cases in 705 files, 57 348
+pass, 4357 answer differently, and 10 640 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts

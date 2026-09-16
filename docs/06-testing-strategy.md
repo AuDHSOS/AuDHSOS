@@ -5161,6 +5161,28 @@ Document 16 step Q8.
   schema stands as it was.
 - A new name the statement wrote in quotes is written in quotes.
 
+### 6.6.170 The order a row is held to the keys in (`db-sqlite`)
+
+Document 16 step Q8.
+
+Against `CREATE TABLE t1(a INTEGER PRIMARY KEY, b, c UNIQUE, d UNIQUE, e
+UNIQUE)` holding the row `(1,2,3,4,5)`:
+
+- A row that shares every key reaches the first clause, so
+  `ON CONFLICT(a) ... ON CONFLICT(c)` writes what the clause for `a`
+  writes.
+- A row that shares `a` and `c` under `ON CONFLICT(c) ... ON CONFLICT(a)`
+  writes what the clause for `c` writes, because the key of the table
+  stands in the place of the clause that names it.
+- A row that shares `a` and `d` under `ON CONFLICT(c) ... ON CONFLICT(d)
+  ... ON CONFLICT(a)` writes what the clause for `d` writes.
+- A row that shares `a`, `d` and `e` under `ON CONFLICT(c) ...
+  ON CONFLICT(d) ... ON CONFLICT DO UPDATE` writes what the clause for
+  `d` writes, because the key of the table stands after the named keys.
+- `ON CONFLICT(c) ... ON CONFLICT(c)` reaches the first of the two.
+- A clause whose term is not a column is refused `ON CONFLICT clause
+  does not match any PRIMARY KEY or UNIQUE constraint`.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

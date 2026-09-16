@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- A row in `db-sqlite` is held to the keys of a table in the order the
+  `ON CONFLICT` clauses name them, which is
+  `sqlite3GenerateConstraintChecks`: the keys the clauses name come
+  first, the key of the table stands in the place of the clause that
+  names it, and the indexes no clause names come last. A clause that
+  names a key an earlier clause named is one no row reaches. D-246
+  records it. Catalog 6.6.170.
+
 - An `ON CONFLICT` clause in `db-sqlite` names a key by its columns and
   their collations rather than by its columns alone, which is
   `sqlite3UpsertAnalyzeTarget`. A term carries the collation and the
@@ -62,6 +70,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   highest of the four is the pool's.
 
 ### Fixed
+
+- A run of one file of SQLite's own suite answered `Text file busy`
+  where a thread of the pool forked while another wrote a file, because
+  the fork holds a descriptor open to the binary and `execve` refuses it
+  for as long as that descriptor stands. `suite::started` waits it out
+  for five seconds rather than answering the refusal.
 
 - `ANALYZE` in `db-sqlite` counted the rows of the table where it must
   count the entries of the index, which `analyzeOneTable` counts. A

@@ -3313,6 +3313,7 @@ impl Writer {
             kept,
             table,
         } = inserting;
+        let order = Self::checked_order(upserts, (arena, sql), (&table, alias, &kept))?;
         let into = Insertion {
             arena,
             sql,
@@ -3324,8 +3325,8 @@ impl Writer {
             affinities: &affinities,
             conflict: statement.conflict,
             returning: statement.returning,
+            order: &order,
         };
-        Self::upsert_keys(&into)?;
         let before = self.triggers_for(&name, TriggerEvent::Insert, TriggerTime::Before)?;
         let after = self.triggers_for(&name, TriggerEvent::Insert, TriggerTime::After)?;
         let fires = !before.is_empty() || !after.is_empty();
@@ -3437,28 +3438,6 @@ impl Writer {
         Ok((largest.max(counted.unwrap_or(0)), counted))
     }
 
-    /// Whether every `ON CONFLICT` clause names the columns of a key of
-    /// the table, which is `sqlite3UpsertAnalyzeTarget`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NoUpsertKey`] where a clause names any other columns.
-    fn upsert_keys(into: &Insertion<'_>) -> Result<(), Error> {
-        for clause in into.upserts {
-            if clause.targets.is_empty() {
-                continue;
-            }
-            let targets = targets_of(into.arena, into.sql, clause).ok_or(Error::NoUpsertKey)?;
-            let mut keys = (0..into.kept.len())
-                .filter_map(|at| Self::key_columns(into.table, into.kept, at))
-                .chain(core::iter::once(Self::key_column(into.table, into.alias)));
-            if !keys.any(|key| names_key(&key, &targets)) {
-                return Err(Error::NoUpsertKey);
-            }
-        }
-        Ok(())
-    }
-
     /// What a row that shares a key with one the table holds does: the
     /// `ON CONFLICT` clause it reaches writes the row the conflict
     /// found, or the resolution of the statement decides, which is
@@ -3473,26 +3452,78 @@ impl Writer {
         named: &[Value],
         rowid: i64,
     ) -> Result<Conflicted, Error> {
-        // `sqlite3UpsertOfIndex`: a row that shares the key of the table
-        // with one already there reaches the clause that names the
-        // column the key is another name for, or the clause that names
-        // no column.
-        let taken = into.alias.is_some() && crate::tree::holds(&self.pages, into.root, rowid)?;
-        let clause = taken
-            .then(|| {
-                let key = Self::key_column(into.table, into.alias);
-                upsert_of(into.arena, into.sql, into.upserts, &key)
-            })
-            .flatten();
-        if let Some(clause) = clause {
-            return Ok(Conflicted::Wrote(self.upsert(
-                into,
-                clause,
-                named,
-                (rowid, rowid),
-            )?));
+        for key in into.order.iter().copied() {
+            let Some(index) = key else {
+                match self.keyed_conflict(into, named, rowid)? {
+                    Some(answer) => return Ok(answer),
+                    None => continue,
+                }
+            };
+            let tail = keyed_as(rowid);
+            let found = into
+                .kept
+                .get(index)
+                .map(|one| self.conflicts_at(one, into.table, (named, &tail), None))
+                .transpose()?
+                .flatten();
+            let Some(held) = found else {
+                continue;
+            };
+            let columns = Self::key_columns(into.table, into.kept, index).unwrap_or_default();
+            if let Some(clause) = upsert_of(into.arena, into.sql, into.upserts, &columns) {
+                // The entry the row shares a key with ends with the key
+                // of the row it belongs to.
+                let other = held.first().map_or(rowid, Value::to_integer);
+                return Ok(Conflicted::Wrote(self.upsert(
+                    into,
+                    clause,
+                    named,
+                    (rowid, other),
+                )?));
+            }
+            match resolved(into.conflict, into.kept, index) {
+                crate::ast::Conflict::Ignore => return Ok(Conflicted::Over),
+                crate::ast::Conflict::Fail => {
+                    self.stopped = true;
+                    return Err(Error::Unique(Self::shown_key_of(
+                        into.table, into.kept, index,
+                    )));
+                }
+                crate::ast::Conflict::Replace
+                    if self.replaced(into.root, into.kept, into.table, &held)? => {}
+                _ => {
+                    return Err(Error::Unique(Self::shown_key_of(
+                        into.table, into.kept, index,
+                    )));
+                }
+            }
         }
-        if !self.keyed(
+        Ok(Conflicted::Write)
+    }
+
+    /// What a row that shares the key of the table with one already
+    /// there does, or nothing where it shares no key, which is
+    /// `sqlite3UpsertOfIndex` reading the clause that names the column
+    /// the key is another name for.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unique`] where the resolution refuses the row.
+    fn keyed_conflict(
+        &mut self,
+        into: &Insertion<'_>,
+        named: &[Value],
+        rowid: i64,
+    ) -> Result<Option<Conflicted>, Error> {
+        if into.alias.is_none() || !crate::tree::holds(&self.pages, into.root, rowid)? {
+            return Ok(None);
+        }
+        let key = Self::key_column(into.table, into.alias);
+        if let Some(clause) = upsert_of(into.arena, into.sql, into.upserts, &key) {
+            let wrote = self.upsert(into, clause, named, (rowid, rowid))?;
+            return Ok(Some(Conflicted::Wrote(wrote)));
+        }
+        if self.keyed(
             into.root,
             into.kept,
             into.table,
@@ -3500,42 +3531,63 @@ impl Writer {
             rowid,
             into.conflict,
         )? {
-            return Ok(Conflicted::Over);
+            return Ok(None);
         }
-        let Some((index, held)) =
-            self.conflicting(into.kept, into.table, named, &keyed_as(rowid), None)?
-        else {
-            return Ok(Conflicted::Write);
-        };
-        let columns = Self::key_columns(into.table, into.kept, index).unwrap_or_default();
-        if let Some(clause) = upsert_of(into.arena, into.sql, into.upserts, &columns) {
-            // The entry the row shares a key with ends with the key of
-            // the row it belongs to.
-            let other = held.first().map_or(rowid, Value::to_integer);
-            return Ok(Conflicted::Wrote(self.upsert(
-                into,
-                clause,
-                named,
-                (rowid, other),
-            )?));
-        }
-        match resolved(into.conflict, into.kept, index) {
-            crate::ast::Conflict::Ignore => return Ok(Conflicted::Over),
-            crate::ast::Conflict::Fail => {
-                self.stopped = true;
-                return Err(Error::Unique(Self::shown_key_of(
-                    into.table, into.kept, index,
-                )));
+        Ok(Some(Conflicted::Over))
+    }
+
+    /// The order the row is held to the keys of the table in, which is
+    /// `sqlite3GenerateConstraintChecks` reading `IndexListTerm`: the
+    /// keys the `ON CONFLICT` clauses name, in the order the clauses
+    /// name them, with the key of the table in the place of the clause
+    /// that names it and after the named keys where no clause names it,
+    /// and the indexes no clause names after them in the order the
+    /// schema holds them.
+    ///
+    /// Ordering `n` clauses over `k` indexes costs O(n k).
+    fn checked_order(
+        upserts: &[crate::ast::Upsert],
+        held: (&Arena, &[u8]),
+        over: (&Table, Option<usize>, &[Kept]),
+    ) -> Result<Vec<Option<usize>>, Error> {
+        let (arena, sql) = held;
+        let (table, alias, kept) = over;
+        let mut named: Vec<usize> = Vec::new();
+        let mut at_key: Option<usize> = None;
+        for clause in upserts {
+            // A clause that names no column is the one every conflict
+            // reaches, so it orders no key and ends the run.
+            if clause.targets.is_empty() {
+                break;
             }
-            crate::ast::Conflict::Replace
-                if self.replaced(into.root, into.kept, into.table, &held)? => {}
-            _ => {
-                return Err(Error::Unique(Self::shown_key_of(
-                    into.table, into.kept, index,
-                )));
+            let targets = targets_of(arena, sql, clause).ok_or(Error::NoUpsertKey)?;
+            if names_key(&Self::key_column(table, alias), &targets) {
+                at_key.get_or_insert(named.len());
+                continue;
+            }
+            let at = (0..kept.len())
+                .find(|at| {
+                    Self::key_columns(table, kept, *at).is_some_and(|key| names_key(&key, &targets))
+                })
+                .ok_or(Error::NoUpsertKey)?;
+            // A clause that names a key another clause named already is
+            // one no conflict reaches, which `bUsed` marks.
+            if !named.contains(&at) {
+                named.push(at);
             }
         }
-        Ok(Conflicted::Write)
+        let mut out: Vec<Option<usize>> = Vec::new();
+        for (place, index) in named.iter().enumerate() {
+            if at_key == Some(place) {
+                out.push(None);
+            }
+            out.push(Some(*index));
+        }
+        if !out.contains(&None) {
+            out.push(None);
+        }
+        out.extend((0..kept.len()).filter(|at| !named.contains(at)).map(Some));
+        Ok(out)
     }
 
     /// What one `ON CONFLICT` clause does where a row reaches it: a
@@ -4098,6 +4150,8 @@ struct Insertion<'a> {
     conflict: Conflict,
     /// The columns the `RETURNING` of the statement answers.
     returning: crate::ast::Range,
+    /// The order every row is held to the keys of the table in.
+    order: &'a [Option<usize>],
 }
 
 /// What a row that shares a key with one the table holds does.
@@ -4714,32 +4768,46 @@ impl Writer {
         tail: &[Value],
         held: Option<&[Value]>,
     ) -> Result<Option<(usize, Vec<Value>)>, Error> {
-        let encoding = self.header.encoding;
         for (at, one) in kept.iter().enumerate() {
-            if !one.index.unique {
-                continue;
+            if let Some(found) = self.conflicts_at(one, table, (values, tail), held)? {
+                return Ok(Some((at, found)));
             }
-            let over = one.over(table, encoding);
-            if !indexes_row(&one.index, &over, values)? {
-                continue;
-            }
-            let entry = entry_of(&one.index, &over, values, tail)?;
-            let key = entry.get(..one.index.columns.len()).unwrap_or_default();
-            if key.contains(&Value::Null) {
-                continue;
-            }
-            let width = tail.len();
-            let found =
-                crate::tree::entry_tail_at(&self.pages, one.root, key, &one.collations, width)?;
-            let Some(found) = found else {
-                continue;
-            };
-            if held == Some(found.as_slice()) {
-                continue;
-            }
-            return Ok(Some((at, found)));
         }
         Ok(None)
+    }
+
+    /// The key of the row the index `at` already holds the entry of
+    /// this row's key under, or nothing where it holds none, which is
+    /// the lookup `sqlite3GenerateConstraintChecks` writes per index.
+    ///
+    /// The row is the values it holds and the key it stands under.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what an expression of the index could not answer.
+    fn conflicts_at(
+        &self,
+        one: &Kept,
+        table: &Table,
+        row: (&[Value], &[Value]),
+        held: Option<&[Value]>,
+    ) -> Result<Option<Vec<Value>>, Error> {
+        let (values, tail) = row;
+        if !one.index.unique {
+            return Ok(None);
+        }
+        let over = one.over(table, self.header.encoding);
+        if !indexes_row(&one.index, &over, values)? {
+            return Ok(None);
+        }
+        let entry = entry_of(&one.index, &over, values, tail)?;
+        let key = entry.get(..one.index.columns.len()).unwrap_or_default();
+        if key.contains(&Value::Null) {
+            return Ok(None);
+        }
+        let width = tail.len();
+        let found = crate::tree::entry_tail_at(&self.pages, one.root, key, &one.collations, width)?;
+        Ok(found.filter(|found| held != Some(found.as_slice())))
     }
 
     /// Whether a row is held to the columns that refuse nothing and to

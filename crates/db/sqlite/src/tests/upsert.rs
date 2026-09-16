@@ -522,3 +522,77 @@ fn the_key_a_clause_names_is_held_to_its_columns_and_their_collations() {
         "UNIQUE constraint failed: xyz.d, xyz.c, xyz.b"
     );
 }
+
+#[test]
+fn a_row_reaches_the_clause_whose_key_the_statement_names_first() {
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE t1(a INTEGER PRIMARY KEY, b, c UNIQUE, d UNIQUE, e UNIQUE)")
+        .unwrap();
+    let held = |writer: &Writer| {
+        let image = writer.written();
+        let database = Database::open(&image).unwrap();
+        database.query(b"SELECT a,b,c,d,e FROM t1").unwrap().rows
+    };
+    // The key of the table stands in the place of the clause that names
+    // it, and the indexes no clause names come after the named ones.
+    for (clauses, want) in [
+        // Every key shares, so the first clause reaches the row.
+        (
+            b"(1,NULL,3,4,5) ON CONFLICT(a) DO UPDATE SET b='a' \
+              ON CONFLICT(c) DO UPDATE SET b='c'"
+                .as_slice(),
+            b"a".as_slice(),
+        ),
+        // The key of the table shares as well, and the clause that
+        // names `c` stands before the one that names it.
+        (
+            b"(1,NULL,3,94,95) ON CONFLICT(c) DO UPDATE SET b='c' \
+              ON CONFLICT(a) DO UPDATE SET b='a'",
+            b"c",
+        ),
+        // `c` shares nothing, so the row reaches the clause that names
+        // `d`, which stands before the key of the table.
+        (
+            b"(1,NULL,93,4,95) ON CONFLICT(c) DO UPDATE SET b='c' \
+              ON CONFLICT(d) DO UPDATE SET b='d' ON CONFLICT(a) DO UPDATE SET b='a'",
+            b"d",
+        ),
+        // The key of the table stands after the named keys where no
+        // clause names it, and before the clause that names none.
+        (
+            b"(1,NULL,93,4,5) ON CONFLICT(c) DO UPDATE SET b='c' \
+              ON CONFLICT(d) DO UPDATE SET b='d' ON CONFLICT DO UPDATE SET b='x'",
+            b"d",
+        ),
+        // A clause that names a key an earlier clause named is one no
+        // row reaches.
+        (
+            b"(1,NULL,3,4,5) ON CONFLICT(c) DO UPDATE SET b='c' \
+              ON CONFLICT(c) DO UPDATE SET b='z'",
+            b"c",
+        ),
+    ] {
+        writer.run(b"DELETE FROM t1").unwrap();
+        writer
+            .run(b"INSERT INTO t1(a,b,c,d,e) VALUES(1,2,3,4,5)")
+            .unwrap();
+        let mut sql = b"INSERT INTO t1(a,b,c,d,e) VALUES".to_vec();
+        sql.extend_from_slice(clauses);
+        writer.run(&sql).unwrap();
+        assert_eq!(
+            held(&writer).first().and_then(|row| row.get(1).cloned()),
+            Some(Value::Text(want.to_vec())),
+            "{}",
+            alloc::string::String::from_utf8_lossy(clauses)
+        );
+    }
+    // A clause whose term is not a column names no key.
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO t1(a) VALUES(9) ON CONFLICT(a+1) DO NOTHING")
+            .unwrap_err()
+            .message(),
+        "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint"
+    );
+}
