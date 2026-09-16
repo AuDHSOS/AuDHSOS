@@ -6399,11 +6399,19 @@ impl RegisterLowerer {
         pattern: &BindingPattern,
         lexical: Option<bool>,
     ) -> Option<()> {
-        let Some(mutable) = lexical else {
-            return Some(());
-        };
         let mut names = Vec::new();
         pattern.names(&mut names);
+        let Some(mutable) = lexical else {
+            // 14.7.5.6 step 7.g writes every name a `var` head binds, which
+            // the declaration only hoisted, so each carries the top of the
+            // lattice from the head on.
+            for name in names {
+                if let Some(binding) = self.bindings.get_mut(&name) {
+                    binding.value_type = Some(RegisterType::Unknown);
+                }
+            }
+            return Some(());
+        };
         for name in names {
             self.active_binding_count = self.active_binding_count.checked_add(1)?;
             self.max_binding_count = self.max_binding_count.max(self.active_binding_count);
@@ -8530,11 +8538,14 @@ fn infer_register_var_types(
         // `var` head carries the top of the lattice from the head on. The
         // declaration itself is hoisted and says only that the name exists.
         Stmt::ForIn { binding, body, .. } | Stmt::ForOf { binding, body, .. } => {
-            if let Some((pattern, None)) = binding
-                && let Some(name) = pattern.identifier()
-                && let Some(declared) = bindings.get_mut(name)
-            {
-                declared.value_type = Some(RegisterType::Unknown);
+            if let Some((pattern, None)) = binding {
+                let mut names = Vec::new();
+                pattern.names(&mut names);
+                for name in names {
+                    if let Some(declared) = bindings.get_mut(&name) {
+                        declared.value_type = Some(RegisterType::Unknown);
+                    }
+                }
             }
             infer_register_var_types(body, bindings, widen)?;
         }

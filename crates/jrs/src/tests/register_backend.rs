@@ -528,6 +528,12 @@ fn a_var_head_of_a_nested_iteration_carries_the_top_of_the_lattice() -> Result<(
         "var n=0;for(var a of [1,2]){for(var b of [3,4]){for(var c of [5]){n+=c}}}''+n",
         "var n='';for(var a of ['x','y']){for(var b of ['p']){n+=a+b}}n",
         "(function(){var m=0;for(var a of [1,2]){for(var b of [3,4]){m+=b}}return m})()",
+        // 14.7.5.6 step 7.g writes every name a `var` pattern head binds.
+        "var n=0;for(var [a,b] of [[1,2],[3,4]]){n+=a+b}''+n",
+        "var n='';for(var {x} of [{x:'a'},{x:'b'}]){n+=x}n",
+        "var n=0;for(var [a=5] of [[],[7]]){n+=a}''+n",
+        "var n='';for(var [a,...t] of [[1,2,3]]){n=a+':'+t.join()}n",
+        "var n=0;for(let [a,b] of [[1,2]]){n+=a+b}''+n",
         // A single `var` head still carries what the loop writes.
         "var n=0;for(var a of [1,2]){n+=a}''+n",
         "var n='';for(var a of ['x','y']){n+=a}n",
