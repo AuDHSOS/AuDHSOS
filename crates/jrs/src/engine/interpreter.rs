@@ -1822,6 +1822,47 @@ impl RegisterVM {
             Intrinsic::AsyncResume | Intrinsic::AsyncThrow => Err(VMError::Unsupported(
                 "the resumption of an async function outside its job",
             )),
+            // 20.1.2.1 copies the own enumerable properties of every source
+            // onto the target, and 28.1.13 writes one property.
+            Intrinsic::ObjectAssign => {
+                let target = self.call_argument(&call, 0, heap)?;
+                let object = Self::coerce_object(target, heap, realm)?;
+                for offset in 1..call.arg_count {
+                    let source = self.call_argument(&call, offset, heap)?;
+                    if source.is_undefined() || source.is_null() {
+                        continue;
+                    }
+                    let Some(source) = source.as_object() else {
+                        return Err(VMError::Unsupported(
+                            "a source of 20.1.2.1 that is no Object",
+                        ));
+                    };
+                    Self::copy_own_enumerable(object, source, heap, realm)?;
+                }
+                Ok(Value::from_object(object))
+            }
+            Intrinsic::ReflectSet => {
+                let target = self.call_argument(&call, 0, heap)?;
+                let key = property_key(self.call_argument(&call, 1, heap)?, heap)?;
+                let value = self.call_argument(&call, 2, heap)?;
+                // 28.1.13 step 3 takes the target as the receiver where the
+                // call named none; every other receiver is a gap.
+                if call.arg_count > 3 && self.call_argument(&call, 3, heap)? != target {
+                    return Err(VMError::Unsupported(
+                        "a receiver of 28.1.13 that is not the target",
+                    ));
+                }
+                let Some(object) = target.as_object() else {
+                    return Err(type_error(
+                        heap,
+                        realm,
+                        "Reflect.set called on a value that is not an object",
+                    ));
+                };
+                Ok(Value::from_bool(Self::write_own(
+                    object, key, value, heap, realm,
+                )?))
+            }
             Intrinsic::Print => self.print_line(&call, heap, realm),
             Intrinsic::PromiseAll | Intrinsic::PromiseRace | Intrinsic::PromiseAllSettled => {
                 self.promise_combinator(intrinsic, &call, heap, realm)
@@ -2293,6 +2334,8 @@ impl RegisterVM {
             | Intrinsic::ReflectIsExtensible
             | Intrinsic::ReflectOwnKeys
             | Intrinsic::ReflectPreventExtensions
+            | Intrinsic::ObjectGetOwnPropertySymbols
+            | Intrinsic::ObjectGetOwnPropertyDescriptors
             | Intrinsic::ObjectGetOwnPropertyNames => Self::call_object_intrinsic(
                 intrinsic,
                 self.call_argument(&call, 0, heap)?,
@@ -3064,6 +3107,123 @@ impl RegisterVM {
         Self::array_of(answers, heap, realm)
     }
 
+    /// 20.1.2.1 step 5: every own enumerable property of the source, in the
+    /// order 10.1.11 gives them.
+    ///
+    /// A property that is an accessor is a call of the Script that the clause
+    /// has no frame to make, which it names.
+    fn copy_own_enumerable(
+        target: ObjectRef,
+        source: ObjectRef,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let keys: Vec<PropertyKey> = heap
+            .own_keys(source)?
+            .into_iter()
+            .filter(|(_, enumerable)| *enumerable)
+            .map(|(key, _)| key)
+            .collect();
+        for key in keys {
+            let Some(found) = heap.lookup_named(source, key)? else {
+                continue;
+            };
+            let value = Self::plain_value(found)?;
+            if !Self::write_own(target, key, value, heap, realm)? {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "cannot write a property that is not writable",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// `[[Set]]` of 10.1.9 for a native, which answers whether it wrote.
+    ///
+    /// An accessor of the chain is a call of the Script that a native has no
+    /// frame to make, which it names.
+    fn write_own(
+        target: ObjectRef,
+        key: PropertyKey,
+        value: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<bool, VMError> {
+        if let Some(found) = heap.lookup_named(target, key)? {
+            if found.flags.is_accessor {
+                return Err(VMError::Unsupported("a property that is an accessor"));
+            }
+            if !found.flags.writable {
+                return Ok(false);
+            }
+        } else if !heap.is_extensible(target).unwrap_or(true) {
+            return Ok(false);
+        }
+        let shape = heap.get_object(target).ok_or(VMError::TypeError)?.shape_id;
+        if let Some(location) = heap.shapes.lookup(shape, key) {
+            heap.set_object_slot(target, location.slot_offset, value)?;
+            return Ok(true);
+        }
+        if let Some(index) = key
+            .as_string()
+            .and_then(|name| array_index_units(&heap.strings.to_utf16(Value::from_string(name))?))
+            && heap.array_length(target).is_some()
+        {
+            Self::set_element(target, index, value, heap, realm)?;
+            return Ok(true);
+        }
+        heap.define_own_named(target, key, value, PropertyFlags::ordinary_data())?;
+        Ok(true)
+    }
+
+    /// `Object.getOwnPropertySymbols` of 20.1.2.11.
+    fn own_symbol_keys(
+        target: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let object = Self::coerce_object(target, heap, realm)?;
+        let symbols: Vec<Value> = heap
+            .own_keys(object)?
+            .into_iter()
+            .filter_map(|(key, _)| match key {
+                PropertyKey::Symbol(symbol) => Some(Value::from_symbol(symbol)),
+                PropertyKey::String(_) => None,
+            })
+            .collect();
+        Self::array_of(symbols, heap, realm)
+    }
+
+    /// `Object.getOwnPropertyDescriptors` of 20.1.2.9.
+    ///
+    /// Every own key of the object answers the descriptor 6.2.6.4 makes of
+    /// it, on an ordinary object of this Realm.
+    fn own_descriptors(
+        target: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let object = Self::coerce_object(target, heap, realm)?;
+        let answer = realm.ordinary_object(heap)?;
+        let keys: Vec<PropertyKey> = heap
+            .own_keys(object)?
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect();
+        for key in keys {
+            let Some(flags) = heap.own_named_flags(object, key)? else {
+                continue;
+            };
+            let indexed = Self::element_index_of(object, key, heap);
+            let value = Self::own_property_value(object, key, indexed, heap)?;
+            let descriptor = Self::from_property_descriptor(value, flags, heap, realm)?;
+            heap.define_own_named(answer, key, descriptor, PropertyFlags::ordinary_data())?;
+        }
+        Ok(Value::from_object(answer))
+    }
+
     /// `Object.create` of 20.1.2.2: an ordinary object under the Prototype
     /// given, with the properties of 20.1.2.3 when a second argument names
     /// any.
@@ -3252,6 +3412,10 @@ impl RegisterVM {
                     )
                 })?;
                 Self::define_properties(object, key, heap, realm)
+            }
+            Intrinsic::ObjectGetOwnPropertySymbols => Self::own_symbol_keys(target, heap, realm),
+            Intrinsic::ObjectGetOwnPropertyDescriptors => {
+                Self::own_descriptors(target, heap, realm)
             }
             Intrinsic::ObjectGetOwnPropertyNames
             | Intrinsic::ObjectKeys

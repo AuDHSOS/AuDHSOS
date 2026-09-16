@@ -7693,6 +7693,52 @@ fn a_promise_settles_through_the_job_queue_of_both_backends() -> Result<(), Erro
 }
 
 #[test]
+fn the_four_reflective_functions_this_realm_had_not_built() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    for (source, expected) in [
+        // 20.1.2.1 copies the own enumerable properties of every source.
+        (
+            "var t={a:1};''+(Object.assign(t,{b:2},{c:3})===t)+'/'+t.a+t.b+t.c",
+            "true/123",
+        ),
+        (
+            "var s={};s[Symbol.iterator]=1;''+Object.assign({},s)[Symbol.iterator]",
+            "1",
+        ),
+        (
+            "var o={a:1};Object.defineProperty(o,'h',{value:2,enumerable:false});var t=Object.assign({},o);''+t.a+'/'+(t.h===undefined)",
+            "1/true",
+        ),
+        // 20.1.2.11 answers the own Symbol keys alone.
+        (
+            "var s=Symbol('x'),o={};o[s]=1;''+Object.getOwnPropertySymbols(o).length+'/'+(Object.getOwnPropertySymbols(o)[0]===s)",
+            "1/true",
+        ),
+        // 20.1.2.9 answers one descriptor per own key.
+        (
+            "var d=Object.getOwnPropertyDescriptors({a:1,b:2});''+d.a.value+d.b.value+'/'+d.a.writable",
+            "12/true",
+        ),
+        // 28.1.13 answers whether it wrote.
+        ("var o={};''+Reflect.set(o,'x',5)+'/'+o.x", "true/5"),
+        (
+            "var a=[];''+Reflect.set(a,'0',7)+'/'+a[0]+'/'+a.length",
+            "true/7/1",
+        ),
+        // 10.1.6.3 step 2 refuses a new property of an object that is not
+        // extensible, which the stack backend answers `true` for.
+        (
+            "var o=Object.freeze({});''+Reflect.set(o,'x',5)+'/'+(o.x===undefined)",
+            "false/true",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(expected), "{source}");
+    }
+    Ok(())
+}
+
+#[test]
 fn the_html_methods_of_b_2_2_wrap_the_text_in_a_tag() -> Result<(), Error> {
     // B.2.2.2.1 builds the tag, one attribute where the method names one, and
     // the text between the two ends. The stack backend carries none of the

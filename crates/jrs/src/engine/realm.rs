@@ -721,6 +721,14 @@ pub enum Intrinsic {
     StringPrototypeSub,
     /// `String.prototype.sup`, B.2.2.
     StringPrototypeSup,
+    /// `Object.getOwnPropertySymbols`, 20.1.2.11.
+    ObjectGetOwnPropertySymbols,
+    /// `Object.getOwnPropertyDescriptors`, 20.1.2.9.
+    ObjectGetOwnPropertyDescriptors,
+    /// `Object.assign`, 20.1.2.1.
+    ObjectAssign,
+    /// `Reflect.set`, 28.1.13.
+    ReflectSet,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -774,7 +782,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 209] = [
+    pub const ALL: [Self; 213] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -984,6 +992,10 @@ impl Intrinsic {
         Self::StringPrototypeStrike,
         Self::StringPrototypeSub,
         Self::StringPrototypeSup,
+        Self::ObjectGetOwnPropertySymbols,
+        Self::ObjectGetOwnPropertyDescriptors,
+        Self::ObjectAssign,
+        Self::ReflectSet,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -1110,7 +1122,8 @@ impl Intrinsic {
             | Self::ReflectHas
             | Self::ReflectIsExtensible
             | Self::ReflectOwnKeys
-            | Self::ReflectPreventExtensions => IntrinsicHolder::Reflect,
+            | Self::ReflectPreventExtensions
+            | Self::ReflectSet => IntrinsicHolder::Reflect,
             Self::NumberPrototypeValueOf | Self::NumberPrototypeToString => {
                 IntrinsicHolder::NumberPrototype
             }
@@ -1212,7 +1225,10 @@ impl Intrinsic {
             | Self::ObjectFreeze
             | Self::ObjectIsFrozen
             | Self::ObjectValues
-            | Self::ObjectEntries => IntrinsicHolder::ObjectConstructor,
+            | Self::ObjectEntries
+            | Self::ObjectGetOwnPropertySymbols
+            | Self::ObjectGetOwnPropertyDescriptors
+            | Self::ObjectAssign => IntrinsicHolder::ObjectConstructor,
             Self::NumberIsFinite
             | Self::NumberIsInteger
             | Self::NumberIsNaN
@@ -1437,6 +1453,10 @@ impl Intrinsic {
             Self::StringPrototypeStrike => 206,
             Self::StringPrototypeSub => 207,
             Self::StringPrototypeSup => 208,
+            Self::ObjectGetOwnPropertySymbols => 209,
+            Self::ObjectGetOwnPropertyDescriptors => 210,
+            Self::ObjectAssign => 211,
+            Self::ReflectSet => 212,
         }
     }
 
@@ -1656,6 +1676,10 @@ impl Intrinsic {
             Self::StringPrototypeStrike => 206,
             Self::StringPrototypeSub => 207,
             Self::StringPrototypeSup => 208,
+            Self::ObjectGetOwnPropertySymbols => 209,
+            Self::ObjectGetOwnPropertyDescriptors => 210,
+            Self::ObjectAssign => 211,
+            Self::ReflectSet => 212,
         }
     }
 
@@ -1876,6 +1900,10 @@ impl Intrinsic {
             206 => Some(Self::StringPrototypeStrike),
             207 => Some(Self::StringPrototypeSub),
             208 => Some(Self::StringPrototypeSup),
+            209 => Some(Self::ObjectGetOwnPropertySymbols),
+            210 => Some(Self::ObjectGetOwnPropertyDescriptors),
+            211 => Some(Self::ObjectAssign),
+            212 => Some(Self::ReflectSet),
             _ => None,
         }
     }
@@ -1929,6 +1957,10 @@ impl Intrinsic {
             Self::StringPrototypeStrike => "strike",
             Self::StringPrototypeSub => "sub",
             Self::StringPrototypeSup => "sup",
+            Self::ObjectGetOwnPropertySymbols => "getOwnPropertySymbols",
+            Self::ObjectGetOwnPropertyDescriptors => "getOwnPropertyDescriptors",
+            Self::ObjectAssign => "assign",
+            Self::ReflectSet => "set",
             Self::SpeciesGetter => "get [Symbol.species]",
             Self::RegExpPrototypeFlags => "get flags",
             Self::RegExpPrototypeSource => "get source",
@@ -2363,6 +2395,8 @@ impl Intrinsic {
             | Self::JsonParse
             | Self::JsonStringify
             | Self::ObjectGetOwnPropertyNames
+            | Self::ObjectGetOwnPropertySymbols
+            | Self::ObjectGetOwnPropertyDescriptors
             | Self::IsNaN
             | Self::IsFinite
             | Self::ParseInt
@@ -2601,6 +2635,8 @@ impl Intrinsic {
             | Self::ArrayFrom
             | Self::Eval
             | Self::ObjectGetOwnPropertyNames
+            | Self::ObjectGetOwnPropertySymbols
+            | Self::ObjectGetOwnPropertyDescriptors
             | Self::PromiseConstructor
             | Self::PromiseResolve
             | Self::PromiseReject
@@ -2622,7 +2658,10 @@ impl Intrinsic {
             | Self::StringPrototypeFontsize
             | Self::StringPrototypeLink
             | Self::Print => 1,
-            Self::ObjectDefineProperty | Self::ReflectDefineProperty | Self::ReflectApply => 3,
+            Self::ObjectDefineProperty
+            | Self::ReflectDefineProperty
+            | Self::ReflectApply
+            | Self::ReflectSet => 3,
             Self::MathPow
             | Self::ObjectGetOwnPropertyDescriptor
             | Self::ObjectCreate
@@ -2652,6 +2691,7 @@ impl Intrinsic {
             | Self::ArrayPrototypeToSpliced
             | Self::StringPrototypeReplace
             | Self::RegExpPrototypeReplace
+            | Self::ObjectAssign
             | Self::StringPrototypeSplit
             | Self::RegExpPrototypeSplit
             | Self::PromisePrototypeThen => 2,

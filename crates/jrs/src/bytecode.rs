@@ -8432,6 +8432,7 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ArrayPrototypeIncludes
         | crate::engine::realm::Intrinsic::ObjectIs
         | crate::engine::realm::Intrinsic::ObjectHasOwn
+        | crate::engine::realm::Intrinsic::ReflectSet
         | crate::engine::realm::Intrinsic::ObjectIsExtensible
         | crate::engine::realm::Intrinsic::ObjectIsSealed
         | crate::engine::realm::Intrinsic::ObjectIsFrozen
@@ -8610,6 +8611,12 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ArrayPrototypeReduceRight
         // 23.1.3.15 answers undefined.
         | crate::engine::realm::Intrinsic::ArrayPrototypeForEach
+        // 20.1.2.1 answers the target, 20.1.2.9 and 20.1.2.11 answer an
+        // object and an Array of Symbols, and 28.1.13 answers a Boolean the
+        // lowering types below.
+        | crate::engine::realm::Intrinsic::ObjectAssign
+        | crate::engine::realm::Intrinsic::ObjectGetOwnPropertyDescriptors
+        | crate::engine::realm::Intrinsic::ObjectGetOwnPropertySymbols
         // 27.2 answers a Promise, a settled value, or nothing; none of the
         // four has a tracked layout.
         | crate::engine::realm::Intrinsic::PromiseConstructor
