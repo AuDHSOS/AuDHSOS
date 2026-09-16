@@ -3831,14 +3831,6 @@ impl RegisterLowerer {
         use crate::engine::realm::Intrinsic;
         let property_limit = self.property_limit;
         match intrinsic {
-            Intrinsic::ArrayPrototypeJoin => {
-                // 23.1.3.18 applies ToString to every element, which an
-                // intrinsic cannot do for an Object.
-                if !self.array_element_type(base_type)?.is_primitive() {
-                    return None;
-                }
-                Some(intrinsic_result_type(intrinsic))
-            }
             // 23.1.3.1 answers an element of the receiver.
             Intrinsic::ArrayPrototypeAt => self.array_element_type(base_type),
             // 23.1.3.23 writes each argument at the length reached so far, so
@@ -3913,6 +3905,10 @@ impl RegisterLowerer {
                 *length = Some(last);
                 Some(element)
             }
+            // 23.1.3.18 applies `ToString` to every element, which for an
+            // Object is 7.1.1 with the hint `string`: the engine runs the
+            // methods of the Realm for it and names the gap for one of the
+            // Script.
             _ => Some(intrinsic_result_type(intrinsic)),
         }
     }
@@ -3974,9 +3970,9 @@ impl RegisterLowerer {
                     strict,
                 });
             } else {
-                if !self.lower(key)?.converts_to_primitive() {
-                    return None;
-                }
+                // 7.1.19 step 2 sends an Object key through 7.1.1, which
+                // the engine runs where the access stands.
+                self.lower(key)?;
                 let key = self.allocate_register()?;
                 self.code.emit(Instruction::Star(key));
                 self.code.emit(Instruction::DeleteByValue {
@@ -4023,9 +4019,9 @@ impl RegisterLowerer {
                 slot,
             });
         } else {
-            if !self.lower(key)?.converts_to_primitive() {
-                return None;
-            }
+            // 7.1.19 step 2 sends an Object key through 7.1.1, which the
+            // engine runs where the access stands.
+            self.lower(key)?;
             let key = self.allocate_register()?;
             self.code.emit(Instruction::Star(key));
             self.code.emit(Instruction::GetByValue {
@@ -4073,9 +4069,9 @@ impl RegisterLowerer {
                 slot,
             });
         } else {
-            if !self.lower(key)?.converts_to_primitive() {
-                return None;
-            }
+            // 7.1.19 step 2 sends an Object key through 7.1.1, which the
+            // engine runs where the access stands.
+            self.lower(key)?;
             let register = self.allocate_register()?;
             self.code.emit(Instruction::Star(register));
             self.code.emit(Instruction::GetByValue {
@@ -4190,9 +4186,9 @@ impl RegisterLowerer {
                 })
         };
         if keyed {
-            if !self.lower(key)?.converts_to_primitive() {
-                return None;
-            }
+            // 7.1.19 step 2 sends an Object key through 7.1.1, which the
+            // engine runs where the access stands.
+            self.lower(key)?;
         } else if let Some(index) = static_index {
             self.emit_array_index(index)?;
         } else if !self.lower(key)?.converts_to_primitive() {
@@ -4475,9 +4471,9 @@ impl RegisterLowerer {
         use crate::engine::bytecode::Instruction;
         let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
         if keyed {
-            if !self.lower(key)?.converts_to_primitive() {
-                return None;
-            }
+            // 7.1.19 step 2 sends an Object key through 7.1.1, which the
+            // engine runs where the access stands.
+            self.lower(key)?;
             let register = self.allocate_register()?;
             self.code.emit(Instruction::Star(register));
             self.code.emit(Instruction::GetByValue {
@@ -4568,9 +4564,9 @@ impl RegisterLowerer {
         };
         let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
         if keyed {
-            if !self.lower(key)?.converts_to_primitive() {
-                return None;
-            }
+            // 7.1.19 step 2 sends an Object key through 7.1.1, which the
+            // engine runs where the access stands.
+            self.lower(key)?;
             let key = self.allocate_register()?;
             self.code.emit(Instruction::Star(key));
             self.code.emit(Instruction::GetByValue {
@@ -4747,9 +4743,9 @@ impl RegisterLowerer {
         let key_register = if keyed.is_some() {
             None
         } else {
-            if !self.lower(key)?.converts_to_primitive() {
-                return None;
-            }
+            // 7.1.19 step 2 sends an Object key through 7.1.1, which the
+            // engine runs where the access stands.
+            self.lower(key)?;
             let register = self.allocate_register()?;
             self.code.emit(Instruction::Star(register));
             Some(register)
@@ -4837,9 +4833,9 @@ impl RegisterLowerer {
                 name,
             }
         } else {
-            if !self.lower(key)?.converts_to_primitive() {
-                return None;
-            }
+            // 7.1.19 step 2 sends an Object key through 7.1.1, which the
+            // engine runs where the access stands.
+            self.lower(key)?;
             let key = self.allocate_register()?;
             self.code.emit(Instruction::Star(key));
             RegisterMemberKey::ObjectKeyed(key, None)

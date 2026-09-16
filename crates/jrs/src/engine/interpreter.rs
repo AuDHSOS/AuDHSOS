@@ -560,6 +560,9 @@ pub struct RegisterVM {
     current_context: Option<ContextRef>,
     /// Reused precise context-root buffer for minor collection.
     context_roots: Vec<Option<ContextRef>>,
+    /// How deep a `ToString` of 7.1.17 is nested in methods of this Realm,
+    /// which bounds what a cyclic Array spends the Rust stack on.
+    conversion_depth: usize,
 }
 
 impl Default for RegisterVM {
@@ -599,6 +602,7 @@ impl RegisterVM {
             binding_limit: usize::MAX,
             current_context: None,
             context_roots: Vec::with_capacity(register_capacity.saturating_add(1)),
+            conversion_depth: 0,
         }
     }
 
@@ -1622,7 +1626,7 @@ impl RegisterVM {
             | Intrinsic::ArrayPrototypeReverse
             | Intrinsic::ArrayPrototypeSlice
             | Intrinsic::ArrayPrototypeToString => {
-                self.call_array_intrinsic(intrinsic, call, heap, realm)
+                self.call_array_intrinsic(intrinsic, call, units, heap, realm)
             }
             // Never reached: `enter_call_value` sends these to the walk of
             // 23.1.3 before an intrinsic is called at all.
@@ -5827,6 +5831,7 @@ impl RegisterVM {
         &mut self,
         intrinsic: Intrinsic,
         call: Call,
+        units: CodeUnits<'_>,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
@@ -5907,6 +5912,7 @@ impl RegisterVM {
                             arg_count: 0,
                             ..call
                         },
+                        units,
                         heap,
                         realm,
                     ),
@@ -5929,21 +5935,24 @@ impl RegisterVM {
                     property_name_units(search, heap)?
                 };
                 let scanned = length.min(i64::from(u32::MAX));
-                let mut units: Vec<u16> = Vec::new();
+                let mut out: Vec<u16> = Vec::new();
                 for index in Self::scan_range(0, scanned) {
                     if index > 0 {
-                        units.extend_from_slice(&separator);
+                        out.extend_from_slice(&separator);
                     }
                     let element = Self::element_at(heap, object, index)?.unwrap_or(VALUE_UNDEFINED);
                     if element.is_object() {
-                        // ToString of an Object calls a method of it, which an
-                        // intrinsic has no way to do yet.
-                        return Err(VMError::Unsupported("an Object element in a join"));
+                        // 7.1.17 of an Object is 7.1.1 with the hint `string`.
+                        let text = self.text_of(element, units, heap, realm)?;
+                        let text = heap
+                            .strings
+                            .to_utf16(text)
+                            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+                        out.extend_from_slice(&text);
+                    } else if !element.is_undefined() && !element.is_null() {
+                        out.extend(property_name_units(element, heap)?);
                     }
-                    if !element.is_undefined() && !element.is_null() {
-                        units.extend(property_name_units(element, heap)?);
-                    }
-                    if units.len() > self.string_units_limit {
+                    if out.len() > self.string_units_limit {
                         return Err(VMError::StringLimit);
                     }
                 }
@@ -5952,7 +5961,7 @@ impl RegisterVM {
                 if length > scanned && !separator.is_empty() {
                     return Err(VMError::StringLimit);
                 }
-                self.allocate_string(heap, &units)
+                self.allocate_string(heap, &out)
             }
             // 23.1.3.23: each argument is written at the length reached so
             // far, and the new length is the answer.
@@ -7840,6 +7849,92 @@ impl RegisterVM {
         }
         out.push(0x7D);
         Ok(true)
+    }
+
+    /// The value a register holds as a property key, with an Object sent
+    /// through 7.1.1 the way 7.1.19 step 2 asks.
+    fn text_key(
+        &mut self,
+        key: Reg,
+        units: CodeUnits<'_>,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let value = self.read_reg(key)?;
+        if value.is_object() {
+            return self.text_of(value, units, heap, realm);
+        }
+        Ok(value)
+    }
+
+    /// `ToString` of 7.1.17, where an Object goes through 7.1.1 with the hint
+    /// `string`.
+    ///
+    /// Only a method this Realm built can answer here: one of the Script needs
+    /// a frame this native has none of, which it names. The depth bound is
+    /// what a cyclic Array would otherwise spend the Rust stack on.
+    fn text_of(
+        &mut self,
+        value: Value,
+        units: CodeUnits<'_>,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        /// How deep one `ToString` follows the methods of this Realm.
+        const DEPTH_LIMIT: usize = 16;
+        let Some(object) = value.as_object() else {
+            return self.primitive_string(value, heap, realm);
+        };
+        if self.conversion_depth >= DEPTH_LIMIT {
+            return Err(VMError::Unsupported("a ToString that nests too deeply"));
+        }
+        // 7.1.1 step 1 asks `@@toPrimitive` before either method.
+        if heap
+            .lookup_named(object, super::realm::WellKnownSymbol::ToPrimitive.key())?
+            .is_some()
+        {
+            return Err(VMError::Unsupported("the @@toPrimitive of an Object"));
+        }
+        for name in ["toString", "valueOf"] {
+            let key = PropertyKey::String(heap.strings.intern(name)?);
+            let method = heap
+                .lookup_named(object, key)?
+                .map(Self::plain_value)
+                .transpose()?
+                .filter(|method| Self::is_callable(*method, heap));
+            let Some(method) = method else {
+                continue;
+            };
+            let intrinsic = method
+                .as_object()
+                .and_then(|method| heap.get_object(method))
+                .and_then(|entry| match entry.kind {
+                    ObjectKind::NativeFunction { id, .. } => Intrinsic::from_id(id),
+                    _ => None,
+                });
+            let Some(intrinsic) = intrinsic else {
+                return Err(VMError::Unsupported("a ToString of the Script"));
+            };
+            let call = Call {
+                receiver: value,
+                func: Reg(0),
+                arg_start: Reg(0),
+                arg_count: 0,
+                slot: 0,
+                return_pc: 0,
+                resume: None,
+                construct: None,
+                caller_code_id: None,
+            };
+            self.conversion_depth = self.conversion_depth.saturating_add(1);
+            let answered = self.call_intrinsic(intrinsic, call, units, heap, realm);
+            self.conversion_depth = self.conversion_depth.saturating_sub(1);
+            let answered = answered?;
+            if !answered.is_object() {
+                return self.primitive_string(answered, heap, realm);
+            }
+        }
+        Err(type_error(heap, realm, "an object has no primitive value"))
     }
 
     /// `String.prototype.replace` of 22.1.3.19.
@@ -9983,10 +10078,12 @@ impl RegisterVM {
                 }
                 Instruction::GetByValue { obj, key, slot } => {
                     let code_units = units;
+                    // 7.1.19 step 2 sends an Object key through 7.1.1 with the
+                    // hint `string`, which runs before the base is read again.
+                    let key_val = self.text_key(key, code_units, heap, realm)?;
                     let target = self.read_reg(obj)?;
                     if target.is_string() {
-                        let key = self.read_reg(key)?;
-                        let name = property_key(key, heap)?;
+                        let name = property_key(key_val, heap)?;
                         self.acc = self.string_member(target, name, heap, realm)?;
                         return Ok(None);
                     }
@@ -9994,7 +10091,6 @@ impl RegisterVM {
                         return Err(property_base_error(target, heap, realm));
                     };
                     let js_obj = heap.get_object(oref).ok_or(VMError::TypeError)?;
-                    let key_val = self.read_reg(key)?;
 
                     let element = match (array_index(key_val, heap)?, js_obj.elements) {
                         (Some(index), Some(eref)) => heap
@@ -10121,12 +10217,15 @@ impl RegisterVM {
                     strict,
                 } => {
                     let code_units = units;
+                    // 7.1.19 step 2 sends an Object key through 7.1.1 with the
+                    // hint `string`, which runs before the base and the value
+                    // are read again.
+                    let key_val = self.text_key(key, code_units, heap, realm)?;
                     let target = self.read_reg(obj)?;
                     let Some(oref) = target.as_object() else {
                         return Err(property_store_error(target, heap, realm));
                     };
                     let js_obj = heap.get_object(oref).ok_or(VMError::TypeError)?;
-                    let key_val = self.read_reg(key)?;
                     let val = self.acc;
 
                     // 7.1.19 keeps a Symbol as the key it is, and no Symbol
@@ -10296,8 +10395,8 @@ impl RegisterVM {
                     self.acc = delete_reference(target, name, index, strict, heap, realm)?;
                 }
                 Instruction::DeleteByValue { obj, key, strict } => {
+                    let key = self.text_key(key, units, heap, realm)?;
                     let target = self.read_reg(obj)?;
-                    let key = self.read_reg(key)?;
                     let index = array_index(key, heap)?;
                     // 7.1.19 keeps a Symbol as the key it is.
                     let name = property_key(key, heap)?;

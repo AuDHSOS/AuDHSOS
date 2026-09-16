@@ -1364,7 +1364,6 @@ fn observable_object_binding_defaults_stay_on_legacy_backend() -> Result<(), Err
     differential("let o={};let {x=(o.y=1)}={};42")?;
     differential("let o={};let {x=(o.y=1)}={x:0};o.y")?;
     for source in [
-        "let key={toString(){return 'x'}};let {[key]:x}={x:42};x",
         "let key='x';let {[key='y']:x}={x:42};x",
         "let {['x'+'']:x}={x:42};x",
     ] {
@@ -1372,6 +1371,15 @@ fn observable_object_binding_defaults_stay_on_legacy_backend() -> Result<(), Err
         assert!(!program.uses_register_backend(), "{source}");
         Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
     }
+    // 7.1.19 sends the key through 7.1.1, and a `toString` of the Script needs
+    // a frame the binding has none of.
+    let source = "let key={toString(){return 'x'}};let {[key]:x}={x:42};x";
+    let program = compile(source, Limits::default())?;
+    assert!(program.uses_register_backend(), "{source}");
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
     Ok(())
 }
 
@@ -1526,7 +1534,6 @@ fn observable_destructuring_assignments_stay_on_legacy_backend() -> Result<(), E
     differential("let x=0;[x]={0:42,length:1}")?;
     for source in [
         "const x=0;[x]=[1]",
-        "let target={},key={toString(){return 'x'}};[target[key]]=[42];target.x",
         "let target={x:1},key='y',x=0,rest={};target[key]=2;({x,...rest}=target);rest.y",
     ] {
         let program = compile(source, Limits::default())?;
@@ -1534,6 +1541,15 @@ fn observable_destructuring_assignments_stay_on_legacy_backend() -> Result<(), E
         let _ = Runtime::with_backend(Limits::default(), Backend::Engine)
             .run(&program, &mut SilentHost);
     }
+    // 7.1.19 sends the key through 7.1.1, and a `toString` of the Script needs
+    // a frame the access has none of.
+    let source = "let target={},key={toString(){return 'x'}};[target[key]]=[42];target.x";
+    let program = compile(source, Limits::default())?;
+    assert!(program.uses_register_backend(), "{source}");
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
     Ok(())
 }
 
@@ -2059,8 +2075,15 @@ fn ordinary_objects_read_primitive_bracket_keys_through_keyed_caches() -> Result
         );
     }
 
+    // 7.1.19 sends the key through 7.1.1, and a `toString` of the Script needs
+    // a frame the read has none of.
     let observable = "let key={toString(){return 'x'}};let o={x:42};o[key]";
-    assert!(!compile(observable, Limits::default())?.uses_register_backend());
+    let program = compile(observable, Limits::default())?;
+    assert!(program.uses_register_backend());
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
     Ok(())
 }
 
@@ -3911,9 +3934,6 @@ fn register_lowering_rejects_intrinsic_arguments_it_cannot_coerce() -> Result<()
         // argument position whose conversion the native does not leave for
         // keeps the call on the legacy backend.
         "let n=0;({}).hasOwnProperty({toString(){n++;return 'a'}})",
-        // 23.1.3.18 applies ToString to every element, which needs a frame.
-        "[{}].join('-')",
-        "[[1]].join('-')",
         // 23.1.3.22 and 23.1.3.23 need the length the layout starts from.
         "let a=[1];let i=0;a[i]=2;a.pop()",
         "let a=[1];let i=0;a[i]=2;a.reverse()",
@@ -6794,6 +6814,65 @@ fn replace_substitutes_the_first_match_or_every_global_one() -> Result<(), Error
     // Step 8 calls a replace value that is callable, which needs a frame.
     let program = compile(
         "'abc'.replace('b',function(){return 'x'})",
+        Limits::default(),
+    )?;
+    assert!(program.uses_register_backend());
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
+    Ok(())
+}
+
+/// 23.1.3.18 sends every element through 7.1.17, which for an Object is 7.1.1
+/// with the hint `string`. A method this Realm built answers without a frame;
+/// one of the Script needs one and stays a named gap.
+#[test]
+fn a_join_converts_an_object_element_with_the_methods_of_the_realm() -> Result<(), Error> {
+    for source in [
+        "''+[{},{}]",
+        "''+[[1,[2]],3]",
+        "''+[new Error('x')]",
+        "''+[1,2]",
+        "String([{}])",
+        "''+[{},1,null,undefined,'a']",
+        "[{}].join('-')",
+        "[[1]].join('-')",
+        "''+[[]]",
+        "''+[[[]]]",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // A `toString` of the Script needs a frame this native has none of.
+    let program = compile(
+        "var o={toString:function(){return 'T'}};''+[o]",
+        Limits::default(),
+    )?;
+    assert!(program.uses_register_backend());
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
+    Ok(())
+}
+
+/// 7.1.19 step 2 sends an Object key through 7.1.1 with the hint `string`,
+/// which the engine runs where the access stands.
+#[test]
+fn an_object_property_key_goes_through_to_property_key() -> Result<(), Error> {
+    for source in [
+        "var o={};o[{}]=1;''+o['[object Object]']",
+        "var o={};o[[1,2]]=3;''+o['1,2']",
+        "var o={};o[new Boolean(true)]=1;''+o['true']",
+        "var o={'1,2':7};''+o[[1,2]]",
+        "var o={a:1};''+delete o[['a']]",
+        "var o={};o[1]=2;''+o[1]",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // A `toString` of the Script needs a frame the access has none of.
+    let program = compile(
+        "var o={a:1};o[{toString:function(){return 'a'}}]",
         Limits::default(),
     )?;
     assert!(program.uses_register_backend());
