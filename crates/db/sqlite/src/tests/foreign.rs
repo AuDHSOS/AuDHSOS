@@ -628,3 +628,63 @@ fn a_row_written_into_the_parent_is_one_the_child_may_point_at() {
         assert_eq!(answer.is_err(), refused, "{sql}: {shown:?}");
     }
 }
+
+#[test]
+fn a_table_that_keeps_its_rows_in_the_keys_own_tree_holds_a_foreign_key() {
+    // The rows a key points at, and the rows that point, are read by
+    // the key of each row and not by a rowid, so a table that keeps its
+    // rows in the key's own tree is held to the key like any other.
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE p(a PRIMARY KEY, b) WITHOUT ROWID",
+        "CREATE TABLE c(x REFERENCES p(a) ON DELETE CASCADE, y)",
+    ])
+    .unwrap();
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO c VALUES(9,'z')")
+            .unwrap_err()
+            .message(),
+        "FOREIGN KEY constraint failed"
+    );
+    let rows = |writer: &Writer, sql: &[u8]| {
+        let image = writer.written();
+        let database = Database::open(&image).unwrap();
+        database.query(sql).unwrap().rows
+    };
+    // `ON DELETE CASCADE` takes the rows that point away with the row
+    // they pointed at.
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE p(a PRIMARY KEY, b) WITHOUT ROWID",
+        "CREATE TABLE c(x PRIMARY KEY REFERENCES p(a) ON DELETE CASCADE, y) WITHOUT ROWID",
+        "INSERT INTO p VALUES(1,'one'),(2,'two')",
+        "INSERT INTO c VALUES(1,'a'),(2,'b')",
+    ])
+    .unwrap();
+    writer.run(b"DELETE FROM p WHERE a=1").unwrap();
+    assert_eq!(
+        rows(&writer, b"SELECT x,y FROM c"),
+        [[Value::Int(2), Value::Text(b"b".to_vec())]]
+    );
+    // `ON DELETE SET NULL` writes nothing into the columns that point.
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE p(a PRIMARY KEY, b) WITHOUT ROWID",
+        "CREATE TABLE c(k PRIMARY KEY, x REFERENCES p(a) ON DELETE SET NULL) WITHOUT ROWID",
+        "INSERT INTO p VALUES(1,'one')",
+        "INSERT INTO c VALUES(7,1)",
+    ])
+    .unwrap();
+    writer.run(b"DELETE FROM p WHERE a=1").unwrap();
+    assert_eq!(
+        rows(&writer, b"SELECT k,x FROM c"),
+        [[Value::Int(7), Value::Null]]
+    );
+    assert_eq!(
+        rows(&writer, b"PRAGMA integrity_check")
+            .first()
+            .and_then(|row| row.first().and_then(crate::value::Value::text)),
+        Some(b"ok".to_vec())
+    );
+}

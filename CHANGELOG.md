@@ -111,6 +111,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- A foreign key over a table that keeps its rows in the key's own tree in
+  `db-sqlite`. A key names a row by its key and not by a rowid, so the
+  rows a key points at, the rows that point, and the row one action
+  writes are all read under that key. D-250 records it. Catalog 6.6.174.
+
 - `ALTER TABLE ... DROP CONSTRAINT`, `... ALTER COLUMN ... DROP NOT
   NULL`, `... ALTER COLUMN ... SET NOT NULL` and `... ADD [CONSTRAINT
   name] CHECK (...)` in `db-sqlite`. The four read the tokens of the

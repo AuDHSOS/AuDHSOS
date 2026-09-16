@@ -5242,6 +5242,18 @@ Document 16 step Q8.
 - `timediff('1066-10-14 00:00:00','-4713-11-24 12:00:00')` answers
   `+5778-10-19 12:00:00.000`.
 
+### 6.6.174 A foreign key over a table with no rowid (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A row written into a table that points at a table with no rowid, where
+  no row of that table holds the key, is refused `FOREIGN KEY constraint
+  failed`.
+- `ON DELETE CASCADE` takes the rows that point away with the row they
+  pointed at, where both tables keep their rows in the key's own tree.
+- `ON DELETE SET NULL` writes nothing into the columns that point, and
+  the walk of `PRAGMA integrity_check` answers `ok` after it.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

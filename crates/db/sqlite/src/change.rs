@@ -2190,18 +2190,18 @@ impl Writer {
         }
         match action {
             crate::ast::Action::Cascade => {
-                for (rowid, values) in rows {
+                for (key, values) in rows {
                     match after {
-                        None => self.taken_away(&points.child, rowid)?,
-                        Some(after) => self.written_over(points, rowid, &values, after)?,
+                        None => self.taken_away(&points.child, &key)?,
+                        Some(after) => self.written_over(points, &key, &values, after)?,
                     }
                 }
                 Ok(())
             }
             crate::ast::Action::SetNull | crate::ast::Action::SetDefault => {
                 let fallback = matches!(action, crate::ast::Action::SetDefault);
-                for (rowid, values) in rows {
-                    self.written_back(points, rowid, &values, fallback)?;
+                for (key, values) in rows {
+                    self.written_back(points, &key, &values, fallback)?;
                 }
                 Ok(())
             }
@@ -2214,25 +2214,25 @@ impl Writer {
         &self,
         points: &Points,
         wanted: &[Value],
-    ) -> Result<Vec<(i64, Vec<Value>)>, Error> {
+    ) -> Result<Vec<crate::db::Reading>, Error> {
         let bytes = self.image();
         let database = Database::open(&bytes)?;
         let (child, _) = database
             .table(&points.child)
             .ok_or(Error::NoTable(Vec::new()))?;
         let mut out = Vec::new();
-        for (rowid, values) in database.rows_of(&points.child)? {
+        for (key, values) in database.held_rows_of(&points.child)? {
             let held: Vec<Value> = points
                 .key
                 .columns
                 .iter()
-                .map(|at| at_place(child, &values, rowid, *at))
+                .map(|at| at_place(child, &values, keyed_rowid(&key), *at))
                 .collect();
             if held.contains(&Value::Null) {
                 continue;
             }
             if alike_values(&held, wanted, &points.under) {
-                out.push((rowid, values));
+                out.push((key, values));
             }
         }
         Ok(out)
@@ -2241,11 +2241,16 @@ impl Writer {
     /// One row of the table that points, taken away with the row it
     /// pointed at, which is `ON DELETE CASCADE`. The rows that point at
     /// that row go with it.
-    fn taken_away(&mut self, name: &[u8], rowid: i64) -> Result<(), Error> {
-        let (root, kept, table, values) = self.one_row(name, rowid)?;
-        self.orphaned(name, &table, &values, rowid, None)?;
-        self.unindex_row(&kept, &table, &values, &keyed_as(rowid))?;
-        crate::tree::remove(&mut self.pages, root, rowid)?;
+    fn taken_away(&mut self, name: &[u8], key: &[Value]) -> Result<(), Error> {
+        let (root, kept, table, values) = self.one_row(name, key)?;
+        self.orphaned(name, &table, &values, keyed_rowid(key), None)?;
+        self.unindex_row(&kept, &table, &values, key)?;
+        if table.without_rowid {
+            let collations = crate::schema::key_collations(&table);
+            crate::tree::remove_entry(&mut self.pages, root, key, &collations)?;
+            return Ok(());
+        }
+        crate::tree::remove(&mut self.pages, root, keyed_rowid(key))?;
         Ok(())
     }
 
@@ -2254,7 +2259,7 @@ impl Writer {
     fn written_over(
         &mut self,
         points: &Points,
-        rowid: i64,
+        key: &[Value],
         held: &[Value],
         after: &[Value],
     ) -> Result<(), Error> {
@@ -2264,7 +2269,7 @@ impl Writer {
                 *slot = value.clone();
             }
         }
-        self.rewrite(&points.child, rowid, &values)
+        self.rewrite(&points.child, key, &values)
     }
 
     /// One row of the table that points, with nothing or its fallback
@@ -2273,7 +2278,7 @@ impl Writer {
     fn written_back(
         &mut self,
         points: &Points,
-        rowid: i64,
+        key: &[Value],
         held: &[Value],
         fallback: bool,
     ) -> Result<(), Error> {
@@ -2294,12 +2299,29 @@ impl Writer {
                 *slot = value.clone();
             }
         }
-        self.rewrite(&points.child, rowid, &values)
+        self.rewrite(&points.child, key, &values)
     }
 
     /// One row of a table, written again with the values given.
-    fn rewrite(&mut self, name: &[u8], rowid: i64, values: &[Value]) -> Result<(), Error> {
-        let (root, kept, table, held) = self.one_row(name, rowid)?;
+    fn rewrite(&mut self, name: &[u8], key: &[Value], values: &[Value]) -> Result<(), Error> {
+        let (root, kept, table, held) = self.one_row(name, key)?;
+        self.unindex_row(&kept, &table, &held, key)?;
+        self.index_row(&kept, &table, values, key)?;
+        if table.without_rowid {
+            // A table that keeps its rows in the key's own tree holds
+            // the columns of the key in the record, and no action
+            // writes a column of that key, because such a column
+            // refuses nothing.
+            let affinities = ordered_affinities(&table);
+            let stored = ordered(&table, values);
+            let record = crate::record::write(&stored, &affinities, 4);
+            let collations = crate::schema::key_collations(&table);
+            // The entry the row stands under is written again in place,
+            // which is one taken out and one put back.
+            crate::tree::remove_entry(&mut self.pages, root, key, &collations)?;
+            crate::tree::insert_entry(&mut self.pages, root, &record, key, &collations, false)?;
+            return Ok(());
+        }
         let affinities: Vec<Affinity> =
             table.columns.iter().map(|column| column.affinity).collect();
         let mut stored = values.to_vec();
@@ -2312,10 +2334,8 @@ impl Writer {
         {
             *slot = Value::Null;
         }
-        self.unindex_row(&kept, &table, &held, &keyed_as(rowid))?;
-        self.index_row(&kept, &table, values, &keyed_as(rowid))?;
         let record = crate::record::write(&stored, &affinities, 4);
-        crate::tree::update(&mut self.pages, root, rowid, &record)?;
+        crate::tree::update(&mut self.pages, root, keyed_rowid(key), &record)?;
         Ok(())
     }
 
@@ -2323,16 +2343,16 @@ impl Writer {
     fn one_row(
         &self,
         name: &[u8],
-        rowid: i64,
+        key: &[Value],
     ) -> Result<(u32, Vec<Kept>, Table, Vec<Value>), Error> {
         let bytes = self.image();
         let database = Database::open(&bytes)?;
         let (table, root) = database.table(name).ok_or(Error::NoTable(Vec::new()))?;
         let kept = kept_indexes(&database, name);
         let values = database
-            .rows_of(name)?
+            .held_rows_of(name)?
             .into_iter()
-            .find(|(held, _)| *held == rowid)
+            .find(|(held, _)| held == key)
             .map(|(_, values)| values)
             .ok_or(Error::NoTable(Vec::new()))?;
         Ok((root, kept, table.clone(), values))
@@ -5514,6 +5534,13 @@ struct Points {
     under: Vec<(Affinity, Collation)>,
 }
 
+/// The key of a row as a rowid, which is the one value a table that
+/// keeps no rows in the key's own tree holds there; a table that does
+/// has no rowid for a name to answer.
+fn keyed_rowid(key: &[Value]) -> i64 {
+    key.first().map_or(0, Value::to_integer)
+}
+
 /// The name of a table under the schema it stands in, which is `main`
 /// for every table this crate holds.
 fn schema_named_as(name: &[u8]) -> Vec<u8> {
@@ -5637,7 +5664,8 @@ fn found_parent(
     places: &[usize],
     wanted: &[Value],
 ) -> Result<bool, Error> {
-    for (rowid, values) in database.rows_of(name)? {
+    for (key, values) in database.held_rows_of(name)? {
+        let rowid = keyed_rowid(&key);
         let same = places.iter().zip(wanted).all(|(at, value)| {
             let held = at_place(parent, &values, rowid, *at);
             let collation = parent
