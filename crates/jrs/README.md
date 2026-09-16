@@ -782,8 +782,8 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same two, on the register engine (focused) | focused | `9b84330` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object/create test/built-ins/Object/defineProperties --summary` | 952 | 1,904 | 1,737 (91.23%) | 46 (2.42%) | 121 (6.35%) |
 | The three functions of 22.1.2 (focused) | focused | `bcc2ce5` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/String/raw test/built-ins/String/fromCharCode test/built-ins/String/fromCodePoint --summary` | 58 | 116 | 40 (34.48%) | 66 (56.90%) | 10 (8.62%) |
 | The same three, on the register engine (focused) | focused | `bcc2ce5` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/String/raw test/built-ins/String/fromCharCode test/built-ins/String/fromCodePoint --summary` | 58 | 116 | 76 (65.52%) | 0 (0.00%) | 40 (34.48%) |
-| Complete pinned suite, including staging and Intl | full | `bcc2ce5` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `bcc2ce5` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 29,866 (29.02%) | 19,507 (18.95%) | 53,552 (52.03%) |
+| Complete pinned suite, including staging and Intl | full | `fc9a0b1` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `fc9a0b1` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 29,868 (29.02%) | 19,507 (18.95%) | 53,550 (52.03%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1660,7 +1660,10 @@ runs beside 22.1.2 were measured at tree
 `bd25da145f8a2d680080647509b682b8acdcca8f`, which is the tree of `bcc2ce5`;
 that step gained 120 variants and lost none, and the register engine passes 36
 variants more than the stack backend on that focused set, which built only
-22.1.2.1.
+22.1.2.1. The `var` pattern head of an iteration landed in `fc9a0b1` after it,
+measured at tree `9597ac60049dabb11fb71f7de257764e09f9761b`; that step gained 2
+variants and lost none, because the suite reaches the shape through harnesses
+that need other features.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
