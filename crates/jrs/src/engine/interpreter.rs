@@ -3225,6 +3225,9 @@ impl RegisterVM {
         }
         let shape = heap.get_object(target).ok_or(VMError::TypeError)?.shape_id;
         if let Some(location) = heap.shapes.lookup(shape, key) {
+            // 10.4.4.4 writes a mapped index through to the parameter it maps
+            // to, and the Shape keeps a copy.
+            heap.write_parameter(target, key, value)?;
             heap.set_object_slot(target, location.slot_offset, value)?;
             return Ok(true);
         }
@@ -8714,7 +8717,7 @@ impl RegisterVM {
             | ObjectKind::BooleanWrapper(_)
             | ObjectKind::StringWrapper(_)
             | ObjectKind::SymbolWrapper(_)
-            | ObjectKind::Arguments
+            | ObjectKind::Arguments { .. }
             | ObjectKind::Math
             | ObjectKind::Array { .. }
             | ObjectKind::ArrayIterator { .. }
@@ -9518,7 +9521,7 @@ impl RegisterVM {
                 ObjectKind::NumberWrapper(_) => "Number",
                 ObjectKind::StringWrapper(_) => "String",
                 // 10.4.4 gives the object [[ParameterMap]], which step 8 reads.
-                ObjectKind::Arguments => "Arguments",
+                ObjectKind::Arguments { .. } => "Arguments",
                 // 20.4.3.5 tags a Symbol wrapper through @@toStringTag, so its
                 // builtin tag is the ordinary one, as it is for the namespaces
                 // of 21.3, 25.5 and 28.1 and the iterator of 23.1.5.2.2.
@@ -11907,6 +11910,10 @@ impl RegisterVM {
     /// The mapping of 10.4.4.7 is not built. The lowering only takes a body
     /// where the mapping cannot be observed: one that assigns no parameter and
     /// uses `arguments` for nothing but reading a property of it.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "10.4.4 names every property of the object in one clause"
+    )]
     fn create_arguments(
         &mut self,
         code: &BytecodeFunction,
@@ -11967,7 +11974,24 @@ impl RegisterVM {
         }
         let root_shape = heap.shapes.root_shape();
         let object = self.allocate_object(code, heap, realm, root_shape)?;
-        heap.set_object_kind(object, ObjectKind::Arguments)?;
+        // 10.4.4.7 maps the indices the call passed onto the parameters they
+        // arrived in, which the lowering put in the function's own context.
+        let map = code
+            .arguments_map
+            .filter(|_| self.current_context.is_some());
+        heap.set_object_kind(
+            object,
+            ObjectKind::Arguments {
+                context: map.and(self.current_context),
+                slot: map.map_or(0, |map| map.slot),
+                mapped: map.map_or(0, |map| {
+                    map.mask
+                        & 1u64
+                            .checked_shl(u32::from(arguments.count))
+                            .map_or(u64::MAX, |bit| bit.wrapping_sub(1))
+                }),
+            },
+        )?;
         self.write_reg(target, Value::from_object(object))?;
         for (index, argument) in passed.into_iter().enumerate() {
             let name = alloc::format!("{index}");
@@ -14404,7 +14428,8 @@ impl RegisterVM {
                     // Inline cache check
                     let cached = active_feedback
                         .get_named_ic(slot)
-                        .and_then(|ic| ic.try_get(name, shape_id, prototype_epoch));
+                        .and_then(|ic| ic.try_get(name, shape_id, prototype_epoch))
+                        .filter(|_| !heap.has_parameter_map(oref));
 
                     if let Some(case) = cached
                         && let Some(value) = heap.load_cached_named(
@@ -14441,7 +14466,9 @@ impl RegisterVM {
                             }
                             return Ok(None);
                         }
-                        if let Some(ic) = active_feedback.get_named_ic_mut(slot) {
+                        if !property.mapped
+                            && let Some(ic) = active_feedback.get_named_ic_mut(slot)
+                        {
                             ic.record(NamedAccessCase {
                                 name,
                                 receiver_shape: property.receiver_shape,
@@ -14512,7 +14539,8 @@ impl RegisterVM {
 
                     let cached = active_feedback
                         .get_named_ic(slot)
-                        .and_then(|ic| ic.try_get(name, current_shape, prototype_epoch));
+                        .and_then(|ic| ic.try_get(name, current_shape, prototype_epoch))
+                        .filter(|_| !heap.has_parameter_map(oref));
                     if let Some(case) = cached
                         && case.holder_depth == 0
                         && case.holder_shape == current_shape
@@ -14571,8 +14599,11 @@ impl RegisterVM {
                     // Check if property exists in current shape
                     if let Some(loc) = heap.shapes.lookup(current_shape, name) {
                         let val = self.acc;
+                        // 10.4.4.4 writes a mapped index through to the
+                        // parameter it maps to, and the Shape keeps a copy.
+                        let mapped = heap.write_parameter(oref, name, val)?;
                         heap.set_object_slot(oref, loc.slot_offset, val)?;
-                        if let Some(ic) = active_feedback.get_named_ic_mut(slot) {
+                        if !mapped && let Some(ic) = active_feedback.get_named_ic_mut(slot) {
                             ic.record(NamedAccessCase {
                                 name,
                                 receiver_shape: current_shape,
@@ -14724,7 +14755,8 @@ impl RegisterVM {
                         let prototype_epoch = heap.shapes.prototype_epoch();
                         let cached = active_feedback
                             .get_named_ic(slot)
-                            .and_then(|ic| ic.try_get(name, shape_id, prototype_epoch));
+                            .and_then(|ic| ic.try_get(name, shape_id, prototype_epoch))
+                            .filter(|_| !heap.has_parameter_map(oref));
                         if let Some(case) = cached
                             && let Some(value) = heap.load_cached_named(
                                 oref,
@@ -14756,7 +14788,9 @@ impl RegisterVM {
                                 }
                                 return Ok(None);
                             }
-                            if let Some(ic) = active_feedback.get_named_ic_mut(slot) {
+                            if !property.mapped
+                                && let Some(ic) = active_feedback.get_named_ic_mut(slot)
+                            {
                                 ic.record(NamedAccessCase {
                                     name,
                                     receiver_shape: property.receiver_shape,
@@ -14922,7 +14956,8 @@ impl RegisterVM {
                         let prototype_epoch = heap.shapes.prototype_epoch();
                         let cached = active_feedback
                             .get_named_ic(slot)
-                            .and_then(|ic| ic.try_get(name, current_shape, prototype_epoch));
+                            .and_then(|ic| ic.try_get(name, current_shape, prototype_epoch))
+                            .filter(|_| !heap.has_parameter_map(oref));
                         if let Some(case) = cached
                             && case.holder_depth == 0
                             && case.holder_shape == current_shape
@@ -14970,8 +15005,11 @@ impl RegisterVM {
                             return Ok(None);
                         }
                         if let Some(location) = heap.shapes.lookup(current_shape, name) {
+                            // 10.4.4.4 writes a mapped index through to the
+                            // parameter it maps to, and the Shape keeps a copy.
+                            let mapped = heap.write_parameter(oref, name, val)?;
                             heap.set_object_slot(oref, location.slot_offset, val)?;
-                            if let Some(ic) = active_feedback.get_named_ic_mut(slot) {
+                            if !mapped && let Some(ic) = active_feedback.get_named_ic_mut(slot) {
                                 ic.record(NamedAccessCase {
                                     name,
                                     receiver_shape: current_shape,

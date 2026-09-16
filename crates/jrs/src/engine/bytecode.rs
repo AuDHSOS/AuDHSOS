@@ -721,6 +721,19 @@ pub struct ExceptionHandler {
     pub exception: Reg,
 }
 
+/// What 10.4.4.7 maps the indices of an arguments object onto.
+///
+/// The lowering puts the parameters of a sloppy function with a simple
+/// parameter list in consecutive slots of the function's own context, so the
+/// index `i` maps to `slot + i` while bit `i` of `mask` is set.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ParameterMap {
+    /// The context slot index 0 maps to.
+    pub slot: u16,
+    /// One bit per index 10.4.4.7 maps, index 0 in bit 0.
+    pub mask: u64,
+}
+
 /// Compiled bytecode unit for a function or top-level script.
 #[derive(Clone, Debug)]
 #[expect(
@@ -764,6 +777,10 @@ pub struct BytecodeFunction {
     /// Register the arguments object of the call is built in (10.4.4), when
     /// the body reads it.
     pub arguments_register: Option<Reg>,
+    /// The `[[ParameterMap]]` of 10.4.4.7, for a sloppy function with a simple
+    /// parameter list: the context slot index 0 maps to, and one bit per index
+    /// that 10.4.4.7 maps at all.
+    pub arguments_map: Option<ParameterMap>,
     /// Whether this function is the constructor of a class with a heritage,
     /// which 10.2.2 gives no `this` of its own and whose return answers the
     /// binding 13.3.7.1 made.
@@ -827,6 +844,7 @@ impl BytecodeFunction {
             home_register: None,
             new_target_register: None,
             arguments_register: None,
+            arguments_map: None,
             derived: false,
             constructible: false,
             strict: false,

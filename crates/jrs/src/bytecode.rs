@@ -753,6 +753,9 @@ struct RegisterLowerer {
     /// How many formal parameters 10.4.4.7 could map the indices of the
     /// arguments object onto.
     mapped_parameters: usize,
+    /// Whether 10.4.4.7 builds the map of this function, which the body
+    /// prologue puts the parameters in the own context for.
+    maps_arguments: bool,
     /// Strictness of the Reference the assignment being lowered names, which
     /// 10.1.9.1 reads to decide whether a write it refuses throws.
     assignment_strict: bool,
@@ -935,6 +938,7 @@ impl RegisterLowerer {
             open_iterators: Vec::new(),
             arguments_binding: None,
             mapped_parameters: 0,
+            maps_arguments: false,
             assignment_strict: false,
             initializing_global_lexical: false,
             reading_member_base: false,
@@ -1816,6 +1820,30 @@ impl RegisterLowerer {
         Some(captured)
     }
 
+    /// Puts the parameters 10.4.4.7 maps in consecutive slots of the own
+    /// context, where the arguments object reaches them for as long as it
+    /// lives.
+    fn capture_parameters(&mut self, function: &Function) -> Option<()> {
+        let base = self.code.own_context_slot_count.unwrap_or(0);
+        let mut mask = 0u64;
+        for (index, parameter) in function.parameters.iter().enumerate() {
+            let parser::BindingPattern::Name(name) = &parameter.pattern else {
+                return None;
+            };
+            let name = name.clone();
+            let binding = self.capture_binding(&name)?;
+            let RegisterBindingStorage::Context { depth: 0, slot } = binding.storage else {
+                return None;
+            };
+            if slot != base.checked_add(u16::try_from(index).ok()?)? {
+                return None;
+            }
+            mask |= 1u64.checked_shl(u32::try_from(index).ok()?)?;
+        }
+        self.code.arguments_map = Some(crate::engine::bytecode::ParameterMap { slot: base, mask });
+        Some(())
+    }
+
     fn snapshot(&self) -> RegisterSnapshot {
         RegisterSnapshot {
             instructions: self.code.instructions.len(),
@@ -2008,7 +2036,9 @@ impl RegisterLowerer {
                             // A function with no formal parameter has an empty
                             // mapping, so its object carries nothing that could
                             // be observed anywhere.
-                            let unmapped = self.code.strict || self.mapped_parameters == 0;
+                            let unmapped = self.code.strict
+                                || self.mapped_parameters == 0
+                                || self.code.arguments_map.is_some();
                             let binding =
                                 self.arguments_binding.filter(|_| member_base || unmapped)?;
                             self.load_binding(binding);
@@ -3334,7 +3364,15 @@ impl RegisterLowerer {
         child.function_layout_effects = self.function_layout_effects.clone();
         child.next_object_id = self.next_object_id;
         child.object_layouts = self.object_layouts.clone();
-        let depth_shift = u16::from(!captured_names.is_empty());
+        // 10.4.4.7 builds the map for a sloppy function whose parameter list
+        // is simple; 10.4.4.6 builds the object of every other one, which maps
+        // nothing. A function that maps holds its parameters in a context of
+        // its own, which every inherited binding is one step further out in.
+        let maps = !function.strict
+            && !function.arrow
+            && register_maps_its_parameters(function)
+            && register_body_reads_arguments(&function.body)?;
+        let depth_shift = u16::from(!captured_names.is_empty() || maps);
         for (name, binding) in captures {
             let RegisterBindingStorage::Context { depth, slot } = binding.storage else {
                 return None;
@@ -3420,7 +3458,9 @@ impl RegisterLowerer {
         // of 10.4.4.7 is only unobservable while no parameter is assigned.
         if !function.arrow
             && register_body_reads_arguments(&function.body)?
-            && (function.strict || !register_body_writes_parameters(&function.body, function)?)
+            && (maps
+                || function.strict
+                || !register_body_writes_parameters(&function.body, function)?)
         {
             child.declare(ARGUMENTS, false)?;
             let RegisterBindingStorage::Register(register) = child.bindings.get(ARGUMENTS)?.storage
@@ -3430,6 +3470,7 @@ impl RegisterLowerer {
             child.bindings.get_mut(ARGUMENTS)?.value_type = Some(RegisterType::Unknown);
             child.arguments_binding = child.bindings.remove(ARGUMENTS);
             child.mapped_parameters = function.parameters.len();
+            child.maps_arguments = maps;
             child.code.arguments_register = Some(register);
         }
         // 10.2.2 and 13.3.7.1 read the `[[NewTarget]]` of the call and the
@@ -3525,6 +3566,11 @@ impl RegisterLowerer {
         }
         child.prepare_var_bindings(&function.body)?;
         child.infer_binding_type_hints(&function.body);
+        // The map names consecutive slots, so the parameters take the first
+        // ones the context has.
+        if child.maps_arguments {
+            child.capture_parameters(function)?;
+        }
         for name in captured_names {
             child.capture_binding(name)?;
         }
@@ -9283,6 +9329,24 @@ fn register_body_reads_arguments(body: &[Stmt]) -> Option<bool> {
     Some(names.contains(ARGUMENTS))
 }
 
+/// Whether 10.4.4.7 maps the indices of this function's arguments object.
+///
+/// The clause maps a simple parameter list, and this lowering maps one whose
+/// names are distinct, so that each parameter holds a slot of its own, and no
+/// more than the 64 the object carries one bit each for.
+fn register_maps_its_parameters(function: &Function) -> bool {
+    if function.parameters.len() > 64 {
+        return false;
+    }
+    let mut seen = BTreeSet::new();
+    function.parameters.iter().all(|parameter| {
+        let parser::BindingPattern::Name(name) = &parameter.pattern else {
+            return false;
+        };
+        parameter.default.is_none() && !parameter.rest && seen.insert(name.clone())
+    })
+}
+
 /// Whether a body assigns one of the parameters, which 10.4.4.7 would show in
 /// the arguments object.
 fn register_body_writes_parameters(body: &[Stmt], function: &Function) -> Option<bool> {
@@ -9747,7 +9811,13 @@ fn register_block_local_names(body: &[Stmt]) -> Option<BTreeMap<String, bool>> {
 }
 
 fn register_function_scope(function: &Function) -> Option<RegisterFunctionScope> {
-    let local_names = register_function_local_names(function)?;
+    let mut local_names = register_function_local_names(function)?;
+    // 10.4.4 binds `arguments` in every ordinary function, so one nested in
+    // another body names its own object and not the one of that body. 10.2.1.1
+    // gives an arrow none, which is why only this case is local.
+    if !function.arrow {
+        local_names.insert(String::from(ARGUMENTS));
+    }
     let mut scope = register_body_scope(&function.body, &local_names)?;
     // An Initializer of 8.6.2 runs in the frame of the call, so a name it
     // reads and the body does not is captured just the same.

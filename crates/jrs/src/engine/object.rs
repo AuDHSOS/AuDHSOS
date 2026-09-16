@@ -99,7 +99,17 @@ pub enum ObjectKind {
     SymbolWrapper(SymbolRef),
     /// The arguments object of 10.4.4, which carries `[[ParameterMap]]` and so
     /// takes the builtin tag `Arguments` of 20.1.3.6.
-    Arguments,
+    Arguments {
+        /// The context 10.4.4.7 maps the indices onto. 10.4.4.6 builds the
+        /// object of a strict function or of a parameter list that is not
+        /// simple, which maps nothing and holds none.
+        context: Option<ContextRef>,
+        /// The slot index 0 maps to; index `i` maps to `slot + i`.
+        slot: u16,
+        /// One bit per index that is still mapped, index 0 in bit 0. 10.4.4.1
+        /// and 10.4.4.2 clear a bit, which leaves the value in the Shape.
+        mapped: u64,
+    },
     /// Error instance, the `[[ErrorData]]` slot of 20.5.4.
     Error,
     /// Array Iterator instance, the slots of 23.1.5.3.
@@ -290,7 +300,9 @@ impl ObjectKind {
     #[must_use]
     pub const fn context(&self) -> Option<ContextRef> {
         match self {
-            Self::Function { context, .. } | Self::Continuation { context, .. } => *context,
+            Self::Function { context, .. }
+            | Self::Continuation { context, .. }
+            | Self::Arguments { context, .. } => *context,
             _ => None,
         }
     }
@@ -298,7 +310,9 @@ impl ObjectKind {
     /// The same context, to be forwarded by a collection.
     pub const fn context_mut(&mut self) -> Option<&mut ContextRef> {
         match self {
-            Self::Function { context, .. } | Self::Continuation { context, .. } => context.as_mut(),
+            Self::Function { context, .. }
+            | Self::Continuation { context, .. }
+            | Self::Arguments { context, .. } => context.as_mut(),
             _ => None,
         }
     }

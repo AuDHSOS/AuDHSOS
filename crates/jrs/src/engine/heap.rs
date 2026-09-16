@@ -266,6 +266,9 @@ pub struct NamedProperty {
     pub flags: PropertyFlags,
     /// Prototype-validity epoch at lookup time.
     pub prototype_epoch: Option<u64>,
+    /// Whether the `[[ParameterMap]]` of 10.4.4 answered the value rather than
+    /// the slot, which no inline cache may record.
+    pub mapped: bool,
 }
 
 /// Generational execution heap.
@@ -709,6 +712,108 @@ impl GenerationalHeap {
         Ok(())
     }
 
+    /// The context slot the `[[ParameterMap]]` of 10.4.4 maps a name to.
+    ///
+    /// 10.4.4.7 maps the indices of a sloppy function's arguments object onto
+    /// the bindings of its parameters, which the lowering put in consecutive
+    /// slots of the function's own context.
+    fn parameter_map_slot(
+        &self,
+        reference: ObjectRef,
+        name: PropertyKey,
+    ) -> Option<(ContextRef, u16)> {
+        let ObjectKind::Arguments {
+            context,
+            slot,
+            mapped,
+        } = self.get_object(reference)?.kind
+        else {
+            return None;
+        };
+        let context = context?;
+        let index = self.array_index_of(name.as_string()?).ok().flatten()?;
+        if mapped & 1u64.checked_shl(index)? == 0 {
+            return None;
+        }
+        Some((context, slot.checked_add(u16::try_from(index).ok()?)?))
+    }
+
+    /// The value the parameter one mapped index of 10.4.4 names holds.
+    #[must_use]
+    pub fn parameter_value(&self, reference: ObjectRef, name: PropertyKey) -> Option<Value> {
+        let (context, slot) = self.parameter_map_slot(reference, name)?;
+        self.context_slot(context, 0, slot)
+    }
+
+    /// Whether this object is an arguments object with an entry of 10.4.4.7
+    /// left, which no inline cache may record a slot of.
+    #[must_use]
+    pub fn has_parameter_map(&self, reference: ObjectRef) -> bool {
+        matches!(
+            self.get_object(reference).map(|object| &object.kind),
+            Some(&ObjectKind::Arguments { mapped, .. }) if mapped != 0
+        )
+    }
+
+    /// Writes through one mapped index of 10.4.4 to the parameter it names,
+    /// answering whether the name was mapped at all.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale context.
+    pub fn write_parameter(
+        &mut self,
+        reference: ObjectRef,
+        name: PropertyKey,
+        value: Value,
+    ) -> Result<bool, HeapError> {
+        let Some((context, slot)) = self.parameter_map_slot(reference, name) else {
+            return Ok(false);
+        };
+        self.set_context_slot(context, 0, slot, value)?;
+        Ok(true)
+    }
+
+    /// Drops one entry of the `[[ParameterMap]]`, leaving the value where the
+    /// Shape holds it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale object.
+    fn unmap_parameter(
+        &mut self,
+        reference: ObjectRef,
+        name: PropertyKey,
+    ) -> Result<(), HeapError> {
+        let Some(value) = self.parameter_value(reference, name) else {
+            return Ok(());
+        };
+        let Some(index) = name
+            .as_string()
+            .and_then(|name| self.array_index_of(name).ok().flatten())
+        else {
+            return Ok(());
+        };
+        let slot = self.shapes.lookup(
+            self.get_object(reference)
+                .ok_or(HeapError::InvalidReference)?
+                .shape_id,
+            name,
+        );
+        if let Some(ObjectKind::Arguments { mapped, .. }) = self
+            .object_mut(reference)
+            .ok()
+            .map(|object| &mut object.kind)
+            && let Some(bit) = 1u64.checked_shl(index)
+        {
+            *mapped &= !bit;
+        }
+        if let Some(location) = slot {
+            self.set_object_slot(reference, location.slot_offset, value)?;
+        }
+        Ok(())
+    }
+
     /// Returns an Array exotic object's logical `length`.
     #[must_use]
     pub fn array_length(&self, reference: ObjectRef) -> Option<u32> {
@@ -1025,20 +1130,26 @@ impl GenerationalHeap {
                 .get_object(current)
                 .ok_or(HeapError::InvalidReference)?;
             if let Some(location) = self.shapes.lookup(object.shape_id, name) {
+                // 10.4.4.4 answers a mapped index out of the parameter it maps
+                // to, whatever the Shape slot of the same name last held.
+                let mapped = self.parameter_value(current, name);
                 return Ok(Some(NamedProperty {
                     receiver_shape,
                     holder_depth: depth,
                     holder_shape: object.shape_id,
                     slot: location.slot_offset,
-                    value: object
-                        .get_slot(location.slot_offset)
-                        .unwrap_or(VALUE_UNDEFINED),
+                    value: mapped.unwrap_or_else(|| {
+                        object
+                            .get_slot(location.slot_offset)
+                            .unwrap_or(VALUE_UNDEFINED)
+                    }),
                     flags: location.flags,
                     prototype_epoch: if depth == 0 {
                         None
                     } else {
                         self.shapes.prototype_epoch()
                     },
+                    mapped: mapped.is_some(),
                 }));
             }
             if object.prototype.is_null() {
@@ -1129,6 +1240,14 @@ impl GenerationalHeap {
         value: Value,
         flags: PropertyFlags,
     ) -> Result<u32, HeapError> {
+        // 10.4.4.2 steps 5 and 6: a descriptor that makes the property an
+        // accessor or takes its writability drops the entry of the map, and
+        // every other one writes the parameter the entry names.
+        if flags.is_accessor || !flags.writable {
+            self.unmap_parameter(reference, name)?;
+        } else {
+            self.write_parameter(reference, name, value)?;
+        }
         let shape_id = self
             .get_object(reference)
             .ok_or(HeapError::InvalidReference)?
@@ -1164,6 +1283,8 @@ impl GenerationalHeap {
         reference: ObjectRef,
         name: PropertyKey,
     ) -> Result<(), HeapError> {
+        // 10.4.4.5 step 3 drops the entry of the map for the index it deletes.
+        self.unmap_parameter(reference, name)?;
         let shape_id = self
             .get_object(reference)
             .ok_or(HeapError::InvalidReference)?
@@ -1231,12 +1352,24 @@ impl GenerationalHeap {
         let properties = self.shapes.own_properties(shape_id);
         let mut held = Vec::with_capacity(properties.len());
         for (property, flags, slot) in properties {
+            // 10.4.4.2 step 5: a property that loses its writability loses its
+            // entry of the map, and the Shape then holds what it last had.
             let value = self
-                .get_object(reference)
-                .ok_or(HeapError::InvalidReference)?
-                .get_slot(slot)
+                .parameter_value(reference, property)
+                .or_else(|| {
+                    self.get_object(reference)
+                        .and_then(|object| object.get_slot(slot))
+                })
                 .unwrap_or(VALUE_UNDEFINED);
             held.push((property, flags, value));
+        }
+        if writable == Some(false)
+            && let Some(ObjectKind::Arguments { mapped, .. }) = self
+                .object_mut(reference)
+                .ok()
+                .map(|object| &mut object.kind)
+        {
+            *mapped = 0;
         }
         let mut rebuilt = self.shapes.root_shape();
         let mut placed = Vec::with_capacity(held.len());

@@ -966,14 +966,20 @@ fn arguments_inside_a_function_is_never_a_global() -> Result<(), Error> {
     // A function with no formal parameter has an empty mapping, so its object
     // goes where any other value goes.
     differential("function f(){return typeof arguments}f()")?;
-    // With a formal parameter the mapping of 10.4.4.7 is not built, so the
-    // object is only read as the base of a property access.
+    // 10.4.4.7 maps the indices onto the parameters, so a write to either is
+    // read through the other.
     for source in [
-        "function f(){arguments=1;return 2}f()",
         "function f(a){arguments[0]=2;return a}f(1)",
         "function f(a){a=2;return arguments[0]}f(1)",
-        "function g(x){return x}function f(a){return g(arguments)}f(1)",
-        "function f(a){return arguments}f(1)",
+        "function g(x){return x}function f(a){return g(arguments)[0]}f(1)",
+        "function f(a){return arguments[0]}f(1)",
+    ] {
+        differential(source)?;
+    }
+    // A binding of that name and an arrow that reads the object of the frame
+    // it was made in are both refused.
+    for source in [
+        "function f(){arguments=1;return 2}f()",
         "function f(a){return (()=>arguments.length)()}f(1)",
     ] {
         assert!(
@@ -5996,12 +6002,9 @@ fn the_arguments_object_of_a_strict_function_is_a_value() -> Result<(), Error> {
     ] {
         differential_scripts(&[source])?;
     }
-    // A sloppy function's arguments object carries the mapping of 10.4.4.7,
-    // which this engine does not build, so there it is only the base of a
-    // property access.
-    let source = "function f(p){p=2;var a=arguments;return a[0]}f(1)";
-    let program = compile(source, Limits::default())?;
-    assert!(!program.uses_register_backend(), "{source}");
+    // 10.4.4.7 maps the indices of a sloppy function's object onto its
+    // parameters, so a write to one is read through the other.
+    differential_scripts(&["function f(p){p=2;var a=arguments;return a[0]}f(1)"])?;
     // 23.1.5.2.1 reads the length of the array-like again at every step, so
     // an object that is no Array is walked the same way.
     for source in [
@@ -6593,12 +6596,15 @@ fn an_arguments_object_with_no_mapping_leaves_its_frame() -> Result<(), Error> {
     ] {
         differential_scripts(&[source])?;
     }
-    // A sloppy function with a formal parameter keeps a mapping this engine
-    // does not build, so its object is read only as the base of a property
-    // access.
-    let source = "var arg;(function fun(a){arg=arguments}(1,2,3));arg.length";
-    let program = compile(source, Limits::default())?;
-    assert!(!program.uses_register_backend(), "{source}");
+    // A sloppy function with a formal parameter carries the map of 10.4.4.7,
+    // which the object keeps for as long as it lives.
+    for source in [
+        "var arg;(function fun(a){arg=arguments}(1,2,3));arg.length",
+        "var arg;(function fun(a){arg=arguments;a=9}(1,2,3));arg[0]",
+        "var arg;(function fun(a){arg=arguments}(1,2,3));arg[0]=8;arg[0]",
+    ] {
+        differential_scripts(&[source])?;
+    }
     Ok(())
 }
 
@@ -8476,6 +8482,49 @@ fn a_read_of_an_index_reaches_the_elements_store_of_a_prototype() -> Result<(), 
         assert_eq!(
             engine.evaluate(source)?,
             stack.evaluate(source)?,
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn the_parameter_map_of_10_4_4_7_reaches_both_ways() -> Result<(), Error> {
+    for source in [
+        // 10.4.4.7 maps each index onto the parameter the argument arrived in.
+        "function f(a){a=2;return arguments[0]}f(1)",
+        "function f(a){arguments[0]=3;return a}f(1)",
+        "function f(a,b){b='B';return ''+arguments[0]+arguments[1]+arguments.length}f(1,2)",
+        // 10.4.4.7 maps no index the call passed no argument for.
+        "function f(a,b){b='B';return ''+arguments[1]+'/'+arguments.length}f(1)",
+        // 10.4.4.5 drops the entry the delete removes, and the parameter keeps
+        // what it holds.
+        "function f(a){delete arguments[0];a=9;return ''+arguments[0]+'/'+a}f(1)",
+        // 10.4.4.2 step 5: a descriptor that takes the writability or makes
+        // the property an accessor drops the entry.
+        "function f(a){Object.defineProperty(arguments,'0',{value:7});return ''+a}f(1)",
+        "function f(a){Object.defineProperty(arguments,'0',{get:function(){return 5}});a=8;return ''+arguments[0]+'/'+a}f(1)",
+        "function f(a){Object.freeze(arguments);a=4;return ''+arguments[0]+'/'+a}f(1)",
+        // 6.2.6.4 reads the value through the map as well.
+        "function f(a){a=6;return ''+Object.getOwnPropertyDescriptor(arguments,'0').value}f(1)",
+        // The object outlives the frame, so the map holds the context and not
+        // the registers of a call that has returned.
+        "var g;function f(a){g=arguments;a=5;return 0}f(1);g[0]",
+        // A nested ordinary function binds an object of its own.
+        "function f(a){return (function(b){return b+arguments.length})(2)}f(1)",
+        // 10.4.4.6 maps nothing for a strict function.
+        "function f(a){'use strict';a=2;return arguments[0]}f(1)",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // 10.4.4.6 builds the object of a parameter list that is not simple, which
+    // maps nothing; a body that writes such a parameter is refused instead.
+    for source in [
+        "function f(a=1){a=2;return arguments[0]}f(1)",
+        "function f(...a){a=2;return arguments[0]}f(1)",
+    ] {
+        assert!(
+            !compile(source, Limits::default())?.uses_register_backend(),
             "{source}"
         );
     }
