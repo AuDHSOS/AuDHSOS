@@ -707,8 +707,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `for`-`of`, after the iterator close, on the register engine (focused) | focused | `f151cfc` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/for-of --summary` | 751 | 1,442 | 742 (51.46%) | 45 (3.12%) | 655 (45.42%) |
 | `%Object.prototype%`, after `valueOf` (focused) | focused | `c1b270e` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object/prototype --summary` | 248 | 494 | 284 (57.49%) | 202 (40.89%) | 8 (1.62%) |
 | `%Object.prototype%`, after `valueOf`, on the register engine (focused) | focused | `c1b270e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object/prototype --summary` | 248 | 494 | 246 (49.80%) | 12 (2.43%) | 236 (47.77%) |
-| Complete pinned suite, including staging and Intl | full | `c1b270e` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `c1b270e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 25,212 (24.50%) | 19,818 (19.25%) | 57,895 (56.25%) |
+| `%Function.prototype%`, `instanceof` and `concat`, after the four answers (focused) | focused | `83ca8c2` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Function/prototype test/language/expressions/instanceof test/built-ins/Array/prototype/concat --summary` | 421 | 824 | 713 (86.53%) | 57 (6.92%) | 54 (6.55%) |
+| The same three, after the four answers, on the register engine (focused) | focused | `83ca8c2` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Function/prototype test/language/expressions/instanceof test/built-ins/Array/prototype/concat --summary` | 421 | 824 | 293 (35.56%) | 240 (29.13%) | 291 (35.32%) |
+| Complete pinned suite, including staging and Intl | full | `83ca8c2` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `83ca8c2` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 25,375 (24.65%) | 20,025 (19.46%) | 57,525 (55.89%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1452,7 +1454,11 @@ which is the tree of `22fdd9f`. The `for`-`of` runs and both full runs beside
 the iterator close were measured at tree `22fb2237d4e46bd487f8db4e43822baef9d45cfa`,
 which is the tree of `f151cfc`. The `%Object.prototype%` runs and both full
 runs beside `valueOf` were measured at tree
-`832a7f0dba084b4500812b8e0ed6cfdaabf5d987`, which is the tree of `c1b270e`. That step moved 868 variants from unsupported
+`832a7f0dba084b4500812b8e0ed6cfdaabf5d987`, which is the tree of `c1b270e`. The three focused runs and both full runs
+beside the four answers were measured at tree
+`d2bff07c4c68c06757ee22646a378334210f4236`, which is the tree of `83ca8c2`.
+That step gained 167 variants and lost 4: `concat` now keeps an object
+element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
 fails on the feature it actually needs. `RegExp.prototype[@@split]` landed in `fe5797c`
 between them and moved no variant of the suite.
