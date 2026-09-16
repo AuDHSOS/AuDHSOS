@@ -411,6 +411,10 @@ pub struct Writer {
     /// what `changes()` answers where the statement stops where it
     /// stands and keeps them.
     writing: i64,
+    /// How many foreign keys held at the end of the transaction point
+    /// at no row, which is the counter `sqlite3VdbeCheckFk` reads at a
+    /// `COMMIT`.
+    deferred: i64,
     /// The header as the open transaction began, where a `BEGIN` opened
     /// one. A connection outside `BEGIN` holds none and commits every
     /// statement of its own.
@@ -439,6 +443,9 @@ struct Saved {
     pages: Pages,
     /// The header as it stood.
     header: Header,
+    /// How many foreign keys held at the end of the transaction pointed
+    /// at no row.
+    deferred: i64,
     /// Whether this savepoint opened the transaction, which is what
     /// makes releasing it a commit.
     opener: bool,
@@ -467,6 +474,7 @@ impl Writer {
             counting: false,
             counted: crate::func::Counted::default(),
             writing: 0,
+            deferred: 0,
             began: None,
             stopped: false,
             saved: Vec::new(),
@@ -528,6 +536,7 @@ impl Writer {
             counting: false,
             counted: crate::func::Counted::default(),
             writing: 0,
+            deferred: 0,
             began: None,
             stopped: false,
             saved: Vec::new(),
@@ -1406,6 +1415,15 @@ impl Writer {
         // and not by itself, which is what makes the transaction one
         // unit of work.
         if self.began.is_none() {
+            // A statement of its own commits at its end, so a foreign
+            // key held at the end of the transaction is held there.
+            if self.deferred != 0 {
+                self.deferred = 0;
+                self.pages.rollback();
+                self.header = held;
+                self.counts_step(0);
+                return Err(Error::Foreign);
+            }
             self.commit(&was)?;
         }
         // A statement that writes a `RETURNING` answers one row per row
@@ -1578,6 +1596,16 @@ impl Writer {
                 self.began = Some(self.header);
             }
             crate::ast::Transaction::Commit => {
+                if self.began.is_none() {
+                    return Err(Error::NoTransaction);
+                }
+                // `sqlite3VdbeCheckFk`: a transaction that leaves a
+                // foreign key held at its end pointing at no row is not
+                // written, and it stays open.
+                if self.deferred != 0 {
+                    self.stopped = true;
+                    return Err(Error::Foreign);
+                }
                 let was = self.began.take().ok_or(Error::NoTransaction)?;
                 self.saved.clear();
                 self.commit(&was)?;
@@ -1585,6 +1613,7 @@ impl Writer {
             crate::ast::Transaction::Rollback => {
                 let was = self.began.take().ok_or(Error::NoTransaction)?;
                 self.saved.clear();
+                self.deferred = 0;
                 // The pages go back to what they held and the header
                 // with them, so the transaction leaves no trace.
                 self.pages.rollback();
@@ -1625,6 +1654,7 @@ impl Writer {
                 name,
                 pages: self.pages.clone(),
                 header: self.header,
+                deferred: self.deferred,
                 opener,
             });
             return Ok(Vec::new());
@@ -1640,12 +1670,20 @@ impl Writer {
             let held = self.saved.get(at).ok_or(Error::NoSavepoint(Vec::new()))?;
             self.pages = held.pages.clone();
             self.header = held.header;
+            self.deferred = held.deferred;
             // The savepoint the statement names stays open, and every
             // one inside it is gone.
             self.saved.truncate(at.saturating_add(1));
             return Ok(Vec::new());
         }
         let opener = self.saved.get(at).is_some_and(|held| held.opener);
+        // Releasing the savepoint that opened the transaction writes
+        // it, so a foreign key held at the end of the transaction is
+        // held there and the savepoint stays open.
+        if opener && self.deferred != 0 {
+            self.stopped = true;
+            return Err(Error::Foreign);
+        }
         self.saved.truncate(at);
         if opener {
             let was = self.began.take().ok_or(Error::NoTransaction)?;
@@ -2176,8 +2214,90 @@ impl Writer {
     /// Looking one key up reads the rows of the table it points at, so
     /// a statement that writes n rows into a table with a foreign key
     /// over a table of m rows costs O(n·m).
-    fn parented(&self, table: &Table, values: &[Value], rowid: i64) -> Result<(), Error> {
-        if !self.holding() || table.foreign.is_empty() {
+    fn parented(&mut self, table: &Table, values: &[Value], rowid: i64) -> Result<(), Error> {
+        if !self.holding() {
+            return Ok(());
+        }
+        self.counted_child(table, values, rowid, 1)?;
+        self.rescued(table, values, rowid)
+    }
+
+    /// Whether a foreign key is held where the transaction ends rather
+    /// than where a row is written, which is `DEFERRABLE INITIALLY
+    /// DEFERRED` and `PRAGMA defer_foreign_keys`.
+    fn deferring(&self, key: &crate::schema::Foreign) -> bool {
+        key.deferred || self.told(b"defer_foreign_keys") != 0
+    }
+
+    /// The rows that point at a row the statement wrote, counted one
+    /// fewer each, which is `fkScanChildren` over the row that
+    /// appeared: a row is the parent the rows waiting for it were
+    /// counted against.
+    ///
+    /// Reading the rows that point costs O(m) in the rows of each table
+    /// that points at this one.
+    fn rescued(&mut self, table: &Table, values: &[Value], rowid: i64) -> Result<(), Error> {
+        // Nothing waits for a parent where no key is counted, so no
+        // table needs reading.
+        if self.deferred == 0 {
+            return Ok(());
+        }
+        for points in self.pointing(&table.name)? {
+            if !self.deferring(&points.key) {
+                continue;
+            }
+            let places = {
+                let bytes = self.image();
+                let database = Database::open(&bytes)?;
+                // The table is the one the statement wrote, so it is
+                // there wherever this is reached.
+                let (parent, _) = database
+                    .table(&table.name)
+                    .ok_or(Error::NoTable(Vec::new()))?;
+                parent_places(&database, (&points.child, &points.key), parent)?
+            };
+            let wanted: Vec<Value> = places
+                .iter()
+                .map(|at| at_place(table, values, rowid, *at))
+                .collect();
+            if wanted.contains(&Value::Null) {
+                continue;
+            }
+            let rows = self.pointing_rows(&points, &wanted)?;
+            self.deferred = self.deferred.saturating_sub(counted(rows.len()));
+        }
+        Ok(())
+    }
+
+    /// The foreign keys of a row that goes, counted one fewer each
+    /// where the key is held at the end of the transaction and the row
+    /// pointed at no row, which is `sqlite3FkCheck` over the old row.
+    ///
+    /// # Errors
+    ///
+    /// Whatever reading the tables the keys point at refuses.
+    fn unparented(&mut self, table: &Table, values: &[Value], rowid: i64) -> Result<(), Error> {
+        if !self.holding() {
+            return Ok(());
+        }
+        self.counted_child(table, values, rowid, -1)
+    }
+
+    /// The foreign keys of one row counted `by` each where the key is
+    /// held at the end of the transaction and the row points at no row,
+    /// which is `sqlite3FkCheck` over the row's own keys.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Foreign`] where a key held at once points at no row.
+    fn counted_child(
+        &mut self,
+        table: &Table,
+        values: &[Value],
+        rowid: i64,
+        by: i64,
+    ) -> Result<(), Error> {
+        if table.foreign.is_empty() {
             return Ok(());
         }
         let bytes = self.image();
@@ -2202,9 +2322,16 @@ impl Writer {
             if wanted.contains(&Value::Null) {
                 continue;
             }
-            if !found_parent(&database, &key.table, parent, &places, &wanted)? {
-                return Err(Error::Foreign);
+            if found_parent(&database, &key.table, parent, &places, &wanted)? {
+                continue;
             }
+            if !self.deferring(key) {
+                if by > 0 {
+                    return Err(Error::Foreign);
+                }
+                continue;
+            }
+            self.deferred = self.deferred.saturating_add(by);
         }
         Ok(())
     }
@@ -2334,7 +2461,16 @@ impl Writer {
                 }
                 Ok(())
             }
-            _ => Err(Error::Foreign),
+            // `RESTRICT` is held where the row is written whatever the
+            // key says, which is what `sqlite3FkCheck` leaves it as.
+            crate::ast::Action::Restrict => Err(Error::Foreign),
+            _ => {
+                if !self.deferring(&points.key) {
+                    return Err(Error::Foreign);
+                }
+                self.deferred = self.deferred.saturating_add(counted(rows.len()));
+                Ok(())
+            }
         }
     }
 
@@ -2372,6 +2508,7 @@ impl Writer {
     /// that row go with it.
     fn taken_away(&mut self, name: &[u8], key: &[Value]) -> Result<(), Error> {
         let (root, kept, table, values) = self.one_row(name, key)?;
+        self.unparented(&table, &values, keyed_rowid(key))?;
         self.orphaned(name, &table, &values, keyed_rowid(key), None)?;
         self.unindex_row(&kept, &table, &values, key)?;
         if table.without_rowid {
@@ -3413,6 +3550,7 @@ impl Writer {
             }
             // `D.2` of `src/fkey.c`: a row that rows of another table
             // point at is refused, or those rows are written.
+            self.unparented(&table, &values, 0)?;
             self.orphaned(name, &table, &values, 0, None)?;
             let key = crate::schema::key_of(&table, &values);
             self.unindex_row(&kept, &table, &values, &key)?;
@@ -3716,6 +3854,7 @@ impl Writer {
         let collations = crate::schema::key_collations(table);
         let was = crate::schema::key_of(table, held);
         let key = crate::schema::key_of(table, &named);
+        self.unparented(table, held, 0)?;
         self.parented(table, &named, 0)?;
         self.orphaned(&table.name, table, held, 0, Some((&named, 0)))?;
         self.unindex_row(wanted.kept, table, held, &was)?;
@@ -4016,6 +4155,7 @@ impl Writer {
                 continue;
             }
             let key = crate::schema::key_of(&table, &named);
+            self.unparented(&table, &held, 0)?;
             self.parented(&table, &named, 0)?;
             self.orphaned(name, &table, &held, 0, Some((&named, 0)))?;
             let was = crate::schema::key_of(&table, &held);
@@ -4681,6 +4821,7 @@ impl Writer {
         }
         let affinities = ordered_affinities(table);
         let record = crate::record::write(&ordered(table, &values), &affinities, 4);
+        self.unparented(table, held, rowid)?;
         self.parented(table, &named, key)?;
         self.orphaned(&table.name, table, held, rowid, Some((&named, key)))?;
         self.unindex_row(wanted.kept, wanted.table, held, &keyed_as(rowid))?;
@@ -5148,6 +5289,11 @@ struct Keying<'a> {
     returning: crate::ast::Range,
 }
 
+/// A count of rows as the whole number it is.
+fn counted(count: usize) -> i64 {
+    i64::try_from(count).unwrap_or(i64::MAX)
+}
+
 /// The columns the `FROM` of an `UPDATE` answers and the rows of it to
 /// write each row of the table against, which is one row of nothing
 /// where the statement wrote no clause.
@@ -5514,6 +5660,7 @@ impl Writer {
             // `D.2` of `src/fkey.c`: a row that rows of another table
             // point at is refused, or those rows are written, by what
             // the key says happens.
+            self.unparented(&table, &values, key)?;
             self.orphaned(&name, &table, &values, key, None)?;
             self.unindex_row(&kept, &table, &values, &keyed_as(key))?;
             crate::tree::remove(&mut self.pages, root, key)?;
@@ -5755,6 +5902,7 @@ impl Writer {
             // `I.1` of `src/fkey.c` over the row as it will stand, and
             // `D.2` over the row as it stands: a row that points at no
             // row is refused, and so is one that rows point at.
+            self.unparented(&table, &held, rowid)?;
             self.parented(&table, &named, key)?;
             self.orphaned(&name, &table, &held, rowid, Some((&named, key)))?;
             // `sqlite3Update` removes the entries of the row, removes

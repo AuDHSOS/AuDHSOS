@@ -16,6 +16,7 @@ mod constraint;
 mod counted;
 mod date;
 mod db;
+mod deferred;
 mod definition;
 mod dropcons;
 mod error;

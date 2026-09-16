@@ -5450,6 +5450,27 @@ Document 16 step Q8.
   `target object/alias may not appear in FROM clause: t1`, and a table
   under another schema is another object.
 
+### 6.6.186 The keys a transaction is held to at its end (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A statement of its own commits at its end, so `INSERT INTO node
+  VALUES(1, 0)` under a key written `DEFERRABLE INITIALLY DEFERRED` is
+  refused `FOREIGN KEY constraint failed` and the row it wrote is gone
+  with it.
+- Inside a transaction the `COMMIT` holds the key: the statement that
+  breaks it is written, the `COMMIT` is refused, the transaction stays
+  open, and a statement that mends the row lets the next `COMMIT`
+  write.
+- A row that appears answers the rows waiting for it, and `PRAGMA
+  defer_foreign_keys` holds every key at the end of the transaction.
+- A row that goes stops being counted, and a `ROLLBACK TO` puts the
+  count back where the savepoint found it.
+- Releasing the savepoint that opened the transaction writes it, so the
+  key is held there and the savepoint stays open.
+- `ON DELETE RESTRICT` is held where the row is written whatever the key
+  says, and `NO ACTION` counts the rows that lose their parent.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

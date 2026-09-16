@@ -149,6 +149,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` holds a foreign key written `DEFERRABLE INITIALLY
+  DEFERRED`, and every key while `PRAGMA defer_foreign_keys` is on, at
+  the end of the transaction rather than where the row is written. A
+  `COMMIT` that leaves such a key pointing at no row is refused and the
+  transaction stays open. D-262 records it. Catalog 6.6.186.
+
 - `UPDATE ... FROM` in `db-sqlite`, and the `WITH` before such a
   statement. Every row of the table is written against the row of the
   clause the `WHERE` holds for, and against the last of them where the
