@@ -152,6 +152,9 @@ proc sqlite3 {name args} {
           harness_send eval %N% $sql
           return {}
         }
+        if {$array ne ""} {
+          uplevel 1 [list set ${array}(*) $names]
+        }
         set at 0
         while {$at < [llength $rows]} {
           for {set c 0} {$c < $w} {incr c} {

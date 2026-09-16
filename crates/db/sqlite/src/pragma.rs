@@ -100,6 +100,16 @@ pub struct Keeps {
     pub fixed: bool,
 }
 
+/// What a connection was told for the pragmas it keeps a value for.
+///
+/// A caller that holds one writer per file and several connections over
+/// it carries one of these per connection, because the values belong to
+/// a connection and the pages belong to a file. A connection that was
+/// told nothing carries the default, which every pragma answers its own
+/// fallback for.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Kept(pub(crate) Vec<Option<i64>>);
+
 /// The pragmas the connection keeps a value for, which are the ones
 /// `sqlite3Pragma` answers out of the connection and no byte of the
 /// file holds.
@@ -204,6 +214,20 @@ pub static HELD: &[Keeps] = &[
     },
     Keeps {
         name: b"foreign_keys",
+        fallback: 0,
+        written: Written::Truth,
+        answers: false,
+        fixed: false,
+    },
+    Keeps {
+        name: b"short_column_names",
+        fallback: 1,
+        written: Written::Truth,
+        answers: false,
+        fixed: false,
+    },
+    Keeps {
+        name: b"full_column_names",
         fallback: 0,
         written: Written::Truth,
         answers: false,
@@ -370,8 +394,6 @@ pub fn of_name(name: &[u8]) -> Option<Setting> {
         b"foreign_key_check" => Setting::ForeignKeyCheck,
         b"legacy_file_format"
         | b"legacy_alter_table"
-        | b"short_column_names"
-        | b"full_column_names"
         | b"empty_result_callbacks"
         | b"cache_spill"
         | b"case_sensitive_like"

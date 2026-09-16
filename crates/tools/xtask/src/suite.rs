@@ -32,6 +32,7 @@ use db_sqlite::change::Writer;
 use db_sqlite::db::Database;
 use db_sqlite::func::Counted;
 use db_sqlite::header::Encoding;
+use db_sqlite::pragma::Kept;
 use db_sqlite::value::Value;
 
 use crate::error::Error;
@@ -471,6 +472,9 @@ struct Session {
     /// The three counters of each connection, which belong to a
     /// connection and not to the file the connection opened.
     counters: BTreeMap<String, Counted>,
+    /// What each connection was told for the pragmas it keeps a value
+    /// for, which belong to a connection and not to the file.
+    pragmas: BTreeMap<String, Kept>,
     /// What the file has scored.
     score: Score,
     /// When the file began, which is what the deadline is counted from.
@@ -486,6 +490,7 @@ impl Session {
             connections: BTreeMap::new(),
             nulls: BTreeMap::new(),
             counters: BTreeMap::new(),
+            pragmas: BTreeMap::new(),
             score: Score::default(),
             started: Instant::now(),
         }
@@ -530,6 +535,7 @@ impl Session {
             "close" => {
                 self.connections.remove(first);
                 self.counters.remove(first);
+                self.pragmas.remove(first);
                 Ok(Vec::new())
             }
             "delete" => {
@@ -589,9 +595,11 @@ impl Session {
         }
         self.connections.insert(name.to_owned(), path.to_owned());
         self.nulls.entry(name.to_owned()).or_default();
-        // A connection that is opened again counts from nought, which
-        // is what `sqlite3 db test.db` in a file relies on.
+        // A connection that is opened again counts from nought and was
+        // told no pragma, which is what `sqlite3 db test.db` in a file
+        // relies on.
         self.counters.insert(name.to_owned(), Counted::default());
+        self.pragmas.insert(name.to_owned(), Kept::default());
     }
 
     /// One database written again under another path, which is what a
@@ -616,6 +624,7 @@ impl Session {
             .cloned()
             .ok_or_else(|| format!("no such connection: {name}"))?;
         let counted = self.counters.get(name).copied().unwrap_or_default();
+        let kept = self.pragmas.get(name).cloned().unwrap_or_default();
         let writer = self
             .held
             .get_mut(&path)
@@ -624,6 +633,7 @@ impl Session {
         // file, so the writer stands at this connection's counters for
         // the statements of this request and answers them back.
         writer.counts_as(counted);
+        writer.kept_as(kept);
         let mut out = Vec::new();
         let mut ran = Ok(());
         for statement in statements(sql) {
@@ -643,7 +653,9 @@ impl Session {
             }
         }
         let counted = writer.counts();
+        let kept = writer.kept();
         self.counters.insert(name.to_owned(), counted);
+        self.pragmas.insert(name.to_owned(), kept);
         ran?;
         Ok(out)
     }
@@ -668,7 +680,9 @@ impl Session {
             return Ok(Vec::new());
         }
         let bytes = writer.written();
-        let database = Database::open(&bytes).map_err(|error| error.message())?;
+        let database = Database::open(&bytes)
+            .map(|database| database.naming(writer.naming()))
+            .map_err(|error| error.message())?;
         let answered = database
             .query(last.as_bytes())
             .map_err(|error| error.message())?;
@@ -729,8 +743,9 @@ fn run_one(writer: &mut Writer, text: &str) -> Result<Vec<Value>, String> {
             None => Database::open(&bytes),
         };
         let counted = writer.counts();
+        let naming = writer.naming();
         let answered = opened
-            .map(|database| database.counting(counted))
+            .map(|database| database.counting(counted).naming(naming))
             .and_then(|database| database.query(text.as_bytes()))
             .map_err(|error| shape(text, error.message()))?;
         for row in &answered.rows {

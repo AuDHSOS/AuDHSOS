@@ -173,6 +173,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` keeps `PRAGMA short_column_names` and `PRAGMA
+  full_column_names`, which say how a statement names the columns it
+  answers: the column alone, the column with its table in front of it,
+  or the text the column was written as. A `*` answers under the name
+  the statement calls the side, and a statement inside a `FROM` with no
+  alias is named after its own place. A view and a statement inside a
+  `FROM` have the names of their columns made unique, `a`, `a:1`. A `*`
+  written where the statement reads no table is refused `no tables
+  specified`. D-266 records it. Catalog 6.6.190.
+
 - `db-sqlite` holds a foreign key written `DEFERRABLE INITIALLY
   DEFERRED`, and every key while `PRAGMA defer_foreign_keys` is on, at
   the end of the transaction rather than where the row is written. A

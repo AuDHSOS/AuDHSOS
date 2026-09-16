@@ -5527,6 +5527,31 @@ Document 16 step Q8.
 - A name one `USING` or one `NATURAL` matched is answered by the side
   before it and is no refusal.
 
+### 6.6.190 The names a statement answers its columns under (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A connection told nothing names a column by the column and every
+  other expression by the text it was written as, so `SELECT t1 . a`
+  answers `a` and `SELECT 1+2` answers `1+2`.
+- With `short_column_names` off and `full_column_names` off, `SELECT
+  t1 . a` answers `t1 . a`, the text as it was written.
+- With `full_column_names` on, a column answers `t1.a` whichever name
+  the statement calls its table by, and a `*` answers `x.a` under the
+  name the statement calls the side, the second only where
+  `short_column_names` is off.
+- A statement inside a `FROM` that carries no alias is named after its
+  own place, `(subquery-7).a`.
+- A statement that stands as a table has the names of its columns made
+  unique: `SELECT * FROM (SELECT a, a, a FROM t1)` answers `a`, `a:1`
+  and `a:2`, and a name that already ends in a colon and digits loses
+  them before it takes its own.
+- The two pragmas belong to the connection, which answers them back and
+  carries them for a caller that holds one writer per file; a
+  connection opened again was told neither.
+- A `*` written where the statement reads no table is refused `no
+  tables specified`.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

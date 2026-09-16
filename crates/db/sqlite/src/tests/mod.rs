@@ -13,6 +13,7 @@
 mod ambiguous;
 mod balance;
 mod bytes;
+mod colnames;
 mod constraint;
 mod counted;
 mod date;

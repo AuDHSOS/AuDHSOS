@@ -952,6 +952,15 @@ pub struct Drop {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SelectId(u32);
 
+impl SelectId {
+    /// Where the statement lies in the arena, which names a statement
+    /// written inside a `FROM` that carries no alias.
+    #[must_use]
+    pub const fn place(self) -> u32 {
+        self.0
+    }
+}
+
 /// Whether a statement keeps every row or only the rows that differ.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Distinct {

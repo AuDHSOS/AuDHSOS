@@ -96,6 +96,8 @@ pub enum Error {
     DistinctAggregate,
     /// `DISTINCT` before the arguments of a window function.
     DistinctWindow,
+    /// A `*` written where the statement reads no table.
+    NoTables,
     /// A `HAVING` on a statement that groups nothing.
     Having,
     /// Two sides of a compound that answer different numbers of columns.
@@ -277,6 +279,7 @@ impl Error {
             Error::MisusedAggregate(name) => {
                 alloc::format!("misuse of aggregate function {}()", shown(name))
             }
+            Error::NoTables => alloc::string::String::from("no tables specified"),
             Error::GroupedAggregate => alloc::string::String::from(
                 "aggregate functions are not allowed in the GROUP BY clause",
             ),
@@ -661,8 +664,12 @@ pub struct Indexed<'a> {
 /// does.
 #[derive(Clone, Debug)]
 struct Column {
-    /// Its name.
+    /// Its name, which is what a name written in the statement above
+    /// it reaches it by.
     name: Vec<u8>,
+    /// The name the statement answers it under, which the two pragmas
+    /// [`Naming`] carries move away from its name.
+    shown: Vec<u8>,
     /// The name of the side it came from, where the side it stands on
     /// answers the columns of several: a statement written inside a
     /// `FROM` for the tables inside brackets carries the name of each
@@ -845,6 +852,10 @@ struct Side<'a> {
     /// or the `WITH` term it reads, or nothing for a statement written
     /// inside the `FROM` with no alias.
     name: Vec<u8>,
+    /// The name of the table or the view it reads, which an alias does
+    /// not move, and nothing for a statement written inside the `FROM`.
+    /// `PRAGMA full_column_names` names a column by this.
+    table: Vec<u8>,
     /// Which join attaches it.
     kind: JoinKind,
     /// The `ON` condition written on it.
@@ -921,6 +932,92 @@ impl Side<'_> {
         }
         answered
     }
+
+    /// The name a `*` over this side answers one column under: the
+    /// column's own name, with the name the statement calls this side
+    /// by in front of it where `long` is set.
+    fn shown_as(&self, column: &Column, long: bool) -> Vec<u8> {
+        if !long {
+            return column.name.clone();
+        }
+        let mut shown = self.called().to_vec();
+        shown.push(b'.');
+        shown.extend_from_slice(&column.name);
+        shown
+    }
+
+    /// What a name in front of a column of this side reads as: what the
+    /// statement calls the side, and the name of what it reads where it
+    /// carries no name of its own.
+    fn called(&self) -> &[u8] {
+        if self.name.is_empty() {
+            return &self.table;
+        }
+        &self.name
+    }
+}
+
+/// What the name a result column is answered under is worked out from.
+#[derive(Clone, Copy)]
+struct ShownAs<'a> {
+    /// The two pragmas the connection holds.
+    naming: Naming,
+    /// Whether an `AS` names the column.
+    alias: bool,
+    /// The name the statement reaches the column by.
+    name: &'a [u8],
+    /// The text the column was written as.
+    text: Span,
+    /// The table and the column of a column reference, and nothing
+    /// where the result column is an expression.
+    written: Option<(Option<Span>, Span)>,
+}
+
+/// The name one result column is answered under, which is
+/// `sqlite3GenerateColumnNames`: an `AS` name is the name; a column
+/// answers under its own name where either pragma is on, with the name
+/// of its table in front of it where `full_column_names` is; everything
+/// else answers under the text it was written as.
+fn shown_name(sql: &[u8], sides: &[Side<'_>], shown: ShownAs<'_>) -> Vec<u8> {
+    let Some((table, column)) = shown.written.filter(|_| !shown.alias) else {
+        return shown.name.to_vec();
+    };
+    if shown.naming.full {
+        let mut named = table_of(sides, table, column, sql);
+        named.push(b'.');
+        named.extend_from_slice(shown.name);
+        return named;
+    }
+    if shown.naming.short {
+        return shown.name.to_vec();
+    }
+    shown.text.text(sql).to_vec()
+}
+
+/// The name of the table one column reference reads, which is
+/// `pTab->zName` of the resolved column: the table a name in front of
+/// the column names, or the first side that holds the column.
+fn table_of(sides: &[Side<'_>], table: Option<Span>, column: Span, sql: &[u8]) -> Vec<u8> {
+    let named = table.map(|span| dequote(span.text(sql)));
+    let name = dequote(column.text(sql));
+    let found = match &named {
+        Some(named) => sides.iter().find(|side| side.named(named)),
+        None => sides.iter().find(|side| side.shape.has(&name)),
+    };
+    match found {
+        Some(side) => side.table.clone(),
+        None => named.unwrap_or_default(),
+    }
+}
+
+/// The name `sqlite3SelectExpand` gives a statement written inside a
+/// `FROM` that carries no alias, which `full_column_names` writes in
+/// front of the columns it answers.
+fn subquery_named(id: crate::ast::SelectId) -> Vec<u8> {
+    let mut named = b"(subquery-".to_vec();
+    named.extend_from_slice(&number::integer_text(i64::from(id.place())));
+    named.push(b')');
+    named
 }
 
 /// Whether a `*` leaves the column out: the column a `USING` or a
@@ -934,6 +1031,53 @@ fn left_out(column: &Column, using: &[Vec<u8>]) -> bool {
             .any(|name| name.eq_ignore_ascii_case(&column.name))
 }
 
+/// The columns of a statement as a table holds them, with the names
+/// made unique: a name a column before it carries takes `:1` after it,
+/// `:2` for the one after that, and a name that already ends in a colon
+/// and digits loses them before it takes its own.
+///
+/// Every name is read against the ones before it, so the walk is
+/// O(columns²) in the width of the statement.
+fn uniqued(mut shape: Shape) -> Shape {
+    let mut seen: Vec<Vec<u8>> = Vec::new();
+    for column in &mut shape.columns {
+        let mut count: u32 = 0;
+        while seen
+            .iter()
+            .any(|held| held.eq_ignore_ascii_case(&column.name))
+        {
+            count = count.saturating_add(1);
+            let mut named = untailed(&column.name);
+            named.push(b':');
+            named.extend_from_slice(&number::integer_text(i64::from(count)));
+            column.name = named;
+        }
+        seen.push(column.name.clone());
+        column.shown.clone_from(&column.name);
+    }
+    shape
+}
+
+/// A name with a trailing colon and digits taken off, which is what
+/// `sqlite3ColumnsFromExprList` reads back off a name it made unique.
+fn untailed(name: &[u8]) -> Vec<u8> {
+    let mut at = name.len();
+    while at > 1
+        && name
+            .get(at.saturating_sub(1))
+            .is_some_and(u8::is_ascii_digit)
+    {
+        at = at.saturating_sub(1);
+    }
+    if name.get(at.saturating_sub(1)) == Some(&b':') {
+        return name
+            .get(..at.saturating_sub(1))
+            .unwrap_or_default()
+            .to_vec();
+    }
+    name.to_vec()
+}
+
 /// The columns a table of the schema answers.
 fn shape_of(table: &Table) -> Shape {
     Shape {
@@ -943,6 +1087,7 @@ fn shape_of(table: &Table) -> Shape {
             .iter()
             .map(|column| Column {
                 name: column.name.clone(),
+                shown: column.name.clone(),
                 from: Vec::new(),
                 hidden: false,
                 affinity: column.affinity,
@@ -976,6 +1121,8 @@ pub struct Database<'a> {
     /// What the connection has written, which `changes()`,
     /// `total_changes()` and `last_insert_rowid()` answer.
     counted: crate::func::Counted,
+    /// How the connection names the columns a statement answers.
+    naming: Naming,
 }
 
 /// One trigger of the schema: what it is on, and the statement that
@@ -1014,6 +1161,30 @@ struct View {
 /// One row of a table as a statement that writes rows reads it: the
 /// key that names the row, and the value of each column.
 pub type Reading = (Vec<Value>, Vec<Value>);
+
+/// How a statement names the columns it answers, which
+/// `sqlite3GenerateColumnNames` reads two pragmas for.
+///
+/// A connection told nothing holds `short` on and `full` off, which is
+/// what `SQLITE_ShortColNames` and `SQLITE_FullColNames` stand at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Naming {
+    /// `PRAGMA short_column_names`: a column reference answers under
+    /// the column's own name.
+    pub short: bool,
+    /// `PRAGMA full_column_names`: a column reference answers under
+    /// the name of its table and the column's own name.
+    pub full: bool,
+}
+
+impl Default for Naming {
+    fn default() -> Self {
+        Self {
+            short: true,
+            full: false,
+        }
+    }
+}
 
 /// What a statement answered.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -1104,6 +1275,7 @@ impl<'a> Database<'a> {
             encoding,
             random: crate::random::Source::default(),
             counted: crate::func::Counted::default(),
+            naming: Naming::default(),
         };
         database.read_indexes()?;
         database.read_views()?;
@@ -1133,6 +1305,18 @@ impl<'a> Database<'a> {
     #[must_use]
     pub const fn counting(mut self, counted: crate::func::Counted) -> Self {
         self.counted = counted;
+        self
+    }
+
+    /// The same database, naming the columns a statement answers as the
+    /// connection that writes was told to name them.
+    ///
+    /// The two pragmas belong to a connection and not to a file, so a
+    /// database that is not told names them the way a connection told
+    /// nothing does.
+    #[must_use]
+    pub const fn naming(mut self, naming: Naming) -> Self {
+        self.naming = naming;
         self
     }
 
@@ -1985,12 +2169,17 @@ impl<'a> Database<'a> {
         }
         let mut sides = self.sides(arena, &select, sql, scope)?;
         planned(arena, select.filter, sql, &mut sides);
-        let shape = shape(arena, &select, sql, &sides)?;
+        let shape = shape(arena, &select, sql, &sides, self.naming)?;
         let collations = self.collations(&shape);
         let names: Vec<Vec<u8>> = shape
             .columns
             .iter()
             .map(|column| column.name.clone())
+            .collect();
+        let shown: Vec<Vec<u8>> = shape
+            .columns
+            .iter()
+            .map(|column| column.shown.clone())
             .collect();
         let keys = if whole {
             keys(arena, &select, sql, &names, &collations)?
@@ -2033,7 +2222,7 @@ impl<'a> Database<'a> {
             limit(arena, &select, sql, &mut rows, &cursor)?;
         }
         Ok(Answered {
-            answer: Answer { names, rows },
+            answer: Answer { names: shown, rows },
             shape,
         })
     }
@@ -2108,6 +2297,11 @@ impl<'a> Database<'a> {
                 }
                 SourceKind::Function { .. } => return Err(Error::Unsupported),
             };
+            // A statement that stands as a table has the names of its
+            // columns made unique, which `sqlite3ColumnsFromExprList`
+            // does and which the tables inside brackets are not, they
+            // answering under the names of the tables themselves.
+            let shape = if shape.nested { shape } else { uniqued(shape) };
             let written: Vec<Vec<u8>> = arena
                 .names(source.using)
                 .iter()
@@ -2133,9 +2327,18 @@ impl<'a> Database<'a> {
                 }
                 written
             };
+            // `sqlite3SelectExpand` names a statement written inside
+            // the `FROM` that carries no alias after the statement's
+            // own place, which is what stands in front of its columns
+            // where `full_column_names` is on.
+            let table = match source.kind {
+                SourceKind::Select(id) => subquery_named(id),
+                _ => name.clone(),
+            };
             out.push(Side {
                 shape,
                 source: from,
+                table,
                 name: alias.unwrap_or(name),
                 kind: source.join.kind,
                 on: source.on,
@@ -2237,6 +2440,7 @@ impl<'a> Database<'a> {
                 let side = Side {
                     shape: shape_of(&stored.table),
                     source: Source::Table(stored),
+                    table: called.clone(),
                     name: Vec::new(),
                     kind: JoinKind::Inner,
                     on: None,
@@ -2801,6 +3005,7 @@ fn listed(
         name.extend_from_slice(&number::integer_text(i64::try_from(at).unwrap_or(0)));
         columns.push(Column {
             name: name.clone(),
+            shown: name.clone(),
             from: Vec::new(),
             hidden: false,
             affinity: Affinity::None,
@@ -4107,13 +4312,26 @@ fn aggregating(arena: &Arena, id: ExprId, sql: &[u8]) -> bool {
 
 /// The columns a statement answers: their names, and what a
 /// comparison against each of them does.
-fn shape(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> Result<Shape, Error> {
+fn shape(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    sides: &[Side<'_>],
+    naming: Naming,
+) -> Result<Shape, Error> {
+    // `selectExpander` names a column a `*` stands for with the side it
+    // came from in front of it where `full_column_names` is on and
+    // `short_column_names` off, which is the one place the name of the
+    // side and not of the table is read.
+    let long = naming.full && !naming.short;
     let mut columns = Vec::new();
     for result in arena.results(select.columns) {
         match *result {
             ResultColumn::Star => {
+                // `selectExpander` refuses a `*` written where the
+                // statement reads no table.
                 if sides.is_empty() {
-                    return Err(Error::NoTable(Vec::new()));
+                    return Err(Error::NoTables);
                 }
                 for (at, side) in sides.iter().enumerate() {
                     // A `*` stands for every column named by its side,
@@ -4137,6 +4355,7 @@ fn shape(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> Resu
                         }
                         let mut answered = side.answered_as(column);
                         answered.hidden = hidden;
+                        answered.shown = side.shown_as(column, long);
                         columns.push(answered);
                     }
                 }
@@ -4148,27 +4367,39 @@ fn shape(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> Resu
                 if named.next().is_some() {
                     return Err(Error::Ambiguous);
                 }
-                columns.extend(
-                    side.shape
-                        .columns
-                        .iter()
-                        .map(|column| side.answered_as(column)),
-                );
+                columns.extend(side.shape.columns.iter().map(|column| {
+                    let mut answered = side.answered_as(column);
+                    answered.shown = side.shown_as(column, long);
+                    answered
+                }));
             }
             ResultColumn::Expr { expr, alias, text } => {
+                let written = column_parts(arena, expr);
                 let name = match alias {
                     Some(span) => dequote(span.text(sql)),
                     // With no name written, a column answers under its
                     // own name and everything else under the text it
                     // was written as.
-                    None => match column_named(arena, expr) {
-                        Some(name) => answered_name(&dequote(name.text(sql)), sides),
+                    None => match written {
+                        Some((_, column)) => answered_name(&dequote(column.text(sql)), sides),
                         None => text.text(sql).to_vec(),
                     },
                 };
+                let shown = shown_name(
+                    sql,
+                    sides,
+                    ShownAs {
+                        naming,
+                        alias: alias.is_some(),
+                        name: &name,
+                        text,
+                        written,
+                    },
+                );
                 let (affinity, collation) = compared(arena, expr, sql, sides);
                 columns.push(Column {
                     name,
+                    shown,
                     from: Vec::new(),
                     hidden: false,
                     affinity,
@@ -4802,8 +5033,14 @@ fn uncollated(arena: &Arena, id: ExprId) -> ExprId {
 }
 
 fn column_named(arena: &Arena, id: ExprId) -> Option<Span> {
+    column_parts(arena, id).map(|(_, column)| column)
+}
+
+/// The table a column reference names and the column itself, or nothing
+/// where the expression is no column reference.
+fn column_parts(arena: &Arena, id: ExprId) -> Option<(Option<Span>, Span)> {
     match arena.node(id)? {
-        Node::Column { column, .. } => Some(column),
+        Node::Column { table, column, .. } => Some((table, column)),
         _ => None,
     }
 }

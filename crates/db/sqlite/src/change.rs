@@ -2201,11 +2201,41 @@ impl Writer {
     /// What the connection was told for the pragma `name`, or what the
     /// pragma falls back to where it was told nothing.
     fn told(&self, name: &[u8]) -> i64 {
-        crate::pragma::HELD
+        let at = crate::pragma::HELD
             .iter()
-            .position(|keeps| keeps.name == name)
-            .and_then(|at| self.kept.get(at).copied().flatten())
-            .unwrap_or(0)
+            .position(|keeps| keeps.name == name);
+        let fallback = at
+            .and_then(|at| crate::pragma::HELD.get(at))
+            .map_or(0, |keeps| keeps.fallback);
+        at.and_then(|at| self.kept.get(at).copied().flatten())
+            .unwrap_or(fallback)
+    }
+
+    /// What this connection was told for the pragmas it keeps a value
+    /// for, which a caller that holds one writer per file and several
+    /// connections over it reads before it changes connection.
+    #[must_use]
+    pub fn kept(&self) -> crate::pragma::Kept {
+        crate::pragma::Kept(self.kept.clone())
+    }
+
+    /// The pragmas this connection stands at, which such a caller sets
+    /// before each statement. A connection that was told nothing is set
+    /// to the default, which is what opening one again does.
+    pub fn kept_as(&mut self, kept: crate::pragma::Kept) {
+        self.kept = kept.0;
+        self.kept.resize(crate::pragma::HELD.len(), None);
+    }
+
+    /// How a statement of this connection names the columns it
+    /// answers, which a reader built over this connection's file is
+    /// told by [`Database::naming`].
+    #[must_use]
+    pub fn naming(&self) -> crate::db::Naming {
+        crate::db::Naming {
+            short: self.told(b"short_column_names") != 0,
+            full: self.told(b"full_column_names") != 0,
+        }
     }
 
     /// Whether every foreign key of a row points at a row that is
