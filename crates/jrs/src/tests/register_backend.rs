@@ -7694,6 +7694,36 @@ fn a_promise_settles_through_the_job_queue_of_both_backends() -> Result<(), Erro
 }
 
 #[test]
+fn a_jump_leaves_the_lexical_declarations_of_the_blocks_it_ends() -> Result<(), Error> {
+    // 14.9 and 14.10 leave every block between the jump and its target, so a
+    // lexical declaration of one of those blocks is a name the target does not
+    // have. The lowering compared the two sets for equal size and refused
+    // every `break` and `continue` of a body that declared one.
+    for source in [
+        "var i=0,r=0;while(i<3){const c=i;i+=1;if(c===0)continue;r+=c}r",
+        "var i=0,r=0;while(i<3){const c=i;i+=1;if(c===1)break;r+=c}r",
+        "var r=0;for(var i=0;i<4;i++){let c=i;if(c%2)continue;r+=c}r",
+        "var r=0;for(var v of [1,2,3]){const c=v;if(c===2)continue;r+=c}r",
+        "var r=0;for(var k in {a:1,b:2}){const c=k;if(c==='a')continue;r+=1}r",
+        "var r=0,i=0;do{const c=i;i+=1;if(c===0)continue;r+=c}while(i<3);r",
+        "var r=0;switch(1){case 1:{const c=5;r=c;break}}r",
+        // A nested block between the jump and the loop leaves too.
+        "var i=0,r=0;while(i<3){const a=i;i+=1;{const b=a;if(b===0)continue;r+=b}}r",
+    ] {
+        let mut engine_host = SilentHost;
+        let mut engine = Realm::with_backend(Limits::default(), &mut engine_host, Backend::Engine)?;
+        let mut stack_host = SilentHost;
+        let mut stack = Realm::with_backend(Limits::default(), &mut stack_host, Backend::Stack)?;
+        assert_eq!(
+            engine.evaluate(source)?,
+            stack.evaluate(source)?,
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn a_loop_of_a_realm_script_takes_a_var_of_its_body() -> Result<(), Error> {
     // 16.1.7 puts a `var` of a Realm Script on the Global Environment Record.
     // The pass that widens the type of every name a loop body writes looked

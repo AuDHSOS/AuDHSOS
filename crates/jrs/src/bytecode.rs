@@ -5894,7 +5894,7 @@ impl RegisterLowerer {
             self.loops.iter().rposition(|frame| !frame.is_switch)?
         };
         let loop_state = self.loops.get(index)?;
-        if !register_bindings_fit(&self.bindings, &loop_state.bindings)
+        if !register_bindings_reach(&self.bindings, &loop_state.bindings)
             || !self.loop_layouts_match(&loop_state.object_layouts)
         {
             return None;
@@ -8363,6 +8363,30 @@ fn register_bindings_fit(
     expected: &BTreeMap<String, RegisterBinding>,
 ) -> bool {
     merge_register_bindings(actual, expected).as_ref() == Some(expected)
+}
+
+/// Whether the bindings a jump leaves carry every binding its target has, with
+/// a type that fits it.
+///
+/// 14.9 and 14.10 leave every block between the jump and its target, so a
+/// lexical declaration of one of those blocks is a name the target does not
+/// have and the comparison does not carry.
+fn register_bindings_reach(
+    actual: &BTreeMap<String, RegisterBinding>,
+    expected: &BTreeMap<String, RegisterBinding>,
+) -> bool {
+    expected.iter().all(|(name, expected)| {
+        actual.get(name).is_some_and(|actual| {
+            actual.storage == expected.storage
+                && actual.mutable == expected.mutable
+                && actual.stable_function_identity == expected.stable_function_identity
+                && match (actual.value_type, expected.value_type) {
+                    (Some(actual), Some(expected)) => actual.merge(expected) == expected,
+                    (None, None) => true,
+                    (Some(_), None) | (None, Some(_)) => false,
+                }
+        })
+    })
 }
 
 fn register_context_bindings_unchanged(
