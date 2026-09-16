@@ -6741,3 +6741,27 @@ fn match_and_search_make_a_regexp_of_what_they_were_given() -> Result<(), Error>
     }
     Ok(())
 }
+
+/// A method read off an instance is a callee like any other: `[].slice.call`
+/// reads `call` off `%Array.prototype%.slice`, which carries the methods of
+/// 20.2.3 the way a function of the Script does. 7.1.5 over 7.1.4 step 2
+/// refuses a Symbol with the `TypeError`, not with a gap.
+#[test]
+fn an_intrinsic_read_off_an_instance_carries_the_methods_of_20_2_3() -> Result<(), Error> {
+    for source in [
+        "''+[].slice.length",
+        "''+[].slice.call([1,2],0)",
+        "''+[].concat.call([1],2)",
+        "''+'abc'.charAt.call('xyz',1)",
+        "typeof [].slice.call",
+        "var s=[].slice;''+s.call([1,2],1)",
+        "''+[1,2].slice(0)",
+        "var o={};o.length=Symbol(1);var t=false;\
+         try{[].copyWithin.call(o,0,0)}catch(e){t=e instanceof TypeError}''+t",
+        "var t=false;try{[1].slice(Symbol())}catch(e){t=e instanceof TypeError}''+t",
+        "var t=false;try{'abc'.charAt(Symbol())}catch(e){t=e instanceof TypeError}''+t",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}

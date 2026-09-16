@@ -3516,15 +3516,23 @@ impl RegisterLowerer {
         };
         if !base_type.is_object()
             && primitive_holder.is_none()
-            && base_type != RegisterType::Unknown
+            && !matches!(
+                base_type,
+                RegisterType::Unknown | RegisterType::NativeFunction(_)
+            )
         {
             return None;
         }
         let receiver = self.allocate_register()?;
         self.code.emit(Instruction::Star(receiver));
         // A base the lowering could not name carries no layout, so the callee
-        // is read at run time and 7.3.14 dispatches on whatever it is.
-        if matches!(base_type, RegisterType::Unknown | RegisterType::Function(_)) {
+        // is read at run time and 7.3.14 dispatches on whatever it is. A
+        // function of the Script and an intrinsic both carry the methods of
+        // 20.2.3, which are read the same way.
+        if matches!(
+            base_type,
+            RegisterType::Unknown | RegisterType::Function(_) | RegisterType::NativeFunction(_)
+        ) {
             self.code.emit(Instruction::Ldar(receiver));
             self.lower_unknown_member(key)?;
             let result = self.lower_dynamic_method_call(receiver, arguments)?;
@@ -3917,8 +3925,13 @@ impl RegisterLowerer {
             return self.lower_string_member(key);
         }
         // A function object carries no layout this lowering tracks, so its
-        // properties are read the way a base it could not name is read.
-        if matches!(base_type, RegisterType::Unknown | RegisterType::Function(_)) {
+        // properties are read the way a base it could not name is read. That
+        // holds for an intrinsic as much as for a function of the Script:
+        // `[].slice.call` reads `call` off `%Array.prototype%.slice`.
+        if matches!(
+            base_type,
+            RegisterType::Unknown | RegisterType::Function(_) | RegisterType::NativeFunction(_)
+        ) {
             return self.lower_unknown_member(key);
         }
         if !base_type.is_object() {
