@@ -1631,21 +1631,11 @@ fn an_object_that_reached_a_call_keeps_no_layout() -> Result<(), Error> {
 }
 
 #[test]
-fn a_conversion_that_cannot_run_valueof_names_the_gap() -> Result<(), Error> {
-    // 7.1.4 sends an Object through ToPrimitive. 13.12 and 13.11.1 reach the
-    // instruction that opens a frame for a `valueOf` of the Script, and 13.5.4
-    // still has none.
-    let source = "function f(p){return +p}f({})";
-    let program = compile(source, Limits::default())?;
-    assert!(program.uses_register_backend(), "{source}");
-    assert!(
-        matches!(
-            Runtime::with_backend(Limits::default(), Backend::Engine)
-                .run(&program, &mut SilentHost),
-            Err(Error::Unsupported { .. })
-        ),
-        "{source}"
-    );
+fn a_conversion_of_an_object_operand_runs_its_valueof() -> Result<(), Error> {
+    // 7.1.4 sends an Object through ToPrimitive. 13.5.4, 13.12 and 13.11.1
+    // each reach the instruction that opens a frame for a `valueOf` of the
+    // Script.
+    differential_scripts(&["function f(p){return +p}f({})"])?;
     differential_scripts(&["function f(p){return p&1}f({})"])?;
     differential_scripts(&["function f(p){return p==1}f({})"])?;
     // The same code answers for every argument that is a primitive.
@@ -2857,8 +2847,6 @@ fn register_string_concatenation_preserves_string_unit_limit() -> Result<(), Err
 #[test]
 fn register_backend_is_selected_statically_without_runtime_fallback() -> Result<(), Error> {
     for source in [
-        "+({valueOf(){return 1}})",
-        "-function(){}",
         "let o={};false&&(o.x=1);0",
         "let x=1;false&&(function(){return x});x",
     ] {
@@ -5424,14 +5412,11 @@ fn an_update_takes_tonumeric_of_what_the_binding_held() -> Result<(), Error> {
     ] {
         differential(source)?;
     }
-    // An Object would need the ToPrimitive of 7.1.1, which the instruction
-    // names where it runs.
-    let program = compile("var x=[];x++;x", Limits::default())?;
-    assert!(program.uses_register_backend());
-    assert!(matches!(
-        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
-        Err(Error::Unsupported { .. })
-    ));
+    // An Object reaches the ToPrimitive of 7.1.1, which the instruction opens
+    // a frame for.
+    for source in ["var x=[];x++;x", "var x=[2];var y=x++;y", "var x={};x--;x"] {
+        differential(source)?;
+    }
     Ok(())
 }
 
@@ -7730,6 +7715,40 @@ fn a_promise_settles_through_the_job_queue_of_both_backends() -> Result<(), Erro
         stack.evaluate(source)?;
         let expected = stack.evaluate("l.join('|')")?;
         assert_eq!(engine.evaluate("l.join('|')")?, expected, "{source}");
+    }
+    Ok(())
+}
+
+#[test]
+fn an_update_and_a_unary_operator_convert_an_object_operand() -> Result<(), Error> {
+    for source in [
+        // 13.4.4.1 takes ToNumeric of the old value, which for an Object is
+        // 7.1.1 with the hint `number`.
+        "var o={valueOf(){return 1}},x=o;x++;''+x",
+        "var o={valueOf(){return 1}},x=o;''+(x++)+'/'+x",
+        "var o={valueOf(){return 1}},t={p:o};''+(t.p++)+'/'+t.p",
+        "var o={valueOf(){return 1}},a=[o];''+(a[0]++)+'/'+a[0]",
+        "var o={valueOf(){return '2'}},x=o;x++;''+x+'/'+typeof x",
+        // The accessor of the property is read once and written once.
+        "var g={get p(){return {valueOf(){return 4}}},set p(v){this.q=v}};g.p++;''+g.q",
+        // 13.5.4, 13.5.5 and 13.5.6 convert the same way.
+        "var o={valueOf(){return 3}};''+(-o)+'/'+(+o)+'/'+(~o)",
+        "var o={[Symbol.toPrimitive](h){return h}};''+(+o)",
+        // A method that throws leaves the update with its value.
+        "var o={valueOf(){throw 7}},x=o,r;try{x++}catch(e){r=e};''+r",
+        // 7.1.4 step 2 refuses a Symbol.
+        "var s=Symbol(),r;try{-s}catch(e){r=e instanceof TypeError};''+r",
+        "var s=Symbol(),x=s,r;try{x++}catch(e){r=e instanceof TypeError};''+r",
+    ] {
+        let mut engine_host = SilentHost;
+        let mut engine = Realm::with_backend(Limits::default(), &mut engine_host, Backend::Engine)?;
+        let mut stack_host = SilentHost;
+        let mut stack = Realm::with_backend(Limits::default(), &mut stack_host, Backend::Stack)?;
+        assert_eq!(
+            engine.evaluate(source)?,
+            stack.evaluate(source)?,
+            "{source}"
+        );
     }
     Ok(())
 }

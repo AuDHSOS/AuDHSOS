@@ -264,6 +264,13 @@ pub enum Instruction {
     /// method of the Script: the primitive comes back into the register and the
     /// instruction runs again.
     ToText(Reg),
+    /// `acc = ToNumeric(reg)` of 7.1.4, which 13.4 applies to the old value of
+    /// an update.
+    ///
+    /// An Object operand reaches 7.1.1 with the hint `number`, which may run a
+    /// method of the Script: the primitive comes back into the register and the
+    /// instruction runs again.
+    ToNumeric(Reg),
     /// `acc = ~ToInt32(acc)` for an already numeric primitive.
     BitNot,
     /// `acc = typeof acc`, materialized as an Agent-local String.
@@ -965,6 +972,7 @@ impl BytecodeFunction {
             Instruction::Ldar(register)
             | Instruction::Star(register)
             | Instruction::ToText(register)
+            | Instruction::ToNumeric(register)
             | Instruction::Add(register)
             | Instruction::Sub(register)
             | Instruction::Mul(register)

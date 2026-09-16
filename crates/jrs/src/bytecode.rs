@@ -2040,11 +2040,14 @@ impl RegisterLowerer {
                     _ => self.lower(inner)?,
                 };
                 match operator {
-                    Unary::Plus | Unary::Minus | Unary::BitNot
-                        if inner_type.converts_to_primitive() =>
-                    {
+                    Unary::Plus | Unary::Minus | Unary::BitNot => {
                         if inner_type != RegisterType::Number {
-                            self.code.emit(Instruction::ToNumber);
+                            // 7.1.4 of an Object runs a method of the Script,
+                            // which the instruction names where it runs.
+                            let held = self.allocate_register()?;
+                            self.code.emit(Instruction::Star(held));
+                            self.code.emit(Instruction::ToNumeric(held));
+                            self.release_register(held)?;
                         }
                         if matches!(operator, Unary::Minus) {
                             self.code.emit(Instruction::Negate);
@@ -2061,7 +2064,7 @@ impl RegisterLowerer {
                     Unary::Typeof => {
                         self.code.emit(Instruction::TypeOf);
                     }
-                    Unary::Plus | Unary::Minus | Unary::BitNot | Unary::Delete => return None,
+                    Unary::Delete => return None,
                 }
                 match operator {
                     Unary::Plus | Unary::Minus | Unary::BitNot => RegisterType::Number,
@@ -4917,8 +4920,10 @@ impl RegisterLowerer {
         let prepared = self.prepare_member_assignment(target)?;
         self.read_prepared_member(&prepared)?;
         // 13.4.4.1 takes `ToNumeric` of the old value first, so a postfix
-        // update answers that Number and not what the property held.
-        self.code.emit(Instruction::ToNumber);
+        // update answers that Number and not what the property held. An
+        // Object reaches 7.1.1 there, which the instruction names.
+        self.code.emit(Instruction::Star(numeric));
+        self.code.emit(Instruction::ToNumeric(numeric));
         self.code.emit(Instruction::Star(numeric));
         self.code.emit(Instruction::LdaSmi(1));
         self.code.emit(Instruction::Star(one));
@@ -7807,11 +7812,11 @@ impl RegisterLowerer {
         // 13.4.4.1 takes `ToNumeric` of the old value first, so the operand of
         // the addition is a Number whatever the binding held, and the answer a
         // postfix update gives is that Number and not what was there before.
-        // An Object would need the `ToPrimitive` of 7.1.1, which the
-        // instruction names where it runs.
+        // An Object reaches the `ToPrimitive` of 7.1.1 there.
         self.load_binding(binding);
-        self.code.emit(Instruction::ToNumber);
         let numeric = self.allocate_register()?;
+        self.code.emit(Instruction::Star(numeric));
+        self.code.emit(Instruction::ToNumeric(numeric));
         self.code.emit(Instruction::Star(numeric));
         let one = self.allocate_register()?;
         self.code.emit(Instruction::LdaSmi(1));
@@ -7838,8 +7843,9 @@ impl RegisterLowerer {
         let units: Vec<u16> = name.encode_utf16().collect();
         let constant = self.string_constant(&units)?;
         self.code.emit(Instruction::LdaGlobal(constant));
-        self.code.emit(Instruction::ToNumber);
         let numeric = self.allocate_register()?;
+        self.code.emit(Instruction::Star(numeric));
+        self.code.emit(Instruction::ToNumeric(numeric));
         self.code.emit(Instruction::Star(numeric));
         let one = self.allocate_register()?;
         self.code.emit(Instruction::LdaSmi(1));
