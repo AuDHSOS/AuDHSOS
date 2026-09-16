@@ -213,6 +213,8 @@ impl ArrayWalk {
     const fn callback_arity(&self) -> u16 {
         match self.intrinsic {
             Intrinsic::ArrayPrototypeReduce | Intrinsic::ArrayPrototypeReduceRight => 4,
+            // 23.1.2.1 step 5.f.iii passes the element and its index alone.
+            Intrinsic::ArrayFrom => 2,
             _ => 3,
         }
     }
@@ -1641,10 +1643,6 @@ impl RegisterVM {
                 }
                 Self::array_of(values, heap, realm)
             }
-            // 23.1.2.1 takes the elements of an array-like. A mapper and an
-            // `@@iterator` each run a method of the Script, which this native
-            // has no frame for.
-            Intrinsic::ArrayFrom => self.array_from(&call, heap, realm),
             Intrinsic::ArrayPrototypeValues
             | Intrinsic::ArrayPrototypeKeys
             | Intrinsic::ArrayPrototypeEntries
@@ -1675,7 +1673,8 @@ impl RegisterVM {
             | Intrinsic::ArrayPrototypeFindLast
             | Intrinsic::ArrayPrototypeFindLastIndex
             | Intrinsic::ArrayPrototypeReduce
-            | Intrinsic::ArrayPrototypeReduceRight => Err(VMError::TypeError),
+            | Intrinsic::ArrayPrototypeReduceRight
+            | Intrinsic::ArrayFrom => Err(VMError::TypeError),
             Intrinsic::ArrayPrototypeShift
             | Intrinsic::ArrayPrototypeUnshift
             | Intrinsic::ArrayPrototypeSplice
@@ -4632,13 +4631,43 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Option<u32>, VMError> {
-        let target = Self::coerce_object(call.receiver, heap, realm)?;
-        let callback = self.call_argument(&call, 0)?;
+        // 23.1.2.1 takes the array-like as its first argument and the mapper
+        // as its second; every clause of 23.1.3 takes the receiver and the
+        // callback.
+        let from = intrinsic == Intrinsic::ArrayFrom;
+        let source = if from {
+            let items = self.call_argument(&call, 0)?;
+            if items.is_undefined() || items.is_null() {
+                return Err(type_error(heap, realm, "cannot box null or undefined"));
+            }
+            items
+        } else {
+            call.receiver
+        };
+        let target = Self::coerce_object(source, heap, realm)?;
+        if from {
+            let mapper = self.call_argument(&call, 1)?;
+            if !mapper.is_undefined() && !Self::is_callable(mapper, heap) {
+                return Err(type_error(heap, realm, "the mapper is not callable"));
+            }
+            // Step 2: an `@@iterator` decides the whole clause, and this Realm
+            // reaches one only through a frame. 22.1.3.36 gives a String one
+            // that yields code points, which this Realm has not built and
+            // which no index walk stands in for.
+            if heap
+                .lookup_named(target, super::realm::WellKnownSymbol::Iterator.key())?
+                .is_some()
+                || Self::string_data(target, heap).is_some()
+            {
+                return Err(VMError::Unsupported("an @@iterator in Array.from"));
+            }
+        }
+        let callback = self.call_argument(&call, u16::from(from))?;
         // 23.1.3.24 takes its second argument as the accumulator; every other
         // clause takes it as the `this` value of the callback. Both are read
         // before the `length`, because reading a register has no effect a
         // Script can see and its getter may open a frame of its own.
-        let second = self.call_argument(&call, 1)?;
+        let second = self.call_argument(&call, if from { 2 } else { 1 })?;
         let reduces = matches!(
             intrinsic,
             Intrinsic::ArrayPrototypeReduce | Intrinsic::ArrayPrototypeReduceRight
@@ -4977,7 +5006,11 @@ impl RegisterVM {
                 realm,
             );
         }
-        if !Self::is_callable(walk.callback, heap) {
+        // 23.1.2.1 takes a mapper or none at all; every other clause here
+        // asks for a callback.
+        if !Self::is_callable(walk.callback, heap)
+            && (walk.intrinsic != Intrinsic::ArrayFrom || !walk.callback.is_undefined())
+        {
             heap.exit_scope();
             return Err(type_error(heap, realm, "callback is not callable"));
         }
@@ -4999,12 +5032,12 @@ impl RegisterVM {
         // Array cannot hold.
         if matches!(
             walk.intrinsic,
-            Intrinsic::ArrayPrototypeMap | Intrinsic::ArrayPrototypeFilter
+            Intrinsic::ArrayPrototypeMap | Intrinsic::ArrayPrototypeFilter | Intrinsic::ArrayFrom
         ) {
-            let wanted = if walk.intrinsic == Intrinsic::ArrayPrototypeMap {
-                walk.length
-            } else {
+            let wanted = if walk.intrinsic == Intrinsic::ArrayPrototypeFilter {
                 0
+            } else {
+                walk.length
             };
             let created = realm.array(heap, wanted)?;
             walk.output = Value::from_object(created);
@@ -5185,6 +5218,17 @@ impl RegisterVM {
                 Self::write_iteration(state, &walk, heap)?;
                 continue;
             }
+            // 23.1.2.1 without a mapper writes the element it read, with no
+            // call to make for it.
+            if walk.intrinsic == Intrinsic::ArrayFrom && walk.callback.is_undefined() {
+                let array = walk
+                    .output
+                    .as_object()
+                    .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+                heap.set_array_element(array, walk.element_index, element)?;
+                Self::write_iteration(state, &walk, heap)?;
+                continue;
+            }
             // 23.1.3.24 takes the first element it finds as the accumulator and
             // calls the callback only from the next one on.
             if !walk.started {
@@ -5293,8 +5337,8 @@ impl RegisterVM {
         match walk.intrinsic {
             // 23.1.3.15 uses no answer at all.
             Intrinsic::ArrayPrototypeForEach => {}
-            // 23.1.3.21 writes the answer at the same index.
-            Intrinsic::ArrayPrototypeMap => {
+            // 23.1.3.21 and 23.1.2.1 write the answer at the same index.
+            Intrinsic::ArrayPrototypeMap | Intrinsic::ArrayFrom => {
                 let array = walk
                     .output
                     .as_object()
@@ -5551,6 +5595,7 @@ impl RegisterVM {
                     | Intrinsic::ArrayPrototypeFindLastIndex
                     | Intrinsic::ArrayPrototypeReduce
                     | Intrinsic::ArrayPrototypeReduceRight
+                    | Intrinsic::ArrayFrom
             )
     }
 
@@ -5564,6 +5609,8 @@ impl RegisterVM {
                 | Intrinsic::ArrayPrototypeFindIndex
                 | Intrinsic::ArrayPrototypeFindLast
                 | Intrinsic::ArrayPrototypeFindLastIndex
+                // 23.1.2.1 step 5.e reads every index with 7.3.2 too.
+                | Intrinsic::ArrayFrom
                 // 23.1.3.16 reads a missing index as undefined, which
                 // 23.1.3.17 and 23.1.3.20 pass over.
                 | Intrinsic::ArrayPrototypeIncludes
@@ -5600,6 +5647,10 @@ impl RegisterVM {
             Some(Intrinsic::ArrayPrototypeReduce | Intrinsic::ArrayPrototypeReduceRight)
         ) {
             return Ok([output, element, index, target]);
+        }
+        // 23.1.2.1 step 5.f.iii passes the element and its index alone.
+        if Intrinsic::from_id(intrinsic) == Some(Intrinsic::ArrayFrom) {
+            return Ok([element, index, VALUE_UNDEFINED, VALUE_UNDEFINED]);
         }
         Ok([element, index, target, VALUE_UNDEFINED])
     }
@@ -8194,48 +8245,6 @@ impl RegisterVM {
         }
         out.push(0x7D);
         Ok(true)
-    }
-
-    /// `Array.from` of 23.1.2.1 for an array-like without a mapper.
-    ///
-    /// Step 2 reads `@@iterator` and step 5 the `length`; a method of the
-    /// Script in either place needs a frame this native has none of.
-    fn array_from(
-        &mut self,
-        call: &Call,
-        heap: &mut GenerationalHeap,
-        realm: &Realm,
-    ) -> Result<Value, VMError> {
-        let items = self.call_argument(call, 0)?;
-        let mapper = self.call_argument(call, 1)?;
-        if !mapper.is_undefined() {
-            if !Self::is_callable(mapper, heap) {
-                return Err(type_error(heap, realm, "the mapper is not callable"));
-            }
-            return Err(VMError::Unsupported("a mapper in Array.from"));
-        }
-        if items.is_undefined() || items.is_null() {
-            return Err(type_error(heap, realm, "cannot box null or undefined"));
-        }
-        let source = Self::coerce_object(items, heap, realm)?;
-        // Step 2: an `@@iterator` decides the whole clause, and this Realm
-        // reaches one only through a frame.
-        if heap
-            .lookup_named(source, super::realm::WellKnownSymbol::Iterator.key())?
-            .is_some()
-        {
-            return Err(VMError::Unsupported("an @@iterator in Array.from"));
-        }
-        let length = Self::array_like_length(heap, source, realm)?;
-        self.charge_for_scan(length)?;
-        let mut values = Vec::new();
-        for index in Self::scan_range(0, length) {
-            // Step 5.e reads every index with 7.3.2, so a hole is undefined.
-            values.push(Some(
-                Self::element_at(heap, source, index)?.unwrap_or(VALUE_UNDEFINED),
-            ));
-        }
-        Self::array_from_holes(values, heap, realm)
     }
 
     /// The value a register holds as a property key, with an Object sent

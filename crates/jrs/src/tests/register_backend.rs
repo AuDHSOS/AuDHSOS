@@ -6949,6 +6949,11 @@ fn array_of_and_array_from_build_an_array_of_what_they_were_given() -> Result<()
         "''+Array.of(undefined).length",
         "''+Array.from({0:'a',1:'b',length:2})",
         "''+Array.from({length:2})",
+        "''+Array.from({length:2},function(x,i){return i})",
+        "''+Array.from({0:1,1:2,length:2},function(x){return x*2})",
+        "var t='';Array.from({0:1,length:1},function(x,i,o){t=typeof o});t",
+        "var o={0:1,1:2};Object.defineProperty(o,'length',{get:function(){return 2}});\
+         ''+Array.from(o,function(x){return x+1})",
         "''+Array.from({length:0}).length",
         "''+Array.of.length+Array.from.length",
         "Array.of.name+Array.from.name",
@@ -6957,11 +6962,9 @@ fn array_of_and_array_from_build_an_array_of_what_they_were_given() -> Result<()
     ] {
         differential_scripts(&[source])?;
     }
-    // An `@@iterator` and a mapper each need a frame this native has none of.
-    for source in [
-        "Array.from([1,2])",
-        "Array.from({length:1},function(x){return x})",
-    ] {
+    // An `@@iterator` decides the whole clause, and this Realm reaches one
+    // only through a frame.
+    for source in ["Array.from([1,2])", "Array.from('ab')"] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
         assert!(
