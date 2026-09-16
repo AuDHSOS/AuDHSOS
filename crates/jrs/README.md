@@ -731,8 +731,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same two, on the register engine (focused) | focused | `248f5f0` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/String/prototype/match test/built-ins/String/prototype/search --summary` | 94 | 188 | 130 (69.15%) | 8 (4.26%) | 50 (26.60%) |
 | `copyWithin` and `slice`, after the intrinsic base (focused) | focused | `710ba34` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/prototype/copyWithin test/built-ins/Array/prototype/slice --summary` | 110 | 220 | 198 (90.00%) | 18 (8.18%) | 4 (1.82%) |
 | The same two, on the register engine (focused) | focused | `710ba34` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/prototype/copyWithin test/built-ins/Array/prototype/slice --summary` | 110 | 220 | 144 (65.45%) | 38 (17.27%) | 38 (17.27%) |
-| Complete pinned suite, including staging and Intl | full | `710ba34` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `710ba34` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 26,909 (26.14%) | 19,466 (18.91%) | 56,550 (54.94%) |
+| `replace` and `@@replace` (focused) | focused | `7c92bf7` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/String/prototype/replace test/built-ins/RegExp/prototype/Symbol.replace --summary` | 125 | 246 | 228 (92.68%) | 0 (0.00%) | 18 (7.32%) |
+| The same two, on the register engine (focused) | focused | `7c92bf7` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/String/prototype/replace test/built-ins/RegExp/prototype/Symbol.replace --summary` | 125 | 246 | 94 (38.21%) | 18 (7.32%) | 134 (54.47%) |
+| Complete pinned suite, including staging and Intl | full | `7c92bf7` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `7c92bf7` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 27,017 (26.25%) | 19,368 (18.82%) | 56,540 (54.93%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1514,7 +1516,12 @@ both full runs beside the made `RegExp` were measured at tree
 that step gained 56 variants and lost none. The `copyWithin` and `slice` runs
 and both full runs beside the intrinsic base were measured at tree
 `0bf8201e3fcd983cc0fccbd1a81990dad0301443`, which is the tree of `710ba34`;
-that step gained 76 variants and lost none.
+that step gained 76 variants and lost none. The `replace` runs and both full
+runs beside it were measured at tree
+`5696041bf3e4dec958ee1047c5df944e81b652c0`, which is the tree of `7c92bf7`;
+that step gained 110 variants and lost 2, both of them tests that used to pass
+because `@@replace` was absent and now reach the `exec` of the Script that
+22.2.7.1 would call.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
