@@ -91,8 +91,8 @@ pub const fn request_len(user: usize, service: usize) -> usize {
 /// The client's key: the secret of RFC 8032, section 5.1.5, and the
 /// public half the server is asked to accept.
 ///
-/// Where the secret comes from is the caller's — the boot volume, the
-/// scratch disk, or a generator — and section 14.13 of
+/// Where the secret comes from is the caller's — the scratch disk or a
+/// generator — and section 14.13 of
 /// [document 14](../../../docs/14-secure-shell-as-a-client.md) holds that
 /// question open. This crate opens no file.
 pub struct ClientKey {

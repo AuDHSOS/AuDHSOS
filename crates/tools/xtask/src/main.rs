@@ -89,8 +89,9 @@ subcommands:
                    check
   run [--release] [--display] [--scratch]
                    boot the system in QEMU with the console on the
-                   terminal; --scratch attaches the second disk, blank when
-                   it is new and kept across runs under target/qemu/
+                   terminal; the second disk carries the programs and is
+                   written from target/scratch.img, and --scratch keeps
+                   the disk of the run before under target/qemu/
   check [--quiet]  everything CI runs, in CI order; --quiet leaves one
                    line per step and prints the output of a step only
                    when it fails

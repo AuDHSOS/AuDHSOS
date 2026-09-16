@@ -11,7 +11,7 @@ to 8 released as 0.1.0, and Phase 15 is next. The disk and the file
 system server of [document 15](15-the-disk-on-the-machine.md) are built
 beside the phases: `server-fs` answers file requests over the boot volume
 and over a scratch disk, and every program outside the boot set is read
-off the volume. Every side track of documents 11 and 12 is finished: the
+off the scratch volume, which the build writes (D-151). Every side track of documents 11 and 12 is finished: the
 TLS track of document 11 through T7 and R1 to R6, and of document 12 the
 network stack D1 to D9, the shared foundations, the whole of track F, and
 the tooling. What is left of both documents is their two integration

@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! The program that holds the trust anchors of the image: it reads the
-//! table the boot volume carries and reports what it found (D-148).
+//! The program that holds the trust anchors of the build: it reads the
+//! table the scratch volume carries and reports what it found (D-148,
+//! D-151).
 //!
 //! The anchors are what a certificate path is validated against, so a
 //! program that speaks TLS needs them before it opens a connection. The
 //! table is written by `cargo xtask image` out of the directory
 //! `anchors/` and read here with the same code, `audhsos-x509::anchors`.
 //!
-//! The acceptance run of Phase 15 adds one anchor the image cannot carry:
-//! the root of the chain its server presents, which reaches this program
-//! over the scratch volume together with the port and the name (D-150).
-//! Every run but that one finds no such file and holds the image's
-//! anchors alone.
+//! The acceptance run of Phase 15 adds one anchor the build cannot carry:
+//! the root of the chain its server presents, which the run writes onto
+//! the same volume together with the port and the name (D-150). Every run
+//! but that one finds no such file and holds the build's anchors alone.
 //!
 //! What this program does not do yet is the handshake: the transport glue
 //! between `audhsos-tls` and a connection of `server-net` is step T8 of
@@ -43,7 +43,7 @@ use audhsos_abi::Error;
 use audhsos_x509::TrustAnchor;
 use audhsos_x509::anchors::Anchors;
 use user_programs::client::{lookup, write_line};
-use user_proto::file::{BOOT, Name, ROOT, Reply as FileReply, Request as FileRequest};
+use user_proto::file::{Name, ROOT, Reply as FileReply, Request as FileRequest};
 use user_rt::{EndpointHandle, Line, Startup};
 use user_sys_x86_64::{self as sys, Gate};
 
@@ -55,7 +55,7 @@ const FILES: &[u8] = b"files";
 /// The name the console driver registered itself under.
 const CONSOLE: &[u8] = b"console";
 
-/// The directory of the volume the table lies in.
+/// The directory of the scratch volume the table lies in.
 const DIRECTORY: &[u8] = b"AUDHSOS";
 
 /// The file the table lies in.
@@ -97,7 +97,7 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
     let mut table = [0u8; MAX_TABLE];
     let mut root = [0u8; MAX_RUN_ROOT];
     // The trust set a handshake validates a chain against: the anchors of
-    // the image first, the root of the run behind them. Counting it is
+    // the build first, the root of the run behind them. Counting it is
     // what this program does with it until the glue of Phase 15 arrives.
     let mut anchors = [TrustAnchor {
         subject: &[],
@@ -231,7 +231,7 @@ fn report_anchors<'a>(
 }
 
 /// Says where the run's server is and adds the root of its chain behind
-/// the `held` anchors of the image. Answers how many anchors there are
+/// the `held` anchors of the build. Answers how many anchors there are
 /// then, which is `held` again where the root is refused.
 fn report_run<'a>(
     gate: &mut Gate,
@@ -391,7 +391,7 @@ fn read_table(gate: &mut Gate, startup: &Startup, into: &mut [u8]) -> Result<Opt
     let Some(files) = volume(gate, startup) else {
         return Ok(None);
     };
-    let Some(directory) = open(gate, files, BOOT, DIRECTORY)? else {
+    let Some(directory) = open(gate, files, ROOT, DIRECTORY)? else {
         return Ok(None);
     };
     let opened = open(gate, files, directory, TABLE)?;

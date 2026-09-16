@@ -212,9 +212,9 @@ this loader does not use and works only where the firmware is UEFI.
 | S7 | The machine carries the disk automatically | built | S4 | S |
 | S8 | The end-to-end tests | built | S6, S7 | M |
 | S9 | Programs move onto the volume | built | S6, S8, D4 (15.19) | L |
-| S10 | The build writes the system volume | planned | D5 (15.21) | M |
-| S11 | The root task reads the programs off the scratch volume | planned | S10, D6 (15.22) | S |
-| S12 | Every run carries the disk | planned | S10, S11 | M |
+| S10 | The build writes the system volume | built | D5 (15.21) | M |
+| S11 | The root task reads the programs off the scratch volume | built | S10, D6 (15.22) | S |
+| S12 | Every run carries the disk | built | S10, S11 | M |
 
 S5 depends on nothing. It can be built at any time before S6. Every other
 step depends on the step before it.
@@ -640,7 +640,8 @@ Size: S.
 ### Already built (D-136)
 
 - The two `virtio-blk-pci` lines on the reference machine.
-- One blank scratch disk per run name, kept under `target/qemu/`.
+- One scratch disk per run name, kept under `target/qemu/`. It arrived
+  blank until S10 wrote the programs onto it (15.21).
 - `sh tools/xtask.sh run --scratch`, which attaches it.
 - Measured: QEMU 11.1 accepts the lines and reports the device as
   `1af4:1042`.
@@ -669,8 +670,9 @@ Size: S.
    every request when it was given none. Reason: it is what the display
    server does for a machine without a screen, and a client that asks for
    a file has to hear that there is none rather than find no server at
-   all. The run without a graphics adapter carries no scratch disk and is
-   where `[files] no disk` is read.
+   all. The run without a graphics adapter carried no scratch disk and
+   was where `[files] no disk` was read; S12 gives that run a disk of its
+   own (15.25).
 2. The disk of the end-to-end run starts blank on every run, and the two
    boots of one run are the pair that proves persistence. A run a person
    starts with `--scratch` keeps its disk across runs, as D-136 has it.
@@ -758,7 +760,8 @@ also why S9 is the last step.
    `fs-fat` learns long file names, which 8.18 lists as later work.
 2. The firmware reads the boot disk. Therefore S9 reads programs from the
    boot disk and writes nothing to it. All writes go to the scratch disk
-   (D-136).
+   (D-136). S10 moves the programs themselves onto the scratch disk
+   (15.21), and the boot disk keeps the three files the loader reads.
 
 ### Done when
 
@@ -808,7 +811,8 @@ The handover S9 needed came with it: the root task hands over every device
 the enumeration found, as the nine roles of S1 appearing once per device,
 the way `Role::Ram` already appears once per region, and the server brings
 up one transport per device. S9 reads programs off the boot volume and
-writes to the scratch volume in the same boot.
+writes to the scratch volume in the same boot; S10 to S12 read them off
+the scratch volume instead (15.21).
 
 ## 15.20 Risks
 
@@ -885,7 +889,7 @@ that reports success and then fails once per program.
 
 ## 15.23 S10. The build writes the system volume
 
-Status: planned.
+Status: built.
 Depends on: D5 (15.21).
 Size: M.
 
@@ -928,7 +932,7 @@ Size: M.
 
 ## 15.24 S11. The root task reads the programs off the scratch volume
 
-Status: planned.
+Status: built.
 Depends on: S10.
 Size: S.
 
@@ -954,13 +958,15 @@ Size: S.
 1. The end-to-end run reaches `[hello] ready` with the programs on the
    scratch volume.
 2. A run started without the second disk writes `[init] no program
-   volume` and the machine ends by itself.
+   volume` and starts no program after the boot set. The runner stops
+   that machine, because the program that writes the exit code is one of
+   those on the volume.
 3. No program of `crates/user` names `file::BOOT` except the file system
    server, which mounts the boot volume and reports it.
 
 ## 15.25 S12. Every run carries the disk
 
-Status: planned.
+Status: built.
 Depends on: S10, S11.
 Size: M.
 
@@ -981,6 +987,8 @@ Size: M.
    `SCRATCH_CLUSTERS` as before, and that the volume was mounted and not
    formatted: a volume the host wrote reports the programs' clusters
    taken.
+6. `test_without_a_program_volume` boots the machine with no second disk
+   and reads the line of D-152 off it.
 
 ### Done when
 

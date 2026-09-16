@@ -96,7 +96,8 @@ Before Phase 13 the machine has no network device at all: a device that
 neither a driver nor a bus walk looks at is one more thing for an
 unrelated test to trip over.
 
-A run that writes adds two lines more, and no run has them unless it asks:
+Every run adds two lines more, because the programs outside the boot set
+lie on the second disk (D-151):
 
 ```
 -drive if=none,id=s0,format=raw,file=<scratch disk> \
@@ -111,17 +112,21 @@ virtio because the firmware's own drivers are gone after
 from has to drive the controller itself.
 
 The boot volume is the firmware's and the loader's, and nothing in the
-system writes it. What the system writes, it writes to this second disk,
-so that no run can leave the volume the machine boots from torn (D-136).
-The disk arrives blank and holds no partition table: what formats it is
-the system, over the whole disk. `disable-legacy=on` makes it a
-non-transitional virtio 1.0 device, so its PCI device id is `0x1042` and
-not the transitional `0x1001`; `num-queues=1` is not the default, QEMU
-giving the device one queue per processor, and it is named because the
-driver will drive one. `cargo xtask run --scratch` is what asks for the
-disk today. The runner keeps one disk per run name under `target/qemu/`,
-creates it blank when it is not there, and leaves it as it stands when it
-is, which is what a test that boots twice to see what survived needs.
+system writes it. It carries the three files the loader reads and nothing
+else (D-151). What the system reads after the kernel and what it writes
+are both on this second disk, so that no run can leave the volume the
+machine boots from torn (D-136). The disk carries the fourteen programs
+outside the boot set and the trust anchor table, written by `cargo xtask
+image` as `target/scratch.img`, and holds no partition table: the volume
+is the whole disk. `disable-legacy=on` makes it a non-transitional virtio
+1.0 device, so its PCI device id is `0x1042` and not the transitional
+`0x1001`; `num-queues=1` is not the default, QEMU giving the device one
+queue per processor, and it is named because the driver will drive one.
+The runner writes one disk per run name under `target/qemu/` from
+`target/scratch.img` before the machine starts; `cargo xtask run
+--scratch` leaves the disk of the run before as it stands, which is what a
+person looking at what survived a boot needs. A machine started without
+the disk starts the boot set and no program after it (D-152).
 
 ### 3.1.2 Devices
 
@@ -138,7 +143,7 @@ is, which is what a test that boots twice to see what survived needs.
 | PCI configuration space via ECAM (`MCFG`) | the kernel reads the `MCFG` table and reports the window through `system_info`; userland maps it as a `Device` memory object and walks the bus with the crate `pci` (D-112) | userland virtio drivers | 13 |
 | MSI-X on a PCI device | `interrupt_create_msi` allocates the vector; the driver writes the address and data into the device's own table (D-111) | userland virtio drivers | 12 |
 | virtio-net over PCI (`virtio-net-pci`, non-transitional) | MMIO through the volatile accessor, DMA through a `Ram` memory object with `INFO`, interrupts through MSI-X | on the machine from 13, so that the bus walk has a device to find; driven by `driver-virtio-net` and `server-net` from 14 | 13, 14 |
-| virtio-blk over PCI (`virtio-blk-pci`, non-transitional), on both disks; the second only for a run that asks | the same three paths | the boot disk at slot `0x4` and the scratch disk at slot `0x5`; `driver-virtio-blk` drives them | built |
+| virtio-blk over PCI (`virtio-blk-pci`, non-transitional), on both disks | the same three paths | the boot disk at slot `0x4` and the scratch disk at slot `0x5`; `driver-virtio-blk` drives them | built |
 | `RDSEED` | the `random_bytes` system call | `crypto-rng` seeding in every process that needs randomness | 12 |
 | Standard VGA device (`q35` default) with a linear framebuffer exposed by the UEFI Graphics Output Protocol | loader: mode query through `EFI_GRAPHICS_OUTPUT_PROTOCOL`; userland: MMIO via a `Device` memory object | boot information; userland display server | 2, 9 |
 | i8042 PS/2 controller (I/O ports `0x60` and `0x64`, IRQ 1 keyboard, IRQ 12 mouse) | port I/O via `IoPortRange`, `Interrupt` | userland input driver | 10 |
