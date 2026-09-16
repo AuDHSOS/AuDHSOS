@@ -7859,6 +7859,12 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::FunctionPrototypeApply
         | crate::engine::realm::Intrinsic::ReflectApply
         | crate::engine::realm::Intrinsic::ReflectConstruct
+        // 23.1.3.14, 23.1.3.30, 23.1.3.34 and 23.1.3.35 answer an Array whose
+        // elements this lowering did not make.
+        | crate::engine::realm::Intrinsic::ArrayPrototypeFlat
+        | crate::engine::realm::Intrinsic::ArrayPrototypeSort
+        | crate::engine::realm::Intrinsic::ArrayPrototypeToSorted
+        | crate::engine::realm::Intrinsic::ArrayPrototypeToSpliced
         | crate::engine::realm::Intrinsic::FunctionPrototypeBind
         | crate::engine::realm::Intrinsic::MathPow
         | crate::engine::realm::Intrinsic::ErrorConstructor

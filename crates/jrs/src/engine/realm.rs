@@ -377,6 +377,14 @@ pub enum Intrinsic {
     ErrorPrototypeToString,
     /// `Reflect.construct` (28.1.2).
     ReflectConstruct,
+    /// `Array.prototype.flat` (23.1.3.14).
+    ArrayPrototypeFlat,
+    /// `Array.prototype.sort` (23.1.3.30).
+    ArrayPrototypeSort,
+    /// `Array.prototype.toSorted` (23.1.3.34).
+    ArrayPrototypeToSorted,
+    /// `Array.prototype.toSpliced` (23.1.3.35).
+    ArrayPrototypeToSpliced,
     /// `Array.prototype.values`, which is also `%Array.prototype%[@@iterator]`
     /// (23.1.3.38 and 23.1.3.40).
     ArrayPrototypeValues,
@@ -631,7 +639,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 149] = [
+    pub const ALL: [Self; 153] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -781,6 +789,10 @@ impl Intrinsic {
         Self::FunctionPrototype,
         Self::ErrorPrototypeToString,
         Self::ReflectConstruct,
+        Self::ArrayPrototypeFlat,
+        Self::ArrayPrototypeSort,
+        Self::ArrayPrototypeToSorted,
+        Self::ArrayPrototypeToSpliced,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -836,6 +848,10 @@ impl Intrinsic {
             | Self::ArrayPrototypeConcat
             | Self::ArrayPrototypeWith
             | Self::ArrayPrototypeToReversed
+            | Self::ArrayPrototypeFlat
+            | Self::ArrayPrototypeSort
+            | Self::ArrayPrototypeToSorted
+            | Self::ArrayPrototypeToSpliced
             | Self::ArrayPrototypeForEach
             | Self::ArrayPrototypeMap
             | Self::ArrayPrototypeFilter
@@ -1106,6 +1122,10 @@ impl Intrinsic {
             Self::FunctionPrototype => 146,
             Self::ErrorPrototypeToString => 147,
             Self::ReflectConstruct => 148,
+            Self::ArrayPrototypeFlat => 149,
+            Self::ArrayPrototypeSort => 150,
+            Self::ArrayPrototypeToSorted => 151,
+            Self::ArrayPrototypeToSpliced => 152,
         }
     }
 
@@ -1265,6 +1285,10 @@ impl Intrinsic {
             Self::FunctionPrototype => 146,
             Self::ErrorPrototypeToString => 147,
             Self::ReflectConstruct => 148,
+            Self::ArrayPrototypeFlat => 149,
+            Self::ArrayPrototypeSort => 150,
+            Self::ArrayPrototypeToSorted => 151,
+            Self::ArrayPrototypeToSpliced => 152,
         }
     }
 
@@ -1425,6 +1449,10 @@ impl Intrinsic {
             146 => Some(Self::FunctionPrototype),
             147 => Some(Self::ErrorPrototypeToString),
             148 => Some(Self::ReflectConstruct),
+            149 => Some(Self::ArrayPrototypeFlat),
+            150 => Some(Self::ArrayPrototypeSort),
+            151 => Some(Self::ArrayPrototypeToSorted),
+            152 => Some(Self::ArrayPrototypeToSpliced),
             _ => None,
         }
     }
@@ -1487,6 +1515,10 @@ impl Intrinsic {
             Self::ArrayPrototypeShift => "shift",
             Self::ArrayPrototypeUnshift => "unshift",
             Self::ArrayPrototypeSplice => "splice",
+            Self::ArrayPrototypeFlat => "flat",
+            Self::ArrayPrototypeSort => "sort",
+            Self::ArrayPrototypeToSorted => "toSorted",
+            Self::ArrayPrototypeToSpliced => "toSpliced",
             Self::ArrayPrototypeFill => "fill",
             Self::ArrayPrototypeCopyWithin => "copyWithin",
             Self::ArrayPrototypeWith => "with",
@@ -1630,7 +1662,9 @@ impl Intrinsic {
             | Self::MathSin
             // 19.2.2 and 19.2.3 apply `ToNumber` to their argument.
             | Self::IsNaN
-            | Self::IsFinite => NUMBER,
+            | Self::IsFinite
+            // 23.1.3.14 converts the depth it was given.
+            | Self::ArrayPrototypeFlat => NUMBER,
             // 22.1.3.9, 22.1.3.11, 22.1.3.7, 22.1.3.8 and 22.1.3.24: the text
             // to search for, then where to start.
             Self::StringPrototypeIndexOf
@@ -1642,6 +1676,7 @@ impl Intrinsic {
             Self::StringPrototypeSlice
             | Self::StringPrototypeSubstring
             | Self::ArrayPrototypeSlice
+            | Self::ArrayPrototypeToSpliced
             | Self::MathPow
             | Self::MathImul => NUMBERS,
             // 22.1.3.16 and 22.1.3.17: the length, then the text to pad with.
@@ -1693,6 +1728,8 @@ impl Intrinsic {
             | Self::ObjectPrototypeValueOf
             | Self::FunctionPrototype
             | Self::ErrorPrototypeToString
+            | Self::ArrayPrototypeSort
+            | Self::ArrayPrototypeToSorted
             | Self::ArrayPrototypeValues
             | Self::ArrayPrototypeKeys
             | Self::ArrayPrototypeEntries
@@ -1855,6 +1892,7 @@ impl Intrinsic {
             | Self::ArrayPrototypeToString
             | Self::ArrayPrototypeShift
             | Self::IteratorPrototypeIterator
+            | Self::ArrayPrototypeFlat
             | Self::ArrayPrototypeToReversed => 0,
             Self::ObjectPrototypeHasOwnProperty
             | Self::ObjectPrototypeIsPrototypeOf
@@ -1947,6 +1985,8 @@ impl Intrinsic {
             | Self::ReflectIsExtensible
             | Self::ReflectOwnKeys
             | Self::ReflectPreventExtensions
+            | Self::ArrayPrototypeSort
+            | Self::ArrayPrototypeToSorted
             | Self::ObjectGetOwnPropertyNames => 1,
             Self::ObjectDefineProperty | Self::ReflectDefineProperty | Self::ReflectApply => 3,
             Self::MathPow
@@ -1974,6 +2014,7 @@ impl Intrinsic {
             | Self::ObjectSetPrototypeOf
             | Self::ReflectSetPrototypeOf
             | Self::ReflectConstruct
+            | Self::ArrayPrototypeToSpliced
             | Self::StringPrototypeSplit => 2,
         }
     }

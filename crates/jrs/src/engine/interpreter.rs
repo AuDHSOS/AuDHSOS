@@ -1650,6 +1650,10 @@ impl RegisterVM {
             | Intrinsic::ArrayPrototypeCopyWithin
             | Intrinsic::ArrayPrototypeConcat
             | Intrinsic::ArrayPrototypeWith
+            | Intrinsic::ArrayPrototypeFlat
+            | Intrinsic::ArrayPrototypeSort
+            | Intrinsic::ArrayPrototypeToSorted
+            | Intrinsic::ArrayPrototypeToSpliced
             | Intrinsic::ArrayPrototypeToReversed => {
                 self.call_array_edit_intrinsic(intrinsic, call, heap, realm)
             }
@@ -5033,6 +5037,94 @@ impl RegisterVM {
                 }
                 Self::array_from_holes(values, heap, realm)
             }
+            // 23.1.3.14: every index of an Array element becomes an index of
+            // the answer, as deep as the depth allows.
+            Intrinsic::ArrayPrototypeFlat => {
+                let depth = if call.arg_count == 0 {
+                    1
+                } else {
+                    integer_argument(self.call_argument(&call, 0)?, heap)?
+                };
+                let values = self.flatten(object, length, depth, heap, realm)?;
+                Self::array_from_holes(values, heap, realm)
+            }
+            // 23.1.3.35: a copy with one range replaced, which reads every
+            // index it passes and so answers no hole.
+            Intrinsic::ArrayPrototypeToSpliced => {
+                let start = bounded(self.call_argument(&call, 0)?, 0, heap)?;
+                let skipped = match call.arg_count {
+                    0 => 0,
+                    1 => length.saturating_sub(start),
+                    _ => integer_argument(self.call_argument(&call, 1)?, heap)?
+                        .clamp(0, length.saturating_sub(start)),
+                };
+                let inserted = i64::from(call.arg_count).saturating_sub(2).max(0);
+                let mut values = Vec::new();
+                for position in Self::scan_range(0, start) {
+                    values.push(Some(
+                        Self::element_at(heap, object, position)?.unwrap_or(VALUE_UNDEFINED),
+                    ));
+                }
+                for offset in 0..inserted {
+                    let index = u16::try_from(offset.saturating_add(2)).unwrap_or(u16::MAX);
+                    values.push(Some(self.call_argument(&call, index)?));
+                }
+                for position in Self::scan_range(start.saturating_add(skipped), length) {
+                    values.push(Some(
+                        Self::element_at(heap, object, position)?.unwrap_or(VALUE_UNDEFINED),
+                    ));
+                }
+                Self::array_from_holes(values, heap, realm)
+            }
+            // 23.1.3.30 and 23.1.3.34: the elements in the order 23.1.3.30.1
+            // compares them, written back over the receiver or into a copy.
+            Intrinsic::ArrayPrototypeSort | Intrinsic::ArrayPrototypeToSorted => {
+                let comparator = self.call_argument(&call, 0)?;
+                if !comparator.is_undefined() {
+                    if !Self::is_callable(comparator, heap) {
+                        return Err(type_error(heap, realm, "comparator is not callable"));
+                    }
+                    return Err(VMError::Unsupported("a sort with a comparator"));
+                }
+                let sorts_in_place = intrinsic == Intrinsic::ArrayPrototypeSort;
+                // 23.1.3.30 step 5 passes over a hole; 23.1.3.34 step 5 reads
+                // it as undefined and keeps the length.
+                let mut sorted = Vec::new();
+                for position in Self::scan_range(0, length) {
+                    self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+                    let found = Self::element_at(heap, object, position)?;
+                    match found {
+                        Some(value) => sorted.push(value),
+                        None if !sorts_in_place => sorted.push(VALUE_UNDEFINED),
+                        None => {}
+                    }
+                }
+                // 23.1.3.30.1 puts undefined last and orders the rest by the
+                // code units of their `ToString`, which a key holds so the
+                // comparison itself allocates nothing.
+                let mut keyed = Vec::with_capacity(sorted.len());
+                for value in sorted {
+                    keyed.push((Self::sort_key(value, heap, realm)?, value));
+                }
+                self.charge_for_scan(length)?;
+                keyed.sort_by(|left, right| left.0.cmp(&right.0));
+                let values: Vec<Option<Value>> =
+                    keyed.into_iter().map(|(_, value)| Some(value)).collect();
+                if !sorts_in_place {
+                    return Self::array_from_holes(values, heap, realm);
+                }
+                let elements = Self::array_elements(heap, object)?;
+                let count = i64::try_from(values.len()).unwrap_or(i64::MAX);
+                for (offset, value) in values.into_iter().enumerate() {
+                    let index = u32::try_from(offset).map_err(|_| VMError::PropertyLimit)?;
+                    Self::place_element(heap, object, elements, index, value)?;
+                }
+                // Step 8 deletes the indices the holes left behind.
+                for position in Self::scan_range(count, length) {
+                    heap.delete_element(elements, position)?;
+                }
+                Ok(call.receiver)
+            }
             // 23.1.3.39: a copy with one index replaced, which 23.1.3.39 step
             // 5 refuses for an index outside the Array.
             Intrinsic::ArrayPrototypeWith => {
@@ -5179,6 +5271,88 @@ impl RegisterVM {
             }
         }
         Ok(())
+    }
+
+    /// `FlattenIntoArray` of 23.1.3.14.1 without a mapper.
+    ///
+    /// The nesting is walked with a stack of its own rather than by recursion,
+    /// so a deeply nested Array reaches a named limit instead of the Rust
+    /// stack.
+    fn flatten(
+        &mut self,
+        object: ObjectRef,
+        length: i64,
+        depth: i64,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Vec<Option<Value>>, VMError> {
+        /// How deep 23.1.3.14 follows an Array element before it names a gap.
+        const NESTING_LIMIT: usize = 64;
+        let mut values = Vec::new();
+        let mut open = alloc::vec![(object, 0i64, length, depth)];
+        while let Some((source, index, end, left)) = open.pop() {
+            if index >= end {
+                continue;
+            }
+            open.push((source, index.saturating_add(1), end, left));
+            self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+            let position = u32::try_from(index).unwrap_or(u32::MAX);
+            let Some(element) = Self::element_at(heap, source, position)? else {
+                continue;
+            };
+            // Step 5.c.iv: only an Array is flattened, and only while the
+            // depth allows it.
+            if left > 0 && Self::is_array(element, heap) {
+                let part = element.as_object().ok_or(VMError::TypeError)?;
+                let part_length = Self::array_like_length(heap, part, realm)?;
+                self.charge_for_scan(part_length)?;
+                if open.len() >= NESTING_LIMIT {
+                    return Err(VMError::Unsupported(
+                        "a flat of more nesting than the engine walks",
+                    ));
+                }
+                open.push((part, 0, part_length, left.saturating_sub(1)));
+                continue;
+            }
+            values.push(Some(element));
+        }
+        Ok(values)
+    }
+
+    /// The key 23.1.3.30.1 compares two elements by when it was given no
+    /// comparator: undefined after everything, and every other value by the
+    /// code units of its `ToString`.
+    fn sort_key(
+        value: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(bool, Vec<u16>), VMError> {
+        if value.is_undefined() {
+            return Ok((true, Vec::new()));
+        }
+        if value.is_string() {
+            let units = heap
+                .strings
+                .to_utf16(value)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            return Ok((false, units));
+        }
+        if value.is_object() {
+            return Err(VMError::Unsupported("ToString of an Object"));
+        }
+        if value.is_symbol() {
+            return Err(type_error(heap, realm, "cannot convert Symbol operand"));
+        }
+        let text = if let Some(number) = value.as_f64() {
+            crate::number::decimal_string(number)
+        } else if let Some(boolean) = value.as_boolean() {
+            alloc::string::String::from(if boolean { "true" } else { "false" })
+        } else if value.is_null() {
+            alloc::string::String::from("null")
+        } else {
+            return Err(VMError::TypeError);
+        };
+        Ok((false, text.encode_utf16().collect()))
     }
 
     /// Appends every index of an array-like, a hole as a hole.

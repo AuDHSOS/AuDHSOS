@@ -1136,7 +1136,7 @@ fn a_read_that_reaches_an_unbuilt_prototype_is_a_gap() -> Result<(), Error> {
     // computed one reaches the engine and used to answer undefined.
     for source in [
         "let o={a:1};let k='toLocaleString';typeof o[k]",
-        "let a=[1];let k='flat';typeof a[k]",
+        "let a=[1];let k='flatMap';typeof a[k]",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
@@ -6558,5 +6558,42 @@ fn reflect_construct_calls_a_constructor_with_a_list() -> Result<(), Error> {
     ] {
         differential_scripts(&[source])?;
     }
+    Ok(())
+}
+
+/// 23.1.3.14, 23.1.3.30, 23.1.3.34 and 23.1.3.35: the four methods of
+/// `%Array.prototype%` that need no callback.
+#[test]
+fn flat_sort_to_sorted_and_to_spliced_answer_on_the_new_engine() -> Result<(), Error> {
+    for source in [
+        "''+[3,1,2].sort()",
+        "''+[3,1,2,undefined,,10].sort()",
+        "var a=[3,1,,2];a.sort();''+a.length+(1 in a)+(3 in a)",
+        "''+['b','a'].sort()",
+        "''+[].sort()",
+        "var a=[2,1];a.sort()===a",
+        "''+[1,[2,[3]]].flat(2)",
+        "''+[1,[2,[3]]].flat(Infinity)",
+        "''+[1,[],2].flat()",
+        "''+[1,[2,,3]].flat().length",
+        "''+[3,1,2].toSorted()",
+        "''+[,1].toSorted()",
+        "''+[1,2,3].toSpliced(1,1,9)",
+        "''+[1,2,3].toSpliced(1)",
+        "''+[1,2,3].toSpliced()",
+        "''+[1,2,3].toSpliced(-1,1,'x','y')",
+        "''+Array.prototype.sort.length+Array.prototype.flat.length\
+         +Array.prototype.toSpliced.length+Array.prototype.toSorted.length",
+        "var t=false;try{[1].sort(1)}catch(e){t=e instanceof TypeError}t",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // A comparator of the Script needs a frame this native has none of.
+    let program = compile("[2,1].sort(function(a,b){return a-b})", Limits::default())?;
+    assert!(program.uses_register_backend());
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
     Ok(())
 }
