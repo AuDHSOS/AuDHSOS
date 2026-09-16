@@ -398,6 +398,26 @@ pub enum Intrinsic {
     ArrayFrom,
     /// `eval` (19.2.1).
     Eval,
+    /// `get flags` of 22.2.6.4.
+    RegExpPrototypeFlags,
+    /// `get source` of 22.2.6.13.
+    RegExpPrototypeSource,
+    /// `get hasIndices` of 22.2.6.6.
+    RegExpPrototypeHasIndices,
+    /// `get global` of 22.2.6.5.
+    RegExpPrototypeGlobal,
+    /// `get ignoreCase` of 22.2.6.7.
+    RegExpPrototypeIgnoreCase,
+    /// `get multiline` of 22.2.6.9.
+    RegExpPrototypeMultiline,
+    /// `get dotAll` of 22.2.6.3.
+    RegExpPrototypeDotAll,
+    /// `get unicode` of 22.2.6.18.
+    RegExpPrototypeUnicode,
+    /// `get unicodeSets` of 22.2.6.19.
+    RegExpPrototypeUnicodeSets,
+    /// `get sticky` of 22.2.6.14.
+    RegExpPrototypeSticky,
     /// `Array.prototype.values`, which is also `%Array.prototype%[@@iterator]`
     /// (23.1.3.38 and 23.1.3.40).
     ArrayPrototypeValues,
@@ -652,7 +672,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 159] = [
+    pub const ALL: [Self; 169] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -812,6 +832,16 @@ impl Intrinsic {
         Self::ArrayOf,
         Self::ArrayFrom,
         Self::Eval,
+        Self::RegExpPrototypeFlags,
+        Self::RegExpPrototypeSource,
+        Self::RegExpPrototypeHasIndices,
+        Self::RegExpPrototypeGlobal,
+        Self::RegExpPrototypeIgnoreCase,
+        Self::RegExpPrototypeMultiline,
+        Self::RegExpPrototypeDotAll,
+        Self::RegExpPrototypeUnicode,
+        Self::RegExpPrototypeUnicodeSets,
+        Self::RegExpPrototypeSticky,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -944,6 +974,16 @@ impl Intrinsic {
             // arguments object is the only way to reach it, and nothing
             // installs it on the holder this names.
             Self::Eval
+            | Self::RegExpPrototypeFlags
+            | Self::RegExpPrototypeSource
+            | Self::RegExpPrototypeHasIndices
+            | Self::RegExpPrototypeGlobal
+            | Self::RegExpPrototypeIgnoreCase
+            | Self::RegExpPrototypeMultiline
+            | Self::RegExpPrototypeDotAll
+            | Self::RegExpPrototypeUnicode
+            | Self::RegExpPrototypeUnicodeSets
+            | Self::RegExpPrototypeSticky
             | Self::SymbolConstructor
             | Self::RegExpConstructor
             | Self::ThrowTypeError
@@ -1157,6 +1197,16 @@ impl Intrinsic {
             Self::ArrayOf => 156,
             Self::ArrayFrom => 157,
             Self::Eval => 158,
+            Self::RegExpPrototypeFlags => 159,
+            Self::RegExpPrototypeSource => 160,
+            Self::RegExpPrototypeHasIndices => 161,
+            Self::RegExpPrototypeGlobal => 162,
+            Self::RegExpPrototypeIgnoreCase => 163,
+            Self::RegExpPrototypeMultiline => 164,
+            Self::RegExpPrototypeDotAll => 165,
+            Self::RegExpPrototypeUnicode => 166,
+            Self::RegExpPrototypeUnicodeSets => 167,
+            Self::RegExpPrototypeSticky => 168,
         }
     }
 
@@ -1326,6 +1376,16 @@ impl Intrinsic {
             Self::ArrayOf => 156,
             Self::ArrayFrom => 157,
             Self::Eval => 158,
+            Self::RegExpPrototypeFlags => 159,
+            Self::RegExpPrototypeSource => 160,
+            Self::RegExpPrototypeHasIndices => 161,
+            Self::RegExpPrototypeGlobal => 162,
+            Self::RegExpPrototypeIgnoreCase => 163,
+            Self::RegExpPrototypeMultiline => 164,
+            Self::RegExpPrototypeDotAll => 165,
+            Self::RegExpPrototypeUnicode => 166,
+            Self::RegExpPrototypeUnicodeSets => 167,
+            Self::RegExpPrototypeSticky => 168,
         }
     }
 
@@ -1496,6 +1556,16 @@ impl Intrinsic {
             156 => Some(Self::ArrayOf),
             157 => Some(Self::ArrayFrom),
             158 => Some(Self::Eval),
+            159 => Some(Self::RegExpPrototypeFlags),
+            160 => Some(Self::RegExpPrototypeSource),
+            161 => Some(Self::RegExpPrototypeHasIndices),
+            162 => Some(Self::RegExpPrototypeGlobal),
+            163 => Some(Self::RegExpPrototypeIgnoreCase),
+            164 => Some(Self::RegExpPrototypeMultiline),
+            165 => Some(Self::RegExpPrototypeDotAll),
+            166 => Some(Self::RegExpPrototypeUnicode),
+            167 => Some(Self::RegExpPrototypeUnicodeSets),
+            168 => Some(Self::RegExpPrototypeSticky),
             _ => None,
         }
     }
@@ -1527,6 +1597,16 @@ impl Intrinsic {
             | Self::ObjectPrototypeValueOf => "valueOf",
             Self::ThrowTypeError | Self::FunctionPrototype => "",
             Self::SpeciesGetter => "get [Symbol.species]",
+            Self::RegExpPrototypeFlags => "get flags",
+            Self::RegExpPrototypeSource => "get source",
+            Self::RegExpPrototypeHasIndices => "get hasIndices",
+            Self::RegExpPrototypeGlobal => "get global",
+            Self::RegExpPrototypeIgnoreCase => "get ignoreCase",
+            Self::RegExpPrototypeMultiline => "get multiline",
+            Self::RegExpPrototypeDotAll => "get dotAll",
+            Self::RegExpPrototypeUnicode => "get unicode",
+            Self::RegExpPrototypeUnicodeSets => "get unicodeSets",
+            Self::RegExpPrototypeSticky => "get sticky",
             Self::SymbolConstructor => "Symbol",
             Self::RegExpConstructor => "RegExp",
             Self::RegExpPrototypeExec => "exec",
@@ -1778,6 +1858,16 @@ impl Intrinsic {
             | Self::FunctionPrototype
             | Self::ErrorPrototypeToString
             | Self::SpeciesGetter
+            | Self::RegExpPrototypeFlags
+            | Self::RegExpPrototypeSource
+            | Self::RegExpPrototypeHasIndices
+            | Self::RegExpPrototypeGlobal
+            | Self::RegExpPrototypeIgnoreCase
+            | Self::RegExpPrototypeMultiline
+            | Self::RegExpPrototypeDotAll
+            | Self::RegExpPrototypeUnicode
+            | Self::RegExpPrototypeUnicodeSets
+            | Self::RegExpPrototypeSticky
             | Self::ArrayOf
             | Self::ArrayFrom
             | Self::Eval
@@ -1923,6 +2013,16 @@ impl Intrinsic {
             Self::ThrowTypeError
             | Self::FunctionPrototype
             | Self::SpeciesGetter
+            | Self::RegExpPrototypeFlags
+            | Self::RegExpPrototypeSource
+            | Self::RegExpPrototypeHasIndices
+            | Self::RegExpPrototypeGlobal
+            | Self::RegExpPrototypeIgnoreCase
+            | Self::RegExpPrototypeMultiline
+            | Self::RegExpPrototypeDotAll
+            | Self::RegExpPrototypeUnicode
+            | Self::RegExpPrototypeUnicodeSets
+            | Self::RegExpPrototypeSticky
             | Self::SymbolConstructor
             | Self::RegExpPrototypeToString
             | Self::ObjectPrototypeToString
@@ -2414,6 +2514,32 @@ pub const REGEXP_PROTOTYPE_PROPERTIES: [&str; 16] = [
     "lastIndex",
 ];
 
+/// The accessors 22.2.6 gives `%RegExp.prototype%`, in the order it lists them.
+pub const REGEXP_ACCESSORS: [Intrinsic; 10] = [
+    Intrinsic::RegExpPrototypeFlags,
+    Intrinsic::RegExpPrototypeSource,
+    Intrinsic::RegExpPrototypeHasIndices,
+    Intrinsic::RegExpPrototypeGlobal,
+    Intrinsic::RegExpPrototypeIgnoreCase,
+    Intrinsic::RegExpPrototypeMultiline,
+    Intrinsic::RegExpPrototypeDotAll,
+    Intrinsic::RegExpPrototypeUnicode,
+    Intrinsic::RegExpPrototypeUnicodeSets,
+    Intrinsic::RegExpPrototypeSticky,
+];
+
+/// The eight flag accessors of 22.2.6, in the order 22.2.6.4 reads them.
+pub const REGEXP_FLAG_ACCESSORS: [Intrinsic; 8] = [
+    Intrinsic::RegExpPrototypeHasIndices,
+    Intrinsic::RegExpPrototypeGlobal,
+    Intrinsic::RegExpPrototypeIgnoreCase,
+    Intrinsic::RegExpPrototypeMultiline,
+    Intrinsic::RegExpPrototypeDotAll,
+    Intrinsic::RegExpPrototypeUnicode,
+    Intrinsic::RegExpPrototypeUnicodeSets,
+    Intrinsic::RegExpPrototypeSticky,
+];
+
 /// Whether `%RegExp.prototype%` owns a property of this name.
 #[must_use]
 pub fn regexp_prototype_owns(name: &[u16]) -> bool {
@@ -2848,6 +2974,7 @@ impl Realm {
         )?;
         Self::define_species_getters(heap, &intrinsics)?;
         Self::define_restricted_properties(heap, &intrinsics, function_prototype)?;
+        Self::define_regexp_accessors(heap, &intrinsics, regexp_prototype)?;
         Self::define_unscopables(heap, array_prototype)?;
         Self::define_to_string_tags(
             heap,
@@ -3443,6 +3570,57 @@ impl Realm {
         Ok(())
     }
 
+    /// The accessors 22.2.6 gives `%RegExp.prototype%`.
+    ///
+    /// Each has a getter and no setter, which 17 makes undefined.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    fn define_regexp_accessors(
+        heap: &mut GenerationalHeap,
+        intrinsics: &[Root],
+        prototype: Root,
+    ) -> Result<(), HeapError> {
+        for intrinsic in REGEXP_ACCESSORS {
+            let getter = Self::rooted(
+                heap,
+                *intrinsics
+                    .get(intrinsic.index())
+                    .ok_or(HeapError::InvalidReference)?,
+            )?;
+            let holder = Self::rooted(heap, prototype)?
+                .as_object()
+                .ok_or(HeapError::InvalidReference)?;
+            let shape = heap.shapes.root_shape();
+            let pair = heap.allocate_immortal_object(shape, super::value::VALUE_NULL)?;
+            heap.set_object_kind(
+                pair,
+                super::object::ObjectKind::Accessor {
+                    get: getter,
+                    set: super::value::VALUE_UNDEFINED,
+                },
+            )?;
+            let name = intrinsic
+                .name()
+                .strip_prefix("get ")
+                .ok_or(HeapError::InvalidReference)?;
+            let key = PropertyKey::String(heap.strings.intern(name)?);
+            heap.define_own_named(
+                holder,
+                key,
+                Value::from_object(pair),
+                PropertyFlags {
+                    writable: false,
+                    enumerable: false,
+                    configurable: true,
+                    is_accessor: true,
+                },
+            )?;
+        }
+        Ok(())
+    }
+
     /// `get [Symbol.species]` of 23.1.2.5 and 22.2.5.2.
     ///
     /// One getter stands for both, because each answers the `this` value it
@@ -3613,7 +3791,19 @@ impl Realm {
             // key beside their constructors, not names on a holder.
             if matches!(
                 intrinsic,
-                Intrinsic::ThrowTypeError | Intrinsic::FunctionPrototype | Intrinsic::SpeciesGetter
+                Intrinsic::ThrowTypeError
+                    | Intrinsic::FunctionPrototype
+                    | Intrinsic::SpeciesGetter
+                    | Intrinsic::RegExpPrototypeFlags
+                    | Intrinsic::RegExpPrototypeSource
+                    | Intrinsic::RegExpPrototypeHasIndices
+                    | Intrinsic::RegExpPrototypeGlobal
+                    | Intrinsic::RegExpPrototypeIgnoreCase
+                    | Intrinsic::RegExpPrototypeMultiline
+                    | Intrinsic::RegExpPrototypeDotAll
+                    | Intrinsic::RegExpPrototypeUnicode
+                    | Intrinsic::RegExpPrototypeUnicodeSets
+                    | Intrinsic::RegExpPrototypeSticky
             ) {
                 continue;
             }

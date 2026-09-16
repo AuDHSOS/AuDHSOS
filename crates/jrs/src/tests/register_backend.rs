@@ -426,6 +426,43 @@ fn the_wrapper_prototypes_carry_the_data_slot_of_their_clause() -> Result<(), Er
     Ok(())
 }
 
+#[test]
+fn the_accessors_of_22_2_6_answer_the_flags_of_the_receiver() -> Result<(), Error> {
+    for source in [
+        // Each flag accessor reads [[OriginalFlags]] of the receiver.
+        "/ab/g.global",
+        "/ab/g.ignoreCase",
+        "/ab/g.sticky",
+        "/ab/g.dotAll",
+        "/ab/g.hasIndices",
+        "/ab/g.multiline",
+        "/ab/g.unicode",
+        "/ab/g.unicodeSets",
+        "/ab/.flags",
+        "/ab/g.flags",
+        "/a\\/b/.source",
+        "new RegExp('').source",
+        // Step 3 answers undefined for %RegExp.prototype%, which carries no
+        // [[OriginalFlags]], and "(?:)" for its source.
+        "RegExp.prototype.global",
+        "RegExp.prototype.sticky",
+        "RegExp.prototype.flags",
+        "RegExp.prototype.source",
+        // Every other receiver without the slot is a TypeError.
+        "let g=Object.getOwnPropertyDescriptor(RegExp.prototype,'global').get;try{g.call({})}catch(e){e instanceof TypeError}",
+        "let g=Object.getOwnPropertyDescriptor(RegExp.prototype,'source').get;try{g.call({})}catch(e){e instanceof TypeError}",
+        // 22.2.6.4 reads the eight names off the receiver, whatever it is.
+        "let f=Object.getOwnPropertyDescriptor(RegExp.prototype,'flags').get;f.call({global:true,sticky:true})",
+        "let f=Object.getOwnPropertyDescriptor(RegExp.prototype,'flags').get;f.call({})",
+        // 17 gives each accessor a getter and no setter.
+        "let d=Object.getOwnPropertyDescriptor(RegExp.prototype,'global');typeof d.get+':'+typeof d.set",
+        "let d=Object.getOwnPropertyDescriptor(RegExp.prototype,'global');d.enumerable+':'+d.configurable",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
 fn differential_scripts(scripts: &[&str]) -> Result<(), Error> {
     let outcome = |backend| -> Result<Result<Value, Error>, Error> {
         let mut host = SilentHost;
@@ -5774,14 +5811,13 @@ fn a_regular_expression_literal_makes_the_object_of_its_pattern() -> Result<(), 
         differential_scripts(&[source])?;
     }
     // 22.2.6 gives `%RegExp.prototype%` more than this Realm builds.
-    for source in ["/a/.source", "/a/.global"] {
-        let mut host = SilentHost;
-        let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
-        assert!(
-            matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
-            "{source}"
-        );
-    }
+    let source = "/a/.compile";
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    assert!(
+        matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
+        "{source}"
+    );
     Ok(())
 }
 

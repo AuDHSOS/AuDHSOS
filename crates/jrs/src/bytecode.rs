@@ -7799,6 +7799,9 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // 22.1.1.1 answers a String whichever argument it took; `new` answers
         // no value at all, because the exotic object it would make is a gap.
         crate::engine::realm::Intrinsic::StringConstructor
+        // 22.2.6.4 and 22.2.6.13 answer a String for every receiver they take.
+        | crate::engine::realm::Intrinsic::RegExpPrototypeFlags
+        | crate::engine::realm::Intrinsic::RegExpPrototypeSource
         | crate::engine::realm::Intrinsic::ObjectPrototypeToString
         | crate::engine::realm::Intrinsic::NumberPrototypeToString
         | crate::engine::realm::Intrinsic::BooleanPrototypeToString
@@ -7951,7 +7954,18 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::NumberConstructor => RegisterType::Number,
         // 22.1.3.1 and 22.1.3.4 answer undefined for an index outside the String.
         crate::engine::realm::Intrinsic::StringPrototypeAt
-        | crate::engine::realm::Intrinsic::StringPrototypeCodePointAt => RegisterType::Primitive,
+        | crate::engine::realm::Intrinsic::StringPrototypeCodePointAt
+        // 22.2.6 answers a Boolean for a RegExp and undefined for the one
+        // object of step 3 that is no RegExp.
+        | crate::engine::realm::Intrinsic::RegExpPrototypeHasIndices
+        | crate::engine::realm::Intrinsic::RegExpPrototypeGlobal
+        | crate::engine::realm::Intrinsic::RegExpPrototypeIgnoreCase
+        | crate::engine::realm::Intrinsic::RegExpPrototypeMultiline
+        | crate::engine::realm::Intrinsic::RegExpPrototypeDotAll
+        | crate::engine::realm::Intrinsic::RegExpPrototypeUnicode
+        | crate::engine::realm::Intrinsic::RegExpPrototypeUnicodeSets
+        | crate::engine::realm::Intrinsic::RegExpPrototypeSticky
+        => RegisterType::Primitive,
     }
 }
 

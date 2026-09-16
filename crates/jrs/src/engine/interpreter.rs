@@ -1834,6 +1834,20 @@ impl RegisterVM {
             | Intrinsic::RegExpPrototypeToString => {
                 self.call_regexp_intrinsic(intrinsic, &call, heap, realm)
             }
+            // 22.2.6.4 reads the eight flag accessors of the receiver rather
+            // than its own `[[OriginalFlags]]`, so it takes any object.
+            Intrinsic::RegExpPrototypeFlags => self.regexp_flags(call.receiver, heap, realm),
+            Intrinsic::RegExpPrototypeSource => self.regexp_source(call.receiver, heap, realm),
+            Intrinsic::RegExpPrototypeHasIndices
+            | Intrinsic::RegExpPrototypeGlobal
+            | Intrinsic::RegExpPrototypeIgnoreCase
+            | Intrinsic::RegExpPrototypeMultiline
+            | Intrinsic::RegExpPrototypeDotAll
+            | Intrinsic::RegExpPrototypeUnicode
+            | Intrinsic::RegExpPrototypeUnicodeSets
+            | Intrinsic::RegExpPrototypeSticky => {
+                Self::regexp_flag(intrinsic, call.receiver, heap, realm)
+            }
             // 20.2.3.5 answers the source text of the grammar node a function
             // was written as, and the NativeFunction string of 20.2.3.5 step 3
             // for one this engine wrote.
@@ -9317,6 +9331,136 @@ impl RegisterVM {
                 "invalid flags",
             )
         })
+    }
+
+    /// The flag character 22.2.6 gives one accessor of `%RegExp.prototype%`.
+    const fn flag_character(intrinsic: Intrinsic) -> Option<u16> {
+        Some(match intrinsic {
+            Intrinsic::RegExpPrototypeHasIndices => 100,
+            Intrinsic::RegExpPrototypeGlobal => 103,
+            Intrinsic::RegExpPrototypeIgnoreCase => 105,
+            Intrinsic::RegExpPrototypeMultiline => 109,
+            Intrinsic::RegExpPrototypeDotAll => 115,
+            Intrinsic::RegExpPrototypeUnicode => 117,
+            Intrinsic::RegExpPrototypeUnicodeSets => 118,
+            Intrinsic::RegExpPrototypeSticky => 121,
+            _ => return None,
+        })
+    }
+
+    /// What an accessor of 22.2.6 answers for a receiver with no
+    /// `[[OriginalFlags]]`.
+    ///
+    /// Step 3 of each answers undefined for `%RegExp.prototype%` itself, which
+    /// is an ordinary object, and a `TypeError` for every other one.
+    fn regexp_slot_absent(
+        receiver: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        if receiver.as_object() == realm.regexp_prototype(heap)?.as_object() {
+            return Ok(());
+        }
+        Err(type_error(heap, realm, "this value is not a RegExp"))
+    }
+
+    /// One flag accessor of 22.2.6.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a receiver that is
+    /// neither a `RegExp` nor `%RegExp.prototype%`.
+    fn regexp_flag(
+        intrinsic: Intrinsic,
+        receiver: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let unit = Self::flag_character(intrinsic).ok_or(VMError::InvalidFeedbackVector)?;
+        let pattern = receiver
+            .as_object()
+            .and_then(|object| Self::regexp_pattern(object, heap));
+        let Some(pattern) = pattern else {
+            Self::regexp_slot_absent(receiver, heap, realm)?;
+            return Ok(VALUE_UNDEFINED);
+        };
+        Ok(Value::from_bool(
+            pattern.flags.encode_utf16().any(|flag| flag == unit),
+        ))
+    }
+
+    /// `get source` of 22.2.6.13, with the escape of 22.2.6.13.1.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a receiver that is
+    /// neither a `RegExp` nor `%RegExp.prototype%`.
+    fn regexp_source(
+        &self,
+        receiver: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let pattern = receiver
+            .as_object()
+            .and_then(|object| Self::regexp_pattern(object, heap));
+        let Some(pattern) = pattern else {
+            Self::regexp_slot_absent(receiver, heap, realm)?;
+            // Step 3.a answers the pattern 22.2.6.13.1 gives an empty source.
+            return self.allocate_string(heap, &"(?:)".encode_utf16().collect::<Vec<u16>>());
+        };
+        let units: Vec<u16> = if pattern.source.is_empty() {
+            "(?:)".encode_utf16().collect()
+        } else {
+            pattern.source.to_vec()
+        };
+        self.allocate_string(heap, &units)
+    }
+
+    /// `get flags` of 22.2.6.4.
+    ///
+    /// The clause reads the eight flag accessors off the receiver with 7.3.2,
+    /// so an object that is no `RegExp` answers the flags its own properties
+    /// carry. A getter of the Script needs a frame this native has none of.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a receiver that is
+    /// not an Object.
+    fn regexp_flags(
+        &self,
+        receiver: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let Some(object) = receiver.as_object() else {
+            return Err(type_error(heap, realm, "this value is not an object"));
+        };
+        let mut units: Vec<u16> = Vec::new();
+        for intrinsic in super::realm::REGEXP_FLAG_ACCESSORS {
+            let unit = Self::flag_character(intrinsic).ok_or(VMError::InvalidFeedbackVector)?;
+            let name = intrinsic
+                .name()
+                .strip_prefix("get ")
+                .ok_or(VMError::InvalidFeedbackVector)?;
+            let key = PropertyKey::String(heap.strings.intern(name)?);
+            let found = heap.lookup_named(object, key)?;
+            let value = match found {
+                None => VALUE_UNDEFINED,
+                Some(property) if !property.flags.is_accessor => property.value,
+                Some(property) => {
+                    let (get, _) = Self::accessor_parts(property.value, heap)?;
+                    if !Self::is_intrinsic(get, intrinsic, heap) {
+                        return Err(VMError::Unsupported("a property that is an accessor"));
+                    }
+                    Self::regexp_flag(intrinsic, receiver, heap, realm)?
+                }
+            };
+            if Self::to_boolean(value, heap)? {
+                units.push(unit);
+            }
+        }
+        self.allocate_string(heap, &units)
     }
 
     /// `RegExpAlloc` of 22.2.3.2 with the `lastIndex` 22.2.3.3 initializes.
