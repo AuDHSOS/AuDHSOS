@@ -741,8 +741,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same, on the register engine (focused) | focused | `eaaca5d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/prototype/Symbol.unscopables --summary` | 5 | 10 | 8 (80.00%) | 2 (20.00%) | 0 (0.00%) |
 | `Array.from` and `Array.of` (focused) | focused | `7eb647c` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/from test/built-ins/Array/of --summary` | 63 | 122 | 110 (90.16%) | 6 (4.92%) | 6 (4.92%) |
 | The same two, on the register engine (focused) | focused | `7eb647c` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/from test/built-ins/Array/of --summary` | 63 | 122 | 40 (32.79%) | 22 (18.03%) | 60 (49.18%) |
-| Complete pinned suite, including staging and Intl | full | `7eb647c` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `7eb647c` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 27,106 (26.34%) | 19,410 (18.86%) | 56,409 (54.81%) |
+| `Array.from` with a mapper (focused) | focused | `92ee3db` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/from test/built-ins/Array/of --summary` | 63 | 122 | 110 (90.16%) | 6 (4.92%) | 6 (4.92%) |
+| The same two, with the mapper, on the register engine (focused) | focused | `92ee3db` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/from test/built-ins/Array/of --summary` | 63 | 122 | 40 (32.79%) | 24 (19.67%) | 58 (47.54%) |
+| Complete pinned suite, including staging and Intl | full | `92ee3db` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `92ee3db` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 27,106 (26.34%) | 19,412 (18.86%) | 56,407 (54.80%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1540,7 +1542,12 @@ runs and both full runs beside it were measured at tree
 that step gained 8 variants and lost none. The `Array.from` and `Array.of`
 runs and both full runs beside them were measured at tree
 `4722dc97bf87361f29915e3897960f8e417e27d0`, which is the tree of `7eb647c`;
-that step gained 42 variants and lost none.
+that step gained 42 variants and lost none. The same two runs and both full
+runs beside the mapper were measured at tree
+`ea18c72f3cd3694e94be2c23318ddd3300fde006`, which is the tree of `92ee3db`;
+that step gained 2 variants and lost 2, the two being `Array.from` of a String,
+which passed by accident while the clause walked indices and is now the named
+gap the string iterator of 22.1.3.36 leaves.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
