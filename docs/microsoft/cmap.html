@@ -1,0 +1,2568 @@
+ <!DOCTYPE html>
+		<html
+			class="layout layout-holy-grail   show-table-of-contents conceptual show-breadcrumb default-focus"
+			lang="en-us"
+			dir="ltr"
+			data-authenticated="false"
+			data-auth-status-determined="false"
+			data-target="docs"
+			x-ms-format-detection="none"
+		>
+			
+		<head>
+			<title>cmap - Character To Glyph Index Mapping Table (OpenType 1.9.1) - Typography | Microsoft Learn</title>
+			<meta charset="utf-8" />
+			<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+			<meta name="color-scheme" content="light dark" />
+
+			<meta name="description" content="The Character To Glyph Index Mapping Table specification (OpenType 1.9.1)" />
+			<link rel="canonical" href="https://learn.microsoft.com/en-us/typography/opentype/spec/cmap" /> 
+
+			<!-- Non-customizable open graph and sharing-related metadata -->
+			<meta name="twitter:card" content="summary_large_image" />
+			<meta name="twitter:site" content="@MicrosoftLearn" />
+			<meta property="og:type" content="website" />
+			<meta property="og:image:alt" content="Microsoft Learn" />
+			<meta property="og:image" content="https://learn.microsoft.com/en-us/media/open-graph-image.png" />
+			<!-- Page specific open graph and sharing-related metadata -->
+			<meta property="og:title" content="cmap - Character To Glyph Index Mapping Table (OpenType 1.9.1) - Typography" />
+			<meta property="og:url" content="https://learn.microsoft.com/en-us/typography/opentype/spec/cmap" />
+			<meta property="og:description" content="The Character To Glyph Index Mapping Table specification (OpenType 1.9.1)" />
+			<meta name="platform_id" content="f0ba3752-cc22-eec0-d356-e3aa29670741" /> <meta name="scope" content="typography" />
+			<meta name="locale" content="en-us" />
+			 
+			<meta name="uhfHeaderId" content="MSDocsHeader-MSTypography" />
+
+			<meta name="page_type" content="conceptual" />
+
+			<!--page specific meta tags-->
+			
+
+			<!-- custom meta tags -->
+			
+		<meta name="ms.service" content="typography" />
+	
+		<meta name="breadcrumb_path" content="/typography/breadcrumbs/toc.json" />
+	
+		<meta name="feedback_system" content="OpenSource" />
+	
+		<meta name="author" content="PeterCon" />
+	
+		<meta name="ms.author" content="pconstable" />
+	
+		<meta name="ms.date" content="2024-05-29T00:00:00Z" />
+	
+		<meta name="feedback_product_url" content="https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml" />
+	
+		<meta name="keywords" content="typography" />
+	
+		<meta name="ms.topic" content="article" />
+	
+		<meta name="source-file" content="https://www.microsoft.com/typography/otspec/cmap.htm" />
+	
+		<meta name="document_id" content="86923ff4-2b60-9144-e2b4-77cdb36fd698" />
+	
+		<meta name="document_version_independent_id" content="ea221e53-f51a-8233-3c0b-d416e5360623" />
+	
+		<meta name="updated_at" content="2024-05-31T17:41:00Z" />
+	
+		<meta name="original_content_git_url" content="https://github.com/MicrosoftDocs/typography/blob/live/typographydocs/opentype/spec/cmap.md" />
+	
+		<meta name="gitcommit" content="https://github.com/MicrosoftDocs/typography/blob/810414e13e39f68adfb5f12d525e6b50c850fbbc/typographydocs/opentype/spec/cmap.md" />
+	
+		<meta name="git_commit_id" content="810414e13e39f68adfb5f12d525e6b50c850fbbc" />
+	
+		<meta name="site_name" content="Docs" />
+	
+		<meta name="depot_name" content="Win.typography" />
+	
+		<meta name="schema" content="Conceptual" />
+	
+		<meta name="toc_rel" content="../../toc.json" />
+	
+		<meta name="pdf_url_template" content="https://learn.microsoft.com/pdfstore/en-us/Win.typography/{branchName}{pdfName}" />
+	
+		<meta name="feedback_help_link_type" content="" />
+	
+		<meta name="feedback_help_link_url" content="" />
+	
+		<meta name="word_count" content="5792" />
+	
+		<meta name="asset_id" content="opentype/spec/cmap" />
+	
+		<meta name="moniker_range_name" content="" />
+	
+		<meta name="item_type" content="Content" />
+	
+		<meta name="source_path" content="typographydocs/opentype/spec/cmap.md" />
+	
+		<meta name="previous_tlsh_hash" content="F5D976F2951CA562EFC2CF0609E37A50A1F4C6CEE2F077E91C6936D242982C170F05F5FA7A12A3C523375A93036635AFE295EB3D60BCB6A6A5A5187C520C3286C754537FF8" />
+	
+		<meta name="github_feedback_content_git_url" content="https://github.com/MicrosoftDocs/typography/blob/live/typographydocs/opentype/spec/cmap.md" />
+	
+		<meta name="markdown_url" content="https://learn.microsoft.com/en-us/typography/opentype/spec/cmap?accept=text/markdown" />
+	 
+		<meta name="cmProducts" content="https://microsoft-devrel.poolparty.biz/DevRelOfferingOntology/c6f99e62-1cf6-4b71-af9b-649b05f80cce" data-source="generated" />
+	
+		<meta name="cmProducts" content="https://authoring-docs-microsoft.poolparty.biz/devrel/bcbcbad5-4208-4783-8035-8481272c98b8" data-source="generated" />
+	
+		<meta name="spProducts" content="https://microsoft-devrel.poolparty.biz/DevRelOfferingOntology/3f56b378-07a9-4fa1-afe8-9889fdc77628" data-source="generated" />
+	
+		<meta name="spProducts" content="https://authoring-docs-microsoft.poolparty.biz/devrel/43b2e5aa-8a6d-4de2-a252-692232e5edc8" data-source="generated" />
+	
+
+			<!-- Apply persisted/system theme before first paint to prevent wrong-theme flash when scripts are deferred. -->
+			<script id="theme-preference">
+				(function () {
+			try {
+				var stored = localStorage.getItem('theme');
+				var theme = /^(light|dark|high-contrast)$/.test(stored)
+					? stored
+					: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+				document.documentElement.classList.add('theme-' + theme);
+			} catch (e) {}
+		})();;
+			</script>
+
+			<script id="atlas-layout-preferences">
+				(function () {
+			try {
+				var state = JSON.parse(localStorage.getItem('atlas-layout-preferences') || '{}');
+				var view = state["docs-layout-persistence"] || {};
+				var excludesKey = "";
+				var blocked = {};
+				if (excludesKey) {
+					var exclusions = JSON.parse(localStorage.getItem('atlas-layout-exclusions') || '{}');
+					if (Object.prototype.hasOwnProperty.call(exclusions, excludesKey)) {
+						var scoped = exclusions[excludesKey];
+						if (scoped) {
+							if (typeof scoped === 'object') blocked = scoped;
+						}
+					}
+				}
+				var html = document.documentElement;
+				for (var c in view) {
+					if (Object.prototype.hasOwnProperty.call(blocked, c)) continue;
+					if (view[c]) html.classList.add(c);
+					else html.classList.remove(c);
+				}
+			} catch (e) {}
+		})();;
+			</script>
+
+			<!-- assets and js globals -->
+			
+			<link rel="stylesheet" href="/static/assets/0.4.03544.8243-8192ba90/styles/site.css" />
+			
+			<script src="https://wcpstatic.microsoft.com/mscc/lib/v2/wcp-consent.js"></script>
+			<!-- Keep this URL in sync with oneDSScriptSelector in instrumentation/one-ds.ts. -->
+			<script async src="https://js.monitor.azure.com/scripts/c/ms.jsll-4.min.js"></script>
+			
+
+			<!-- msdocs global object -->
+			<script id="msdocs-script">
+		var msDocs = {
+  "environment": {
+    "accessLevel": "online",
+    "azurePortalHostname": "portal.azure.com",
+    "reviewFeatures": false,
+    "supportLevel": "production",
+    "systemContent": true,
+    "siteName": "learn",
+    "legacyHosting": false
+  },
+  "data": {
+    "contentLocale": "en-us",
+    "contentDir": "ltr",
+    "userLocale": "en-us",
+    "userDir": "ltr",
+    "pageTemplate": "Conceptual",
+    "layoutStateStorageKey": "docs-layout-persistence",
+    "brand": "",
+    "context": {},
+    "standardFeedback": false,
+    "showFeedbackReport": false,
+    "feedbackHelpLinkType": "",
+    "feedbackHelpLinkUrl": "",
+    "feedbackSystem": "OpenSource",
+    "feedbackGitHubRepo": "",
+    "feedbackProductUrl": "https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml",
+    "extendBreadcrumb": false,
+    "isEditDisplayable": false,
+    "isPrivateUnauthorized": false,
+    "hideViewSource": false,
+    "isPermissioned": false,
+    "hasRecommendations": true,
+    "openSourceFeedbackIssueUrl": "https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml",
+    "openSourceFeedbackIssueTitle": ""
+  },
+  "functions": {}
+};;
+	</script>
+
+			<!-- base scripts, msdocs global should be before this -->
+			<script
+				src="/static/assets/0.4.03544.8243-8192ba90/scripts/en-us/index-docs.js"
+				async
+			></script>
+			
+
+			<!-- json-ld -->
+			
+		</head>
+	
+			<body
+				id="body"
+				data-bi-name="body"
+				class="layout-body "
+				lang="en-us"
+				dir="ltr"
+			>
+				<header class="layout-body-header background-color-body-medium">
+		<div class="header-holder has-default-focus">
+			
+		<a
+			href="#main"
+			
+			style="z-index: 1070"
+			class="outline-color-text visually-hidden-until-focused position-fixed inner-focus focus-visible top-0 left-0 right-0 padding-xs text-align-center background-color-body"
+			
+		>
+			Skip to main content
+		</a>
+	
+		<a
+			href="#"
+			data-skip-to-ask-learn
+			style="z-index: 1070"
+			class="outline-color-text visually-hidden-until-focused position-fixed inner-focus focus-visible top-0 left-0 right-0 padding-xs text-align-center background-color-body"
+			hidden
+		>
+			Skip to Ask Learn chat experience
+		</a>
+	
+
+			<div hidden id="cookie-consent-holder" data-test-id="cookie-consent-container"></div>
+			<!-- Unsupported browser warning -->
+			<div
+				id="unsupported-browser"
+				style="background-color: white; color: black; padding: 16px; border-bottom: 1px solid grey;"
+				hidden
+			>
+				<div style="max-width: 800px; margin: 0 auto;">
+					<p style="font-size: 24px">This browser is no longer supported.</p>
+					<p style="font-size: 16px; margin-top: 16px;">
+						Upgrade to Microsoft Edge to take advantage of the latest features, security updates, and technical support.
+					</p>
+					<div style="margin-top: 12px;">
+						<a
+							href="https://go.microsoft.com/fwlink/p/?LinkID=2092881 "
+							style="background-color: #0078d4; border: 1px solid #0078d4; color: white; padding: 6px 12px; border-radius: 2px; display: inline-block;"
+						>
+							Download Microsoft Edge
+						</a>
+						<a
+							href="https://learn.microsoft.com/en-us/lifecycle/faq/internet-explorer-microsoft-edge"
+							style="background-color: white; padding: 6px 12px; border: 1px solid #505050; color: #171717; border-radius: 2px; display: inline-block;"
+						>
+							More info about Internet Explorer and Microsoft Edge
+						</a>
+					</div>
+				</div>
+			</div>
+			<!-- site header -->
+			<div
+				id="ms--site-header"
+				data-test-id="site-header-wrapper"
+				itemscope="itemscope"
+				itemtype="http://schema.org/Organization"
+			>
+				<div
+					id="ms--mobile-nav"
+					class="site-header display-none-tablet padding-inline-none gap-none"
+					data-bi-name="mobile-header"
+					data-test-id="mobile-header"
+				></div>
+				<div
+					id="ms--primary-nav"
+					class="site-header display-none display-flex-tablet"
+					data-bi-name="L1-header"
+					data-test-id="primary-header"
+				></div>
+				<div
+					id="ms--secondary-nav"
+					class="site-header display-none display-flex-tablet"
+					data-bi-name="L2-header"
+					data-test-id="secondary-header"
+					
+				></div>
+			</div>
+			
+		<!-- banner -->
+		<div data-banner>
+			<div id="disclaimer-holder"></div>
+			
+		</div>
+		<!-- banner end -->
+	
+		</div>
+	</header>
+				 <section
+					id="layout-body-menu"
+					class="layout-body-menu border-right display-flex background-color-body-medium"
+					data-bi-name="menu"
+			  >
+					
+		<div
+			id="left-container"
+			class="left-container display-none padding-none display-block-tablet width-full display-none-until-layout-restored"
+			data-toc-container="true"
+		>
+			<div
+				id="ms--toc-content"
+				class="padding-left-sm padding-right-none padding-bottom-sm height-full"
+			>
+				<nav
+					id="affixed-left-container"
+					class="margin-top-xxs-tablet position-sticky display-flex flex-direction-column width-full"
+					aria-label="Primary"
+					data-bi-name="left-toc"
+					role="navigation"
+				>
+					<div
+						id="ms--collapsible-toc-header"
+						class="display-flex flex-direction-row-reverse justify-content-center align-items-center margin-bottom-xxs margin-right-xxs"
+					>
+						<button
+							type="button"
+							class="button button-clear button-sm inner-focus"
+							data-collapsible-toc-toggle
+							aria-expanded="true"
+							hidden
+							aria-controls="ms--toc-content"
+							aria-label="Table of contents"
+						>
+							<span class="icon icon-mirrored-rtl" aria-hidden="true">
+								<span
+									class="docon docon-panel-left-contract display-none-layout-menu-collapsed"
+								></span>
+								<span
+									class="docon docon-panel-left-expand display-none display-inline-layout-menu-collapsed"
+								></span>
+							</span>
+						</button>
+						<div
+							id="ms--collapsible-toc-moniker-slot"
+							class="flex-grow-1 display-none-layout-menu-collapsed"
+						></div>
+					</div>
+				</nav>
+			</div>
+		</div>
+	
+			  </section>
+
+				<main
+					id="main"
+					role="main"
+					class="layout-body-main "
+					data-bi-name="content"
+					lang="en-us"
+					dir="ltr"
+				>
+					
+			<div
+		id="ms--content-header"
+		class="content-header default-focus border-bottom-none"
+		data-bi-name="content-header"
+	>
+		<div class="content-header-controls margin-xxs margin-inline-sm-tablet">
+			<button
+				type="button"
+				class="contents-button button button-sm margin-right-xxs"
+				data-bi-name="contents-expand"
+				aria-haspopup="true"
+				data-contents-button
+			>
+				<span class="icon" aria-hidden="true"><span class="docon docon-menu"></span></span>
+				<span class="contents-expand-title"> Table of contents </span>
+			</button>
+			<button
+				type="button"
+				class="ap-collapse-behavior ap-expanded button button-sm"
+				data-bi-name="ap-collapse"
+				aria-controls="action-panel"
+			>
+				<span class="icon" aria-hidden="true"><span class="docon docon-exit-mode"></span></span>
+				<span>Exit editor mode</span>
+			</button>
+		</div>
+	</div> 
+		<div
+			id="action-panel"
+			role="region"
+			aria-label="Action Panel"
+			class="action-panel"
+			tabindex="-1"
+		></div>
+	
+			<div
+				data-main-column
+				class="reading-width margin-inline-auto layout-padding padding-top-none padding-top-sm-tablet padding-bottom-sm"
+			>
+				<div>
+					
+		<div id="article-header" class="background-color-body margin-bottom-xs display-none-print">
+			<div class="display-flex align-items-center justify-content-space-between">
+				
+		<details
+			id="article-header-breadcrumbs-overflow-popover"
+			class="popover popover-left"
+			data-for="article-header-breadcrumbs"
+		>
+			<summary
+				class="button button-clear button-primary button-sm inner-focus"
+				aria-label="All breadcrumbs"
+			>
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-more"></span>
+				</span>
+			</summary>
+			<div id="article-header-breadcrumbs-overflow" class="popover-content"></div>
+		</details>
+
+		<bread-crumbs
+			id="article-header-breadcrumbs"
+			role="group"
+			aria-label="Breadcrumbs"
+			data-test-id="article-header-breadcrumbs"
+			class="overflow-hidden flex-grow-1 margin-right-sm margin-right-md-tablet margin-right-lg-desktop margin-left-negative-xxs padding-left-xxs"
+		></bread-crumbs>
+	 
+		<div
+			id="article-header-page-actions"
+			class="opacity-none margin-left-auto display-flex flex-wrap-no-wrap align-items-stretch"
+		>
+			
+		<button
+			class="button button-sm border-none inner-focus display-none-tablet flex-shrink-0 "
+			data-bi-name="ask-learn-assistant-entry"
+			data-test-id="ask-learn-assistant-modal-entry-mobile"
+			data-ask-learn-modal-entry
+			
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-label="Ask Learn"
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+		</button>
+		<button
+			class="button button-sm display-none display-inline-flex-tablet display-none-desktop flex-shrink-0 margin-right-xxs border-color-ask-learn "
+			data-bi-name="ask-learn-assistant-entry"
+			
+			data-test-id="ask-learn-assistant-modal-entry-tablet"
+			data-ask-learn-modal-entry
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+		<button
+			class="button button-sm display-none flex-shrink-0 display-inline-flex-desktop margin-right-xxs border-color-ask-learn "
+			data-bi-name="ask-learn-assistant-entry"
+			
+			data-test-id="ask-learn-assistant-flyout-entry"
+			data-ask-learn-flyout-entry
+			data-flyout-button="toggle"
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-controls="ask-learn-flyout"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+	 
+
+			<details class="popover popover-right" id="article-header-page-actions-overflow">
+				<summary
+					class="justify-content-flex-start button button-clear button-sm button-primary inner-focus"
+					aria-label="More actions"
+					title="More actions"
+				>
+					<span class="icon" aria-hidden="true">
+						<span class="docon docon-more-vertical"></span>
+					</span>
+				</summary>
+				<div class="popover-content">
+					
+		<button
+			type="button"
+			id="ms--focus-mode-button"
+			data-focus-mode
+			data-bi-name="focus-mode-entry"
+			data-page-action-item="overflow-all"
+			data-popover-close
+			class="button button-clear button-sm button-block justify-content-flex-start text-align-left inner-focus display-none display-inline-flex-tablet"
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-glasses"></span>
+			</span>
+			<span>Reading mode</span>
+		</button>
+	 
+		<button
+			data-page-action-item="overflow-mobile"
+			type="button"
+			class="display-block-layout-menu-collapsed button-block button-sm inner-focus button button-clear display-none-tablet justify-content-flex-start text-align-left"
+			data-bi-name="contents-expand"
+			data-contents-button
+			data-popover-close
+		>
+			<span class="icon" aria-hidden="true"
+				><span class="docon docon-editor-list-bullet"></span
+			></span>
+			<span class="contents-expand-title">Table of contents</span>
+		</button>
+	 
+		<a
+			id="lang-link-overflow"
+			class="button-sm inner-focus button button-clear button-block justify-content-flex-start text-align-left"
+			data-bi-name="language-toggle"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			data-read-in-link
+			href="#"
+			hidden
+		>
+			<span class="icon" aria-hidden="true" data-read-in-link-icon>
+				<span class="docon docon-locale-globe"></span>
+			</span>
+			<span data-read-in-link-text>Read in English</span>
+		</a>
+	
+					
+		<button
+			type="button"
+			class="collection button button-clear button-sm button-block justify-content-flex-start text-align-left inner-focus"
+			data-list-type="collection"
+			data-bi-name="collection"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			data-popover-close
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-circle-addition"></span>
+			</span>
+			<span class="collection-status">Add</span>
+		</button>
+	 
+		<button
+			type="button"
+			class="collection button button-block button-clear button-sm justify-content-flex-start text-align-left inner-focus"
+			data-list-type="plan"
+			data-bi-name="plan"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			data-popover-close
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-circle-addition"></span>
+			</span>
+			<span class="plan-status">Add to Plans</span>
+		</button>
+	 
+					
+		<a
+			data-contenteditbtn
+			class="button button-clear button-block button-sm inner-focus justify-content-flex-start text-align-left text-decoration-none"
+			data-bi-name="edit"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			hidden
+			href=""
+			data-original_content_git_url="https://github.com/MicrosoftDocs/typography/blob/live/typographydocs/opentype/spec/cmap.md"
+			data-original_content_git_url_template="{repo}/blob/{branch}/typographydocs/opentype/spec/cmap.md"
+			data-pr_repo=""
+			data-pr_branch=""
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-edit-outline"></span>
+			</span>
+			<span>Edit</span>
+		</a>
+	  
+		<hr class="margin-block-xxs" />
+		
+				<button
+					class="button button-block button-clear button-sm justify-content-flex-start text-align-left inner-focus"
+					type="button"
+					data-bi-name="copy-markdown"
+					data-page-action-item="overflow-all"
+					data-copy-markdown
+					data-copy-state="idle"
+					data-check-hidden="true"
+				>
+					<span class="icon color-primary" aria-hidden="true">
+						<span data-show-when="idle" class="docon docon-code-lang"></span>
+						<span data-show-when="loading" class="loader" hidden></span>
+						<span data-show-when="success" class="docon docon-check-mark" hidden></span>
+					</span>
+					<span>Copy Markdown</span>
+				</button>
+		   
+				<button
+					class="button button-block button-clear button-sm justify-content-flex-start text-align-left inner-focus"
+					type="button"
+					data-bi-name="print"
+					data-page-action-item="overflow-all"
+					data-popover-close
+					data-print-page
+					data-check-hidden="true"
+				>
+					<span class="icon color-primary" aria-hidden="true">
+						<span class="docon docon-print"></span>
+					</span>
+					<span>Print</span>
+				</button>
+		  
+	
+				</div>
+			</details>
+		</div>
+	
+			</div>
+		</div>
+	  
+		<!-- privateUnauthorizedTemplate is hidden by default -->
+		<div unauthorized-private-section data-bi-name="permission-content-unauthorized-private" hidden>
+			<hr class="hr margin-top-xs margin-bottom-sm" />
+			<div class="notification notification-info">
+				<div class="notification-content">
+					<p class="margin-top-none notification-title">
+						<span class="icon" aria-hidden="true"
+							><span class="docon docon-exclamation-circle-solid"></span
+						></span>
+						<span>Note</span>
+					</p>
+					<p class="margin-top-none authentication-determined not-authenticated">
+						Access to this page requires authorization. You can try <a class="docs-sign-in" href="#" data-bi-name="permission-content-sign-in">signing in</a> or <a  class="docs-change-directory" data-bi-name="permisson-content-change-directory">changing directories</a>.
+					</p>
+					<p class="margin-top-none authentication-determined authenticated">
+						Access to this page requires authorization. You can try <a class="docs-change-directory" data-bi-name="permisson-content-change-directory">changing directories</a>.
+					</p>
+				</div>
+			</div>
+		</div>
+	
+					<div class="content"><h1 id="cmap--character-to-glyph-index-mapping-table">cmap — Character to Glyph Index Mapping Table</h1></div>
+					
+		<div
+			id="article-metadata"
+			data-bi-name="article-metadata"
+			data-test-id="article-metadata"
+			class="page-metadata-container display-flex gap-xxs justify-content-space-between align-items-center flex-wrap-wrap"
+		>
+			 
+				<div
+					id="user-feedback"
+					class="margin-block-xxs display-none display-none-print"
+					hidden
+					data-hide-on-archived
+				>
+					
+		<button
+			id="user-feedback-button"
+			data-test-id="conceptual-feedback-button"
+			class="button button-sm button-clear button-primary display-none"
+			type="button"
+			data-bi-name="user-feedback-button"
+			data-user-feedback-button
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-like"></span>
+			</span>
+			<span>Feedback</span>
+		</button>
+	
+				</div>
+		  
+		</div>
+	 
+		<div data-id="ai-summary" class="display-none-print">
+			<div id="ms--ai-summary-cta" class="margin-top-xs display-flex align-items-center">
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-sparkle-fill gradient-text-vivid"></span>
+				</span>
+				<button
+					id="ms--ai-summary"
+					type="button"
+					class="tag tag-sm tag-suggestion margin-left-xxs"
+					data-test-id="ai-summary-cta"
+					data-bi-name="ai-summary-cta"
+					data-an="ai-summary"
+				>
+					<span class="ai-summary-cta-text">
+						Summarize this article for me
+					</span>
+				</button>
+			</div>
+			<!-- Slot where the client will render the summary card after the user clicks the CTA -->
+			<div id="ms--ai-summary-header" class="margin-top-xs"></div>
+		</div>
+	 
+		<nav
+			id="center-doc-outline"
+			class="doc-outline display-none-desktop display-none-print margin-bottom-sm"
+			data-bi-name="intopic toc"
+			aria-label="In this article"
+		>
+			<h2 id="ms--in-this-article" class="title is-6 margin-block-xs">
+				In this article
+			</h2>
+		</nav>
+	 <div class="content"><p><a id="overview"></a></p>
+<h2 id="table-overview">Table overview</h2>
+<p>This table defines the mapping of character codes to a default glyph index. Different subtables may be defined that each contain mappings for different character encoding schemes. The table header indicates the character encodings for which subtables are present.</p>
+<p>Regardless of the encoding scheme, character codes that do not correspond to any glyph in the font should be mapped to glyph index 0. The glyph at this location must be a special glyph representing a missing character, commonly known as .notdef.</p>
+<p>Each subtable is in one of seven possible formats and begins with a format field indicating the format used. The first four formats — formats 0, 2, 4 and 6 — were originally defined prior to Unicode 2.0. These formats allow for 8-bit single-byte, 8-bit multi-byte, and 16-bit encodings. With the introduction of supplementary planes in Unicode 2.0, the Unicode addressable code space extends beyond 16 bits. To accommodate this, three additional formats were added — formats 8, 10 and 12 — that allow for 32-bit encoding schemes.</p>
+<p>Other enhancements in Unicode led to the addition of other subtable formats. Subtable format 13 allows for an efficient mapping of many characters to a single glyph; this is useful for “last-resort” fonts that provide fallback rendering for all possible Unicode characters with a distinct fallback glyph for different Unicode ranges. Subtable format 14 provides a unified mechanism for supporting Unicode variation sequences.</p>
+<p>Of the seven available formats, not all are commonly used today. Formats 4 or 12 are appropriate for most new fonts, depending on the Unicode character repertoire supported. Format 14 is used in many applications for support of Unicode variation sequences. Some platforms also make use for format 13 for a last-resort fallback font. Other subtable formats are not recommended for use in new fonts. Application developers, however, should anticipate that any of the formats may be used in fonts.</p>
+<blockquote>
+<p><em>Note:</em> The 'cmap' table version number remains at 0x0000 for fonts that make use of the newer subtable formats.</p>
+</blockquote>
+<p><a id="cmapHeader"></a></p>
+<h2 id="cmap-header">'cmap' Header</h2>
+<p>The Character to Glyph Index Mapping table is organized as follows.</p>
+<p><em>'cmap' Header:</em></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uint16</td>
+<td>version</td>
+<td>Table version number (0).</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>numTables</td>
+<td>Number of encoding tables that follow.</td>
+</tr>
+<tr>
+<td>EncodingRecord</td>
+<td>encodingRecords[numTables]</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p><a id="encodings"></a></p>
+<h2 id="encoding-records-and-encodings">Encoding records and encodings</h2>
+<p>The array of encoding records specifies particular encodings and the offset to the subtable for each encoding.</p>
+<p><a id="encodingRec"></a></p>
+<p><em>EncodingRecord:</em></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uint16</td>
+<td>platformID</td>
+<td>Platform ID.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>encodingID</td>
+<td>Platform-specific encoding ID.</td>
+</tr>
+<tr>
+<td>Offset32</td>
+<td>subtableOffset</td>
+<td>Byte offset from beginning of table to the subtable for this encoding.</td>
+</tr>
+</tbody>
+</table>
+<p>The platform ID and platform-specific encoding ID in the encoding record are used to specify a particular character encoding. In the case of the Macintosh platform, a language field within the mapping subtable is also used for this purpose.</p>
+<p>The encoding record entries in the 'cmap' header must be sorted first by platform ID, then by platform-specific encoding ID, and then by the language field in the corresponding subtable. Each platform ID, platform-specific encoding ID, and subtable language combination may appear only once in the 'cmap' table.</p>
+<p>Apart from a format 14 subtable, all other subtables are exclusive: applications should select and use one and ignore the others. If a Unicode subtable is used (platform 0, or platform 3 / encoding 1 or 10), then a format 14 subtable using platform 0/encoding 5 can also be supplemented for mapping Unicode variation sequences.</p>
+<p>If a font includes Unicode subtables for both 16-bit encoding (typically, format 4) and also 32-bit encoding (formats 10 or 12), then the characters supported by the subtable for 32-bit encoding should be a superset of the characters supported by the subtable for 16-bit encoding, and the 32-bit encoding should be used by applications.</p>
+<p>Fonts should not include 16-bit Unicode subtables using both format 4 and format 6; format 4 should be used. Similarly, fonts should not include 32-bit Unicode subtables using both format 10 and format 12; format 12 should be used.</p>
+<p>If a font includes encoding records for Unicode subtables of the same format but with different platform IDs, an application may choose which to select, but should make this selection consistently each time the font is used.</p>
+<h3 id="platform-ids">Platform IDs</h3>
+<p>The following platform IDs are defined:</p>
+<table>
+<thead>
+<tr>
+<th>Platform&nbsp;ID</th>
+<th>Platform name</th>
+<th>Platform-specific encoding IDs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>Unicode</td>
+<td><a href="#unicode-platform-platform-id--0" data-linktype="self-bookmark">Various</a></td>
+</tr>
+<tr>
+<td>1</td>
+<td>Macintosh</td>
+<td><a href="#macintosh-platform-platform-id--1" data-linktype="self-bookmark">Script manager code</a></td>
+</tr>
+<tr>
+<td><em>2</em></td>
+<td><em>ISO [deprecated]</em></td>
+<td><em><a href="#iso-platform-platform-id--2" data-linktype="self-bookmark">ISO encoding</a> [deprecated]</em></td>
+</tr>
+<tr>
+<td>3</td>
+<td>Windows</td>
+<td><a href="#windows-platform-platform-id--3" data-linktype="self-bookmark">Windows encoding</a></td>
+</tr>
+<tr>
+<td>4</td>
+<td>Custom</td>
+<td><a href="#custom-platform-platform-id--4-and-otf-windows-nt-compatibility-mapping" data-linktype="self-bookmark">Custom</a></td>
+</tr>
+</tbody>
+</table>
+<p>Platform ID values 240 through 255 are reserved for user-defined platforms and shall never be assigned to a registered platform.</p>
+<p><a id="unicodePlatform"></a></p>
+<h3 id="unicode-platform-platform-id--0">Unicode platform (platform ID = 0)</h3>
+<p>The following encoding IDs are defined for use with the Unicode platform:</p>
+<table>
+<tbody>
+<tr>
+<th>Encoding&nbsp;ID</th>
+<th>Description</th>
+</tr>
+<tr id="encID0_pid0">
+<td>0</td>
+<td>Unicode 1.0 semantics—<em>deprecated</em></td>
+</tr>
+<tr id="encID1_pid0">
+<td>1</td>
+<td>Unicode 1.1 semantics—<em>deprecated</em></td>
+</tr>
+<tr id="encID2_pid0">
+<td>2</td>
+<td>ISO/IEC 10646 semantics—<em>deprecated</em></td>
+</tr>
+<tr id="encID3_pid0">
+<td>3</td>
+<td>Unicode 2.0 and onwards semantics, Unicode BMP only</td>
+</tr>
+<tr id="encID4_pid0">
+<td>4</td>
+<td>Unicode 2.0 and onwards semantics, Unicode full repertoire</td>
+</tr>
+<tr id="encID5_pid0">
+<td>5</td>
+<td>Unicode variation sequences—for use with subtable format 14</td>
+</tr>
+<tr id="encID6_pid0">
+<td>6</td>
+<td>Unicode full repertoire—for use with subtable format 13</td>
+</tr>
+</tbody>
+</table>
+<p>Use of encoding IDs 0, 1 or 2 is deprecated.</p>
+<p>Encoding ID 3 should be used in conjunction with 'cmap' subtable formats 4 or 6. Encoding ID 4 should be used in conjunction with subtable formats 10 or 12.</p>
+<p>Unicode variation sequences supported by the font should be specified in the 'cmap' table using a format 14 subtable. A format 14 subtable must only be used under platform ID 0 and encoding ID 5; and encoding ID 5 should only be used with a format 14 subtable.</p>
+<p>Encoding ID 6 should only be used in conjunction with 'cmap' subtable format 13; and subtable format 13 should only be used under platform ID 0 and encoding ID 6.</p>
+<p><a id="macPlatform"></a></p>
+<h3 id="macintosh-platform-platform-id--1">Macintosh platform (platform ID = 1)</h3>
+<p>Older Macintosh versions required fonts to have a 'cmap' subtable for platform ID 1. For current Apple platforms, use of platform ID 1 is discouraged. See the <a href="name#macintosh-encoding-ids-script-manager-codes" data-linktype="relative-path">'name'</a> table chapter for details regarding encoding IDs defined for the Macintosh platform.</p>
+<p><a id="isoPlatform"></a></p>
+<h3 id="iso-platform-platform-id--2">ISO platform (platform ID = 2)</h3>
+<p>Use of this platform ID is deprecated.</p>
+<p>The following encoding IDs are defined for use with the ISO platform:</p>
+<table>
+<tbody>
+<tr>
+<th>Code</th>
+<th>ISO encoding</th>
+</tr>
+<tr id="encID0_pid2">
+<td>0</td>
+<td>7-bit ASCII</td>
+</tr>
+<tr id="encID1_pid2">
+<td>1</td>
+<td>ISO 10646</td>
+</tr>
+<tr id="encID2_pid2">
+<td>2</td>
+<td>ISO 8859-1</td>
+</tr>
+</tbody>
+</table>
+<p><a id="windowsPlatform"></a></p>
+<h3 id="windows-platform-platform-id--3">Windows platform (platform ID = 3)</h3>
+<p>The Windows platform supports several encodings. When creating fonts for Windows, Unicode 'cmap' subtables should always be used—platform ID 3 with encoding ID 1 or encoding ID 10. See below for additional details.</p>
+<p>The following encoding IDs are supported on the Windows platform:</p>
+<table>
+<thead>
+<tr>
+<th>Platform ID</th>
+<th>Encoding ID</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>3</td>
+<td>0</td>
+<td>Symbol</td>
+</tr>
+<tr>
+<td>3</td>
+<td>1</td>
+<td>Unicode BMP</td>
+</tr>
+<tr>
+<td>3</td>
+<td>2</td>
+<td>ShiftJIS</td>
+</tr>
+<tr>
+<td>3</td>
+<td>3</td>
+<td>PRC</td>
+</tr>
+<tr>
+<td>3</td>
+<td>4</td>
+<td>Big5</td>
+</tr>
+<tr>
+<td>3</td>
+<td>5</td>
+<td>Wansung</td>
+</tr>
+<tr>
+<td>3</td>
+<td>6</td>
+<td>Johab</td>
+</tr>
+<tr>
+<td>3</td>
+<td>7</td>
+<td>Reserved</td>
+</tr>
+<tr>
+<td>3</td>
+<td>8</td>
+<td>Reserved</td>
+</tr>
+<tr>
+<td>3</td>
+<td>9</td>
+<td>Reserved</td>
+</tr>
+<tr>
+<td>3</td>
+<td>10</td>
+<td>Unicode full repertoire</td>
+</tr>
+</tbody>
+</table>
+<p>Fonts that support only Unicode BMP characters (U+0000 to U+FFFF) on the Windows platform must use encoding 1 with a format 4 subtable. This encoding must not be used to support Unicode supplementary-plane characters.</p>
+<p>Fonts that support Unicode supplementary-plane characters (U+10000 to U+10FFFF) on the Windows platform must use encoding 10 with a format 12 subtable.</p>
+<p>The symbol encoding was created to support fonts with arbitrary ornaments or symbols not supported in Unicode or other standard encodings. A format 4 subtable would be used, typically with up to 224 graphic characters assigned at code positions beginning with 0xF020. This corresponds to a sub-range within the Unicode Private-Use Area (PUA), though this is not a Unicode encoding. In legacy usage, some applications would represent the symbol characters in text using a single-byte encoding, and then map 0x20 to the OS/2.usFirstCharIndex value in the font. In new fonts, symbols or characters not in Unicode should be encoded using PUA code points in a Unicode 'cmap' subtable.</p>
+<p>See the <a href="recom#cmap-table" data-linktype="relative-path">Recommendations</a> chapter for additional information.</p>
+<p><a id="customPlatform_OTF"></a></p>
+<h3 id="custom-platform-platform-id--4-and-otf-windows-nt-compatibility-mapping">Custom platform (platform ID = 4) and OTF Windows NT compatibility mapping</h3>
+<p>Platform ID 4 is a legacy platform that was created to provide compatibility of older applications with OpenType fonts that had been adapted from older Type 1 fonts. This platform is not commonly used today, and should not be used in new fonts.</p>
+<table>
+<tbody>
+<tr>
+<th>ID</th>
+<th>Custom encoding</th>
+</tr>
+<tr>
+<td>0-255</td>
+<td>OTF Windows NT compatibility mapping</td>
+</tr>
+</tbody>
+</table>
+<p>This 'cmap' platform provides a compatibility mechanism for non-Unicode applications that use the font as if it were Windows ANSI encoded. Non-Windows ANSI Type 1 fonts, such as Cyrillic and Central European fonts that Adobe shipped in the past, had “0” (Windows ANSI) recorded in the CharSet field of the .PFM file; Adobe Type Manager for Windows 9x ignored the CharSet altogether. Adobe provides this compatibility 'cmap' encoding in every OpenType font converted from a Type1 font in which the Encoding is not StandardEncoding.</p>
+<p>When platform ID 4 is used, the encoding ID must be set to the Windows charset value (in the range 0 to 255, inclusive) present in the .PFM file of the original Type 1 font.</p>
+<p>If a platform ID 4, encoding ID 0 – 255 'cmap' encoding is present in an OpenType font with CFF outlines, then the OTF font driver in Windows NT will: (a) superimpose the glyphs encoded at character codes 0-255 in the encoding on the corresponding Windows ANSI (code page 1252) Unicode values in the Unicode encoding it reports to the system; (b) add Windows ANSI (CharSet 0) to the list of CharSets supported by the font; and (c) consider the value of the encoding ID to be a Windows CharSet value and add it to the list of CharSets supported by the font. Note that the 'cmap' subtable needs to use Format 0 or 6 for its subtable, and the encoding needs to be identical to the CFF’s encoding.</p>
+<h2 id="cmap-subtable-formats">'cmap' subtable formats</h2>
+<p><a id="language"></a></p>
+<h3 id="use-of-the-language-field-in-cmap-subtables">Use of the language field in 'cmap' subtables</h3>
+<p>All 'cmap' subtable formats include a <em>language</em> field. The language field must be set to zero for all 'cmap' subtables whose platform IDs are other than Macintosh (platform ID 1). For 'cmap' subtables whose platform IDs are Macintosh, set this field to the Macintosh language ID of the 'cmap' subtable plus one, or to zero if the 'cmap' subtable is not language-specific. For example, a Mac OS Turkish 'cmap' subtable must set this field to 18, since the Macintosh language ID for Turkish is 17. A Mac OS Roman 'cmap' subtable must set this field to 0, since Mac OS Roman is not a language-specific encoding.</p>
+<p><a id="format0"></a></p>
+<h3 id="format-0-byte-encoding-table">Format 0: Byte encoding table</h3>
+<p>Format 0 was the standard mapping subtable used on older Macintosh platforms but is not required on newer Apple platforms.</p>
+<p><a id="subtable_0"></a></p>
+<p><em>'cmap' Subtable Format 0:</em></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uint16</td>
+<td>format</td>
+<td>Format number is set to 0.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>length</td>
+<td>This is the length in bytes of the subtable.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>language</td>
+<td>For requirements on use of the language field, see “<a href="#language" data-linktype="self-bookmark">Use of the language field in 'cmap' subtables</a>” in this document.</td>
+</tr>
+<tr>
+<td>uint8</td>
+<td>glyphIdArray[256]</td>
+<td>An array that maps character codes to glyph index values.</td>
+</tr>
+</tbody>
+</table>
+<p>This is a simple 1 to 1 mapping of character codes to glyph indices. The glyph set is limited to 256. If this format is used to index into a larger glyph set, only the first 256 glyphs will be accessible.</p>
+<p><a id="format2"></a></p>
+<h3 id="format-2-high-byte-mapping-through-table">Format 2: High byte mapping through table</h3>
+<p>This subtable format was created for “double-byte” encodings following national character code standards used for Japanese, Chinese, and Korean characters. These code standards use a mixed 8-/16-bit encoding. This format is not commonly used today.</p>
+<p>In these mixed 8-/16-bit encodings, certain byte values signal the first byte of a 2-byte character. (These byte values are also valid as the second byte of a 2-byte character.) In addition, even for the 2-byte characters, the mapping of character codes to glyph index values depends heavily on the first byte. Consequently, the table begins with an array that maps the first byte to a SubHeader record. For 2-byte character codes, the SubHeader is used to map the second byte’s value into a sub-range of a glyph index array—a <em>sub-array</em>—, as described below. When processing mixed 8-/16-bit text, SubHeader 0 is special: it is used for single-byte character codes. When SubHeader 0 is used, a second byte is not needed; the single byte value is mapped through the specified sub-array.</p>
+<p><a id="subtable_2"></a></p>
+<p><em>'cmap' Subtable Format 2:</em></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uint16</td>
+<td>format</td>
+<td>Format number is set to 2.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>length</td>
+<td>This is the length in bytes of the subtable.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>language</td>
+<td>For requirements on use of the language field, see “<a href="#language" data-linktype="self-bookmark">Use of the language field in 'cmap' subtables</a>” in this document.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>subHeaderKeys[256]</td>
+<td>Array that maps high bytes into the subHeaders array: value is subHeaders index × 8.</td>
+</tr>
+<tr>
+<td>SubHeader</td>
+<td>subHeaders[ ]</td>
+<td>Variable-length array of SubHeader records.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>glyphIdArray[ ]</td>
+<td>Variable-length array containing sub-arrays used for mapping the low byte of 2-byte characters.</td>
+</tr>
+</tbody>
+</table>
+<p>The SubHeader record is structured as follows:</p>
+<p><a id="subHeadRec"></a></p>
+<p><em>SubHeader Record:</em></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uint16</td>
+<td>firstCode</td>
+<td>First valid low byte for this SubHeader.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>entryCount</td>
+<td>Number of valid low bytes for this SubHeader.</td>
+</tr>
+<tr>
+<td>int16</td>
+<td>idDelta</td>
+<td>See text below.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>idRangeOffset</td>
+<td>See text below.</td>
+</tr>
+</tbody>
+</table>
+<p>The firstCode and entryCount values specify a subrange that begins at firstCode and has a length equal to the value of entryCount. This subrange stays within the 0-255 range of the byte being mapped. Bytes outside of this subrange are mapped to glyph index 0 (missing glyph). The offset of the byte within this subrange is then used as index into a corresponding sub-array of glyphIdArray. This sub-array is also of length entryCount. The value of the idRangeOffset is the number of bytes past the actual location of the idRangeOffset word where the glyphIdArray element corresponding to firstCode appears.</p>
+<p>Finally, if the value obtained from the sub-array is not 0 (which indicates the missing glyph), you should add idDelta to it in order to get the glyphIndex. The value idDelta permits the same sub-array to be used for several different subheaders. The idDelta arithmetic is modulo 65536. If the result after adding idDelta to the value from the sub-array is less than zero, add 65536 to obtain a valid glyph ID.</p>
+<p><a id="format4"></a></p>
+<h3 id="format-4-segment-mapping-to-delta-values">Format 4: Segment mapping to delta values</h3>
+<p>This is the standard character-to-glyph-index mapping subtable for fonts that support only Unicode Basic Multilingual Plane characters (U+0000 to U+FFFF).</p>
+<blockquote>
+<p><em>Note:</em> To support Unicode supplementary-plane characters, <a href="#format-12-segmented-coverage" data-linktype="self-bookmark">format 12</a> should be used.</p>
+</blockquote>
+<p>This format is used when the character codes for the characters represented by a font fall into several contiguous ranges, possibly with holes in some or all of the ranges (that is, some of the codes in a range might not have a representation in the font). The format-dependent data is divided into three parts, which must occur in the following order:</p>
+<ol>
+<li>A four-word header gives parameters for an optimized search of the segment list.</li>
+<li>Four parallel arrays describe the segments (one segment for each contiguous range of codes).</li>
+<li>A variable-length array of glyph IDs (unsigned words).</li>
+</ol>
+<p><a id="subtable_4"></a></p>
+<p><em>'cmap' Subtable Format 4:</em></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uint16</td>
+<td>format</td>
+<td>Format number is set to 4.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>length</td>
+<td>This is the length in bytes of the subtable.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>language</td>
+<td>For requirements on use of the language field, see “<a href="#language" data-linktype="self-bookmark">Use of the language field in 'cmap' subtables</a>” in this document.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>segCountX2</td>
+<td>2 × segCount.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>searchRange</td>
+<td>Maximum power of 2 less than or equal to segCount, times 2<br>((2**floor(log<sub>2</sub>(segCount))) * 2, where “**” is an exponentiation operator)</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>entrySelector</td>
+<td>Log<sub>2</sub> of the maximum power of 2 less than or equal to segCount<br>(log<sub>2</sub>(searchRange/2), which is equal to floor(log<sub>2</sub>(segCount)))</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>rangeShift</td>
+<td>segCount times 2, minus searchRange<br>((segCount * 2) - searchRange)</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>endCode[segCount]</td>
+<td>End characterCode for each segment, last=0xFFFF.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>reservedPad</td>
+<td>Set to 0.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>startCode[segCount]</td>
+<td>Start character code for each segment.</td>
+</tr>
+<tr>
+<td>int16</td>
+<td>idDelta[segCount]</td>
+<td>Delta for all character codes in segment.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>idRangeOffset[segCount]</td>
+<td>Offsets into glyphIdArray or 0</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>glyphIdArray[ ]</td>
+<td>Glyph index array (arbitrary length)</td>
+</tr>
+</tbody>
+</table>
+<p>The number of segments is specified by segCount, which is not given directly in the header but is readily derived from segCountX2. All of the other header parameters are derived from it. The searchRange value is twice the largest power of 2 that is less than or equal to segCount. For example, if segCount=39, we have the following:</p>
+<table>
+<tbody><tr><td>segCountX2</td><td>78</td><td> </td><td> </td><td> </td><td> </td><td> </td></tr>
+<tr><td>searchRange</td><td>64 (= 2 × (largest power of 2 &lt;=39))</td><td> </td><td> </td><td> </td><td> </td><td> </td></tr>
+<tr><td>entrySelector</td><td>5 (= log<sub>2</sub>32)</td><td> </td><td> </td><td> </td><td> </td><td> </td></tr>
+<tr><td>rangeShift</td><td>14 (= 2 × 39 - 64)</td><td> </td><td> </td><td> </td><td> </td><td> </td></tr>
+</tbody></table>
+<p>To assist in quick binary searches, the searchRange, entrySelector and rangeShift fields are included as parameters that can be used in configuring search algorithms. In particular, binary search is optimal when the number of entries is a power of two. The searchRange field provides the largest number of items that can be searched with that constraint (maximum power of two). The rangeShift field provides the remaining number of items that would also need to be searched. The entrySelector field indicates the maximum number of levels into the binary tree will need to be entered.</p>
+<p>In early implementations on devices with limited hardware capabilities, optimizations provided by the searchRange, entrySelector and rangeShift fields were of high importance. They have less importance on modern devices but could still be used in some implementations. However, incorrect values could potentially be used as an attack vector against some implementations. Since these values can be derived from the segCountX2 field when the file is parsed, it is strongly recommended that parsing implementations not rely on the searchRange, entrySelector and rangeShift fields in the font but derive them independently from segCountX2. Font files, however, should continue to provide valid values for these fields to maintain compatibility with all existing implementations.</p>
+<p>Each segment is described by a startCode and endCode, along with an idDelta and an idRangeOffset, which are used for mapping the character codes in the segment. The segments are sorted in order of increasing endCode values, and the segment values are specified in four parallel arrays. You search for the first endCode that is greater than or equal to the character code you want to map. If the corresponding startCode is less than or equal to the character code, then you use the corresponding idDelta and idRangeOffset to map the character code to a glyph index (otherwise, the missingGlyph is returned). For the search to terminate, the final startCode and endCode values must be 0xFFFF. This segment need not contain any valid mappings. (It can just map the single character code 0xFFFF to missingGlyph). However, the segment must be present.</p>
+<p>If the idRangeOffset value for the segment is not 0, the mapping of character codes relies on glyphIdArray. The character code offset from startCode is added to the idRangeOffset value. This sum is used as an offset from the current location within idRangeOffset itself to index out the correct glyphIdArray value. This obscure indexing trick works because glyphIdArray immediately follows idRangeOffset in the font file. The C expression that yields the glyph index is:</p>
+<pre><code>glyphId = *(idRangeOffset[i]/2
+            + (c - startCode[i])
+            + &amp;idRangeOffset[i])
+</code></pre>
+<p>The value <em>c</em> is the character code in question, and <em>i</em> is the segment index in which <em>c</em> appears. If the value obtained from the indexing operation is not 0 (which indicates missingGlyph), idDelta[i] is added to it to get the glyph index. The idDelta arithmetic is modulo 65536.</p>
+<p>If the idRangeOffset is 0, the idDelta value is added directly to the character code offset (i.e. <code>idDelta[i] + c</code>) to get the corresponding glyph index. Again, the idDelta arithmetic is modulo 65536. If the result after adding <code>idDelta[i] + c</code> is less than zero, add 65536 to obtain a valid glyph ID.</p>
+<p>As an example, the variant part of the table to map characters 10-20, 30-90, and 153-480 onto a contiguous range of glyph indices may look like this:</p>
+<table>
+<tbody><tr><td> segCountX2: </td><td> 8 </td><td> </td><td> </td><td> </td><td> </td><td> </td></tr>
+<tr><td> searchRange: </td><td> 8 </td><td> </td><td> </td><td> </td><td> </td><td> </td></tr>
+<tr><td> entrySelector: </td><td> 2 </td><td> </td><td> </td><td> </td><td> </td><td> </td></tr>
+<tr><td> rangeShift: </td><td> 0 </td><td> </td><td> </td><td> </td><td> </td><td> </td></tr>
+<tr><td> endCode: </td><td> 20  90  480  0xffff </td><td> </td><td> </td><td> </td><td> </td><td> </td></tr>
+<tr><td> reservedPad: </td><td> 0 </td><td> </td><td> </td><td> </td><td> </td><td> </td></tr>
+<tr><td> startCode: </td><td> 10  30  153  0xffff </td><td> </td><td> </td><td> </td><td> </td><td> </td></tr>
+<tr><td> idDelta: </td><td> -9  -18  -80  1 </td><td> </td><td> </td><td> </td><td> </td><td> </td></tr>
+<tr><td> idRangeOffset: </td><td> 0  0  0  0 </td><td> </td><td> </td><td> </td><td> </td><td> </td></tr>
+</tbody></table>
+<p>This table yields the following mappings:</p>
+<blockquote>
+<p>10 ⇒ 10 - 9 = 1<br>
+20 ⇒ 20 - 9 = 11<br>
+30 ⇒ 30 - 18 = 12<br>
+90 ⇒ 90 - 18 = 72<br>
+153 ⇒ 153 - 80 = 73<br>
+480 ⇒ 480 - 80 = 400<br>
+0xffff ⇒ 0</p>
+</blockquote>
+<p>Note that the delta values could be reworked so as to reorder the segments.</p>
+<p><a id="format6"></a></p>
+<h3 id="format-6-trimmed-table-mapping">Format 6: Trimmed table mapping</h3>
+<p>Format 6 was designed to map 16-bit characters to glyph indexes when the character codes for a font fall into a single contiguous range.</p>
+<p><a id="subtable_6"></a></p>
+<p><em>'cmap' Subtable Format 6:</em></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uint16</td>
+<td>format</td>
+<td>Format number is set to 6.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>length</td>
+<td>This is the length in bytes of the subtable.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>language</td>
+<td>For requirements on use of the language field, see “<a href="#language" data-linktype="self-bookmark">Use of the language field in 'cmap' subtables</a>” in this document.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>firstCode</td>
+<td>First character code of subrange.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>entryCount</td>
+<td>Number of character codes in subrange.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>glyphIdArray[entryCount]</td>
+<td>Array of glyph index values for character codes in the range.</td>
+</tr>
+</tbody>
+</table>
+<p>The firstCode and entryCount values specify a subrange (beginning at firstCode, length = entryCount) within the range of possible character codes. Codes outside of this subrange are mapped to glyph index 0. The offset of the code (from the first code) within this subrange is used as index to the glyphIdArray, which provides the glyph index value.</p>
+<p><a id="format8"></a></p>
+<h3 id="format-8-mixed-16-bit-and-32-bit-coverage">Format 8: mixed 16-bit and 32-bit coverage</h3>
+<p>Subtable format 8 was designed to support Unicode supplementary-plane characters in UTF-16 encoding, though it is not commonly used. Format 8 is similar to format 2 in that it provides for mixed-length character codes. Instead of allowing for 8- and 16-bit character codes, however, it allows for 16- and 32-bit character codes.</p>
+<p>If a font contains Unicode supplementary-plane characters (U+10000 to U+10FFFF), then it’s likely that it will also include Unicode BMP characters (U+0000 to U+FFFF) as well. Hence, there is a need to map a mixture of 16-bit and 32-bit character codes. A simplifying assumption is made: namely, that there are no 32-bit character codes which share the same first 16 bits as any 16-bit character code. (Since the Unicode code space extends only to U+10FFFF, a potential conflict exists only for characters U+0000 to U+0010, which are non-printing control characters.) This means that the determination as to whether a particular 16-bit value is a standalone character code or the start of a 32-bit character code can be made by looking at the 16-bit value directly, with no further information required.</p>
+<p><a id="subtable_8"></a></p>
+<p><em>'cmap' Subtable Format 8:</em></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uint16</td>
+<td>format</td>
+<td>Subtable format; set to 8.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>reserved</td>
+<td>Reserved; set to 0</td>
+</tr>
+<tr>
+<td>uint32</td>
+<td>length</td>
+<td>Byte length of this subtable (including the header)</td>
+</tr>
+<tr>
+<td>uint32</td>
+<td>language</td>
+<td>For requirements on use of the language field, see “<a href="#language" data-linktype="self-bookmark">Use of the language field in 'cmap' subtables</a>” in this document.</td>
+</tr>
+<tr>
+<td>uint8</td>
+<td>is32[8192]</td>
+<td>Tightly packed array of bits (8K bytes total) indicating whether the particular 16-bit (index) value is the start of a 32-bit character code</td>
+</tr>
+<tr>
+<td>uint32</td>
+<td>numGroups</td>
+<td>Number of groupings which follow</td>
+</tr>
+<tr>
+<td>SequentialMapGroup</td>
+<td>groups[numGroups]</td>
+<td>Array of SequentialMapGroup records.</td>
+</tr>
+</tbody>
+</table>
+<p>Each sequential map group record specifies a character range and the starting glyph ID mapped from the first character. Glyph IDs for subsequent characters follow in sequence.</p>
+<p><a id="seqMapGrpRec_8"></a></p>
+<p><em>SequentialMapGroup Record:</em></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uint32</td>
+<td>startCharCode</td>
+<td>First character code in this group; note that if this group is for one or more 16-bit character codes (which is determined from the is32 array), this 32-bit value will have the high 16-bits set to zero</td>
+</tr>
+<tr>
+<td>uint32</td>
+<td>endCharCode</td>
+<td>Last character code in this group; same condition as listed above for the startCharCode</td>
+</tr>
+<tr>
+<td>uint32</td>
+<td>startGlyphID</td>
+<td>Glyph index corresponding to the starting character code</td>
+</tr>
+</tbody>
+</table>
+<p>A few notes here. The endCharCode is used, rather than a count, because comparisons for group matching are usually done on an existing character code, and having the endCharCode be there explicitly saves the necessity of an addition per group. Groups must be sorted by increasing startCharCode. A group’s endCharCode must be less than the startCharCode of the following group, if any.</p>
+<p>To determine if a particular word (cp) is the first half of 32-bit code points, one can use an expression such as ( is32[ cp / 8 ] &amp; ( 1 &lt;&lt; ( 7 - ( cp % 8 ) ) ) ). If this is non-zero, then the word is the first half of a 32-bit code point.</p>
+<p>0 is not a special value for the high word of a 32-bit code point. A font must not have both a glyph for the code point 0x0000 and glyphs for code points with a high word of 0x0000.</p>
+<p>The presence of the packed array of bits indicating whether a particular 16-bit value is the start of a 32-bit character code is useful even when the font contains no glyphs for a particular 16-bit start value. This is because the system software often needs to know how many bytes ahead the next character begins, even if the current character maps to the missing glyph. By including this information explicitly in this table, no “secret” knowledge needs to be encoded into the OS.</p>
+<p>Although this format was created to support Unicode supplementary-plane characters, it is not widely supported or used. Also, no character encoding other than Unicode uses mixed 16-/32-bit characters. The use of this format is discouraged.</p>
+<p><a id="format10"></a></p>
+<h3 id="format-10-trimmed-array">Format 10: Trimmed array</h3>
+<p>Subtable format 10 was designed to support Unicode supplementary-plane characters, though it is not commonly used. Format 10 is similar to format 6 in that it defines a trimmed array for a tight range of character codes. It differs, however, in that it uses 32-bit character codes.</p>
+<p><a id="subtable_10"></a></p>
+<p><em>'cmap' Subtable Format 10:</em></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uint16</td>
+<td>format</td>
+<td>Subtable format; set to 10.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>reserved</td>
+<td>Reserved; set to 0</td>
+</tr>
+<tr>
+<td>uint32</td>
+<td>length</td>
+<td>Byte length of this subtable (including the header)</td>
+</tr>
+<tr>
+<td>uint32</td>
+<td>language</td>
+<td>For requirements on use of the language field, see “<a href="#language" data-linktype="self-bookmark">Use of the language field in 'cmap' subtables</a>” in this document.</td>
+</tr>
+<tr>
+<td>uint32</td>
+<td>startCharCode</td>
+<td>First character code covered</td>
+</tr>
+<tr>
+<td>uint32</td>
+<td>numChars</td>
+<td>Number of character codes covered</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>glyphIdArray[]</td>
+<td>Array of glyph indices for the character codes covered</td>
+</tr>
+</tbody>
+</table>
+<p>This format is not widely used and is not supported on Windows platforms. It would be most suitable for fonts that support only a contiguous range of Unicode supplementary-plane characters, but such fonts are rare.</p>
+<p><a id="format12"></a></p>
+<h3 id="format-12-segmented-coverage">Format 12: Segmented coverage</h3>
+<p>This is the standard character-to-glyph-index mapping subtable for fonts supporting Unicode character repertoires that include supplementary-plane characters (U+10000 to U+10FFFF).</p>
+<p>Fonts that include a format 12 subtable can also include a format 4 subtable for compatibility with older applications. This is not required, however. See the <a href="recom#cmap-table" data-linktype="relative-path">Recommendations</a> chapter for additional information.</p>
+<p>Format 12 is similar to format 4 in that it defines segments for sparse representation. It differs, however, in that it uses 32-bit character codes.</p>
+<p><a id="subtable_12"></a></p>
+<p><em>'cmap' Subtable Format 12:</em></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uint16</td>
+<td>format</td>
+<td>Subtable format; set to 12.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>reserved</td>
+<td>Reserved; set to 0</td>
+</tr>
+<tr>
+<td>uint32</td>
+<td>length</td>
+<td>Byte length of this subtable (including the header)</td>
+</tr>
+<tr>
+<td>uint32</td>
+<td>language</td>
+<td>For requirements on use of the language field, see “<a href="#language" data-linktype="self-bookmark">Use of the language field in 'cmap' subtables</a>” in this document.</td>
+</tr>
+<tr>
+<td>uint32</td>
+<td>numGroups</td>
+<td>Number of groupings which follow</td>
+</tr>
+<tr>
+<td>SequentialMapGroup</td>
+<td>groups[numGroups]</td>
+<td>Array of SequentialMapGroup records.</td>
+</tr>
+</tbody>
+</table>
+<p>The sequential map group record is the same format as is used for the format 8 subtable. The qualifications regarding 16-bit character codes does not apply here, however, since characters codes are uniformly 32-bit.</p>
+<p><a id="seqMapGrpRec_12"></a></p>
+<p><em>SequentialMapGroup Record:</em></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uint32</td>
+<td>startCharCode</td>
+<td>First character code in this group</td>
+</tr>
+<tr>
+<td>uint32</td>
+<td>endCharCode</td>
+<td>Last character code in this group</td>
+</tr>
+<tr>
+<td>uint32</td>
+<td>startGlyphID</td>
+<td>Glyph index corresponding to the starting character code</td>
+</tr>
+</tbody>
+</table>
+<p>Groups must be sorted by increasing startCharCode. A group’s endCharCode must be less than the startCharCode of the following group, if any. The endCharCode is used, rather than a count, because comparisons for group matching are usually done on an existing character code, and having the endCharCode be there explicitly saves the necessity of an addition per group.</p>
+<p><a id="format13"></a></p>
+<h3 id="format-13-many-to-one-range-mappings">Format 13: Many-to-one range mappings</h3>
+<p>This subtable provides for situations in which the same glyph is used for hundreds or even thousands of consecutive characters spanning across multiple ranges of the code space. This subtable format may be useful for “last resort” fonts, although these fonts may use other suitable subtable formats as well. (For “last resort” fonts, see also the <a href="head" data-linktype="relative-path">'head' table</a> flags, bit 14.)</p>
+<blockquote>
+<p><em>Note:</em> Subtable format 13 has the same structure as format 12; it differs only in the interpretation of the startGlyphID/glyphID fields.</p>
+</blockquote>
+<p><a id="subtable_13"></a></p>
+<p><em>'cmap' Subtable Format 13:</em></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uint16</td>
+<td>format</td>
+<td>Subtable format; set to 13.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>reserved</td>
+<td>Reserved; set to 0</td>
+</tr>
+<tr>
+<td>uint32</td>
+<td>length</td>
+<td>Byte length of this subtable (including the header)</td>
+</tr>
+<tr>
+<td>uint32</td>
+<td>language</td>
+<td>For requirements on use of the language field, see “<a href="#language" data-linktype="self-bookmark">Use of the language field in 'cmap' subtables</a>” in this document.</td>
+</tr>
+<tr>
+<td>uint32</td>
+<td>numGroups</td>
+<td>Number of groupings which follow</td>
+</tr>
+<tr>
+<td>ConstantMapGroup</td>
+<td>groups[numGroups]</td>
+<td>Array of ConstantMapGroup records.</td>
+</tr>
+</tbody>
+</table>
+<p>The constant map group record has the same structure as the sequential map group record, with start and end character codes and a mapped glyph ID. However, the same glyph ID applies to all characters in the specified range rather than sequential glyph IDs.</p>
+<p><a id="constMapGrpRec"></a></p>
+<p><em>ConstantMapGroup Record:</em></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uint32</td>
+<td>startCharCode</td>
+<td>First character code in this group</td>
+</tr>
+<tr>
+<td>uint32</td>
+<td>endCharCode</td>
+<td>Last character code in this group</td>
+</tr>
+<tr>
+<td>uint32</td>
+<td>glyphID</td>
+<td>Glyph index to be used for all the characters in the group’s range.</td>
+</tr>
+</tbody>
+</table>
+<p><a id="format14"></a></p>
+<h3 id="format-14-unicode-variation-sequences">Format 14: Unicode variation sequences</h3>
+<p>Subtable format 14 specifies the Unicode variation sequences (UVSes) supported by the font. A variation sequence, according to the Unicode Standard, comprises a base character followed by a variation selector. For example, &lt;U+82A6, U+E0101&gt;.</p>
+<p>This subtable format must only be used under platform ID 0 and encoding ID 5.</p>
+<p>The subtable partitions the UVSes supported by the font into two categories: “default” and “non-default” UVSes. Given a UVS, if the glyph obtained by looking up the base character of that sequence in the Unicode 'cmap' subtable (i.e., the BMP subtable or BMP + supplementary-planes subtable) is the glyph to use for that sequence, then the sequence is a “default” UVS. Otherwise, it is a “non-default” UVS, and the glyph to use for that sequence is specified in the format 14 subtable itself.</p>
+<p>The example at the bottom of the page shows how a font vendor can use format 14 for a JIS-2004-aware font.</p>
+<p><a id="subtable_14"></a></p>
+<p><em>'cmap' Subtable Format 14:</em></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uint16</td>
+<td>format</td>
+<td>Subtable format; set to 14.</td>
+</tr>
+<tr>
+<td>uint32</td>
+<td>length</td>
+<td>Byte length of this subtable (including this header)</td>
+</tr>
+<tr>
+<td>uint32</td>
+<td>numVarSelectorRecords</td>
+<td>Number of variation Selector Records</td>
+</tr>
+<tr>
+<td>VariationSelector</td>
+<td>varSelector[numVarSelectorRecords]</td>
+<td>Array of VariationSelector records.</td>
+</tr>
+</tbody>
+</table>
+<p>Each VariationSelector record specifies a variation selector character, and offsets to “default” and “non-default” tables used to map variation sequences using that variation selector.</p>
+<p><a id="varSelRec"></a></p>
+<p><em>VariationSelector Record:</em></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uint24</td>
+<td>varSelector</td>
+<td>Variation selector</td>
+</tr>
+<tr>
+<td>Offset32</td>
+<td>defaultUVSOffset</td>
+<td>Offset from the start of the format 14 subtable to Default UVS table. May be 0.</td>
+</tr>
+<tr>
+<td>Offset32</td>
+<td>nonDefaultUVSOffset</td>
+<td>Offset from the start of the format 14 subtable to Non-Default UVS table. May be 0.</td>
+</tr>
+</tbody>
+</table>
+<p>The VariationSelector records are sorted in increasing order of varSelector. No two records may have the same varSelector value.</p>
+<p>A VariationSelector record and the data its offsets point to specify those UVSes supported by the font for which the variation selector is the varSelector value of the record. The base characters of the UVSes are stored in the tables pointed to by the offsets. The UVSes are partitioned by whether they are default or non-default UVSes.</p>
+<p>Glyph IDs to be used for non-default UVSes are specified in the Non-Default UVS table.</p>
+<p><a id="subtable_dfltUVS"></a></p>
+<h4 id="default-uvs-table">Default UVS table</h4>
+<p>A Default UVS table is simply a range-compressed list of Unicode scalar values, representing the base characters of the default UVSes which use the varSelector of the associated VariationSelector record.</p>
+<p><a id="dfltUVS"></a></p>
+<p><em>DefaultUVS Table:</em></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uint32</td>
+<td>numUnicodeValueRanges</td>
+<td>Number of Unicode character ranges.</td>
+</tr>
+<tr>
+<td>UnicodeRange</td>
+<td>ranges[numUnicodeValueRanges]</td>
+<td>Array of UnicodeRange records.</td>
+</tr>
+</tbody>
+</table>
+<p>Each Unicode range record specifies a contiguous range of Unicode values.</p>
+<p><a id="unicRngRec"></a></p>
+<p><em>UnicodeRange Record:</em></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uint24</td>
+<td>startUnicodeValue</td>
+<td>First value in this range</td>
+</tr>
+<tr>
+<td>uint8</td>
+<td>additionalCount</td>
+<td>Number of additional values in this range</td>
+</tr>
+</tbody>
+</table>
+<p>For example, the range U+4E4D – U+4E4F (3 values) will set startUnicodeValue to 0x004E4D and additionalCount to 2. A singleton range will set additionalCount to 0.</p>
+<p>The sum (startUnicodeValue + additionalCount) must not exceed 0xFFFFFF.</p>
+<p>The Unicode Value Ranges are sorted in increasing order of startUnicodeValue. The ranges must not overlap; i.e., (startUnicodeValue + additionalCount) must be less than the startUnicodeValue of the following range (if any).</p>
+<p>All code points listed in the ranges array should have corresponding entries in a Unicode 'cmap' subtable. Applications could encounter fonts in which this is not the case, however.</p>
+<p><a id="subtable_nonDfltUVS"></a></p>
+<h4 id="non-default-uvs-table">Non-Default UVS table</h4>
+<p>A Non-Default UVS table is a list of pairs of Unicode scalar values and glyph IDs. The Unicode values represent the base characters of all non-default UVSes which use the varSelector of the associated VariationSelector record, and the glyph IDs specify the glyph IDs to use for the UVSes.</p>
+<p><a id="nonDfltUVS"></a></p>
+<p><em>NonDefaultUVS Table:</em></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uint32</td>
+<td>numUVSMappings</td>
+<td>Number of UVS Mappings that follow</td>
+</tr>
+<tr>
+<td>UVSMapping</td>
+<td>uvsMappings[numUVSMappings]</td>
+<td>Array of UVSMapping records.</td>
+</tr>
+</tbody>
+</table>
+<p>Each UVSMapping record provides a glyph ID mapping for one base Unicode character, when that base character is used in a variation sequence with the current variation selector.</p>
+<p><a id="uvsMapRec"></a></p>
+<p><em>UVSMapping Record:</em></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uint24</td>
+<td>unicodeValue</td>
+<td>Base Unicode value of the UVS</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>glyphID</td>
+<td>Glyph ID of the UVS</td>
+</tr>
+</tbody>
+</table>
+<p>The UVS Mappings are sorted in increasing order of unicodeValue. No two mappings in this table may have the same unicodeValue values.</p>
+<p>Typically, code points listed in the uvsMappings array will have corresponding entries in a Unicode 'cmap' subtable. This is not required, however. For example, it might not be the case if a font is intended for use with content in which a given Unicode character only occurs in a variation sequence.</p>
+<p><a id="format14Example"></a></p>
+<h4 id="example">Example</h4>
+<p>Here is an example of how a format 14 'cmap' subtable may be used in a font that is aware of JIS-2004 variant glyphs. The CIDs (character IDs) in this example refer to those in the Adobe Character Collection “Adobe-Japan1” and can be assumed to be identical to the glyph IDs in the font in our example.</p>
+<p>JIS-2004 changed the default glyph variants for some of its code points. For example:</p>
+<p>JIS-90: U+82A6 ⇒ CID 1142<br>
+JIS-2004: U+82A6 ⇒ CID 7961</p>
+<p>Both of these glyph variants are supported through the use of Unicode variation sequences, as the following examples from Unicode’s UVS registry show:</p>
+<p>U+82A6 U+E0100 ⇒ CID 1142<br>
+U+82A6 U+E0101 ⇒ CID 7961</p>
+<p>If the font wants to support the JIS-2004 variants by default, it will:</p>
+<ul>
+<li>encode glyph ID 7961 at U+82A6 in the Unicode 'cmap' subtable;</li>
+<li>specify &lt;U+82A6, U+E0101&gt; in the UVS 'cmap' subtable’s Default UVS table (varSelector will be 0x0E0101 and defaultUVSOffset will point to data containing a 0x0082A6 Unicode value);</li>
+<li>specify &lt;U+82A6, U+E0100&gt; ⇒ glyph ID 1142 in the UVS 'cmap' subtable’s Non-Default UVS table (varSelector will be 0x0E0100 and nonDefaultBaseUVSOffset will point to data containing a unicodeValue 0x0082A6 and glyphID 1142).</li>
+</ul>
+<p>If, however, the font wants to support the JIS-90 variants by default, it will:</p>
+<ul>
+<li>encode glyph ID 1142 at U+82A6 in the Unicode 'cmap' subtable;</li>
+<li>specify &lt;U+82A6, U+E0100&gt; in the UVS 'cmap' subtable’s Default UVS table;</li>
+<li>specify &lt;U+82A6, U+E0101&gt; ⇒ glyph ID 7961 in the UVS 'cmap' subtable’s Non-Default UVS table.</li>
+</ul>
+</div>
+					
+		<div
+			id="ms--inline-notifications"
+			class="margin-block-xs"
+			data-bi-name="inline-notification"
+		></div>
+	 
+		<div
+			id="assertive-live-region"
+			role="alert"
+			aria-live="assertive"
+			class="visually-hidden"
+			aria-relevant="additions"
+			aria-atomic="true"
+		></div>
+		<div
+			id="polite-live-region"
+			role="status"
+			aria-live="polite"
+			class="visually-hidden"
+			aria-relevant="additions"
+			aria-atomic="true"
+		></div>
+	
+					
+			
+		<!-- feedback section -->
+		<section
+			class="feedback-section position-relative margin-top-lg border border-radius padding-xxs display-none-print"
+			data-bi-name="open-source-feedback-section"
+			data-open-source-feedback-section
+			hidden
+		>
+			<div class="display-flex flex-direction-column flex-direction-row-tablet">
+				<div
+					class="width-450-tablet padding-inline-xs padding-inline-xs-tablet padding-top-xs padding-bottom-sm padding-top-xs-tablet background-color-body-medium"
+				>
+					<div class="display-flex flex-direction-column">
+						<div class="padding-bottom-xxs">
+							<span class="icon margin-right-xxs" aria-hidden="true">
+								<span class="docon docon-brand-github"></span>
+							</span>
+							<span class="font-weight-semibold">
+								Collaborate with us on GitHub
+							</span>
+						</div>
+						<span class="line-height-normal">
+							The source for this content can be found on GitHub, where you can also create and review issues and pull requests. For more information, see <a href="https://learn.microsoft.com/contribute/content/">our contributor guide</a>.
+						</span>
+					</div>
+				</div>
+				<div
+					class="display-flex gap-xs width-full-tablet flex-direction-column padding-xs justify-content-space-evenly"
+				>
+					<div class="media">
+						
+
+						<div class="media-content">
+							<p
+								class="font-size-xl font-weight-semibold margin-bottom-xxs"
+								data-open-source-product-title
+							>
+								OpenType specification
+							</p>
+							<div class="display-flex gap-xs flex-direction-column">
+								<p class="line-height-normal" data-open-source-product-description></p>
+								<div class="display-flex gap-xs flex-direction-column">
+									<a href="#" data-github-link>
+										<span class="icon margin-right-xxs" aria-hidden="true">
+											<span class="docon docon-bug"></span>
+										</span>
+										<span>Open a documentation issue</span>
+									</a>
+									<a
+										href="https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml"
+										class="display-block margin-top-auto font-size-md"
+										data-feedback-product-url
+									>
+										<span class="icon margin-right-xxs" aria-hidden="true">
+											<span class="docon docon-feedback"></span>
+										</span>
+										<span>Provide product feedback</span>
+									</a>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</section>
+		<!-- end feedback section -->
+	
+			
+		<!-- feedback section -->
+		<section
+			id="site-user-feedback-footer"
+			class="font-size-sm margin-top-md display-none-print display-none-desktop"
+			data-test-id="site-user-feedback-footer"
+			data-bi-name="site-feedback-section"
+		>
+			<hr class="hr" />
+			<h2 id="ms--feedback" class="title is-3">Feedback</h2>
+			<div class="display-flex flex-wrap-wrap align-items-center">
+				<p class="font-weight-semibold margin-xxs margin-left-none">
+					Was this page helpful?
+				</p>
+				<div class="buttons">
+					<button
+						class="thumb-rating-button like button button-primary button-sm"
+						data-test-id="footer-rating-yes"
+						data-binary-rating-response="rating-yes"
+						type="button"
+						title="This article is helpful"
+						data-bi-name="button-rating-yes"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-like"></span>
+						</span>
+						<span>Yes</span>
+					</button>
+					<button
+						class="thumb-rating-button dislike button button-primary button-sm"
+						id="standard-rating-no-button"
+						hidden
+						data-test-id="footer-rating-no"
+						data-binary-rating-response="rating-no"
+						type="button"
+						title="This article is not helpful"
+						data-bi-name="button-rating-no"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-dislike"></span>
+						</span>
+						<span>No</span>
+					</button>
+					<details
+						class="popover popover-top"
+						id="mobile-help-popover"
+						data-test-id="footer-feedback-popover"
+					>
+						<summary
+							class="thumb-rating-button dislike button button-primary button-sm"
+							data-test-id="details-footer-rating-no"
+							data-binary-rating-response="rating-no"
+							title="This article is not helpful"
+							data-bi-name="button-rating-no"
+							aria-pressed="false"
+							data-bi-an="feedback-unhelpful-popover"
+						>
+							<span class="icon" aria-hidden="true">
+								<span class="docon docon-dislike"></span>
+							</span>
+							<span>No</span>
+						</summary>
+						<div
+							class="popover-content width-200 width-300-tablet"
+							role="dialog"
+							aria-labelledby="popover-heading"
+							aria-describedby="popover-description"
+						>
+							<p id="popover-heading" class="font-size-lg margin-bottom-xxs font-weight-semibold">
+								Need help with this topic?
+							</p>
+							<p id="popover-description" class="font-size-sm margin-bottom-xs">
+								Want to try using Ask Learn to clarify or guide you through this topic?
+							</p>
+							
+		<div class="buttons flex-direction-row flex-wrap justify-content-center gap-xxs">
+			<div>
+		<button
+			class="button button-sm border inner-focus display-none margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-test-id="ask-learn-assistant-modal-entry-mobile-feedback"
+			data-ask-learn-modal-entry-feedback
+			data-bi-an=feedback-unhelpful-popover
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-label="Ask Learn"
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+		</button>
+		<button
+			class="button button-sm display-inline-flex display-none-desktop flex-shrink-0 margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-modal-entry-tablet-feedback"
+			data-ask-learn-modal-entry-feedback
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+		<button
+			class="button button-sm display-none flex-shrink-0 display-inline-flex-desktop margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-flyout-entry-feedback"
+			data-ask-learn-flyout-entry-show-only
+			data-flyout-button="toggle"
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-controls="ask-learn-flyout"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+	</div>
+			<button
+				type="button"
+				class="button button-sm margin-right-xxs"
+				data-help-option="suggest-fix"
+				data-bi-name="feedback-suggest"
+				data-bi-an="feedback-unhelpful-popover"
+				data-test-id="suggest-fix"
+			>
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-feedback"></span>
+				</span>
+				<span> Suggest a fix? </span>
+			</button>
+		</div>
+	
+						</div>
+					</details>
+				</div>
+			</div>
+		</section>
+		<!-- end feedback section -->
+	
+		
+				</div>
+				
+		<div id="ms--additional-resources-mobile" class="display-none-print">
+			<hr class="hr" hidden />
+			<h2 id="ms--additional-resources-mobile-heading" class="title is-3" hidden>
+				Additional resources
+			</h2>
+			
+		<section
+			id="right-rail-recommendations-mobile"
+			class=""
+			data-bi-name="recommendations"
+			hidden
+		></section>
+	 
+		<section
+			id="right-rail-training-mobile"
+			class=""
+			data-bi-name="learning-resource-card"
+			hidden
+		></section>
+	 
+		<section
+			id="right-rail-events-mobile"
+			class=""
+			data-bi-name="events-card"
+			hidden
+		></section>
+	
+		</div>
+	 
+		<div
+			id="article-metadata-footer"
+			data-bi-name="article-metadata-footer"
+			data-test-id="article-metadata-footer"
+			class="page-metadata-container"
+		>
+			<hr class="hr" />
+			<ul class="metadata page-metadata" data-bi-name="page info" lang="en-us" dir="ltr">
+				<li class="visibility-hidden-visual-diff">
+			<span class="badge badge-sm text-wrap-pretty">
+				<span>Last updated on <local-time format="twoDigitNumeric"
+		datetime="2024-05-29T08:00:00.000Z"
+		data-article-date-source="calculated"
+		class="is-invisible"
+	>
+		2024-05-29
+	</local-time></span>
+			</span>
+		</li>
+			</ul>
+		</div>
+	
+			</div>
+		
+				</main>
+				<aside
+					id="layout-body-aside"
+					class="layout-body-aside  "
+					data-bi-name="aside"
+					aria-label="Additional resources"
+			  >
+					
+		<div
+			id="ms--additional-resources"
+			class="right-container padding-sm display-none display-block-desktop height-full"
+			data-bi-name="pageactions"
+		>
+			<div id="affixed-right-container" data-bi-name="right-column">
+				
+		<nav
+			id="side-doc-outline"
+			class="doc-outline border-bottom padding-bottom-xs margin-bottom-xs scrollbar-width-thin"
+			data-bi-name="intopic toc"
+			aria-label="In this article"
+		>
+			<h3>In this article</h3>
+		</nav>
+	
+				<!-- Feedback -->
+				
+		<section
+			id="ms--site-user-feedback-right-rail"
+			class="font-size-sm display-none-print"
+			data-test-id="site-user-feedback-right-rail"
+			data-bi-name="site-feedback-right-rail"
+		>
+			<div class="display-flex flex-wrap-wrap align-items-center">
+				<p class="font-weight-semibold margin-xxs margin-left-none">
+					Was this page helpful?
+				</p>
+				<div class="display-flex flex-wrap-nowrap">
+					<button
+						class="thumb-rating-button like inner-focus"
+						data-test-id="right-rail-rating-yes"
+						data-binary-rating-response="rating-yes"
+						type="button"
+						title="This article is helpful"
+						aria-label="This article is helpful"
+						data-bi-name="button-rating-yes"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-like"></span>
+						</span>
+					</button>
+					<button
+						class="thumb-rating-button dislike inner-focus"
+						id="right-rail-no-button"
+						hidden
+						data-test-id="right-rail-rating-no"
+						data-binary-rating-response="rating-no"
+						type="button"
+						title="This article is not helpful"
+						aria-label="This article is not helpful"
+						data-bi-name="button-rating-no"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-dislike"></span>
+						</span>
+					</button>
+					<details class="popover popover-right" id="help-popover" data-test-id="feedback-popover">
+						<summary
+							tabindex="0"
+							class="thumb-rating-button dislike inner-focus"
+							data-test-id="details-right-rail-rating-no"
+							data-binary-rating-response="rating-no"
+							title="This article is not helpful"
+							aria-label="This article is not helpful"
+							data-bi-name="button-rating-no"
+							aria-pressed="false"
+							data-bi-an="feedback-unhelpful-popover"
+						>
+							<span class="icon" aria-hidden="true">
+								<span class="docon docon-dislike"></span>
+							</span>
+						</summary>
+						<div
+							class="popover-content width-200 width-300-tablet"
+							role="dialog"
+							aria-labelledby="popover-heading-right-rail"
+							aria-describedby="popover-description-right-rail"
+						>
+							<p
+								id="popover-heading-right-rail"
+								class="font-size-lg margin-bottom-xxs font-weight-semibold"
+							>
+								Need help with this topic?
+							</p>
+							<p id="popover-description-right-rail" class="font-size-sm margin-bottom-xs">
+								Want to try using Ask Learn to clarify or guide you through this topic?
+							</p>
+							
+		<div class="buttons flex-direction-row flex-wrap justify-content-center gap-xxs">
+			<div>
+		<button
+			class="button button-sm border inner-focus display-none margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-test-id="ask-learn-assistant-modal-entry-mobile-feedback"
+			data-ask-learn-modal-entry-feedback
+			data-bi-an=feedback-unhelpful-popover
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-label="Ask Learn"
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+		</button>
+		<button
+			class="button button-sm display-inline-flex display-none-desktop flex-shrink-0 margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-modal-entry-tablet-feedback"
+			data-ask-learn-modal-entry-feedback
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+		<button
+			class="button button-sm display-none flex-shrink-0 display-inline-flex-desktop margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-flyout-entry-feedback"
+			data-ask-learn-flyout-entry-show-only
+			data-flyout-button="toggle"
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-controls="ask-learn-flyout"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+	</div>
+			<button
+				type="button"
+				class="button button-sm margin-right-xxs"
+				data-help-option="suggest-fix"
+				data-bi-name="feedback-suggest"
+				data-bi-an="feedback-unhelpful-popover"
+				data-test-id="suggest-fix"
+			>
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-feedback"></span>
+				</span>
+				<span> Suggest a fix? </span>
+			</button>
+		</div>
+	
+						</div>
+					</details>
+				</div>
+			</div>
+		</section>
+	
+			</div>
+		</div>
+	
+			  </aside> <section
+					id="layout-body-flyout"
+					class="layout-body-flyout "
+					data-bi-name="flyout"
+			  >
+					 <div
+	class="height-full border-left background-color-body-medium"
+	id="ask-learn-flyout"
+></div>
+			  </section> <div class="layout-body-footer " data-bi-name="layout-footer">
+		<footer
+			id="footer"
+			data-test-id="footer"
+			data-bi-name="footer"
+			class="footer-layout padding-xs padding-sm-desktop has-default-focus border-top"
+			role="contentinfo"
+		>
+			<div class="display-flex gap-xs flex-wrap-wrap is-full-height padding-right-lg-desktop">
+				
+		<a
+			data-mscc-ic="false"
+			href="#"
+			data-bi-name="select-locale"
+			class="locale-selector-link flex-shrink-0 button button-sm button-clear external-link-indicator"
+			id=""
+			title=""
+			><span class="icon" aria-hidden="true"
+				><span class="docon docon-world"></span></span
+			><span class="local-selector-link-text">en-us</span></a
+		>
+	 <div class="ccpa-privacy-link" data-ccpa-privacy-link hidden>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://aka.ms/yourcaliforniaprivacychoices"
+			data-bi-name="your-privacy-choices"
+			class="button button-sm button-clear flex-shrink-0 external-link-indicator"
+			id=""
+			title=""
+			>
+		<svg
+			xmlns="http://www.w3.org/2000/svg"
+			viewBox="0 0 30 14"
+			xml:space="preserve"
+			height="16"
+			width="43"
+			aria-hidden="true"
+			focusable="false"
+		>
+			<path
+				d="M7.4 12.8h6.8l3.1-11.6H7.4C4.2 1.2 1.6 3.8 1.6 7s2.6 5.8 5.8 5.8z"
+				style="fill-rule:evenodd;clip-rule:evenodd;fill:#fff"
+			></path>
+			<path
+				d="M22.6 0H7.4c-3.9 0-7 3.1-7 7s3.1 7 7 7h15.2c3.9 0 7-3.1 7-7s-3.2-7-7-7zm-21 7c0-3.2 2.6-5.8 5.8-5.8h9.9l-3.1 11.6H7.4c-3.2 0-5.8-2.6-5.8-5.8z"
+				style="fill-rule:evenodd;clip-rule:evenodd;fill:#06f"
+			></path>
+			<path
+				d="M24.6 4c.2.2.2.6 0 .8L22.5 7l2.2 2.2c.2.2.2.6 0 .8-.2.2-.6.2-.8 0l-2.2-2.2-2.2 2.2c-.2.2-.6.2-.8 0-.2-.2-.2-.6 0-.8L20.8 7l-2.2-2.2c-.2-.2-.2-.6 0-.8.2-.2.6-.2.8 0l2.2 2.2L23.8 4c.2-.2.6-.2.8 0z"
+				style="fill:#fff"
+			></path>
+			<path
+				d="M12.7 4.1c.2.2.3.6.1.8L8.6 9.8c-.1.1-.2.2-.3.2-.2.1-.5.1-.7-.1L5.4 7.7c-.2-.2-.2-.6 0-.8.2-.2.6-.2.8 0L8 8.6l3.8-4.5c.2-.2.6-.2.9 0z"
+				style="fill:#06f"
+			></path>
+		</svg>
+	
+			<span>Your Privacy Choices</span></a
+		>
+	
+	</div>
+				<div class="flex-shrink-0">
+		<div class="dropdown has-caret-up">
+			<button
+				data-test-id="theme-selector-button"
+				class="dropdown-trigger button button-clear button-sm inner-focus theme-dropdown-trigger"
+				aria-controls="{{ themeMenuId }}"
+				aria-haspopup="true"
+				aria-expanded="false"
+				data-bi-name="theme"
+			>
+				<span class="icon" aria-hidden="true"><span class="docon docon-sun"></span></span>
+				<span>Theme</span>
+				<span class="icon expanded-indicator" aria-hidden="true">
+					<span class="docon docon-chevron-down-light"></span>
+				</span>
+			</button>
+			<div class="dropdown-menu" id="{{ themeMenuId }}" role="menu">
+				<ul class="theme-selector padding-xxs" data-test-id="theme-dropdown-menu" role="none">
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="light"
+							tabindex="-1"
+						>
+							<span class="theme-light margin-right-xxs">
+								<span
+									class="theme-selector-icon border display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> Light </span>
+						</button>
+					</li>
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="dark"
+							tabindex="-1"
+						>
+							<span class="theme-dark margin-right-xxs">
+								<span
+									class="border theme-selector-icon display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> Dark </span>
+						</button>
+					</li>
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="high-contrast"
+							tabindex="-1"
+						>
+							<span class="theme-high-contrast margin-right-xxs">
+								<span
+									class="border theme-selector-icon display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> High contrast </span>
+						</button>
+					</li>
+				</ul>
+			</div>
+		</div>
+	</div>
+			</div>
+			<ul class="links" data-bi-name="footerlinks">
+				<li class="manage-cookies-holder" hidden=""></li>
+				<li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/principles-for-ai-generated-content"
+			data-bi-name="aiDisclaimer"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>AI Disclaimer</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/previous-versions/"
+			data-bi-name="archivelink"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Previous Versions</a
+		>
+	
+	</li> <li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://techcommunity.microsoft.com/t5/microsoft-learn-blog/bg-p/MicrosoftLearnBlog"
+			data-bi-name="bloglink"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Blog</a
+		>
+	
+	</li> <li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/contribute"
+			data-bi-name="contributorGuide"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Contribute</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://go.microsoft.com/fwlink/?LinkId=521839"
+			data-bi-name="privacy"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Privacy</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://go.microsoft.com/fwlink/?linkid=2259814"
+			data-bi-name="consumer-health-privacy"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Consumer Health Privacy</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/legal/termsofuse"
+			data-bi-name="termsofuse"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Terms of Use</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://www.microsoft.com/legal/intellectualproperty/Trademarks/"
+			data-bi-name="trademarks"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Trademarks</a
+		>
+	
+	</li>
+				<li>&copy; Microsoft 2026</li>
+			</ul>
+		</footer>
+	</footer>
+			</body>
+		</html>

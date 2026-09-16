@@ -1,0 +1,2204 @@
+ <!DOCTYPE html>
+		<html
+			class="layout layout-holy-grail   show-table-of-contents conceptual show-breadcrumb default-focus"
+			lang="en-us"
+			dir="ltr"
+			data-authenticated="false"
+			data-auth-status-determined="false"
+			data-target="docs"
+			x-ms-format-detection="none"
+		>
+			
+		<head>
+			<title>name - Naming table (OpenType 1.9.1) - Typography | Microsoft Learn</title>
+			<meta charset="utf-8" />
+			<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+			<meta name="color-scheme" content="light dark" />
+
+			<meta name="description" content="The naming table specification (OpenType 1.9.1)" />
+			<link rel="canonical" href="https://learn.microsoft.com/en-us/typography/opentype/spec/name" /> 
+
+			<!-- Non-customizable open graph and sharing-related metadata -->
+			<meta name="twitter:card" content="summary_large_image" />
+			<meta name="twitter:site" content="@MicrosoftLearn" />
+			<meta property="og:type" content="website" />
+			<meta property="og:image:alt" content="Microsoft Learn" />
+			<meta property="og:image" content="https://learn.microsoft.com/en-us/media/open-graph-image.png" />
+			<!-- Page specific open graph and sharing-related metadata -->
+			<meta property="og:title" content="name - Naming table (OpenType 1.9.1) - Typography" />
+			<meta property="og:url" content="https://learn.microsoft.com/en-us/typography/opentype/spec/name" />
+			<meta property="og:description" content="The naming table specification (OpenType 1.9.1)" />
+			<meta name="platform_id" content="1d8df9c6-adfb-e828-e382-a2e670bc899e" /> <meta name="scope" content="typography" />
+			<meta name="locale" content="en-us" />
+			 
+			<meta name="uhfHeaderId" content="MSDocsHeader-MSTypography" />
+
+			<meta name="page_type" content="conceptual" />
+
+			<!--page specific meta tags-->
+			
+
+			<!-- custom meta tags -->
+			
+		<meta name="ms.service" content="typography" />
+	
+		<meta name="breadcrumb_path" content="/typography/breadcrumbs/toc.json" />
+	
+		<meta name="feedback_system" content="OpenSource" />
+	
+		<meta name="author" content="PeterCon" />
+	
+		<meta name="ms.author" content="pconstable" />
+	
+		<meta name="ms.date" content="2024-05-30T00:00:00Z" />
+	
+		<meta name="feedback_product_url" content="https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml" />
+	
+		<meta name="keywords" content="typography" />
+	
+		<meta name="ms.topic" content="article" />
+	
+		<meta name="source-file" content="https://www.microsoft.com/typography/otspec/name.htm" />
+	
+		<meta name="document_id" content="9bc5a9d9-70e1-97b3-6926-c176e1a2401d" />
+	
+		<meta name="document_version_independent_id" content="1afb0f5b-d1a7-7d69-d175-a5c9382b74be" />
+	
+		<meta name="updated_at" content="2024-05-31T17:41:00Z" />
+	
+		<meta name="original_content_git_url" content="https://github.com/MicrosoftDocs/typography/blob/live/typographydocs/opentype/spec/name.md" />
+	
+		<meta name="gitcommit" content="https://github.com/MicrosoftDocs/typography/blob/810414e13e39f68adfb5f12d525e6b50c850fbbc/typographydocs/opentype/spec/name.md" />
+	
+		<meta name="git_commit_id" content="810414e13e39f68adfb5f12d525e6b50c850fbbc" />
+	
+		<meta name="site_name" content="Docs" />
+	
+		<meta name="depot_name" content="Win.typography" />
+	
+		<meta name="schema" content="Conceptual" />
+	
+		<meta name="toc_rel" content="../../toc.json" />
+	
+		<meta name="pdf_url_template" content="https://learn.microsoft.com/pdfstore/en-us/Win.typography/{branchName}{pdfName}" />
+	
+		<meta name="feedback_help_link_type" content="" />
+	
+		<meta name="feedback_help_link_url" content="" />
+	
+		<meta name="word_count" content="5230" />
+	
+		<meta name="asset_id" content="opentype/spec/name" />
+	
+		<meta name="moniker_range_name" content="" />
+	
+		<meta name="item_type" content="Content" />
+	
+		<meta name="source_path" content="typographydocs/opentype/spec/name.md" />
+	
+		<meta name="previous_tlsh_hash" content="5769D0E2970C7733BF82AA081597AF7097E0C54CE1F527F40C9E3251C5013E935B0A98DDFB1263891675079202627ADFB2C5EB3EE03D2772E9A998AE465C92C66774376BB3" />
+	
+		<meta name="github_feedback_content_git_url" content="https://github.com/MicrosoftDocs/typography/blob/live/typographydocs/opentype/spec/name.md" />
+	
+		<meta name="markdown_url" content="https://learn.microsoft.com/en-us/typography/opentype/spec/name?accept=text/markdown" />
+	 
+		<meta name="cmProducts" content="https://microsoft-devrel.poolparty.biz/DevRelOfferingOntology/c6f99e62-1cf6-4b71-af9b-649b05f80cce" data-source="generated" />
+	
+		<meta name="spProducts" content="https://microsoft-devrel.poolparty.biz/DevRelOfferingOntology/3f56b378-07a9-4fa1-afe8-9889fdc77628" data-source="generated" />
+	
+
+			<!-- Apply persisted/system theme before first paint to prevent wrong-theme flash when scripts are deferred. -->
+			<script id="theme-preference">
+				(function () {
+			try {
+				var stored = localStorage.getItem('theme');
+				var theme = /^(light|dark|high-contrast)$/.test(stored)
+					? stored
+					: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+				document.documentElement.classList.add('theme-' + theme);
+			} catch (e) {}
+		})();;
+			</script>
+
+			<script id="atlas-layout-preferences">
+				(function () {
+			try {
+				var state = JSON.parse(localStorage.getItem('atlas-layout-preferences') || '{}');
+				var view = state["docs-layout-persistence"] || {};
+				var excludesKey = "";
+				var blocked = {};
+				if (excludesKey) {
+					var exclusions = JSON.parse(localStorage.getItem('atlas-layout-exclusions') || '{}');
+					if (Object.prototype.hasOwnProperty.call(exclusions, excludesKey)) {
+						var scoped = exclusions[excludesKey];
+						if (scoped) {
+							if (typeof scoped === 'object') blocked = scoped;
+						}
+					}
+				}
+				var html = document.documentElement;
+				for (var c in view) {
+					if (Object.prototype.hasOwnProperty.call(blocked, c)) continue;
+					if (view[c]) html.classList.add(c);
+					else html.classList.remove(c);
+				}
+			} catch (e) {}
+		})();;
+			</script>
+
+			<!-- assets and js globals -->
+			
+			<link rel="stylesheet" href="/static/assets/0.4.03544.8243-8192ba90/styles/site.css" />
+			
+			<script src="https://wcpstatic.microsoft.com/mscc/lib/v2/wcp-consent.js"></script>
+			<!-- Keep this URL in sync with oneDSScriptSelector in instrumentation/one-ds.ts. -->
+			<script async src="https://js.monitor.azure.com/scripts/c/ms.jsll-4.min.js"></script>
+			
+
+			<!-- msdocs global object -->
+			<script id="msdocs-script">
+		var msDocs = {
+  "environment": {
+    "accessLevel": "online",
+    "azurePortalHostname": "portal.azure.com",
+    "reviewFeatures": false,
+    "supportLevel": "production",
+    "systemContent": true,
+    "siteName": "learn",
+    "legacyHosting": false
+  },
+  "data": {
+    "contentLocale": "en-us",
+    "contentDir": "ltr",
+    "userLocale": "en-us",
+    "userDir": "ltr",
+    "pageTemplate": "Conceptual",
+    "layoutStateStorageKey": "docs-layout-persistence",
+    "brand": "",
+    "context": {},
+    "standardFeedback": false,
+    "showFeedbackReport": false,
+    "feedbackHelpLinkType": "",
+    "feedbackHelpLinkUrl": "",
+    "feedbackSystem": "OpenSource",
+    "feedbackGitHubRepo": "",
+    "feedbackProductUrl": "https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml",
+    "extendBreadcrumb": false,
+    "isEditDisplayable": false,
+    "isPrivateUnauthorized": false,
+    "hideViewSource": false,
+    "isPermissioned": false,
+    "hasRecommendations": true,
+    "openSourceFeedbackIssueUrl": "https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml",
+    "openSourceFeedbackIssueTitle": ""
+  },
+  "functions": {}
+};;
+	</script>
+
+			<!-- base scripts, msdocs global should be before this -->
+			<script
+				src="/static/assets/0.4.03544.8243-8192ba90/scripts/en-us/index-docs.js"
+				async
+			></script>
+			
+
+			<!-- json-ld -->
+			
+		</head>
+	
+			<body
+				id="body"
+				data-bi-name="body"
+				class="layout-body "
+				lang="en-us"
+				dir="ltr"
+			>
+				<header class="layout-body-header background-color-body-medium">
+		<div class="header-holder has-default-focus">
+			
+		<a
+			href="#main"
+			
+			style="z-index: 1070"
+			class="outline-color-text visually-hidden-until-focused position-fixed inner-focus focus-visible top-0 left-0 right-0 padding-xs text-align-center background-color-body"
+			
+		>
+			Skip to main content
+		</a>
+	
+		<a
+			href="#"
+			data-skip-to-ask-learn
+			style="z-index: 1070"
+			class="outline-color-text visually-hidden-until-focused position-fixed inner-focus focus-visible top-0 left-0 right-0 padding-xs text-align-center background-color-body"
+			hidden
+		>
+			Skip to Ask Learn chat experience
+		</a>
+	
+
+			<div hidden id="cookie-consent-holder" data-test-id="cookie-consent-container"></div>
+			<!-- Unsupported browser warning -->
+			<div
+				id="unsupported-browser"
+				style="background-color: white; color: black; padding: 16px; border-bottom: 1px solid grey;"
+				hidden
+			>
+				<div style="max-width: 800px; margin: 0 auto;">
+					<p style="font-size: 24px">This browser is no longer supported.</p>
+					<p style="font-size: 16px; margin-top: 16px;">
+						Upgrade to Microsoft Edge to take advantage of the latest features, security updates, and technical support.
+					</p>
+					<div style="margin-top: 12px;">
+						<a
+							href="https://go.microsoft.com/fwlink/p/?LinkID=2092881 "
+							style="background-color: #0078d4; border: 1px solid #0078d4; color: white; padding: 6px 12px; border-radius: 2px; display: inline-block;"
+						>
+							Download Microsoft Edge
+						</a>
+						<a
+							href="https://learn.microsoft.com/en-us/lifecycle/faq/internet-explorer-microsoft-edge"
+							style="background-color: white; padding: 6px 12px; border: 1px solid #505050; color: #171717; border-radius: 2px; display: inline-block;"
+						>
+							More info about Internet Explorer and Microsoft Edge
+						</a>
+					</div>
+				</div>
+			</div>
+			<!-- site header -->
+			<div
+				id="ms--site-header"
+				data-test-id="site-header-wrapper"
+				itemscope="itemscope"
+				itemtype="http://schema.org/Organization"
+			>
+				<div
+					id="ms--mobile-nav"
+					class="site-header display-none-tablet padding-inline-none gap-none"
+					data-bi-name="mobile-header"
+					data-test-id="mobile-header"
+				></div>
+				<div
+					id="ms--primary-nav"
+					class="site-header display-none display-flex-tablet"
+					data-bi-name="L1-header"
+					data-test-id="primary-header"
+				></div>
+				<div
+					id="ms--secondary-nav"
+					class="site-header display-none display-flex-tablet"
+					data-bi-name="L2-header"
+					data-test-id="secondary-header"
+					
+				></div>
+			</div>
+			
+		<!-- banner -->
+		<div data-banner>
+			<div id="disclaimer-holder"></div>
+			
+		</div>
+		<!-- banner end -->
+	
+		</div>
+	</header>
+				 <section
+					id="layout-body-menu"
+					class="layout-body-menu border-right display-flex background-color-body-medium"
+					data-bi-name="menu"
+			  >
+					
+		<div
+			id="left-container"
+			class="left-container display-none padding-none display-block-tablet width-full display-none-until-layout-restored"
+			data-toc-container="true"
+		>
+			<div
+				id="ms--toc-content"
+				class="padding-left-sm padding-right-none padding-bottom-sm height-full"
+			>
+				<nav
+					id="affixed-left-container"
+					class="margin-top-xxs-tablet position-sticky display-flex flex-direction-column width-full"
+					aria-label="Primary"
+					data-bi-name="left-toc"
+					role="navigation"
+				>
+					<div
+						id="ms--collapsible-toc-header"
+						class="display-flex flex-direction-row-reverse justify-content-center align-items-center margin-bottom-xxs margin-right-xxs"
+					>
+						<button
+							type="button"
+							class="button button-clear button-sm inner-focus"
+							data-collapsible-toc-toggle
+							aria-expanded="true"
+							hidden
+							aria-controls="ms--toc-content"
+							aria-label="Table of contents"
+						>
+							<span class="icon icon-mirrored-rtl" aria-hidden="true">
+								<span
+									class="docon docon-panel-left-contract display-none-layout-menu-collapsed"
+								></span>
+								<span
+									class="docon docon-panel-left-expand display-none display-inline-layout-menu-collapsed"
+								></span>
+							</span>
+						</button>
+						<div
+							id="ms--collapsible-toc-moniker-slot"
+							class="flex-grow-1 display-none-layout-menu-collapsed"
+						></div>
+					</div>
+				</nav>
+			</div>
+		</div>
+	
+			  </section>
+
+				<main
+					id="main"
+					role="main"
+					class="layout-body-main "
+					data-bi-name="content"
+					lang="en-us"
+					dir="ltr"
+				>
+					
+			<div
+		id="ms--content-header"
+		class="content-header default-focus border-bottom-none"
+		data-bi-name="content-header"
+	>
+		<div class="content-header-controls margin-xxs margin-inline-sm-tablet">
+			<button
+				type="button"
+				class="contents-button button button-sm margin-right-xxs"
+				data-bi-name="contents-expand"
+				aria-haspopup="true"
+				data-contents-button
+			>
+				<span class="icon" aria-hidden="true"><span class="docon docon-menu"></span></span>
+				<span class="contents-expand-title"> Table of contents </span>
+			</button>
+			<button
+				type="button"
+				class="ap-collapse-behavior ap-expanded button button-sm"
+				data-bi-name="ap-collapse"
+				aria-controls="action-panel"
+			>
+				<span class="icon" aria-hidden="true"><span class="docon docon-exit-mode"></span></span>
+				<span>Exit editor mode</span>
+			</button>
+		</div>
+	</div> 
+		<div
+			id="action-panel"
+			role="region"
+			aria-label="Action Panel"
+			class="action-panel"
+			tabindex="-1"
+		></div>
+	
+			<div
+				data-main-column
+				class="reading-width margin-inline-auto layout-padding padding-top-none padding-top-sm-tablet padding-bottom-sm"
+			>
+				<div>
+					
+		<div id="article-header" class="background-color-body margin-bottom-xs display-none-print">
+			<div class="display-flex align-items-center justify-content-space-between">
+				
+		<details
+			id="article-header-breadcrumbs-overflow-popover"
+			class="popover popover-left"
+			data-for="article-header-breadcrumbs"
+		>
+			<summary
+				class="button button-clear button-primary button-sm inner-focus"
+				aria-label="All breadcrumbs"
+			>
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-more"></span>
+				</span>
+			</summary>
+			<div id="article-header-breadcrumbs-overflow" class="popover-content"></div>
+		</details>
+
+		<bread-crumbs
+			id="article-header-breadcrumbs"
+			role="group"
+			aria-label="Breadcrumbs"
+			data-test-id="article-header-breadcrumbs"
+			class="overflow-hidden flex-grow-1 margin-right-sm margin-right-md-tablet margin-right-lg-desktop margin-left-negative-xxs padding-left-xxs"
+		></bread-crumbs>
+	 
+		<div
+			id="article-header-page-actions"
+			class="opacity-none margin-left-auto display-flex flex-wrap-no-wrap align-items-stretch"
+		>
+			
+		<button
+			class="button button-sm border-none inner-focus display-none-tablet flex-shrink-0 "
+			data-bi-name="ask-learn-assistant-entry"
+			data-test-id="ask-learn-assistant-modal-entry-mobile"
+			data-ask-learn-modal-entry
+			
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-label="Ask Learn"
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+		</button>
+		<button
+			class="button button-sm display-none display-inline-flex-tablet display-none-desktop flex-shrink-0 margin-right-xxs border-color-ask-learn "
+			data-bi-name="ask-learn-assistant-entry"
+			
+			data-test-id="ask-learn-assistant-modal-entry-tablet"
+			data-ask-learn-modal-entry
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+		<button
+			class="button button-sm display-none flex-shrink-0 display-inline-flex-desktop margin-right-xxs border-color-ask-learn "
+			data-bi-name="ask-learn-assistant-entry"
+			
+			data-test-id="ask-learn-assistant-flyout-entry"
+			data-ask-learn-flyout-entry
+			data-flyout-button="toggle"
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-controls="ask-learn-flyout"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+	 
+
+			<details class="popover popover-right" id="article-header-page-actions-overflow">
+				<summary
+					class="justify-content-flex-start button button-clear button-sm button-primary inner-focus"
+					aria-label="More actions"
+					title="More actions"
+				>
+					<span class="icon" aria-hidden="true">
+						<span class="docon docon-more-vertical"></span>
+					</span>
+				</summary>
+				<div class="popover-content">
+					
+		<button
+			type="button"
+			id="ms--focus-mode-button"
+			data-focus-mode
+			data-bi-name="focus-mode-entry"
+			data-page-action-item="overflow-all"
+			data-popover-close
+			class="button button-clear button-sm button-block justify-content-flex-start text-align-left inner-focus display-none display-inline-flex-tablet"
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-glasses"></span>
+			</span>
+			<span>Reading mode</span>
+		</button>
+	 
+		<button
+			data-page-action-item="overflow-mobile"
+			type="button"
+			class="display-block-layout-menu-collapsed button-block button-sm inner-focus button button-clear display-none-tablet justify-content-flex-start text-align-left"
+			data-bi-name="contents-expand"
+			data-contents-button
+			data-popover-close
+		>
+			<span class="icon" aria-hidden="true"
+				><span class="docon docon-editor-list-bullet"></span
+			></span>
+			<span class="contents-expand-title">Table of contents</span>
+		</button>
+	 
+		<a
+			id="lang-link-overflow"
+			class="button-sm inner-focus button button-clear button-block justify-content-flex-start text-align-left"
+			data-bi-name="language-toggle"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			data-read-in-link
+			href="#"
+			hidden
+		>
+			<span class="icon" aria-hidden="true" data-read-in-link-icon>
+				<span class="docon docon-locale-globe"></span>
+			</span>
+			<span data-read-in-link-text>Read in English</span>
+		</a>
+	
+					
+		<button
+			type="button"
+			class="collection button button-clear button-sm button-block justify-content-flex-start text-align-left inner-focus"
+			data-list-type="collection"
+			data-bi-name="collection"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			data-popover-close
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-circle-addition"></span>
+			</span>
+			<span class="collection-status">Add</span>
+		</button>
+	 
+		<button
+			type="button"
+			class="collection button button-block button-clear button-sm justify-content-flex-start text-align-left inner-focus"
+			data-list-type="plan"
+			data-bi-name="plan"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			data-popover-close
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-circle-addition"></span>
+			</span>
+			<span class="plan-status">Add to Plans</span>
+		</button>
+	 
+					
+		<a
+			data-contenteditbtn
+			class="button button-clear button-block button-sm inner-focus justify-content-flex-start text-align-left text-decoration-none"
+			data-bi-name="edit"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			hidden
+			href=""
+			data-original_content_git_url="https://github.com/MicrosoftDocs/typography/blob/live/typographydocs/opentype/spec/name.md"
+			data-original_content_git_url_template="{repo}/blob/{branch}/typographydocs/opentype/spec/name.md"
+			data-pr_repo=""
+			data-pr_branch=""
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-edit-outline"></span>
+			</span>
+			<span>Edit</span>
+		</a>
+	  
+		<hr class="margin-block-xxs" />
+		
+				<button
+					class="button button-block button-clear button-sm justify-content-flex-start text-align-left inner-focus"
+					type="button"
+					data-bi-name="copy-markdown"
+					data-page-action-item="overflow-all"
+					data-copy-markdown
+					data-copy-state="idle"
+					data-check-hidden="true"
+				>
+					<span class="icon color-primary" aria-hidden="true">
+						<span data-show-when="idle" class="docon docon-code-lang"></span>
+						<span data-show-when="loading" class="loader" hidden></span>
+						<span data-show-when="success" class="docon docon-check-mark" hidden></span>
+					</span>
+					<span>Copy Markdown</span>
+				</button>
+		   
+				<button
+					class="button button-block button-clear button-sm justify-content-flex-start text-align-left inner-focus"
+					type="button"
+					data-bi-name="print"
+					data-page-action-item="overflow-all"
+					data-popover-close
+					data-print-page
+					data-check-hidden="true"
+				>
+					<span class="icon color-primary" aria-hidden="true">
+						<span class="docon docon-print"></span>
+					</span>
+					<span>Print</span>
+				</button>
+		  
+	
+				</div>
+			</details>
+		</div>
+	
+			</div>
+		</div>
+	  
+		<!-- privateUnauthorizedTemplate is hidden by default -->
+		<div unauthorized-private-section data-bi-name="permission-content-unauthorized-private" hidden>
+			<hr class="hr margin-top-xs margin-bottom-sm" />
+			<div class="notification notification-info">
+				<div class="notification-content">
+					<p class="margin-top-none notification-title">
+						<span class="icon" aria-hidden="true"
+							><span class="docon docon-exclamation-circle-solid"></span
+						></span>
+						<span>Note</span>
+					</p>
+					<p class="margin-top-none authentication-determined not-authenticated">
+						Access to this page requires authorization. You can try <a class="docs-sign-in" href="#" data-bi-name="permission-content-sign-in">signing in</a> or <a  class="docs-change-directory" data-bi-name="permisson-content-change-directory">changing directories</a>.
+					</p>
+					<p class="margin-top-none authentication-determined authenticated">
+						Access to this page requires authorization. You can try <a class="docs-change-directory" data-bi-name="permisson-content-change-directory">changing directories</a>.
+					</p>
+				</div>
+			</div>
+		</div>
+	
+					<div class="content"><h1 id="name--naming-table">name — Naming Table</h1></div>
+					
+		<div
+			id="article-metadata"
+			data-bi-name="article-metadata"
+			data-test-id="article-metadata"
+			class="page-metadata-container display-flex gap-xxs justify-content-space-between align-items-center flex-wrap-wrap"
+		>
+			 
+				<div
+					id="user-feedback"
+					class="margin-block-xxs display-none display-none-print"
+					hidden
+					data-hide-on-archived
+				>
+					
+		<button
+			id="user-feedback-button"
+			data-test-id="conceptual-feedback-button"
+			class="button button-sm button-clear button-primary display-none"
+			type="button"
+			data-bi-name="user-feedback-button"
+			data-user-feedback-button
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-like"></span>
+			</span>
+			<span>Feedback</span>
+		</button>
+	
+				</div>
+		  
+		</div>
+	 
+		<div data-id="ai-summary" class="display-none-print">
+			<div id="ms--ai-summary-cta" class="margin-top-xs display-flex align-items-center">
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-sparkle-fill gradient-text-vivid"></span>
+				</span>
+				<button
+					id="ms--ai-summary"
+					type="button"
+					class="tag tag-sm tag-suggestion margin-left-xxs"
+					data-test-id="ai-summary-cta"
+					data-bi-name="ai-summary-cta"
+					data-an="ai-summary"
+				>
+					<span class="ai-summary-cta-text">
+						Summarize this article for me
+					</span>
+				</button>
+			</div>
+			<!-- Slot where the client will render the summary card after the user clicks the CTA -->
+			<div id="ms--ai-summary-header" class="margin-top-xs"></div>
+		</div>
+	 
+		<nav
+			id="center-doc-outline"
+			class="doc-outline display-none-desktop display-none-print margin-bottom-sm"
+			data-bi-name="intopic toc"
+			aria-label="In this article"
+		>
+			<h2 id="ms--in-this-article" class="title is-6 margin-block-xs">
+				In this article
+			</h2>
+		</nav>
+	 <div class="content"><p>The naming table allows multilingual strings to be associated with the OpenType™ font. These strings can represent copyright notices, font names, family names, style names, and so on. To keep this table short, the font manufacturer may wish to make a limited set of entries in some small set of languages; later, the font can be “localized” and the strings translated or added. Other parts of the OpenType font that require these strings can refer to them using a language-independent name ID. In addition to language variants, the table also allows for platform-specific character-encoding variants. Applications that need a particular string can look it up by its platform ID, encoding ID, language ID and name ID. Note that different platforms may have different requirements for the encoding of strings.</p>
+<p>Many newer platforms can use strings intended for different platforms if a font does not include strings for that platform. Some applications might display incorrect strings, however, if strings for the current platform are not included.</p>
+<p><a id="nameHeader"></a></p>
+<h2 id="naming-table-header">Naming table header</h2>
+<p>There are two versions of the Naming Table. Version 0 uses platform-specific, numeric language identifiers. Version 1 allows for use of language-tag strings to indicate the language of strings. Both versions include variable-size string-data storage, and an array of name records that are used to identify the type of string (name ID), platform, encoding and language variants of the string, and the location within the storage.</p>
+<p><a id="nameHeader_0"></a></p>
+<h3 id="naming-table-version-0">Naming table version 0</h3>
+<p>The version 0 naming table is organized as follows:</p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uint16</td>
+<td>version</td>
+<td>Table version number (=0).</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>count</td>
+<td>Number of name records.</td>
+</tr>
+<tr>
+<td>Offset16</td>
+<td>storageOffset</td>
+<td>Offset to start of string storage (from start of table).</td>
+</tr>
+<tr>
+<td>NameRecord</td>
+<td>nameRecord[count]</td>
+<td>The name records where <em>count</em> is the number of records.</td>
+</tr>
+<tr>
+<td>(Variable)</td>
+<td></td>
+<td>Storage for the actual string data.</td>
+</tr>
+</tbody>
+</table>
+<p>Version 0 differs from version 1 in regard to handling of language identification: it uses only numeric language IDs, which generally are values less than 0x8000 and have platform-specific interpretations. See Name Records below for more detail.</p>
+<p><a id="nameHeader_1"></a></p>
+<h3 id="naming-table-version-1">Naming table version 1</h3>
+<p>The version 1 naming table adds additional elements, as follows:</p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uint16</td>
+<td>version</td>
+<td>Table version number (=1).</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>count</td>
+<td>Number of name records.</td>
+</tr>
+<tr>
+<td>Offset16</td>
+<td>storageOffset</td>
+<td>Offset to start of string storage (from start of table).</td>
+</tr>
+<tr>
+<td>NameRecord</td>
+<td>nameRecord[count]</td>
+<td>The name records where <em>count</em> is the number of records.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>langTagCount</td>
+<td>Number of language-tag records.</td>
+</tr>
+<tr>
+<td>LangTagRecord</td>
+<td>langTagRecord[langTagCount]</td>
+<td>The language-tag records where <em>langTagCount</em> is the number of records.</td>
+</tr>
+<tr>
+<td>(Variable)</td>
+<td></td>
+<td>Storage for the actual string data.</td>
+</tr>
+</tbody>
+</table>
+<p>When version 1 is used, the language IDs in name records can be less than or greater than 0x8000. If a language ID is less than 0x8000, it has a platform-specific interpretation as with a version 0 naming table. If a language ID is equal to or greater than 0x8000, it is associated with a language-tag record (LangTagRecord) that references a language-tag string. In this way, the language ID is associated with a language-tag string that specifies the language for name records using that language ID, regardless of the platform. These can be used for any platform that supports this language-tag mechanism.</p>
+<p>A font using a version 1 naming table may use a combination of platform-specific language IDs as well as language-tag records for a given platform and encoding.</p>
+<p><a id="langTagRec"></a></p>
+<p>Each LangTagRecord is organized as follows:</p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr id="length_ltr">
+<td>uint16</td>
+<td>length</td>
+<td>Language-tag string length (in bytes).</td>
+</tr>
+<tr id="offset_ltr">
+<td>Offset16</td>
+<td>langTagOffset</td>
+<td>Language-tag string offset from start of storage area (in bytes).</td>
+</tr>
+</tbody>
+</table>
+<p>Language-tag strings stored in the naming table must be encoded in UTF-16BE. The language tags must conform to <a href="https://tools.ietf.org/html/bcp47" data-linktype="external">IETF specification BCP 47</a>. This provides tags such as “en”, “fr-CA” and “zh-Hant” to identify languages, including dialects, written form and other language variants.</p>
+<p>The language-tag records are associated sequentially with language IDs starting with 0x8000. Each language-tag record corresponds to a language ID one greater than that for the previous language-tag record. Thus, language IDs associated with language-tag records must be within the range 0x8000 to 0x8000 + langTagCount - 1. If a name record uses a language ID that is greater than this, the identity of the language is unknown; such name records should not be used.</p>
+<p>For example, suppose a font has two language-tag records referencing strings in the storage: the first references the string “en”, and the second references the string “zh-Hant-HK” In this case, the language ID 0x8000 is used in name records to index English-language strings. The language ID 0x8001 is used in name records to index strings in Traditional Chinese as used in Hong Kong SAR.</p>
+<p><a id="nameRecord"></a></p>
+<h2 id="name-records">Name records</h2>
+<p>Each string in the string storage is referenced by a name record. The name record has a multi-part key, to identify the logical type of string and its language or platform-specific implementation variants, plus the location of the string in the string storage.</p>
+<p>Each NameRecord is organized as follows:</p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr id="platformID_nr">
+<td>uint16</td>
+<td>platformID</td>
+<td>Platform ID.</td>
+</tr>
+<tr id="encodingID_nr">
+<td>uint16</td>
+<td>encodingID</td>
+<td>Platform-specific encoding ID.</td>
+</tr>
+<tr id="languageID_nr">
+<td>uint16</td>
+<td>languageID</td>
+<td>Language ID.</td>
+</tr>
+<tr id="nameID_nr">
+<td>uint16</td>
+<td>nameID</td>
+<td>Name ID.</td>
+</tr>
+<tr id="length_nr">
+<td>uint16</td>
+<td>length</td>
+<td>String length (in bytes).</td>
+</tr>
+<tr id="offset_nr">
+<td>Offset16</td>
+<td>stringOffset</td>
+<td>String offset from start of storage area (in bytes).</td>
+</tr>
+</tbody>
+</table>
+<p>The name ID identifies a logical string category, such as family name or copyright. Name IDs are the same for all platforms and languages; these are described in detail below. The other three elements of the key allow for platform-specific implementations: a platform ID, a platform-specific encoding ID, and a language ID.</p>
+<p>As with encoding records in the <a href="cmap" data-linktype="relative-path">'cmap' table</a>, name records must be sorted first by platform ID, then by platform-specific encoding ID, then by language ID, and then by name ID. Descriptions of the various IDs follow.</p>
+<h2 id="platform-encoding-and-language">Platform, encoding and language</h2>
+<p>The platform, encoding and language IDs of a name record allow for platform-specific implementations. Different platforms can support different encodings, and different languages. All encoding IDs are platform-specific. Language IDs are similarly platform-specific, except in the case of IDs used in conjunction with the language-tag mechanism of naming table version 1, described above.</p>
+<blockquote>
+<p><em>Note:</em> Platform IDs, platform-specific encoding IDs and, in some cases, platform-specific language IDs are also used in the 'cmap' table.</p>
+</blockquote>
+<p>Language IDs refer to a value that identifies the language in which a particular string is written. Values less than 0x8000 are defined on a platform-specific basis. A version 0 naming table must use only language ID values less than 0x8000 from the platform-specific enumerations given below. (Exceptions to this requirement are permitted, however, in the case of user-defined platforms — platform IDs 240 to 255.) Values greater than or equal to 0x8000 may be used in a version 1 naming table in conjunction with language-tag records, as described above. Not all platforms have platform-specific language IDs, and not all platforms support language-tag records.</p>
+<p>Tables with detailed listings of platform, encoding and language IDs used within the 'name' table are provided at the end of this chapter. See <a href="#platform-encoding-and-language-ids" data-linktype="self-bookmark">Platform, encoding and language IDs</a>.</p>
+<p><a id="nameIDs"></a></p>
+<h2 id="name-ids">Name IDs</h2>
+<p>The following name IDs are pre-defined and apply to all platforms unless indicated otherwise. Name IDs 26 to 255, inclusive, are reserved for future standard names. Name IDs 256 to 32767, inclusive, are reserved for font-specific names such as those referenced by a font’s layout features.</p>
+<table>
+<tbody>
+<tr>
+<th>ID</th>
+<th>Meaning</th>
+</tr>
+<tr id="nid0">
+<td>0</td>
+<td>Copyright notice.</td>
+</tr>
+<tr id="nid1">
+<td>1</td>
+<td>Font Family name. The Font Family name is used in combination with Font Subfamily name (name ID 2), and should be shared among at most four fonts that differ only in weight or style (italic/oblique), as described below.
+<br><br>
+This four-way distinction should also be reflected in the <a href="os2#fss" data-linktype="relative-path">OS/2.fsSelection</a> field, using bits 0 and 5.
+<br><br>
+While some platforms or applications do not have this constraint, many existing applications that use this pair of names assume that a Font Family name is shared by at most four fonts that form a font style-linking group: regular, italic (or oblique), bold, and bold italic (or bold oblique). To be compatible with the broadest range of platforms and applications, it is strongly recommended that fonts limit use of Font Family name in this manner.
+<br><br>
+For extended typographic families that includes fonts other than the four basic styles (regular, italic, bold, bold italic), it is strongly recommended that name IDs <a href="#nid16" data-linktype="self-bookmark">16</a> and <a href="#nid17" data-linktype="self-bookmark">17</a> be used in fonts to create an extended, typographic grouping. (See examples provided below.)
+<br><br>
+It is also strongly recommended that applications support extended typographic-family groupings using name IDs 16 and 17. Note that variable fonts can include a large number of named instances, each of which will use a shared typographic family name (name ID 16) and will have a typographic subfamily name (equivalent to name ID 17). Applications that assume a four-style family grouping based on name IDs 1 and 2 are likely to provide a poor user experience with variable fonts.
+<br><br>
+For fonts within an extended typographic family that fall outside the basic four-way distinction, the distinguishing attributes should be reflected in the Font Family name so that those fonts appear as a separate font family in applications that support only four-member families. For example, the Font Family name for the Arial Narrow font is “Arial Narrow”; the Font Family name for the Arial Black font is “Arial Black”. Note that, in such cases, name ID 16 should also be included with a shared name (e.g., "Arial") that reflects the full, typographic family.</td>
+</tr>
+<tr id="nid2">
+<td>2</td>
+<td>Font Subfamily name. The Font Subfamily is used in combination with Font Family name (name ID 1), and distinguishes the fonts in a group with the same Font Family name. This should be used for weight and style (italic/oblique) variants only, as described below.
+<br><br>
+This four-way distinction should also be reflected in the <a href="os2#fss" data-linktype="relative-path">OS/2.fsSelection</a> field, using bits 0 and 5.
+<br><br>
+While some platforms or applications do not have this constraint, many existing applications that use name IDs 1 and 2 assume that a Font Family name is shared by at most four fonts that form a font style-linking group, and that Font Subfamily names would reflect one of the four basic styles, regular, italic (or oblique), bold, and bold italic (or bold oblique). To be compatible with the broadest range of platforms and applications, it is strongly recommended that fonts should limit use of Font Subfamily in this manner.
+<br><br>
+For extended typographic families that includes fonts other than the four basic styles (regular, italic, bold, bold italic), it is strongly recommended that name IDs <a href="#nid16" data-linktype="self-bookmark">16</a> and <a href="#nid17" data-linktype="self-bookmark">17</a> be used in fonts to create an extended, typographic grouping.
+<br><br>
+Within an extended typographic family that includes fonts beyond regular, bold, italic, or bold italic, distinctions for these other fonts are made in the Font Family name so that fonts appear to be in separate families. In some cases, this can lead to specifying a Subfamily name of “Regular” for a font that might not otherwise be considered a <em>regular</em> font. For example, the Arial Black font has a Font Family name of “Arial Black” and a Subfamily name of “Regular”. Note that, in such cases, name IDs 16 and 17 should also be included, using a shared value for name ID 16 (e.g., "Arial") that reflects the full typographic family, and values for name ID 17 that appropriately reflect the actual design variant of each font.
+<br><br>
+Fonts that are not part of an extended typographic family and with no distinctive weight or style (e.g., medium weight, not italic) should use "Regular" as the Font Subfamily name (for English).
+</td>
+</tr>
+<tr id="nid3">
+<td>3</td>
+<td>Unique font identifier.</td>
+</tr>
+<tr id="nid4">
+<td>4</td>
+<td>Full font name that reflects all family and relevant subfamily descriptors. The full font name is generally a combination of name IDs 1 and 2, or of name IDs 16 and 17, or a similar human-readable variant.
+<br><br>
+For fonts in extended typographic families (that is, families that include more than regular, italic, bold, and bold italic variants), values for name IDs 1 and 2 are normally chosen to provide compatibility with certain applications that assume a family has at most four style-linked fonts. In that case, some fonts may end up with a Subfamily name (name ID 2) of “Regular” even though the font would not be considered, typographically, a <em>regular</em> font. For such non-regular fonts in which name ID 2 is specified as “Regular”, the “Regular” descriptor would generally be omitted from name ID 4. For example, the Arial Black font has a Font Family name (name ID 1) of “Arial Black” and a Subfamily name (name ID 2) of “Regular”, but has a full font name (name ID 4) of “Arial Black”. Note that name IDs 16 and 17 should also be included in these fonts, and that name ID 4 would typically be a combination of name IDs 16 and 17, without needing any additional qualifications regarding “Regular”.</td>
+</tr>
+<tr id="nid5">
+<td>5</td>
+<td>Version string. Should begin with the pattern “Version &lt;number&gt;.&lt;number&gt;” (upper case, lower case, or mixed, with a space between “Version” and the number).
+<br><br>
+The string must contain a version number of the following form: one or more digits (0-9) of value less than 65,535, followed by a period, followed by one or more digits of value less than 65,535. Any character other than a digit will terminate the minor number. A character such as “;” is helpful to separate different pieces of version information.
+<br><br>
+The first such match in the string can be used by installation software to compare font versions. Some installers could require the string to start with “Version ”, followed by a version number as above.</td>
+</tr>
+<tr id="nid6">
+<td>6</td>
+<td>PostScript name for the font. Name ID 6 specifies a string which is used to invoke a PostScript language font that corresponds to this OpenType font. When translated to ASCII, the name string must be no longer than 63 characters and restricted to the printable ASCII subset, codes 33 to 126, except for the 10 characters '[', ']', '(', ')', '{', '}', '&lt;', '&gt;', '/', '%'.
+<br><br>
+In a CFF OpenType font, there is no requirement that this name be the same as the font name in the CFF’s Name INDEX. Thus, the same CFF may be shared among multiple font components in a Font Collection. See the <a href="recom#name" data-linktype="relative-path">'name' table section</a> of “Recommendations for OpenType fonts” for additional information.</td>
+</tr>
+<tr id="nid7">
+<td>7</td>
+<td>Trademark. This is used to save any trademark notice/information for this font. Such information should be based on legal advice. This is <em>distinctly</em> separate from the copyright.</td>
+</tr>
+<tr id="nid8">
+<td>8</td>
+<td>Manufacturer Name.</td>
+</tr>
+<tr id="nid9">
+<td>9</td>
+<td>Designer. Name of the designer of the typeface.</td>
+</tr>
+<tr id="nid10">
+<td>10</td>
+<td>Description. Description of the typeface. Can contain revision information, usage recommendations, history, features, etc.</td>
+</tr>
+<tr id="nid11">
+<td>11</td>
+<td>URL of Vendor. URL of font vendor (with protocol, e.g., http://, ftp://). If a unique serial number is embedded in the URL, it can be used to register the font.</td>
+</tr>
+<tr id="nid12">
+<td>12</td>
+<td>URL of Designer. URL of typeface designer (with protocol, e.g., http://, ftp://).</td>
+</tr>
+<tr id="nid13">
+<td>13</td>
+<td>License Description. Description of the license or licenses under which the font is provided. This could be a reference to a named license agreement (e.g., a common open source licenses), identification of a software-use license under which a font is bundled, information about where to locate an external license (see also name ID 14), a summary of permitted uses, or the full legal text of a license agreement. It is prudent to seek legal advice on the content of this name ID to avoid possible conflict of interpretation between it and the license(s).</td>
+</tr>
+<tr id="nid14">
+<td>14</td>
+<td>License Info URL. URL where additional licensing information can be found.</td>
+</tr>
+<tr id="nid15">
+<td>15</td>
+<td>Reserved.</td>
+</tr>
+<tr id="nid16">
+<td>16</td>
+<td>Typographic Family name. The typographic family grouping doesn’t impose any constraints on the number of faces within it, in contrast with the 4-style family grouping (ID 1), which is present both for historical reasons and to express style linking groups. If name ID 16 is absent, then name ID 1 is considered to be the typographic family name. (In earlier versions of the specification, name ID 16 was known as “Preferred Family”.)</td>
+</tr>
+<tr id="nid17">
+<td>17</td>
+<td>Typographic Subfamily name. This allows font designers to specify a subfamily name within the typographic family grouping. This string must be unique within a particular typographic family. If it is absent, then name ID 2 is considered to be the typographic subfamily name. (In earlier versions of the specification, name ID 17 was known as “Preferred Subfamily”.)</td>
+</tr>
+<tr id="nid18">
+<td>18</td>
+<td>Compatible Full (Macintosh only). On the Macintosh, the menu name is constructed using the FOND resource. This usually matches the Full Name. If you want the name of the font to appear differently than the Full Name, you can insert the Compatible Full Name in ID 18.</td>
+</tr>
+<tr id="nid19">
+<td>19</td>
+<td>Sample text. This can be the font name, or any other text that the designer thinks is the best sample to display the font in.</td>
+</tr>
+<tr id="nid20">
+<td>20</td>
+<td>PostScript CID findfont name. Its presence in a font means that the nameID 6 holds a PostScript font name that is meant to be used with the “composefont” invocation in order to invoke the font in a PostScript interpreter. See the definition of name ID 6.
+<br><br>
+The value held in the name ID 20 string is interpreted as a PostScript font name that is meant to be used with the “findfont” invocation, in order to invoke the font in a PostScript interpreter.
+<br><br>
+When translated to ASCII, this name string must be restricted to the printable ASCII subset, codes 33 through 126, except for the 10 characters: '[', ']', '(', ')', '{', '}', '&lt;', '&gt;', '/', '%'.
+<br><br>
+See <a href="recom" data-linktype="relative-path">“Recommendations for OTF fonts”</a> for additional information</td>
+</tr>
+<tr id="nid21">
+<td>21</td>
+<td>WWS Family Name. Used to provide a WWS-conformant family name in case the entries for IDs 16 and 17 do not conform to the WWS model. (That is, in case the entry for ID 17 includes qualifiers for some attribute other than weight, width or slope.) If bit 8 of the OS/2 fsSelection field is set, a WWS Family Name entry should not be needed and should not be included. Conversely, if an entry for this ID is included, bit 8 should not be set. (See <a href="os2#fsselection" data-linktype="relative-path">OS/2.fsSelection</a> field for details.) Examples of name ID 21: “Minion Pro Caption” and “Minion Pro Display”. (Name ID 16 would be “Minion Pro” for these examples.)<br><br>See additional remarks regarding IDs 21 and 22 below.</td>
+</tr>
+<tr id="nid22">
+<td>22</td>
+<td>WWS Subfamily Name. Used in conjunction with ID 21, this ID provides a WWS-conformant subfamily name (reflecting only weight, width and slope attributes) in case the entries for IDs 16 and 17 do not conform to the WWS model. As in the case of ID 21, use of this ID should correlate inversely with bit 8 of the OS/2 fsSelection field being set. Examples of name ID 22: “Semibold Italic”, “Bold Condensed”. (Name ID 17 could be “Semibold Italic Caption”, or “Bold Condensed Display”, for example.)<br><br>See additional remarks regarding IDs 21 and 22 below.
+</td>
+</tr>
+<tr id="nid23">
+<td>23</td>
+<td>Light Background Palette. This ID, if used in the CPAL table’s Palette Labels Array, specifies that the corresponding color palette in the CPAL table is appropriate to use with the font when displaying it on a light background such as white. Strings for this ID are for use as user interface strings associated with this palette.
+</td>
+</tr>
+<tr id="nid24">
+<td>24</td>
+<td>Dark Background Palette. This ID, if used in the CPAL table’s Palette Labels Array, specifies that the corresponding color palette in the CPAL table is appropriate to use with the font when displaying it on a dark background such as black. Strings for this ID are for use as user interface strings associated with this palette.
+</td>
+</tr>
+<tr id="nid25">
+<td>25</td>
+<td>Variations PostScript Name Prefix. If present in a variable font, it may be used as the family prefix in the PostScript Name Generation for Variation Fonts algorithm. The character set is restricted to ASCII-range uppercase Latin letters, lowercase Latin letters, and digits. All name strings for name ID 25 within a font, when converted to ASCII, must be identical. See <a href="https://adobe-type-tools.github.io/font-tech-notes/pdfs/5902.AdobePSNameGeneration.pdf" data-linktype="external">Adobe Technical Note #5902: “PostScript Name Generation for Variation Fonts”</a> for reasons to include name ID 25 in a font, and for examples. For general information on OpenType Font Variations, see the chapter, <a href="otvaroverview" data-linktype="relative-path">OpenType Font Variations Overview</a>.</td>
+</tr>
+</tbody>
+</table>
+<p>For a typographic family that includes member faces that differ from Regular in relation to attributes other than weight, width or slope, there may also be some member faces that differ only in relation to these three attributes. For example, the Minion Pro family includes Minion Pro Display, but also includes Minion Pro Bold and Minion Pro Italic. IDs 21 and 22 should be used only in those fonts that differ from the Regular face in terms of an attribute other than weight, width or slope. For example, IDs 21 and 22 should be used in Minion Pro Display, but not in Minion Pro Bold or Minion Pro Italic.</p>
+<blockquote>
+<p><em>Note:</em> While both Apple and Microsoft support the same set of name strings, the interpretations may be somewhat different. But since name strings are stored by platform, encoding and language (placing separate strings for both Apple and MS platforms), this should not present a problem.</p>
+</blockquote>
+<p>The key information for this table for Microsoft platforms relates to the use of name IDs 1, 2, 4, 16 and 17. Note that some newer applications will use name IDs 16 and 17, while some legacy applications require name IDs 1 and 2 and also assume certain limitations on these values (see descriptions of name IDs 1 and 2 above). Fonts should include all of these strings for the broadest application compatibility. To better understand how to set values for these name IDs, some <a href="namesmp" data-linktype="relative-path">examples</a> of name usage, weight class and style flags have been created.</p>
+<p><a id="examples"></a></p>
+<h3 id="name-id-examples">Name ID examples</h3>
+<p>The following are examples of how these strings might be defined, based on Times New Roman Bold:</p>
+<dl><dd>
+0. The copyright string from the font vendor. <em>© Copyright the Monotype Corporation plc, 1990</em>
+<br><br>
+1. The name the user sees. <em>Times New Roman</em>
+<br><br>
+2. The name of the style. <em>Bold</em>
+<br><br>
+3. A unique identifier that applications can store to identify the font being used. <em>Monotype: Times New Roman Bold: 1990</em>
+<br><br>
+4. The complete, unique, human readable name of the font. This name is used by Windows. <em>Times New Roman Bold</em>
+<br><br>
+5. Release and version information from the font vendor. <em>Version 1.00 June 1, 1990, initial release</em>
+<br><br>
+6. The name the font will be known by on a PostScript printer. <em>TimesNewRoman-Bold</em>
+<br><br>
+7. Trademark string. <em>Times New Roman is a registered trademark of the Monotype Corporation.</em>
+<br><br>
+8. Manufacturer. <em>Monotype Corporation</em>
+<br><br>
+9. Designer. <em>Stanley Morison</em>
+<br><br>
+10. Description. <em>Designed in 1932 for the Times of London newspaper. Excellent readability and a narrow overall width, allowing more words per line than most fonts.</em>
+<br><br>
+11. URL of Vendor. <em>http://www.monotype.com</em>
+<br><br>
+12. URL of Designer. <em>http://www.monotype.com</em>
+<br><br>
+13. License Description. <em>This font may be installed on all of your machines and printers, but you may not sell or give these fonts to anyone else.</em>
+<br><br>
+14. License Info URL. <em>http://www.monotype.com/license/</em>
+<br><br>
+15. Reserved.
+<br><br>
+16. Preferred Family. No name string present, since it is the same as name ID 1 (Font Family name).
+<br><br>
+17. Preferred Subfamily. No name string present, since it is the same as name ID 2 (Font Subfamily name).
+<br><br>
+18. Compatible Full (Macintosh only). No name string present, since it is the same as name ID 4 (Full name).
+<br><br>
+19. Sample text. <em>The quick brown fox jumps over the lazy dog.</em>
+<br><br>
+20. PostScript CID findfont name. No name string present. Thus, the PostScript Name defined by name ID 6 should be used with the “findfont” invocation for locating the font in the context of a PostScript interpreter.
+<br><br>
+21. WWS family name: Since Times New Roman is a WWS font, this field does not need to be specified. If the font contained styles such as “caption”, “display”, “handwriting”, etc., that would be noted here.
+<br><br>
+22. WWS subfamily name: Since Times New Roman is a WWS font, this field does not need to be specified.
+<br><br>
+23. Light background palette name. No name string present, since this is not a color font.
+<br><br>
+24. Dark background palette name. No name string present, since this is not a color font.
+<br><br>
+25. Variations PostScript name prefix. No name string present, since this is not a variable font.
+</dd></dl>
+<p>The following is an example of only name IDs 6 and 20 in the CFF OpenType Japanese font Kozuka Mincho Std Regular (other name IDs are also present in this font):
+<br><br>
+6. PostScript name: <em>KozMinStd-Regular</em>. Since a name ID 20 is present in the font (see below), then the PostScript name defined by name ID 6 should be used with the “composefont” invocation for locating the font in the context of a PostScript interpreter.
+<br><br>
+20. PostScript CID findfont name: <em>KozMinStd-Regular-83pv-RKSJ-H</em>, in a name record of Platform 1 [Macintosh], Platform-specific script 1 [Japanese], Language: 0xFFFF [English]. This name string is a PostScript name that should be used with the “findfont” invocation for locating the font in the context of a PostScript interpreter, and is associated with the encoding specified by the following 'cmap' subtable, which must be present in the font: Platform: 1 [Macintosh]; Platform-specific encoding: 1 [Japanese]; Language: 0 [not language-specific].</p>
+<p>The following is an example of family/subfamily naming for an extended, WWS-only family. Consider Adobe Caslon Pro, with six members: upright and italic versions of regular, semibold and bold weights. (Bit 8 of the fsSelection field of the OS/2 table, version 4, should be set for all six fonts, and none should include 'name' entries for IDs 21 or 22.)</p>
+<ul>
+<li>Adobe Caslon Pro Regular:<br>
+Name ID 1: Adobe Caslon Pro<br>
+Name ID 2: Regular</li>
+<li>Adobe Caslon Pro Italic:<br>
+Name ID 1: Adobe Caslon Pro<br>
+Name ID 2: Italic</li>
+<li>Adobe Caslon Pro Semibold:<br>
+Name ID 1: Adobe Caslon Pro<br>
+Name ID 2: Bold<br>
+Name ID 16: Adobe Caslon Pro<br>
+Name ID 17: Semibold</li>
+<li>Adobe Caslon Pro Semibold Italic:<br>
+Name ID 1: Adobe Caslon Pro<br>
+Name ID 2: Bold Italic<br>
+Name ID 16: Adobe Caslon Pro<br>
+Name ID 17: Semibold Italic</li>
+<li>Adobe Caslon Pro Bold:<br>
+Name ID 1: Adobe Caslon Pro Bold<br>
+Name ID 2: Regular<br>
+Name ID 16: Adobe Caslon Pro<br>
+Name ID 17: Bold</li>
+<li>Adobe Caslon Pro Bold Italic:<br>
+Name ID 1: Adobe Caslon Pro Bold<br>
+Name ID 2: Italic<br>
+Name ID 16: Adobe Caslon Pro<br>
+Name ID 17: Bold Italic</li>
+</ul>
+<p>The following is an example of family/subfamily naming for an extended, non-WWS family. Consider Minion Pro Opticals, with 32 member fonts: upright and italic versions of regular, medium, semibold and bold weights in each of four optical sizes: regular, caption, display and subhead. The following show names for a sampling of the fonts in this family. (Bit 8 of the fsSelection field in the OS/2 table, version 4, should be set in those fonts that do not include 'name' entries for IDs 21 or 22, and only in those fonts.)</p>
+<ul>
+<li>Minion Pro Regular:<br>
+Name ID 1: Minion Pro<br>
+Name ID 2: Regular</li>
+<li>Minion Pro Italic:<br>
+Name ID 1: Minion Pro<br>
+Name ID 2: Italic</li>
+<li>Minion Pro Semibold:<br>
+Name ID 1: Minion Pro SmBd<br>
+Name ID 2: Regular<br>
+Name ID 16: Minion Pro<br>
+Name ID 17: Semibold</li>
+<li>Minion Pro Semibold Italic:<br>
+Name ID 1: Minion Pro SmBd<br>
+Name ID 2: Italic<br>
+Name ID 16: Minion Pro<br>
+Name ID 17: Semibold Italic</li>
+<li>Minion Pro Caption:<br>
+Name ID 1: Minion Pro Capt<br>
+Name ID 2: Regular<br>
+Name ID 16: Minion Pro<br>
+Name ID 17: Caption<br>
+Name ID 21: Minion Pro Caption<br>
+Name ID 22: Regular</li>
+<li>Minion Pro Semibold Italic Caption:<br>
+Name ID 1: Minion Pro SmBd Capt<br>
+Name ID 2: Italic<br>
+Name ID 16: Minion Pro<br>
+Name ID 17: Semibold Italic Caption<br>
+Name ID 21: Minion Pro Caption<br>
+Name ID 22: Semibold Italic</li>
+</ul>
+<p><a id="platformEncodingLanguageIds"></a></p>
+<h2 id="platform-encoding-and-language-ids">Platform, encoding and language IDs</h2>
+<p>The following sections provide details regarding platform IDs, platform-specific encoding IDs, and platform-specific language IDs used in the 'name' table. For details regarding platform, encoding or language IDs used in the 'cmap' table, see <a href="cmap#encoding-records-and-encodings" data-linktype="relative-path">Encoding records and encodings</a> in the 'cmap' table chapter.</p>
+<p><a id="platformIDs"></a></p>
+<h3 id="platform-ids">Platform IDs</h3>
+<p>The following platform IDs may be used in the 'name' table:</p>
+<table>
+<thead>
+<tr>
+<th>Platform&nbsp;ID</th>
+<th>Platform name</th>
+<th>Platform-specific encoding IDs</th>
+<th>Language IDs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>Unicode</td>
+<td><a href="#enc0" data-linktype="self-bookmark">Various</a></td>
+<td>None</td>
+</tr>
+<tr>
+<td>1</td>
+<td>Macintosh</td>
+<td><a href="#enc1" data-linktype="self-bookmark">Script manager code</a></td>
+<td><a href="#lang1" data-linktype="self-bookmark">Various</a></td>
+</tr>
+<tr>
+<td>3</td>
+<td>Windows</td>
+<td><a href="#enc3" data-linktype="self-bookmark">Windows encoding</a></td>
+<td><a href="#windows-language-ids" data-linktype="self-bookmark">Various</a></td>
+</tr>
+</tbody>
+</table>
+<p>Note that other platform IDs have been defined for use only in the 'cmap' table.</p>
+<p><a id="encLangIDs_platID0"></a></p>
+<h3 id="unicode-platform-platform-id--0">Unicode platform (platform ID = 0)</h3>
+<p><a id="enc0"></a></p>
+<p>The following encoding IDs for the Unicode platform may be used in the 'name' table:</p>
+<table>
+<tbody>
+<tr>
+<th>Encoding&nbsp;ID</th>
+<th>Description</th>
+</tr>
+<tr id="encID0_pid0">
+<td>0</td>
+<td>Unicode 1.0 semantics—<em>deprecated</em></td>
+</tr>
+<tr id="encID1_pid0">
+<td>1</td>
+<td>Unicode 1.1 semantics—<em>deprecated</em></td>
+</tr>
+<tr id="encID2_pid0">
+<td>2</td>
+<td>ISO/IEC 10646 semantics—<em>deprecated</em></td>
+</tr>
+<tr id="encID3_pid0">
+<td>3</td>
+<td>Unicode 2.0 and onwards semantics, Unicode BMP only</td>
+</tr>
+<tr id="encID4_pid0">
+<td>4</td>
+<td>Unicode 2.0 and onwards semantics, Unicode full repertoire</td>
+</tr>
+</tbody>
+</table>
+<p>Use of encoding IDs 0, 1 or 2 is deprecated. Either encoding ID 3 or 4 may be used for 'name' entries.</p>
+<p>Note that other platform IDs have been defined for use only in the 'cmap' table. Also note that a new encoding ID for the Unicode platform may sometimes be assigned when new 'cmap' subtable formats are defined, and these may also be appropriate for use in the 'name' table. For example, when 'cmap' subtable formats 10 and 12 were added to the specification, encoding ID 4 was added as well.</p>
+<p>There are no platform-specific language IDs defined for the Unicode platform. Language ID = 0 may be used for Unicode-platform strings, but this does not indicate any particular language. Language IDs greater than or equal to 0x8000 may be used together with language-tag records, as described above.</p>
+<p>Strings for the Unicode platform must be encoded in UTF-16BE.</p>
+<p><a id="encLangIDs_platID1"></a></p>
+<h3 id="macintosh-platform-platform-id--1">Macintosh platform (platform ID = 1)</h3>
+<p><a id="enc1"></a></p>
+<h4 id="macintosh-encoding-ids-script-manager-codes">Macintosh encoding IDs (script manager codes)</h4>
+<p>The following encoding IDs are defined for use with the Macintosh platform:</p>
+<table>
+<tbody>
+<tr>
+<th>Encoding ID</th>
+<th>Script</th>
+<th>Encoding ID</th>
+<th>Script</th>
+</tr>
+<tr id="encID0_pid1">
+<td>0</td>
+<td>Roman</td>
+<td id="encID17_pid1">17</td>
+<td>Malayalam</td>
+</tr>
+<tr id="encID1_pid1">
+<td>1</td>
+<td>Japanese</td>
+<td id="encID18_pid1">18</td>
+<td>Sinhalese</td>
+</tr>
+<tr id="encID2_pid1">
+<td>2</td>
+<td>Chinese (Traditional)</td>
+<td id="encID19_pid1">19</td>
+<td>Burmese</td>
+</tr>
+<tr id="encID3_pid1">
+<td>3</td>
+<td>Korean</td>
+<td id="encID20_pid1">20</td>
+<td>Khmer</td>
+</tr>
+<tr id="encID4_pid1">
+<td>4</td>
+<td>Arabic</td>
+<td id="encID21_pid1">21</td>
+<td>Thai</td>
+</tr>
+<tr id="encID5_pid1">
+<td>5</td>
+<td>Hebrew</td>
+<td id="encID22_pid1">22</td>
+<td>Laotian</td>
+</tr>
+<tr id="encID6_pid1">
+<td>6</td>
+<td>Greek</td>
+<td id="encID23_pid1">23</td>
+<td>Georgian</td>
+</tr>
+<tr id="encID7_pid1">
+<td>7</td>
+<td>Russian</td>
+<td id="encID24_pid1">24</td>
+<td>Armenian</td>
+</tr>
+<tr id="encID8_pid1">
+<td>8</td>
+<td>RSymbol</td>
+<td id="encID25_pid1">25</td>
+<td>Chinese (Simplified)</td>
+</tr>
+<tr id="encID9_pid1">
+<td>9</td>
+<td>Devanagari</td>
+<td id="encID26_pid1">26</td>
+<td>Tibetan</td>
+</tr>
+<tr id="encID10_pid1">
+<td>10</td>
+<td>Gurmukhi</td>
+<td id="encID27_pid1">27</td>
+<td>Mongolian</td>
+</tr>
+<tr id="encID11_pid1">
+<td>11</td>
+<td>Gujarati</td>
+<td id="encID28_pid1">28</td>
+<td>Geez</td>
+</tr>
+<tr id="encID12_pid1">
+<td>12</td>
+<td>Odia</td>
+<td id="encID29_pid1">29</td>
+<td>Slavic</td>
+</tr>
+<tr id="encID13_pid1">
+<td>13</td>
+<td>Bangla</td>
+<td id="encID30_pid1">30</td>
+<td>Vietnamese</td>
+</tr>
+<tr id="encID14_pid1">
+<td>14</td>
+<td>Tamil</td>
+<td id="encID31_pid1">31</td>
+<td>Sindhi</td>
+</tr>
+<tr id="encID15_pid1">
+<td>15</td>
+<td>Telugu</td>
+<td id="encID32_pid1">32</td>
+<td>Uninterpreted</td>
+</tr>
+<tr id="encID16_pid1">
+<td>16</td>
+<td>Kannada</td>
+<td>&nbsp;</td>
+<td>&nbsp;</td>
+</tr>
+</tbody>
+</table>
+<p>Strings for the Macintosh platform (platform ID 1) use platform-specific single- or double-byte encodings according to the specified encoding ID for a given name record.</p>
+<p><a id="lang1"></a></p>
+<h4 id="macintosh-language-ids">Macintosh language IDs</h4>
+<p>For information on Macintosh platform-specific language IDs, consult <a href="https://developer.apple.com/fonts/TrueType-Reference-Manual/RM06/Chap6name.html" data-linktype="external">Apple’s TrueType Reference Manual</a>.</p>
+<h3 id="windows-platform-platform-id-3">Windows platform (platform ID= 3)</h3>
+<p><a id="enc3"></a></p>
+<h4 id="windows-encoding-ids">Windows encoding IDs</h4>
+<p>The following encoding IDs are defined for use with the Windows platform:</p>
+<table>
+<tbody>
+<tr>
+<th>Encoding ID</th>
+<th>Description</th>
+</tr>
+<tr id="encID0_pid3">
+<td>0</td>
+<td>Symbol</td>
+</tr>
+<tr id="encID1_pid3">
+<td>1</td>
+<td>Unicode BMP</td>
+</tr>
+<tr id="encID2_pid3">
+<td>2</td>
+<td>ShiftJIS</td>
+</tr>
+<tr id="encID3_pid3">
+<td>3</td>
+<td>PRC</td>
+</tr>
+<tr id="encID4_pid3">
+<td>4</td>
+<td>Big5</td>
+</tr>
+<tr id="encID5_pid3">
+<td>5</td>
+<td>Wansung</td>
+</tr>
+<tr id="encID6_pid3">
+<td>6</td>
+<td>Johab</td>
+</tr>
+<tr id="encID7_pid3">
+<td>7</td>
+<td>Reserved</td>
+</tr>
+<tr id="encID8_pid3">
+<td>8</td>
+<td>Reserved</td>
+</tr>
+<tr id="encID9_pid3">
+<td>9</td>
+<td>Reserved</td>
+</tr>
+<tr id="encID10_pid3">
+<td>10</td>
+<td>Unicode full repertoire</td>
+</tr>
+</tbody>
+</table>
+<p>Encoding IDs for platform 3 'name' entries should match the encoding IDs used for platform 3 subtables in the 'cmap' table. When building a Unicode font for Windows, the platform ID should be 3 and the encoding ID should be 1. When building a symbol font for Windows, the platform ID should be 3 and the encoding ID should be 0. If a font has records for encoding IDs 3, 4 or 5, the corresponding string data should be encoded using code pages 936, 950 and 949, respectively. Otherwise, all string data for platform 3 must be encoded in UTF-16BE.</p>
+<blockquote>
+<p><em>Note:</em> Some legacy Traditional Chinese fonts had name entries for platform 3, encoding ID 4 (Big5) with some string data encoded using code page 950 but with the string data for name ID 2 (font subfamily) encoded, instead, in UTF-16BE. For example, this was the case in the MingLi font included in the Traditional Chinese edition of Windows 95. Some older software implementations, including Windows GDI, allow for this exception.</p>
+</blockquote>
+<p><a id="encLangIDs_platID3"></a>
+<a id="lang3"></a></p>
+<h4 id="windows-language-ids">Windows language IDs</h4>
+<p>For information on Windows platform-specific language IDs and corresponding BCP 47 language tags, see <a href="/en-us/openspecs/windows_protocols/ms-lcid/70feba9f-294e-491e-b6eb-56532684c37f" data-linktype="absolute-path">[MS-LCID]: Windows Language Code Identifier (LCID) Reference</a>.</p>
+</div>
+					
+		<div
+			id="ms--inline-notifications"
+			class="margin-block-xs"
+			data-bi-name="inline-notification"
+		></div>
+	 
+		<div
+			id="assertive-live-region"
+			role="alert"
+			aria-live="assertive"
+			class="visually-hidden"
+			aria-relevant="additions"
+			aria-atomic="true"
+		></div>
+		<div
+			id="polite-live-region"
+			role="status"
+			aria-live="polite"
+			class="visually-hidden"
+			aria-relevant="additions"
+			aria-atomic="true"
+		></div>
+	
+					
+			
+		<!-- feedback section -->
+		<section
+			class="feedback-section position-relative margin-top-lg border border-radius padding-xxs display-none-print"
+			data-bi-name="open-source-feedback-section"
+			data-open-source-feedback-section
+			hidden
+		>
+			<div class="display-flex flex-direction-column flex-direction-row-tablet">
+				<div
+					class="width-450-tablet padding-inline-xs padding-inline-xs-tablet padding-top-xs padding-bottom-sm padding-top-xs-tablet background-color-body-medium"
+				>
+					<div class="display-flex flex-direction-column">
+						<div class="padding-bottom-xxs">
+							<span class="icon margin-right-xxs" aria-hidden="true">
+								<span class="docon docon-brand-github"></span>
+							</span>
+							<span class="font-weight-semibold">
+								Collaborate with us on GitHub
+							</span>
+						</div>
+						<span class="line-height-normal">
+							The source for this content can be found on GitHub, where you can also create and review issues and pull requests. For more information, see <a href="https://learn.microsoft.com/contribute/content/">our contributor guide</a>.
+						</span>
+					</div>
+				</div>
+				<div
+					class="display-flex gap-xs width-full-tablet flex-direction-column padding-xs justify-content-space-evenly"
+				>
+					<div class="media">
+						
+
+						<div class="media-content">
+							<p
+								class="font-size-xl font-weight-semibold margin-bottom-xxs"
+								data-open-source-product-title
+							>
+								OpenType specification
+							</p>
+							<div class="display-flex gap-xs flex-direction-column">
+								<p class="line-height-normal" data-open-source-product-description></p>
+								<div class="display-flex gap-xs flex-direction-column">
+									<a href="#" data-github-link>
+										<span class="icon margin-right-xxs" aria-hidden="true">
+											<span class="docon docon-bug"></span>
+										</span>
+										<span>Open a documentation issue</span>
+									</a>
+									<a
+										href="https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml"
+										class="display-block margin-top-auto font-size-md"
+										data-feedback-product-url
+									>
+										<span class="icon margin-right-xxs" aria-hidden="true">
+											<span class="docon docon-feedback"></span>
+										</span>
+										<span>Provide product feedback</span>
+									</a>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</section>
+		<!-- end feedback section -->
+	
+			
+		<!-- feedback section -->
+		<section
+			id="site-user-feedback-footer"
+			class="font-size-sm margin-top-md display-none-print display-none-desktop"
+			data-test-id="site-user-feedback-footer"
+			data-bi-name="site-feedback-section"
+		>
+			<hr class="hr" />
+			<h2 id="ms--feedback" class="title is-3">Feedback</h2>
+			<div class="display-flex flex-wrap-wrap align-items-center">
+				<p class="font-weight-semibold margin-xxs margin-left-none">
+					Was this page helpful?
+				</p>
+				<div class="buttons">
+					<button
+						class="thumb-rating-button like button button-primary button-sm"
+						data-test-id="footer-rating-yes"
+						data-binary-rating-response="rating-yes"
+						type="button"
+						title="This article is helpful"
+						data-bi-name="button-rating-yes"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-like"></span>
+						</span>
+						<span>Yes</span>
+					</button>
+					<button
+						class="thumb-rating-button dislike button button-primary button-sm"
+						id="standard-rating-no-button"
+						hidden
+						data-test-id="footer-rating-no"
+						data-binary-rating-response="rating-no"
+						type="button"
+						title="This article is not helpful"
+						data-bi-name="button-rating-no"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-dislike"></span>
+						</span>
+						<span>No</span>
+					</button>
+					<details
+						class="popover popover-top"
+						id="mobile-help-popover"
+						data-test-id="footer-feedback-popover"
+					>
+						<summary
+							class="thumb-rating-button dislike button button-primary button-sm"
+							data-test-id="details-footer-rating-no"
+							data-binary-rating-response="rating-no"
+							title="This article is not helpful"
+							data-bi-name="button-rating-no"
+							aria-pressed="false"
+							data-bi-an="feedback-unhelpful-popover"
+						>
+							<span class="icon" aria-hidden="true">
+								<span class="docon docon-dislike"></span>
+							</span>
+							<span>No</span>
+						</summary>
+						<div
+							class="popover-content width-200 width-300-tablet"
+							role="dialog"
+							aria-labelledby="popover-heading"
+							aria-describedby="popover-description"
+						>
+							<p id="popover-heading" class="font-size-lg margin-bottom-xxs font-weight-semibold">
+								Need help with this topic?
+							</p>
+							<p id="popover-description" class="font-size-sm margin-bottom-xs">
+								Want to try using Ask Learn to clarify or guide you through this topic?
+							</p>
+							
+		<div class="buttons flex-direction-row flex-wrap justify-content-center gap-xxs">
+			<div>
+		<button
+			class="button button-sm border inner-focus display-none margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-test-id="ask-learn-assistant-modal-entry-mobile-feedback"
+			data-ask-learn-modal-entry-feedback
+			data-bi-an=feedback-unhelpful-popover
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-label="Ask Learn"
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+		</button>
+		<button
+			class="button button-sm display-inline-flex display-none-desktop flex-shrink-0 margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-modal-entry-tablet-feedback"
+			data-ask-learn-modal-entry-feedback
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+		<button
+			class="button button-sm display-none flex-shrink-0 display-inline-flex-desktop margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-flyout-entry-feedback"
+			data-ask-learn-flyout-entry-show-only
+			data-flyout-button="toggle"
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-controls="ask-learn-flyout"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+	</div>
+			<button
+				type="button"
+				class="button button-sm margin-right-xxs"
+				data-help-option="suggest-fix"
+				data-bi-name="feedback-suggest"
+				data-bi-an="feedback-unhelpful-popover"
+				data-test-id="suggest-fix"
+			>
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-feedback"></span>
+				</span>
+				<span> Suggest a fix? </span>
+			</button>
+		</div>
+	
+						</div>
+					</details>
+				</div>
+			</div>
+		</section>
+		<!-- end feedback section -->
+	
+		
+				</div>
+				
+		<div id="ms--additional-resources-mobile" class="display-none-print">
+			<hr class="hr" hidden />
+			<h2 id="ms--additional-resources-mobile-heading" class="title is-3" hidden>
+				Additional resources
+			</h2>
+			
+		<section
+			id="right-rail-recommendations-mobile"
+			class=""
+			data-bi-name="recommendations"
+			hidden
+		></section>
+	 
+		<section
+			id="right-rail-training-mobile"
+			class=""
+			data-bi-name="learning-resource-card"
+			hidden
+		></section>
+	 
+		<section
+			id="right-rail-events-mobile"
+			class=""
+			data-bi-name="events-card"
+			hidden
+		></section>
+	
+		</div>
+	 
+		<div
+			id="article-metadata-footer"
+			data-bi-name="article-metadata-footer"
+			data-test-id="article-metadata-footer"
+			class="page-metadata-container"
+		>
+			<hr class="hr" />
+			<ul class="metadata page-metadata" data-bi-name="page info" lang="en-us" dir="ltr">
+				<li class="visibility-hidden-visual-diff">
+			<span class="badge badge-sm text-wrap-pretty">
+				<span>Last updated on <local-time format="twoDigitNumeric"
+		datetime="2024-05-31T17:41:00.000Z"
+		data-article-date-source="calculated"
+		class="is-invisible"
+	>
+		2024-05-31
+	</local-time></span>
+			</span>
+		</li>
+			</ul>
+		</div>
+	
+			</div>
+		
+				</main>
+				<aside
+					id="layout-body-aside"
+					class="layout-body-aside  "
+					data-bi-name="aside"
+					aria-label="Additional resources"
+			  >
+					
+		<div
+			id="ms--additional-resources"
+			class="right-container padding-sm display-none display-block-desktop height-full"
+			data-bi-name="pageactions"
+		>
+			<div id="affixed-right-container" data-bi-name="right-column">
+				
+		<nav
+			id="side-doc-outline"
+			class="doc-outline border-bottom padding-bottom-xs margin-bottom-xs scrollbar-width-thin"
+			data-bi-name="intopic toc"
+			aria-label="In this article"
+		>
+			<h3>In this article</h3>
+		</nav>
+	
+				<!-- Feedback -->
+				
+		<section
+			id="ms--site-user-feedback-right-rail"
+			class="font-size-sm display-none-print"
+			data-test-id="site-user-feedback-right-rail"
+			data-bi-name="site-feedback-right-rail"
+		>
+			<div class="display-flex flex-wrap-wrap align-items-center">
+				<p class="font-weight-semibold margin-xxs margin-left-none">
+					Was this page helpful?
+				</p>
+				<div class="display-flex flex-wrap-nowrap">
+					<button
+						class="thumb-rating-button like inner-focus"
+						data-test-id="right-rail-rating-yes"
+						data-binary-rating-response="rating-yes"
+						type="button"
+						title="This article is helpful"
+						aria-label="This article is helpful"
+						data-bi-name="button-rating-yes"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-like"></span>
+						</span>
+					</button>
+					<button
+						class="thumb-rating-button dislike inner-focus"
+						id="right-rail-no-button"
+						hidden
+						data-test-id="right-rail-rating-no"
+						data-binary-rating-response="rating-no"
+						type="button"
+						title="This article is not helpful"
+						aria-label="This article is not helpful"
+						data-bi-name="button-rating-no"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-dislike"></span>
+						</span>
+					</button>
+					<details class="popover popover-right" id="help-popover" data-test-id="feedback-popover">
+						<summary
+							tabindex="0"
+							class="thumb-rating-button dislike inner-focus"
+							data-test-id="details-right-rail-rating-no"
+							data-binary-rating-response="rating-no"
+							title="This article is not helpful"
+							aria-label="This article is not helpful"
+							data-bi-name="button-rating-no"
+							aria-pressed="false"
+							data-bi-an="feedback-unhelpful-popover"
+						>
+							<span class="icon" aria-hidden="true">
+								<span class="docon docon-dislike"></span>
+							</span>
+						</summary>
+						<div
+							class="popover-content width-200 width-300-tablet"
+							role="dialog"
+							aria-labelledby="popover-heading-right-rail"
+							aria-describedby="popover-description-right-rail"
+						>
+							<p
+								id="popover-heading-right-rail"
+								class="font-size-lg margin-bottom-xxs font-weight-semibold"
+							>
+								Need help with this topic?
+							</p>
+							<p id="popover-description-right-rail" class="font-size-sm margin-bottom-xs">
+								Want to try using Ask Learn to clarify or guide you through this topic?
+							</p>
+							
+		<div class="buttons flex-direction-row flex-wrap justify-content-center gap-xxs">
+			<div>
+		<button
+			class="button button-sm border inner-focus display-none margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-test-id="ask-learn-assistant-modal-entry-mobile-feedback"
+			data-ask-learn-modal-entry-feedback
+			data-bi-an=feedback-unhelpful-popover
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-label="Ask Learn"
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+		</button>
+		<button
+			class="button button-sm display-inline-flex display-none-desktop flex-shrink-0 margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-modal-entry-tablet-feedback"
+			data-ask-learn-modal-entry-feedback
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+		<button
+			class="button button-sm display-none flex-shrink-0 display-inline-flex-desktop margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-flyout-entry-feedback"
+			data-ask-learn-flyout-entry-show-only
+			data-flyout-button="toggle"
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-controls="ask-learn-flyout"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+	</div>
+			<button
+				type="button"
+				class="button button-sm margin-right-xxs"
+				data-help-option="suggest-fix"
+				data-bi-name="feedback-suggest"
+				data-bi-an="feedback-unhelpful-popover"
+				data-test-id="suggest-fix"
+			>
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-feedback"></span>
+				</span>
+				<span> Suggest a fix? </span>
+			</button>
+		</div>
+	
+						</div>
+					</details>
+				</div>
+			</div>
+		</section>
+	
+			</div>
+		</div>
+	
+			  </aside> <section
+					id="layout-body-flyout"
+					class="layout-body-flyout "
+					data-bi-name="flyout"
+			  >
+					 <div
+	class="height-full border-left background-color-body-medium"
+	id="ask-learn-flyout"
+></div>
+			  </section> <div class="layout-body-footer " data-bi-name="layout-footer">
+		<footer
+			id="footer"
+			data-test-id="footer"
+			data-bi-name="footer"
+			class="footer-layout padding-xs padding-sm-desktop has-default-focus border-top"
+			role="contentinfo"
+		>
+			<div class="display-flex gap-xs flex-wrap-wrap is-full-height padding-right-lg-desktop">
+				
+		<a
+			data-mscc-ic="false"
+			href="#"
+			data-bi-name="select-locale"
+			class="locale-selector-link flex-shrink-0 button button-sm button-clear external-link-indicator"
+			id=""
+			title=""
+			><span class="icon" aria-hidden="true"
+				><span class="docon docon-world"></span></span
+			><span class="local-selector-link-text">en-us</span></a
+		>
+	 <div class="ccpa-privacy-link" data-ccpa-privacy-link hidden>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://aka.ms/yourcaliforniaprivacychoices"
+			data-bi-name="your-privacy-choices"
+			class="button button-sm button-clear flex-shrink-0 external-link-indicator"
+			id=""
+			title=""
+			>
+		<svg
+			xmlns="http://www.w3.org/2000/svg"
+			viewBox="0 0 30 14"
+			xml:space="preserve"
+			height="16"
+			width="43"
+			aria-hidden="true"
+			focusable="false"
+		>
+			<path
+				d="M7.4 12.8h6.8l3.1-11.6H7.4C4.2 1.2 1.6 3.8 1.6 7s2.6 5.8 5.8 5.8z"
+				style="fill-rule:evenodd;clip-rule:evenodd;fill:#fff"
+			></path>
+			<path
+				d="M22.6 0H7.4c-3.9 0-7 3.1-7 7s3.1 7 7 7h15.2c3.9 0 7-3.1 7-7s-3.2-7-7-7zm-21 7c0-3.2 2.6-5.8 5.8-5.8h9.9l-3.1 11.6H7.4c-3.2 0-5.8-2.6-5.8-5.8z"
+				style="fill-rule:evenodd;clip-rule:evenodd;fill:#06f"
+			></path>
+			<path
+				d="M24.6 4c.2.2.2.6 0 .8L22.5 7l2.2 2.2c.2.2.2.6 0 .8-.2.2-.6.2-.8 0l-2.2-2.2-2.2 2.2c-.2.2-.6.2-.8 0-.2-.2-.2-.6 0-.8L20.8 7l-2.2-2.2c-.2-.2-.2-.6 0-.8.2-.2.6-.2.8 0l2.2 2.2L23.8 4c.2-.2.6-.2.8 0z"
+				style="fill:#fff"
+			></path>
+			<path
+				d="M12.7 4.1c.2.2.3.6.1.8L8.6 9.8c-.1.1-.2.2-.3.2-.2.1-.5.1-.7-.1L5.4 7.7c-.2-.2-.2-.6 0-.8.2-.2.6-.2.8 0L8 8.6l3.8-4.5c.2-.2.6-.2.9 0z"
+				style="fill:#06f"
+			></path>
+		</svg>
+	
+			<span>Your Privacy Choices</span></a
+		>
+	
+	</div>
+				<div class="flex-shrink-0">
+		<div class="dropdown has-caret-up">
+			<button
+				data-test-id="theme-selector-button"
+				class="dropdown-trigger button button-clear button-sm inner-focus theme-dropdown-trigger"
+				aria-controls="{{ themeMenuId }}"
+				aria-haspopup="true"
+				aria-expanded="false"
+				data-bi-name="theme"
+			>
+				<span class="icon" aria-hidden="true"><span class="docon docon-sun"></span></span>
+				<span>Theme</span>
+				<span class="icon expanded-indicator" aria-hidden="true">
+					<span class="docon docon-chevron-down-light"></span>
+				</span>
+			</button>
+			<div class="dropdown-menu" id="{{ themeMenuId }}" role="menu">
+				<ul class="theme-selector padding-xxs" data-test-id="theme-dropdown-menu" role="none">
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="light"
+							tabindex="-1"
+						>
+							<span class="theme-light margin-right-xxs">
+								<span
+									class="theme-selector-icon border display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> Light </span>
+						</button>
+					</li>
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="dark"
+							tabindex="-1"
+						>
+							<span class="theme-dark margin-right-xxs">
+								<span
+									class="border theme-selector-icon display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> Dark </span>
+						</button>
+					</li>
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="high-contrast"
+							tabindex="-1"
+						>
+							<span class="theme-high-contrast margin-right-xxs">
+								<span
+									class="border theme-selector-icon display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> High contrast </span>
+						</button>
+					</li>
+				</ul>
+			</div>
+		</div>
+	</div>
+			</div>
+			<ul class="links" data-bi-name="footerlinks">
+				<li class="manage-cookies-holder" hidden=""></li>
+				<li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/principles-for-ai-generated-content"
+			data-bi-name="aiDisclaimer"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>AI Disclaimer</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/previous-versions/"
+			data-bi-name="archivelink"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Previous Versions</a
+		>
+	
+	</li> <li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://techcommunity.microsoft.com/t5/microsoft-learn-blog/bg-p/MicrosoftLearnBlog"
+			data-bi-name="bloglink"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Blog</a
+		>
+	
+	</li> <li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/contribute"
+			data-bi-name="contributorGuide"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Contribute</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://go.microsoft.com/fwlink/?LinkId=521839"
+			data-bi-name="privacy"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Privacy</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://go.microsoft.com/fwlink/?linkid=2259814"
+			data-bi-name="consumer-health-privacy"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Consumer Health Privacy</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/legal/termsofuse"
+			data-bi-name="termsofuse"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Terms of Use</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://www.microsoft.com/legal/intellectualproperty/Trademarks/"
+			data-bi-name="trademarks"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Trademarks</a
+		>
+	
+	</li>
+				<li>&copy; Microsoft 2026</li>
+			</ul>
+		</footer>
+	</footer>
+			</body>
+		</html>

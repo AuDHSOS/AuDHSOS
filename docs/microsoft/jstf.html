@@ -1,0 +1,2316 @@
+ <!DOCTYPE html>
+		<html
+			class="layout layout-holy-grail   show-table-of-contents conceptual show-breadcrumb default-focus"
+			lang="en-us"
+			dir="ltr"
+			data-authenticated="false"
+			data-auth-status-determined="false"
+			data-target="docs"
+			x-ms-format-detection="none"
+		>
+			
+		<head>
+			<title>JSTF — Justification Table (OpenType 1.9.1) - Typography | Microsoft Learn</title>
+			<meta charset="utf-8" />
+			<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+			<meta name="color-scheme" content="light dark" />
+
+			<meta name="description" content="JSTF — Justification Table (OpenType 1.9.1)" />
+			<link rel="canonical" href="https://learn.microsoft.com/en-us/typography/opentype/spec/jstf" /> 
+
+			<!-- Non-customizable open graph and sharing-related metadata -->
+			<meta name="twitter:card" content="summary_large_image" />
+			<meta name="twitter:site" content="@MicrosoftLearn" />
+			<meta property="og:type" content="website" />
+			<meta property="og:image:alt" content="Microsoft Learn" />
+			<meta property="og:image" content="https://learn.microsoft.com/en-us/media/open-graph-image.png" />
+			<!-- Page specific open graph and sharing-related metadata -->
+			<meta property="og:title" content="JSTF — Justification Table (OpenType 1.9.1) - Typography" />
+			<meta property="og:url" content="https://learn.microsoft.com/en-us/typography/opentype/spec/jstf" />
+			<meta property="og:description" content="JSTF — Justification Table (OpenType 1.9.1)" />
+			<meta name="platform_id" content="d08a61f1-6c43-218a-f0f1-b00d8951d453" /> <meta name="scope" content="typography" />
+			<meta name="locale" content="en-us" />
+			 
+			<meta name="uhfHeaderId" content="MSDocsHeader-MSTypography" />
+
+			<meta name="page_type" content="conceptual" />
+
+			<!--page specific meta tags-->
+			
+
+			<!-- custom meta tags -->
+			
+		<meta name="ms.service" content="typography" />
+	
+		<meta name="breadcrumb_path" content="/typography/breadcrumbs/toc.json" />
+	
+		<meta name="feedback_system" content="OpenSource" />
+	
+		<meta name="author" content="PeterCon" />
+	
+		<meta name="ms.author" content="pconstable" />
+	
+		<meta name="ms.date" content="2025-03-19T00:00:00Z" />
+	
+		<meta name="feedback_product_url" content="https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml" />
+	
+		<meta name="keywords" content="typography" />
+	
+		<meta name="ms.topic" content="article" />
+	
+		<meta name="source-file" content="https://www.microsoft.com/typography/otspec/jstf.htm" />
+	
+		<meta name="document_id" content="b691a267-906d-cafb-2f9e-4dadc8691427" />
+	
+		<meta name="document_version_independent_id" content="41170219-4e78-137d-9382-2d06039a4e8c" />
+	
+		<meta name="updated_at" content="2025-03-20T05:52:00Z" />
+	
+		<meta name="original_content_git_url" content="https://github.com/MicrosoftDocs/typography/blob/live/typographydocs/opentype/spec/jstf.md" />
+	
+		<meta name="gitcommit" content="https://github.com/MicrosoftDocs/typography/blob/6282dcf07034c3584933986fc8dde2a921e45e61/typographydocs/opentype/spec/jstf.md" />
+	
+		<meta name="git_commit_id" content="6282dcf07034c3584933986fc8dde2a921e45e61" />
+	
+		<meta name="site_name" content="Docs" />
+	
+		<meta name="depot_name" content="Win.typography" />
+	
+		<meta name="schema" content="Conceptual" />
+	
+		<meta name="toc_rel" content="../../toc.json" />
+	
+		<meta name="pdf_url_template" content="https://learn.microsoft.com/pdfstore/en-us/Win.typography/{branchName}{pdfName}" />
+	
+		<meta name="feedback_help_link_type" content="" />
+	
+		<meta name="feedback_help_link_url" content="" />
+	
+		<meta name="word_count" content="3498" />
+	
+		<meta name="asset_id" content="opentype/spec/jstf" />
+	
+		<meta name="moniker_range_name" content="" />
+	
+		<meta name="item_type" content="Content" />
+	
+		<meta name="source_path" content="typographydocs/opentype/spec/jstf.md" />
+	
+		<meta name="previous_tlsh_hash" content="8F736EB2A71CA412EF805E523622BB12B5F8C11F6770BF64142532A36B8A6CA72A8078BEB30A5746337B1593C052732DD4F58737A0AE2757F97505EFC09C2502B6957BFEBC" />
+	
+		<meta name="github_feedback_content_git_url" content="https://github.com/MicrosoftDocs/typography/blob/live/typographydocs/opentype/spec/jstf.md" />
+	
+		<meta name="markdown_url" content="https://learn.microsoft.com/en-us/typography/opentype/spec/jstf?accept=text/markdown" />
+	 
+		<meta name="cmProducts" content="https://microsoft-devrel.poolparty.biz/DevRelOfferingOntology/c6f99e62-1cf6-4b71-af9b-649b05f80cce" data-source="generated" />
+	
+		<meta name="spProducts" content="https://microsoft-devrel.poolparty.biz/DevRelOfferingOntology/3f56b378-07a9-4fa1-afe8-9889fdc77628" data-source="generated" />
+	
+
+			<!-- Apply persisted/system theme before first paint to prevent wrong-theme flash when scripts are deferred. -->
+			<script id="theme-preference">
+				(function () {
+			try {
+				var stored = localStorage.getItem('theme');
+				var theme = /^(light|dark|high-contrast)$/.test(stored)
+					? stored
+					: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+				document.documentElement.classList.add('theme-' + theme);
+			} catch (e) {}
+		})();;
+			</script>
+
+			<script id="atlas-layout-preferences">
+				(function () {
+			try {
+				var state = JSON.parse(localStorage.getItem('atlas-layout-preferences') || '{}');
+				var view = state["docs-layout-persistence"] || {};
+				var excludesKey = "";
+				var blocked = {};
+				if (excludesKey) {
+					var exclusions = JSON.parse(localStorage.getItem('atlas-layout-exclusions') || '{}');
+					if (Object.prototype.hasOwnProperty.call(exclusions, excludesKey)) {
+						var scoped = exclusions[excludesKey];
+						if (scoped) {
+							if (typeof scoped === 'object') blocked = scoped;
+						}
+					}
+				}
+				var html = document.documentElement;
+				for (var c in view) {
+					if (Object.prototype.hasOwnProperty.call(blocked, c)) continue;
+					if (view[c]) html.classList.add(c);
+					else html.classList.remove(c);
+				}
+			} catch (e) {}
+		})();;
+			</script>
+
+			<!-- assets and js globals -->
+			
+			<link rel="stylesheet" href="/static/assets/0.4.03544.8243-8192ba90/styles/site.css" />
+			
+			<script src="https://wcpstatic.microsoft.com/mscc/lib/v2/wcp-consent.js"></script>
+			<!-- Keep this URL in sync with oneDSScriptSelector in instrumentation/one-ds.ts. -->
+			<script async src="https://js.monitor.azure.com/scripts/c/ms.jsll-4.min.js"></script>
+			
+
+			<!-- msdocs global object -->
+			<script id="msdocs-script">
+		var msDocs = {
+  "environment": {
+    "accessLevel": "online",
+    "azurePortalHostname": "portal.azure.com",
+    "reviewFeatures": false,
+    "supportLevel": "production",
+    "systemContent": true,
+    "siteName": "learn",
+    "legacyHosting": false
+  },
+  "data": {
+    "contentLocale": "en-us",
+    "contentDir": "ltr",
+    "userLocale": "en-us",
+    "userDir": "ltr",
+    "pageTemplate": "Conceptual",
+    "layoutStateStorageKey": "docs-layout-persistence",
+    "brand": "",
+    "context": {},
+    "standardFeedback": false,
+    "showFeedbackReport": false,
+    "feedbackHelpLinkType": "",
+    "feedbackHelpLinkUrl": "",
+    "feedbackSystem": "OpenSource",
+    "feedbackGitHubRepo": "",
+    "feedbackProductUrl": "https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml",
+    "extendBreadcrumb": false,
+    "isEditDisplayable": false,
+    "isPrivateUnauthorized": false,
+    "hideViewSource": false,
+    "isPermissioned": false,
+    "hasRecommendations": true,
+    "openSourceFeedbackIssueUrl": "https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml",
+    "openSourceFeedbackIssueTitle": ""
+  },
+  "functions": {}
+};;
+	</script>
+
+			<!-- base scripts, msdocs global should be before this -->
+			<script
+				src="/static/assets/0.4.03544.8243-8192ba90/scripts/en-us/index-docs.js"
+				async
+			></script>
+			
+
+			<!-- json-ld -->
+			
+		</head>
+	
+			<body
+				id="body"
+				data-bi-name="body"
+				class="layout-body "
+				lang="en-us"
+				dir="ltr"
+			>
+				<header class="layout-body-header background-color-body-medium">
+		<div class="header-holder has-default-focus">
+			
+		<a
+			href="#main"
+			
+			style="z-index: 1070"
+			class="outline-color-text visually-hidden-until-focused position-fixed inner-focus focus-visible top-0 left-0 right-0 padding-xs text-align-center background-color-body"
+			
+		>
+			Skip to main content
+		</a>
+	
+		<a
+			href="#"
+			data-skip-to-ask-learn
+			style="z-index: 1070"
+			class="outline-color-text visually-hidden-until-focused position-fixed inner-focus focus-visible top-0 left-0 right-0 padding-xs text-align-center background-color-body"
+			hidden
+		>
+			Skip to Ask Learn chat experience
+		</a>
+	
+
+			<div hidden id="cookie-consent-holder" data-test-id="cookie-consent-container"></div>
+			<!-- Unsupported browser warning -->
+			<div
+				id="unsupported-browser"
+				style="background-color: white; color: black; padding: 16px; border-bottom: 1px solid grey;"
+				hidden
+			>
+				<div style="max-width: 800px; margin: 0 auto;">
+					<p style="font-size: 24px">This browser is no longer supported.</p>
+					<p style="font-size: 16px; margin-top: 16px;">
+						Upgrade to Microsoft Edge to take advantage of the latest features, security updates, and technical support.
+					</p>
+					<div style="margin-top: 12px;">
+						<a
+							href="https://go.microsoft.com/fwlink/p/?LinkID=2092881 "
+							style="background-color: #0078d4; border: 1px solid #0078d4; color: white; padding: 6px 12px; border-radius: 2px; display: inline-block;"
+						>
+							Download Microsoft Edge
+						</a>
+						<a
+							href="https://learn.microsoft.com/en-us/lifecycle/faq/internet-explorer-microsoft-edge"
+							style="background-color: white; padding: 6px 12px; border: 1px solid #505050; color: #171717; border-radius: 2px; display: inline-block;"
+						>
+							More info about Internet Explorer and Microsoft Edge
+						</a>
+					</div>
+				</div>
+			</div>
+			<!-- site header -->
+			<div
+				id="ms--site-header"
+				data-test-id="site-header-wrapper"
+				itemscope="itemscope"
+				itemtype="http://schema.org/Organization"
+			>
+				<div
+					id="ms--mobile-nav"
+					class="site-header display-none-tablet padding-inline-none gap-none"
+					data-bi-name="mobile-header"
+					data-test-id="mobile-header"
+				></div>
+				<div
+					id="ms--primary-nav"
+					class="site-header display-none display-flex-tablet"
+					data-bi-name="L1-header"
+					data-test-id="primary-header"
+				></div>
+				<div
+					id="ms--secondary-nav"
+					class="site-header display-none display-flex-tablet"
+					data-bi-name="L2-header"
+					data-test-id="secondary-header"
+					
+				></div>
+			</div>
+			
+		<!-- banner -->
+		<div data-banner>
+			<div id="disclaimer-holder"></div>
+			
+		</div>
+		<!-- banner end -->
+	
+		</div>
+	</header>
+				 <section
+					id="layout-body-menu"
+					class="layout-body-menu border-right display-flex background-color-body-medium"
+					data-bi-name="menu"
+			  >
+					
+		<div
+			id="left-container"
+			class="left-container display-none padding-none display-block-tablet width-full display-none-until-layout-restored"
+			data-toc-container="true"
+		>
+			<div
+				id="ms--toc-content"
+				class="padding-left-sm padding-right-none padding-bottom-sm height-full"
+			>
+				<nav
+					id="affixed-left-container"
+					class="margin-top-xxs-tablet position-sticky display-flex flex-direction-column width-full"
+					aria-label="Primary"
+					data-bi-name="left-toc"
+					role="navigation"
+				>
+					<div
+						id="ms--collapsible-toc-header"
+						class="display-flex flex-direction-row-reverse justify-content-center align-items-center margin-bottom-xxs margin-right-xxs"
+					>
+						<button
+							type="button"
+							class="button button-clear button-sm inner-focus"
+							data-collapsible-toc-toggle
+							aria-expanded="true"
+							hidden
+							aria-controls="ms--toc-content"
+							aria-label="Table of contents"
+						>
+							<span class="icon icon-mirrored-rtl" aria-hidden="true">
+								<span
+									class="docon docon-panel-left-contract display-none-layout-menu-collapsed"
+								></span>
+								<span
+									class="docon docon-panel-left-expand display-none display-inline-layout-menu-collapsed"
+								></span>
+							</span>
+						</button>
+						<div
+							id="ms--collapsible-toc-moniker-slot"
+							class="flex-grow-1 display-none-layout-menu-collapsed"
+						></div>
+					</div>
+				</nav>
+			</div>
+		</div>
+	
+			  </section>
+
+				<main
+					id="main"
+					role="main"
+					class="layout-body-main "
+					data-bi-name="content"
+					lang="en-us"
+					dir="ltr"
+				>
+					
+			<div
+		id="ms--content-header"
+		class="content-header default-focus border-bottom-none"
+		data-bi-name="content-header"
+	>
+		<div class="content-header-controls margin-xxs margin-inline-sm-tablet">
+			<button
+				type="button"
+				class="contents-button button button-sm margin-right-xxs"
+				data-bi-name="contents-expand"
+				aria-haspopup="true"
+				data-contents-button
+			>
+				<span class="icon" aria-hidden="true"><span class="docon docon-menu"></span></span>
+				<span class="contents-expand-title"> Table of contents </span>
+			</button>
+			<button
+				type="button"
+				class="ap-collapse-behavior ap-expanded button button-sm"
+				data-bi-name="ap-collapse"
+				aria-controls="action-panel"
+			>
+				<span class="icon" aria-hidden="true"><span class="docon docon-exit-mode"></span></span>
+				<span>Exit editor mode</span>
+			</button>
+		</div>
+	</div> 
+		<div
+			id="action-panel"
+			role="region"
+			aria-label="Action Panel"
+			class="action-panel"
+			tabindex="-1"
+		></div>
+	
+			<div
+				data-main-column
+				class="reading-width margin-inline-auto layout-padding padding-top-none padding-top-sm-tablet padding-bottom-sm"
+			>
+				<div>
+					
+		<div id="article-header" class="background-color-body margin-bottom-xs display-none-print">
+			<div class="display-flex align-items-center justify-content-space-between">
+				
+		<details
+			id="article-header-breadcrumbs-overflow-popover"
+			class="popover popover-left"
+			data-for="article-header-breadcrumbs"
+		>
+			<summary
+				class="button button-clear button-primary button-sm inner-focus"
+				aria-label="All breadcrumbs"
+			>
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-more"></span>
+				</span>
+			</summary>
+			<div id="article-header-breadcrumbs-overflow" class="popover-content"></div>
+		</details>
+
+		<bread-crumbs
+			id="article-header-breadcrumbs"
+			role="group"
+			aria-label="Breadcrumbs"
+			data-test-id="article-header-breadcrumbs"
+			class="overflow-hidden flex-grow-1 margin-right-sm margin-right-md-tablet margin-right-lg-desktop margin-left-negative-xxs padding-left-xxs"
+		></bread-crumbs>
+	 
+		<div
+			id="article-header-page-actions"
+			class="opacity-none margin-left-auto display-flex flex-wrap-no-wrap align-items-stretch"
+		>
+			
+		<button
+			class="button button-sm border-none inner-focus display-none-tablet flex-shrink-0 "
+			data-bi-name="ask-learn-assistant-entry"
+			data-test-id="ask-learn-assistant-modal-entry-mobile"
+			data-ask-learn-modal-entry
+			
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-label="Ask Learn"
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+		</button>
+		<button
+			class="button button-sm display-none display-inline-flex-tablet display-none-desktop flex-shrink-0 margin-right-xxs border-color-ask-learn "
+			data-bi-name="ask-learn-assistant-entry"
+			
+			data-test-id="ask-learn-assistant-modal-entry-tablet"
+			data-ask-learn-modal-entry
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+		<button
+			class="button button-sm display-none flex-shrink-0 display-inline-flex-desktop margin-right-xxs border-color-ask-learn "
+			data-bi-name="ask-learn-assistant-entry"
+			
+			data-test-id="ask-learn-assistant-flyout-entry"
+			data-ask-learn-flyout-entry
+			data-flyout-button="toggle"
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-controls="ask-learn-flyout"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+	 
+
+			<details class="popover popover-right" id="article-header-page-actions-overflow">
+				<summary
+					class="justify-content-flex-start button button-clear button-sm button-primary inner-focus"
+					aria-label="More actions"
+					title="More actions"
+				>
+					<span class="icon" aria-hidden="true">
+						<span class="docon docon-more-vertical"></span>
+					</span>
+				</summary>
+				<div class="popover-content">
+					
+		<button
+			type="button"
+			id="ms--focus-mode-button"
+			data-focus-mode
+			data-bi-name="focus-mode-entry"
+			data-page-action-item="overflow-all"
+			data-popover-close
+			class="button button-clear button-sm button-block justify-content-flex-start text-align-left inner-focus display-none display-inline-flex-tablet"
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-glasses"></span>
+			</span>
+			<span>Reading mode</span>
+		</button>
+	 
+		<button
+			data-page-action-item="overflow-mobile"
+			type="button"
+			class="display-block-layout-menu-collapsed button-block button-sm inner-focus button button-clear display-none-tablet justify-content-flex-start text-align-left"
+			data-bi-name="contents-expand"
+			data-contents-button
+			data-popover-close
+		>
+			<span class="icon" aria-hidden="true"
+				><span class="docon docon-editor-list-bullet"></span
+			></span>
+			<span class="contents-expand-title">Table of contents</span>
+		</button>
+	 
+		<a
+			id="lang-link-overflow"
+			class="button-sm inner-focus button button-clear button-block justify-content-flex-start text-align-left"
+			data-bi-name="language-toggle"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			data-read-in-link
+			href="#"
+			hidden
+		>
+			<span class="icon" aria-hidden="true" data-read-in-link-icon>
+				<span class="docon docon-locale-globe"></span>
+			</span>
+			<span data-read-in-link-text>Read in English</span>
+		</a>
+	
+					
+		<button
+			type="button"
+			class="collection button button-clear button-sm button-block justify-content-flex-start text-align-left inner-focus"
+			data-list-type="collection"
+			data-bi-name="collection"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			data-popover-close
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-circle-addition"></span>
+			</span>
+			<span class="collection-status">Add</span>
+		</button>
+	 
+		<button
+			type="button"
+			class="collection button button-block button-clear button-sm justify-content-flex-start text-align-left inner-focus"
+			data-list-type="plan"
+			data-bi-name="plan"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			data-popover-close
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-circle-addition"></span>
+			</span>
+			<span class="plan-status">Add to Plans</span>
+		</button>
+	 
+					
+		<a
+			data-contenteditbtn
+			class="button button-clear button-block button-sm inner-focus justify-content-flex-start text-align-left text-decoration-none"
+			data-bi-name="edit"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			hidden
+			href=""
+			data-original_content_git_url="https://github.com/MicrosoftDocs/typography/blob/live/typographydocs/opentype/spec/jstf.md"
+			data-original_content_git_url_template="{repo}/blob/{branch}/typographydocs/opentype/spec/jstf.md"
+			data-pr_repo=""
+			data-pr_branch=""
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-edit-outline"></span>
+			</span>
+			<span>Edit</span>
+		</a>
+	  
+		<hr class="margin-block-xxs" />
+		
+				<button
+					class="button button-block button-clear button-sm justify-content-flex-start text-align-left inner-focus"
+					type="button"
+					data-bi-name="copy-markdown"
+					data-page-action-item="overflow-all"
+					data-copy-markdown
+					data-copy-state="idle"
+					data-check-hidden="true"
+				>
+					<span class="icon color-primary" aria-hidden="true">
+						<span data-show-when="idle" class="docon docon-code-lang"></span>
+						<span data-show-when="loading" class="loader" hidden></span>
+						<span data-show-when="success" class="docon docon-check-mark" hidden></span>
+					</span>
+					<span>Copy Markdown</span>
+				</button>
+		   
+				<button
+					class="button button-block button-clear button-sm justify-content-flex-start text-align-left inner-focus"
+					type="button"
+					data-bi-name="print"
+					data-page-action-item="overflow-all"
+					data-popover-close
+					data-print-page
+					data-check-hidden="true"
+				>
+					<span class="icon color-primary" aria-hidden="true">
+						<span class="docon docon-print"></span>
+					</span>
+					<span>Print</span>
+				</button>
+		  
+	
+				</div>
+			</details>
+		</div>
+	
+			</div>
+		</div>
+	  
+		<!-- privateUnauthorizedTemplate is hidden by default -->
+		<div unauthorized-private-section data-bi-name="permission-content-unauthorized-private" hidden>
+			<hr class="hr margin-top-xs margin-bottom-sm" />
+			<div class="notification notification-info">
+				<div class="notification-content">
+					<p class="margin-top-none notification-title">
+						<span class="icon" aria-hidden="true"
+							><span class="docon docon-exclamation-circle-solid"></span
+						></span>
+						<span>Note</span>
+					</p>
+					<p class="margin-top-none authentication-determined not-authenticated">
+						Access to this page requires authorization. You can try <a class="docs-sign-in" href="#" data-bi-name="permission-content-sign-in">signing in</a> or <a  class="docs-change-directory" data-bi-name="permisson-content-change-directory">changing directories</a>.
+					</p>
+					<p class="margin-top-none authentication-determined authenticated">
+						Access to this page requires authorization. You can try <a class="docs-change-directory" data-bi-name="permisson-content-change-directory">changing directories</a>.
+					</p>
+				</div>
+			</div>
+		</div>
+	
+					<div class="content"><h1 id="jstf--justification-table">JSTF — Justification Table</h1></div>
+					
+		<div
+			id="article-metadata"
+			data-bi-name="article-metadata"
+			data-test-id="article-metadata"
+			class="page-metadata-container display-flex gap-xxs justify-content-space-between align-items-center flex-wrap-wrap"
+		>
+			 
+				<div
+					id="user-feedback"
+					class="margin-block-xxs display-none display-none-print"
+					hidden
+					data-hide-on-archived
+				>
+					
+		<button
+			id="user-feedback-button"
+			data-test-id="conceptual-feedback-button"
+			class="button button-sm button-clear button-primary display-none"
+			type="button"
+			data-bi-name="user-feedback-button"
+			data-user-feedback-button
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-like"></span>
+			</span>
+			<span>Feedback</span>
+		</button>
+	
+				</div>
+		  
+		</div>
+	 
+		<div data-id="ai-summary" class="display-none-print">
+			<div id="ms--ai-summary-cta" class="margin-top-xs display-flex align-items-center">
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-sparkle-fill gradient-text-vivid"></span>
+				</span>
+				<button
+					id="ms--ai-summary"
+					type="button"
+					class="tag tag-sm tag-suggestion margin-left-xxs"
+					data-test-id="ai-summary-cta"
+					data-bi-name="ai-summary-cta"
+					data-an="ai-summary"
+				>
+					<span class="ai-summary-cta-text">
+						Summarize this article for me
+					</span>
+				</button>
+			</div>
+			<!-- Slot where the client will render the summary card after the user clicks the CTA -->
+			<div id="ms--ai-summary-header" class="margin-top-xs"></div>
+		</div>
+	 
+		<nav
+			id="center-doc-outline"
+			class="doc-outline display-none-desktop display-none-print margin-bottom-sm"
+			data-bi-name="intopic toc"
+			aria-label="In this article"
+		>
+			<h2 id="ms--in-this-article" class="title is-6 margin-block-xs">
+				In this article
+			</h2>
+		</nav>
+	 <div class="content"><p><a id="overview"></a></p>
+<h2 id="overview">Overview</h2>
+<p>The Justification table (JSTF) provides font developers with additional control over glyph substitution and positioning that can be used in layout of justified text. It provides text-processing clients with more options to expand or shrink word and glyph spacing when fitting text into a specified column width.</p>
+<p>When justifying text, the text-processing client distributes the characters in each line to completely fill the specified line length. Whether removing space to fit more characters in the line or adding more space to spread the characters, justification can produce large gaps between words, cramped or extended glyph spacing, uneven line break patterns, and other jarring visual effects. For example:</p>
+<figure> <img alt="Paragraph of poorly justified text" src="images/jstf_fig6a.gif" data-linktype="relative-path"> <figcaption>Figure 6a. Poorly justified text</figcaption> </figure>
+<p>To offset these effects, text-processing clients have used justification algorithms that redistribute the space with a series of glyph spacing adjustments that progress from least to most obvious. Typically, the client will begin by expanding or compressing the space between words. If these changes aren’t enough or look distracting, the client might hyphenate the word at the end of the line or adjust the space between glyphs in one or more lines.</p>
+<p>To disguise spacing inconsistencies so they won’t disrupt the flow of text for a reader, the font developer can use the JSTF table to enable or disable individual glyph substitution and positioning actions that apply to specific scripts, language systems, and glyphs in the font.</p>
+<p>For instance, a ligature glyph can replace multiple glyphs, shortening the line of text with an unobtrusive, localized adjustment (see Figure 6b). Font-specific positioning changes can be applied to particular glyphs in a text line that combines two or more fonts. Other options include repositioning the individual glyphs in the line, expanding the space between specific pairs of glyphs, and decreasing the spacing within particular glyph sequences.</p>
+<figure><img alt="Two versions of a line of text: use of the f-f-i ligature makes the line shorter" src="images/jstf_fig6b.gif" data-linktype="relative-path"><figcaption>Figure 6b. JSTF shortens the top line of this example by using the “ffi” ligature</figcaption></figure>
+<p>The font designer or developer defines JSTF data as prioritized suggestions. Each suggestion lists the particular actions that the client can use to adjust the line of text. Justification actions may apply to both vertical and horizontal text.</p>
+<p><a id="organization"></a></p>
+<h2 id="jstf-table-organization">JSTF table organization</h2>
+<p>The JSTF table organizes data by script and language system, as do the GSUB and GPOS tables. The JSTF table begins with a header that lists scripts in an array of JstfScriptRecords (see Figure 6c). Each record contains a ScriptTag and an offset to a JstfScript table that contains script and language-specific data:</p>
+<ul>
+<li>A default justification language system table (JstfLangSys) defines script-specific data that applies to the entire script in the absence of any language-specific information.</li>
+<li>A justification language system table stores the justification data for each language system.</li>
+</ul>
+<figure><img alt="Block diagram of jstf subtables" src="images/jstf_fig6c.gif" data-linktype="relative-path"><figcaption>Figure 6c. High-level organization of JSTF table</figcaption></figure>
+<p>A JstfLangSys table contains a list of justification suggestions. Each suggestion consists of a list of GSUB or GPOS LookupList indices to lookups that may be enabled or disabled to add or remove space in the line of text. In addition, each suggestion can include a set of dedicated justification lookups with maximum adjustment values to extend or shrink the amount of space.</p>
+<p>The font developer prioritizes suggestions based on how they affect the appearance and function of the text line, and the client applies the suggestions in that order. Low-numbered (high-priority) suggestions correspond to “least bad” options.</p>
+<p>The font developer can also supply a list of extender glyphs for each script, such as kashidas in Arabic. A client may use the extender glyphs in addition to the justification suggestions.</p>
+<p>A client begins justifying a line of text only after implementing all selected GSUB and GPOS features for the string. Starting with the lowest-numbered suggestion, the client enables or disables the lookups specified in the JSTF table, reassembles the lookups in the LookupList order, and applies them to each glyph in the string one after another. If the line still is not the correct length, the client processes the next suggestion in ascending order of priority. This continues until the line length meets the justification requirements.</p>
+<p>If any JSTF suggestion at any priority level modifies a GSUB or GPOS lookup that was previously applied to the glyph string, then the text processing client must apply the JSTF suggestion to an unmodified version of the glyph string.</p>
+<p>A FeatureVariations table may be used in either the GSUB or GPOS table to substitute the lookups triggered by a given feature with an alternate set of lookups based on certain conditions. (Currently, these conditions can pertain only to the use of variable fonts, which are discussed further below.) The actual lookups that were applied for a given feature may be different from the default set of lookups for that feature. When processing a justification suggestion, the list of lookups to check for previous application should be the actual lookups that applied, with any feature variations in effect, not the default lookups. Also, when adding data in the JSTF table to disable GSUB or GPOS lookups, the font developer should consider possible interactions with feature variation tables, such as a need to include such alternate lookups in the set of lookups to disable. Note that this applies only to features and lookups in the GSUB and GPOS table: for lookups contained directly within the JSTF table, there is no analogous feature-variation mechanism.</p>
+<p>Later in this chapter, the following tables and records used by the JSTF table for scripts and language systems will be described:</p>
+<ul>
+<li>Script information, including the JstfScript table (plus its associated JstfLangSysRecords) and the ExtenderGlyph table.</li>
+<li>Language system information, including the JstfLangSys table, JstfPriority table (and its associated JstfDataRecord), the JstfModList table, and the JstfMax table.</li>
+</ul>
+<p><a id="variations"></a></p>
+<h2 id="jstf-table-and-opentype-font-variations">JSTF table and OpenType Font Variations</h2>
+<p>OpenType Font Variations allow a single font to support many design variations along one or more axes of design variation. For example, a font with weight and width variations might support weights from thin to black, and widths from ultra-condensed to ultra-expanded. For general information on OpenType Font Variations, see the chapter, <a href="otvaroverview" data-linktype="relative-path">OpenType Font Variations Overview</a>.</p>
+<p>When different variation instances are selected, the design and metrics of individual glyphs change, and the metric characteristics of the font as a whole can also change. As metrics are relevant for justification, the interaction between justification data and variations requires consideration.</p>
+<p>As noted above, justification is assumed to be an iterative process in which the application tests different suggestions defined in the font in priority order to find a suggestion that results in a line length that meets application-determined justification requirements. When an instance of a variable font is selected, the line layout will use glyph outlines and metrics that are adjusted for that instance. Thus, the metrics for one variation instance may be different from another, and the text content of a given line after justification may be different if formatted with different variation instances, but the justification processing proceeds in the same manner.</p>
+<p>As also noted above, justification suggestions are applied to the results after selected GSUB and GPOS features have been processed. If the GSUB or GPOS table includes a FeatureVariations table, there may be interactions between the effects of the FeatureVariations table and the justification suggestions. See above for additional discussion.</p>
+<p>As noted, justification suggestions can make use of GPOS lookups contained within the GPOS table or directly within the JSTF table. GPOS lookup subtables contain X or Y font-unit values that specify modifications to individual glyph positions or metrics. In a variable font, these X and Y values apply to the default instance, and may require adjustment for different variation instances. This is done using variation data with processes similar to those used for glyph outlines and other font data, as described in the chapter, <a href="otvaroverview" data-linktype="relative-path">OpenType Font Variations Overview</a>. Variation data for adjustment of X or Y values in GPOS lookups is stored within an item variation store table located within the <a href="gdef" data-linktype="relative-path">GDEF</a> table. This is true for lookups in either the GPOS or the JSTF table. The same item variation store is also used for adjustment of values in the GDEF table. See the <a href="gpos" data-linktype="relative-path">GPOS</a> chapter for additional details regarding variation of GPOS lookup values in variable fonts.</p>
+<h2 id="jstf-table-structures">JSTF table structures</h2>
+<p><a id="jstfHeader"></a></p>
+<h3 id="jstf-header">JSTF Header</h3>
+<p>The JSTF table begins with a header that contains a version number for the table, a count of the number of scripts used in the font, and an array of script records. Each record contains a script tag (jstfScriptTag) and an offset to a JstfScript table.</p>
+<p>Note that the jstfScriptTag values must correspond with the script tags listed in the GSUB and GPOS tables.</p>
+<p>Example 1 at the end of this chapter shows a JSTF Header table and JstfScriptRecord.</p>
+<p><a id="header"></a></p>
+<p><em>JSTF header</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr id="majorVersion">
+<td>uint16</td>
+<td>majorVersion</td>
+<td>Major version of the JSTF table, = 1.</td>
+</tr>
+<tr id="minorVersion">
+<td>uint16</td>
+<td>minorVersion</td>
+<td>Minor version of the JSTF table, = 0.</td>
+</tr>
+<tr id="scriptCount">
+<td>uint16</td>
+<td>jstfScriptCount</td>
+<td>Number of JstfScriptRecords in this table.</td>
+</tr>
+<tr id="scriptRecs">
+<td>JstfScriptRecord</td>
+<td>jstfScriptRecords[jstfScriptCount]</td>
+<td>Array of JstfScriptRecords, in alphabetical order by jstfScriptTag.</td>
+</tr>
+</tbody>
+</table>
+<p><a id="jstfScriptRec"></a></p>
+<p><em>JstfScriptRecord</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr id="jstfScriptTag">
+<td>Tag</td>
+<td>jstfScriptTag</td>
+<td>4-byte JstfScript identification.</td>
+</tr>
+<tr id="jstfScript">
+<td>Offset16</td>
+<td>jstfScriptOffset</td>
+<td>Offset to JstfScript table, from beginning of JSTF Header.</td>
+</tr>
+</tbody>
+</table>
+<p><a id="jstfScriptTbl"></a></p>
+<h3 id="justification-script-table">Justification script table</h3>
+<p>A justification script (JstfScript) table describes the justification information for a single script. It consists of an offset to a table that defines extender glyphs, an offset to a default justification language system table for the script, a count of the language systems that define justification data (jstfLangSysCount), and an array of justification language system records for specific language systems.</p>
+<p>If a script uses the same justification information for all language systems, the font developer defines only the default language system table and sets the jstfLangSysCount value to zero (0). However, if any language system has unique justification suggestions, jstfLangSysCount will be a positive value, and the JstfScript table must include an array of justification language system records, one for each language system. Each JstfLangSysRecord contains a language system tag and an offset to a justification language system table. In the jstfLangSysRecords array, records are ordered alphabetically by language system tag.</p>
+<blockquote>
+<p><em>Note:</em>
+No JstfLangSysRecord is defined for the default script data; the data is stored in the default JstfLangSys table instead.</p>
+</blockquote>
+<p>Example 2 at the end of the chapter shows a JstfScript table for the Arabic script and a JstfLangSysRecord for the Farsi language system.</p>
+<p><a id="jstfScriptTable"></a></p>
+<p><em>JstfScript table</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr id="extenderGlyph">
+<td>Offset16</td>
+<td>extenderGlyphOffset</td>
+<td>Offset to ExtenderGlyph table, from beginning of JstfScript table (may be NULL).</td>
+</tr>
+<tr id="defJstfLangSys">
+<td>Offset16</td>
+<td>defJstfLangSysOffset</td>
+<td>Offset to default JstfLangSys table, from beginning of JstfScript table (may be NULL).</td>
+</tr>
+<tr id="jstfLangSysCount">
+<td>uint16</td>
+<td>jstfLangSysCount</td>
+<td>Number of JstfLangSysRecords in this table- may be zero (0).</td>
+</tr>
+<tr id="jstfLangSysRecs">
+<td>JstfLangSysRecord</td>
+<td>jstfLangSysRecords[jstfLangSysCount]</td>
+<td>Array of JstfLangSysRecords, in alphabetical order by JstfLangSysTag.</td>
+</tr>
+</tbody>
+</table>
+<p><a id="jstfLangSysRec"></a></p>
+<p><em>JstfLangSysRecord</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr id="jstfLangSysTag">
+<td>Tag</td>
+<td>jstfLangSysTag</td>
+<td>4-byte JstfLangSys identifier.</td>
+</tr>
+<tr id="jstfLangSys">
+<td>Offset16</td>
+<td>jstfLangSysOffset</td>
+<td>Offset to JstfLangSys table, from beginning of JstfScript table.</td>
+</tr>
+</tbody>
+</table>
+<p><a id="extenderGlyphTbl"></a></p>
+<h3 id="extender-glyph-table">Extender glyph table</h3>
+<p>The extender glyph table (ExtenderGlyph) lists indices of glyphs, such as Arabic kashidas, that a client can insert to extend the length of the line for justification. The table consists of a count of the extender glyphs for the script and an array of extender glyph indices, arranged in increasing numerical order.</p>
+<p>Example 2 at the end of this chapter shows an ExtenderGlyph table for Arabic kashida glyphs.</p>
+<p><a id="extenderGlyphTable"></a></p>
+<p><em>ExtenderGlyph table</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr id="glyphCount">
+<td>uint16</td>
+<td>glyphCount</td>
+<td>Number of extender glyphs in this script.</td>
+</tr>
+<tr id="extenderGlyphs">
+<td>uint16</td>
+<td>extenderGlyphs[glyphCount]</td>
+<td>Extender glyph IDs — in increasing numerical order.</td>
+</tr>
+</tbody>
+</table>
+<p><a id="jstfLangSysTbl"></a></p>
+<h3 id="justification-language-system-table">Justification language system table</h3>
+<p>The justification language system (JstfLangSys) table contains an array of justification suggestions, ordered by priority. A text-processing client doing justification should begin with the suggestion that has a zero (0) priority, and then, as needed, apply suggestions of increasing priority until the text is justified.</p>
+<p>The font developer defines the number and the meaning of the priority levels. Each priority level stands alone; its suggestions are not added to the previous levels. The JstfLangSys table consists of a count of the number of priority levels and an array of offsets to justification priority tables (jstfPriorityOffsets), stored in priority order. Example 2 at the end of the chapter shows how to define a JstfLangSys table.</p>
+<p><a id="jstfLangSysTable"></a></p>
+<p><em>JstfLangSys table</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr id="jstfPriorityCount">
+<td>uint16</td>
+<td>jstfPriorityCount</td>
+<td>Number of JstfPriority tables.</td>
+</tr>
+<tr id="jstfPriorityOffsets">
+<td>Offset16</td>
+<td>jstfPriorityOffsets[jstfPriorityCount]</td>
+<td>Array of offsets to JstfPriority tables, from beginning of JstfLangSys table, in priority order.</td>
+</tr>
+</tbody>
+</table>
+<p><a id="jstfPriorityTbl"></a></p>
+<h3 id="justification-priority-table">Justification priority table</h3>
+<p>A justification priority (JstfPriority) table defines justification suggestions for a single priority level. Each priority level specifies whether to enable or disable GSUB and GPOS lookups or apply text justification lookups to shrink and extend lines of text.</p>
+<p>JstfPriority has offsets to four tables with line shrinkage data: two are justification modification tables for enabling and disabling glyph substitution (GSUB) lookups, and two are justification modification tables for enabling and disabling glyph positioning (GPOS) lookups. Offsets to GSUB and GPOS justification modification tables also are defined for line extension.</p>
+<p>Example 3 at the end of this chapter demonstrates two JstfPriority tables for two justification suggestions.</p>
+<p><a id="jstfPriorityTable"></a></p>
+<p><em>JstfPriority table</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr id="shrinkEnableGsub">
+<td>Offset16</td>
+<td>gsubShrinkageEnableOffset</td>
+<td>Offset to GSUB shrinkage-enable JstfModList table, from beginning of JstfPriority table (may be NULL).</td>
+</tr>
+<tr id="shrinkDisableGsub">
+<td>Offset16</td>
+<td>gsubShrinkageDisableOffset</td>
+<td>Offset to GSUB shrinkage-disable JstfModList table, from beginning of JstfPriority table (may be NULL).</td>
+</tr>
+<tr id="shrinkEnableGpos">
+<td>Offset16</td>
+<td>gposShrinkageEnableOffset</td>
+<td>Offset to GPOS shrinkage-enable JstfModList table, from beginning of JstfPriority table (may be NULL).</td>
+</tr>
+<tr id="shrinkDisableGpos">
+<td>Offset16</td>
+<td>gposShrinkageDisableOffset</td>
+<td>Offset to GPOS shrinkage-disable JstfModList table, from beginning of JstfPriority table (may be NULL).</td>
+</tr>
+<tr id="shrinkJstfMax">
+<td>Offset16</td>
+<td>shrinkageJstfMaxOffset</td>
+<td>Offset to shrinkage JstfMax table, from beginning of JstfPriority table (may be NULL).</td>
+</tr>
+<tr id="extEnableGsub">
+<td>Offset16</td>
+<td>gsubExtensionEnableOffset</td>
+<td>Offset to GSUB extension-enable JstfModList table, from beginnning of JstfPriority table (may be NULL).</td>
+</tr>
+<tr id="extDisableGsub">
+<td>Offset16</td>
+<td>gsubExtensionDisableOffset</td>
+<td>Offset to GSUB extension-disable JstfModList table, from beginning of JstfPriority table (may be NULL).</td>
+</tr>
+<tr id="extEnableGpos">
+<td>Offset16</td>
+<td>gposExtensionEnableOffset</td>
+<td>Offset to GPOS extension-enable JstfModList table, from beginning of JstfPriority table (may be NULL).</td>
+</tr>
+<tr id="extDisableGpos">
+<td>Offset16</td>
+<td>gposExtensionDisableOffset</td>
+<td>Offset to GPOS extension-disable JstfModList table, from beginning of JstfPriority table (may be NULL).</td>
+</tr>
+<tr id="extJstfMax">
+<td>Offset16</td>
+<td>extensionJstfMaxOffset</td>
+<td>Offset to extension JstfMax table, from beginning of JstfPriority table (may be NULL).</td>
+</tr>
+</tbody>
+</table>
+<p><a id="jstfModListTbls"></a></p>
+<h3 id="justification-modification-list-table">Justification modification list table</h3>
+<p>A justification modification list table (JstfModList) contains a list of indices into LookupList tables within either the GSUB or GPOS table. JstfModList tables are used within a JstfPriority table to specify GSUB or GPOS lookups that can be either enabled or disabled for the purpose of either extending or shrinking the length of text. The client can enable or disable the lookups to justify text. For example, to increase line length, the client might disable a GSUB ligature substitution.</p>
+<p>Each JstfModList table consists of a count of Lookups and an array of lookup indices.</p>
+<p>During justification of a line of text, to implement modifications specified for a given priority level, a text-processing client enables or disables the specified lookups in a JstfModList table, reassembles the lookups in the LookupList order, and applies them to each glyph in the string one after another.</p>
+<p>If any JSTF suggestion at any priority level modifies a GSUB or GPOS lookup previously applied to the glyph string, then the text-processing client must apply the JSTF suggestion to an unmodified version of the glyph string.</p>
+<p>Example 3 at the end of this chapter shows JstfModList tables with data for shrinking and extending text line lengths.</p>
+<p><a id="jstfGsubModListTable"></a>
+<a id="jstfGposModListTable"></a>
+<a id="jstfModListTable"></a></p>
+<p><em>JstfModList table</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr id="lookupCount">
+<td>uint16</td>
+<td>lookupCount</td>
+<td>Number of lookups for this modification.</td>
+</tr>
+<tr id="lookupIndices">
+<td>uint16</td>
+<td>lookupIndices[lookupCount]</td>
+<td>Array of Lookup indices into the GSUB or GPOS LookupList, in increasing numerical order.</td>
+</tr>
+</tbody>
+</table>
+<p><a id="jstfMaxTbl"></a></p>
+<h3 id="justification-maximum-table">Justification maximum table</h3>
+<p>A justification maximum table (JstfMax) consists of an array of offsets to justification lookups. JstfMax lookups typically are located after the JstfMax table in the font definition.</p>
+<p>JstfMax tables have the same format as lookup tables and subtables in the GPOS table, but the JstfMax lookups reside in the JSTF table and contain justification data only. The lookup data might specify a single adjustment value for positioning all glyphs in the script, or it might specify more elaborate adjustments, such as different values for different glyphs or special values for specific pairs of glyphs.</p>
+<p>All GPOS lookup types except contextual positioning lookups may be defined in a JstfMax table.</p>
+<p>JstfMax lookup values are defined in GPOS ValueRecords and may be specified for any advance or placement position, whether horizontal or vertical. These values define the maximum shrinkage or extension allowed per glyph. To justify text, a text-processing client may choose to adjust a glyph’s positioning by any amount from zero (0) to the specified maximum.</p>
+<p>Example 4 at the end of this chapter shows a JstfMax table. It defines a justification lookup to change the size of the word space glyph to extend line lengths.</p>
+<p><a id="jstfMaxTable"></a></p>
+<p><em>JstfMax table</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr id="lookupCount_jstfMax">
+<td>uint16</td>
+<td>lookupCount</td>
+<td>Number of lookup Indices for this modification.</td>
+</tr>
+<tr id="lookups_jstfMax">
+<td>Offset16</td>
+<td>lookupOffsets[lookupCount]</td>
+<td>Array of offsets to GPOS-type lookup tables, from beginning of JstfMax table, in design order.</td>
+</tr>
+</tbody>
+</table>
+<p><a id="examples"></a></p>
+<h2 id="jstf-structure-examples">JSTF structure examples</h2>
+<p>The rest of this chapter describes examples of all the JSTF table formats. All the examples reflect unique parameters described below, but the samples provide a useful reference for building tables specific to other situations.</p>
+<p>The examples have three columns showing hex data, source, and comments.</p>
+<h3 id="example-1-jstf-header-and-jstfscriptrecord">Example 1: JSTF Header and JstfScriptRecord</h3>
+<p>Example 1 demonstrates how a script is defined in the JSTF Header with a JstfScriptRecord that identifies the script and references its JstfScript table.</p>
+<p><em>Example 1</em></p>
+<table>
+<tbody>
+<tr>
+<th>Hex Data</th>
+<th>Source</th>
+<th>Comments</th>
+</tr>
+<tr>
+<td> </td>
+<td><b>JSTFHeader</b><br>
+TheJSTFHeader</td>
+<td>JSTFHeader table definition</td>
+</tr>
+<tr>
+<td>00010000</td>
+<td>0x00010000</td>
+<td>major/minor version</td>
+</tr>
+<tr>
+<td>0001</td>
+<td>1</td>
+<td>jstfScriptCount</td>
+</tr>
+<tr>
+<td></td>
+<td>jstfScriptRecords[0]</td>
+<td></td>
+</tr>
+<tr>
+<td>74686169</td>
+<td>'thai'</td>
+<td>jstfScriptTag</td>
+</tr>
+<tr>
+<td>000C</td>
+<td>ThaiScript</td>
+<td>offset to JstfScript table</td>
+</tr>
+</tbody>
+</table>
+<h3 id="example-2-jstfscript-table-extenderglyph-table-jstflangsysrecord-and-jstflangsys-table">Example 2: JstfScript table, ExtenderGlyph table, JstfLangSysRecord, and JstfLangSys table</h3>
+<p>Example 2 shows a JstfScript table for the Arabic script and the tables it references. The default JstfLangSys table defines justification data to apply to the script in the absence of language-specific information. In the example, the table lists two justification suggestions in priority order.</p>
+<p>JstfScript also supplies language-specific justification data for the Farsi language. The JstfLangSysRecord identifies the language and references its JstfLangSys table. The FarsiJstfLangSys lists one suggestion for justifying Farsi text.</p>
+<p>The ExtenderGlyph table in JstfScript lists the indices of all the extender glyphs used in the script.</p>
+<p><em>Example 2</em></p>
+<table>
+<tbody>
+<tr>
+<th>Hex Data</th>
+<th>Source</th>
+<th>Comments</th>
+</tr>
+<tr>
+<td> </td>
+<td><b>JstfScript</b><br>
+ArabicScript</td>
+<td>JstfScript table definition</td>
+</tr>
+<tr>
+<td>000C</td>
+<td>ArabicExtenders</td>
+<td>extenderGlyphOffset</td>
+</tr>
+<tr>
+<td>0012</td>
+<td>ArabicDefJstfLangSys</td>
+<td>offset to default JstfLangSys table</td>
+</tr>
+<tr>
+<td>0001</td>
+<td>1</td>
+<td>jstfLangSysCount</td>
+</tr>
+<tr>
+<td></td>
+<td>jstfLangSysRecords[0]</td>
+<td></td>
+</tr>
+<tr>
+<td>50455220</td>
+<td>“FAR ”</td>
+<td>jstfLangSysTag</td>
+</tr>
+<tr>
+<td>0018</td>
+<td>FarsiJstfLangSys</td>
+<td>jstfLangSysOffset</td>
+</tr>
+<tr>
+<td> </td>
+<td><b>ExtenderGlyph</b><br>
+ArabicExtenders</td>
+<td>ExtenderGlyph table definition</td>
+</tr>
+<tr>
+<td>0002</td>
+<td>2</td>
+<td>glyphCount</td>
+</tr>
+<tr>
+<td>01D3</td>
+<td>TatweelGlyphID</td>
+<td>extenderGlyphs[0]</td>
+</tr>
+<tr>
+<td>01D4</td>
+<td>LongTatweelGlyphID</td>
+<td>extenderGlyphs[1]
+</td>
+</tr>
+<tr>
+<td> </td>
+<td><b>JstfLangSys</b><br>
+ArabicDefJstfLangSys</td>
+<td>JstfLangSys table definition</td>
+</tr>
+<tr>
+<td>0002</td>
+<td>2</td>
+<td>jstfPriorityCount</td>
+</tr>
+<tr>
+<td>000A</td>
+<td>ArabicScriptJstfPriority1</td>
+<td>jstfPriorityOffsets[0]</td>
+</tr>
+<tr>
+<td>001E</td>
+<td>ArabicScriptJstfPriority2</td>
+<td>jstfPriorityOffsets[1]
+</td>
+</tr>
+<tr>
+<td> </td>
+<td><b>JstfLangSys</b><br>
+FarsiJstfLangSys</td>
+<td>JstfLangSys table definition</td>
+</tr>
+<tr>
+<td>0001</td>
+<td>1</td>
+<td>jstfPriorityCount</td>
+</tr>
+<tr>
+<td>002C</td>
+<td>FarsiLangJstfPriority1</td>
+<td>jstfPriorityOffsets[0]</td>
+</tr>
+</tbody>
+</table>
+<h3 id="example-3-jstfpriority-table-and-jstfmodlist-table">Example 3: JstfPriority table and JstfModList table</h3>
+<p>Example 3 shows the JstfPriority and JstfModList table definitions for two justification suggestions defined in priority order. The first suggestion uses ligature substitution to shrink the lengths of text lines, and it extends line lengths by replacing ligatures with their individual glyph components. Other lookup actions are not recommended at this priority level and are set to NULL. The associated JstfModList tables enable and disable three substitution lookups.</p>
+<p>The second suggestion enables glyph kerning to reduce line lengths and disables glyph kerning to extend line lengths. Each action uses three lookups. This suggestion also includes a JstfMax table to extend line lengths, called WordSpaceExpandMax, which is described in Example 4.</p>
+<p><em>Example 3</em></p>
+<table>
+<tbody>
+<tr>
+<th>Hex Data</th>
+<th>Source</th>
+<th>Comments</th>
+</tr>
+<tr>
+<td> </td>
+<td><b>JstfPriority</b><br>
+USEnglishFirstJstfPriority</td>
+<td>JstfPriority table definition</td>
+</tr>
+<tr>
+<td>0028</td>
+<td>EnableGSUBLookupsToShrink</td>
+<td>gsubShrinkageEnableOffset (offset to GSUB shrinkage-enable JstfModList table)</td>
+</tr>
+<tr>
+<td>0000</td>
+<td>NULL</td>
+<td>gsubShrinkageDisableOffset</td>
+</tr>
+<tr>
+<td>0000</td>
+<td>NULL</td>
+<td>gposShrinkageEnableOffset</td>
+</tr>
+<tr>
+<td>0000</td>
+<td>NULL</td>
+<td>gposShrinkageDisableOffset</td>
+</tr>
+<tr>
+<td>0000</td>
+<td>NULL</td>
+<td>shrinkageJstfMaxOffset</td>
+</tr>
+<tr>
+<td>0000</td>
+<td>NULL</td>
+<td>gsubExtensionEnableOffset</td>
+</tr>
+<tr>
+<td>0038</td>
+<td>DisableGSUBLookupsToExtend</td>
+<td>gsubExtensionDisableOffset</td>
+</tr>
+<tr>
+<td>0000</td>
+<td>NULL</td>
+<td>gposExtensionEnableOffset</td>
+</tr>
+<tr>
+<td>0000</td>
+<td>NULL</td>
+<td>gposExtensionDisableOffset</td>
+</tr>
+<tr>
+<td>0000</td>
+<td>NULL</td>
+<td>extensionJstfMaxOffset</td>
+</tr>
+<tr>
+<td> </td>
+<td><b>JstfPriority</b><br>
+USEnglishSecondJstfPriority</td>
+<td>JstfPriority table definition</td>
+</tr>
+<tr>
+<td>0000</td>
+<td>NULL</td>
+<td>gsubShrinkageEnableOffset</td>
+</tr>
+<tr>
+<td>0000</td>
+<td>NULL</td>
+<td>gsubShrinkageDisableOffset</td>
+</tr>
+<tr>
+<td>0000</td>
+<td>NULL</td>
+<td>gposShrinkageEnableOffset</td>
+</tr>
+<tr>
+<td>001C</td>
+<td>DisableGPOSLookupsToShrink</td>
+<td>gposShrinkageDisableOffset</td>
+</tr>
+<tr>
+<td>0000</td>
+<td>NULL</td>
+<td>shrinkageJstfMaxOffset</td>
+</tr>
+<tr>
+<td>0000</td>
+<td>NULL</td>
+<td>gsubExtensionEnableOffset</td>
+</tr>
+<tr>
+<td>0000</td>
+<td>NULL</td>
+<td>gsubExtensionDisableOffset</td>
+</tr>
+<tr>
+<td>002C</td>
+<td>EnableGPOSLookupsToExtend</td>
+<td>gposExtensionEnableOffset</td>
+</tr>
+<tr>
+<td>0000</td>
+<td>NULL</td>
+<td>gposExtensionDisableOffset</td>
+</tr>
+<tr>
+<td>0000</td>
+<td>NULL</td>
+<td>extensionJstfMaxOffset
+</td>
+</tr>
+<tr>
+<td> </td>
+<td><b>JstfModList</b><br>
+EnableGSUBLookupsToShrink</td>
+<td>JstfModList table definition, enable three ligature substitution lookups</td>
+</tr>
+<tr>
+<td>0003</td>
+<td>3</td>
+<td>lookupCount</td>
+</tr>
+<tr>
+<td>002E</td>
+<td>46</td>
+<td>gsubLookupIndices[0]</td>
+</tr>
+<tr>
+<td>0035</td>
+<td>53</td>
+<td>gsubLookupIndices[1]</td>
+</tr>
+<tr>
+<td>0063</td>
+<td>99</td>
+<td>gsubLookupIndices[2]
+</td>
+</tr>
+<tr>
+<td> </td>
+<td><b>JstfModList</b><br>
+DisableGPOSLookupsToShrink</td>
+<td>JstfModList table definition, disable three tight kerning lookups</td>
+</tr>
+<tr>
+<td>0003</td>
+<td>3</td>
+<td>lookupCount</td>
+</tr>
+<tr>
+<td>006C</td>
+<td>108</td>
+<td>gposLookupIndices[0]</td>
+</tr>
+<tr>
+<td>006E</td>
+<td>110</td>
+<td>gposLookupIndices[1]</td>
+</tr>
+<tr>
+<td>0070</td>
+<td>112</td>
+<td>gposLookupIndices[2]
+</td>
+</tr>
+<tr>
+<td> </td>
+<td><b>JstfModList</b><br>
+DisableGSUBLookupsToExtend</td>
+<td>JstfModList table definition, disable three ligature substitution lookups</td>
+</tr>
+<tr>
+<td>0003</td>
+<td>3</td>
+<td>lookupCount</td>
+</tr>
+<tr>
+<td>002E</td>
+<td>46</td>
+<td>gsubLookupIndices[0]</td>
+</tr>
+<tr>
+<td>0035</td>
+<td>53</td>
+<td>gsubookupIndices[1]</td>
+</tr>
+<tr>
+<td>0063</td>
+<td>99</td>
+<td>gsubLookupIndices[2]
+</td>
+</tr>
+<tr>
+<td> </td>
+<td><b>JstfModList</b><br>
+EnableGPOSLookupsToExtend</td>
+<td>JstfModList table definition enable three tight kerning lookups</td>
+</tr>
+<tr>
+<td>0003</td>
+<td>3</td>
+<td>lookupCount</td>
+</tr>
+<tr>
+<td>006C</td>
+<td>108</td>
+<td>gposLookupIndices[0]</td>
+</tr>
+<tr>
+<td>006E</td>
+<td>110</td>
+<td>gposLookupIndices[1]</td>
+</tr>
+<tr>
+<td>0070</td>
+<td>112</td>
+<td>gposLookupIndices[2]</td>
+</tr>
+</tbody>
+</table>
+<h3 id="example-4-jstfmax-table">Example 4: JstfMax table</h3>
+<p>The JstfMax table in Example 4 defines a lookup to expand the advance width of the word space glyph and extend line lengths. The lookup definition is identical to the SinglePos lookup type in the GPOS table although it is enabled only when justifying text. The ValueRecord in the WordSpaceExpand lookup subtable specifies an XAdvance adjustment of 360 units, which is the maximum value the font developer recommends for acceptable text rendering. The text-processing client may implement the lookup using any value between zero and the maximum.</p>
+<p><em>Example 4</em></p>
+<table>
+<tbody>
+<tr>
+<th>Hex Data</th>
+<th>Source</th>
+<th>Comments</th>
+</tr>
+<tr>
+<td> </td>
+<td><b>JstfMax</b><br>
+WordSpaceExpandMax</td>
+<td>JstfMax table definition</td>
+</tr>
+<tr>
+<td>0001</td>
+<td>1</td>
+<td>lookupCount</td>
+</tr>
+<tr>
+<td>0004</td>
+<td>WordSpaceExpandLookup</td>
+<td>lookupOffsets[0] (offset to JSTF Lookup table)
+</td>
+</tr>
+<tr>
+<td> </td>
+<td><b>Lookup</b><br>
+WordSpaceExpandLookup</td>
+<td>Jstf Lookup table definition</td>
+</tr>
+<tr>
+<td>0001</td>
+<td>1</td>
+<td>lookupType: SinglePos Lookup</td>
+</tr>
+<tr>
+<td>0000</td>
+<td>0x0000</td>
+<td>lookupFlag</td>
+</tr>
+<tr>
+<td>0001</td>
+<td>1</td>
+<td>subTableCount</td>
+</tr>
+<tr>
+<td>0008</td>
+<td>WordSpaceExpandSubtable</td>
+<td>subtableOffsets[0], SinglePos subtable
+</td>
+</tr>
+<tr>
+<td> </td>
+<td><b>SinglePosFormat1</b><br>
+WordSpaceExpandSubtable</td>
+<td>SinglePos subtable definition</td>
+</tr>
+<tr>
+<td>0001</td>
+<td>1</td>
+<td>format</td>
+</tr>
+<tr>
+<td>0008</td>
+<td>WordSpaceCoverage</td>
+<td>offset to Coverage table</td>
+</tr>
+<tr>
+<td>0004</td>
+<td>0x0004</td>
+<td>valueFormat: xAdvance only</td>
+</tr>
+<tr>
+<td>0168</td>
+<td>360</td>
+<td>value — xAdvance value in Jstf: this is a max value, expand word space from zero to this amount
+</td>
+</tr>
+<tr>
+<td> </td>
+<td><b>CoverageFormat1</b><br>
+WordSpaceCoverage</td>
+<td>Coverage table definition</td>
+</tr>
+<tr>
+<td>0001</td>
+<td>1</td>
+<td>format</td>
+</tr>
+<tr>
+<td>0001</td>
+<td>1</td>
+<td>glyphCount</td>
+</tr>
+<tr>
+<td>0022</td>
+<td>WordSpaceGlyphID</td>
+<td>glyphArray[0]</td>
+</tr>
+</tbody>
+</table>
+</div>
+					
+		<div
+			id="ms--inline-notifications"
+			class="margin-block-xs"
+			data-bi-name="inline-notification"
+		></div>
+	 
+		<div
+			id="assertive-live-region"
+			role="alert"
+			aria-live="assertive"
+			class="visually-hidden"
+			aria-relevant="additions"
+			aria-atomic="true"
+		></div>
+		<div
+			id="polite-live-region"
+			role="status"
+			aria-live="polite"
+			class="visually-hidden"
+			aria-relevant="additions"
+			aria-atomic="true"
+		></div>
+	
+					
+			
+		<!-- feedback section -->
+		<section
+			class="feedback-section position-relative margin-top-lg border border-radius padding-xxs display-none-print"
+			data-bi-name="open-source-feedback-section"
+			data-open-source-feedback-section
+			hidden
+		>
+			<div class="display-flex flex-direction-column flex-direction-row-tablet">
+				<div
+					class="width-450-tablet padding-inline-xs padding-inline-xs-tablet padding-top-xs padding-bottom-sm padding-top-xs-tablet background-color-body-medium"
+				>
+					<div class="display-flex flex-direction-column">
+						<div class="padding-bottom-xxs">
+							<span class="icon margin-right-xxs" aria-hidden="true">
+								<span class="docon docon-brand-github"></span>
+							</span>
+							<span class="font-weight-semibold">
+								Collaborate with us on GitHub
+							</span>
+						</div>
+						<span class="line-height-normal">
+							The source for this content can be found on GitHub, where you can also create and review issues and pull requests. For more information, see <a href="https://learn.microsoft.com/contribute/content/">our contributor guide</a>.
+						</span>
+					</div>
+				</div>
+				<div
+					class="display-flex gap-xs width-full-tablet flex-direction-column padding-xs justify-content-space-evenly"
+				>
+					<div class="media">
+						
+
+						<div class="media-content">
+							<p
+								class="font-size-xl font-weight-semibold margin-bottom-xxs"
+								data-open-source-product-title
+							>
+								OpenType specification
+							</p>
+							<div class="display-flex gap-xs flex-direction-column">
+								<p class="line-height-normal" data-open-source-product-description></p>
+								<div class="display-flex gap-xs flex-direction-column">
+									<a href="#" data-github-link>
+										<span class="icon margin-right-xxs" aria-hidden="true">
+											<span class="docon docon-bug"></span>
+										</span>
+										<span>Open a documentation issue</span>
+									</a>
+									<a
+										href="https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml"
+										class="display-block margin-top-auto font-size-md"
+										data-feedback-product-url
+									>
+										<span class="icon margin-right-xxs" aria-hidden="true">
+											<span class="docon docon-feedback"></span>
+										</span>
+										<span>Provide product feedback</span>
+									</a>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</section>
+		<!-- end feedback section -->
+	
+			
+		<!-- feedback section -->
+		<section
+			id="site-user-feedback-footer"
+			class="font-size-sm margin-top-md display-none-print display-none-desktop"
+			data-test-id="site-user-feedback-footer"
+			data-bi-name="site-feedback-section"
+		>
+			<hr class="hr" />
+			<h2 id="ms--feedback" class="title is-3">Feedback</h2>
+			<div class="display-flex flex-wrap-wrap align-items-center">
+				<p class="font-weight-semibold margin-xxs margin-left-none">
+					Was this page helpful?
+				</p>
+				<div class="buttons">
+					<button
+						class="thumb-rating-button like button button-primary button-sm"
+						data-test-id="footer-rating-yes"
+						data-binary-rating-response="rating-yes"
+						type="button"
+						title="This article is helpful"
+						data-bi-name="button-rating-yes"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-like"></span>
+						</span>
+						<span>Yes</span>
+					</button>
+					<button
+						class="thumb-rating-button dislike button button-primary button-sm"
+						id="standard-rating-no-button"
+						hidden
+						data-test-id="footer-rating-no"
+						data-binary-rating-response="rating-no"
+						type="button"
+						title="This article is not helpful"
+						data-bi-name="button-rating-no"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-dislike"></span>
+						</span>
+						<span>No</span>
+					</button>
+					<details
+						class="popover popover-top"
+						id="mobile-help-popover"
+						data-test-id="footer-feedback-popover"
+					>
+						<summary
+							class="thumb-rating-button dislike button button-primary button-sm"
+							data-test-id="details-footer-rating-no"
+							data-binary-rating-response="rating-no"
+							title="This article is not helpful"
+							data-bi-name="button-rating-no"
+							aria-pressed="false"
+							data-bi-an="feedback-unhelpful-popover"
+						>
+							<span class="icon" aria-hidden="true">
+								<span class="docon docon-dislike"></span>
+							</span>
+							<span>No</span>
+						</summary>
+						<div
+							class="popover-content width-200 width-300-tablet"
+							role="dialog"
+							aria-labelledby="popover-heading"
+							aria-describedby="popover-description"
+						>
+							<p id="popover-heading" class="font-size-lg margin-bottom-xxs font-weight-semibold">
+								Need help with this topic?
+							</p>
+							<p id="popover-description" class="font-size-sm margin-bottom-xs">
+								Want to try using Ask Learn to clarify or guide you through this topic?
+							</p>
+							
+		<div class="buttons flex-direction-row flex-wrap justify-content-center gap-xxs">
+			<div>
+		<button
+			class="button button-sm border inner-focus display-none margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-test-id="ask-learn-assistant-modal-entry-mobile-feedback"
+			data-ask-learn-modal-entry-feedback
+			data-bi-an=feedback-unhelpful-popover
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-label="Ask Learn"
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+		</button>
+		<button
+			class="button button-sm display-inline-flex display-none-desktop flex-shrink-0 margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-modal-entry-tablet-feedback"
+			data-ask-learn-modal-entry-feedback
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+		<button
+			class="button button-sm display-none flex-shrink-0 display-inline-flex-desktop margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-flyout-entry-feedback"
+			data-ask-learn-flyout-entry-show-only
+			data-flyout-button="toggle"
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-controls="ask-learn-flyout"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+	</div>
+			<button
+				type="button"
+				class="button button-sm margin-right-xxs"
+				data-help-option="suggest-fix"
+				data-bi-name="feedback-suggest"
+				data-bi-an="feedback-unhelpful-popover"
+				data-test-id="suggest-fix"
+			>
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-feedback"></span>
+				</span>
+				<span> Suggest a fix? </span>
+			</button>
+		</div>
+	
+						</div>
+					</details>
+				</div>
+			</div>
+		</section>
+		<!-- end feedback section -->
+	
+		
+				</div>
+				
+		<div id="ms--additional-resources-mobile" class="display-none-print">
+			<hr class="hr" hidden />
+			<h2 id="ms--additional-resources-mobile-heading" class="title is-3" hidden>
+				Additional resources
+			</h2>
+			
+		<section
+			id="right-rail-recommendations-mobile"
+			class=""
+			data-bi-name="recommendations"
+			hidden
+		></section>
+	 
+		<section
+			id="right-rail-training-mobile"
+			class=""
+			data-bi-name="learning-resource-card"
+			hidden
+		></section>
+	 
+		<section
+			id="right-rail-events-mobile"
+			class=""
+			data-bi-name="events-card"
+			hidden
+		></section>
+	
+		</div>
+	 
+		<div
+			id="article-metadata-footer"
+			data-bi-name="article-metadata-footer"
+			data-test-id="article-metadata-footer"
+			class="page-metadata-container"
+		>
+			<hr class="hr" />
+			<ul class="metadata page-metadata" data-bi-name="page info" lang="en-us" dir="ltr">
+				<li class="visibility-hidden-visual-diff">
+			<span class="badge badge-sm text-wrap-pretty">
+				<span>Last updated on <local-time format="twoDigitNumeric"
+		datetime="2025-03-19T08:00:00.000Z"
+		data-article-date-source="calculated"
+		class="is-invisible"
+	>
+		2025-03-19
+	</local-time></span>
+			</span>
+		</li>
+			</ul>
+		</div>
+	
+			</div>
+		
+				</main>
+				<aside
+					id="layout-body-aside"
+					class="layout-body-aside  "
+					data-bi-name="aside"
+					aria-label="Additional resources"
+			  >
+					
+		<div
+			id="ms--additional-resources"
+			class="right-container padding-sm display-none display-block-desktop height-full"
+			data-bi-name="pageactions"
+		>
+			<div id="affixed-right-container" data-bi-name="right-column">
+				
+		<nav
+			id="side-doc-outline"
+			class="doc-outline border-bottom padding-bottom-xs margin-bottom-xs scrollbar-width-thin"
+			data-bi-name="intopic toc"
+			aria-label="In this article"
+		>
+			<h3>In this article</h3>
+		</nav>
+	
+				<!-- Feedback -->
+				
+		<section
+			id="ms--site-user-feedback-right-rail"
+			class="font-size-sm display-none-print"
+			data-test-id="site-user-feedback-right-rail"
+			data-bi-name="site-feedback-right-rail"
+		>
+			<div class="display-flex flex-wrap-wrap align-items-center">
+				<p class="font-weight-semibold margin-xxs margin-left-none">
+					Was this page helpful?
+				</p>
+				<div class="display-flex flex-wrap-nowrap">
+					<button
+						class="thumb-rating-button like inner-focus"
+						data-test-id="right-rail-rating-yes"
+						data-binary-rating-response="rating-yes"
+						type="button"
+						title="This article is helpful"
+						aria-label="This article is helpful"
+						data-bi-name="button-rating-yes"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-like"></span>
+						</span>
+					</button>
+					<button
+						class="thumb-rating-button dislike inner-focus"
+						id="right-rail-no-button"
+						hidden
+						data-test-id="right-rail-rating-no"
+						data-binary-rating-response="rating-no"
+						type="button"
+						title="This article is not helpful"
+						aria-label="This article is not helpful"
+						data-bi-name="button-rating-no"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-dislike"></span>
+						</span>
+					</button>
+					<details class="popover popover-right" id="help-popover" data-test-id="feedback-popover">
+						<summary
+							tabindex="0"
+							class="thumb-rating-button dislike inner-focus"
+							data-test-id="details-right-rail-rating-no"
+							data-binary-rating-response="rating-no"
+							title="This article is not helpful"
+							aria-label="This article is not helpful"
+							data-bi-name="button-rating-no"
+							aria-pressed="false"
+							data-bi-an="feedback-unhelpful-popover"
+						>
+							<span class="icon" aria-hidden="true">
+								<span class="docon docon-dislike"></span>
+							</span>
+						</summary>
+						<div
+							class="popover-content width-200 width-300-tablet"
+							role="dialog"
+							aria-labelledby="popover-heading-right-rail"
+							aria-describedby="popover-description-right-rail"
+						>
+							<p
+								id="popover-heading-right-rail"
+								class="font-size-lg margin-bottom-xxs font-weight-semibold"
+							>
+								Need help with this topic?
+							</p>
+							<p id="popover-description-right-rail" class="font-size-sm margin-bottom-xs">
+								Want to try using Ask Learn to clarify or guide you through this topic?
+							</p>
+							
+		<div class="buttons flex-direction-row flex-wrap justify-content-center gap-xxs">
+			<div>
+		<button
+			class="button button-sm border inner-focus display-none margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-test-id="ask-learn-assistant-modal-entry-mobile-feedback"
+			data-ask-learn-modal-entry-feedback
+			data-bi-an=feedback-unhelpful-popover
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-label="Ask Learn"
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+		</button>
+		<button
+			class="button button-sm display-inline-flex display-none-desktop flex-shrink-0 margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-modal-entry-tablet-feedback"
+			data-ask-learn-modal-entry-feedback
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+		<button
+			class="button button-sm display-none flex-shrink-0 display-inline-flex-desktop margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-flyout-entry-feedback"
+			data-ask-learn-flyout-entry-show-only
+			data-flyout-button="toggle"
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-controls="ask-learn-flyout"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+	</div>
+			<button
+				type="button"
+				class="button button-sm margin-right-xxs"
+				data-help-option="suggest-fix"
+				data-bi-name="feedback-suggest"
+				data-bi-an="feedback-unhelpful-popover"
+				data-test-id="suggest-fix"
+			>
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-feedback"></span>
+				</span>
+				<span> Suggest a fix? </span>
+			</button>
+		</div>
+	
+						</div>
+					</details>
+				</div>
+			</div>
+		</section>
+	
+			</div>
+		</div>
+	
+			  </aside> <section
+					id="layout-body-flyout"
+					class="layout-body-flyout "
+					data-bi-name="flyout"
+			  >
+					 <div
+	class="height-full border-left background-color-body-medium"
+	id="ask-learn-flyout"
+></div>
+			  </section> <div class="layout-body-footer " data-bi-name="layout-footer">
+		<footer
+			id="footer"
+			data-test-id="footer"
+			data-bi-name="footer"
+			class="footer-layout padding-xs padding-sm-desktop has-default-focus border-top"
+			role="contentinfo"
+		>
+			<div class="display-flex gap-xs flex-wrap-wrap is-full-height padding-right-lg-desktop">
+				
+		<a
+			data-mscc-ic="false"
+			href="#"
+			data-bi-name="select-locale"
+			class="locale-selector-link flex-shrink-0 button button-sm button-clear external-link-indicator"
+			id=""
+			title=""
+			><span class="icon" aria-hidden="true"
+				><span class="docon docon-world"></span></span
+			><span class="local-selector-link-text">en-us</span></a
+		>
+	 <div class="ccpa-privacy-link" data-ccpa-privacy-link hidden>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://aka.ms/yourcaliforniaprivacychoices"
+			data-bi-name="your-privacy-choices"
+			class="button button-sm button-clear flex-shrink-0 external-link-indicator"
+			id=""
+			title=""
+			>
+		<svg
+			xmlns="http://www.w3.org/2000/svg"
+			viewBox="0 0 30 14"
+			xml:space="preserve"
+			height="16"
+			width="43"
+			aria-hidden="true"
+			focusable="false"
+		>
+			<path
+				d="M7.4 12.8h6.8l3.1-11.6H7.4C4.2 1.2 1.6 3.8 1.6 7s2.6 5.8 5.8 5.8z"
+				style="fill-rule:evenodd;clip-rule:evenodd;fill:#fff"
+			></path>
+			<path
+				d="M22.6 0H7.4c-3.9 0-7 3.1-7 7s3.1 7 7 7h15.2c3.9 0 7-3.1 7-7s-3.2-7-7-7zm-21 7c0-3.2 2.6-5.8 5.8-5.8h9.9l-3.1 11.6H7.4c-3.2 0-5.8-2.6-5.8-5.8z"
+				style="fill-rule:evenodd;clip-rule:evenodd;fill:#06f"
+			></path>
+			<path
+				d="M24.6 4c.2.2.2.6 0 .8L22.5 7l2.2 2.2c.2.2.2.6 0 .8-.2.2-.6.2-.8 0l-2.2-2.2-2.2 2.2c-.2.2-.6.2-.8 0-.2-.2-.2-.6 0-.8L20.8 7l-2.2-2.2c-.2-.2-.2-.6 0-.8.2-.2.6-.2.8 0l2.2 2.2L23.8 4c.2-.2.6-.2.8 0z"
+				style="fill:#fff"
+			></path>
+			<path
+				d="M12.7 4.1c.2.2.3.6.1.8L8.6 9.8c-.1.1-.2.2-.3.2-.2.1-.5.1-.7-.1L5.4 7.7c-.2-.2-.2-.6 0-.8.2-.2.6-.2.8 0L8 8.6l3.8-4.5c.2-.2.6-.2.9 0z"
+				style="fill:#06f"
+			></path>
+		</svg>
+	
+			<span>Your Privacy Choices</span></a
+		>
+	
+	</div>
+				<div class="flex-shrink-0">
+		<div class="dropdown has-caret-up">
+			<button
+				data-test-id="theme-selector-button"
+				class="dropdown-trigger button button-clear button-sm inner-focus theme-dropdown-trigger"
+				aria-controls="{{ themeMenuId }}"
+				aria-haspopup="true"
+				aria-expanded="false"
+				data-bi-name="theme"
+			>
+				<span class="icon" aria-hidden="true"><span class="docon docon-sun"></span></span>
+				<span>Theme</span>
+				<span class="icon expanded-indicator" aria-hidden="true">
+					<span class="docon docon-chevron-down-light"></span>
+				</span>
+			</button>
+			<div class="dropdown-menu" id="{{ themeMenuId }}" role="menu">
+				<ul class="theme-selector padding-xxs" data-test-id="theme-dropdown-menu" role="none">
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="light"
+							tabindex="-1"
+						>
+							<span class="theme-light margin-right-xxs">
+								<span
+									class="theme-selector-icon border display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> Light </span>
+						</button>
+					</li>
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="dark"
+							tabindex="-1"
+						>
+							<span class="theme-dark margin-right-xxs">
+								<span
+									class="border theme-selector-icon display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> Dark </span>
+						</button>
+					</li>
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="high-contrast"
+							tabindex="-1"
+						>
+							<span class="theme-high-contrast margin-right-xxs">
+								<span
+									class="border theme-selector-icon display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> High contrast </span>
+						</button>
+					</li>
+				</ul>
+			</div>
+		</div>
+	</div>
+			</div>
+			<ul class="links" data-bi-name="footerlinks">
+				<li class="manage-cookies-holder" hidden=""></li>
+				<li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/principles-for-ai-generated-content"
+			data-bi-name="aiDisclaimer"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>AI Disclaimer</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/previous-versions/"
+			data-bi-name="archivelink"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Previous Versions</a
+		>
+	
+	</li> <li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://techcommunity.microsoft.com/t5/microsoft-learn-blog/bg-p/MicrosoftLearnBlog"
+			data-bi-name="bloglink"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Blog</a
+		>
+	
+	</li> <li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/contribute"
+			data-bi-name="contributorGuide"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Contribute</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://go.microsoft.com/fwlink/?LinkId=521839"
+			data-bi-name="privacy"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Privacy</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://go.microsoft.com/fwlink/?linkid=2259814"
+			data-bi-name="consumer-health-privacy"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Consumer Health Privacy</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/legal/termsofuse"
+			data-bi-name="termsofuse"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Terms of Use</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://www.microsoft.com/legal/intellectualproperty/Trademarks/"
+			data-bi-name="trademarks"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Trademarks</a
+		>
+	
+	</li>
+				<li>&copy; Microsoft 2026</li>
+			</ul>
+		</footer>
+	</footer>
+			</body>
+		</html>

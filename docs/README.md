@@ -55,49 +55,61 @@ secret — is D-146.
 | 16 | [More than one processor](16-more-than-one-processor.md) | The SMP track: the processor list, interprocessor interrupts, a borrow that waits, per-processor data, the start-up of an application processor, per-processor run queues, remote invalidation |
 
 Beside the documents lie the standards they cite, verbatim and with
-their checksums, one directory per body that publishes them:
-[rfc/](rfc) for the RFCs (D-59), [oasis/](oasis) for what OASIS
-publishes (D-100), [w3c/](w3c), [ecma/](ecma), [itu/](itu) for the
-JPEG Recommendations, [cipa/](cipa) for Exif, [ti/](ti) for the
-16550 serial controller, which is a datasheet from a manufacturer rather
-than a standard from a standards body, [uefi/](uefi) for what the UEFI
-Forum publishes — the firmware interface the loader is written against and
-the ACPI tables the kernel finds its interrupt controllers through — and
-[openssh/](openssh) for what
-OpenSSH specified and no standards body did (D-134): the one cipher of
-the Secure Shell client, kept as the OpenSSH document it came from and
-the IETF draft that replaced it, and the private key format a client
-reads a key of its own from, and [acm/](acm) for the one research
+their checksums, one directory per body that publishes them: [rfc/](rfc)
+for the RFCs (D-59), [oasis/](oasis) for what OASIS publishes (D-100),
+[w3c/](w3c), [ecma/](ecma), [unicode/](unicode) for the annexes,
+reports, character database and conformance test files of Unicode 18.0.0
+(D-151), [microsoft/](microsoft) for the OpenType specification (D-152),
+[adobe/](adobe) for the three technical notes that specification defers
+to for a CFF outline (D-155), [iso/](iso) for the standard that is its
+normative form (D-153), [itu/](itu) for the JPEG Recommendations,
+[cipa/](cipa) for Exif, [ti/](ti) for the 16550 serial controller, which
+is a datasheet from a manufacturer rather than a standard from a
+standards body, [uefi/](uefi) for what the UEFI Forum publishes — the
+firmware interface the loader is written against and the ACPI tables the
+kernel finds its interrupt controllers through — and [openssh/](openssh)
+for what OpenSSH specified and no standards body did (D-134): the one
+cipher of the Secure Shell client, kept as the OpenSSH document it came
+from and the IETF draft that replaced it, and the private key format a
+client reads a key of its own from, and [acm/](acm) for the one research
 paper a tool of this repository implements: NoREC, which `norec`
 compares an optimized query against an unoptimized one by. Each
-directory has a `README.md`
-naming what belongs there and how it is fetched. Nothing under them is
-compiled, linked, or read at run time.
+directory has a `README.md` naming what belongs there and how it is
+fetched. Nothing under them is compiled, linked, or read at run time.
 
 D-124 states what decides whether a document is kept: whether it can be
 obtained, not whether its licence permits the copy. `rfc/`, `oasis/`,
-`w3c/`, `ecma/` and `openssh/` hold documents that may be redistributed.
-`itu/`, `cipa/`, `ti/`, `uefi/` and `acm/` hold documents that the ITU,
-CIPA, Texas Instruments, the UEFI Forum and, for the paper in `acm/`, its
-first author serve to anyone at no charge but do
-not licence for redistribution; the copies are kept regardless, and each
-of those READMEs quotes the restriction it stands against and states what
-follows from it. Two of them record something further. `ti/` does,
-because the part the crate is named after is the one document of all of
-these that its publisher no longer serves: what is kept is the datasheet
-of a compatible part that TI does serve, and the README says which routes
-to the original were tried and what the substitution does and does not
-cover. `uefi/` does, because its two documents are the first here that a
-shell on the development machine cannot fetch: the Forum's site answers
-an automated request with a bot check, so they were downloaded by hand
-and the checksum is what stands in for the fetch. `acm/` does, because
-what is kept is the authors' accepted version rather than the published
-one: the ACM Digital Library answers an automated request with `403`, and
-the author serves the same paper.
-[pcisig/](pcisig) holds no document, because PCI-SIG releases the two
-specifications the crate `pci` cites only to members or against payment;
-it records instead which documents those are and what takes the place of
-having them at hand.
+`w3c/`, `ecma/`, `openssh/` and `adobe/` hold documents that may be
+redistributed, and so do the property and test files of `unicode/`,
+which the Unicode License v3 covers. `itu/`, `cipa/`, `ti/`, `uefi/`,
+`acm/`, `microsoft/`, `iso/` and the seven annexes and reports of
+`unicode/` hold documents that the ITU, CIPA, Texas Instruments, the
+UEFI Forum, Microsoft, ISO/IEC, Unicode and, for the paper in `acm/`,
+its first author serve to anyone at no charge but do not licence for
+redistribution; the copies are kept regardless, and each of those
+READMEs quotes the restriction it stands against and states what follows
+from it. Five of them record something further. `ti/` does, because the
+part the crate is named after is the one document of all of these that
+its publisher no longer serves: what is kept is the datasheet of a
+compatible part that TI does serve, and the README says which routes to
+the original were tried and what the substitution does and does not
+cover. `uefi/` and `iso/` do, because their documents are the ones here
+that a shell on the development machine cannot fetch: the Forum's site
+answers an automated request with a bot check, and ISO serves its
+standard free of charge behind a licence a person has to accept, so all
+three were downloaded by hand and the checksum is what stands in for the
+fetch. `acm/` does, because what is kept is the authors' accepted
+version rather than the published one: the ACM Digital Library answers
+an automated request with `403`, and the author serves the same paper.
+`microsoft/` does, because what Microsoft serves is not one document but
+84 pages of a site, so its README states what a page carries besides the
+specification and what a cross-reference between two of them does not
+do.
+
+[pcisig/](pcisig) is the one directory that holds no document, because
+PCI-SIG releases the two specifications the crate `pci` cites only to
+members or against payment; it records instead which documents those are
+and what takes the place of having them at hand.
 
 ## Conventions for these documents
 

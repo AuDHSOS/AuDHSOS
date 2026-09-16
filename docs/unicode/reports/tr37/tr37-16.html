@@ -1,0 +1,491 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
+"http://www.w3.org/TR/html4/loose.dtd">
+<html>
+
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<meta http-equiv="Content-Language" content="en-us">
+<title>UTS #37: Unicode Ideographic Variation Database</title>
+<link rel="stylesheet" type="text/css"
+	href="https://www.unicode.org/reports/reports-v2.css">
+<style type="text/css">
+<!--
+a:visited.plain, a:link.plain {
+	color: black;
+	text-decoration: none
+}
+
+a:hover.plain {
+	color: red;
+	text-decoration: underline;
+}
+
+.noborder {
+	border-width: 0;
+	border-collapse: collapse;
+}
+
+@font-face {
+	font-family: 'Uni82A6a';
+	src: url('fonts/Uni82A6a-Regular.woff2') format('woff2'), url('fonts/Uni82A6a-Regular.woff') format('woff');
+	font-weight: normal;
+	font-style: normal;
+}
+@font-face {
+	font-family: 'Uni82A6b';
+	src: url('fonts/Uni82A6b-Regular.woff2') format('woff2'), url('fonts/Uni82A6b-Regular.woff') format('woff');
+	font-weight: normal;
+	font-style: normal;
+}
+@font-face {
+	font-family: 'Uni82A6c';
+	src: url('fonts/Uni82A6c-Regular.woff2') format('woff2'), url('fonts/Uni82A6c-Regular.woff') format('woff');
+	font-weight: normal;
+	font-style: normal;
+}
+@font-face {
+	font-family: 'Uni82A6d';
+	src: url('fonts/Uni82A6d-Regular.woff2') format('woff2'), url('fonts/Uni82A6d-Regular.woff') format('woff');
+	font-weight: normal;
+	font-style: normal;
+}
+@font-face {
+	font-family: 'Uni82A6e';
+	src: url('fonts/Uni82A6e-Regular.woff2') format('woff2'), url('fonts/Uni82A6e-Regular.woff') format('woff');
+	font-weight: normal;
+	font-style: normal;
+}
+@font-face {
+	font-family: 'Uni82A6f';
+	src: url('fonts/Uni82A6f-Regular.woff2') format('woff2'), url('fonts/Uni82A6f-Regular.woff') format('woff');
+	font-weight: normal;
+	font-style: normal;
+}
+-->
+
+</style>
+</head>
+
+<body>
+
+  <table class="header">
+    <tr>
+          <td class="icon" style="width:38px; height:35px">
+          <a href="https://www.unicode.org/">
+          <img border="0" src="https://www.unicode.org/webscripts/logo60s2.gif" align="middle" 
+          alt="[Unicode]" width="34" height="33"></a>
+          </td>
+
+          <td class="icon" style="vertical-align:middle">
+          <a class="bar"> </a>
+          <a class="bar" href="https://www.unicode.org/reports/"><font size="3">Technical Reports</font></a>
+          </td>
+    </tr>
+    <tr>
+      <td colspan="2" class="gray">&nbsp;</td>
+    </tr>
+  </table>
+
+	<div class="body">
+		<h2 align="center">
+			<!-- span class="changed">Proposed Update </span -->
+			<span class="uaxtitle">Unicode® Technical Standard #37</span>
+		</h2>
+		<h1>Unicode Ideographic Variation Database</h1>
+		<table class="simple" width="90%">
+			<tr>
+				<td width="20%">Version</td>
+				<td>7.0</td>
+			</tr>
+			<tr>
+				<td>Editor</td>
+				<td>Ken Lunde &#x5C0F;&#x6797;&#x5263;
+				</td>
+			</tr>
+			<tr>
+				<td>Date</td>
+				<td>2026-04-30</td>
+			</tr>
+			<tr>
+				<td>This Version</td>
+				<td><a href="https://www.unicode.org/reports/tr37/tr37-16.html">https://www.unicode.org/reports/tr37/tr37-16.html</a></td>
+			</tr>
+			<tr>
+				<td>Previous Version</td>
+				<td><a href="https://www.unicode.org/reports/tr37/tr37-14.html">https://www.unicode.org/reports/tr37/tr37-14.html</a></td>
+			</tr>
+			<tr>
+				<td>Latest Version</td>
+				<td><a href="https://www.unicode.org/reports/tr37/">https://www.unicode.org/reports/tr37/</a></td>
+			</tr>
+			<tr>
+				<td>Latest Proposed Update</td>
+				<td><a href="https://www.unicode.org/reports/tr37/proposed.html">https://www.unicode.org/reports/tr37/proposed.html</a></td>
+			</tr>
+			<tr>
+				<td>Database</td>
+				<td><a href="https://www.unicode.org/ivd/">https://www.unicode.org/ivd/</a></td>
+			</tr>
+			<tr>
+				<td>Revision</td>
+				<td><a href="#Modifications">16</a></td>
+			</tr>
+		</table>
+		<h3>
+			<em>Summary</em>
+		</h3>
+		<p>
+			<em>This document describes the organization of the Ideographic Variation Database, and the procedure to add sequences to that database.</em>
+		</p>
+
+		<h3>
+			<em>Status</em>
+		</h3>
+		<!-- NOT YET APPROVED
+		<p class="changed">
+			<em>This is a<b><font color="#ff3333"> draft </font></b>document which may be updated, replaced, or superseded by other documents at any time. Publication does not imply endorsement by the Unicode Consortium. This is not a stable document; it is inappropriate to cite this document as other than a work in progress.</em>
+		</p>
+		NOT YET APPROVED -->
+		<!-- APPROVED -->
+		<p>
+			<em>This document has been reviewed by Unicode members and other interested parties, and has been approved for publication by the Unicode Consortium. This is a stable document and may be used as reference material or cited as a normative reference by other specifications.</em>
+		</p>
+		<!-- END APPROVED -->
+		<blockquote>
+		<p><em><b>A Unicode Technical Standard (UTS)</b> is an independent specification. Conformance to the Unicode Standard does not imply conformance to any UTS.</em></p>
+		</blockquote>
+
+		<p><em>Please submit corrigenda and other comments with the online reporting form [<a href="#Feedback">Feedback</a>]. Related information that is useful in understanding this document is found in <a href="#References">References</a>. For the latest version of the Unicode Standard see [<a href="#Unicode">Unicode</a>]. For a list of current Unicode Technical Reports see [<a href="#Reports">Reports</a>]. For more information about versions of the Unicode Standard, see [<a href="#Versions">Versions</a>].</em></p>
+
+		<h4>Contents</h4>
+		<ul class="toc">
+			<li>1     <a href="#w1aab7b1">Introduction</a></li>
+			<li>2     <a href="#w1aab9b1">Description</a></li>
+			<li>3     <a href="#w1aac11b1">Format of the Ideographic Variation Database</a></li>
+			<li>4     <a href="#w1aac13b1">Registration Procedure</a>
+			<ul class="toc">
+				<li>4.1     <a href="#w1aac13b5b1">Registration of a Collection</a></li>
+				<li>4.2     <a href="#w1aac13b7b1">Registration of Sequences in a Collection</a></li>
+				<li>4.3     <a href="#w1aac13b9b1">Registration Authority and Registrar</a></li>
+				<li>4.4     <a href="#w1aac13c11b1">Registration Fees</a></li>
+			</ul></li>
+			<li>Appendix A.  <a href="#registration_form">Registration Form for Collections</a></li>
+			<li>Appendix B.  <a href="#w1aac17b1">Hypothetical Example</a>
+			<ul class="toc">
+				<li>1     <a href="#w1aac17b5b1">The Situation</a></li>
+				<li>2     <a href="#w1aac17b7b1">Describing the Collection and its Content</a></li>
+				<li>3     <a href="#w1aac17b9b1">The IVD</a></li>
+				<li>4     <a href="#w1aac17c11b1">Using the IVS</a></li>
+			</ul></li>
+			<li><a href="#Acknowledgments">Acknowledgments</a></li>
+			<li><a href="#References">References</a></li>
+			<li><a href="#Modifications">Modifications</a></li>
+		</ul>
+		<hr>
+		<h2>
+			<a name="w1aab7b1">1 Introduction</a>
+		</h2>
+
+		<p>Characters in the Unicode Standard can be represented by a wide variety of glyphs. Occasionally the need arises in text processing to restrict or change the set of glyphs that are to be used to display a character. In special circumstances, this restriction needs to be expressed in plain text rather than by font selection or some other rich text mechanism. The Unicode Standard accommodates those circumstances with variation selectors: the code point of a graphic character can be followed by the code point of a variation selector to identify a restriction on the graphic character. The combination of a graphic character and a variation selector is known as a variation sequence (see Section 23.4, <em>Variation Selectors</em> of [<a href="#Unicode">Unicode</a>]).</p>
+		<p>In the case of Han and other ideographs, it is impossible to build a single collection of variation sequences that can satisfy all the needs of the users. The requirements from scholars, governments and publishers are too different to be accommodated by a single collection. Instead they can be met by having multiple independent collections. The Ideographic Variation Database ensures that there is a single definition of a given variation sequence, to make interchange of text using such variation sequences reliable.</p>
+
+		<h2>
+			<a name="w1aab9b1">2 Description</a>
+		</h2>
+
+		<p>An <em>Ideographic Variation Sequence (IVS)</em> is a sequence of two coded characters, the first being a character with the Ideographic property that is not canonically nor compatibly decomposable, the second being a variation selector character in the range U+E0100 to U+E01EF.</p>
+
+		<p>A <em>glyphic subset</em> for a given character is a subset of the glyphs that are appropriate for displaying that character.</p>
+
+		<p>The purpose of the <em>Ideographic Variation Database (IVD)</em> is to associate an IVS with a unique glyphic subset. An IVS which is present in the database is a <em>registered IVS;</em> one can determine reliably the intent of such IVSes when they occur in text by consulting the database, thus those IVSes are suitable for use in text interchange.</p>
+
+		<p>IVSes are subject to the usual rules for variation sequences: unregistered IVSes (which are not in the database) should not be used in text interchange, and registered IVSes should be used only to restrict the rendering of their ideograph to the glyphic subset associated with the IVS in the database. Furthermore, variation selectors are default ignorable. This implies that registrants are expected to ensure that the glyphic subset associated with an IVS is indeed a subset of the glyphs which are acceptable for the base character alone. Stated another way, the shapes in the glyphic subset of an IVS should be unifiable with the base character of that IVS. One possible way to determine this, at least for characters with the Unified_Ideograph property, is to consider the unification rules for Han ideographs (see Section 18.1, <em>Han</em> of [<a href="#Unicode">Unicode</a>] and Annex S, <em>Procedure for the unification and arrangement of CJK Ideographs</em> of [<a href="#ISO10646">ISO 10646</a>]).</p>
+		<p>In an effort to reduce the number of encoded variants, the unification rules for characters with the Unified_Ideograph property, when applied to the IVD, have been expanded to include the following two cases whose examples are shown using IDSes (<em>Ideographic Description Sequences</em>) because one of the characters in each example pair is either unencoded or not-yet-encoded:</p>
+		<ol>
+			<li>Characters that have a different structure, but whose difference is not considered significant enough to encode them as separate unified ideographs, and for which strong evidence associating them as variants of encoded characters can be provided. Examples include the following:
+			<ul>
+				<li>⿱椎十 (UAX #45 UTC-00344) versus ⿰木隼 (U+69AB 榫)</li>
+				<li>⿱汨皿 (U+30715 &#x30715;) versus ⿰氵昷 (U+6E29 温)</li>
+				<li>⿱戠火 (IRG Working Set 2015 #02274) versus ⿹戠火 (U+243B7 𤎷)</li>
+			</ul>
+			</li>
+			<li>Characters with the same structure, but with different components at the second (or subsequent) level that may not be generally unifiable, and for which strong evidence associating them as variants of encoded characters can be provided. Examples include the following:
+			<ul>
+				<li>⿰月㲋 (U+30BBC &#x30BBC;) versus ⿰月𣬉 (U+818D 膍)</li>
+				<li>⿺𠃊西 (U+3003E &#x3003E;) versus ⿺辶西 (U+8FFA 迺)</li>
+			</ul>
+			</li>
+		</ol>
+		<p>When considering the second case, the character should be rarely used and not in general circulation, and the registrant is expected to provide evidence that demonstrates similarity of glyph shape and general acceptance as a variant.</p>
+
+		<p>To guarantee the stability of texts using registered IVSes, the association between an IVS and a glyphic subset is permanent: an IVS is never reassigned to another glyphic subset.</p>
+
+		<p>While the IVD guarantees that a registered IVS corresponds to a single glyphic subset, and that this association is permanent, it does not guarantee that two different IVSes on the same ideograph have non-overlapping or even distinct glyphic subsets.</p>
+
+		<p>There is no guarantee that two IVSes using the same variation selector but on different ideographs have any relationship, nor will a variation selector be designated for a purpose independently of any base. For example, if some IVS using U+E0100 captures a restriction on the display of left component of its base ideograph, some other IVS also using U+E0100 could capture a restriction on the display of the right component of its base ideograph; and therefore, the effect of U+E0100 does not need to be uniform in all the IVSes it is part of.</p>
+
+		<p>Should there be a requirement to register more than 240 IVSes involving the same ideograph, the Unicode Consortium will begin the process of encoding additional variation selectors, and make those available for registration of Ideographic Variation Sequences.</p>
+
+		<p>To facilitate the organization and use of the IVD, registered IVSes are grouped in collections. This facilitates tracking the glyphic subset associated with an IVS, which is identified as an entry in a collection. It is also expected that the glyphic subsets in a given collection have been selected so that as an aggregate, they satisfy the requirements of a given user community.</p>
+
+		<p>If there are sequences that correspond to the same glyphic subset, it becomes a burden for implementers, which can make a collection less likely to be implemented. As a result, in an effort to minimize the number of sequences that correspond to the same glyphic subset, registrants are strongly encouraged, but not required, to share sequences where sequences in a submission are similar to those in an existing collection. Furthermore, as part of the registration process, the registrar shall alert the registrant to the potential of sharing sequences. The sharing of sequences across collections may occur if there is mutual agreement among the registrants for the affected collections.</p>
+
+		<p>Registration of a collection does not imply suitability for any particular purpose. The usefulness of a given variation sequence and the usefulness of a collection as a whole depend to a large extent on their use. Registrants are encouraged to describe the intent of their collections, and users are encouraged to evaluate whether a collection is useful for their purpose.</p>
+
+		<p>Implementations are free to support any combination of registered sequences, including those from multiple collections or partial subsets of collections.</p>
+
+		<h2>
+			<a name="w1aac11b1">3 Format of the Ideographic Variation Database</a>
+		</h2>
+
+		<p>The Ideographic Variation Database consists of two data files. The first, IVD_Collections.txt records the registered collections. The second, IVD_Sequences.txt records the registered sequences.</p>
+
+		<p>In each file, lines starting with a '#' character and empty lines are comment lines. The other lines are organized into fields, separated by a semicolon; initial and trailing white space in those fields is not significant. Both files are encoded in UTF-8, using U+000A as the line separator. Both files must end with a comment line “# EOF”.</p>
+
+		<p>In IVD_Collections.txt, each line corresponds to an Ideographic Variation Collection, and there are three fields per line:</p>
+
+		<ul>
+			<li><p>field 1: the identifier of a collection</p></li>
+			<li><p>field 2: a regular expression for the identifiers within the collection; all such identifiers must match that regular expression. Over time, this regular expression may be extended, as new identifiers are used in the collection.</p></li>
+			<li><p>field 3: the URL of a website describing the collection</p></li>
+		</ul>
+
+		<p>In IVD_Sequences.txt, each line corresponds to an Ideographic Variation Sequence and there are three fields per line:</p>
+
+		<ul>
+			<li><p>field 1: the code points of the base character and the variation selector, separated by a space</p></li>
+			<li><p>field 2: the identifier of the collection under which the sequence is registered</p></li>
+			<li><p>field 3: the identifier of the sequence, provided by the registrant; this identifier must match the regular expression for the collection</p></li>
+		</ul>
+
+		<p>The identifiers for collections and sequences are character strings starting with one of 'A'..'Z', 'a'..'z', and continuing with one of 'A'..'Z', 'a'..'z', '0'..'9', '_' ,'-','+'. The use of '-' and '+' in identifiers is allowed for the purpose of backwards compatibility with existing registrations. Unique programmatic identifiers can be generated from these identifiers by one of two means: 1) folding '-' and '+' into '_', or 2) removing them altogether. The regular expressions for identifiers conform to Perl 5.8 regular expressions [<a href="#Perl">Perl</a>].</p>
+
+		<h2>
+			<a name="w1aac13b1">4 Registration Procedure</a>
+		</h2>
+
+		<p>The Ideographic Variation Database is populated by submitting registration requests to a registration authority. The first step is to register a collection. After this is done, individual glyphic subsets can be registered in the context of that collection.</p>
+
+		<h3>
+			<a name="w1aac13b5b1">4.1 Registration of a Collection</a>
+		</h3>
+
+		<p>The registrant must first provide to the registrar the intent of the collection, its principles, and any other data that may be useful for users of the collection. The registrar will use that information to establish a web page summarizing the proposed collection on the registration authority’s website.</p>
+
+		<p>Once the appropriate webpage is online, the intent to register the collection must be announced publicly in a manner designated by the registrar and sent to the general Unicode email distribution list [<a href="#DistList">DistList</a>]. This announcement must include the URL of the webpage describing the proposed collection. This starts a review period of at least 90 days, during which comments and questions about the collection can be submitted to the registrant. The registrant should respond to these comments and questions.</p>
+
+		<p>At the end of the review period, the registrant can submit the registration form in <a href="#registration_form">Appendix A</a>, together with a written and signed statement that:</p>
+
+		<ul>
+			<li><p>the registrant will make reasonable efforts to maintain the stability of any websites the web page references</p></li>
+			<li><p>the variation sequences that will be registered in that collection can be used freely, without any limitation, fee, or other requirement</p></li>
+			<li><p>all the comments and questions received during the review period have been addressed</p></li>
+		</ul>
+
+		<p>Upon receipt of a complete application and the applicable fee, if any, the registrar will assign a collection identifier (respecting as much as possible the suggested identifier), and add the collection to the Ideographic Variation Database.</p>
+
+		<p>Owners of collections can change the designated representative at any time by notifying the registrar. Ownership of a collection can be transferred to another party by notifying the registrar.</p>
+
+		<p>The registration of sequences in that collection can be started concurrently with the registration of the collection itself.</p>
+
+		<h3>
+			<a name="w1aac13b7b1">4.2 Registration of Sequences in a Collection</a>
+		</h3>
+
+		<p>The registrar shall include the proposed sequences in the web page describing the collection, which is provided by the registrant. This must include a file in the format of IVD_Sequences.txt, except that the first field must contain only the code point of the base character. The registrant is responsible for ensuring that sequence identifiers are unique for each base character <em>within</em> the collection, including sequences previously registered in that collection, and that they match the regular expression for sequence identifiers in the collection. An application that does not respect these rules will be rejected. Ideally, this description should include representative glyphs for proposed sequences.</p>
+
+		<p>Once the webpage is online, the intent to register the sequences must be announced publicly in a manner designated by the registrar and sent to the general Unicode email distribution list [<a href="#DistList">DistList</a>]. This announcement must include the URL of the webpage describing the proposed sequences. This starts a review period of at least 90 days, during which comments and questions about the sequences can be submitted to the registrant. The registrant should respond to these comments and questions.</p>
+
+		<p>At the end of the review period, the registrant can submit the application for those sequences. The registrant must include one or more representative glyphs for each registered sequence. Independent of the registration process, the registrant may also supply additional representative glyphs for registered sequences of an existing collection.</p>
+
+		<p>Upon receipt of a complete application and the applicable fee if any, the registrar will assign a variation selector for each sequence, and add the sequences to the Ideographic Variation Database.</p>
+
+		<h3>
+			<a name="w1aac13b9b1">4.3 Registration Authority and Registrar</a>
+		</h3>
+
+		<p>The Unicode Consortium will be the registration authority for this database. It will appoint a registrar to handle requests for registration. Collections for which the registration authority itself is the registrant will have no special status over other registered collections. Collections submitted for registration by the registration authority will also undergo the same vetting process as any other submission.</p>
+
+		<h3>
+			<a name="w1aac13c11b1">4.4 Registration Fees</a>
+		</h3>
+
+		<p>The registration authority may impose a non-refundable processing fee for the registration of collections and sequences. If a registration application is incomplete, the registrar will inform the registrant and accept one corrected application at no fee. Further corrections to the application may require an additional fee.</p>
+
+		<p>Collections that are submitted for registration or sponsored by the registration authority are exempt from processing fees.</p>
+
+		<h2>
+			<a name="registration_form">Appendix A. Registration Form for Collections</a>
+		</h2>
+
+		<p>Application for registration of an Ideographic Variation Sequence Collection</p>
+
+		<p>Name and address of the registrant:</p>
+
+		<p>Name and email address of the representative:</p>
+
+		<p>Suggested identifier for the collection:</p>
+
+		<p>Pattern for the sequence identifiers:</p>
+
+		<h2>
+			<a name="w1aac17b1">Appendix B. Hypothetical Example</a>
+		</h2>
+
+		<p>This appendix presents an hypothetical example, where it is desirable to express in plain text that the display of a character occurrence should be restricted.</p>
+
+		<h2>
+			<a name="w1aac17b5b1">1 The Situation</a>
+		</h2>
+
+		<p>Consider the ideograph U+82A6 <em>ashi</em>, which can be appropriately rendered by a number of different glyphs:</p>
+
+		<div align="center">
+			<table class="noborder" cellpadding="2">
+				<tr>
+					<td><span style="font-family:Uni82A6a; font-size: 36pt; width: 100px">&#x82A6;</span></td>
+					<td><span style="font-family:Uni82A6b; font-size: 36pt; width: 50px">&#x82A6;</span></td>
+					<td><span style="font-family:Uni82A6c; font-size: 36pt; width: 50px">&#x82A6;</span></td>
+					<td><span style="font-family:Uni82A6d; font-size: 36pt; width: 50px">&#x82A6;</span></td>
+					<td><span style="font-family:Uni82A6e; font-size: 36pt; width: 50px">&#x82A6;</span></td>
+					<td><span style="font-family:Uni82A6f; font-size: 36pt; width: 50px">&#x82A6;</span></td>
+				</tr>
+				<tr>
+					<td style="text-align:center">1</td>
+					<td style="text-align:center">2</td>
+					<td style="text-align:center">3</td>
+					<td style="text-align:center">4</td>
+					<td style="text-align:center">5</td>
+					<td style="text-align:center">6</td>
+				</tr>
+			</table>
+		</div>
+
+		<p>In the following Japanese sentence (which means roughly “Ms. Ashida is a young lady from Ashiya”), this character occurs twice. The first occurrence could be displayed with any of those six glyphs, and it is therefore not necessary to express any restriction in plain text; the character U+82A6 alone is enough, and usual font selection mechanisms can take care of selecting a glyph appropriate for the context (typically 3 in modern Japanese). On the other hand, the second occurrence is in the name of the town Ashiya, and it is customarily displayed with an older form (5) of the character.</p>
+
+		<center><img src="sentence.png" alt="芦田さんは芦屋のお嬢様だ"></center>
+
+		<h2>
+			<a name="w1aac17b7b1">2 Describing the Collection and its Content</a>
+		</h2>
+
+		<p>Assuming that some party “Example” wishes to express the restriction above in plain text, they would create a collection for this kind of situation. This collection could be targeted at the representation of person and place names, for example. The registrar would put a description of this collection on the registration authority’s website, at “https://www.unicode.org/ivd/example_names/”, which could look like this:</p>
+
+		<blockquote>
+			<p>This collection of glyphic subsets is intended for the representation of person and place names in Japanese. Elements in this collection are identified by an integer (that is, match the regular expression “[0-9]+”).</p>
+
+			<p>It currently contains a single glyphic subset:</p>
+
+			<ul>
+				<li>Base Ideograph: U+82A6</li>
+				<li>Identifier in this collection: 23</li>
+				<li>Glyphic subset: There is a single horizontal stroke in the radical; the top stroke below the radical is attached and slanting up; thus, <span style="font-family:Uni82A6e">&#x82A6;</span> is in the glyphic subset; <span style="font-family:Uni82A6a">&#x82A6;</span>, <span style="font-family:Uni82A6b">&#x82A6;</span>, <span style="font-family:Uni82A6c">&#x82A6;</span>, <span style="font-family:Uni82A6d">&#x82A6;</span>, and <span style="font-family:Uni82A6f">&#x82A6;</span> are not</li>
+			</ul>
+		</blockquote>
+
+		<h2>
+			<a name="w1aac17b9b1">3 The IVD</a>
+		</h2>
+
+		<p>Assuming a successful registration, the collection could be assigned a name like “Example_names”; the glyphic subset 23 in that collection could be associated with the IVS &lt;82A6 E0134&gt;. This would be reflected in the IVD as follows:</p>
+
+		<p>IVD_Collections.txt would contain one entry for this collection:</p>
+
+		<blockquote>Example_names;[0-9]+;https://www.unicode.org/ivd/example_names/</blockquote>
+
+		<p>IVD_Sequences.txt would contain one entry for this particular glyphic subset:</p>
+
+		<blockquote>82A6 E0134; Example_names; 23</blockquote>
+
+		<p>Using these entries, the IVS &lt;82A6, E0134&gt; can be traced to entity 23 in the collection “Example_names”, and that collection can be traced to the website “https://www.unicode.org/ivd/example_names/”, and therefore to the description of the collection and its glyphic subsets.</p>
+
+		<h2>
+			<a name="w1aac17c11b1">4 Using the IVS</a>
+		</h2>
+
+		<p>Now that the IVS is registered, it can be used in plain text interchange. The example sentence could be represented by the character sequence &lt;82A6, 7530, &hellip;, 82A6, E0134, &hellip;&gt;. The first occurrence of U+82A6 is not followed by a variation selector, because there is no need to express any glyphic restriction. The second occurrence uses the registered IVS, and can be interpreted unambiguously using the IVD.</p>
+
+		<h2>
+			<a name="Acknowledgments">Acknowledgments</a>
+		</h2>
+
+		<p>Thanks to Hideki Hiura &#x6A0B;&#x6D66;&#x79C0;&#x6A39; (RIP) and Eric Muller, co-editors of Versions 1 and 2, who were responsible for the original text of this document, and to Richard Cook &#x66F2;&#x7406;&#x67E5; and John H. Jenkins &#x4E95;&#x4F5C;&#x6046; (RIP), co-editors of Versions 3 through 6.</p>
+
+		<p>Thanks to Henry Chan, Mark Davis, Deborah Goldsmith, Tatsuo Kobayashi, Rick McGowan, Chie Oshima, Michel Suignard, Andrew West, and Ken Whistler for their help developing the registry and their feedback on this document.</p>
+
+		<h2>
+			<a name="References" href="#References">References</a>
+		</h2>
+		<table cellspacing="0" cellpadding="4" border="0" class="noborder" style="border-collapse: collapse">
+		<!-- nocaption -->
+
+			<tr>
+				<td class="noborder" valign="top" nowrap>[<a name="DistList" href="#DistList">DistList</a>]</td>
+				<td class="noborder" valign="top"><a href="https://www.unicode.org/consortium/distlist.html">https://www.unicode.org/consortium/distlist.html</a></td>
+			</tr>
+
+			<tr>
+				<td class="noborder" valign="top" nowrap>[<a name="Errata" href="#Errata">Errata</a>]</td>
+				<td class="noborder" valign="top">Updates and Errata<br><a href="https://www.unicode.org/errata/">https://www.unicode.org/errata/</a></td>
+			</tr>
+
+			<tr>
+				<td class="noborder" valign="top" nowrap>[<a name="Feedback" href="#Feedback">Feedback</a>]</td>
+				<td class="noborder" valign="top"><a href="https://www.unicode.org/reporting.html">https://www.unicode.org/reporting.html</a><br><em>For reporting errors and requesting information online.</em></td>
+			</tr>
+
+			<tr>
+				<td class="noborder" valign="top" nowrap>[<a name="ISO10646" href="#ISO10646">ISO 10646</a>]</td>
+				<td class="noborder" valign="top">International Organization for Standardization. Information Technology&mdash;Universal Coded Character Set (UCS). (ISO/IEC 10646:2020 Sixth Edition).<em><br>For the latest version, see:<br></em><a href="https://www.iso.org/">https://www.iso.org/</a><br></td>
+			</tr>
+
+			<tr>
+				<td class="noborder" valign="top" nowrap>[<a name="Perl" href="#Perl">Perl</a>]</td>
+				<td class="noborder" valign="top">Perl regular expressions<br><a href="https://perldoc.perl.org/perlre">https://perldoc.perl.org/perlre</a></td>
+			</tr>
+
+			<tr>
+				<td class="noborder" valign="top" nowrap>[<a name="Reports" href="#Reports">Reports</a>]</td>
+				<td class="noborder" valign="top">Unicode Technical Reports<br><a href="https://www.unicode.org/reports/">https://www.unicode.org/reports/<br></a><em>For information on the status and development process for technical reports, and for a list of technical reports.</em></td>
+			</tr>
+
+			<tr>
+				<td class="noborder" valign="top" nowrap>[<a name="Unicode" href="#Unicode">Unicode</a>]</td>
+				<td class="noborder" valign="top">The Unicode Standard<em><br>For the latest version, see:<br></em><a href="https://www.unicode.org/versions/latest/">https://www.unicode.org/versions/latest/</a></td>
+			</tr>
+
+			<tr>
+				<td class="noborder" valign="top" nowrap>[<a name="Versions" href="#Versions">Versions</a>]</td>
+				<td class="noborder" valign="top">Versions of the Unicode Standard<br> <a href="https://www.unicode.org/versions/">https://www.unicode.org/versions/</a><br>
+				<em>For information on version numbering, and citing and referencing the Unicode Standard, the Unicode Character Database, and Unicode Technical Reports.</em></td>
+			</tr>
+		</table>
+
+		<h2>
+			<a name="Modifications">Modifications</a>
+		</h2>
+		<p>The following summarizes modifications from the previous published version of this specification.</p>
+
+		<p><b>Revision 16</b></p>
+
+		<p><em>Revision 15 being a Proposed Update, changes between Revisions 14 and 16 are listed here.</em></p>
+
+		<ul>
+			<li>Removed Richard Cook and John H. Jenkins as co-editors.</li>
+			<li>Modified <a href="#w1aab9b1">Section 2</a>, <a href="#w1aac13b5b1">Section 4.1</a>, <a href="#w1aac13b7b1">Section 4.2</a>, <a href="#registration_form">Appendix A</a>, and <a href="#w1aac17b1">Appendix B</a> to reflect that the URL for a collection is now established and maintained by the registrar, not the registrant.</li>
+			<li>The images of the four glyphs of U+82A6 in <a href="#w1aac17b1">Appendix B</a> were replaced with six glyphs served as web fonts.</li>
+			<li>Updated one of the <a href="#References">References</a>.</li>
+		</ul>
+
+		<p>Previous revisions can be accessed with the “Previous Version” link in the header.</p>
+
+		<hr>
+		<p class="copyright">&#x00A9; 2006–2026 Unicode, Inc. This publication is protected by copyright, and permission must be obtained from Unicode, Inc. prior to any reproduction, modification, or other use not permitted by the <a href="https://www.unicode.org/copyright.html">Terms of Use</a>. Specifically, you may make copies of this publication and may annotate and translate it solely for personal or internal business purposes and not for public distribution, provided that any such permitted copies and modifications fully reproduce all copyright and other legal notices contained in the original. You may not make copies of or modifications to this publication for public distribution, or incorporate it in whole or in part into any product or publication without the express written permission of Unicode.</p>
+
+		<p class="copyright">Use of all Unicode Products, including this publication, is governed by the Unicode <a href="https://www.unicode.org/copyright.html">Terms of Use</a>. The authors, contributors, and publishers have taken care in the preparation of this publication, but make no express or implied representation or warranty of any kind and assume no responsibility or liability for errors or omissions or for consequential or incidental damages that may arise therefrom. This publication is provided “AS-IS” without charge as a convenience to users.</p>
+
+		<p class="copyright">Unicode and the Unicode Logo are registered trademarks of Unicode, Inc., in the United States and other countries.</p>
+
+</div>
+</body>
+</html>
