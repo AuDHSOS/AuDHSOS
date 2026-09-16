@@ -460,6 +460,14 @@ fn whole(total: usize) -> u64 {
     u64::try_from(total).unwrap_or(u64::MAX)
 }
 
+/// How many bytes of a page a cell of `bytes` bytes takes, which is
+/// `cellSizePtr`: a cell takes four bytes at the least, because the
+/// bytes it would leave behind are too few to be a freeblock.
+#[must_use]
+pub const fn cell_room(bytes: usize) -> usize {
+    if bytes < 4 { 4 } else { bytes }
+}
+
 /// A page holding `cells`, in the order they are given.
 ///
 /// This is `rebuildPage`: the pointer array names the cells in that
@@ -488,7 +496,7 @@ pub fn build(
     let mut content = usable;
     let mut pointers = Vec::with_capacity(cells.len());
     for cell in cells {
-        content = content.checked_sub(cell.len())?;
+        content = content.checked_sub(cell_room(cell.len()))?;
         for (slot, byte) in out.iter_mut().skip(content).zip(cell) {
             *slot = *byte;
         }
@@ -994,10 +1002,11 @@ impl<'a> Writer<'a> {
         if at > cells {
             return Err(Error::Overrun);
         }
-        if cell.len().saturating_add(2) > self.free()? {
+        let want = cell_room(cell.len());
+        if want.saturating_add(2) > self.free()? {
             return Ok(false);
         }
-        let offset = self.allocate(cell.len())?;
+        let offset = self.allocate(want)?;
         self.put(offset, cell);
         let array = self.array();
         let pointer = array.saturating_add(at.saturating_mul(2));
@@ -1078,7 +1087,7 @@ impl<'a> Writer<'a> {
         // inside the page, and what is written back is never longer,
         // because a length the file wrote as a wide varint is written
         // back as the shortest one that holds it.
-        let size = write_cell(&self.page().cell(at)?).len();
+        let size = cell_room(write_cell(&self.page().cell(at)?).len());
         self.release(offset, size)?;
         let header = self.start;
         if cells == 1 {
@@ -1243,7 +1252,7 @@ impl Writer<'_> {
             let Some((_, at)) = cell.from.filter(|(number, _)| *number == self.number) else {
                 continue;
             };
-            let after = at.saturating_add(cell.bytes.len());
+            let after = at.saturating_add(cell_room(cell.bytes.len()));
             let mut joined = false;
             for run in &mut runs {
                 if run.0 == after {
@@ -1286,7 +1295,7 @@ impl Writer<'_> {
     ) -> Result<bool, Error> {
         let array = self.array();
         for (step, cell) in cells.iter().skip(first).take(count).enumerate() {
-            let size = cell.bytes.len();
+            let size = cell_room(cell.bytes.len());
             let taken = if self.get16(self.start.saturating_add(1)) == 0 {
                 None
             } else {
@@ -1317,7 +1326,7 @@ impl Writer<'_> {
         let array = self.array();
         for (step, cell) in cells.iter().skip(first).take(count).enumerate() {
             content = content
-                .checked_sub(cell.bytes.len())
+                .checked_sub(cell_room(cell.bytes.len()))
                 .ok_or(Error::Balance)?;
             if content < array.saturating_add(count.saturating_mul(2)) {
                 return Err(Error::Balance);

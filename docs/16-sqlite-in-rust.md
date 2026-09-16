@@ -759,6 +759,8 @@ Size: L.
     triggers of the view answer. Built, which D-253 records.
 34. `changes()`, `total_changes()` and `last_insert_rowid()`, which the
     connection carries. Built, which D-254 records.
+35. The four bytes a cell takes of a page at the least. Built, which
+    D-255 records.
 
 ### Done when
 
@@ -768,8 +770,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 72 386 cases in 706 files, 58 550
-pass, 3464 answer differently, and 10 372 name something the engine
+under the `tclsh` of the machine. Of 72 269 cases in 706 files, 58 439
+pass, 3460 answer differently, and 10 370 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts

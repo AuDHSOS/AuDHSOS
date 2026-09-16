@@ -88,6 +88,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- A cell of fewer than four bytes in `db-sqlite` takes four bytes of the
+  page, which is `cellSizePtr`. A three-byte cell given back wrote a
+  freeblock that leaves the page, so a `DELETE` of the row under such a
+  cell was refused `the free space of a page does not add up to the
+  page`. D-255 records it. Catalog 6.6.179.
+
 - `timediff` in `db-sqlite` counted the years and the months by
   subtracting the two moments, which answers a day count that belongs to
   no month, where `timediffFunc` walks the second moment to the first a

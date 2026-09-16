@@ -1129,3 +1129,35 @@ fn what_writing_a_page_again_refuses() {
     let mut writer = Writer::open(&mut broken, 2, 512).unwrap();
     assert_eq!(writer.edit(0, 0, 4, &sources, &[]), Err(Error::FreeBlock));
 }
+
+/// A cell of fewer than four bytes takes four of the page, because the
+/// bytes it would leave behind are too few to be a freeblock, which is
+/// `cellSizePtr`. The page is the one the shell writes for the same
+/// statements.
+#[test]
+fn a_cell_of_fewer_than_four_bytes_takes_four_of_the_page() {
+    use crate::change::Writer;
+    use crate::header::Encoding;
+    use crate::value::Value;
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE t1(x INTEGER PRIMARY KEY) WITHOUT ROWID")
+        .unwrap();
+    writer.run(b"INSERT INTO t1 VALUES(1),(2)").unwrap();
+    let image = writer.written();
+    let page = image.get(1024..2048).expect("page two");
+    // The cell of `1` is two bytes of payload under a length byte, and
+    // it stands at 1020 with one byte after it that no cell holds.
+    assert_eq!(
+        page.get(..16),
+        Some([10, 0, 0, 0, 2, 3, 248, 0, 3, 252, 3, 248, 0, 0, 0, 0].as_slice())
+    );
+    assert_eq!(page.get(1016..), Some([3, 2, 1, 2, 2, 2, 9, 0].as_slice()));
+    // The row that stands under the short cell is taken out, and the
+    // page still counts up.
+    writer.run(b"DELETE FROM t1 WHERE x=1").unwrap();
+    let image = writer.written();
+    let database = crate::db::Database::open(&image).expect("a database");
+    let answered = database.query(b"SELECT x FROM t1").expect("the rows");
+    assert_eq!(answered.rows, alloc::vec![alloc::vec![Value::Int(2)]]);
+}

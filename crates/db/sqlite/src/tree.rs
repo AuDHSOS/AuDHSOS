@@ -922,7 +922,7 @@ impl Pages {
     ///
     /// Whatever reading or writing the page refuses.
     pub fn put_cell(&mut self, number: u32, at: usize, cell: &[u8]) -> Result<bool, Error> {
-        if self.page(number)?.free()? < cell.len().saturating_add(2) {
+        if self.page(number)?.free()? < crate::page::cell_room(cell.len()).saturating_add(2) {
             return Ok(false);
         }
         let put = self.writer(number)?.insert(at, cell)?;
@@ -2150,9 +2150,9 @@ fn gather(
 /// What the cell at `at` costs the page it lies on: its bytes and the
 /// two of its pointer, and nought where the cells end before it.
 fn cost_of(cells: &[Held], at: usize) -> i64 {
-    cells
-        .get(at)
-        .map_or(0, |cell| count_of(cell.bytes.len()).saturating_add(2))
+    cells.get(at).map_or(0, |cell| {
+        count_of(crate::page::cell_room(cell.bytes.len())).saturating_add(2)
+    })
 }
 
 /// How many pages the cells take and where each of them ends among the
@@ -2492,7 +2492,9 @@ fn balance_nonroot(
         let mut used = room.saturating_sub(count_of(pages.page(number)?.free()?));
         if index == taken.full {
             for (_, bytes) in spill {
-                used = used.saturating_add(count_of(bytes.len()).saturating_add(2));
+                used = used.saturating_add(
+                    count_of(crate::page::cell_room(bytes.len())).saturating_add(2),
+                );
             }
         }
         sizes.set(index, used);

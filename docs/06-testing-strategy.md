@@ -5324,6 +5324,17 @@ Document 16 step Q8.
 - A foreign key action counts toward `total_changes()`.
 - Two connections over one file each carry their own three counters.
 
+### 6.6.179 The fewest bytes a cell takes (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `CREATE TABLE t1(x INTEGER PRIMARY KEY) WITHOUT ROWID` with the rows
+  1 and 2 writes the page the shell writes for the same statements: the
+  cell of `1` is three bytes and takes four, the byte after it held by
+  no cell.
+- A `DELETE` of the row under such a cell leaves a page whose free space
+  counts up, and the rows beside it stand.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`
