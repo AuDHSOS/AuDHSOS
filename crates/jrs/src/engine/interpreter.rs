@@ -7890,12 +7890,35 @@ impl RegisterVM {
     ) -> Result<Value, VMError> {
         let text = self.receiver_units(call.receiver, units, heap, realm)?;
         let argument = self.call_argument(call, 0)?;
-        let Some(receiver) = argument.as_object() else {
-            return Err(VMError::Unsupported("a RegExp made at run time"));
+        // 22.1.3.13 step 5 and 22.1.3.15 step 4 make a RegExp of an argument
+        // that is not one, with no flags.
+        let held = argument
+            .as_object()
+            .and_then(|object| Self::regexp_pattern(object, heap));
+        let argument = if held.is_some() {
+            argument
+        } else {
+            if argument.is_object() {
+                return Err(VMError::Unsupported("ToString of an Object"));
+            }
+            let source: alloc::rc::Rc<[u16]> = if argument.is_undefined() {
+                alloc::rc::Rc::from(&[][..])
+            } else {
+                alloc::rc::Rc::from(property_name_units(argument, heap)?)
+            };
+            let compiled = crate::regexp::RegExp::compile(source, "").map_err(|_| {
+                raise(
+                    heap,
+                    realm,
+                    super::realm::NativeErrorKind::SyntaxError,
+                    "invalid regular expression",
+                )
+            })?;
+            let pattern = super::object::PatternRef(alloc::rc::Rc::new(compiled));
+            Self::allocate_regexp(pattern, heap, realm)?
         };
-        let Some(pattern) = Self::regexp_pattern(receiver, heap) else {
-            return Err(VMError::Unsupported("a RegExp made at run time"));
-        };
+        let receiver = argument.as_object().ok_or(VMError::TypeError)?;
+        let pattern = Self::regexp_pattern(receiver, heap).ok_or(VMError::TypeError)?;
         if intrinsic == Intrinsic::StringPrototypeSearch {
             // 22.2.6.12 searches from the start and leaves `lastIndex` as it
             // found it.

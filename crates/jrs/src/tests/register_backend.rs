@@ -5825,16 +5825,6 @@ fn a_string_matches_and_searches_a_regexp() -> Result<(), Error> {
     ] {
         differential_scripts(&[source])?;
     }
-    // 22.2.3.1 would compile a pattern at run time, which this engine has not
-    // built, so an argument that is not already a `RegExp` is a gap.
-    for source in ["'abc'.match('b')", "'abc'.search('b')", "'abc'.match()"] {
-        let mut host = SilentHost;
-        let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
-        assert!(
-            matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
-            "{source}"
-        );
-    }
     Ok(())
 }
 
@@ -6729,5 +6719,25 @@ fn a_bound_function_keeps_the_arguments_the_bind_gave_it() -> Result<(), Error> 
         Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
         Err(Error::Unsupported { .. })
     ));
+    Ok(())
+}
+
+/// 22.1.3.13 step 5 and 22.1.3.15 step 4 make a `RegExp` of an argument that
+/// is not one, which 22.2.3.1 compiles where the call stands.
+#[test]
+fn match_and_search_make_a_regexp_of_what_they_were_given() -> Result<(), Error> {
+    for source in [
+        "''+'abcbd'.match('b').index",
+        "''+'abcbd'.search('c')",
+        "''+'abc'.search(/b/)",
+        "''+'abc'.match(/b/)[0]",
+        "''+'abc'.search()",
+        "''+'a.c'.search('.')",
+        "''+'abc'.match('x')",
+        "''+'abc'.search('x')",
+        "var t=false;try{'a'.search('(')}catch(e){t=e instanceof SyntaxError}''+t",
+    ] {
+        differential_scripts(&[source])?;
+    }
     Ok(())
 }
