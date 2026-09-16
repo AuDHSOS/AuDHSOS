@@ -762,8 +762,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same two, on the register engine (focused) | focused | `c9b1598` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object/getOwnPropertyDescriptor test/built-ins/Function/prototype --summary` | 619 | 1,222 | 818 (66.94%) | 140 (11.46%) | 264 (21.60%) |
 | `for`-`of` statements (focused) | focused | `f9d7537` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/for-of --summary` | 751 | 1,442 | 1,062 (73.65%) | 79 (5.48%) | 301 (20.87%) |
 | The same, on the register engine (focused) | focused | `f9d7537` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/for-of --summary` | 751 | 1,442 | 891 (61.79%) | 73 (5.06%) | 478 (33.15%) |
-| Complete pinned suite, including staging and Intl | full | `f9d7537` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `f9d7537` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 28,800 (27.98%) | 19,426 (18.87%) | 54,699 (53.15%) |
+| The clauses that convert a position (focused) | focused | `ded2cac` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/prototype/copyWithin test/built-ins/Array/prototype/fill test/built-ins/Array/prototype/splice test/built-ins/String/prototype/split --summary` | 262 | 524 | 498 (95.04%) | 18 (3.44%) | 8 (1.53%) |
+| The same four, on the register engine (focused) | focused | `ded2cac` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/prototype/copyWithin test/built-ins/Array/prototype/fill test/built-ins/Array/prototype/splice test/built-ins/String/prototype/split --summary` | 262 | 524 | 396 (75.57%) | 50 (9.54%) | 78 (14.89%) |
+| Complete pinned suite, including staging and Intl | full | `ded2cac` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `ded2cac` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 28,912 (28.09%) | 19,432 (18.88%) | 54,581 (53.03%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1603,7 +1605,10 @@ both full runs beside 14.7.5.6 were measured at tree
 that step gained 128 variants and lost none. The `var` head of a nested
 iteration landed in `b56e60f` after it and moved no variant of the suite, which
 has no standalone variant of that shape; the engine output of `b56e60f` is
-byte-identical to that of `f9d7537`.
+byte-identical to that of `f9d7537`. The conversion runs and both full runs
+beside the positions each clause converts were measured at tree
+`f3de73daea7fe93ba9f33a8b2541bc1ca7d67f81`, which is the tree of `ded2cac`;
+that step gained 112 variants and lost none.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
