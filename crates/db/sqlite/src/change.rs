@@ -2057,9 +2057,12 @@ impl Writer {
             // `sqlite3FkLocateIndex` runs where the statement is read
             // and not where a row is written, so a key that names no
             // key of the parent is refused whatever the row holds.
+            // `sqlite3FkLocateIndex` names the schema the table would
+            // stand in, which is `main` for every table this crate
+            // holds.
             let (parent, _) = database
                 .table(&key.table)
-                .ok_or_else(|| Error::ForeignMismatch(table.name.clone(), key.table.clone()))?;
+                .ok_or_else(|| Error::NoTable(schema_named_as(&key.table)))?;
             let places = parent_places(&database, (&table.name, key), parent)?;
             let mut wanted = Vec::new();
             for at in &key.columns {
@@ -5509,6 +5512,14 @@ struct Points {
     /// affinity and the collation of the column of the parent, not of
     /// the child.
     under: Vec<(Affinity, Collation)>,
+}
+
+/// The name of a table under the schema it stands in, which is `main`
+/// for every table this crate holds.
+fn schema_named_as(name: &[u8]) -> Vec<u8> {
+    let mut out = b"main.".to_vec();
+    out.extend_from_slice(name);
+    out
 }
 
 /// The places the parent columns of a foreign key take in the table it

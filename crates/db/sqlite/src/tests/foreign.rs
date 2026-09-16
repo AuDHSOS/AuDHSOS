@@ -126,8 +126,6 @@ fn a_foreign_key_that_points_at_no_unique_columns_is_a_mismatch() {
         "INSERT INTO astray VALUES(1)",
         // More columns than the key it points at.
         "INSERT INTO wide VALUES(1,2)",
-        // A table that is not there.
-        "INSERT INTO nowhere VALUES(1)",
         // A table with no primary key at all.
         "INSERT INTO keyless VALUES(1)",
         // More columns pointed at than columns that point.
@@ -157,6 +155,20 @@ fn a_foreign_key_that_points_at_no_unique_columns_is_a_mismatch() {
             "{sql}"
         );
     }
+    // A key that points at a table the schema does not hold names that
+    // table under the schema it would stand in.
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE nowhere(a REFERENCES missing(x))",
+    ])
+    .unwrap();
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO nowhere VALUES(1)")
+            .unwrap_err()
+            .message(),
+        "no such table: main.missing"
+    );
     // A `UNIQUE` over the columns pointed at is enough, and so is a
     // table whose primary key is the rowid.
     let (mut writer, _) = ran(&[
@@ -576,4 +588,43 @@ fn the_foreign_keys_pragma_stands_while_a_transaction_is_open() {
         writer.run(b"PRAGMA foreign_keys").unwrap(),
         [[Value::Int(0)]]
     );
+}
+
+#[test]
+fn a_row_written_into_the_parent_is_one_the_child_may_point_at() {
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys = on",
+        "CREATE TABLE t1(a PRIMARY KEY, b)",
+        "CREATE TABLE t2(c REFERENCES t1(a), d)",
+        "CREATE TABLE t3(a PRIMARY KEY, b)",
+        "CREATE TABLE t4(c REFERENCES t3, d)",
+        "CREATE TABLE t7(a, b INTEGER PRIMARY KEY)",
+        "CREATE TABLE t8(c REFERENCES t7, d)",
+        "CREATE TABLE t9(a REFERENCES nosuchtable, b)",
+        "CREATE TABLE t10(a REFERENCES t9(c), b)",
+    ])
+    .unwrap();
+    for (sql, refused) in [
+        ("INSERT INTO t2 VALUES(1, 3)", true),
+        ("INSERT INTO t1 VALUES(1, 2)", false),
+        ("INSERT INTO t2 VALUES(1, 3)", false),
+        ("INSERT INTO t2 VALUES(2, 4)", true),
+        ("INSERT INTO t2 VALUES(NULL, 4)", false),
+        ("UPDATE t2 SET c=2 WHERE d=4", true),
+        ("UPDATE t2 SET c=1 WHERE d=4", false),
+        ("UPDATE t2 SET c=NULL WHERE d=4", false),
+        ("DELETE FROM t1 WHERE a=1", true),
+        ("UPDATE t1 SET a = 2", true),
+        ("UPDATE t1 SET a = 1", false),
+        ("INSERT INTO t4 VALUES(1, 3)", true),
+        ("INSERT INTO t3 VALUES(1, 2)", false),
+        ("INSERT INTO t4 VALUES(1, 3)", false),
+        ("INSERT INTO t8 VALUES(1, 3)", true),
+        ("INSERT INTO t7 VALUES(2, 1)", false),
+        ("INSERT INTO t8 VALUES(1, 3)", false),
+    ] {
+        let answer = writer.run(sql.as_bytes());
+        let shown = answer.as_ref().err().map(crate::db::Error::message);
+        assert_eq!(answer.is_err(), refused, "{sql}: {shown:?}");
+    }
 }

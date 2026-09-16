@@ -79,8 +79,9 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   statement is read, so a row that holds nothing in the key reached no
   refusal, and it counted no unique index of the parent's own as a key.
   The refusal now names both tables. `PRAGMA foreign_keys` set while a
-  transaction is open now changes nothing, which is `PragTyp_FLAG`.
-  D-248 records it. Catalog 6.6.172.
+  transaction is open now changes nothing, which is `PragTyp_FLAG`, and
+  a key that points at a table the schema does not hold is refused `no
+  such table: main.NAME`. D-248 records it. Catalog 6.6.172.
 
 - A run of one file of SQLite's own suite answered `Text file busy`
   where a thread of the pool forked while another wrote a file, because

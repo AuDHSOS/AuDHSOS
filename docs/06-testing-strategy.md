@@ -5223,6 +5223,8 @@ Document 16 step Q8.
   an index that is not unique, do not; both are refused `foreign key
   mismatch - "u2" referencing "u1"`, which a row that holds nothing in
   the key reaches because the key is read where the statement is.
+- A key that points at a table the schema does not hold is refused `no
+  such table: main.missing`.
 - `PRAGMA foreign_keys` set while a transaction is open changes nothing,
   and every other pragma the connection keeps is set there.
 
