@@ -7,6 +7,22 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The programs and the anchors move onto the scratch volume (D-151,
+  D-152). `cargo xtask image` writes `target/scratch.img`: the fourteen
+  programs outside the boot set under `AUDHSOS/BIN/` and the trust anchor
+  table as `AUDHSOS/ANCHORS.BIN`, on a FAT32 volume of 128 MiB with no
+  partition table. The boot volume keeps the three files the loader reads
+  and falls from 130 023 424 bytes to 67 108 864. The root task opens
+  `AUDHSOS/BIN` under `file::ROOT`, `app-tls` reads the table there, and
+  every run writes its disk from the system volume before the machine
+  starts — the Secure Shell run and the TLS run add their files to it with
+  `image::fat32::add`. A machine that mounts no scratch volume writes
+  `[init] no program volume` and starts nothing after the boot set, so
+  the run without a framebuffer and the run without a network carry a
+  disk of their own, and `cargo xtask run` attaches one whether or not
+  `--scratch` was typed; `--scratch` now means the disk of the run before
+  is kept.
+
 - `docs/16-more-than-one-processor.md`: the design and implementation plan
   for running this kernel on more than one processor. What is already
   built and needs no change: `Scheduler`, whose doc comment names one

@@ -8,6 +8,7 @@
 use audhsos_abi::boot_image::BootImageHeader;
 use audhsos_abi::layout::PAGE_SIZE;
 
+use crate::commands;
 use crate::image::{boot_image, disk, fat32, gpt};
 use fs_gpt::crc32;
 
@@ -372,4 +373,37 @@ fn an_empty_root_task_or_an_unaligned_reserve_is_rejected() {
     assert!(boot_image::build(&[], &[], 0).is_err());
     assert!(boot_image::build(&[0x90], &[], PAGE_SIZE + 1).is_err());
     assert!(boot_image::build(&[0x90], &[], PAGE_SIZE).is_ok());
+}
+
+#[test]
+fn a_run_adds_its_files_to_the_volume_the_build_wrote() {
+    // The system volume the build writes, and then the two files of a run
+    // (D-151): both stand on the volume, and the run's write leaves the
+    // programs where they were.
+    let mut volume = vec![0u8; 64 * 1024 * 1024];
+    fat32::write(
+        &mut volume,
+        &[("AUDHSOS/BIN/APPHELLO.ELF", vec![0x7F; 8192])],
+    )
+    .unwrap();
+    fat32::add(&mut volume, &[("SSHCONF.TXT", b"port 22\n".to_vec())]).unwrap();
+    let files = fat32::read(&volume).unwrap();
+    assert_eq!(files["AUDHSOS/BIN/APPHELLO.ELF"], vec![0x7F; 8192]);
+    assert_eq!(files["SSHCONF.TXT"], b"port 22\n".to_vec());
+}
+
+#[test]
+fn a_volume_carrying_no_file_system_is_refused() {
+    let mut nothing = vec![0u8; 64 * 1024 * 1024];
+    assert!(fat32::add(&mut nothing, &[("A.TXT", vec![1])]).is_err());
+}
+
+#[test]
+fn the_scratch_disk_holds_the_clusters_the_end_to_end_run_expects() {
+    // The end-to-end run reads this count off the guest's own report, so
+    // the constant and the volume the host writes have to agree.
+    let sector = u64::try_from(fat32::SECTOR).unwrap();
+    let sectors = u32::try_from(commands::SCRATCH_SIZE / sector).unwrap();
+    let geometry = fat32::geometry(sectors).unwrap();
+    assert_eq!(u64::from(geometry.clusters), commands::SCRATCH_CLUSTERS);
 }

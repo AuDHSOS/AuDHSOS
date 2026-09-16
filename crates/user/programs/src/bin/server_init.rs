@@ -379,8 +379,8 @@ const PROGRAMS: [Program; 18] = [
         reports: true,
     },
     // The program that holds the trust anchors. It reads one file off the
-    // boot volume and talks to nothing else, so it starts after the file
-    // system server and needs nothing of the network.
+    // scratch volume and talks to nothing else, so it starts after the
+    // file system server and needs nothing of the network.
     Program {
         name: b"app-tls",
         priority: priority::APPLICATION,
@@ -542,7 +542,7 @@ struct World {
     /// own requests. It is what the programs outside the boot set are
     /// read through.
     files_for_self: Option<EndpointHandle>,
-    /// The directory `AUDHSOS/BIN` of the volume the machine booted from,
+    /// The directory `AUDHSOS/BIN` of the volume the system writes,
     /// opened once and kept for every program read out of it.
     bin: Option<u32>,
     /// The configuration window of the PCI bus, made once: the root task
@@ -603,8 +603,8 @@ fn start_everything(gate: &mut Gate, startup: &Startup, world: &mut World, image
     let mut reserve = startup.ram.iter().copied().next();
     for program in PROGRAMS {
         // The boot set comes out of the archive; everything else the file
-        // system server reads off the volume, which is what it was
-        // started for.
+        // system server reads off the scratch volume, which is what it
+        // was started for.
         if in_the_boot_set(program.name) {
             let found = archive.find(program.name);
             let Ok(Some(entry)) = found else {
@@ -621,6 +621,17 @@ fn start_everything(gate: &mut Gate, startup: &Startup, world: &mut World, image
             let outcome = start(gate, startup, world, &program, entry.data, &mut reserve);
             report(gate, world, program.name, outcome);
             continue;
+        }
+        // Every program outside the boot set lies on the scratch volume,
+        // so a machine that mounted none starts the boot set and stops
+        // there (D-152).
+        if let Err(error) = program_directory(gate, world) {
+            let mut line: Line<128> = Line::new();
+            line.put(b"[init] no program volume: ");
+            line.put(error.message().as_bytes());
+            line.put(b"\n");
+            say(gate, world, line.as_bytes());
+            return;
         }
         let read = match read_program(gate, world, &mut reserve, program.name) {
             Ok(read) => read,
@@ -683,7 +694,7 @@ fn give_back(gate: &mut Gate, world: &World, object: MemoryHandle) {
 ///
 /// The root task cannot read a file before the file system server runs,
 /// and the server is itself a file, so these four come from the archive
-/// and everything else from the volume.
+/// and everything else from the scratch volume.
 const fn in_the_boot_set(name: &[u8]) -> bool {
     matches!(
         name,
@@ -691,8 +702,31 @@ const fn in_the_boot_set(name: &[u8]) -> bool {
     )
 }
 
-/// The bytes of `program`, read off the volume the machine booted from,
-/// and the object they stand in.
+/// The directory `AUDHSOS/BIN` of the scratch volume, opened once and
+/// kept: every program after the first is one name away from it.
+///
+/// The programs lie on the volume the system writes and not on the one the
+/// firmware read (D-151), so the walk starts at [`file::ROOT`].
+///
+/// # Errors
+///
+/// The refusals of the file system server, which answers `NotFound` for a
+/// volume it did not mount.
+fn program_directory(gate: &mut Gate, world: &mut World) -> Result<u32, Error> {
+    if let Some(handle) = world.bin {
+        return Ok(handle);
+    }
+    let files = world.files_for_self.ok_or(Error::Unavailable)?;
+    let mut parent = file::ROOT;
+    for step in volume::DIRECTORY {
+        parent = open_at(gate, files, parent, step.as_bytes())?.file;
+    }
+    world.bin = Some(parent);
+    Ok(parent)
+}
+
+/// The bytes of `program`, read off the scratch volume, and the object
+/// they stand in.
 ///
 /// The file is read into a memory object of its own, which the caller
 /// unmaps and gives back and which the program's own regions are copied
@@ -705,18 +739,7 @@ fn read_program(
     name: &[u8],
 ) -> Result<(Mapping, MemoryHandle), Error> {
     let files = world.files_for_self.ok_or(Error::Unavailable)?;
-    // The directory is opened once and kept: every program after the first
-    // is one name away from it.
-    let bin = if let Some(handle) = world.bin {
-        handle
-    } else {
-        let mut parent = file::BOOT;
-        for step in volume::DIRECTORY {
-            parent = open_at(gate, files, parent, step.as_bytes())?.file;
-        }
-        world.bin = Some(parent);
-        parent
-    };
+    let bin = program_directory(gate, world)?;
     let (spelled, len) = volume::file_name(name).ok_or(Error::InvalidArgument)?;
     let opened = open_at(gate, files, bin, spelled.get(..len).unwrap_or(&[]))?;
     let bytes = u64::from(opened.size).max(1).next_multiple_of(PAGE_SIZE);

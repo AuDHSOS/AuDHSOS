@@ -11,7 +11,7 @@ to 8 released as 0.1.0, and Phase 15 is next. The disk and the file
 system server of [document 15](15-the-disk-on-the-machine.md) are built
 beside the phases: `server-fs` answers file requests over the boot volume
 and over a scratch disk, and every program outside the boot set is read
-off the volume. Every side track of documents 11 and 12 is finished: the
+off the scratch volume, which the build writes (D-151). Every side track of documents 11 and 12 is finished: the
 TLS track of document 11 through T7 and R1 to R6, and of document 12 the
 network stack D1 to D9, the shared foundations, the whole of track F, and
 the tooling. What is left of both documents is their two integration
@@ -59,10 +59,10 @@ their checksums, one directory per body that publishes them: [rfc/](rfc)
 for the RFCs (D-59), [oasis/](oasis) for what OASIS publishes (D-100),
 [w3c/](w3c), [ecma/](ecma), [unicode/](unicode) for the annexes,
 reports, character database and conformance test files of Unicode 18.0.0
-(D-151), [microsoft/](microsoft) for the OpenType specification (D-152),
+(D-153), [microsoft/](microsoft) for the OpenType specification (D-154),
 [adobe/](adobe) for the three technical notes that specification defers
-to for a CFF outline (D-155), [iso/](iso) for the standard that is its
-normative form (D-153), [itu/](itu) for the JPEG Recommendations,
+to for a CFF outline (D-157), [iso/](iso) for the standard that is its
+normative form (D-155), [itu/](itu) for the JPEG Recommendations,
 [cipa/](cipa) for Exif, [ti/](ti) for the 16550 serial controller, which
 is a datasheet from a manufacturer rather than a standard from a
 standards body, [uefi/](uefi) for what the UEFI Forum publishes — the

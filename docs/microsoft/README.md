@@ -9,7 +9,7 @@ documents. Rule R8 of the safety policy is about dependencies, and it is
 untouched: `Cargo.lock` still lists only workspace members, and no
 manifest names anything outside the workspace. D-59 records the
 arrangement, D-124 what decides whether a document is kept under it, and
-D-152 this directory.
+D-154 this directory.
 
 ## Which specification, and which text of it
 
@@ -213,7 +213,7 @@ and Adobe Technical Note #5177, *Type 2 Charstring Format*, and defer to
 defining; the index page names #5902 for the PostScript name of a
 variable font instance. All three are in
 [`docs/adobe/`](../adobe/README.md), which is where they belong under the
-rule that one directory holds one publishing body (D-155).
+rule that one directory holds one publishing body (D-157).
 
 ## Why it is here
 

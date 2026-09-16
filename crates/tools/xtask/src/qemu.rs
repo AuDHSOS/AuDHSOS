@@ -216,8 +216,8 @@ pub(crate) struct Options {
     /// accepted on (D-118).
     pub(crate) network: Option<u16>,
     /// The second disk, and with it the block device itself. `None` is a
-    /// machine that has the boot volume and nothing else, which is every
-    /// run that writes nothing (D-136).
+    /// machine that has the boot volume and nothing else, which starts
+    /// the boot set and no program after it (D-152).
     pub(crate) scratch: Option<PathBuf>,
 }
 
@@ -515,14 +515,14 @@ fn network(host_port: Option<u16>) -> Vec<String> {
     ]
 }
 
-/// The second disk of a run that writes, as
+/// The second disk of the run, as
 /// [03-target-platform.md 3.1.1](../../../docs/03-target-platform.md)
-/// prescribes it, or nothing for a run that writes nothing.
+/// prescribes it, or nothing for a run that is to find none.
 ///
 /// The boot volume stays what the firmware and the loader read; what the
 /// system writes, it writes here, so that no run can leave the volume it
-/// boots from torn (D-136). The disk arrives blank and holds no partition
-/// table: what formats it is the system.
+/// boots from torn (D-136). The disk carries the programs the build wrote
+/// (D-151) and holds no partition table: the volume is the whole disk.
 ///
 /// `disable-legacy=on` makes it a non-transitional virtio 1.0 device,
 /// whose device identifier is then `0x1042` and not the transitional

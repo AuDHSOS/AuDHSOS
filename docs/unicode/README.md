@@ -10,7 +10,7 @@ documents and data files. Rule R8 of the safety policy is about
 dependencies, and it is untouched: `Cargo.lock` still lists only
 workspace members, and no manifest names anything outside the workspace.
 D-59 records the arrangement, D-124 what decides whether a document is
-kept under it, and D-151 this directory.
+kept under it, and D-153 this directory.
 
 ## Which version
 
@@ -27,7 +27,7 @@ on the day of the fetch, and the file it served for `UnicodeData.txt` was
 byte for byte the file at the versioned address; the versioned address is
 what `fetch.sh` uses, because it is fixed and the alias moves.
 
-D-154 states what happens when Unicode 19.0.0 is published.
+D-156 states what happens when Unicode 19.0.0 is published.
 
 ## What is here
 

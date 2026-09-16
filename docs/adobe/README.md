@@ -10,7 +10,7 @@ documents. Rule R8 of the safety policy is about dependencies, and it is
 untouched: `Cargo.lock` still lists only workspace members, and no
 manifest names anything outside the workspace. D-59 records the
 arrangement, D-124 what decides whether a document is kept under it, and
-D-155 this directory.
+D-157 this directory.
 
 ## What is here
 
