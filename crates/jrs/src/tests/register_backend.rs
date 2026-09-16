@@ -686,6 +686,34 @@ fn a_class_derives_from_another_and_super_binds_its_this() -> Result<(), Error> 
     Ok(())
 }
 
+#[test]
+fn a_string_method_converts_the_this_value_it_was_given() -> Result<(), Error> {
+    for source in [
+        // 22.1.3 sends the `this` value through ToString, which for an Object
+        // is a method of the Script the native leaves to run.
+        "let o={toString:function(){return ' ab '}};String.prototype.trim.call(o)",
+        "let o={toString:function(){return 'abc'}};String.prototype.charAt.call(o,1)",
+        "let o={toString:function(){return 'a,b'}};String.prototype.split.call(o,',').join('|')",
+        "let o={toString:function(){return 'abc'}};String.prototype.replace.call(o,'b','Z')",
+        "let o={toString:function(){return 'abc'}};String.prototype.padStart.call(o,5,'-')",
+        "let o={valueOf:function(){return 1},toString:function(){return 'xy'}};String.prototype.indexOf.call(o,'y')",
+        // The receiver is converted before any argument is.
+        "let n=[];let o={toString:function(){n.push('t');return 'ab'}};let a={toString:function(){n.push('a');return 'b'}};String.prototype.indexOf.call(o,a);n.join()",
+        // A throw of the conversion leaves the clause.
+        "let o={toString:function(){throw 7}};try{String.prototype.trim.call(o)}catch(e){e}",
+        // An object with no method of its own reaches %Object.prototype%.
+        "String.prototype.trim.call({})",
+        "String.prototype.trim.call(new String('  x  '))",
+        "(function(){try{String.prototype.trim.call(null)}catch(e){return e instanceof TypeError}})()",
+        // A primitive receiver is unchanged.
+        "'abc'.charAt(1)",
+        "'  a '.trim()",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
 fn differential_scripts(scripts: &[&str]) -> Result<(), Error> {
     let outcome = |backend| -> Result<Result<Value, Error>, Error> {
         let mut host = SilentHost;
@@ -6516,17 +6544,13 @@ fn a_native_converts_a_receiver_whose_conversion_needs_no_frame() -> Result<(), 
     ] {
         differential_scripts(&[source])?;
     }
-    // A `toString` the Script wrote needs a frame the native does not have.
+    // A `toString` the Script wrote runs through the frame the clause leaves
+    // for, as does the one 23.1.3.37 gives an Array.
     for source in [
         "var o={toString:function(){return 'hi'}};String.prototype.charAt.call(o,0)",
         "String.prototype.indexOf.call([1,2],'2')",
     ] {
-        let mut host = SilentHost;
-        let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
-        assert!(
-            matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
-            "{source}"
-        );
+        differential_scripts(&[source])?;
     }
     Ok(())
 }

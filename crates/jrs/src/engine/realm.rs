@@ -2036,6 +2036,20 @@ impl Intrinsic {
         }
     }
 
+    /// Whether the clause sends its `this` value through `ToString` before it
+    /// does anything else (22.1.3).
+    ///
+    /// 22.1.3.32 and 22.1.3.35 take a String or its wrapper and answer the
+    /// `[[StringData]]` of one, so neither converts.
+    #[must_use]
+    pub const fn coerces_its_receiver(self) -> bool {
+        matches!(self.holder(), IntrinsicHolder::StringPrototype)
+            && !matches!(
+                self,
+                Self::StringPrototypeToString | Self::StringPrototypeValueOf
+            )
+    }
+
     /// Whether this intrinsic is a constructor of this Realm that makes an
     /// object of its own with 10.1.13.
     #[must_use]

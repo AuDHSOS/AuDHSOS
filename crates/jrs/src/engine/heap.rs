@@ -1359,6 +1359,21 @@ impl GenerationalHeap {
         self.roots.get(root.0 as usize).copied()
     }
 
+    /// Writes a root, which an operation that converts the value it holds does
+    /// once the conversion answered.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a root of a scope that was
+    /// left.
+    pub fn set_root(&mut self, root: Root, value: Value) -> Result<(), HeapError> {
+        *self
+            .roots
+            .get_mut(root.0 as usize)
+            .ok_or(HeapError::InvalidReference)? = value;
+        Ok(())
+    }
+
     /// Starts a new native `HandleScope`.
     pub fn enter_scope(&mut self) {
         self.scope_markers.push(self.roots.len());

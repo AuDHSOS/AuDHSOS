@@ -413,6 +413,10 @@ pub enum Resume {
         step: PrimitiveStep,
         /// The hint 7.1.1 was given.
         hint: PrimitiveHint,
+        /// Set where 22.1.3 converts the `this` value rather than an argument,
+        /// which has no register of the caller to answer into: the root the
+        /// receiver travels in takes the primitive instead.
+        of_receiver: bool,
     },
     /// A method of 23.1.3 called the callback for one element.
     ///
@@ -507,6 +511,7 @@ impl Resume {
                 arg_count,
                 construct,
                 hint,
+                of_receiver,
                 ..
             } => Self::Coercion {
                 intrinsic,
@@ -517,6 +522,7 @@ impl Resume {
                 construct,
                 step: next,
                 hint,
+                of_receiver,
             },
             other => other,
         }
@@ -1397,6 +1403,19 @@ impl RegisterVM {
                     active_feedback
                         .record_call(call.slot, NATIVE_CALL_TARGET | u64::from(id))
                         .ok_or(VMError::InvalidFeedbackVector)?;
+                }
+                // 22.1.3 converts the `this` value before it reads any
+                // argument, so the receiver leaves first.
+                if intrinsic.coerces_its_receiver() && call.receiver.is_object() {
+                    return self.begin_receiver_coercion(
+                        intrinsic,
+                        PrimitiveHint::String,
+                        call,
+                        units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    );
                 }
                 // 7.1.17 of an Object argument is a call of a method of the
                 // object, and the native has no frame to make it from: it
@@ -3284,6 +3303,19 @@ impl RegisterVM {
         ) {
             return self.begin_spread_call(intrinsic, call, units, active_feedback, heap, realm);
         }
+        // 22.1.3 sends the `this` value through ToString before it reads its
+        // arguments, which is a method of the Script for an Object.
+        if intrinsic.coerces_its_receiver() && call.receiver.is_object() {
+            return self.begin_receiver_coercion(
+                intrinsic,
+                PrimitiveHint::String,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
         // A method of 23.1.3 that asks the Script about each element leaves to
         // make the first call and comes back through the frame it opens.
         if Self::iterates_with_callback(intrinsic) {
@@ -3632,6 +3664,7 @@ impl RegisterVM {
             construct: call.construct,
             step: PrimitiveStep::Exotic,
             hint,
+            of_receiver: false,
         };
         let conversion = Call {
             receiver: argument,
@@ -3642,6 +3675,61 @@ impl RegisterVM {
         match self.convert_to_primitive(conversion, units, active_feedback, heap, realm)? {
             Conversion::Done(value) => {
                 self.write_reg(register, value)?;
+                self.finish_coerced(
+                    resume,
+                    call.return_pc,
+                    call.caller_code_id,
+                    units,
+                    active_feedback,
+                    heap,
+                    realm,
+                )
+            }
+            Conversion::Suspended(code_id) => Ok(Some(code_id)),
+        }
+    }
+
+    /// Leaves a native operation to convert its `this` value (22.1.3).
+    ///
+    /// The receiver has no register of the caller to answer into, so the
+    /// primitive replaces the value the root holds and the clause runs again
+    /// with it.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a conversion runs where a call does, with what a call has"
+    )]
+    fn begin_receiver_coercion(
+        &mut self,
+        intrinsic: Intrinsic,
+        hint: PrimitiveHint,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        heap.enter_scope();
+        let receiver = heap.push_root(call.receiver)?;
+        let resume = Resume::Coercion {
+            intrinsic: intrinsic.id(),
+            receiver,
+            register: call.arg_start,
+            arg_start: call.arg_start,
+            arg_count: call.arg_count,
+            construct: call.construct,
+            step: PrimitiveStep::Exotic,
+            hint,
+            of_receiver: true,
+        };
+        let conversion = Call {
+            receiver: call.receiver,
+            resume: Some(resume),
+            construct: None,
+            ..call
+        };
+        match self.convert_to_primitive(conversion, units, active_feedback, heap, realm)? {
+            Conversion::Done(value) => {
+                heap.set_root(receiver, value).map_err(VMError::Heap)?;
                 self.finish_coerced(
                     resume,
                     call.return_pc,
@@ -7268,7 +7356,16 @@ impl RegisterVM {
             return Err(VMError::TypeError);
         };
         if let Some(value) = Self::primitive_answer(self.acc, step, heap, realm)? {
-            self.write_reg(register, value)?;
+            if let Resume::Coercion {
+                receiver,
+                of_receiver: true,
+                ..
+            } = resume
+            {
+                heap.set_root(receiver, value).map_err(VMError::Heap)?;
+            } else {
+                self.write_reg(register, value)?;
+            }
             return self.finish_coerced(
                 resume,
                 call.return_pc,
@@ -7284,10 +7381,15 @@ impl RegisterVM {
         let Some(next) = hint.after(step) else {
             return Err(type_error(heap, realm, "an object has no primitive value"));
         };
-        let object = self
-            .read_reg(register)?
-            .as_object()
-            .ok_or(VMError::TypeError)?;
+        let held = match resume {
+            Resume::Coercion {
+                receiver,
+                of_receiver: true,
+                ..
+            } => heap.root_value(receiver).unwrap_or(VALUE_UNDEFINED),
+            _ => self.read_reg(register)?,
+        };
+        let object = held.as_object().ok_or(VMError::TypeError)?;
         let call = Call {
             receiver: Value::from_object(object),
             resume: Some(resume.with_step(next)),
@@ -7295,7 +7397,16 @@ impl RegisterVM {
         };
         match self.convert_to_primitive(call, units, active_feedback, heap, realm)? {
             Conversion::Done(value) => {
-                self.write_reg(register, value)?;
+                if let Resume::Coercion {
+                    receiver,
+                    of_receiver: true,
+                    ..
+                } = resume
+                {
+                    heap.set_root(receiver, value).map_err(VMError::Heap)?;
+                } else {
+                    self.write_reg(register, value)?;
+                }
                 self.finish_coerced(
                     resume,
                     call.return_pc,
