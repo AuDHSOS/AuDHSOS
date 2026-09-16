@@ -1777,6 +1777,18 @@ impl RegisterVM {
                 Ok(VALUE_UNDEFINED)
             }
             Intrinsic::Print => self.print_line(&call, heap, realm),
+            Intrinsic::PromiseAll | Intrinsic::PromiseRace | Intrinsic::PromiseAllSettled => {
+                self.promise_combinator(intrinsic, &call, heap, realm)
+            }
+            Intrinsic::PromiseWithResolvers => Self::promise_with_resolvers(heap, realm),
+            Intrinsic::PromiseAllElement
+            | Intrinsic::PromiseAllSettledFulfilled
+            | Intrinsic::PromiseAllSettledRejected => {
+                let function = self.read_reg(call.func)?;
+                let value = self.call_argument(&call, 0, heap)?;
+                self.settle_element(intrinsic, function, value, heap, realm)?;
+                Ok(VALUE_UNDEFINED)
+            }
             Intrinsic::PromiseResolve => self.promise_resolve(call, heap, realm),
             Intrinsic::PromiseReject => self.promise_reject(call, heap, realm),
             Intrinsic::PromisePrototypeThen => self.promise_then(call, heap, realm),
@@ -11408,6 +11420,344 @@ impl RegisterVM {
         }
     }
 
+    /// 27.2.4.1, 27.2.4.2 and 27.2.4.5, which differ only in what each element
+    /// is given as its pair of handlers.
+    ///
+    /// Steps 3 to 6 stand inside one guard: a value thrown while the iterable
+    /// is read or an element is started rejects the capability rather than
+    /// reaching the caller.
+    fn promise_combinator(
+        &self,
+        intrinsic: Intrinsic,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if !Self::is_intrinsic(call.receiver, Intrinsic::PromiseConstructor, heap) {
+            if call.receiver.as_object().is_none() {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "a combinator of 27.2.4 called on a value that is no Object",
+                ));
+            }
+            return Err(VMError::Unsupported(
+                "a combinator of 27.2.4 on a constructor that is not %Promise%",
+            ));
+        }
+        let capability = promise::capability(heap, realm)?;
+        let argument = self.call_argument(call, 0, heap)?;
+        match self.start_elements(intrinsic, argument, capability, heap, realm) {
+            Ok(()) => {}
+            Err(VMError::Thrown(value, _)) => {
+                let reject = promise::slot(heap, capability, promise::CAPABILITY_REJECT);
+                self.settle_through(reject, value, true, heap, realm)?;
+            }
+            Err(error) => return Err(error),
+        }
+        Ok(promise::slot(heap, capability, promise::CAPABILITY_PROMISE))
+    }
+
+    /// Steps 3 to 6 of the three combinators.
+    fn start_elements(
+        &self,
+        intrinsic: Intrinsic,
+        argument: Value,
+        capability: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        // Step 3 reads `resolve` once, before the iterable is read.
+        let constructor = realm
+            .intrinsic(heap, Intrinsic::PromiseConstructor)?
+            .as_object()
+            .ok_or(VMError::TypeError)?;
+        let key = PropertyKey::String(heap.strings.intern("resolve")?);
+        let resolve = match heap.lookup_named(constructor, key)? {
+            Some(found) => Self::plain_value(found)?,
+            None => VALUE_UNDEFINED,
+        };
+        if !Self::is_intrinsic(resolve, Intrinsic::PromiseResolve, heap) {
+            return Err(VMError::Unsupported(
+                "a `resolve` that is not %Promise.resolve%",
+            ));
+        }
+        let elements = Self::iterable_elements(argument, heap, realm)?;
+        let values = Value::from_object(realm.array(heap, 0)?);
+        let group = promise::record(heap, realm, &[values, capability, Value::from_smi(1)])?;
+        for (index, element) in elements.into_iter().enumerate() {
+            let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+            if intrinsic != Intrinsic::PromiseRace {
+                promise::set_slot(heap, values, index, VALUE_UNDEFINED)?;
+            }
+            promise::set_slot(
+                heap,
+                group,
+                promise::GROUP_REMAINING,
+                Value::from_smi(Self::remaining(heap, group).saturating_add(1)),
+            )?;
+            let next = self.resolved_promise(element, heap, realm)?;
+            let (on_fulfilled, on_rejected) = match intrinsic {
+                Intrinsic::PromiseRace => (
+                    promise::slot(heap, capability, promise::CAPABILITY_RESOLVE),
+                    promise::slot(heap, capability, promise::CAPABILITY_REJECT),
+                ),
+                Intrinsic::PromiseAllSettled => (
+                    promise::element_function(
+                        heap,
+                        realm,
+                        Intrinsic::PromiseAllSettledFulfilled,
+                        group,
+                        index,
+                    )?,
+                    promise::element_function(
+                        heap,
+                        realm,
+                        Intrinsic::PromiseAllSettledRejected,
+                        group,
+                        index,
+                    )?,
+                ),
+                _ => (
+                    promise::element_function(
+                        heap,
+                        realm,
+                        Intrinsic::PromiseAllElement,
+                        group,
+                        index,
+                    )?,
+                    promise::slot(heap, capability, promise::CAPABILITY_REJECT),
+                ),
+            };
+            // Step 6.q calls `then` of the promise the element resolved to,
+            // which is observable and so must be the one of this Realm.
+            let object = next.as_object().ok_or(VMError::TypeError)?;
+            let key = PropertyKey::String(heap.strings.intern("then")?);
+            let then = match heap.lookup_named(object, key)? {
+                Some(found) => Self::plain_value(found)?,
+                None => VALUE_UNDEFINED,
+            };
+            if !Self::is_intrinsic(then, Intrinsic::PromisePrototypeThen, heap) {
+                return Err(VMError::Unsupported(
+                    "a `then` that is not %Promise.prototype.then%",
+                ));
+            }
+            self.perform_then(
+                next,
+                on_fulfilled,
+                on_rejected,
+                VALUE_UNDEFINED,
+                heap,
+                realm,
+            )?;
+        }
+        if intrinsic == Intrinsic::PromiseRace {
+            return Ok(());
+        }
+        let remaining = Self::remaining(heap, group).saturating_sub(1);
+        promise::set_slot(
+            heap,
+            group,
+            promise::GROUP_REMAINING,
+            Value::from_smi(remaining),
+        )?;
+        if remaining == 0 {
+            let resolve = promise::slot(heap, capability, promise::CAPABILITY_RESOLVE);
+            self.settle_through(resolve, values, false, heap, realm)?;
+        }
+        Ok(())
+    }
+
+    /// `[[RemainingElements]]` of the shared record.
+    fn remaining(heap: &GenerationalHeap, group: Value) -> i32 {
+        promise::slot(heap, group, promise::GROUP_REMAINING)
+            .as_smi()
+            .unwrap_or(0)
+    }
+
+    /// 27.2.4.7.1 for `%Promise%`: the value itself where it is already a
+    /// promise of this Realm, and a new promise resolved with it otherwise.
+    fn resolved_promise(
+        &self,
+        value: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if promise::state_of(value, heap).is_some() {
+            let object = value.as_object().ok_or(VMError::TypeError)?;
+            let key = PropertyKey::String(heap.strings.intern("constructor")?);
+            let constructor = match heap.lookup_named(object, key)? {
+                Some(found) => Self::plain_value(found)?,
+                None => VALUE_UNDEFINED,
+            };
+            if Self::is_intrinsic(constructor, Intrinsic::PromiseConstructor, heap) {
+                return Ok(value);
+            }
+        }
+        let capability = promise::capability(heap, realm)?;
+        let resolve = promise::slot(heap, capability, promise::CAPABILITY_RESOLVE);
+        self.settle_through(resolve, value, false, heap, realm)?;
+        Ok(promise::slot(heap, capability, promise::CAPABILITY_PROMISE))
+    }
+
+    /// Every element of the iterable a combinator of 27.2.4 was given.
+    ///
+    /// 7.4.2 calls `@@iterator` and 7.4.4 calls `next` for each element; both
+    /// are methods of the Script that a native has no frame to call. An Array
+    /// whose two methods are the ones of this Realm answers its elements
+    /// without either call, and every other iterable is a named gap.
+    fn iterable_elements(
+        value: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Vec<Value>, VMError> {
+        // 22.1.3.34 makes a String iterable, and this Realm has not built it.
+        if value.is_string() {
+            return Err(VMError::Unsupported("a property of %String.prototype%"));
+        }
+        let Some(object) = value.as_object() else {
+            return Err(type_error(heap, realm, "the argument is not iterable"));
+        };
+        let method =
+            match heap.lookup_named(object, super::realm::WellKnownSymbol::Iterator.key())? {
+                Some(found) => Self::plain_value(found)?,
+                None => VALUE_UNDEFINED,
+            };
+        if method.is_undefined() || method.is_null() {
+            return Err(type_error(heap, realm, "the argument is not iterable"));
+        }
+        let iterates = Self::is_intrinsic(method, Intrinsic::ArrayPrototypeValues, heap)
+            && matches!(
+                heap.get_object(object).map(|entry| &entry.kind),
+                Some(&ObjectKind::Array { .. })
+            );
+        if !iterates {
+            return Err(VMError::Unsupported(
+                "an iterable that is no Array of this Realm",
+            ));
+        }
+        // 23.1.5.2.1 answers each element through `next`, so the method that
+        // reads it must be the one of this Realm as well.
+        let iterator_prototype = realm
+            .array_iterator_prototype(heap)?
+            .as_object()
+            .ok_or(VMError::TypeError)?;
+        let key = PropertyKey::String(heap.strings.intern("next")?);
+        let next = match heap.lookup_named(iterator_prototype, key)? {
+            Some(found) => Self::plain_value(found)?,
+            None => VALUE_UNDEFINED,
+        };
+        if !Self::is_intrinsic(next, Intrinsic::ArrayIteratorPrototypeNext, heap) {
+            return Err(VMError::Unsupported(
+                "a `next` that is not %ArrayIteratorPrototype%.next",
+            ));
+        }
+        let Some(&ObjectKind::Array { length, .. }) = heap.get_object(object).map(|e| &e.kind)
+        else {
+            return Err(VMError::TypeError);
+        };
+        let mut elements = Vec::new();
+        for index in 0..length {
+            elements.push(Self::element_at(heap, object, index)?.unwrap_or(VALUE_UNDEFINED));
+        }
+        Ok(elements)
+    }
+
+    /// 27.2.4.1.3, 27.2.4.2.2 and 27.2.4.2.3: one element of a combinator has
+    /// settled.
+    fn settle_element(
+        &self,
+        intrinsic: Intrinsic,
+        function: Value,
+        value: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let state = Self::native_state(function, heap).ok_or(VMError::TypeError)?;
+        if promise::slot(heap, state, promise::ELEMENT_CALLED) == VALUE_TRUE {
+            return Ok(());
+        }
+        promise::set_slot(heap, state, promise::ELEMENT_CALLED, VALUE_TRUE)?;
+        let group = promise::slot(heap, state, promise::ELEMENT_GROUP);
+        let index = promise::slot(heap, state, promise::ELEMENT_INDEX)
+            .as_smi()
+            .and_then(|index| u32::try_from(index).ok())
+            .ok_or(VMError::TypeError)?;
+        let values = promise::slot(heap, group, promise::GROUP_VALUES);
+        let held = match intrinsic {
+            Intrinsic::PromiseAllSettledFulfilled => {
+                Self::settled_record(heap, realm, "fulfilled", "value", value)?
+            }
+            Intrinsic::PromiseAllSettledRejected => {
+                Self::settled_record(heap, realm, "rejected", "reason", value)?
+            }
+            _ => value,
+        };
+        promise::set_slot(heap, values, index, held)?;
+        let remaining = Self::remaining(heap, group).saturating_sub(1);
+        promise::set_slot(
+            heap,
+            group,
+            promise::GROUP_REMAINING,
+            Value::from_smi(remaining),
+        )?;
+        if remaining == 0 {
+            let capability = promise::slot(heap, group, promise::GROUP_CAPABILITY);
+            let resolve = promise::slot(heap, capability, promise::CAPABILITY_RESOLVE);
+            self.settle_through(resolve, values, false, heap, realm)?;
+        }
+        Ok(())
+    }
+
+    /// The object 27.2.4.2.2 step 9 and 27.2.4.2.3 step 9 build for one
+    /// element.
+    fn settled_record(
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+        status: &str,
+        field: &str,
+        value: Value,
+    ) -> Result<Value, VMError> {
+        let object = realm.ordinary_object(heap)?;
+        let flags = PropertyFlags {
+            writable: true,
+            enumerable: true,
+            configurable: true,
+            is_accessor: false,
+        };
+        let text = heap.strings.allocate_str(status)?;
+        let key = PropertyKey::String(heap.strings.intern("status")?);
+        heap.define_own_named(object, key, Value::from_string(text), flags)?;
+        let key = PropertyKey::String(heap.strings.intern(field)?);
+        heap.define_own_named(object, key, value, flags)?;
+        Ok(Value::from_object(object))
+    }
+
+    /// 27.2.4.9: the promise and the pair that settles it, in one object.
+    fn promise_with_resolvers(
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let capability = promise::capability(heap, realm)?;
+        let object = realm.ordinary_object(heap)?;
+        let flags = PropertyFlags {
+            writable: true,
+            enumerable: true,
+            configurable: true,
+            is_accessor: false,
+        };
+        for (name, index) in [
+            ("promise", promise::CAPABILITY_PROMISE),
+            ("resolve", promise::CAPABILITY_RESOLVE),
+            ("reject", promise::CAPABILITY_REJECT),
+        ] {
+            let value = promise::slot(heap, capability, index);
+            let key = PropertyKey::String(heap.strings.intern(name)?);
+            heap.define_own_named(object, key, value, flags)?;
+        }
+        Ok(Value::from_object(object))
+    }
+
     /// `print`: the run stops, the embedding writes the line, and the call
     /// instruction runs again with nothing to write.
     fn print_line(
@@ -11669,6 +12019,12 @@ impl RegisterVM {
                     heap,
                     realm,
                 )?;
+                Ok(VALUE_UNDEFINED)
+            }
+            Intrinsic::PromiseAllElement
+            | Intrinsic::PromiseAllSettledFulfilled
+            | Intrinsic::PromiseAllSettledRejected => {
+                self.settle_element(intrinsic, function, first, heap, realm)?;
                 Ok(VALUE_UNDEFINED)
             }
             _ => Err(gap),

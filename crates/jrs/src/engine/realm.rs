@@ -658,6 +658,20 @@ pub enum Intrinsic {
     /// gives the global object one, and a Test262 file of the flag `async`
     /// reports through it.
     Print,
+    /// `Promise.all`, 27.2.4.1.
+    PromiseAll,
+    /// `Promise.race`, 27.2.4.5.
+    PromiseRace,
+    /// `Promise.allSettled`, 27.2.4.2.
+    PromiseAllSettled,
+    /// `Promise.withResolvers`, 27.2.4.9.
+    PromiseWithResolvers,
+    /// The resolve element function of 27.2.4.1.3.
+    PromiseAllElement,
+    /// The fulfil element function of 27.2.4.2.2.
+    PromiseAllSettledFulfilled,
+    /// The reject element function of 27.2.4.2.3.
+    PromiseAllSettledRejected,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -711,7 +725,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 184] = [
+    pub const ALL: [Self; 191] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -896,6 +910,13 @@ impl Intrinsic {
         Self::PromiseResolveFunction,
         Self::PromiseRejectFunction,
         Self::Print,
+        Self::PromiseAll,
+        Self::PromiseRace,
+        Self::PromiseAllSettled,
+        Self::PromiseWithResolvers,
+        Self::PromiseAllElement,
+        Self::PromiseAllSettledFulfilled,
+        Self::PromiseAllSettledRejected,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -1031,7 +1052,12 @@ impl Intrinsic {
             Self::PromisePrototypeThen | Self::PromisePrototypeCatch => {
                 IntrinsicHolder::PromisePrototype
             }
-            Self::PromiseResolve | Self::PromiseReject => IntrinsicHolder::PromiseConstructor,
+            Self::PromiseResolve
+            | Self::PromiseReject
+            | Self::PromiseAll
+            | Self::PromiseRace
+            | Self::PromiseAllSettled
+            | Self::PromiseWithResolvers => IntrinsicHolder::PromiseConstructor,
             Self::StringFromCharCode | Self::StringFromCodePoint | Self::StringRaw => {
                 IntrinsicHolder::StringConstructor
             }
@@ -1072,6 +1098,11 @@ impl Intrinsic {
             | Self::PromiseConstructor
             | Self::PromiseResolveFunction
             | Self::PromiseRejectFunction
+            // 27.2.4.1.3, 27.2.4.2.2 and 27.2.4.2.3 stand on no object
+            // either: the combinator that made one is the only caller.
+            | Self::PromiseAllElement
+            | Self::PromiseAllSettledFulfilled
+            | Self::PromiseAllSettledRejected
             | Self::Print => IntrinsicHolder::Global,
             Self::ArrayIsArray | Self::ArrayOf | Self::ArrayFrom => {
                 IntrinsicHolder::ArrayConstructor
@@ -1293,6 +1324,13 @@ impl Intrinsic {
             Self::PromiseResolveFunction => 181,
             Self::PromiseRejectFunction => 182,
             Self::Print => 183,
+            Self::PromiseAll => 184,
+            Self::PromiseRace => 185,
+            Self::PromiseAllSettled => 186,
+            Self::PromiseWithResolvers => 187,
+            Self::PromiseAllElement => 188,
+            Self::PromiseAllSettledFulfilled => 189,
+            Self::PromiseAllSettledRejected => 190,
         }
     }
 
@@ -1487,6 +1525,13 @@ impl Intrinsic {
             Self::PromiseResolveFunction => 181,
             Self::PromiseRejectFunction => 182,
             Self::Print => 183,
+            Self::PromiseAll => 184,
+            Self::PromiseRace => 185,
+            Self::PromiseAllSettled => 186,
+            Self::PromiseWithResolvers => 187,
+            Self::PromiseAllElement => 188,
+            Self::PromiseAllSettledFulfilled => 189,
+            Self::PromiseAllSettledRejected => 190,
         }
     }
 
@@ -1682,6 +1727,13 @@ impl Intrinsic {
             181 => Some(Self::PromiseResolveFunction),
             182 => Some(Self::PromiseRejectFunction),
             183 => Some(Self::Print),
+            184 => Some(Self::PromiseAll),
+            185 => Some(Self::PromiseRace),
+            186 => Some(Self::PromiseAllSettled),
+            187 => Some(Self::PromiseWithResolvers),
+            188 => Some(Self::PromiseAllElement),
+            189 => Some(Self::PromiseAllSettledFulfilled),
+            190 => Some(Self::PromiseAllSettledRejected),
             _ => None,
         }
     }
@@ -1716,7 +1768,10 @@ impl Intrinsic {
             Self::ThrowTypeError
             | Self::FunctionPrototype
             | Self::PromiseResolveFunction
-            | Self::PromiseRejectFunction => "",
+            | Self::PromiseRejectFunction
+            | Self::PromiseAllElement
+            | Self::PromiseAllSettledFulfilled
+            | Self::PromiseAllSettledRejected => "",
             Self::SpeciesGetter => "get [Symbol.species]",
             Self::RegExpPrototypeFlags => "get flags",
             Self::RegExpPrototypeSource => "get source",
@@ -1748,6 +1803,10 @@ impl Intrinsic {
             Self::PromisePrototypeCatch => "catch",
 
             Self::Print => "print",
+            Self::PromiseAll => "all",
+            Self::PromiseRace => "race",
+            Self::PromiseAllSettled => "allSettled",
+            Self::PromiseWithResolvers => "withResolvers",
             Self::RegExpPrototypeTest => "test",
             Self::ArrayConstructor => "Array",
             Self::ObjectConstructor => "Object",
@@ -2262,7 +2321,8 @@ impl Intrinsic {
             | Self::ArrayOf
             | Self::StringPrototypeIsWellFormed
             | Self::StringPrototypeToWellFormed
-            | Self::ArrayPrototypeToReversed => 0,
+            | Self::ArrayPrototypeToReversed
+            | Self::PromiseWithResolvers => 0,
             Self::StringFromCharCode
             | Self::StringFromCodePoint
             | Self::StringRaw
@@ -2369,6 +2429,12 @@ impl Intrinsic {
             | Self::PromisePrototypeCatch
             | Self::PromiseResolveFunction
             | Self::PromiseRejectFunction
+            | Self::PromiseAll
+            | Self::PromiseRace
+            | Self::PromiseAllSettled
+            | Self::PromiseAllElement
+            | Self::PromiseAllSettledFulfilled
+            | Self::PromiseAllSettledRejected
             | Self::Print => 1,
             Self::ObjectDefineProperty | Self::ReflectDefineProperty | Self::ReflectApply => 3,
             Self::MathPow
@@ -2711,8 +2777,7 @@ pub fn string_constructor_owns(name: &[u16]) -> bool {
 
 /// The property names 27.2.4 gives `%Promise%` beyond what 17 gives every
 /// built-in function, and this Realm has not built.
-pub const PROMISE_CONSTRUCTOR_PROPERTIES: [&str; 6] =
-    ["all", "allSettled", "any", "race", "try", "withResolvers"];
+pub const PROMISE_CONSTRUCTOR_PROPERTIES: [&str; 2] = ["any", "try"];
 
 /// Whether `%Promise%` owns a property of this name that this Realm has not
 /// built.
@@ -4072,6 +4137,9 @@ impl Realm {
                 Intrinsic::ThrowTypeError
                     | Intrinsic::PromiseResolveFunction
                     | Intrinsic::PromiseRejectFunction
+                    | Intrinsic::PromiseAllElement
+                    | Intrinsic::PromiseAllSettledFulfilled
+                    | Intrinsic::PromiseAllSettledRejected
                     | Intrinsic::FunctionPrototype
                     | Intrinsic::SpeciesGetter
                     | Intrinsic::RegExpPrototypeFlags

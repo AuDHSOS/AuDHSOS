@@ -8215,7 +8215,14 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::PromiseResolveFunction
         | crate::engine::realm::Intrinsic::PromiseRejectFunction
         // The embedding answers nothing for a line it wrote.
-        | crate::engine::realm::Intrinsic::Print => RegisterType::Unknown,
+        | crate::engine::realm::Intrinsic::Print
+        | crate::engine::realm::Intrinsic::PromiseAll
+        | crate::engine::realm::Intrinsic::PromiseRace
+        | crate::engine::realm::Intrinsic::PromiseAllSettled
+        | crate::engine::realm::Intrinsic::PromiseWithResolvers
+        | crate::engine::realm::Intrinsic::PromiseAllElement
+        | crate::engine::realm::Intrinsic::PromiseAllSettledFulfilled
+        | crate::engine::realm::Intrinsic::PromiseAllSettledRejected => RegisterType::Unknown,
         crate::engine::realm::Intrinsic::StringPrototypeCharCodeAt
         | crate::engine::realm::Intrinsic::StringPrototypeIndexOf
         | crate::engine::realm::Intrinsic::StringPrototypeLastIndexOf

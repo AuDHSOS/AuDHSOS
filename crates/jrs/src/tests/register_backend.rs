@@ -7735,17 +7735,53 @@ fn a_promise_settles_through_the_job_queue_of_both_backends() -> Result<(), Erro
 }
 
 #[test]
+fn the_combinators_of_27_2_4_settle_one_promise_for_many() -> Result<(), Error> {
+    for source in [
+        // 27.2.4.1 answers the values in the order of the iterable, whatever
+        // order the elements settle in.
+        "var l=[];Promise.all([1,Promise.resolve(2),3]).then(function(v){l.push(v.join(','))});0",
+        // Step 8 of 27.2.4.1.3 resolves an empty iterable at once.
+        "var l=[];Promise.all([]).then(function(v){l.push('e'+v.length)});0",
+        // Step 6.q rejects the capability with the first element that rejects.
+        "var l=[];Promise.all([1,Promise.reject('e'),3]).catch(function(e){l.push('r'+e)});0",
+        // 27.2.4.5 answers the first element that settles.
+        "var l=[];Promise.race([Promise.resolve('w'),Promise.reject('x')]).then(function(v){l.push('w'+v)},function(e){l.push('x'+e)});0",
+        // 27.2.4.2 answers one record per element.
+        "var l=[];Promise.allSettled([Promise.resolve(1),Promise.reject(2)]).then(function(v){l.push(v[0].status+v[0].value+'/'+v[1].status+v[1].reason)});0",
+        // 27.2.4.9 answers the promise and the pair that settles it.
+        "var l=[];var w=Promise.withResolvers();w.resolve(9);w.promise.then(function(v){l.push('w'+v)});0",
+        // 7.4.2 throws for an argument that is not iterable, and the throw is
+        // the rejection of step 7.
+        "var l=[];Promise.all(3).catch(function(e){l.push('t'+(e instanceof TypeError))});0",
+        // A hole reads through the Prototype Chain like any other index.
+        "var l=[];Promise.all([1,,3]).then(function(v){l.push(v.length+':'+v[1])});0",
+    ] {
+        let mut engine_host = SilentHost;
+        let mut engine = Realm::with_backend(Limits::default(), &mut engine_host, Backend::Engine)?;
+        let mut stack_host = SilentHost;
+        let mut stack = Realm::with_backend(Limits::default(), &mut stack_host, Backend::Stack)?;
+        engine.evaluate(source)?;
+        stack.evaluate(source)?;
+        let expected = stack.evaluate("l.join('|')")?;
+        assert_eq!(engine.evaluate("l.join('|')")?, expected, "{source}");
+    }
+    Ok(())
+}
+
+#[test]
 fn the_engine_names_the_parts_of_clause_27_it_has_not_built() -> Result<(), Error> {
     // 27.2.4 gives `%Promise%` five combinators and 27.2.5.3 gives the
     // prototype `finally`; a read of one of them is a gap and not undefined.
     // A gap is fatal, so each one is read in a Realm of its own.
     for source in [
-        "Promise.all",
-        "Promise.race",
         "Promise.any",
-        "Promise.allSettled",
-        "Promise.withResolvers",
+        "Promise.try",
         "Promise.prototype.finally",
+        // 7.4.2 and 7.4.4 are methods of the Script, which a combinator has no
+        // frame to call: only an Array of this Realm answers its elements
+        // without either call.
+        "Promise.all({[Symbol.iterator](){return {next(){return {done:true}}}}})",
+        "Promise.all('ab')",
         // A Promise of a subclass needs the `newTarget` of 10.1.13, which this
         // engine does not carry into a constructor written in Rust.
         "class C extends Promise{}; new C(function(){})",

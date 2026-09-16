@@ -66,6 +66,21 @@ pub const REACTION_HANDLER: u32 = 0;
 /// Index of `[[Capability]]` in a reaction record.
 pub const REACTION_CAPABILITY: u32 = 1;
 
+/// Index of `[[Values]]` in the record the element functions of 27.2.4.1
+/// share.
+pub const GROUP_VALUES: u32 = 0;
+/// Index of `[[Capability]]` in that record.
+pub const GROUP_CAPABILITY: u32 = 1;
+/// Index of `[[RemainingElements]]` in that record.
+pub const GROUP_REMAINING: u32 = 2;
+
+/// Index of the shared record in the state of one element function.
+pub const ELEMENT_GROUP: u32 = 0;
+/// Index of `[[Index]]` in that state.
+pub const ELEMENT_INDEX: u32 = 1;
+/// Index of `[[AlreadyCalled]]` in that state.
+pub const ELEMENT_CALLED: u32 = 2;
+
 /// Index of `[[Promise]]` in the state a pair of resolving functions shares.
 pub const STATE_PROMISE: u32 = 0;
 /// Index of `[[AlreadyResolved]]` in that state.
@@ -118,6 +133,35 @@ pub fn record(
         heap.set_array_element(array, u32::try_from(index).unwrap_or(0), *value)?;
     }
     Ok(Value::from_object(array))
+}
+
+/// One element function of 27.2.4.1.3, 27.2.4.2.2 or 27.2.4.2.3, which
+/// carries the shared record, its index and `[[AlreadyCalled]]`.
+///
+/// # Errors
+///
+/// The errors of the allocation.
+pub fn element_function(
+    heap: &mut GenerationalHeap,
+    realm: &Realm,
+    intrinsic: Intrinsic,
+    group: Value,
+    index: u32,
+) -> Result<Value, HeapError> {
+    let state = record(
+        heap,
+        realm,
+        &[group, Value::from_smi(index_as_smi(index)), VALUE_FALSE],
+    )?;
+    let parent = realm.function_prototype(heap)?;
+    let function = heap.allocate_native(parent, intrinsic.id(), 1, state)?;
+    name_the_function(heap, function)?;
+    Ok(Value::from_object(function))
+}
+
+/// An index as the Number a slot of a record carries.
+fn index_as_smi(index: u32) -> i32 {
+    i32::try_from(index).unwrap_or(i32::MAX)
 }
 
 /// The `[[PromiseState]]` of a value that is a Promise, and nothing for one
