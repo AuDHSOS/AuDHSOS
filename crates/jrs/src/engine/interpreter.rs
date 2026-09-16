@@ -1718,15 +1718,13 @@ impl RegisterVM {
             Intrinsic::JsonParse | Intrinsic::JsonStringify => {
                 self.call_json_intrinsic(intrinsic, &call, heap, realm)
             }
-            // 22.2.4.1 compiles a pattern at run time, which this engine does
-            // only where the Script was compiled.
-            Intrinsic::RegExpConstructor => Err(VMError::Unsupported(
-                "the RegExp constructor, which compiles a pattern at run time",
-            )),
+            // 22.2.3.1 makes a RegExp of a pattern and flags 22.2.4.1
+            // compiles where the call stands.
+            Intrinsic::RegExpConstructor => self.construct_regexp(&call, heap, realm),
             Intrinsic::RegExpPrototypeExec
             | Intrinsic::RegExpPrototypeTest
             | Intrinsic::RegExpPrototypeToString => {
-                self.call_regexp_intrinsic(intrinsic, &call, units, heap, realm)
+                self.call_regexp_intrinsic(intrinsic, &call, heap, realm)
             }
             // 20.2.3.5 answers the source text of the grammar node a function
             // was written as, and the NativeFunction string of 20.2.3.5 step 3
@@ -1989,6 +1987,7 @@ impl RegisterVM {
                 intrinsic,
                 Intrinsic::ArrayConstructor
                     | Intrinsic::ObjectConstructor
+                    | Intrinsic::RegExpConstructor
                     | Intrinsic::ErrorConstructor
                     | Intrinsic::EvalErrorConstructor
                     | Intrinsic::RangeErrorConstructor
@@ -6962,7 +6961,7 @@ impl RegisterVM {
         let text = self.receiver_units(call.receiver, units, heap, realm)?;
         let separator = self.call_argument(call, 0)?;
         if let Some(reference) = separator.as_object()
-            && let Some(pattern) = Self::regexp_pattern(reference, heap, units).cloned()
+            && let Some(pattern) = Self::regexp_pattern(reference, heap)
         {
             return self.regexp_split(&text, &pattern, call, heap, realm);
         }
@@ -7625,7 +7624,6 @@ impl RegisterVM {
         &mut self,
         intrinsic: Intrinsic,
         call: &Call,
-        units: CodeUnits<'_>,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
@@ -7633,13 +7631,19 @@ impl RegisterVM {
             .receiver
             .as_object()
             .ok_or_else(|| type_error(heap, realm, "this value is not a RegExp"))?;
-        let Some(pattern) = Self::regexp_pattern(receiver, heap, units).cloned() else {
+        let Some(pattern) = Self::regexp_pattern(receiver, heap) else {
             return Err(type_error(heap, realm, "this value is not a RegExp"));
         };
         // 22.2.6.17 answers the text of the literal, which needs no match.
         if intrinsic == Intrinsic::RegExpPrototypeToString {
             let mut units: Vec<u16> = alloc::vec![0x2F];
-            units.extend_from_slice(&pattern.source);
+            // 22.2.6.10 answers "(?:)" for an empty pattern, which is what
+            // 22.2.6.17 reads and what keeps the text a literal again.
+            if pattern.source.is_empty() {
+                units.extend("(?:)".encode_utf16());
+            } else {
+                units.extend_from_slice(&pattern.source);
+            }
             units.push(0x2F);
             units.extend(pattern.flags.encode_utf16());
             if units.len() > self.string_units_limit {
@@ -7678,7 +7682,7 @@ impl RegisterVM {
         let Some(receiver) = argument.as_object() else {
             return Err(VMError::Unsupported("a RegExp made at run time"));
         };
-        let Some(pattern) = Self::regexp_pattern(receiver, heap, units).cloned() else {
+        let Some(pattern) = Self::regexp_pattern(receiver, heap) else {
             return Err(VMError::Unsupported("a RegExp made at run time"));
         };
         if intrinsic == Intrinsic::StringPrototypeSearch {
@@ -7917,25 +7921,105 @@ impl RegisterVM {
     /// 22.2.7 gives the instance a `lastIndex` of its own, which is where
     /// 22.2.7.2 reads and writes the position a stateful match starts from.
     fn create_regexp(
-        &self,
         code: &BytecodeFunction,
         index: u16,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        if usize::from(index) >= code.regex_constants.len() {
-            return Err(VMError::InvalidRegister);
+        let pattern = code
+            .regex_constants
+            .get(usize::from(index))
+            .ok_or(VMError::InvalidRegister)?;
+        let pattern = super::object::PatternRef(alloc::rc::Rc::clone(pattern));
+        Self::allocate_regexp(pattern, heap, realm)
+    }
+
+    /// `RegExp` of 22.2.3.1, with the `RegExpInitialize` of 22.2.3.3.
+    ///
+    /// A pattern that is an `Object` and not a `RegExp` would go through
+    /// `ToString`, which runs a method of the Script; this native has no frame
+    /// for one and names the gap.
+    fn construct_regexp(
+        &self,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let pattern = self.call_argument(call, 0)?;
+        let flags = self.call_argument(call, 1)?;
+        // Step 3: a RegExp pattern gives its own source, and its flags where
+        // the call passed none.
+        let held = pattern
+            .as_object()
+            .and_then(|object| Self::regexp_pattern(object, heap));
+        let (source, text) = if let Some(held) = held {
+            // Step 1.c: `RegExp(re)` without `new` and without flags answers
+            // the same object.
+            if call.construct.is_none() && flags.is_undefined() {
+                return Ok(pattern);
+            }
+            let flags = if flags.is_undefined() {
+                held.flags.clone()
+            } else {
+                Self::flag_units(flags, heap, realm)?
+            };
+            (alloc::rc::Rc::clone(&held.source), flags)
+        } else {
+            if pattern.is_object() {
+                return Err(VMError::Unsupported("ToString of an Object"));
+            }
+            let source: alloc::rc::Rc<[u16]> = if pattern.is_undefined() {
+                alloc::rc::Rc::from(&[][..])
+            } else {
+                alloc::rc::Rc::from(property_name_units(pattern, heap)?)
+            };
+            (source, Self::flag_units(flags, heap, realm)?)
+        };
+        let compiled = crate::regexp::RegExp::compile(source, &text).map_err(|_| {
+            raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::SyntaxError,
+                "invalid regular expression",
+            )
+        })?;
+        let pattern = super::object::PatternRef(alloc::rc::Rc::new(compiled));
+        Self::allocate_regexp(pattern, heap, realm)
+    }
+
+    /// The flags 22.2.3.1 was given, as the text `RegExp::compile` reads.
+    fn flag_units(
+        flags: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<alloc::string::String, VMError> {
+        if flags.is_undefined() {
+            return Ok(alloc::string::String::new());
         }
+        if flags.is_object() {
+            return Err(VMError::Unsupported("ToString of an Object"));
+        }
+        let units = property_name_units(flags, heap)?;
+        alloc::string::String::from_utf16(&units).map_err(|_| {
+            raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::SyntaxError,
+                "invalid flags",
+            )
+        })
+    }
+
+    /// `RegExpAlloc` of 22.2.3.2 with the `lastIndex` 22.2.3.3 initializes.
+    fn allocate_regexp(
+        pattern: super::object::PatternRef,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
         let prototype = realm.regexp_prototype(heap)?;
         let shape = heap.shapes.root_shape();
         let object = heap.allocate_object(shape, prototype)?;
-        heap.set_object_kind(
-            object,
-            ObjectKind::RegExp {
-                unit: self.unit,
-                index: u32::from(index),
-            },
-        )?;
+        heap.set_object_kind(object, ObjectKind::RegExp { pattern })?;
         let key = PropertyKey::String(heap.strings.intern("lastIndex")?);
         heap.define_own_named(
             object,
@@ -7952,15 +8036,14 @@ impl RegisterVM {
     }
 
     /// The pattern a `RegExp` instance was made from.
-    fn regexp_pattern<'a>(
+    fn regexp_pattern(
         object: ObjectRef,
         heap: &GenerationalHeap,
-        units: CodeUnits<'a>,
-    ) -> Option<&'a alloc::rc::Rc<crate::regexp::RegExp>> {
-        let ObjectKind::RegExp { unit, index } = heap.get_object(object)?.kind else {
+    ) -> Option<alloc::rc::Rc<crate::regexp::RegExp>> {
+        let ObjectKind::RegExp { pattern } = &heap.get_object(object)?.kind else {
             return None;
         };
-        units.table.root(unit)?.regex_constants.get(index as usize)
+        Some(alloc::rc::Rc::clone(&pattern.0))
     }
 
     /// `HasProperty` of 7.3.11: the own property, then the Prototype Chain.
@@ -9833,7 +9916,7 @@ impl RegisterVM {
                         .map_or_else(|_| Value::from_f64(f64::from(length)), Value::from_smi);
                 }
                 Instruction::CreateRegExp(index) => {
-                    self.acc = self.create_regexp(active_code, index, heap, realm)?;
+                    self.acc = Self::create_regexp(active_code, index, heap, realm)?;
                 }
                 Instruction::CreateObject => {
                     let root_shape = heap.shapes.root_shape();

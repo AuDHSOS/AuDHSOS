@@ -24,6 +24,19 @@ use alloc::vec::Vec;
 /// Number of in-object property slots allocated inline with the object header.
 pub const IN_OBJECT_SLOT_COUNT: usize = 2;
 
+/// The compiled pattern of a `RegExp` instance (22.2.4.1).
+///
+/// Two instances hold the same pattern only where they hold the same `Rc`,
+/// which is what the equality compares; the automaton itself has none.
+#[derive(Clone, Debug)]
+pub struct PatternRef(pub alloc::rc::Rc<crate::regexp::RegExp>);
+
+impl PartialEq for PatternRef {
+    fn eq(&self, other: &Self) -> bool {
+        alloc::rc::Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 /// `[[ArrayLikeIterationKind]]` of 23.1.5.1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArrayIterationKind {
@@ -151,10 +164,9 @@ pub enum ObjectKind {
     /// `RegExp` instance, the slots of 22.2.7: the pattern it was compiled
     /// from, named by the unit that holds it and its index there.
     RegExp {
-        /// The code unit whose `regex_constants` hold the pattern.
-        unit: u32,
-        /// Index of the pattern in that unit.
-        index: u32,
+        /// The pattern 22.2.4.1 compiled, which a literal shares with the unit
+        /// it was compiled into and 22.2.3.1 makes at run time.
+        pattern: PatternRef,
     },
     /// Bound function exotic object, the slots of 10.4.1.
     BoundFunction {

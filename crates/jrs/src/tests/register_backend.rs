@@ -5583,9 +5583,8 @@ fn a_regular_expression_literal_makes_the_object_of_its_pattern() -> Result<(), 
     ] {
         differential_scripts(&[source])?;
     }
-    // 22.2.6 gives `%RegExp.prototype%` more than this Realm builds, and
-    // 22.2.4.1 compiles a pattern at run time.
-    for source in ["/a/.source", "/a/.global", "typeof RegExp('a')"] {
+    // 22.2.6 gives `%RegExp.prototype%` more than this Realm builds.
+    for source in ["/a/.source", "/a/.global"] {
         let mut host = SilentHost;
         let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
         assert!(
@@ -6644,5 +6643,39 @@ fn a_coerced_argument_leaves_the_clause_on_the_path_a_call_takes() -> Result<(),
     ] {
         differential_scripts(&[source])?;
     }
+    Ok(())
+}
+
+/// 22.2.3.1 makes a `RegExp` of a pattern and flags 22.2.4.1 compiles where the
+/// call stands, so the instance holds the automaton rather than an index into
+/// the unit the Script was compiled to.
+#[test]
+fn the_regexp_constructor_compiles_where_the_call_stands() -> Result<(), Error> {
+    for source in [
+        "''+new RegExp('a').test('a')",
+        "typeof new RegExp()",
+        "''+Array.isArray(new RegExp())",
+        "var r=/a/g;''+(RegExp(r)===r)",
+        "''+new RegExp('a')",
+        "''+new RegExp()",
+        "''+new RegExp('')",
+        "''+/a/g",
+        "var t=false;try{new RegExp('(')}catch(e){t=e instanceof SyntaxError}''+t",
+        "''+new RegExp('a').lastIndex",
+        "''+new RegExp('a').exec('bab').index",
+        "''+(new RegExp('a') instanceof RegExp)",
+        "''+new RegExp('a','g').test('bab')",
+        "var r=new RegExp('a','g');r.test('aa');''+r.lastIndex",
+        "''+new RegExp(/a/g).test('a')",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // A pattern that is an Object and not a RegExp needs a frame for 7.1.17.
+    let program = compile("new RegExp({})", Limits::default())?;
+    assert!(program.uses_register_backend());
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
     Ok(())
 }
