@@ -123,6 +123,28 @@ impl Rect {
     pub const fn clip_to(self, width: u32, height: u32) -> Rect {
         self.intersect(Rect::new(0, 0, width, height))
     }
+
+    /// The smallest rectangle holding both pixels, which is what a segment
+    /// between them changes.
+    #[must_use]
+    pub const fn span(from: (u32, u32), to: (u32, u32)) -> Rect {
+        let (left, right) = if from.0 <= to.0 {
+            (from.0, to.0)
+        } else {
+            (to.0, from.0)
+        };
+        let (top, bottom) = if from.1 <= to.1 {
+            (from.1, to.1)
+        } else {
+            (to.1, from.1)
+        };
+        Rect::new(
+            left,
+            top,
+            right.saturating_sub(left).saturating_add(1),
+            bottom.saturating_sub(top).saturating_add(1),
+        )
+    }
 }
 
 /// The rectangles that changed since the last presentation.

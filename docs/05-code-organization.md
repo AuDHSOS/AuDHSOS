@@ -75,6 +75,7 @@ AuDHSOS/
 │   │   │   ├── memory/        server-memory
 │   │   │   ├── display/       server-display: framebuffer owner, surfaces, cursor
 │   │   │   ├── input/         server-input: subscribers, the two decoders, event rings
+│   │   │   ├── desk/          server-desk: the windows of the desktop, their order and focus, the menu bar with the clock, and what a composition paints (document 17)
 │   │   │   ├── fs/            server-fs: open files per client, the file protocol over a FAT32 volume (document 15)
 │   │   │   └── net/           server-net: the socket table of every client, the two rings of every socket, the loop around net-stack (document 13)
 │   │   ├── programs/          user-programs: every program of the system as one
@@ -90,16 +91,19 @@ AuDHSOS/
 │   │   │                      server-input, server-fs, app-hello,
 │   │   │                      app-checks, app-paint, app-input,
 │   │   │                      app-canvas, app-faulter, app-lspci,
-│   │   │                      app-files
-│   │   ├── net-programs/      user-net-programs: server-net, app-net and app-ssh,
+│   │   │                      app-files, server-desk
+│   │   ├── net-programs/      user-net-programs: server-net, app-net, app-ssh
+│   │   │                      and app-shell,
 │   │   │                      and what only they need — the region the device
 │   │   │                      reads and writes, and its registers. A package of
 │   │   │                      its own so that no other program carries the
 │   │   │                      network stack (D-144)
 │   │   └── apps/              the logic of the applications, as servers/ is
 │   │                          for the servers: host-tested, no system call
-│   │       └── canvas/        app-canvas: the drawing state of the graphical
+│   │       ├── canvas/        app-canvas: the drawing state of the graphical
 │   │                          demonstration and e2e client (Phase 11)
+│   │       └── shell/         app-shell: the scrollback, the line being typed,
+│   │                          and what a line asks for (document 17)
 │   ├── crypto/                (document 11)
 │   │   ├── ct/                crypto-ct: Choice, constant-time selection and comparison, Secret<N>
 │   │   ├── hash/              crypto-hash: SHA-256, SHA-384/512, HMAC, HKDF
@@ -186,10 +190,12 @@ AuDHSOS/
 | `server-console` | u2 | all | no | yes | `audhsos-collections`, `driver-uart16550` |
 | `server-display` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `gfx`, `user-proto` |
 | `server-input` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `driver-i8042`, `user-proto`; feature `test-doubles` |
+| `server-desk` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `audhsos-time`, `gfx`, `user-proto` |
 | `server-fs` | u2 | all | no | yes | `audhsos-abi`, `audhsos-time`, `fs-fat`, `fs-gpt`, `user-proto`; `test-support` as a dev-dependency |
 | `server-net` | u2 | all | no | yes | `audhsos-abi`, `audhsos-time`, `crypto-rng`, `net-dns`, `net-stack`, `net-tcp`, `net-wire`, `user-proto`; `net-dhcp`, `net-eth`, `net-ip`, `net-udp` and `crypto-rng` with `test-doubles` as dev-dependencies, for the station the tests answer with. The device is the binary's: this crate takes frames in and hands frames out |
-| `user-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | every server logic crate but `server-net`, `app-canvas`, `audhsos-abi`, `audhsos-collections`, `audhsos-time`, `driver-i8042`, `driver-uart16550`, `driver-virtio-blk`, `fs-fat`, `gfx`, `pci`, `virtio-queue`, `user-rt`, `user-proto`, `user-loader`, `user-sys-x86_64` |
-| `user-net-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | `audhsos-abi`, `audhsos-encoding`, `audhsos-ssh`, `audhsos-time`, `crypto-rng`, `driver-virtio-net`, `net-http`, `net-stack`, `net-wire`, `server-net`, `user-programs`, `user-proto`, `user-rt`, `user-sys-x86_64`, `virtio-queue` |
+| `app-shell` | u2 | all | no | yes | `gfx`, `user-proto` |
+| `user-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | every server logic crate but `server-net`, `app-canvas`, `app-shell`, `audhsos-abi`, `audhsos-collections`, `audhsos-time`, `driver-i8042`, `driver-uart16550`, `driver-virtio-blk`, `fs-fat`, `gfx`, `pci`, `virtio-queue`, `user-rt`, `user-proto`, `user-loader`, `user-sys-x86_64` |
+| `user-net-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | `app-shell`, `audhsos-abi`, `audhsos-encoding`, `audhsos-ssh`, `audhsos-time`, `crypto-rng`, `driver-virtio-net`, `gfx`, `net-http`, `net-stack`, `net-wire`, `server-net`, `user-programs`, `user-proto`, `user-rt`, `user-sys-x86_64`, `virtio-queue` |
 | `crypto-ct` | c0 | all | no | yes | - |
 | `audhsos-der` | c0 | all | no | yes, fuzz | `audhsos-time`; `test-support` as a dev-dependency |
 | `crypto-hash` | c1 | all | no | yes | `crypto-ct` |

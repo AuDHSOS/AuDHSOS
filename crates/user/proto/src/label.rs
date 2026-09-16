@@ -60,6 +60,8 @@ pub enum Protocol {
     File = 7,
     /// The network server.
     Socket = 8,
+    /// The compositor of the desktop.
+    Window = 9,
 }
 
 impl Protocol {
@@ -73,6 +75,7 @@ impl Protocol {
         Protocol::Input,
         Protocol::File,
         Protocol::Socket,
+        Protocol::Window,
     ];
 
     /// The stable code of the protocol.
@@ -97,6 +100,7 @@ impl Protocol {
             6 => Some(Protocol::Input),
             7 => Some(Protocol::File),
             8 => Some(Protocol::Socket),
+            9 => Some(Protocol::Window),
             _ => None,
         }
     }
@@ -113,6 +117,7 @@ impl Protocol {
             Protocol::Input => "input",
             Protocol::File => "file",
             Protocol::Socket => "socket",
+            Protocol::Window => "window",
         }
     }
 }

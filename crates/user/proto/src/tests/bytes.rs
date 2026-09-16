@@ -52,3 +52,22 @@ fn two_strings_are_equal_when_their_bytes_are() {
     // with, so equality has to be over the length and not over the array.
     assert_ne!(Short::new(b"ab").unwrap(), Short::empty());
 }
+
+#[test]
+fn a_filled_string_holds_the_first_bytes_of_the_array() {
+    let value: Bytes<4> = Bytes::filled(*b"abcd", 2);
+    assert_eq!(value.as_bytes(), b"ab");
+    assert_eq!(value.as_str(), "ab");
+}
+
+#[test]
+fn a_length_past_the_array_is_the_whole_array() {
+    let value: Bytes<4> = Bytes::filled(*b"abcd", 99);
+    assert_eq!(value.as_bytes(), b"abcd");
+}
+
+#[test]
+fn bytes_that_are_no_string_read_as_the_empty_string() {
+    let value: Bytes<2> = Bytes::filled([0xC3, 0x28], 2);
+    assert_eq!(value.as_str(), "");
+}

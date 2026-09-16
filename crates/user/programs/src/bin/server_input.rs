@@ -27,9 +27,10 @@
 #![allow(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-// The package holds thirteen programs and each uses a different part of what
+// The package holds sixteen programs and each uses a different part of what
 // it depends on; these are the crates this one does not.
 use app_canvas as _;
+use app_shell as _;
 use audhsos_collections as _;
 use audhsos_time as _;
 use driver_uart16550 as _;
@@ -38,6 +39,7 @@ use fs_fat as _;
 use gfx as _;
 use pci as _;
 use server_console as _;
+use server_desk as _;
 use server_display as _;
 use server_fs as _;
 use server_memory as _;

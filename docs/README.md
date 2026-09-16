@@ -18,6 +18,13 @@ the tooling. What is left of both documents is their two integration
 steps, which are Phases 14 and 15; document 13 specifies them together
 with the two phases of kernel and bus work that came first.
 
+The desktop of [document 17](17-the-desktop-on-the-screen.md) is built
+beside the phases as well: `server-desk` holds the windows of every
+program that opens one, composes them onto the surface the display server
+gave it, and paints the menu bar with its clock over them; `app-shell`
+runs in one of those windows and reaches a Secure Shell server and an HTTP
+server from it. Every step W1 to W8 of that document is built.
+
 Secure Shell as a client is finished as well, which D-123 admits and
 [document 14](14-secure-shell-as-a-client.md) specifies, as track S of
 the roadmap. Steps S1 to S7 are every layer of the protocol: the wire
@@ -53,6 +60,7 @@ secret — is D-146.
 | 14 | [Secure Shell as a client](14-secure-shell-as-a-client.md) | The SSH-2 client: the algorithm set and what is refused, the crate, the three layers of the protocol, trusting a host key, testing against an implementation from outside |
 | 15 | [The disk on the machine](15-the-disk-on-the-machine.md) | The file system server and what had to exist before it: the handover of a PCI device, the two adapters, the server, the file protocol, and the move of the programs onto the volume |
 | 16 | [More than one processor](16-more-than-one-processor.md) | The SMP track: the processor list, interprocessor interrupts, a borrow that waits, per-processor data, the start-up of an application processor, per-processor run queues, remote invalidation |
+| 17 | [The desktop on the screen](17-the-desktop-on-the-screen.md) | The compositor: the draw commands, the window protocol, the windows and the menu bar with its clock, the shell that runs in a window, and what the end-to-end run types at it |
 
 Beside the documents lie the standards they cite, verbatim and with
 their checksums, one directory per body that publishes them:

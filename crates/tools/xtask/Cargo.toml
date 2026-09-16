@@ -25,6 +25,7 @@ fs-fat.workspace = true
 fs-gpt.workspace = true
 gfx.workspace = true
 kernel-test-harness.workspace = true
+server-desk.workspace = true
 server-display.workspace = true
 user-loader.workspace = true
 

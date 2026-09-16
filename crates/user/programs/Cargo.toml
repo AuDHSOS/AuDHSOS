@@ -47,6 +47,12 @@ test = false
 bench = false
 
 [[bin]]
+name = "server-desk"
+path = "src/bin/server_desk.rs"
+test = false
+bench = false
+
+[[bin]]
 name = "server-input"
 path = "src/bin/server_input.rs"
 test = false
@@ -106,6 +112,7 @@ bench = false
 
 [dependencies]
 app-canvas.workspace = true
+app-shell.workspace = true
 audhsos-abi.workspace = true
 audhsos-collections.workspace = true
 audhsos-time.workspace = true
@@ -116,6 +123,7 @@ fs-fat.workspace = true
 gfx.workspace = true
 pci.workspace = true
 server-console.workspace = true
+server-desk.workspace = true
 server-display.workspace = true
 server-fs.workspace = true
 server-input.workspace = true

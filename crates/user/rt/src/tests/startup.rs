@@ -81,6 +81,7 @@ fn every_role_lands_in_the_field_it_names() {
         (Role::NetInterrupt, handle(20)),
         (Role::NetNotification, handle(21)),
         (Role::NetServer, handle(22)),
+        (Role::DeskServer, handle(23)),
     ])
     .unwrap();
     assert_eq!(startup.own_process.unwrap().handle(), handle(1));
@@ -107,6 +108,7 @@ fn every_role_lands_in_the_field_it_names() {
     assert_eq!(net.interrupt.unwrap().handle(), handle(20));
     assert_eq!(net.notification.unwrap().handle(), handle(21));
     assert_eq!(startup.net_server.unwrap().handle(), handle(22));
+    assert_eq!(startup.desk_server.unwrap().handle(), handle(23));
     // The name of this test is a promise, and a role added later would
     // break it silently otherwise: every role but `Ram`, which is a list
     // and has a test of its own, and the fifteen value roles, which carry
@@ -118,7 +120,7 @@ fn every_role_lands_in_the_field_it_names() {
     // one field above.
     assert_eq!(
         Role::ALL.len(),
-        38,
+        39,
         "a role was added; give it a field and a line here"
     );
 }

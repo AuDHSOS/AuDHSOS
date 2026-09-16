@@ -834,6 +834,28 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "app-shell",
+        path: "crates/user/apps/shell",
+        kind: Kind::Logic,
+        deps: &["gfx", "user-proto"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "server-desk",
+        path: "crates/user/servers/desk",
+        kind: Kind::Logic,
+        deps: &[
+            "audhsos-abi",
+            "audhsos-collections",
+            "audhsos-time",
+            "gfx",
+            "user-proto",
+        ],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "user-sys-x86_64",
         path: "crates/user/sys-x86_64",
         // The eight accessors of `mmio.rs`, the unsafe constructor they
@@ -869,13 +891,19 @@ pub(crate) const CRATES: &[Crate] = &[
         // `docs/15-the-disk-on-the-machine.md`. Phase 14 added the socket
         // page of `Mapping`, which is one site more, and `socket::Stream`
         // one more again — the reference into the rings that the two
-        // programs of the network used to take each for itself.
+        // programs of the network used to take each for itself. The
+        // compositor raised it from 43 by six: the thread it wakes on —
+        // its entry point and the gate that thread adopts — the ring of
+        // input events, the pixels of a window while a draw command is
+        // carried out, and the two surfaces a composition holds at once,
+        // the screen and the window being blitted onto it.
         kind: Kind::Adapter {
-            unsafe_budget: 43,
+            unsafe_budget: 49,
             asm_budget: 0,
         },
         deps: &[
             "app-canvas",
+            "app-shell",
             "audhsos-abi",
             "audhsos-collections",
             "audhsos-time",
@@ -886,6 +914,7 @@ pub(crate) const CRATES: &[Crate] = &[
             "gfx",
             "pci",
             "server-console",
+            "server-desk",
             "server-display",
             "server-fs",
             "server-input",
@@ -919,6 +948,7 @@ pub(crate) const CRATES: &[Crate] = &[
             asm_budget: 0,
         },
         deps: &[
+            "app-shell",
             "audhsos-abi",
             "audhsos-encoding",
             "audhsos-ssh",
@@ -926,6 +956,7 @@ pub(crate) const CRATES: &[Crate] = &[
             "audhsos-x509",
             "crypto-rng",
             "driver-virtio-net",
+            "gfx",
             "net-http",
             "net-stack",
             "net-wire",
@@ -1049,6 +1080,7 @@ pub(crate) const CRATES: &[Crate] = &[
             "fs-gpt",
             "gfx",
             "kernel-test-harness",
+            "server-desk",
             "server-display",
             "user-loader",
         ],

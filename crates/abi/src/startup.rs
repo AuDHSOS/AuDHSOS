@@ -157,6 +157,7 @@ roles! {
     NetNotification = 36, handle => "The notification the message interrupt is bound to.",
     NetVectorBit = 37, value => "The bit of that notification the message interrupt sets. It closes the description `NetRegisters` opened.",
     NetServer = 38, handle => "The endpoint of the network server, badged with what that server is to know this process by. A program that uses a socket receives one, as a program that draws receives `DisplayServer`.",
+    DeskServer = 39, handle => "The endpoint of the compositor, badged with what it is to know this process by. A program that opens a window receives one, as a program that draws on the whole screen receives `DisplayServer`, and for the same reason: the compositor keeps a window per client.",
 }
 
 /// Why a startup message could not be read.

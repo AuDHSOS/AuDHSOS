@@ -29,11 +29,13 @@
 #![allow(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-// The package holds three programs and each uses a different part of what
+// The package holds five programs and each uses a different part of what
 // it depends on; these are the crates this one does not.
+use app_shell as _;
 use audhsos_encoding as _;
 use audhsos_ssh as _;
 use audhsos_x509 as _;
+use gfx as _;
 use net_http as _;
 
 use core::sync::atomic::{AtomicU64, Ordering};

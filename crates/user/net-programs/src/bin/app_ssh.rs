@@ -23,11 +23,13 @@
 #![no_main]
 #![forbid(unsafe_code)]
 
-// The package holds three programs and each uses a different part of what
+// The package holds five programs and each uses a different part of what
 // it depends on; these are the crates this one does not.
+use app_shell as _;
 use audhsos_time as _;
 use audhsos_x509 as _;
 use driver_virtio_net as _;
+use gfx as _;
 use net_http as _;
 use net_stack as _;
 use server_net as _;

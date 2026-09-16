@@ -17,6 +17,7 @@ pub mod name;
 pub mod parent;
 pub mod ring;
 pub mod socket;
+pub mod window;
 
 pub use bytes::Bytes;
 pub use console::{Chunk, MAX_CHUNK};
@@ -27,6 +28,7 @@ pub use label::{Label, ProtoError, Protocol, VERSION};
 pub use name::{MAX_NAME, Name};
 pub use ring::{RING_CAPACITY, Ring, RingHeader, SOCKET_PAGE_LEN, SocketPage};
 pub use socket::{Addresses, Direction, Endpoint, Interface, Opened, State};
+pub use window::{MAX_TITLE, Title, Window};
 
 #[cfg(test)]
 mod tests;

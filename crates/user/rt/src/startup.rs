@@ -130,6 +130,9 @@ pub struct Startup {
     pub net: Option<Device>,
     /// The endpoint of the network server.
     pub net_server: Option<EndpointHandle>,
+    /// The endpoint of the compositor, badged with what it knows this
+    /// process by. A program that opens a window is given one.
+    pub desk_server: Option<EndpointHandle>,
 }
 
 /// How many virtio block devices a process can be given. The reference
@@ -235,6 +238,7 @@ impl Startup {
             blocks: ArrayVec::new(),
             net: None,
             net_server: None,
+            desk_server: None,
         }
     }
 
@@ -400,6 +404,7 @@ impl Startup {
                 once(&mut device.notification, role, handle)
             }
             Role::NetServer => once(&mut self.net_server, role, handle),
+            Role::DeskServer => once(&mut self.desk_server, role, handle),
             Role::FramebufferGeometry
             | Role::FramebufferLine
             | Role::EcamBuses

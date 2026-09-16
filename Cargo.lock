@@ -11,6 +11,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "app-shell"
+version = "0.1.0"
+dependencies = [
+ "gfx",
+ "user-proto",
+]
+
+[[package]]
 name = "audhsos-abi"
 version = "0.1.0"
 dependencies = [
@@ -627,6 +635,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "server-desk"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-collections",
+ "audhsos-time",
+ "gfx",
+ "user-proto",
+]
+
+[[package]]
 name = "server-display"
 version = "0.1.0"
 dependencies = [
@@ -711,6 +730,7 @@ dependencies = [
 name = "user-net-programs"
 version = "0.1.0"
 dependencies = [
+ "app-shell",
  "audhsos-abi",
  "audhsos-encoding",
  "audhsos-ssh",
@@ -718,6 +738,7 @@ dependencies = [
  "audhsos-x509",
  "crypto-rng",
  "driver-virtio-net",
+ "gfx",
  "net-http",
  "net-stack",
  "net-wire",
@@ -734,6 +755,7 @@ name = "user-programs"
 version = "0.1.0"
 dependencies = [
  "app-canvas",
+ "app-shell",
  "audhsos-abi",
  "audhsos-collections",
  "audhsos-time",
@@ -744,6 +766,7 @@ dependencies = [
  "gfx",
  "pci",
  "server-console",
+ "server-desk",
  "server-display",
  "server-fs",
  "server-input",
@@ -819,6 +842,7 @@ dependencies = [
  "fs-gpt",
  "gfx",
  "kernel-test-harness",
+ "server-desk",
  "server-display",
  "user-loader",
 ]

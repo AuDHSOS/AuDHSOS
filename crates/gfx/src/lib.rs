@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+pub mod draw;
 pub mod font;
 pub mod format;
 pub mod present;
@@ -13,6 +14,7 @@ pub mod rect;
 pub mod strategies;
 pub mod surface;
 
+pub use draw::{Command, LIST_CAPACITY, List, TEXT_CAPACITY, Text, draw, draw_all};
 pub use font::{GLYPH_HEIGHT, GLYPH_WIDTH, GLYPHS, draw_text, glyph};
 pub use format::{BYTES_PER_PIXEL, Color, PixelFormat};
 pub use present::{PixelSink, PresentError, present};

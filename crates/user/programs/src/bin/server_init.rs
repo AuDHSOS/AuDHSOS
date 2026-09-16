@@ -23,9 +23,10 @@
 #![allow(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-// The package holds thirteen programs and each uses a different part of
+// The package holds sixteen programs and each uses a different part of
 // what it depends on; these are the crates this one does not.
 use app_canvas as _;
+use app_shell as _;
 use audhsos_time as _;
 use driver_i8042 as _;
 use driver_uart16550 as _;
@@ -33,6 +34,7 @@ use driver_virtio_blk as _;
 use fs_fat as _;
 use gfx as _;
 use server_console as _;
+use server_desk as _;
 use server_display as _;
 use server_fs as _;
 use server_input as _;
@@ -129,6 +131,10 @@ struct Program {
     /// network server, for the same reason: the server keeps a socket
     /// table per client.
     talks: bool,
+    /// Whether it may open a window, which is a badged capability to the
+    /// compositor, for the same reason: the compositor keeps a window per
+    /// client.
+    windows: bool,
     /// Whether it reports to this program when it is done. The machine
     /// ends when every program that reports has reported.
     reports: bool,
@@ -139,7 +145,7 @@ struct Program {
 /// The quotas are what the programs measured out at need with room over
 /// them; a program that asks for more than its line says is refused by the
 /// kernel and not by this table.
-const PROGRAMS: [Program; 18] = [
+const PROGRAMS: [Program; 20] = [
     Program {
         name: b"server-memory",
         priority: priority::SERVER,
@@ -152,6 +158,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        windows: false,
         reports: false,
     },
     Program {
@@ -166,6 +173,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        windows: false,
         reports: false,
     },
     Program {
@@ -180,6 +188,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        windows: false,
         reports: false,
     },
     // The file system server drives the block device: the register
@@ -200,6 +209,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        windows: false,
         reports: false,
     },
     // The display server maps the framebuffer, which is four mebibytes on
@@ -217,6 +227,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        windows: false,
         reports: false,
     },
     // The input server owns the PS/2 controller and both of its lines. It
@@ -234,6 +245,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        windows: false,
         reports: false,
     },
     Program {
@@ -248,6 +260,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        windows: false,
         reports: true,
     },
     Program {
@@ -262,6 +275,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: true,
         talks: false,
+        windows: false,
         reports: true,
     },
     Program {
@@ -276,6 +290,7 @@ const PROGRAMS: [Program; 18] = [
         draws: true,
         listens: false,
         talks: false,
+        windows: false,
         reports: true,
     },
     Program {
@@ -290,6 +305,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: true,
         talks: false,
+        windows: false,
         reports: true,
     },
     // The canvas draws and listens at once, and its surface is the size of
@@ -307,6 +323,7 @@ const PROGRAMS: [Program; 18] = [
         draws: true,
         listens: true,
         talks: false,
+        windows: false,
         reports: true,
     },
     // The bus walk maps one mebibyte of the configuration window at a time,
@@ -324,6 +341,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        windows: false,
         reports: true,
     },
     // The network server drives the network device: the register window,
@@ -344,7 +362,32 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        windows: false,
         reports: false,
+    },
+    // The compositor holds the desktop: it draws on the whole screen
+    // through one surface of its own and listens to the keyboard and the
+    // pointer, and it keeps a surface per window beside that, so its quota
+    // of frames is a display client's and not an application's. It starts
+    // after both servers it uses and paints nothing until the key that
+    // shows the desktop is typed.
+    Program {
+        name: b"server-desk",
+        priority: priority::SERVER,
+        handles: 64,
+        frames: 256,
+        objects: 64,
+        grant: Grant::None,
+        names: true,
+        memory: true,
+        draws: true,
+        listens: true,
+        talks: false,
+        windows: false,
+        // The compositor is the one server of this system that ends: the
+        // key that ends the desktop is what ends it, and the machine waits
+        // for it as it waits for an application.
+        reports: true,
     },
     // The program that uses the network server. It starts after the bus
     // walk so that the lines of the two do not interleave.
@@ -360,6 +403,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: true,
+        windows: false,
         reports: true,
     },
     // The Secure Shell client. It talks through the network server and
@@ -376,6 +420,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: true,
+        windows: false,
         reports: true,
     },
     // The program that holds the trust anchors. It reads one file off the
@@ -393,6 +438,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        windows: false,
         reports: true,
     },
     // The program that uses the file system server. It starts after the
@@ -409,6 +455,25 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        windows: false,
+        reports: true,
+    },
+    // The shell runs in a window of the compositor and reaches the network
+    // through the socket protocol, so it starts after both. It ends when
+    // the compositor takes its window away.
+    Program {
+        name: b"app-shell",
+        priority: priority::APPLICATION,
+        handles: 32,
+        frames: 32,
+        objects: 32,
+        grant: Grant::None,
+        names: true,
+        memory: true,
+        draws: false,
+        listens: false,
+        talks: true,
+        windows: true,
         reports: true,
     },
     // It faults and its thread stops there, so it never reports and the
@@ -425,6 +490,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        windows: false,
         reports: false,
     },
 ];
@@ -489,6 +555,7 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
         memory: None,
         memory_for_self: None,
         console: None,
+        desk: None,
         display: None,
         input: None,
         net: None,
@@ -536,6 +603,8 @@ struct World {
     input: Option<EndpointHandle>,
     /// The endpoint of the network server.
     net: Option<EndpointHandle>,
+    /// The endpoint of the compositor.
+    desk: Option<EndpointHandle>,
     /// The same, badged for the root task's own lines.
     console_for_self: Option<EndpointHandle>,
     /// The endpoint of the file system server, badged for the root task's
@@ -988,6 +1057,15 @@ fn install_all(
         let marked = gate.endpoint_badge(net, badge)?;
         let handle = gate.process_install_handle(child, marked.handle(), ObjectRights::SEND)?;
         push(&mut given, &mut count, Role::NetServer, handle)?;
+    }
+    // A program that opens a window is known to the compositor the same
+    // way: the compositor keeps a window per client.
+    if program.windows
+        && let Some(desk) = world.desk
+    {
+        let marked = gate.endpoint_badge(desk, badge)?;
+        let handle = gate.process_install_handle(child, marked.handle(), ObjectRights::SEND)?;
+        push(&mut given, &mut count, Role::DeskServer, handle)?;
     }
     // Everyone but the console driver gets the console as its log. The
     // driver is the console: a line it sent itself would be a call on the
@@ -2015,6 +2093,7 @@ fn remember(
         b"server-display" => world.display = Some(endpoint),
         b"server-input" => world.input = Some(endpoint),
         b"server-net" => world.net = Some(endpoint),
+        b"server-desk" => world.desk = Some(endpoint),
         _ => {}
     }
     Ok(())

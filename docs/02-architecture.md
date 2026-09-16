@@ -55,6 +55,7 @@ Three properties define the design:
 | Debug UART | build-time feature for kernel diagnostics; absent in release builds | - |
 | Console and every other device | provides port, device memory, and interrupt capabilities | drivers |
 | Graphics and input (Phases 9 to 11) | hands out the framebuffer as a `Device` memory object and the i8042 ports and interrupt lines as capabilities | display server, input driver, applications |
+| The desktop | - | the compositor, which holds the windows of its clients and composes them onto one surface of the display server (document 17) |
 | Program loading | validates the eight fields of the boot image header; maps the root task | tar reader, ELF loader, process creation |
 | Naming | - | name server |
 | Faults | converts a fault into a message to the fault handler endpoint | fault handler decides: repair, resume, kill |

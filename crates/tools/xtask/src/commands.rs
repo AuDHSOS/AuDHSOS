@@ -485,13 +485,8 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
             Err(error) => violations.push(format!("nothing could be injected: {error}")),
         }
     }
-    // The canvas, which is the two protocols in one program: the sprite
-    // follows the pointer, a held button leaves a stroke, and what is typed
-    // stands on the screen. It runs after the program that listens has
-    // ended, so nothing injected here is part of what that one was checked
-    // against.
     if violations.is_empty() {
-        violations.extend(inject_canvas(&socket, &mut session, root));
+        violations.extend(drive_the_screen(&socket, &mut session, root));
     }
     // Two clients wrote at once and no line of either may be torn: every
     // line the second one wrote has to stand whole and once, which the
@@ -1002,7 +997,7 @@ fn test_the_same_disk_again(machine: &Machine, path: &Path, root: &Path) -> Resu
         }
     }
     if violations.is_empty() {
-        violations.extend(inject_canvas(&socket, &mut session, root));
+        violations.extend(drive_the_screen(&socket, &mut session, root));
     }
     if violations.is_empty() {
         match session.wait_for_end(E2E_TIMEOUT) {
@@ -1382,6 +1377,149 @@ fn inject_canvas(socket: &Path, session: &mut Session, root: &Path) -> Vec<Strin
     violations
 }
 
+/// Drives everything that draws on the screen, in the order the programs
+/// of the image draw.
+///
+/// The canvas first: it is the two protocols in one program, its picture
+/// is checked while the machine still runs, and it ends on a key. The
+/// desktop after it, because the compositor paints over the whole screen
+/// and every picture of the canvas would otherwise be of what the desktop
+/// left there (D-126).
+fn drive_the_screen(socket: &Path, session: &mut Session, root: &Path) -> Vec<String> {
+    let violations = inject_canvas(socket, session, root);
+    if !violations.is_empty() {
+        return violations;
+    }
+    inject_desk(socket, session, root)
+}
+
+/// The name QEMU knows the key that shows the desktop under, and the one
+/// that ends it.
+const DESK_SHOWS_QCODE: &str = "f11";
+const DESK_ENDS_QCODE: &str = "f12";
+
+/// What is typed at the shell, by the name QEMU knows each key under.
+const SHELL_TYPING: [&str; 10] = ["e", "c", "h", "o", "spc", "h", "e", "l", "l", "o"];
+
+/// What the line typed at the shell asks for, as the shell repeats it.
+const SHELL_LINE: &str = "[shell] ran echo hello";
+
+/// Drives the desktop: the key that shows it, a picture of the bar, the
+/// clock and the window of the shell, a line typed at the shell, and the
+/// key that ends it.
+///
+/// It runs after the canvas has ended, because the desktop paints over the
+/// whole screen and every picture taken before this one is of what the
+/// programs that draw on the screen itself left there (D-126).
+fn inject_desk(socket: &Path, session: &mut Session, root: &Path) -> Vec<String> {
+    if !session.wait_for("[desk] ready ", E2E_TIMEOUT) {
+        return vec!["the compositor never said it was ready".to_owned()];
+    }
+    if !session.wait_for("[desk] frame ", E2E_TIMEOUT) {
+        return vec!["the shell never opened a window".to_owned()];
+    }
+    let Some(frame) = last_four(&session.output(), "[desk] frame ") else {
+        return vec!["the compositor said nothing about where the window stands".to_owned()];
+    };
+    let mut qmp = match Qmp::connect(socket, E2E_TIMEOUT) {
+        Ok(qmp) => qmp,
+        Err(error) => return vec![format!("the desktop could not be driven: {error}")],
+    };
+    if let Err(error) = press(&mut qmp, DESK_SHOWS_QCODE) {
+        return vec![format!("the key that shows the desktop: {error}")];
+    }
+    if !session.wait_for("[desk] shown", E2E_TIMEOUT) {
+        return vec!["the desktop never painted itself".to_owned()];
+    }
+    let mut violations = desk_picture(&mut qmp, root, frame);
+    if violations.is_empty() {
+        violations.extend(shell_line(&mut qmp, session));
+    }
+    let done = session.count_seen("[desk] done");
+    if let Err(error) = press(&mut qmp, DESK_ENDS_QCODE) {
+        violations.push(format!("the key that ends the desktop: {error}"));
+    } else if !session.wait_for_more("[desk] done", done, E2E_TIMEOUT) {
+        violations.push("the desktop never ended".to_owned());
+    }
+    violations
+}
+
+/// What the picture does not show of the desktop: the bar, the clock, and
+/// the window of the shell.
+fn desk_picture(qmp: &mut Qmp, root: &Path, frame: ((u32, u32), (u32, u32))) -> Vec<String> {
+    let image = match picture_of(qmp, root) {
+        Ok(image) => image,
+        Err(error) => return vec![format!("no picture of the desktop: {error}")],
+    };
+    let mut violations = Vec::new();
+    match image.pixel(0, 0) {
+        Ok(color) if color == rgb(server_desk::bar::BACKGROUND) => {}
+        Ok(color) => violations.push(format!("the bar begins with {color:?}")),
+        Err(error) => violations.push(format!("the bar is not on the screen: {error}")),
+    }
+    match image.pixel(0, server_desk::bar::HEIGHT.saturating_sub(1)) {
+        Ok(color) if color == rgb(server_desk::bar::EDGE) => {}
+        Ok(color) => violations.push(format!("the line under the bar is {color:?}")),
+        Err(error) => violations.push(format!("the bar has no edge: {error}")),
+    }
+    let clock = server_desk::bar::clock_rect(image.width());
+    match image.count_of(
+        clock.x,
+        clock.y,
+        clock.w,
+        clock.h,
+        rgb(server_desk::bar::INK),
+    ) {
+        Ok(0) => violations.push("the clock shows nothing".to_owned()),
+        Ok(_ink) => {}
+        Err(error) => violations.push(format!("the clock is not on the screen: {error}")),
+    }
+    let ((x, y), (width, height)) = frame;
+    match image.pixel(x, y.saturating_add(height).saturating_sub(1)) {
+        Ok(color) if color == rgb(server_desk::window::FOCUSED) => {}
+        Ok(color) => violations.push(format!("the frame of the window is {color:?}")),
+        Err(error) => violations.push(format!("the window is not on the screen: {error}")),
+    }
+    let side = server_desk::window::CLOSE_SIZE;
+    let close_x = x
+        .saturating_add(width)
+        .saturating_sub(side)
+        .saturating_sub(server_desk::window::CLOSE_MARGIN);
+    let close_y = y.saturating_add(server_desk::window::CLOSE_MARGIN);
+    let wanted = side.saturating_mul(side);
+    match image.count_of(
+        close_x,
+        close_y,
+        side,
+        side,
+        rgb(server_desk::window::CLOSE_INK),
+    ) {
+        Ok(found) if found == wanted => {}
+        Ok(found) => violations.push(format!(
+            "{found} of {wanted} pixels of the close box carry its color"
+        )),
+        Err(error) => violations.push(format!("the close box is not on the screen: {error}")),
+    }
+    violations
+}
+
+/// Types one line at the shell and waits for the shell to repeat it.
+fn shell_line(qmp: &mut Qmp, session: &mut Session) -> Vec<String> {
+    let ran = session.count_seen(SHELL_LINE);
+    for qcode in SHELL_TYPING {
+        if let Err(error) = press(qmp, qcode) {
+            return vec![format!("the key `{qcode}`: {error}")];
+        }
+    }
+    if let Err(error) = press(qmp, "ret") {
+        return vec![format!("the return key: {error}")];
+    }
+    if !session.wait_for_more(SHELL_LINE, ran, E2E_TIMEOUT) {
+        return vec!["what was typed never reached the shell".to_owned()];
+    }
+    Vec::new()
+}
+
 /// A picture of the screen, taken over a connection that is already open.
 ///
 /// The machine serves one monitor client at a time, so a second connection
@@ -1389,6 +1527,25 @@ fn inject_canvas(socket: &Path, session: &mut Session, root: &Path) -> Vec<Strin
 /// goes through the same session as the events it is meant to show.
 fn picture_of(qmp: &mut Qmp, root: &Path) -> Result<ppm::Image, Error> {
     qmp.screendump(&root.join("target").join("screen.ppm"))
+}
+
+/// Presses the key that ends the desktop and waits for the compositor to
+/// say it is down.
+///
+/// Every run that has a screen needs this, as it needs `end_the_canvas`:
+/// the compositor reports to the root task when the desktop is down and
+/// not before, and the machine ends when every program that reports has
+/// reported. The key works whether the desktop was ever painted or not.
+fn end_the_desk(socket: &Path, session: &mut Session) -> Result<(), Error> {
+    let mut qmp = Qmp::connect(socket, E2E_TIMEOUT)?;
+    let done = session.count_seen("[desk] done");
+    press(&mut qmp, DESK_ENDS_QCODE)?;
+    if !session.wait_for_more("[desk] done", done, E2E_TIMEOUT) {
+        return Err(Error::Usage(
+            "the desktop never said it was down".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Presses the key that ends the canvas and waits for it to say it did.
@@ -1827,7 +1984,7 @@ fn test_without_a_network(machine: &Machine, path: &Path) -> Result<(), Error> {
     // The programs that listen end when they have seen what they wait for,
     // and nothing but the runner sends it: a run that injects nothing waits
     // for them until the time limit. This machine has a screen, so the
-    // canvas waits for the key that ends it as well.
+    // canvas and the desktop wait for the keys that end them as well.
     if violations.is_empty() {
         match inject_input(&socket, &mut session) {
             Ok(()) => violations.extend(input_lines(&session.output())),
@@ -1838,6 +1995,12 @@ fn test_without_a_network(machine: &Machine, path: &Path) -> Result<(), Error> {
         match end_the_canvas(&socket, &mut session) {
             Ok(()) => {}
             Err(error) => violations.push(format!("the canvas did not end: {error}")),
+        }
+    }
+    if violations.is_empty() {
+        match end_the_desk(&socket, &mut session) {
+            Ok(()) => {}
+            Err(error) => violations.push(format!("the desktop did not end: {error}")),
         }
     }
     if violations.is_empty() {

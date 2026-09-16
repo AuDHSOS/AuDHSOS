@@ -55,6 +55,26 @@ impl<const N: usize> Bytes<N> {
         Ok(value)
     }
 
+    /// The first `len` bytes of `bytes`, and all `N` of them for a `len`
+    /// above `N`.
+    ///
+    /// It is what a caller that filled an array of exactly `N` bytes uses:
+    /// the length is the only thing that can be wrong, and a length past
+    /// the end of the array is the whole array.
+    #[must_use]
+    pub const fn filled(bytes: [u8; N], len: usize) -> Self {
+        Bytes {
+            bytes,
+            len: if len > N { N } else { len },
+        }
+    }
+
+    /// The bytes as a string, and the empty string when they are not one.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        core::str::from_utf8(self.as_bytes()).unwrap_or_default()
+    }
+
     /// The bytes.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {

@@ -3,6 +3,7 @@
 
 //! The host tests of the crate, one module per product module.
 
+mod draw;
 mod font;
 mod format;
 mod present;

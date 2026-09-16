@@ -7,6 +7,40 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The desktop of `docs/17-the-desktop-on-the-screen.md`: a compositor,
+  `server-desk`, which holds the windows of every program that opens one,
+  and a shell, `app-shell`, which runs in one of them. The compositor is a
+  client of the display server and a server to everybody else (D-151): it
+  takes one surface the size of the screen, subscribes to the input
+  server, and composes the screen out of the surfaces it keeps — the
+  desktop under everything, every window back to front, the menu bar with
+  its clock over all of them. A client of it never sees pixels (D-152): it
+  sends lists of `gfx::draw::Command` — a clear, a fill, an outline, a
+  segment, a run of ASCII text — and the compositor carries them out in
+  the memory object it holds that window's content in, so a window that is
+  covered and uncovered again needs nothing of its client. The keyboard
+  reaches the window that has the focus and the focus follows the click
+  (D-153); the two keys of the desktop itself, `F11` which paints it for
+  the first time (D-154, as D-126 says of the canvas) and `F12` which takes
+  it down, reach no client. A second thread waits on one notification with
+  a deadline and wakes the serving thread (D-155), which is what moves the
+  clock and what carries the ends of clients: the input server signals bit
+  zero and the end of the client in slot `n` signals bit `n + 1`. New:
+  `gfx::draw` and `Rect::span`; the window protocol in
+  `user-proto::window`, protocol 9; `server-desk` and `app-shell` as logic
+  crates under the coverage gate; `Role::DeskServer` and
+  `Startup::desk_server`, which is how a program is given a badged
+  capability to the compositor; `Bytes::filled` and `Bytes::as_str`. The
+  shell holds a scrollback of twenty-two rows, a line being typed, and a
+  parser: `ssh [user@]host[:port] [command]` runs a command over a Secure
+  Shell connection with the trust file and the secret of D-146, `get
+  http://host[:port][/path]` makes an HTTP request over the socket
+  protocol, and `echo`, `time`, `clear`, `help` and `quit` it answers
+  itself. The end-to-end run drives both: it presses the key that shows the
+  desktop, checks the bar, the clock, the frame and the close box against
+  the crate rather than against numbers of its own, types `echo hello` at
+  the shell, and presses the key that ends the desktop.
+
 - `docs/16-more-than-one-processor.md`: the design and implementation plan
   for running this kernel on more than one processor. What is already
   built and needs no change: `Scheduler`, whose doc comment names one

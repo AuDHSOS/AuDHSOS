@@ -54,10 +54,12 @@ members = [
     "crates/fs/fat",
     "crates/fs/gpt",
     "crates/user/apps/canvas",
+    "crates/user/apps/shell",
     "crates/user/loader",
     "crates/user/net-programs",
     "crates/user/programs",
     "crates/user/servers/console",
+    "crates/user/servers/desk",
     "crates/user/servers/display",
     "crates/user/servers/fs",
     "crates/user/servers/input",
@@ -155,6 +157,8 @@ fs-fat = { path = "crates/fs/fat" }
 fs-gpt = { path = "crates/fs/gpt" }
 server-console = { path = "crates/user/servers/console" }
 app-canvas = { path = "crates/user/apps/canvas" }
+app-shell = { path = "crates/user/apps/shell" }
+server-desk = { path = "crates/user/servers/desk" }
 server-display = { path = "crates/user/servers/display" }
 server-fs = { path = "crates/user/servers/fs" }
 server-input = { path = "crates/user/servers/input" }
