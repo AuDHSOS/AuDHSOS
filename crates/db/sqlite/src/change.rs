@@ -706,6 +706,148 @@ impl Writer {
         Ok(())
     }
 
+    /// `ALTER TABLE ... DROP CONSTRAINT`, and `ALTER TABLE ... ALTER
+    /// COLUMN ... DROP NOT NULL`: the text of the constraint goes out
+    /// of the statement that made the table, which is
+    /// `alterDropConstraintFunc`.
+    ///
+    /// The rows of the table are not written again, because a
+    /// constraint holds no value.
+    ///
+    /// Reading the tokens costs O(n) in the bytes of the statement.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotAlterable`] for a table SQLite keeps for itself,
+    /// [`Error::NoSuchColumn`] where the table holds no such column,
+    /// [`Error::NoConstraint`] where it holds no constraint of that
+    /// name, and [`Error::KeptConstraint`] where that constraint is
+    /// neither a `CHECK` nor a `NOT NULL`.
+    fn drop_constraint(
+        &mut self,
+        arena: &Arena,
+        asked: &crate::ast::DropConstraint,
+        sql: &[u8],
+    ) -> Result<(), Error> {
+        let name = crate::schema::dequote(asked.table.text(sql));
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        alterable(&database, &name)?;
+        // The table was located above, so this refusal carries no name
+        // of its own.
+        let (table, root) = database.table(&name).ok_or(Error::NoTable(Vec::new()))?;
+        let (statement, _) = database
+            .written_as(&name)
+            .ok_or(Error::NoTable(Vec::new()))?;
+        let at = |named: Span| {
+            let named = crate::schema::dequote(named.text(sql));
+            table
+                .columns
+                .iter()
+                .position(|held| held.name.eq_ignore_ascii_case(&named))
+                .ok_or(Error::Eval(crate::eval::Error::NoColumn(named)))
+        };
+        let text = match asked.which {
+            crate::ast::Constrained::Named(named) => {
+                let named = crate::schema::dequote(named.text(sql));
+                crate::constraint::without(statement, crate::constraint::Dropped::Named(&named))?
+            }
+            crate::ast::Constrained::NotNull(named) => {
+                let held = crate::constraint::Dropped::NotNull(at(named)?);
+                crate::constraint::without(statement, held)?
+            }
+            crate::ast::Constrained::SetNotNull(named, written) => {
+                let place = at(named)?;
+                self.holds_values(&name, place)?;
+                crate::constraint::with(statement, Some(place), written.text(sql))
+            }
+            crate::ast::Constrained::Add(written, named, value) => {
+                if let Some(named) = named {
+                    let named = crate::schema::dequote(named.text(sql));
+                    if crate::constraint::holds(statement, &named) {
+                        return Err(Error::HeldConstraint(named));
+                    }
+                }
+                self.holds_check((table, &name), (arena, value, sql))?;
+                crate::constraint::with(statement, None, written.text(sql))
+            }
+        };
+        let schema_rowid = self.row_of(&name)?;
+        drop(database);
+        let value = |bytes: &[u8]| Value::Text(crate::value::stored(bytes, self.header.encoding));
+        let row = crate::record::write(
+            &[
+                value(b"table"),
+                value(&name),
+                value(&name),
+                Value::Int(i64::from(root)),
+                value(&text),
+            ],
+            &SCHEMA,
+            4,
+        );
+        let schema = crate::image::SCHEMA_ROOT;
+        crate::tree::update(&mut self.pages, schema, schema_rowid, &row)?;
+        self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
+        Ok(())
+    }
+
+    /// Whether every row of the table is held by a `CHECK` an `ALTER
+    /// TABLE` writes, which `sqlite3AlterAddConstraint` reads before it
+    /// writes the constraint.
+    ///
+    /// Reading the rows costs O(n) in them and what the clause costs
+    /// per row.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Constraint`] where a row is not held, and whatever the
+    /// clause could not answer.
+    fn holds_check(
+        &self,
+        over: (&Table, &[u8]),
+        held: (&Arena, crate::ast::ExprId, &[u8]),
+    ) -> Result<(), Error> {
+        let (table, name) = over;
+        let (arena, value, sql) = held;
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        for (_, values) in database.held_rows_of(name)? {
+            let row = Indexing {
+                table,
+                values: &values,
+                encoding: self.header.encoding,
+            };
+            // `sqlite3ExprIfFalse`: a `CHECK` holds where it answers
+            // anything but false, so a row that answers nothing holds.
+            let answer = crate::eval::evaluate_row(arena, value, sql, &row)?;
+            if !answer.truth(true) {
+                return Err(Error::Constraint);
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether every row of the table holds a value in the column at
+    /// `place`, which `sqlite3AlterSetNotNull` reads before it writes
+    /// the constraint.
+    ///
+    /// Reading the rows costs O(n) in them.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Constraint`] where a row holds nothing there.
+    fn holds_values(&self, name: &[u8], place: usize) -> Result<(), Error> {
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        for (_, values) in database.held_rows_of(name)? {
+            if values.get(place).is_none_or(|value| *value == Value::Null) {
+                return Err(Error::Constraint);
+            }
+        }
+        Ok(())
+    }
+
     /// `ALTER TABLE ... RENAME COLUMN`: every statement of the schema
     /// that names the column is written again under the new name, which
     /// is `sqlite3AlterRenameColumn`.
@@ -2283,6 +2425,9 @@ impl Writer {
             Definition::Rename(asked) => return self.rename_table(&asked, sql),
             Definition::DropColumn(asked) => return self.drop_column(&asked, sql),
             Definition::RenameColumn(asked) => return self.rename_column(&asked, sql),
+            Definition::DropConstraint(asked) => {
+                return self.drop_constraint(arena, &asked, sql);
+            }
             Definition::Trigger(trigger) => return self.create_trigger(&trigger, sql),
             Definition::Table(table) => {
                 if let TableBody::Select(select) = table.body {

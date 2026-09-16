@@ -93,6 +93,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `ALTER TABLE ... DROP CONSTRAINT`, `... ALTER COLUMN ... DROP NOT
+  NULL`, `... ALTER COLUMN ... SET NOT NULL` and `... ADD [CONSTRAINT
+  name] CHECK (...)` in `db-sqlite`. The four read the tokens of the
+  statement that made the table and cut the text of the constraint out
+  of it or write the words the statement wrote into it. Only a `CHECK`
+  and a `NOT NULL` may be dropped. A constraint the rows of the table do
+  not hold to is refused. D-247 records it. Catalog 6.6.171.
+
 - `ALTER TABLE ... RENAME COLUMN` in `db-sqlite`. Every statement of the
   schema that names the column is written again under the new name: the
   table's own statement, a table that points at the column, an index

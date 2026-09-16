@@ -161,7 +161,8 @@ fn walk_definition(arena: &Arena, definition: Definition) {
         Definition::Drop(_)
         | Definition::Rename(_)
         | Definition::DropColumn(_)
-        | Definition::RenameColumn(_) => {}
+        | Definition::RenameColumn(_)
+        | Definition::DropConstraint(_) => {}
     }
 }
 

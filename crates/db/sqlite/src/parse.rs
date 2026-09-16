@@ -108,6 +108,12 @@ pub enum Expected {
     Key,
     /// `NULL`, after `NOT`.
     Null,
+    /// `DROP`, after the column of an `ALTER TABLE ... ALTER COLUMN`.
+    Drop,
+    /// `NOT`, after the `DROP` of an `ALTER TABLE ... ALTER COLUMN`.
+    Not,
+    /// `CHECK`, after the name of an `ALTER TABLE ... ADD CONSTRAINT`.
+    Constraint,
     /// `WITHOUT ROWID` or `STRICT`, after a table's columns.
     TableOption,
     /// A way of resolving a conflict, after `ON CONFLICT`.
@@ -1098,6 +1104,42 @@ impl<'a> Parser<'a> {
     /// the last byte of its last token. `sqlite3AlterFinishAddColumn`
     /// takes the trailing semicolon and the space before it off there,
     /// which a span that ends on a token never holds.
+    /// What follows the `ADD` of an `ALTER TABLE` where it writes a
+    /// constraint of the table's own, which is `ADD CONSTRAINT name
+    /// CHECK (...)` and `ADD CHECK (...)`, and nothing where it writes
+    /// a column.
+    ///
+    /// The text of the constraint is what the schema statement gains,
+    /// so it is kept as it was written.
+    fn added_constraint(&mut self) -> Result<Option<crate::ast::Constrained>, Error> {
+        let start = self.peek().map_or(self.end, |token| token.start);
+        let named = if self.eat_keyword(Keyword::Constraint) {
+            let name = self.name()?;
+            self.expect_keyword(Keyword::Check, Expected::Constraint)?;
+            Some(name)
+        } else if self.eat_keyword(Keyword::Check) {
+            None
+        } else {
+            return Ok(None);
+        };
+        let value = self.check_body()?;
+        let written = Span {
+            start,
+            len: self.end.saturating_sub(start),
+        };
+        Ok(Some(crate::ast::Constrained::Add(written, named, value)))
+    }
+
+    /// The body of a `CHECK` and the conflict clause after it, read for
+    /// what they hold and not for what they answer.
+    fn check_body(&mut self) -> Result<ExprId, Error> {
+        self.expect(Kind::Lp, Expected::OpenParen)?;
+        let value = self.expression()?;
+        self.expect(Kind::Rp, Expected::CloseParen)?;
+        self.conflict_clause()?;
+        Ok(value)
+    }
+
     fn alter_table(&mut self) -> Result<Definition, Error> {
         self.expect_keyword(Keyword::Table, Expected::Table)?;
         let (schema, table) = self.qualified_name()?;
@@ -1122,6 +1164,14 @@ impl<'a> Parser<'a> {
             }));
         }
         if self.eat_keyword(Keyword::Drop) {
+            if self.eat_keyword(Keyword::Constraint) {
+                let name = self.name()?;
+                return Ok(Definition::DropConstraint(crate::ast::DropConstraint {
+                    schema,
+                    table,
+                    which: crate::ast::Constrained::Named(name),
+                }));
+            }
             self.eat_keyword(Keyword::Column);
             let column = self.name()?;
             return Ok(Definition::DropColumn(crate::ast::DropColumn {
@@ -1130,7 +1180,41 @@ impl<'a> Parser<'a> {
                 column,
             }));
         }
+        if self.eat_keyword(Keyword::Alter) {
+            self.eat_keyword(Keyword::Column);
+            let column = self.name()?;
+            if self.eat_keyword(Keyword::Set) {
+                let start = self.peek().map_or(self.end, |token| token.start);
+                self.expect_keyword(Keyword::Not, Expected::Not)?;
+                self.expect_keyword(Keyword::Null, Expected::Null)?;
+                self.conflict_clause()?;
+                let written = Span {
+                    start,
+                    len: self.end.saturating_sub(start),
+                };
+                return Ok(Definition::DropConstraint(crate::ast::DropConstraint {
+                    schema,
+                    table,
+                    which: crate::ast::Constrained::SetNotNull(column, written),
+                }));
+            }
+            self.expect_keyword(Keyword::Drop, Expected::Drop)?;
+            self.expect_keyword(Keyword::Not, Expected::Not)?;
+            self.expect_keyword(Keyword::Null, Expected::Null)?;
+            return Ok(Definition::DropConstraint(crate::ast::DropConstraint {
+                schema,
+                table,
+                which: crate::ast::Constrained::NotNull(column),
+            }));
+        }
         self.expect_keyword(Keyword::Add, Expected::Add)?;
+        if let Some(which) = self.added_constraint()? {
+            return Ok(Definition::DropConstraint(crate::ast::DropConstraint {
+                schema,
+                table,
+                which,
+            }));
+        }
         self.eat_keyword(Keyword::Column);
         let start = self.peek().map_or(self.end, |token| token.start);
         let column = self.column_def()?;

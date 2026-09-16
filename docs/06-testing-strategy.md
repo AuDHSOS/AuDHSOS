@@ -5183,6 +5183,33 @@ UNIQUE)` holding the row `(1,2,3,4,5)`:
 - A clause whose term is not a column is refused `ON CONFLICT clause
   does not match any PRIMARY KEY or UNIQUE constraint`.
 
+### 6.6.171 The constraints an `ALTER TABLE` writes (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `DROP CONSTRAINT` cuts the named `CHECK` out of the statement, and
+  leaves the `NOT NULL` beside it, for each of the eight shapes
+  `altercons.test` writes.
+- A name a constraint of no body carries, such as the `CONSTRAINT abc`
+  of a generated column, is cut on its own.
+- `ALTER COLUMN ... DROP NOT NULL` cuts the `NOT NULL` of that column
+  alone, named or not, and writes the statement as it stands where the
+  column holds none.
+- `ALTER COLUMN ... SET NOT NULL` writes the words at the end of that
+  column, keeping their spacing and their case.
+- `ADD CONSTRAINT nn CHECK (...)` and `ADD CHECK (...)` write before the
+  bracket that closes the columns, keeping the space before it.
+- A name over a `UNIQUE` is refused `constraint may not be dropped:
+  ccc`, and a name the statement does not hold `no such constraint:
+  ddd`.
+- A `SET NOT NULL` over a column a row holds nothing in, and an `ADD
+  CHECK` a row does not hold to, are refused `constraint failed`, and
+  the schema stands as it was.
+- A name the statement already holds is refused `constraint abc already
+  exists`.
+- A statement whose tokens run out, and one that holds a byte no rule
+  accepts, name no constraint.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

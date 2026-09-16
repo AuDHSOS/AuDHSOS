@@ -13,6 +13,7 @@ pub mod ast;
 mod bytes;
 pub mod change;
 pub mod check;
+pub mod constraint;
 pub mod date;
 pub mod db;
 pub mod error;

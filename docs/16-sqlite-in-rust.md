@@ -741,6 +741,9 @@ Size: L.
 26. The order a row is held to the keys of a table in, which the `ON
     CONFLICT` clauses name. Built, which D-246 records; a table that
     keeps its rows in the key's own tree reaches no clause.
+27. `ALTER TABLE ... DROP CONSTRAINT`, `... ALTER COLUMN ... DROP NOT
+    NULL`, `... ALTER COLUMN ... SET NOT NULL` and `... ADD
+    [CONSTRAINT name] CHECK (...)`. Built, which D-247 records.
 
 ### Done when
 
@@ -750,8 +753,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 72 345 cases in 705 files, 57 348
-pass, 4357 answer differently, and 10 640 name something the engine
+under the `tclsh` of the machine. Of 72 289 cases in 705 files, 57 396
+pass, 4301 answer differently, and 10 592 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts

@@ -16,6 +16,7 @@ mod constraint;
 mod date;
 mod db;
 mod definition;
+mod dropcons;
 mod error;
 mod eval;
 mod foreign;

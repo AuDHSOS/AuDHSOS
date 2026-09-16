@@ -141,6 +141,19 @@ pub enum Error {
     /// was renamed: what it makes, its name, and what reading it
     /// refused.
     AfterRename(Vec<u8>, Vec<u8>, alloc::string::String),
+    /// An `ALTER TABLE ... DROP CONSTRAINT` of a name the statement
+    /// that made the table does not hold.
+    NoConstraint(Vec<u8>),
+    /// An `ALTER TABLE ... DROP CONSTRAINT` of a constraint that is
+    /// neither a `CHECK` nor a `NOT NULL`, which are the two
+    /// `alterDropConstraintFunc` cuts.
+    KeptConstraint(Vec<u8>),
+    /// An `ALTER TABLE` that writes a constraint the rows of the table
+    /// do not hold to, which `sqlite3AlterSetNotNull` refuses.
+    Constraint,
+    /// An `ALTER TABLE ... ADD CONSTRAINT` of a name the statement that
+    /// made the table already holds.
+    HeldConstraint(Vec<u8>),
     /// A value written where the key of the table stands that is no
     /// whole number, which `sqlite3_column_int64` of the key refuses.
     Mismatch,
@@ -194,6 +207,7 @@ impl Error {
     /// What an `ALTER TABLE` is refused with, or nothing where the
     /// refusal is another.
     fn altered(&self) -> Option<alloc::string::String> {
+        use alloc::string::ToString as _;
         Some(match self {
             Error::NoSuchColumn(name) => alloc::format!(
                 "no such column: \"{}\"",
@@ -219,6 +233,19 @@ impl Error {
                 alloc::string::String::from_utf8_lossy(kind),
                 alloc::string::String::from_utf8_lossy(name),
                 refused
+            ),
+            Error::NoConstraint(name) => alloc::format!(
+                "no such constraint: {}",
+                alloc::string::String::from_utf8_lossy(name)
+            ),
+            Error::KeptConstraint(name) => alloc::format!(
+                "constraint may not be dropped: {}",
+                alloc::string::String::from_utf8_lossy(name)
+            ),
+            Error::Constraint => "constraint failed".to_string(),
+            Error::HeldConstraint(name) => alloc::format!(
+                "constraint {} already exists",
+                alloc::string::String::from_utf8_lossy(name)
             ),
             Error::NotAlterable(name) => alloc::format!(
                 "table {} may not be altered",
@@ -322,6 +349,15 @@ impl From<error::Error> for Error {
 impl From<parse::Error> for Error {
     fn from(error: parse::Error) -> Self {
         Error::Parse(error)
+    }
+}
+
+impl From<crate::constraint::Error> for Error {
+    fn from(error: crate::constraint::Error) -> Self {
+        match error {
+            crate::constraint::Error::NoSuch(name) => Error::NoConstraint(name),
+            crate::constraint::Error::Kept(name) => Error::KeptConstraint(name),
+        }
     }
 }
 

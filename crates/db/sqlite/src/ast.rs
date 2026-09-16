@@ -569,6 +569,33 @@ pub struct DropColumn {
     pub column: Span,
 }
 
+/// `ALTER TABLE [schema.]name` with one constraint dropped or added.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DropConstraint {
+    /// The schema, where one was named.
+    pub schema: Option<Span>,
+    /// The table.
+    pub table: Span,
+    /// The constraint by name, or the column whose `NOT NULL` goes.
+    pub which: Constrained,
+}
+
+/// Which constraint an `ALTER TABLE` drops, and which one it adds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Constrained {
+    /// `DROP CONSTRAINT name`.
+    Named(Span),
+    /// `ALTER [COLUMN] name DROP NOT NULL`.
+    NotNull(Span),
+    /// `ALTER [COLUMN] name SET NOT NULL [ON CONFLICT ...]`, with the
+    /// column and the text of the constraint as the statement wrote it.
+    SetNotNull(Span, Span),
+    /// `ADD [CONSTRAINT name] CHECK (...) [ON CONFLICT ...]`, with the
+    /// text of the constraint as the statement wrote it, the name it
+    /// carries where it carries one, and what every row is held to.
+    Add(Span, Option<Span>, ExprId),
+}
+
 /// `ALTER TABLE [schema.]name RENAME [COLUMN] name TO name`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RenameColumn {
@@ -773,6 +800,9 @@ pub enum Definition {
     DropColumn(DropColumn),
     /// `ALTER TABLE ... RENAME COLUMN`.
     RenameColumn(RenameColumn),
+    /// `ALTER TABLE ... DROP CONSTRAINT`, and `ALTER TABLE ... ALTER
+    /// COLUMN ... DROP NOT NULL`.
+    DropConstraint(DropConstraint),
     /// `CREATE TRIGGER`.
     Trigger(CreateTrigger),
     /// `DROP TABLE`, `DROP INDEX`, `DROP VIEW` and `DROP TRIGGER`.
