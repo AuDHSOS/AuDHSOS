@@ -772,8 +772,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same two, on the register engine (focused) | focused | `756642a` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/class/subclass test/language/statements/class/super --summary` | 117 | 233 | 74 (31.76%) | 14 (6.01%) | 145 (62.23%) |
 | Subclasses of a class and of a builtin (focused) | focused | `3d10524` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/class/subclass test/language/expressions/class/subclass-builtins --summary` | 145 | 289 | 198 (68.51%) | 76 (26.30%) | 15 (5.19%) |
 | The same two, on the register engine (focused) | focused | `3d10524` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/class/subclass test/language/expressions/class/subclass-builtins --summary` | 145 | 289 | 146 (50.52%) | 14 (4.84%) | 129 (44.64%) |
-| `%String.prototype%` (focused) | focused | `c1c4f04` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/String/prototype --summary` | 1,073 | 2,144 | 1,708 (79.66%) | 382 (17.82%) | 54 (2.52%) |
-| The same, on the register engine (focused) | focused | `c1c4f04` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/String/prototype --summary` | 1,073 | 2,144 | 1,456 (67.91%) | 38 (1.77%) | 650 (30.32%) |
+| `%String.prototype%` (focused) | focused | `6952e99` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/String/prototype --summary` | 1,073 | 2,144 | 1,708 (79.66%) | 382 (17.82%) | 54 (2.52%) |
+| The same, on the register engine (focused) | focused | `6952e99` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/String/prototype --summary` | 1,073 | 2,144 | 1,512 (70.52%) | 38 (1.77%) | 594 (27.71%) |
+| `%String.prototype%`, before the four of 22.1.3 and B.2.2 (focused, outdated) | focused | `c1c4f04` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/String/prototype --summary` | 1,073 | 2,144 | 1,708 (79.66%) | 382 (17.82%) | 54 (2.52%) |
+| The same, on the register engine (focused, outdated) | focused | `c1c4f04` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/String/prototype --summary` | 1,073 | 2,144 | 1,456 (67.91%) | 38 (1.77%) | 650 (30.32%) |
 | The integrity levels of 20.1.2 (focused) | focused | `a1f9e31` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object/freeze test/built-ins/Object/seal test/built-ins/Object/isFrozen test/built-ins/Object/isSealed --summary` | 239 | 474 | 376 (79.32%) | 94 (19.83%) | 4 (0.84%) |
 | The same four, on the register engine (focused) | focused | `a1f9e31` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object/freeze test/built-ins/Object/seal test/built-ins/Object/isFrozen test/built-ins/Object/isSealed --summary` | 239 | 474 | 378 (79.75%) | 6 (1.27%) | 90 (18.99%) |
 | `defineProperty` of 20.1.2.4 and 28.1.3 (focused) | focused | `a3e49ee` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object/defineProperty test/built-ins/Reflect/defineProperty --summary` | 1,143 | 2,274 | 2,204 (96.92%) | 68 (2.99%) | 2 (0.09%) |
@@ -782,8 +784,8 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same two, on the register engine (focused) | focused | `9b84330` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object/create test/built-ins/Object/defineProperties --summary` | 952 | 1,904 | 1,737 (91.23%) | 46 (2.42%) | 121 (6.35%) |
 | The three functions of 22.1.2 (focused) | focused | `bcc2ce5` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/String/raw test/built-ins/String/fromCharCode test/built-ins/String/fromCodePoint --summary` | 58 | 116 | 40 (34.48%) | 66 (56.90%) | 10 (8.62%) |
 | The same three, on the register engine (focused) | focused | `bcc2ce5` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/String/raw test/built-ins/String/fromCharCode test/built-ins/String/fromCodePoint --summary` | 58 | 116 | 76 (65.52%) | 0 (0.00%) | 40 (34.48%) |
-| Complete pinned suite, including staging and Intl | full | `fc9a0b1` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `fc9a0b1` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 29,868 (29.02%) | 19,507 (18.95%) | 53,550 (52.03%) |
+| Complete pinned suite, including staging and Intl | full | `6952e99` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `6952e99` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 29,946 (29.09%) | 19,509 (18.96%) | 53,470 (51.95%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1663,7 +1665,10 @@ variants more than the stack backend on that focused set, which built only
 22.1.2.1. The `var` pattern head of an iteration landed in `fc9a0b1` after it,
 measured at tree `9597ac60049dabb11fb71f7de257764e09f9761b`; that step gained 2
 variants and lost none, because the suite reaches the shape through harnesses
-that need other features.
+that need other features. The `%String.prototype%` runs and both full runs
+beside 22.1.3.9, 22.1.3.12, 22.1.3.29 and B.2.2.1 were measured at tree
+`8cd027ac5c29e9541f3980f874159db63c1da509`, which is the tree of `6952e99`;
+that step gained 78 variants and lost none.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
