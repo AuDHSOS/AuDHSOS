@@ -2417,10 +2417,11 @@ what the kernel dispatches on, so the check is what the kernel saw.
 
 ### 6.6.65 TLS on the target (QEMU)
 
-- The anchors of the image reach a program of the image: `app-tls` reads
-  `AUDHSOS/ANCHORS.BIN` off the boot volume, reports as many anchors as
-  the directory `anchors/` held when the image was written, and one line
-  per anchor with the length of its subject and of its key. This is the
+- The anchors of the build reach a program of the image: `app-tls` reads
+  `AUDHSOS/ANCHORS.BIN` off the scratch volume (D-151), reports as many
+  anchors as the directory `anchors/` held when the build wrote the
+  volume, and one line per anchor with the length of its subject and of
+  its key. This is the
   part of the item the anchors are, built under D-148; the bullet below
   it is the root of the run, built under D-150, and the five after that
   are the handshake and are Phase 15.

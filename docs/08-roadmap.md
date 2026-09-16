@@ -482,8 +482,8 @@ in it; now it has one.
 
 The anchors this phase validates against arrived ahead of it too
 (D-148): the xtask writes the files of `anchors/` as one table onto the
-boot volume, `audhsos-x509::anchors` reads it, and `app-tls` is the
-program of the image that holds them and reports what it read.
+scratch volume (D-151), `audhsos-x509::anchors` reads it, and `app-tls`
+is the program of the image that holds them and reports what it read.
 
 The server the acceptance needs arrived ahead of it as well (D-149):
 `audhsos-tls::server` behind the feature `test-server` answers one
@@ -492,10 +492,10 @@ chain the certificate builder wrote.
 
 The root of that chain reaches the guest already (D-150): the run writes
 the port, the name and the root onto its scratch disk, `app-tls` reads
-them and holds that root behind the anchors of the image, and
+them and holds that root behind the anchors of the build, and
 `sh tools/xtask.sh test --tls` is the run that checks it. The anchor
-table of the boot volume stays what an operator put in `anchors/`, which
-is what D-148 decided. What the glue adds to that run is the handshake.
+table stays what an operator put in `anchors/`, which is what D-148
+decided. What the glue adds to that run is the handshake.
 
 Deliverables: `audhsos-tls` as a dependency of `user-net-programs`, in
 the manifest and in the policy table, as `audhsos-ssh` is; the transport

@@ -141,8 +141,32 @@ fn name_of(name: &str) -> Result<Name, Error> {
 pub(crate) fn write(partition: &mut [u8], files: &[(&str, Vec<u8>)]) -> Result<Geometry, Error> {
     let sectors = u32::try_from(partition.len() / SECTOR).unwrap_or(u32::MAX);
     let geometry = geometry(sectors)?;
-    let mut volume = FileSystem::format(Slice { bytes: partition }, &options())
+    let volume = FileSystem::format(Slice { bytes: partition }, &options())
         .map_err(|error| Error::Usage(format!("the file system was refused: {error}")))?;
+    put(volume, files)?;
+    Ok(geometry)
+}
+
+/// Writes `files` into the file system `partition` already carries.
+///
+/// This is how the files of one run reach the volume the build wrote
+/// (D-151): the bytes are the system volume's, and the run adds to them.
+///
+/// # Errors
+///
+/// [`Error::Usage`] for a partition carrying no file system this reads,
+/// and the errors of [`write()`] for the files.
+pub(crate) fn add(partition: &mut [u8], files: &[(&str, Vec<u8>)]) -> Result<Geometry, Error> {
+    let sectors = u32::try_from(partition.len() / SECTOR).unwrap_or(u32::MAX);
+    let geometry = geometry(sectors)?;
+    let volume = FileSystem::mount(Slice { bytes: partition })
+        .map_err(|error| Error::Usage(format!("the volume was refused: {error}")))?;
+    put(volume, files)?;
+    Ok(geometry)
+}
+
+/// Writes `files` into `volume`, whose paths are `/`-separated 8.3 names.
+fn put(mut volume: FileSystem<Slice<'_>>, files: &[(&str, Vec<u8>)]) -> Result<(), Error> {
     for (path, data) in files {
         let mut directory = volume.root();
         let mut components = path.split('/').peekable();
@@ -171,7 +195,7 @@ pub(crate) fn write(partition: &mut [u8], files: &[(&str, Vec<u8>)]) -> Result<G
     volume
         .flush()
         .map_err(|error| Error::Usage(format!("the file system was refused: {error}")))?;
-    Ok(geometry)
+    Ok(())
 }
 
 /// What a refusal while writing `path` means to a caller of the xtask.

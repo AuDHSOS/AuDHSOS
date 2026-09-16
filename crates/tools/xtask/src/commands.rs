@@ -328,30 +328,75 @@ fn block_lines(output: &str) -> Vec<String> {
             violations.push(format!("the file system server mounted no {name} volume"));
         }
     }
-    // The scratch volume is 64 MiB of one-sector clusters less what the
-    // tables and the reserved sectors take; a volume of the other disk's
-    // size would be the boot one twice.
+    // The scratch volume is 128 MiB of one-sector clusters less what the
+    // tables and the reserved sectors take; the boot volume is half the
+    // disk, so the count alone tells the two apart.
     if !output.contains(&format!(
         "[files] scratch volume: clusters={SCRATCH_CLUSTERS}"
     )) {
         violations.push(format!(
-            "the scratch volume is not the {SCRATCH_CLUSTERS} clusters of a 64 MiB disk"
+            "the scratch volume is not the {SCRATCH_CLUSTERS} clusters of a 128 MiB disk"
         ));
     }
+    violations.extend(scratch_volume_lines(output));
     violations
 }
 
 /// Clusters of the scratch volume: [`SCRATCH_SIZE`] of 512-byte sectors,
 /// one sector to a cluster, less the reserved sectors and the two tables
 /// the format writes.
-const SCRATCH_CLUSTERS: u64 = 128_992;
+pub(crate) const SCRATCH_CLUSTERS: u64 = 258_016;
+
+/// Clusters the programs take: 54.4 MiB of one-sector clusters, rounded
+/// down to a number a debug build stays above.
+const PROGRAM_CLUSTERS: u32 = 100_000;
+
+/// That the scratch volume the server mounted is the one the build wrote.
+///
+/// The volume carries the programs (D-151), so a server that formatted it
+/// over would report every cluster but one free, which is what this
+/// refuses.
+fn scratch_volume_lines(output: &str) -> Vec<String> {
+    let Some(line) = output
+        .lines()
+        .find(|line| line.starts_with("[files] scratch volume: clusters="))
+    else {
+        return vec!["the server said nothing of the volume it wrote to".to_owned()];
+    };
+    match taken_of(line) {
+        None => vec![format!("the geometry names no cluster counts: {line}")],
+        Some(taken) if taken < PROGRAM_CLUSTERS => vec![format!(
+            "the scratch volume holds {taken} clusters, fewer than the {PROGRAM_CLUSTERS} \
+             the programs take: it was formatted over rather than mounted: {line}"
+        )],
+        Some(_) => Vec::new(),
+    }
+}
+
+/// The clusters taken on the volume one `[files]` line reports, or `None`
+/// where the line names no two counts.
+fn taken_of(line: &str) -> Option<u32> {
+    let numbers: Vec<u32> = line
+        .split(|byte: char| !byte.is_ascii_digit())
+        .filter_map(|word| word.parse().ok())
+        .collect();
+    let (clusters, free) = (numbers.first()?, numbers.get(1)?);
+    Some(clusters.saturating_sub(*free))
+}
+
+/// Clusters the boot image takes: 18.4 MiB of one-sector clusters,
+/// rounded down to a number a debug build stays above.
+const BOOT_IMAGE_CLUSTERS: u32 = 20_000;
 
 /// That the volume the server mounted is the boot one and that it was
 /// mounted rather than written over.
 ///
-/// The boot volume carries the loader, the kernel and the boot image, so
-/// most of its clusters are taken. A disk this server had formatted would
-/// report all but one of them free, which is what this refuses.
+/// The boot volume carries the loader, the kernel and the boot image, of
+/// which the boot image alone takes [`BOOT_IMAGE_CLUSTERS`]. A disk this
+/// server had formatted would report all but one cluster free, which is
+/// what this refuses. The count and not the half of the volume, because
+/// the programs left the boot volume for the scratch one (D-151) and 26.1
+/// MiB of 64 leaves most of it free.
 fn boot_volume_lines(output: &str) -> Vec<String> {
     let Some(line) = output
         .lines()
@@ -359,19 +404,14 @@ fn boot_volume_lines(output: &str) -> Vec<String> {
     else {
         return vec!["the server said nothing of the volume it mounted".to_owned()];
     };
-    let numbers: Vec<u32> = line
-        .split(|byte: char| !byte.is_ascii_digit())
-        .filter_map(|word| word.parse().ok())
-        .collect();
-    let (Some(clusters), Some(free)) = (numbers.first(), numbers.get(1)) else {
-        return vec![format!("the geometry names no cluster counts: {line}")];
-    };
-    if free.saturating_mul(2) >= *clusters {
-        return vec![format!(
-            "the boot volume was written over rather than mounted: {line}"
-        )];
+    match taken_of(line) {
+        None => vec![format!("the geometry names no cluster counts: {line}")],
+        Some(taken) if taken < BOOT_IMAGE_CLUSTERS => vec![format!(
+            "the boot volume holds {taken} clusters, fewer than the {BOOT_IMAGE_CLUSTERS} \
+             the boot image takes: it was written over rather than mounted: {line}"
+        )],
+        Some(_) => Vec::new(),
     }
-    Vec::new()
 }
 
 /// How many lines the second client writes while the first writes its own.
@@ -416,9 +456,10 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
         qmp: Some(socket.clone()),
         // The end-to-end run carries a disk of its own, under its own
         // name, so that what it writes survives into a second boot and
-        // meets no other run (D-136). It starts blank, so that what the
-        // second boot finds is what the first boot wrote.
-        scratch: Some(blank_scratch_image(root, "e2e")?),
+        // meets no other run (D-136). It starts as the build wrote it, so
+        // that what the second boot finds beyond the programs is what the
+        // first boot wrote.
+        scratch: Some(fresh_scratch_image(root, "e2e")?),
         ..qemu::Options::plain()
     };
     let forwarded = run.network;
@@ -536,16 +577,17 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
     }
     Error::from_violations(violations)?;
     test_the_same_disk_again(&machine, &path, root)?;
-    test_without_a_framebuffer(&machine, &path)?;
-    test_without_a_network(&machine, &path)?;
+    test_without_a_program_volume(&machine, &path)?;
+    test_without_a_framebuffer(&machine, &path, root)?;
+    test_without_a_network(&machine, &path, root)?;
     test_the_secure_shell_client(&machine, &path, root)?;
     test_the_tls_client(&machine, &path, root)
 }
 
 /// The half of catalog 6.6.65 that the run's anchor is: the root of the
 /// chain the server presents reaches the program of the image over the
-/// scratch volume, and the program holds it beside the anchors of the
-/// boot volume (D-150).
+/// scratch volume, and the program holds it beside the anchors the build
+/// wrote onto the same volume (D-150, D-151).
 ///
 /// The handshake over that trust set is step T8 of document 11 and is
 /// Phase 15; this run is where its remaining lines go.
@@ -586,16 +628,16 @@ fn test_the_tls_client(machine: &Machine, path: &Path, root: &Path) -> Result<()
 }
 
 /// What the TLS run has to see, in this order: three lines of the boot,
-/// then the anchors of the boot volume, where the run's server is, the
-/// root of its chain, and one trust set holding both.
+/// then the anchors of the build, where the run's server is, the root of
+/// its chain, and one trust set holding both.
 ///
 /// The three boot lines are checkpoints and not assertions of their own.
 /// Each line of this list gets [`E2E_TIMEOUT`] to itself, and `app-tls`
 /// is the second to last program the root task starts: without them one
 /// timeout would have to cover the firmware, the kernel, and the loading
-/// of fifteen programs off the volume, one message of two kibibytes at a
-/// time (D-92). The run that failed in CI reached `app-ssh` and lost the
-/// budget there.
+/// of fifteen programs off the scratch volume, one message of two
+/// kibibytes at a time (D-92). The run that failed in CI reached
+/// `app-ssh` and lost the budget there.
 ///
 /// # Errors
 ///
@@ -617,7 +659,7 @@ fn tls_lines(port: u16, root: &Path) -> Result<Vec<(String, String)>, Error> {
         ),
         (
             format!("[tls-app] anchors={carried}"),
-            "the program did not read the anchor table of the boot volume".to_owned(),
+            "the program did not read the anchor table of the scratch volume".to_owned(),
         ),
         (
             format!("[tls-app] run server=10.0.2.2:{port} name={}", tls::NAME),
@@ -965,7 +1007,7 @@ fn test_the_same_disk_again(machine: &Machine, path: &Path, root: &Path) -> Resu
         path,
         &qemu::Options {
             qmp: Some(socket.clone()),
-            scratch: Some(scratch_image(root, "e2e")?),
+            scratch: Some(kept_scratch_image(root, "e2e")?),
             ..qemu::Options::plain()
         },
     )?;
@@ -1665,11 +1707,48 @@ fn last_numbers(output: &str, head: &str) -> Option<Vec<u32>> {
     )
 }
 
+/// The same system on a machine carrying no second disk: the boot set
+/// starts, the root task finds no program volume and says so, and it
+/// starts no program after it (D-152).
+///
+/// The machine is stopped by the runner rather than ending by itself: the
+/// program that writes the exit code is one of those on the volume.
+fn test_without_a_program_volume(machine: &Machine, path: &Path) -> Result<(), Error> {
+    let mut session = Session::start(machine, path, &qemu::Options::plain())?;
+    let mut violations = Vec::new();
+    for (needle, complaint) in [
+        (
+            "[init] started server-fs",
+            "the machine did not start the last program of the boot set",
+        ),
+        (
+            "[init] no program volume",
+            "the root task did not say that it found no program volume",
+        ),
+    ] {
+        if !session.wait_for(needle, E2E_TIMEOUT) {
+            violations.push(complaint.to_owned());
+            break;
+        }
+    }
+    let output = session.finish();
+    if violations.is_empty() && output.contains("[hello] ready") {
+        violations.push("the machine started a program off a volume it has not".to_owned());
+    }
+    report("without a program volume", &violations);
+    if !violations.is_empty() {
+        eprintln!("--- serial output of the run without a program volume ---");
+        eprintln!("{output}");
+        eprintln!("--- end ---");
+    }
+    Error::from_violations(violations)
+}
+
 /// The same system on a machine with no graphics adapter: the firmware
 /// reports no Graphics Output Protocol, so the kernel finds no framebuffer,
 /// the display server answers that there is no screen, and the program that
 /// draws says it drew nothing — and the run still ends by itself.
-fn test_without_a_framebuffer(machine: &Machine, path: &Path) -> Result<(), Error> {
+fn test_without_a_framebuffer(machine: &Machine, path: &Path, root: &Path) -> Result<(), Error> {
     let socket = qemu::socket_path("audhsos-qmp-novga")?;
     let _ = std::fs::remove_file(&socket);
     let mut session = Session::start(
@@ -1678,6 +1757,9 @@ fn test_without_a_framebuffer(machine: &Machine, path: &Path) -> Result<(), Erro
         &qemu::Options {
             no_vga: true,
             qmp: Some(socket.clone()),
+            // The programs are on this disk, so the run carries one of
+            // its own (D-152).
+            scratch: Some(fresh_scratch_image(root, "novga")?),
             ..qemu::Options::plain()
         },
     )?;
@@ -1688,22 +1770,16 @@ fn test_without_a_framebuffer(machine: &Machine, path: &Path) -> Result<(), Erro
             break;
         }
     }
-    // This run carries no scratch disk, so the only block device is the
-    // one the firmware booted from. The server mounts its volume and does
-    // not format it: a volume carrying the loader, the kernel and the
-    // boot image has far fewer clusters free than it has clusters, where
-    // one just formatted would have all but one.
+    // The server mounts the boot volume and does not format it: a volume
+    // carrying the loader, the kernel and the boot image holds more
+    // clusters than the boot image alone takes, where one just formatted
+    // would hold one.
     if violations.is_empty() {
         if session.wait_for("[files] boot volume: clusters=", E2E_TIMEOUT) {
             violations.extend(boot_volume_lines(&session.output()));
         } else {
-            violations.push("the machine without a scratch disk mounted no volume".to_owned());
+            violations.push("the machine without a framebuffer mounted no boot volume".to_owned());
         }
-    }
-    // And it has nothing to write to, which it says rather than writing
-    // to the volume it must not.
-    if violations.is_empty() && !session.wait_for("[files] no scratch disk", E2E_TIMEOUT) {
-        violations.push("a machine with nothing to write to did not say so".to_owned());
     }
     if violations.is_empty() && session.wait_for("[hello] ready", E2E_TIMEOUT) {
         session.send(b"typed\n")?;
@@ -1745,7 +1821,14 @@ fn test_without_a_framebuffer(machine: &Machine, path: &Path) -> Result<(), Erro
 }
 
 /// What a machine without a graphics adapter has to say.
-const NO_VGA_LINES: [(&str, &str); 4] = [
+///
+/// The four lines of the run stand between checkpoints, as `tls_lines`
+/// has them: each entry gets [`E2E_TIMEOUT`] to itself, and the two lines
+/// a program writes come after the root task has read ten more programs
+/// off the volume, one message of two kibibytes at a time. Without the
+/// checkpoints one timeout covers that whole reading, which is what the
+/// run in CI spent it on.
+const NO_VGA_LINES: [(&str, &str); 7] = [
     (
         "[info] framebuffer=absent",
         "the kernel did not report that the machine has no framebuffer",
@@ -1753,6 +1836,18 @@ const NO_VGA_LINES: [(&str, &str); 4] = [
     (
         "[display] no framebuffer",
         "the display server did not report that there is no screen",
+    ),
+    (
+        "[init] started app-hello",
+        "the machine did not get as far as the first application",
+    ),
+    (
+        "[init] started server-net",
+        "the machine did not get as far as the network server",
+    ),
+    (
+        "[init] started app-files",
+        "the machine did not read the last program of the table off the volume",
     ),
     (
         "[paint] nothing drawn: ",
@@ -1766,13 +1861,17 @@ const NO_VGA_LINES: [(&str, &str); 4] = [
 
 /// The lines the run without the two network lines has to carry: the bus is
 /// walked, the device is not there, and the machine ends by itself.
-const NO_NETWORK_LINES: [(&str, &str); 7] = [
+const NO_NETWORK_LINES: [(&str, &str); 8] = [
     // The bus walk is read off the volume like every program outside the
     // boot set, so the run reaches it one program at a time rather than
     // waiting once for a line minutes away.
     (
         "[files] boot volume: clusters=",
         "the run without a network mounted no boot volume",
+    ),
+    (
+        "[init] started app-hello",
+        "the run without a network did not get as far as the first application",
     ),
     (
         "[init] started app-lspci",
@@ -1803,7 +1902,7 @@ const NO_NETWORK_LINES: [(&str, &str); 7] = [
 /// The same system on a machine without the two network lines: the bus walk
 /// reports the rest of the bus, finds no virtio device, and the run ends by
 /// itself (13.12).
-fn test_without_a_network(machine: &Machine, path: &Path) -> Result<(), Error> {
+fn test_without_a_network(machine: &Machine, path: &Path, root: &Path) -> Result<(), Error> {
     let socket = qemu::socket_path("audhsos-qmp-nonet")?;
     let _ = std::fs::remove_file(&socket);
     let mut session = Session::start(
@@ -1811,6 +1910,9 @@ fn test_without_a_network(machine: &Machine, path: &Path) -> Result<(), Error> {
         path,
         &qemu::Options {
             qmp: Some(socket.clone()),
+            // The programs are on this disk, so the run carries one of
+            // its own (D-152).
+            scratch: Some(fresh_scratch_image(root, "nonet")?),
             ..qemu::Options::without_network()
         },
     )?;
@@ -2002,7 +2104,31 @@ fn loader_bytes(root: &Path, profile: &str) -> Result<Vec<u8>, Error> {
     })
 }
 
-/// The programs that lie on the volume, each under the path
+/// Every file the system reads after the kernel: the programs outside the
+/// boot set under `AUDHSOS/BIN/`, and the trust anchor table (D-151).
+///
+/// # Errors
+///
+/// The errors of reading what the build wrote and of reading `anchors/`,
+/// and [`Error::Usage`] for a program whose name is no 8.3 one.
+fn system_files(root: &Path, profile: &str) -> Result<Vec<(String, Vec<u8>)>, Error> {
+    let mut files = volume_programs(root, profile)?;
+    note!("system volume: {} programs under AUDHSOS/BIN/", files.len());
+    let anchors = anchors::of(root)?;
+    let table = anchors::table(&anchors)?;
+    let named: Vec<&str> = anchors.iter().map(|anchor| anchor.name.as_str()).collect();
+    note!(
+        "system volume: {} trust anchor(s) in {}, {} bytes: {}",
+        anchors.len(),
+        anchors::VOLUME_PATH,
+        table.len(),
+        named.join(", ")
+    );
+    files.push((anchors::VOLUME_PATH.to_owned(), table));
+    Ok(files)
+}
+
+/// The programs that lie on the system volume, each under the path
 /// `AUDHSOS/BIN/` gives it.
 ///
 /// # Errors
@@ -2072,11 +2198,43 @@ fn disk_image(
     disk::build(&files)
 }
 
-/// The size of a scratch disk. FAT32 wants 65525 clusters, which at one
-/// sector each is thirty-three mebibytes before the two tables above them;
-/// this is what the boot volume has by default, and the file is sparse, so
-/// a disk nothing wrote costs a directory entry.
-const SCRATCH_SIZE: u64 = 64 * 1024 * 1024;
+/// The size of a scratch disk. It carries the programs, which are 54.4
+/// MiB of a debug build, so 128 mebibytes of one-sector clusters leaves
+/// a run 73 MiB to write into (D-151).
+pub(crate) const SCRATCH_SIZE: u64 = 128 * 1024 * 1024;
+
+/// Where the system volume of the build lies: the volume every run's disk
+/// is a copy of.
+fn system_path(root: &Path) -> PathBuf {
+    root.join("target").join("scratch.img")
+}
+
+/// The bytes of the system volume: [`system_files`] on a FAT32 volume of
+/// [`SCRATCH_SIZE`], with no partition table.
+///
+/// There is no table because the scratch disk is the system's own and a
+/// table would make it a disk somebody else partitioned (document 15,
+/// 15.10).
+///
+/// # Errors
+///
+/// The errors of [`system_files`], and [`Error::Usage`] where the files
+/// do not fit.
+fn system_volume(root: &Path, profile: &str) -> Result<Vec<u8>, Error> {
+    let files = system_files(root, profile)?;
+    let borrowed: Vec<(&str, Vec<u8>)> = files
+        .iter()
+        .map(|(path, bytes)| (path.as_str(), bytes.clone()))
+        .collect();
+    let mut image = vec![0u8; usize::try_from(SCRATCH_SIZE).unwrap_or(0)];
+    let geometry = fat32::write(&mut image, &borrowed)?;
+    note!(
+        "system volume: {} files, {} clusters",
+        files.len(),
+        geometry.clusters
+    );
+    Ok(image)
+}
 
 /// Where the scratch disk of the run `name` lies.
 ///
@@ -2090,64 +2248,81 @@ pub(crate) fn scratch_path(root: &Path, name: &str) -> PathBuf {
         .join(format!("{name}.scratch.img"))
 }
 
-/// The scratch disk of the run `name`, blank whatever was on it.
+/// The scratch disk of the run `name`, as the build wrote the system
+/// volume.
 ///
 /// The end-to-end run boots twice and the second boot reads what the
-/// first wrote, so the pair says nothing unless it starts from a disk
-/// nothing wrote. A run a person starts keeps its disk instead
-/// ([`scratch_image`]).
-fn blank_scratch_image(root: &Path, name: &str) -> Result<PathBuf, Error> {
-    let path = scratch_path(root, name);
-    let _ = std::fs::remove_file(&path);
-    scratch_image(root, name)
+/// first wrote, so the pair says nothing unless the first boot starts
+/// from a disk carrying the programs and nothing else.
+///
+/// # Errors
+///
+/// The errors of reading the system volume and of writing the disk.
+fn fresh_scratch_image(root: &Path, name: &str) -> Result<PathBuf, Error> {
+    written_scratch_image(root, name, &[])
 }
 
-/// The scratch disk of the run `name`, carrying `files` from the first
-/// boot on.
+/// The scratch disk of the run `name`, carrying `files` beside the
+/// programs from the first boot on.
 ///
-/// A disk nothing wrote is formatted by `server-fs` on its first boot,
-/// which is what [`blank_scratch_image`] leaves it. This one carries a
-/// volume the host wrote, so the server mounts it and finds the files
-/// there — which is how the key material of the interop run reaches the
-/// guest (D-146). There is no partition table on it: the scratch disk is
-/// the system's own and a table would make it a disk somebody else
-/// partitioned (document 15, 15.10).
+/// The volume is the build's (`target/scratch.img`) and the files of the
+/// run are written into it, which is how the key material of the interop
+/// run reaches the guest (D-146) and the root of the TLS run does (D-150).
+///
+/// # Errors
+///
+/// The errors of reading the system volume and of writing the disk, and
+/// [`Error::Usage`] where a file does not fit.
 fn written_scratch_image(
     root: &Path,
     name: &str,
     files: &[(String, Vec<u8>)],
 ) -> Result<PathBuf, Error> {
+    let mut image = system_bytes(root)?;
+    if !files.is_empty() {
+        let borrowed: Vec<(&str, Vec<u8>)> = files
+            .iter()
+            .map(|(path, bytes)| (path.as_str(), bytes.clone()))
+            .collect();
+        fat32::add(&mut image, &borrowed)?;
+    }
     let path = scratch_path(root, name);
-    let _ = std::fs::remove_file(&path);
-    let borrowed: Vec<(&str, Vec<u8>)> = files
-        .iter()
-        .map(|(path, bytes)| (path.as_str(), bytes.clone()))
-        .collect();
-    let size = usize::try_from(SCRATCH_SIZE).unwrap_or(0);
-    let mut image = vec![0u8; size];
-    let geometry = fat32::write(&mut image, &borrowed)?;
-    note!(
-        "scratch disk {}: {} files, {} clusters",
-        path.display(),
-        files.len(),
-        geometry.clusters
-    );
     fs::write_bytes(&path, &image)?;
+    note!(
+        "scratch disk {}: the system volume and {} file(s) of the run",
+        path.display(),
+        files.len()
+    );
     Ok(path)
 }
 
-/// The scratch disk of the run `name`, blank when it was not there and as
-/// it stands when it was.
-fn scratch_image(root: &Path, name: &str) -> Result<PathBuf, Error> {
+/// The scratch disk of the run `name` as it stands, written from the
+/// system volume when it is not there.
+///
+/// # Errors
+///
+/// The errors of [`written_scratch_image`].
+fn kept_scratch_image(root: &Path, name: &str) -> Result<PathBuf, Error> {
     let path = scratch_path(root, name);
-    if fs::create_sparse(&path, SCRATCH_SIZE)? {
-        note!(
-            "scratch disk {}: blank, {} MiB",
-            path.display(),
-            SCRATCH_SIZE >> 20
-        );
+    if path.exists() {
+        return Ok(path);
     }
-    Ok(path)
+    fresh_scratch_image(root, name)
+}
+
+/// The bytes `cargo xtask image` wrote as the system volume.
+///
+/// # Errors
+///
+/// [`Error::Usage`] where the build has not written it.
+fn system_bytes(root: &Path) -> Result<Vec<u8>, Error> {
+    let path = system_path(root);
+    fs::read_bytes(&path).map_err(|_| {
+        Error::Usage(format!(
+            "{} does not exist; run `cargo xtask image` first",
+            path.display()
+        ))
+    })
 }
 
 /// Writes one image of a run into `target/qemu/`.
@@ -2218,12 +2393,12 @@ fn report_tests(
 /// success; the errors of the build and of the image writers.
 pub(crate) fn run(root: &Path, options: &[String]) -> Result<(), Error> {
     let mut display = false;
-    let mut scratch = false;
+    let mut keep = false;
     let mut build_options = Vec::new();
     for option in options {
         match option.as_str() {
             "--display" => display = true,
-            "--scratch" => scratch = true,
+            "--scratch" => keep = true,
             "--release" => build_options.push("--release".to_owned()),
             other => return Err(Error::Usage(format!("unknown option `{other}` for run"))),
         }
@@ -2232,10 +2407,16 @@ pub(crate) fn run(root: &Path, options: &[String]) -> Result<(), Error> {
     image(root, &build_options)?;
     let machine = Machine::locate()?;
     let path = root.join("target").join("audhsos.img");
+    // The programs are on the second disk, so every run carries one
+    // (D-152). `--scratch` keeps the disk of the run before, which is
+    // what a person asking what survived a boot wants.
+    let scratch = if keep {
+        kept_scratch_image(root, "audhsos")?
+    } else {
+        fresh_scratch_image(root, "audhsos")?
+    };
     let machine_options = qemu::Options {
-        scratch: scratch
-            .then(|| scratch_image(root, "audhsos"))
-            .transpose()?,
+        scratch: Some(scratch),
         ..qemu::Options::windowed(display)
     };
     let status = machine.run_attached(&path, &machine_options)?;
@@ -3093,38 +3274,29 @@ pub(crate) fn image(root: &Path, options: &[String]) -> Result<(), Error> {
         .join("audhsos-kernel");
     check_userland(root)?;
     let boot = boot_image_of(root, profile)?;
-    let mut files = vec![
+    // The boot volume carries the three files the loader reads and
+    // nothing else (D-151); every other file is on the system volume.
+    let files = vec![
         (disk::LOADER_PATH, fs::read_bytes(&loader)?),
         (disk::KERNEL_PATH, fs::read_bytes(&kernel)?),
         (disk::BOOT_IMAGE_PATH, boot.clone()),
     ];
-    let programs = volume_programs(root, profile)?;
-    for (path, bytes) in &programs {
-        files.push((path.as_str(), bytes.clone()));
-    }
-    note!("volume: {} programs under AUDHSOS/BIN/", programs.len());
-    let anchors = anchors::of(root)?;
-    let table = anchors::table(&anchors)?;
-    let named: Vec<&str> = anchors.iter().map(|anchor| anchor.name.as_str()).collect();
-    note!(
-        "volume: {} trust anchor(s) in {}, {} bytes: {}",
-        anchors.len(),
-        anchors::VOLUME_PATH,
-        table.len(),
-        named.join(", ")
-    );
-    files.push((anchors::VOLUME_PATH, table));
     let image = disk::build(&files)?;
+    let system = system_volume(root, profile)?;
     let boot_path = target.join("boot.img");
     let disk_path = target.join("audhsos.img");
+    let system_path = system_path(root);
     fs::write_bytes(&boot_path, &boot)?;
     fs::write_bytes(&disk_path, &image)?;
+    fs::write_bytes(&system_path, &system)?;
     note!(
-        "wrote {} ({} bytes) and {} ({} bytes)",
+        "wrote {} ({} bytes), {} ({} bytes) and {} ({} bytes)",
         boot_path.display(),
         boot.len(),
         disk_path.display(),
-        image.len()
+        image.len(),
+        system_path.display(),
+        system.len()
     );
     Ok(())
 }
