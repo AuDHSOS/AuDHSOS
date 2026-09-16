@@ -494,6 +494,29 @@ fn a_function_object_owns_the_name_and_the_prototype_10_2_gives_it() -> Result<(
     Ok(())
 }
 
+#[test]
+fn a_return_out_of_a_for_of_closes_its_iterator() -> Result<(), Error> {
+    for source in [
+        // 14.7.5.6 leaves the loop with a return completion, which 7.4.9
+        // closes the iterator for.
+        "(function(){for(var x of [1,2,3]){if(x===2)return x}return -1})()",
+        "(function(){for(var x of [1,2,3]){}return 'end'})()",
+        "(function(){for(var x of [1,2,3]){return x}})()",
+        "(function(){for(var x of []){return 1}return 2})()",
+        // The `return` method of the iterator runs, and the value the return
+        // answers is built before it does.
+        "var log=[];function f(){var it={};it[Symbol.iterator]=function(){var i=0;return {next:function(){i++;return {value:i,done:i>5}},return:function(){log.push('closed');return {}}}};for(var v of it){if(v===2)return v}}var r=f();log.join()+':'+r",
+        "var log=[];function f(){var it={};it[Symbol.iterator]=function(){var i=0;return {next:function(){i++;return {value:i,done:i>5}},return:function(){log.push('closed');return {}}}};for(var v of it){}return 'end'}var r=f();'['+log.join()+']:'+r",
+        // An iterator with no `return` is closed by doing nothing.
+        "function f(){var it={};it[Symbol.iterator]=function(){var i=0;return {next:function(){i++;return {value:i,done:i>5}}}};for(var v of it){if(v===2)return v}}f()",
+        // A `break` still reaches the close after the body.
+        "var log=[];function f(){var it={};it[Symbol.iterator]=function(){var i=0;return {next:function(){i++;return {value:i,done:i>5}},return:function(){log.push('c');return {}}}};for(var v of it){if(v===2)break}return log.join()}f()",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
+
 fn differential_scripts(scripts: &[&str]) -> Result<(), Error> {
     let outcome = |backend| -> Result<Result<Value, Error>, Error> {
         let mut host = SilentHost;
@@ -4910,11 +4933,10 @@ fn a_for_of_walks_an_iterable_by_the_protocol_of_7_4() -> Result<(), Error> {
             "{source}"
         );
     }
-    // A body that leaves by `return` would have to close the iterator past
-    // the close the loop emits (7.4.9).
+    // A body that leaves by `return` closes the iterator where it leaves.
     let source = "function f(a){for(var x of a.values()){return x}}f([1])";
     assert!(
-        !compile(source, Limits::default())?.uses_register_backend(),
+        compile(source, Limits::default())?.uses_register_backend(),
         "{source}"
     );
     Ok(())
@@ -6669,15 +6691,8 @@ fn a_break_out_of_a_for_of_closes_its_iterator() -> Result<(), Error> {
     ] {
         differential_scripts(&[source])?;
     }
-    // A `return` leaves the frame past the close this emits.
-    let source = "function f(a){for(var x of a.values()){return x}}f([1])";
-    let program = compile(source, Limits::default())?;
-    assert!(!program.uses_register_backend(), "{source}");
-    assert_eq!(
-        program.register_refusal,
-        Some("a return out of a for-of, which 7.4.9 closes"),
-        "{source}"
-    );
+    // A `return` closes the iterator of every loop it leaves.
+    differential_scripts(&["function f(a){for(var x of a.values()){return x}}f([1])"])?;
     Ok(())
 }
 

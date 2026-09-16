@@ -728,6 +728,10 @@ struct RegisterLowerer {
     function_layout_effects: BTreeMap<u32, BTreeMap<u32, RegisterObjectLayout>>,
     binding_type_hints: BTreeMap<String, RegisterType>,
     allow_return: bool,
+    /// The iterators of the enclosing `for`-`of` statements, innermost last,
+    /// which 7.4.9 closes where a `return` leaves them. Each pair is the
+    /// iterator and the register the close reads its `return` method into.
+    open_iterators: Vec<(crate::engine::bytecode::Reg, crate::engine::bytecode::Reg)>,
     /// The binding 10.4.4 made for `arguments`, when this body reads it.
     arguments_binding: Option<RegisterBinding>,
     /// How many formal parameters 10.4.4.7 could map the indices of the
@@ -912,6 +916,7 @@ impl RegisterLowerer {
             function_layout_effects: BTreeMap::new(),
             binding_type_hints: BTreeMap::new(),
             allow_return: false,
+            open_iterators: Vec::new(),
             arguments_binding: None,
             mapped_parameters: 0,
             assignment_strict: false,
@@ -5113,6 +5118,7 @@ impl RegisterLowerer {
                     self.return_type
                         .map_or(return_type, |current| current.merge(return_type)),
                 );
+                self.close_open_iterators()?;
                 self.code.emit(crate::engine::bytecode::Instruction::Return);
                 RegisterFlow::Abrupt
             }
@@ -6570,12 +6576,6 @@ impl RegisterLowerer {
         body: &Stmt,
     ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
-        // 7.4.9 closes an iterator the loop leaves early. A `break` reaches
-        // the close this emits; a `return` leaves the frame past it.
-        if register_statement_returns(body) {
-            self.refuse("a return out of a for-of, which 7.4.9 closes");
-            return None;
-        }
         let iterable = self.allocate_register()?;
         self.code.emit(Instruction::Star(iterable));
         let iterator_slot =
@@ -6664,6 +6664,10 @@ impl RegisterLowerer {
             slot: value_slot,
         });
         let enter = self.code.emit(Instruction::Jump(0));
+        // 7.4.9 closes an iterator the loop leaves early. A `break` reaches
+        // the close this emits after the body; a `return` leaves the frame, so
+        // it emits a close of its own for every loop it leaves.
+        self.open_iterators.push((iterator, next));
         let flow = self.lower_iteration_body(
             body,
             IterationHead {
@@ -6680,7 +6684,9 @@ impl RegisterLowerer {
                 close: Some((iterator, next)),
             },
             &bindings_at_head,
-        )?;
+        );
+        self.open_iterators.pop();
+        let flow = flow?;
         self.bindings = bindings_at_head;
         self.close_iteration_variable(head_binding, variable, RegisterType::Unknown)?;
         self.release_register(next)?;
@@ -6693,6 +6699,26 @@ impl RegisterLowerer {
             RegisterFlow::Value(value_type) => RegisterType::Undefined.merge(value_type),
             RegisterFlow::Empty | RegisterFlow::Abrupt => RegisterType::Undefined,
         })
+    }
+
+    /// Closes every `for`-`of` iterator a `return` leaves, innermost first
+    /// (7.4.9 through 14.7.5.6).
+    ///
+    /// The accumulator holds the value the return answers, which the close
+    /// overwrites, so it waits in a register of its own.
+    fn close_open_iterators(&mut self) -> Option<()> {
+        use crate::engine::bytecode::Instruction;
+        if self.open_iterators.is_empty() {
+            return Some(());
+        }
+        let value = self.allocate_register()?;
+        self.code.emit(Instruction::Star(value));
+        for (iterator, scratch) in self.open_iterators.clone().into_iter().rev() {
+            self.lower_iterator_close(iterator, scratch)?;
+        }
+        self.code.emit(Instruction::Ldar(value));
+        self.release_register(value)?;
+        Some(())
     }
 
     /// `IteratorClose` of 7.4.9: an iterator with no `return` is closed by
@@ -8135,37 +8161,6 @@ fn try_statements<'a>(
     body.iter()
         .chain(catch.into_iter().flat_map(|(_, body)| body.iter()))
         .chain(finally.into_iter().flatten())
-}
-
-/// Whether the statement can transfer control past the Block it stands in.
-///
-/// A nested function body is not scanned: its `return` leaves that function.
-/// Whether a statement returns out of the function it stands in.
-fn register_statement_returns(statement: &Stmt) -> bool {
-    match statement {
-        Stmt::Return(_) => true,
-        Stmt::Block(body) => body.iter().any(register_statement_returns),
-        Stmt::If(_, yes, no) => {
-            register_statement_returns(yes) || no.as_deref().is_some_and(register_statement_returns)
-        }
-        Stmt::While(_, body)
-        | Stmt::DoWhile(body, _)
-        | Stmt::For(_, _, _, body)
-        | Stmt::ForIn { body, .. }
-        | Stmt::ForOf { body, .. } => register_statement_returns(body),
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            try_statements(body, catch.as_ref(), finally.as_deref()).any(register_statement_returns)
-        }
-        Stmt::Switch(_, clauses) => clauses
-            .iter()
-            .flat_map(|(_, body)| body)
-            .any(register_statement_returns),
-        _ => false,
-    }
 }
 
 fn register_statement_transfers_control(statement: &Stmt) -> bool {
