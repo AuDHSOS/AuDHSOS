@@ -9234,6 +9234,23 @@ impl RegisterVM {
         let key = PropertyKey::String(heap.intern_index(index)?);
         let named = heap.lookup_named(object, key)?;
         let limit = named.as_ref().map_or(u16::MAX, |found| found.holder_depth);
+        if let Some(value) = Self::element_within(heap, object, index, limit)? {
+            return Ok(Some((value, false)));
+        }
+        Ok(named.map(|found| (found.value, found.flags.is_accessor)))
+    }
+
+    /// The value an index holds in an Elements store or a `[[StringData]]` of
+    /// the Prototype Chain, no deeper than `limit`.
+    ///
+    /// 10.1.8.1 reads the chain in order, so a named property of the Shape at
+    /// `limit` shadows every index this walk would find below it.
+    fn element_within(
+        heap: &mut GenerationalHeap,
+        object: ObjectRef,
+        index: u32,
+        limit: u16,
+    ) -> Result<Option<Value>, VMError> {
         let mut current = object;
         let mut depth = 0u16;
         while depth <= limit {
@@ -9248,7 +9265,7 @@ impl RegisterVM {
                     .char_code_at(data, index as usize)
                     .ok_or(VMError::Heap(HeapError::InvalidReference))?;
                 let text = heap.strings.allocate_units(&[unit])?;
-                return Ok(Some((Value::from_string(text), false)));
+                return Ok(Some(Value::from_string(text)));
             }
             // 10.4.2 keeps an index of an Array in the Elements store, which
             // a Prototype of the chain has as much as the receiver does.
@@ -9259,7 +9276,7 @@ impl RegisterVM {
                     .ok_or(VMError::TypeError)?
                     .get(index)
             {
-                return Ok(Some((value, false)));
+                return Ok(Some(value));
             }
             let prototype = heap
                 .get_object(current)
@@ -9271,7 +9288,25 @@ impl RegisterVM {
             current = next;
             depth = depth.saturating_add(1);
         }
-        Ok(named.map(|found| (found.value, found.flags.is_accessor)))
+        Ok(None)
+    }
+
+    /// The value an index holds on the Prototype Chain of `object`, where the
+    /// receiver's own Elements store has no answer.
+    ///
+    /// The walk costs one Prototype Chain lookup for the named property that
+    /// would shadow it, so the instructions call it only after the own store
+    /// misses.
+    fn inherited_element(
+        heap: &mut GenerationalHeap,
+        object: ObjectRef,
+        index: u32,
+    ) -> Result<Option<Value>, VMError> {
+        let key = PropertyKey::String(heap.intern_index(index)?);
+        let limit = heap
+            .lookup_named(object, key)?
+            .map_or(u16::MAX, |found| found.holder_depth);
+        Self::element_within(heap, object, index, limit)
     }
 
     /// Runs one of the Array iterator intrinsics of 23.1.5.
@@ -14354,6 +14389,15 @@ impl RegisterVM {
                         self.acc = member;
                         return Ok(None);
                     }
+                    // 10.4.2.1 puts an index of a Prototype in that
+                    // Prototype's Elements store, which no Shape of the chain
+                    // holds.
+                    if let Some(index) = array_index_units(&units)
+                        && let Some(element) = Self::inherited_element(heap, oref, index)?
+                    {
+                        self.acc = element;
+                        return Ok(None);
+                    }
                     let shape_id = heap.get_object(oref).ok_or(VMError::TypeError)?.shape_id;
                     let prototype_epoch = heap.shapes.prototype_epoch();
 
@@ -14654,6 +14698,15 @@ impl RegisterVM {
                         let units = name;
                         if let Some(member) = self.string_exotic_member(oref, &units, heap)? {
                             self.acc = member;
+                            return Ok(None);
+                        }
+                        // 10.4.2.1 puts an index of a Prototype in that
+                        // Prototype's Elements store, which no Shape of the
+                        // chain holds.
+                        if let Some(index) = array_index_units(&units)
+                            && let Some(element) = Self::inherited_element(heap, oref, index)?
+                        {
+                            self.acc = element;
                             return Ok(None);
                         }
                         let Some(name) = heap

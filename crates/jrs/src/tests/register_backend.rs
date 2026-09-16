@@ -8452,3 +8452,32 @@ fn the_engine_answers_the_shape_of_the_resolving_functions() -> Result<(), Error
     assert_eq!(realm.evaluate("typeof a")?, Value::string("function"));
     Ok(())
 }
+
+#[test]
+fn a_read_of_an_index_reaches_the_elements_store_of_a_prototype() -> Result<(), Error> {
+    for source in [
+        // 10.1.8.1 reads the chain in order, and 10.4.2.1 puts an index of a
+        // Prototype in that Prototype's Elements store.
+        "Array.prototype[2]=-1;var y=[0,1];''+y[2]+'/'+y['2']+'/'+y[0]",
+        // 10.4.2.4 deletes the index the shorter length drops, so the read
+        // goes on to the Prototype.
+        "Array.prototype[2]=-1;var x=[0,1,2];x.length=2;''+x[2]",
+        // A named property of the Shape shadows an index of a deeper store.
+        "var o=Object.create([10,20]);Object.defineProperty(o,'1',{value:'named'});''+o[1]",
+        // An own index of the receiver answers before either.
+        "var o=Object.create(['p','q']);o[0]='own';''+o[0]+'/'+o[1]",
+        // A constructor's Prototype is an ordinary object holding an Array.
+        "function A(){}A.prototype=[9,8,7];var a=new A();''+a[1]+'/'+a[3]",
+    ] {
+        let mut engine_host = SilentHost;
+        let mut engine = Realm::with_backend(Limits::default(), &mut engine_host, Backend::Engine)?;
+        let mut stack_host = SilentHost;
+        let mut stack = Realm::with_backend(Limits::default(), &mut stack_host, Backend::Stack)?;
+        assert_eq!(
+            engine.evaluate(source)?,
+            stack.evaluate(source)?,
+            "{source}"
+        );
+    }
+    Ok(())
+}
