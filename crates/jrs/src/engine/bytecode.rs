@@ -614,6 +614,10 @@ pub struct ExceptionHandler {
 
 /// Compiled bytecode unit for a function or top-level script.
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is one property clause 10.2 gives a function"
+)]
 pub struct BytecodeFunction {
     /// Sequence of bytecode instructions.
     pub instructions: Vec<Instruction>,
@@ -673,6 +677,10 @@ pub struct BytecodeFunction {
     pub entry_stack_requirement: usize,
     /// Protected instruction ranges, searched innermost first on a throw.
     pub handlers: Vec<ExceptionHandler>,
+    /// Whether this unit is the root of a Script whose top-level `var` and
+    /// function declarations are bindings of the Global Environment Record
+    /// (16.1.7), which is what a direct `eval` of 19.2.1 writes into.
+    pub realm_script: bool,
 }
 
 impl BytecodeFunction {
@@ -697,6 +705,7 @@ impl BytecodeFunction {
             class_constructor: false,
             name: None,
             source: None,
+            realm_script: false,
             own_context_slot_count: None,
             outer_context_slot_counts: Vec::new(),
             feedback_slots: Vec::new(),

@@ -7039,3 +7039,27 @@ fn the_function_constructor_compiles_a_body_at_run_time() -> Result<(), Error> {
     }
     Ok(())
 }
+
+/// 19.2.1 evaluates a Script of the same Realm, which the embedding runs on
+/// the heap and Realm the caller is using: a `var` it declares is a binding of
+/// the same Global Environment Record.
+#[test]
+fn eval_runs_a_script_of_the_same_realm() -> Result<(), Error> {
+    for source in [
+        "''+eval('1+1')",
+        "eval('\"a\"')",
+        "typeof eval(5)",
+        "eval('var g=7');''+g",
+        "''+eval('var h=1; h+1')",
+        "var t=false;try{eval('(')}catch(e){t=e instanceof SyntaxError}''+t",
+        "''+eval(\"eval('3')\")",
+        "''+eval('')",
+        "eval('function f(){return 4}');''+f()",
+        "var t=false;try{eval('throw new TypeError()')}catch(e){t=e instanceof TypeError}''+t",
+        "''+(typeof eval)",
+        "''+eval.length",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}

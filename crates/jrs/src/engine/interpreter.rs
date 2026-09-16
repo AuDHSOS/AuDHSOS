@@ -588,9 +588,12 @@ pub struct RegisterVM {
     /// How deep a `ToString` of 7.1.17 is nested in methods of this Realm,
     /// which bounds what a cyclic Array spends the Rust stack on.
     conversion_depth: usize,
-    /// The source text 20.2.1.1 asked the embedding to compile, which stops
-    /// the run until a unit of it exists.
+    /// The source text the run asked the embedding for, which stops it until
+    /// the embedding answers.
     pending_source: Option<alloc::rc::Rc<[u16]>>,
+    /// Whether that text is a Script 19.2.1 asked to have evaluated, rather
+    /// than a unit 20.2.1.1 asked to have compiled.
+    pending_script: bool,
     /// Where the run continues once that unit exists.
     resume_pc: usize,
     /// The bytecode function the run continues in.
@@ -599,13 +602,14 @@ pub struct RegisterVM {
     compiled_unit: Option<Compiled>,
 }
 
-/// What the embedding made of the text 20.2.1.1 gave it.
-#[derive(Clone, Copy)]
+/// What the embedding made of the text the run gave it.
 pub enum Compiled {
     /// The unit it compiled the text into.
     Unit(u32),
-    /// It took the text for no Script, which 20.2.1.1 step 12 answers with a
-    /// `SyntaxError`.
+    /// How the Script it evaluated ended.
+    Evaluated(Result<Value, VMError>),
+    /// It took the text for no Script, which 20.2.1.1 step 12 and 19.2.1.1
+    /// step 8 each answer with a `SyntaxError`.
     Refused,
 }
 
@@ -617,6 +621,9 @@ pub enum Outcome {
     /// holds the units of the Realm can do. The run continues where it
     /// stopped once [`RegisterVM::resume_unit`] is given the unit.
     Compile(alloc::rc::Rc<[u16]>),
+    /// 19.2.1 evaluates a Script of the same Realm, which the embedding runs
+    /// on the heap and Realm this one is using.
+    Evaluate(alloc::rc::Rc<[u16]>),
 }
 
 impl Default for RegisterVM {
@@ -658,6 +665,7 @@ impl RegisterVM {
             context_roots: Vec::with_capacity(register_capacity.saturating_add(1)),
             conversion_depth: 0,
             pending_source: None,
+            pending_script: false,
             resume_pc: 0,
             resume_code_id: None,
             compiled_unit: None,
@@ -1727,6 +1735,8 @@ impl RegisterVM {
             Intrinsic::FunctionConstructor => {
                 self.create_dynamic_function(&call, units, heap, realm)
             }
+            // 19.2.1 evaluates a Script, which the embedding runs.
+            Intrinsic::Eval => self.perform_eval(&call, units, heap, realm),
             Intrinsic::ArrayIsArray
             | Intrinsic::FunctionPrototypeCall
             | Intrinsic::MathPow
@@ -8398,6 +8408,53 @@ impl RegisterVM {
         Ok(true)
     }
 
+    /// `eval` of 19.2.1, through `PerformEval` of 19.2.1.1.
+    ///
+    /// The text is a Script of the same Realm, which the embedding evaluates
+    /// and answers; the call instruction runs again with what it said. A
+    /// direct eval inside a function shares the variable environment of that
+    /// function, which this engine keeps in registers no Script can name, so
+    /// only the top level of a Script of a Realm takes this path.
+    fn perform_eval(
+        &mut self,
+        call: &Call,
+        units: CodeUnits<'_>,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if let Some(compiled) = self.compiled_unit.take() {
+            return match compiled {
+                Compiled::Evaluated(outcome) => outcome,
+                Compiled::Refused => Err(raise(
+                    heap,
+                    realm,
+                    super::realm::NativeErrorKind::SyntaxError,
+                    "invalid eval source",
+                )),
+                Compiled::Unit(_) => Err(VMError::InvalidFeedbackVector),
+            };
+        }
+        // Step 2: anything but a String is the answer itself.
+        let source = self.call_argument(call, 0)?;
+        if !source.is_string() {
+            return Ok(source);
+        }
+        if call.caller_code_id.is_some() || !units.active.realm_script {
+            return Err(VMError::Unsupported(
+                "an eval whose variable environment is not the global one",
+            ));
+        }
+        let text = heap
+            .strings
+            .to_utf16(source)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        self.pending_script = true;
+        self.pending_source = Some(alloc::rc::Rc::from(text));
+        self.resume_pc = call.return_pc.saturating_sub(1);
+        self.resume_code_id = call.caller_code_id;
+        Ok(VALUE_UNDEFINED)
+    }
+
     /// `CreateDynamicFunction` of 20.2.1.1.
     ///
     /// The source text is built here and compiled by the embedding, which is
@@ -9703,8 +9760,8 @@ impl RegisterVM {
             realm,
         )? {
             Outcome::Done(value) => Ok(value),
-            Outcome::Compile(_) => Err(VMError::Unsupported(
-                "the Function constructor, which compiles a body at run time",
+            Outcome::Compile(_) | Outcome::Evaluate(_) => Err(VMError::Unsupported(
+                "a body compiled at run time, which needs the units of a Realm",
             )),
         }
     }
@@ -9817,6 +9874,9 @@ impl RegisterVM {
                     // 20.2.1.1 stopped the run where the call stands, and the
                     // instruction runs again once the unit exists.
                     if let Some(source) = self.pending_source.take() {
+                        if core::mem::take(&mut self.pending_script) {
+                            return Ok(Outcome::Evaluate(source));
+                        }
                         return Ok(Outcome::Compile(source));
                     }
                 }

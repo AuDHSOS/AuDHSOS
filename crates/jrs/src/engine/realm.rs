@@ -396,6 +396,8 @@ pub enum Intrinsic {
     ArrayOf,
     /// `Array.from` (23.1.2.1).
     ArrayFrom,
+    /// `eval` (19.2.1).
+    Eval,
     /// `Array.prototype.values`, which is also `%Array.prototype%[@@iterator]`
     /// (23.1.3.38 and 23.1.3.40).
     ArrayPrototypeValues,
@@ -650,7 +652,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 158] = [
+    pub const ALL: [Self; 159] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -809,6 +811,7 @@ impl Intrinsic {
         Self::RegExpPrototypeReplace,
         Self::ArrayOf,
         Self::ArrayFrom,
+        Self::Eval,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -940,7 +943,8 @@ impl Intrinsic {
             // 10.2.4.1 stands on no object: the `callee` of a strict
             // arguments object is the only way to reach it, and nothing
             // installs it on the holder this names.
-            Self::SymbolConstructor
+            Self::Eval
+            | Self::SymbolConstructor
             | Self::RegExpConstructor
             | Self::ThrowTypeError
             | Self::SpeciesGetter
@@ -1152,6 +1156,7 @@ impl Intrinsic {
             Self::RegExpPrototypeReplace => 155,
             Self::ArrayOf => 156,
             Self::ArrayFrom => 157,
+            Self::Eval => 158,
         }
     }
 
@@ -1320,6 +1325,7 @@ impl Intrinsic {
             Self::RegExpPrototypeReplace => 155,
             Self::ArrayOf => 156,
             Self::ArrayFrom => 157,
+            Self::Eval => 158,
         }
     }
 
@@ -1489,6 +1495,7 @@ impl Intrinsic {
             155 => Some(Self::RegExpPrototypeReplace),
             156 => Some(Self::ArrayOf),
             157 => Some(Self::ArrayFrom),
+            158 => Some(Self::Eval),
             _ => None,
         }
     }
@@ -1554,6 +1561,7 @@ impl Intrinsic {
             Self::ArrayPrototypeSplice => "splice",
             Self::ArrayOf => "of",
             Self::ArrayFrom => "from",
+            Self::Eval => "eval",
             Self::ArrayPrototypeFlat => "flat",
             Self::ArrayPrototypeSort => "sort",
             Self::ArrayPrototypeToSorted => "toSorted",
@@ -1772,6 +1780,7 @@ impl Intrinsic {
             | Self::SpeciesGetter
             | Self::ArrayOf
             | Self::ArrayFrom
+            | Self::Eval
             | Self::StringPrototypeReplace
             | Self::RegExpPrototypeReplace
             | Self::ArrayPrototypeSort
@@ -2036,6 +2045,7 @@ impl Intrinsic {
             | Self::ArrayPrototypeSort
             | Self::ArrayPrototypeToSorted
             | Self::ArrayFrom
+            | Self::Eval
             | Self::ObjectGetOwnPropertyNames => 1,
             Self::ObjectDefineProperty | Self::ReflectDefineProperty | Self::ReflectApply => 3,
             Self::MathPow

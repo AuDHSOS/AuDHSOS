@@ -7877,6 +7877,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // did not make.
         | crate::engine::realm::Intrinsic::ArrayOf
         | crate::engine::realm::Intrinsic::ArrayFrom
+        // 19.2.1 answers whatever the Script it evaluated did.
+        | crate::engine::realm::Intrinsic::Eval
         // 22.2.6.11 answers the String it built, which no lowering names.
         | crate::engine::realm::Intrinsic::RegExpPrototypeReplace
         // 23.1.3.14, 23.1.3.30, 23.1.3.34 and 23.1.3.35 answer an Array whose
@@ -9546,7 +9548,10 @@ fn lower_register_script(
     let mut lowerer = RegisterLowerer::new(entry_fuel_cost, stack_requirement, property_limit, 0);
     lowerer.realm = realm;
     lowerer.script_globals = realm;
-    let code = lower_register_body(&mut lowerer, body, realm, saw_declaration, saw_function);
+    let mut code = lower_register_body(&mut lowerer, body, realm, saw_declaration, saw_function);
+    if let Some(code) = code.as_mut() {
+        code.realm_script = realm;
+    }
     let refusal = code.is_none().then(|| {
         lowerer
             .refusal

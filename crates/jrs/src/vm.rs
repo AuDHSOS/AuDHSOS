@@ -586,6 +586,120 @@ impl Execution<'_> {
     ///
     /// A unit is never dropped, so its position is a name a function object of
     /// an earlier Script still resolves against.
+    /// Runs one unit of the Realm, answering every text the run asks for.
+    ///
+    /// 20.2.1.1 asks for a unit of a body and 19.2.1 for a Script to be
+    /// evaluated; both stop the run, because the units of a Realm are held
+    /// here and borrowed for the length of it.
+    fn run_engine_unit(
+        &mut self,
+        vm: &mut crate::engine::interpreter::RegisterVM,
+        agent: &mut crate::engine::agent::Agent,
+        unit: u32,
+        depth: usize,
+    ) -> Result<crate::engine::value::Value, crate::engine::interpreter::VMError> {
+        let mut compiled: Option<crate::engine::interpreter::Compiled> = None;
+        loop {
+            let held: Vec<Rc<crate::engine::bytecode::BytecodeFunction>> = self
+                .register_code
+                .iter()
+                .map(|state| Rc::clone(&state.code))
+                .collect();
+            let roots: Vec<&crate::engine::bytecode::BytecodeFunction> =
+                held.iter().map(Rc::as_ref).collect();
+            let mut vectors: Vec<&mut crate::engine::feedback::FeedbackVector> = self
+                .register_code
+                .iter_mut()
+                .map(|state| &mut state.vector)
+                .collect();
+            let table = crate::engine::interpreter::CodeTable::new(&roots);
+            let outcome = match compiled.take() {
+                None => vm.run_unit(
+                    table,
+                    &mut vectors,
+                    unit,
+                    &[],
+                    &mut agent.heap,
+                    &agent.realm,
+                ),
+                Some(added) => {
+                    vm.resume_unit(table, &mut vectors, added, &mut agent.heap, &agent.realm)
+                }
+            };
+            drop(vectors);
+            drop(roots);
+            drop(held);
+            match outcome {
+                Ok(crate::engine::interpreter::Outcome::Done(value)) => return Ok(value),
+                Ok(crate::engine::interpreter::Outcome::Compile(source)) => {
+                    compiled = Some(self.compile_dynamic_unit(&source));
+                }
+                Ok(crate::engine::interpreter::Outcome::Evaluate(source)) => {
+                    self.fuel = vm.fuel;
+                    let answer = self.evaluate_nested_script(agent, &source, depth);
+                    vm.fuel = self.fuel;
+                    compiled = Some(answer);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    /// `PerformEval` of 19.2.1.1 for a Script of the same Realm.
+    ///
+    /// The Script runs on a VM of its own, which is what gives it the register
+    /// frame of a Script; the heap and the Realm are the ones the caller is
+    /// using, so a `var` it declares is a binding of the same Global
+    /// Environment Record.
+    fn evaluate_nested_script(
+        &mut self,
+        agent: &mut crate::engine::agent::Agent,
+        source: &[u16],
+        depth: usize,
+    ) -> crate::engine::interpreter::Compiled {
+        /// How deep one run nests evals before the budget is the answer.
+        const NESTING_LIMIT: usize = 8;
+        if depth >= NESTING_LIMIT {
+            return crate::engine::interpreter::Compiled::Evaluated(Err(
+                crate::engine::interpreter::VMError::CallStackOverflow,
+            ));
+        }
+        let crate::engine::interpreter::Compiled::Unit(unit) = self.compile_eval_unit(source)
+        else {
+            return crate::engine::interpreter::Compiled::Refused;
+        };
+        let mut nested = crate::engine::interpreter::RegisterVM::with_limits(
+            self.fuel,
+            self.limits.stack.saturating_add(self.limits.binding_slots),
+            self.limits.stack,
+        );
+        nested.fuel = self.fuel;
+        nested.set_string_units_limit(self.limits.string_units);
+        nested.set_property_limit(self.limits.properties);
+        nested.set_call_frame_limit(self.limits.call_frames);
+        nested.set_binding_limit(self.limits.binding_slots);
+        let answer = self.run_engine_unit(&mut nested, agent, unit, depth.saturating_add(1));
+        self.fuel = nested.fuel;
+        crate::engine::interpreter::Compiled::Evaluated(answer)
+    }
+
+    /// Compiles the Script 19.2.1 was given and gives it a unit of this Realm.
+    ///
+    /// The Script is compiled the way 16.1.7 compiles one, so a top-level
+    /// `var` of it is a binding of the Global Environment Record.
+    fn compile_eval_unit(&mut self, source: &[u16]) -> crate::engine::interpreter::Compiled {
+        let mut compiled = || {
+            let text = alloc::string::String::from_utf16(source).ok()?;
+            let program = crate::bytecode::compile_eval(&text, self.limits, false).ok()?;
+            let code = program.register_code.as_ref()?;
+            self.register_unit(code).ok()
+        };
+        compiled().map_or(
+            crate::engine::interpreter::Compiled::Refused,
+            crate::engine::interpreter::Compiled::Unit,
+        )
+    }
+
     /// Compiles the body 20.2.1.1 built and gives it a unit of this Realm.
     ///
     /// A text no Script accepts, and one the register lowering does not take,
@@ -640,10 +754,6 @@ impl Execution<'_> {
     /// completion that cannot cross to the embedding is not a failure: the
     /// Script ran to a defined end, and only its value has no identity outside
     /// the engine.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one run of a Script, with the compilations 20.2.1.1 asks for"
-    )]
     fn execute_register_program(
         &mut self,
         code: &Rc<crate::engine::bytecode::BytecodeFunction>,
@@ -673,48 +783,8 @@ impl Execution<'_> {
         // of an earlier Script resolves in the table that Script was compiled
         // into. The code is borrowed separately from the feedback because one
         // run reads the code of every unit and writes the feedback of the one
-        // it is executing. 20.2.1.1 compiles a body at run time, which adds a
-        // unit: the run stops, the Script is compiled here, and the run
-        // continues with the table that holds it.
-        let mut compiled: Option<crate::engine::interpreter::Compiled> = None;
-        let result = loop {
-            let held: Vec<Rc<crate::engine::bytecode::BytecodeFunction>> = self
-                .register_code
-                .iter()
-                .map(|state| Rc::clone(&state.code))
-                .collect();
-            let roots: Vec<&crate::engine::bytecode::BytecodeFunction> =
-                held.iter().map(Rc::as_ref).collect();
-            let mut vectors: Vec<&mut crate::engine::feedback::FeedbackVector> = self
-                .register_code
-                .iter_mut()
-                .map(|state| &mut state.vector)
-                .collect();
-            let table = crate::engine::interpreter::CodeTable::new(&roots);
-            let outcome = match compiled.take() {
-                None => vm.run_unit(
-                    table,
-                    &mut vectors,
-                    unit,
-                    &[],
-                    &mut agent.heap,
-                    &agent.realm,
-                ),
-                Some(added) => {
-                    vm.resume_unit(table, &mut vectors, added, &mut agent.heap, &agent.realm)
-                }
-            };
-            drop(vectors);
-            drop(roots);
-            drop(held);
-            match outcome {
-                Ok(crate::engine::interpreter::Outcome::Done(value)) => break Ok(value),
-                Ok(crate::engine::interpreter::Outcome::Compile(source)) => {
-                    compiled = Some(self.compile_dynamic_unit(&source));
-                }
-                Err(error) => break Err(error),
-            }
-        };
+        // it is executing.
+        let result = self.run_engine_unit(&mut vm, &mut agent, unit, 0);
         self.fuel = vm.fuel;
         let result = match result {
             Ok(value) => match register_primitive(value, &agent.heap) {
