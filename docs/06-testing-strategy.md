@@ -5335,6 +5335,24 @@ Document 16 step Q8.
 - A `DELETE` of the row under such a cell leaves a page whose free space
   counts up, and the rows beside it stand.
 
+### 6.6.180 A clause over a table with no rowid (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `ON CONFLICT(a) DO NOTHING` over a table that keeps its rows in the
+  key's own tree passes the row over, and `DO UPDATE` writes the row the
+  conflict found.
+- A clause reaches the row an index over the table found as well as the
+  row the key of the table found.
+- A clause that writes the key writes the entry under the new key.
+- The clause writes under `OE_Abort`, so `DO UPDATE SET a='y'` where `y`
+  is another row's key is refused `UNIQUE constraint failed: k.a`
+  although the key was written `ON CONFLICT IGNORE`.
+- The `WHERE` of a clause passes the row over, a `BEFORE UPDATE` trigger
+  that raises `IGNORE` leaves the row as it stands, the `UPDATE`
+  triggers of the table run over the row the clause writes, and the
+  `RETURNING` answers it.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

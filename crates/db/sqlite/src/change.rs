@@ -3402,6 +3402,7 @@ impl Writer {
         inserting: Inserting,
     ) -> Result<i64, Error> {
         let written = statement.conflict;
+        let upserts = arena.upserts(statement.upserts);
         let Inserting {
             root,
             rows,
@@ -3409,11 +3410,25 @@ impl Writer {
             table,
             ..
         } = inserting;
+        let order = Self::checked_order(upserts, (arena, sql), (&table, None, &kept))?;
+        let affinities = ordered_affinities(&table);
+        let into = Insertion {
+            arena,
+            sql,
+            upserts,
+            table: &table,
+            kept: &kept,
+            root,
+            alias: None,
+            affinities: &affinities,
+            conflict: written,
+            returning: statement.returning,
+            order: &order,
+        };
         let before = self.triggers_for(name, TriggerEvent::Insert, TriggerTime::Before)?;
         let after = self.triggers_for(name, TriggerEvent::Insert, TriggerTime::After)?;
         let fires = !before.is_empty() || !after.is_empty();
         let collations = crate::schema::key_collations(&table);
-        let affinities = ordered_affinities(&table);
         let mut count = 0_i64;
         for (_, values) in rows {
             let mut named = values;
@@ -3426,25 +3441,21 @@ impl Writer {
             }
             let stored = ordered(&table, &named);
             let key = crate::schema::key_of(&table, &named);
-            if !self.placed(root, &table, &key, &collations, &kept, written)? {
-                continue;
-            }
-            if let Some((index, held)) = self.conflicting(&kept, &table, &named, &key, None)? {
-                match resolved(written, &kept, index) {
-                    Conflict::Ignore => continue,
-                    Conflict::Fail => {
-                        self.stopped = true;
-                        return Err(Error::Unique(Self::shown_key_of(&table, &kept, index)));
-                    }
-                    Conflict::Replace if self.replaced_keyed(root, &kept, &table, &held)? => {}
-                    _ => return Err(Error::Unique(Self::shown_key_of(&table, &kept, index))),
+            match self.conflicted_keyed(&into, &named, &key)? {
+                Conflicted::Over => continue,
+                Conflicted::Wrote(rows) => {
+                    count = count.saturating_add(rows);
+                    self.writing = count;
+                    continue;
                 }
+                Conflicted::Write => {}
             }
             self.parented(&table, &named, 0)?;
             self.index_row(&kept, &table, &named, &key)?;
             let record = crate::record::write(&stored, &affinities, 4);
             crate::tree::insert_entry(&mut self.pages, root, &record, &key, &collations, false)?;
             count = count.saturating_add(1);
+            self.writing = count;
             self.returns(arena, statement.returning, sql, (&table, &named, None))?;
             if fires {
                 let row = Fired::inserted(&table, &named, self.header.encoding);
@@ -3452,6 +3463,240 @@ impl Writer {
             }
         }
         Ok(count)
+    }
+
+    /// What a row that shares a key with one a table that keeps its
+    /// rows in the key's own tree holds does: the `ON CONFLICT` clause
+    /// it reaches writes the row the conflict found, or the resolution
+    /// of the statement decides.
+    ///
+    /// Reading one key costs O(log n) in the rows of the table.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unique`] where the resolution refuses the row.
+    fn conflicted_keyed(
+        &mut self,
+        into: &Insertion<'_>,
+        named: &[Value],
+        key: &[Value],
+    ) -> Result<Conflicted, Error> {
+        let collations = crate::schema::key_collations(into.table);
+        for at in into.order.iter().copied() {
+            let Some(index) = at else {
+                if crate::tree::find_entry(&self.pages, into.root, key, &collations)?.is_none() {
+                    continue;
+                }
+                let columns = Self::key_column(into.table, None);
+                if let Some(clause) = upsert_of(into.arena, into.sql, into.upserts, &columns) {
+                    return Ok(Conflicted::Wrote(
+                        self.upsert_keyed(into, clause, named, key)?,
+                    ));
+                }
+                if self.placed(
+                    into.root,
+                    into.table,
+                    key,
+                    &collations,
+                    into.kept,
+                    into.conflict,
+                )? {
+                    continue;
+                }
+                return Ok(Conflicted::Over);
+            };
+            let found = into
+                .kept
+                .get(index)
+                .map(|one| self.conflicts_at(one, into.table, (named, key), None))
+                .transpose()?
+                .flatten();
+            let Some(held) = found else {
+                continue;
+            };
+            let columns = Self::key_columns(into.table, into.kept, index).unwrap_or_default();
+            if let Some(clause) = upsert_of(into.arena, into.sql, into.upserts, &columns) {
+                // The entry the row shares a key with ends with the key
+                // of the row it belongs to.
+                return Ok(Conflicted::Wrote(
+                    self.upsert_keyed(into, clause, named, &held)?,
+                ));
+            }
+            match resolved(into.conflict, into.kept, index) {
+                Conflict::Ignore => return Ok(Conflicted::Over),
+                Conflict::Fail => {
+                    self.stopped = true;
+                    return Err(Error::Unique(Self::shown_key_of(
+                        into.table, into.kept, index,
+                    )));
+                }
+                Conflict::Replace
+                    if self.replaced_keyed(into.root, into.kept, into.table, &held)? => {}
+                _ => {
+                    return Err(Error::Unique(Self::shown_key_of(
+                        into.table, into.kept, index,
+                    )));
+                }
+            }
+        }
+        Ok(Conflicted::Write)
+    }
+
+    /// What one `ON CONFLICT` clause does where a row of a table that
+    /// keeps its rows in the key's own tree reaches it. Answers how
+    /// many rows it wrote.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the constraints of the table refuse the written row
+    /// with.
+    fn upsert_keyed(
+        &mut self,
+        into: &Insertion<'_>,
+        clause: &crate::ast::Upsert,
+        proposed: &[Value],
+        found: &[Value],
+    ) -> Result<i64, Error> {
+        if !clause.writes {
+            return Ok(0);
+        }
+        let wanted = Keying {
+            arena: into.arena,
+            sql: into.sql,
+            clause,
+            table: into.table,
+            kept: into.kept,
+            root: into.root,
+            affinities: into.affinities,
+            proposed,
+            found,
+            returning: into.returning,
+        };
+        Ok(i64::from(self.upserted_keyed(&wanted)?))
+    }
+
+    /// The row a conflict found in a table that keeps its rows in the
+    /// key's own tree, written again as a `DO UPDATE` says, and whether
+    /// it was written.
+    ///
+    /// Reading the row costs O(n) in the rows of the table and writing
+    /// it costs O(log n) in them and in the entries of each index.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the constraints of the table refuse the row with.
+    fn upserted_keyed(&mut self, wanted: &Keying<'_>) -> Result<bool, Error> {
+        let table = wanted.table;
+        let held = {
+            let bytes = self.image();
+            let database = Database::open(&bytes)?;
+            database
+                .keyed_rows_of(&table.name)?
+                .into_iter()
+                .find(|values| crate::schema::key_of(table, values) == wanted.found)
+                .ok_or(Error::NoTable(Vec::new()))?
+        };
+        let row = Excluded {
+            table,
+            held: (&held, 0),
+            proposed: (wanted.proposed, 0),
+            encoding: self.header.encoding,
+        };
+        // The `WHERE` of the clause is read against the row the conflict
+        // found, and a row it does not hold for is passed over.
+        if let Some(filter) = wanted.clause.filter
+            && !crate::eval::evaluate_row(wanted.arena, filter, wanted.sql, &row)?.truth(false)
+        {
+            return Ok(false);
+        }
+        let mut values = held.clone();
+        let mut columns = Vec::new();
+        for set in wanted.arena.sets(wanted.clause.sets) {
+            let name = crate::schema::dequote(set.column.text(wanted.sql));
+            let at = table
+                .columns
+                .iter()
+                .position(|column| column.name.eq_ignore_ascii_case(&name))
+                .ok_or_else(|| Error::Eval(crate::eval::Error::NoColumn(name.clone())))?;
+            let value = crate::eval::evaluate_row(wanted.arena, set.value, wanted.sql, &row)?;
+            for slot in values.iter_mut().skip(at).take(1) {
+                slot.clone_from(&value);
+            }
+            columns.push(name);
+        }
+        self.upsert_keyed_row(wanted, &held, values, &columns)
+    }
+
+    /// The row a `DO UPDATE` computed over a table that keeps its rows
+    /// in the key's own tree, written where the constraints of the
+    /// table hold it, and whether it was written.
+    ///
+    /// Writing one row costs O(log n) in the rows of the table and in
+    /// the entries of each index over it.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the constraints of the table refuse the row with.
+    fn upsert_keyed_row(
+        &mut self,
+        wanted: &Keying<'_>,
+        held: &[Value],
+        mut named: Vec<Value>,
+        columns: &[Vec<u8>],
+    ) -> Result<bool, Error> {
+        let table = wanted.table;
+        let before = self.triggers_for(&table.name, TriggerEvent::Update, TriggerTime::Before)?;
+        let after = self.triggers_for(&table.name, TriggerEvent::Update, TriggerTime::After)?;
+        let fires = !before.is_empty() || !after.is_empty();
+        if fires {
+            let row = Fired {
+                table,
+                old: Some((held, 0)),
+                new: Some((&named, 0)),
+                encoding: self.header.encoding,
+            };
+            if !self.fire(&before, columns, &row)? {
+                return Ok(false);
+            }
+        }
+        // A clause writes under no resolution of its own, which is
+        // `OE_Abort`, so the constraints of the table refuse the row
+        // rather than passing it over.
+        self.constrained(table, &mut named, 0, Conflict::Unspecified)?;
+        // `sqlite3UpsertDoUpdate` builds the `UPDATE` under `OE_Abort`,
+        // so a key the row shares with another refuses the statement
+        // whatever the key's own clause says.
+        self.rekeyed(
+            wanted.root,
+            table,
+            wanted.kept,
+            (held, &named),
+            Conflict::Abort,
+        )?;
+        let root = wanted.root;
+        let collations = crate::schema::key_collations(table);
+        let was = crate::schema::key_of(table, held);
+        let key = crate::schema::key_of(table, &named);
+        self.parented(table, &named, 0)?;
+        self.orphaned(&table.name, table, held, 0, Some((&named, 0)))?;
+        self.unindex_row(wanted.kept, table, held, &was)?;
+        crate::tree::remove_entry(&mut self.pages, root, &was, &collations)?;
+        self.index_row(wanted.kept, table, &named, &key)?;
+        let stored = ordered(table, &named);
+        let record = crate::record::write(&stored, wanted.affinities, 4);
+        crate::tree::insert_entry(&mut self.pages, root, &record, &key, &collations, false)?;
+        let answered = (table, named.as_slice(), None);
+        self.returns(wanted.arena, wanted.returning, wanted.sql, answered)?;
+        if fires {
+            let row = Fired {
+                table,
+                old: Some((held, 0)),
+                new: Some((&named, 0)),
+                encoding: self.header.encoding,
+            };
+            self.fire(&after, columns, &row)?;
+        }
+        Ok(true)
     }
 
     /// Whether a row may be placed under `key` in the tree of a table
@@ -3911,9 +4156,6 @@ impl Writer {
         let inserting = self.inserting(arena, statement, sql, outer, &name)?;
         let upserts = arena.upserts(statement.upserts);
         if inserting.table.without_rowid {
-            if !upserts.is_empty() {
-                return Err(Error::Unsupported);
-            }
             return self.insert_keyed(arena, statement, sql, &name, inserting);
         }
         let Inserting {
@@ -4816,6 +5058,32 @@ struct Upserting<'a> {
     returning: crate::ast::Range,
 }
 
+/// One `DO UPDATE` over a table that keeps its rows in the key's own
+/// tree, where a key names a row and a rowid does not.
+struct Keying<'a> {
+    /// The tree the statement was read from.
+    arena: &'a Arena,
+    /// The text of the statement.
+    sql: &'a [u8],
+    /// The clause the conflict reached.
+    clause: &'a crate::ast::Upsert,
+    /// The table the row belongs to.
+    table: &'a Table,
+    /// The indexes over the table.
+    kept: &'a [Kept],
+    /// The tree of the table.
+    root: u32,
+    /// What each column converts a value under, in the order the record
+    /// holds them.
+    affinities: &'a [Affinity],
+    /// The row the statement would have written.
+    proposed: &'a [Value],
+    /// The key of the row the conflict found.
+    found: &'a [Value],
+    /// The columns the `RETURNING` of the statement answers.
+    returning: crate::ast::Range,
+}
+
 /// The row a `DO UPDATE` reads: the row the conflict found under the
 /// name of the table, and the row the statement would have written
 /// under the name `excluded`, which is `sqlite3UpsertDoUpdate`.
@@ -5602,6 +5870,16 @@ impl Writer {
     /// The column the key of the table is another name for, or an empty
     /// name where the table has none.
     fn key_column(table: &Table, alias: Option<usize>) -> Keys {
+        // The key of a table that keeps its rows in the key's own tree
+        // is the columns of its `PRIMARY KEY`, each in its own
+        // collation.
+        if table.without_rowid {
+            return crate::schema::key_places(table)
+                .iter()
+                .filter_map(|at| table.columns.get(*at))
+                .map(|column| (column.name.clone(), column.collation))
+                .collect();
+        }
         let name = alias
             .and_then(|at| table.columns.get(at))
             .map(|column| column.name.clone())

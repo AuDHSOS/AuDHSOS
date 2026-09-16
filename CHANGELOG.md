@@ -134,6 +134,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `INSERT ... ON CONFLICT` in `db-sqlite` over a table that keeps its
+  rows in the key's own tree. A clause names the `PRIMARY KEY` of the
+  table or an index over it, `DO UPDATE` writes the row the conflict
+  found, and a clause that writes the key writes the entry under the new
+  key. D-256 records it. Catalog 6.6.180.
+
 - `changes()`, `total_changes()` and `last_insert_rowid()` in `db-sqlite`
   answer what the connection has written. A statement of a trigger's
   body sets the counters as it runs, a statement the engine refuses

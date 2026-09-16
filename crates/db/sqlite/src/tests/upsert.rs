@@ -191,20 +191,53 @@ fn what_the_parser_reads_of_a_clause() {
     }
 }
 
+/// A clause over a table that keeps its rows in the key's own tree
+/// names the `PRIMARY KEY` of the table or an index over it, and the
+/// row it writes may write the key itself.
 #[test]
-fn a_table_that_keeps_its_rows_in_the_key_s_own_tree_is_not_written_this_way() {
+fn a_clause_writes_the_row_of_a_table_that_keeps_its_rows_in_the_key_s_own_tree() {
     let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
     writer
-        .run(b"CREATE TABLE k(a TEXT PRIMARY KEY, b) WITHOUT ROWID")
+        .run(b"CREATE TABLE k(a TEXT PRIMARY KEY, b, c UNIQUE) WITHOUT ROWID")
         .unwrap();
-    writer.run(b"INSERT INTO k VALUES('x',1)").unwrap();
-    assert_eq!(
-        writer
-            .run(b"INSERT INTO k VALUES('x',2) ON CONFLICT(a) DO NOTHING")
-            .unwrap_err()
-            .message(),
-        "Unsupported"
-    );
+    writer.run(b"INSERT INTO k VALUES('x',1,'p')").unwrap();
+    let shown = |writer: &Writer| -> alloc::string::String {
+        let image = writer.written();
+        let database = Database::open(&image).unwrap();
+        let answered = database.query(b"SELECT a,b,c FROM k").unwrap();
+        let mut out = alloc::string::String::new();
+        for row in &answered.rows {
+            for value in row {
+                out.push_str(&alloc::string::String::from_utf8_lossy(
+                    &value.text().unwrap_or(b"NULL".to_vec()),
+                ));
+                out.push('|');
+            }
+        }
+        out
+    };
+    // `DO NOTHING` over the key of the table passes the row over.
+    writer
+        .run(b"INSERT INTO k VALUES('x',2,'q') ON CONFLICT(a) DO NOTHING")
+        .unwrap();
+    assert_eq!(shown(&writer), "x|1|p|");
+    // `DO UPDATE` reads the row the conflict found under the name of
+    // the table and the row that was not written under `excluded`.
+    writer
+        .run(b"INSERT INTO k VALUES('x',3,'r') ON CONFLICT(a) DO UPDATE SET b=excluded.b, c=k.c||'!'")
+        .unwrap();
+    assert_eq!(shown(&writer), "x|3|p!|");
+    // A clause that names an index over the table reaches the row that
+    // index found.
+    writer
+        .run(b"INSERT INTO k VALUES('y',4,'p!') ON CONFLICT(c) DO UPDATE SET b=b+100")
+        .unwrap();
+    assert_eq!(shown(&writer), "x|103|p!|");
+    // A clause that writes the key writes the entry under the new key.
+    writer
+        .run(b"INSERT INTO k VALUES('x',9,'z') ON CONFLICT(a) DO UPDATE SET a='w'")
+        .unwrap();
+    assert_eq!(shown(&writer), "w|103|p!|");
 }
 
 #[test]
@@ -594,5 +627,137 @@ fn a_row_reaches_the_clause_whose_key_the_statement_names_first() {
             .unwrap_err()
             .message(),
         "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint"
+    );
+}
+
+/// A clause over a table that keeps its rows in the key's own tree
+/// writes under `OE_Abort`, which is `sqlite3UpsertDoUpdate` building
+/// the `UPDATE` that way, so a key the row it writes shares with
+/// another refuses the statement whatever the key's own clause says.
+#[test]
+fn what_a_clause_over_a_table_with_no_rowid_refuses() {
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE k(a TEXT PRIMARY KEY ON CONFLICT IGNORE, b) WITHOUT ROWID")
+        .unwrap();
+    writer.run(b"INSERT INTO k VALUES('x',1),('y',2)").unwrap();
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO k VALUES('x',3) ON CONFLICT(a) DO UPDATE SET a='y'")
+            .unwrap_err()
+            .message(),
+        "UNIQUE constraint failed: k.a"
+    );
+    // A column the table does not hold.
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO k VALUES('x',3) ON CONFLICT(a) DO UPDATE SET zz=1")
+            .unwrap_err()
+            .message(),
+        "no such column: zz"
+    );
+}
+
+/// The `WHERE` of a clause over a table that keeps its rows in the
+/// key's own tree passes the row over, and the `UPDATE` triggers of the
+/// table run over the row the clause writes.
+#[test]
+fn a_clause_over_a_table_with_no_rowid_runs_the_update_triggers() {
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE k(a TEXT PRIMARY KEY, b) WITHOUT ROWID".as_slice(),
+        b"CREATE TABLE log(t)",
+        b"INSERT INTO k VALUES('x',1)",
+        b"CREATE TRIGGER kb BEFORE UPDATE ON k BEGIN INSERT INTO log VALUES('b'||old.b||new.b); END",
+        b"CREATE TRIGGER ka AFTER UPDATE ON k BEGIN INSERT INTO log VALUES('a'||old.b||new.b); END",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let shown = |writer: &Writer, sql: &[u8]| -> alloc::string::String {
+        let image = writer.written();
+        let database = Database::open(&image).unwrap();
+        let answered = database.query(sql).unwrap();
+        let mut out = alloc::string::String::new();
+        for row in &answered.rows {
+            for value in row {
+                out.push_str(&alloc::string::String::from_utf8_lossy(
+                    &value.text().unwrap_or(b"NULL".to_vec()),
+                ));
+                out.push('|');
+            }
+        }
+        out
+    };
+    // A `WHERE` the row does not hold for passes it over, so no trigger
+    // runs.
+    writer
+        .run(b"INSERT INTO k VALUES('x',2) ON CONFLICT(a) DO UPDATE SET b=99 WHERE b<0")
+        .unwrap();
+    assert_eq!(shown(&writer, b"SELECT a,b FROM k"), "x|1|");
+    assert_eq!(shown(&writer, b"SELECT t FROM log"), "");
+    writer
+        .run(b"INSERT INTO k VALUES('x',3) ON CONFLICT(a) DO UPDATE SET b=excluded.b")
+        .unwrap();
+    assert_eq!(shown(&writer, b"SELECT a,b FROM k"), "x|3|");
+    assert_eq!(shown(&writer, b"SELECT t FROM log"), "b13|a13|");
+}
+
+/// A table that carries an `AFTER UPDATE` trigger and no `BEFORE` one
+/// runs that trigger over the row a clause writes.
+#[test]
+fn a_clause_over_a_table_with_no_rowid_runs_an_after_trigger_of_its_own() {
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE k(a TEXT PRIMARY KEY, b) WITHOUT ROWID".as_slice(),
+        b"CREATE TABLE log(t)",
+        b"INSERT INTO k VALUES('x',1)",
+        b"CREATE TRIGGER ka AFTER UPDATE ON k BEGIN INSERT INTO log VALUES(new.b); END",
+        b"INSERT INTO k VALUES('x',7) ON CONFLICT(a) DO UPDATE SET b=excluded.b",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    let database = Database::open(&image).unwrap();
+    let answered = database.query(b"SELECT t FROM log").unwrap();
+    assert_eq!(answered.rows, alloc::vec![alloc::vec![Value::Int(7)]]);
+}
+
+/// A `BEFORE UPDATE` trigger that raises `IGNORE` leaves the row the
+/// clause would have written as it stands.
+#[test]
+fn a_trigger_that_ignores_the_row_a_clause_writes_leaves_it_as_it_stands() {
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE k(a TEXT PRIMARY KEY, b) WITHOUT ROWID".as_slice(),
+        b"INSERT INTO k VALUES('x',1)",
+        b"CREATE TRIGGER kb BEFORE UPDATE ON k BEGIN SELECT RAISE(IGNORE); END",
+        b"INSERT INTO k VALUES('x',5) ON CONFLICT(a) DO UPDATE SET b=excluded.b",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    let database = Database::open(&image).unwrap();
+    let answered = database.query(b"SELECT b FROM k").unwrap();
+    assert_eq!(answered.rows, alloc::vec![alloc::vec![Value::Int(1)]]);
+}
+
+/// A clause over a table that keeps its rows in the key's own tree
+/// writes where its `WHERE` holds, and its `RETURNING` answers the row
+/// it wrote.
+#[test]
+fn a_clause_over_a_table_with_no_rowid_answers_what_it_wrote() {
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE k(a TEXT PRIMARY KEY, b) WITHOUT ROWID")
+        .unwrap();
+    writer.run(b"INSERT INTO k VALUES('x',1)").unwrap();
+    assert_eq!(
+        writer
+            .run(
+                b"INSERT INTO k VALUES('x',2) ON CONFLICT(a) DO UPDATE SET b=excluded.b \
+                  WHERE b>0 RETURNING a,b"
+            )
+            .unwrap(),
+        alloc::vec![alloc::vec![Value::Text(b"x".to_vec()), Value::Int(2)]]
     );
 }
