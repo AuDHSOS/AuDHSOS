@@ -5096,6 +5096,30 @@ Document 16 step Q8.
 - `sqlite_sequence` and `sqlite_stat1` are still written, because the
   crate and not a connection writes them.
 
+### 6.6.167 An index over an expression and over fewer rows (`db-sqlite`)
+
+Document 16 step Q8.
+
+- An index over `substr(a,1,7)` holds one entry per row, and the walk of
+  `PRAGMA integrity_check` answers `ok` after a row is written, changed
+  and taken out.
+- `REINDEX` writes the same entries again out of the rows.
+- An index with a `WHERE` holds an entry only for the rows that clause
+  answers true for, and a row that stops answering true loses its entry.
+- `ANALYZE` counts the entries an index holds and not the rows the table
+  has.
+- A `UNIQUE` over an expression refuses a row with `UNIQUE constraint
+  failed: index 'tu'`, and a `UNIQUE` with a `WHERE` names the column.
+- An index term written as text names a column, so `CREATE INDEX tb ON
+  t('b')` holds the column `b` and `ALTER TABLE t DROP COLUMN b` refuses
+  `error in index tb after drop column: no such column: b`.
+- A term that names a column under a table is refused `the "." operator
+  prohibited in index expressions`; the `WHERE` of a partial index takes
+  one.
+- A statement over a table that carries only an index over an expression
+  and a partial index answers every row, which a lookup in either index
+  would not.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

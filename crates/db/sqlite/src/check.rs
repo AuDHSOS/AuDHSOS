@@ -112,7 +112,7 @@ fn roots(database: &Database<'_>) -> Vec<u32> {
     let mut out = alloc::vec![crate::image::SCHEMA_ROOT];
     for table in database.tables() {
         out.extend(database.table(&table.name).map(|(_, root)| root));
-        out.extend(database.indexes(&table.name).iter().map(|(_, root)| *root));
+        out.extend(database.indexes(&table.name).iter().map(|kept| kept.root));
     }
     out
 }
@@ -241,8 +241,8 @@ fn rows_held(
     if quick {
         return Ok(());
     }
-    for (index, root) in database.indexes(&table.name) {
-        entries_held(database, index, root, &rows, found)?;
+    for kept in database.indexes(&table.name) {
+        entries_held(database, &kept, &rows, found)?;
     }
     Ok(())
 }
@@ -252,11 +252,18 @@ fn rows_held(
 /// holds no key twice.
 fn entries_held(
     database: &Database<'_>,
-    index: &crate::schema::Index,
-    root: u32,
+    kept: &crate::db::Indexed<'_>,
     rows: &[(Vec<Value>, Vec<Value>)],
     found: &mut Found,
 ) -> Result<(), Error> {
+    let index = kept.index;
+    let root = kept.root;
+    let over = crate::change::Over {
+        arena: kept.arena,
+        sql: kept.sql,
+        table: kept.table,
+        encoding: database.encoding(),
+    };
     let image = database.image();
     let collations: Vec<crate::value::Collation> = index
         .columns
@@ -289,8 +296,13 @@ fn entries_held(
     // `sqlite3Pragma` counts the rows of the table as it walks them and
     // names a row by that count, which is register 7 of the routine it
     // writes and not the key of the row.
+    let mut held_rows = 0_usize;
     for (at, (key, values)) in rows.iter().enumerate() {
-        let wanted = crate::change::entry_of(index, values, key);
+        if !crate::change::indexes_row(index, &over, values)? {
+            continue;
+        }
+        held_rows = held_rows.saturating_add(1);
+        let wanted = crate::change::entry_of(index, &over, values, key)?;
         if keys
             .binary_search_by(|held| order_of(held, &wanted, &collations))
             .is_ok()
@@ -304,7 +316,7 @@ fn entries_held(
         text.extend_from_slice(&index.name);
         found.note(&text);
     }
-    if count != rows.len() {
+    if count != held_rows {
         let mut text = b"wrong # of entries in index ".to_vec();
         text.extend_from_slice(&index.name);
         found.note(&text);

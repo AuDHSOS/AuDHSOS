@@ -2952,12 +2952,11 @@ fn what_a_statement_over_an_indexed_table_refuses() {
     writer.run(b"CREATE INDEX uc ON u(c)").unwrap();
     writer.run(b"INSERT INTO t VALUES(1,'a')").unwrap();
     assert!(writer.run(b"DELETE FROM t WHERE a=1").is_ok());
-    // An index this crate cannot walk is one it cannot write, so the
-    // statement that would make it is refused and no table carries one.
+    // A term that names a column the table does not hold is refused,
+    // and so is an index over a table the schema does not hold.
     let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
     writer.run(b"CREATE TABLE t(a,b)").unwrap();
-    assert!(writer.run(b"CREATE INDEX ta ON t(a) WHERE a>0").is_err());
-    assert!(writer.run(b"CREATE INDEX ta ON t(abs(a))").is_err());
+    assert!(writer.run(b"CREATE INDEX ta ON t(zz)").is_err());
     assert!(writer.run(b"CREATE INDEX ta ON nosuch(a)").is_err());
 }
 
@@ -3869,7 +3868,7 @@ fn the_indexes_a_table_carries_of_its_own_are_the_ones_the_shell_names() {
         let held: Vec<Vec<u8>> = database
             .indexes(b"t")
             .iter()
-            .map(|(index, _)| index.name.clone())
+            .map(|kept| kept.index.name.clone())
             .collect();
         let wanted: Vec<Vec<u8>> = (1..=names)
             .map(|at| alloc::format!("sqlite_autoindex_t_{at}").into_bytes())

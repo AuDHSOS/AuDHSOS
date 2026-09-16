@@ -59,11 +59,12 @@ pub enum Error {
     NoSuchColumn,
     /// A primary key whose term is an expression rather than a name.
     KeyExpression,
-    /// An index term that is not a column of the table it is over.
+    /// An index term that names a column the table it is over does not
+    /// hold.
     IndexColumn,
-    /// An index with a `WHERE` clause, which holds fewer rows than the
-    /// table has.
-    PartialIndex,
+    /// An index term that names a column under a table or a schema,
+    /// which `sqlite3ResolveSelfReference` refuses under `NC_IdxExpr`.
+    IndexDot,
 }
 
 /// Whether a column is computed, and whether what it computes is kept.
@@ -248,6 +249,7 @@ pub fn own_index(table: &Table, at: usize) -> Option<Index> {
         columns: keys.columns.clone(),
         unique: true,
         conflict: keys.conflict,
+        filter: None,
     })
 }
 
@@ -271,7 +273,7 @@ fn own_keys(table: &Table, written: &[Written]) -> Result<Vec<Keys>, Error> {
                 .get(at)
                 .map_or(Collation::Binary, |column| column.collation);
             keyed.push(Keyed {
-                column: at,
+                of: Of::Place(at),
                 order: *order,
                 collation,
             });
@@ -282,7 +284,7 @@ fn own_keys(table: &Table, written: &[Written]) -> Result<Vec<Keys>, Error> {
             && keyed.len() == 1
             && keyed
                 .first()
-                .is_some_and(|keyed| table.rowid_alias == Some(keyed.column));
+                .is_some_and(|keyed| table.rowid_alias == keyed.place());
         if alias {
             continue;
         }
@@ -297,7 +299,7 @@ fn own_keys(table: &Table, written: &[Written]) -> Result<Vec<Keys>, Error> {
                     .columns
                     .iter()
                     .zip(&keyed)
-                    .all(|(held, new)| held.column == new.column)
+                    .all(|(held, new)| held.of == new.of)
         });
         if let Some(held) = held {
             if held.conflict == crate::ast::Conflict::Unspecified {
@@ -314,11 +316,21 @@ fn own_keys(table: &Table, written: &[Written]) -> Result<Vec<Keys>, Error> {
     Ok(keys)
 }
 
-/// One column of an index, and how it is held.
+/// What one place of an index entry holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Of {
+    /// A column of the table, by the place it takes in it.
+    Place(usize),
+    /// An expression over the row, as the tree of the `CREATE INDEX`
+    /// holds it, which is `Index.aColExpr` of `sqlite3CreateIndex`.
+    Term(ExprId),
+}
+
+/// One place of an index, and how it is held.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Keyed {
-    /// Where the column stands in the table.
-    pub column: usize,
+    /// What the entry holds there.
+    pub of: Of,
     /// Which way the entries run in it.
     pub order: Order,
     /// How its text is compared, which is the table's unless the index
@@ -326,11 +338,19 @@ pub struct Keyed {
     pub collation: Collation,
 }
 
+impl Keyed {
+    /// The place the column takes in the table, or nothing where the
+    /// place holds an expression.
+    #[must_use]
+    pub const fn place(&self) -> Option<usize> {
+        match self.of {
+            Of::Place(at) => Some(at),
+            Of::Term(_) => None,
+        }
+    }
+}
+
 /// An index, as a `CREATE INDEX` describes it.
-///
-/// An index this crate cannot use is not one it holds: an index over an
-/// expression and a partial index both answer fewer entries than their
-/// columns say, so `index` refuses them and the statement scans.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Index {
     /// The name, with its quotes taken off.
@@ -344,42 +364,70 @@ pub struct Index {
     /// What the constraint says to do where two rows share one key,
     /// which only an index of the table's own carries.
     pub conflict: crate::ast::Conflict,
+    /// The `WHERE` of a partial index, as the tree of the `CREATE
+    /// INDEX` holds it, which is `Index.pPartIdxWhere`.
+    pub filter: Option<ExprId>,
+}
+
+impl Index {
+    /// The first place of the index, with the place in the table of the
+    /// column it holds, or nothing where a statement may not be planned
+    /// against the index: a partial index answers fewer entries than
+    /// the table has rows, and a place over an expression holds a value
+    /// no term of a statement names.
+    #[must_use]
+    pub fn first_keyed(&self) -> Option<(usize, Keyed)> {
+        self.filter
+            .is_none()
+            .then(|| self.columns.first())
+            .flatten()
+            .and_then(|first| first.place().map(|at| (at, *first)))
+    }
 }
 
 /// The index a `CREATE INDEX` describes, read against the table it is
 /// over.
 ///
+/// A term that is a column of the table takes that column's place and
+/// that column's collation; every other term is an expression the entry
+/// holds the value of, compared under the collation the term writes or
+/// under `BINARY`, which is `sqlite3CreateIndex` filling `aColExpr`.
+///
 /// # Errors
 ///
-/// [`Error::IndexColumn`] for a term that is not a column of the table,
-/// and [`Error::PartialIndex`] for a `WHERE` clause, which makes the
-/// index hold fewer rows than the table has.
+/// [`Error::IndexColumn`] for a term that names a column the table does
+/// not hold.
 pub fn index(
     arena: &Arena,
     definition: &CreateIndex,
     sql: &[u8],
     table: &Table,
 ) -> Result<Index, Error> {
-    if definition.filter.is_some() {
-        return Err(Error::PartialIndex);
-    }
     let mut columns = Vec::new();
     for term in arena.orders(definition.columns) {
         // A term may be written with a collation of its own, which is
         // the one its entries are held in.
         let (named, written) = collated(arena, term.expr, sql);
-        let name = dequote(named.ok_or(Error::IndexColumn)?.text(sql));
-        let at = table
-            .columns
-            .iter()
-            .position(|column| column.name.eq_ignore_ascii_case(&name))
-            .ok_or(Error::IndexColumn)?;
-        let collation = table
-            .columns
-            .get(at)
-            .map_or(Collation::Binary, |column| column.collation);
+        let (of, collation) = if let Some(named) = named {
+            let name = dequote(named.text(sql));
+            let at = table
+                .columns
+                .iter()
+                .position(|column| column.name.eq_ignore_ascii_case(&name))
+                .ok_or(Error::IndexColumn)?;
+            let held = table
+                .columns
+                .get(at)
+                .map_or(Collation::Binary, |column| column.collation);
+            (Of::Place(at), held)
+        } else {
+            if qualified(arena, term.expr) {
+                return Err(Error::IndexDot);
+            }
+            (Of::Term(term.expr), Collation::Binary)
+        };
         columns.push(Keyed {
-            column: at,
+            of,
             order: term.order,
             collation: written.unwrap_or(collation),
         });
@@ -390,11 +438,31 @@ pub fn index(
         columns,
         unique: definition.unique,
         conflict: crate::ast::Conflict::Unspecified,
+        filter: definition.filter,
     })
 }
 
-/// The column an index term names and the collation written on it, where
-/// the term is a column and nothing else.
+/// Whether a tree names a column under a table or a schema, which
+/// `sqlite3ResolveSelfReference` refuses in an index term.
+///
+/// Reading the tree costs O(n) in its nodes.
+fn qualified(arena: &Arena, id: ExprId) -> bool {
+    arena.node(id).is_some_and(|node| {
+        if matches!(node, Node::Column { table: Some(_), .. }) {
+            return true;
+        }
+        let mut found = false;
+        arena.under(node, |under| found |= qualified(arena, under));
+        found
+    })
+}
+
+/// The column an index term names and the collation written on it,
+/// naming no column where the term is not a column and nothing else.
+///
+/// A term written as text names a column, which is `sqlite3StringToId`
+/// turning `TK_STRING` into `TK_ID` before `sqlite3CreateIndex` reads
+/// the term.
 fn collated(arena: &Arena, id: ExprId, sql: &[u8]) -> (Option<Span>, Option<Collation>) {
     match arena.node(id) {
         Some(Node::Collate { value, name }) => (
@@ -402,6 +470,7 @@ fn collated(arena: &Arena, id: ExprId, sql: &[u8]) -> (Option<Span>, Option<Coll
             Collation::of_name(&dequote(name.text(sql))),
         ),
         Some(Node::Column { column, .. }) => (Some(column), None),
+        Some(Node::Literal(crate::ast::Literal::Text(text))) => (Some(text), None),
         _ => (None, None),
     }
 }

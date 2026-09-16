@@ -282,6 +282,9 @@ impl Error {
                 "no such savepoint: {}",
                 alloc::string::String::from_utf8_lossy(name)
             ),
+            Error::Schema(schema::Error::IndexDot) => {
+                "the \".\" operator prohibited in index expressions".to_string()
+            }
             Error::Recursion => "recursive aggregate queries not supported".to_string(),
             Error::Eval(error) => error.message(),
             other => alloc::format!("{other:?}"),
@@ -340,6 +343,27 @@ struct Kept {
     index: schema::Index,
     /// The page its tree begins at.
     root: u32,
+    /// The `CREATE INDEX` text, which a place over an expression and a
+    /// partial index's `WHERE` point into.
+    sql: Vec<u8>,
+    /// The tree that text was parsed into.
+    arena: Arena,
+}
+
+/// One index of a table as a caller outside this module reads it: the
+/// index, where its tree is, and what an expression it holds reads.
+#[derive(Clone, Copy)]
+pub struct Indexed<'a> {
+    /// The index as its statement describes it.
+    pub index: &'a schema::Index,
+    /// The page its tree begins at.
+    pub root: u32,
+    /// The `CREATE INDEX` text.
+    pub sql: &'a [u8],
+    /// The tree that text was parsed into.
+    pub arena: &'a Arena,
+    /// The table the index is over, which an expression reads.
+    pub table: &'a Table,
 }
 
 /// One column a statement answers, and what a comparison against it
@@ -1000,6 +1024,8 @@ impl<'a> Database<'a> {
                     .find(|index| index.name.eq_ignore_ascii_case(&name));
                 if let Some(index) = index {
                     stored.indexes.push(Kept {
+                        sql: Vec::new(),
+                        arena: Arena::default(),
                         index,
                         root: u32::try_from(root).unwrap_or(0),
                     });
@@ -1024,6 +1050,8 @@ impl<'a> Database<'a> {
             stored.indexes.push(Kept {
                 index,
                 root: u32::try_from(root).unwrap_or(0),
+                sql,
+                arena,
             });
         }
         Ok(())
@@ -1046,6 +1074,12 @@ impl<'a> Database<'a> {
         &self.image
     }
 
+    /// What encoding the file keeps its text in.
+    #[must_use]
+    pub const fn encoding(&self) -> Encoding {
+        self.encoding
+    }
+
     /// The table of `name` and the page its tree begins at, where the
     /// database holds one.
     #[must_use]
@@ -1065,6 +1099,25 @@ impl<'a> Database<'a> {
         })
     }
 
+    /// The index of `name` as a caller that reads its expressions needs
+    /// it.
+    #[must_use]
+    pub fn indexed(&self, name: &[u8]) -> Option<Indexed<'_>> {
+        self.tables.iter().find_map(|stored| {
+            stored
+                .indexes
+                .iter()
+                .find(|kept| kept.index.name.eq_ignore_ascii_case(name))
+                .map(|kept| Indexed {
+                    index: &kept.index,
+                    root: kept.root,
+                    sql: &kept.sql,
+                    arena: &kept.arena,
+                    table: &stored.table,
+                })
+        })
+    }
+
     /// The indexes over the table of `name` this crate holds, each with
     /// the page its tree begins at and the columns it is over.
     ///
@@ -1072,13 +1125,19 @@ impl<'a> Database<'a> {
     /// may have more indexes on disk than this answers; `has_others`
     /// says so.
     #[must_use]
-    pub fn indexes(&self, name: &[u8]) -> Vec<(&schema::Index, u32)> {
+    pub fn indexes(&self, name: &[u8]) -> Vec<Indexed<'_>> {
         self.find(name)
             .map(|stored| {
                 stored
                     .indexes
                     .iter()
-                    .map(|kept| (&kept.index, kept.root))
+                    .map(|kept| Indexed {
+                        index: &kept.index,
+                        root: kept.root,
+                        sql: &kept.sql,
+                        arena: &kept.arena,
+                        table: &stored.table,
+                    })
                     .collect()
             })
             .unwrap_or_default()
@@ -2546,8 +2605,19 @@ fn reached(arena: &Arena, id: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Option<
 /// The index the terms reach on one side, where they reach one.
 fn plan_of(terms: &[Bound], at: usize, stored: &Stored) -> Option<Plan> {
     for kept in &stored.indexes {
-        let first = kept.index.columns.first()?;
-        let column = stored.table.columns.get(first.column)?;
+        // An index over an expression, and a partial index, answer
+        // fewer entries than their places say, so a statement planned
+        // against either would read fewer rows than it must.
+        let found = kept.index.first_keyed().and_then(|(place, first)| {
+            stored
+                .table
+                .columns
+                .get(place)
+                .map(|column| (place, first, column))
+        });
+        let Some((place, first, column)) = found else {
+            continue;
+        };
         // An index held in another order, or under another collation
         // than the column compares under, answers its entries in an
         // order the terms do not ask about.
@@ -2557,7 +2627,7 @@ fn plan_of(terms: &[Bound], at: usize, stored: &Stored) -> Option<Plan> {
         let Some(term) = terms.iter().find(|term| {
             term.at == at
                 && term.op == BinaryOp::Eq
-                && term.reached == Reached::Column(first.column)
+                && term.reached == Reached::Column(place)
                 // An index holds no entry a `=` against `NULL` reaches,
                 // which is what `NULL = NULL` answering nothing means.
                 && term.value != Value::Null
@@ -2651,15 +2721,25 @@ fn joined(
     }
     let on = side.on?;
     for kept in &stored.indexes {
-        let first = kept.index.columns.first()?;
-        let column = stored.table.columns.get(first.column)?;
+        // An index over an expression, and a partial index, answer
+        // fewer entries than their places say.
+        let found = kept.index.first_keyed().and_then(|(place, first)| {
+            stored
+                .table
+                .columns
+                .get(place)
+                .map(|column| (place, first, column))
+        });
+        let Some((place, first, column)) = found else {
+            continue;
+        };
         // An index held in another order, or under another collation
         // than the column compares under, answers its entries in an
         // order the terms do not ask about.
         if first.order == crate::ast::Order::Descending || first.collation != column.collation {
             continue;
         }
-        let Some(key) = keyed_by(arena, on, sql, sides, at, first.column) else {
+        let Some(key) = keyed_by(arena, on, sql, sides, at, place) else {
             continue;
         };
         return Some(Plan::Joined {

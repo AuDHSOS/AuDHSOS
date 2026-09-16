@@ -55,6 +55,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `ANALYZE` in `db-sqlite` counted the rows of the table where it must
+  count the entries of the index, which `analyzeOneTable` counts. A
+  partial index holds fewer entries than the table has rows, so its row
+  of `sqlite_stat1` named too many.
+
 - `db-sqlite` wrote a page of a table tree into the parent's right
   pointer where the quick balance was reached from a leaf the parent's
   right pointer does not name, so the parent named one page of the tree
@@ -65,6 +70,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   cases passing to 214 with none failing. Catalog 6.6.165.
 
 ### Added
+
+- An index over an expression and an index over fewer rows than the
+  table has in `db-sqlite`. `CREATE INDEX t1a1 ON t1(substr(a,1,12))`
+  holds what the expression answers for each row, and `CREATE INDEX t1p
+  ON t1(b) WHERE c>1` holds an entry only for the rows its `WHERE`
+  answers true for. A statement is planned against neither and walks the
+  table, so every row is answered. D-243 records it. Catalog 6.6.167.
 
 - `RETURNING` and `INSERT INTO t DEFAULT VALUES` in `db-sqlite`. An
   `INSERT`, an `UPDATE`, a `DELETE` and the `DO UPDATE` of an `ON

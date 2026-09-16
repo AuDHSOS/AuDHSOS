@@ -17,7 +17,6 @@
 use alloc::vec::Vec;
 
 use crate::db::{Database, Error};
-use crate::schema::Index;
 use crate::value::{Collation, Value};
 
 /// One row of `sqlite_stat1`.
@@ -61,14 +60,14 @@ pub fn stats_of(
     let mut out = Vec::new();
     // `pTab->pIndex` carries the index made last first, which is the
     // order the rows are written in.
-    for (index, _) in indexes.iter().rev() {
-        if only.is_some_and(|name| !index.name.eq_ignore_ascii_case(name)) {
+    for kept in indexes.iter().rev() {
+        if only.is_some_and(|name| !kept.index.name.eq_ignore_ascii_case(name)) {
             continue;
         }
         out.push(Stat {
             table: table.to_vec(),
-            index: Some(index.name.clone()),
-            stat: stat_of(index, &rows),
+            index: Some(kept.index.name.clone()),
+            stat: stat_of(kept, database.encoding(), &rows)?,
         });
     }
     Ok(out)
@@ -77,12 +76,27 @@ pub fn stats_of(
 /// The counts of one index: the number of rows, and per prefix of its
 /// columns the number of rows a lookup of that prefix answers, which
 /// `statGet` rounds up.
-fn stat_of(index: &Index, rows: &[(i64, Vec<Value>)]) -> Vec<u8> {
+fn stat_of(
+    kept: &crate::db::Indexed<'_>,
+    encoding: crate::header::Encoding,
+    rows: &[(i64, Vec<Value>)],
+) -> Result<Vec<u8>, Error> {
+    let index = kept.index;
+    let over = crate::change::Over {
+        arena: kept.arena,
+        sql: kept.sql,
+        table: kept.table,
+        encoding,
+    };
+    let mut keys: Vec<Vec<Value>> = Vec::new();
+    for (rowid, values) in rows {
+        if !crate::change::indexes_row(index, &over, values)? {
+            continue;
+        }
+        let key = [Value::Int(*rowid)];
+        keys.push(crate::change::entry_of(index, &over, values, &key)?);
+    }
     let collations = crate::change::collations_of(index);
-    let mut keys: Vec<Vec<Value>> = rows
-        .iter()
-        .map(|(rowid, values)| crate::change::entry_of(index, values, &[Value::Int(*rowid)]))
-        .collect();
     keys.sort_by(|one, other| crate::change::order_of_keys(one, other, &collations));
     let columns = index.columns.len();
     // One entry of its own is one value of its own for every prefix,
@@ -109,7 +123,9 @@ fn stat_of(index: &Index, rows: &[(i64, Vec<Value>)]) -> Vec<u8> {
             }
         }
     }
-    let count = counted(rows.len());
+    // `analyzeOneTable` counts the entries the index holds, which a
+    // partial index holds fewer of than the table has rows.
+    let count = counted(keys.len());
     let mut out = crate::number::integer_text(count);
     for values in &distinct {
         out.push(b' ');
@@ -122,7 +138,7 @@ fn stat_of(index: &Index, rows: &[(i64, Vec<Value>)]) -> Vec<u8> {
             .unwrap_or(0);
         out.extend_from_slice(&crate::number::integer_text(rounded.cast_signed()));
     }
-    out
+    Ok(out)
 }
 
 /// How many rows a count of `rows` is, as a number a row holds.

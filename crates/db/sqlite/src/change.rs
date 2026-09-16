@@ -220,7 +220,23 @@ pub(crate) fn without_column(statement: &[u8], column: &[u8]) -> Result<Vec<u8>,
 /// is gone. A name written with a table in front of it carries that
 /// table, which is what `renameTestSchema` answers.
 fn names_column(statement: &[u8], column: &[u8]) -> Option<Vec<u8>> {
-    let (arena, _) = crate::parse::definition(statement).ok()?;
+    let (arena, definition) = crate::parse::definition(statement).ok()?;
+    // `sqlite3StringToId` reads an index term written as text as the
+    // name of a column, which the tree holds as a literal.
+    if let Definition::Index(made) = definition {
+        let named = arena.orders(made.columns).iter().find_map(|term| {
+            let Some(crate::ast::Node::Literal(crate::ast::Literal::Text(text))) =
+                arena.node(term.expr)
+            else {
+                return None;
+            };
+            let name = crate::schema::dequote(text.text(statement));
+            name.eq_ignore_ascii_case(column).then_some(name)
+        });
+        if named.is_some() {
+            return named;
+        }
+    }
     arena.all().find_map(|(_, node)| {
         let crate::ast::Node::Column {
             table,
@@ -270,6 +286,11 @@ struct Rebuilt {
     root: u32,
     /// The table whose rows it holds the entries of.
     table: Vec<u8>,
+    /// The `CREATE INDEX` text, which an expression it holds points
+    /// into.
+    sql: Vec<u8>,
+    /// The tree that text was parsed into.
+    arena: Arena,
 }
 
 /// What one `ANALYZE` counts.
@@ -908,7 +929,7 @@ impl Writer {
                     roots.push(root);
                     held = true;
                 }
-                roots.extend(database.indexes(name).iter().map(|(_, root)| *root));
+                roots.extend(database.indexes(name).iter().map(|kept| kept.root));
             }
             crate::ast::Dropped::Index => {
                 if let Some((_, root)) = database.index(name) {
@@ -1954,7 +1975,7 @@ impl Writer {
     fn taken_away(&mut self, name: &[u8], rowid: i64) -> Result<(), Error> {
         let (root, kept, table, values) = self.one_row(name, rowid)?;
         self.orphaned(name, &table, &values, rowid, None)?;
-        self.unindex_row(&kept, &values, &keyed_as(rowid))?;
+        self.unindex_row(&kept, &table, &values, &keyed_as(rowid))?;
         crate::tree::remove(&mut self.pages, root, rowid)?;
         Ok(())
     }
@@ -2022,8 +2043,8 @@ impl Writer {
         {
             *slot = Value::Null;
         }
-        self.unindex_row(&kept, &held, &keyed_as(rowid))?;
-        self.index_row(&kept, values, &keyed_as(rowid))?;
+        self.unindex_row(&kept, &table, &held, &keyed_as(rowid))?;
+        self.index_row(&kept, &table, values, &keyed_as(rowid))?;
         let record = crate::record::write(&stored, &affinities, 4);
         crate::tree::update(&mut self.pages, root, rowid, &record)?;
         Ok(())
@@ -2434,9 +2455,18 @@ impl Writer {
             let (table, _) = database.table(over).ok_or(Error::Unsupported)?;
             let read = crate::schema::index(arena, index, sql, table)?;
             let collations = collations_of(&read);
+            let over = Over {
+                arena,
+                sql,
+                table,
+                encoding: self.header.encoding,
+            };
             let mut entries = Vec::new();
-            for (key, values) in database.held_rows_of(over)? {
-                entries.push(entry_of(&read, &values, &key));
+            for (key, values) in database.held_rows_of(&read.table)? {
+                if !indexes_row(&read, &over, &values)? {
+                    continue;
+                }
+                entries.push(entry_of(&read, &over, &values, &key)?);
             }
             (entries, collations)
         };
@@ -2649,7 +2679,7 @@ impl Writer {
             // point at is refused, or those rows are written.
             self.orphaned(name, &table, &values, 0, None)?;
             let key = crate::schema::key_of(&table, &values);
-            self.unindex_row(&kept, &values, &key)?;
+            self.unindex_row(&kept, &table, &values, &key)?;
             crate::tree::remove_entry(&mut self.pages, root, &key, &collations)?;
             taken = taken.saturating_add(1);
             self.returns(arena, statement.returning, sql, (&table, &values, None))?;
@@ -2701,7 +2731,7 @@ impl Writer {
             if !self.placed(root, &table, &key, &collations, &kept, written)? {
                 continue;
             }
-            if let Some((index, held)) = self.conflicting(&kept, &named, &key, None)? {
+            if let Some((index, held)) = self.conflicting(&kept, &table, &named, &key, None)? {
                 match resolved(written, &kept, index) {
                     Conflict::Ignore => continue,
                     Conflict::Fail => {
@@ -2713,7 +2743,7 @@ impl Writer {
                 }
             }
             self.parented(&table, &named, 0)?;
-            self.index_row(&kept, &named, &key)?;
+            self.index_row(&kept, &table, &named, &key)?;
             let record = crate::record::write(&stored, &affinities, 4);
             crate::tree::insert_entry(&mut self.pages, root, &record, &key, &collations, false)?;
             count = count.saturating_add(1);
@@ -2788,7 +2818,7 @@ impl Writer {
         if !self.fire(&before, &[], &row)? {
             return Ok(false);
         }
-        self.unindex_row(kept, &values, key)?;
+        self.unindex_row(kept, table, &values, key)?;
         crate::tree::remove_entry(&mut self.pages, root, key, &collations)?;
         self.fire(&after, &[], &row)?;
         Ok(true)
@@ -2979,9 +3009,9 @@ impl Writer {
             self.parented(&table, &named, 0)?;
             self.orphaned(name, &table, &held, 0, Some((&named, 0)))?;
             let was = crate::schema::key_of(&table, &held);
-            self.unindex_row(&kept, &held, &was)?;
+            self.unindex_row(&kept, &table, &held, &was)?;
             crate::tree::remove_entry(&mut self.pages, root, &was, &collations)?;
-            self.index_row(&kept, &named, &key)?;
+            self.index_row(&kept, &table, &named, &key)?;
             let stored = ordered(&table, &named);
             let record = crate::record::write(&stored, &affinities, 4);
             crate::tree::insert_entry(&mut self.pages, root, &record, &key, &collations, false)?;
@@ -3024,7 +3054,7 @@ impl Writer {
         {
             return Ok(false);
         }
-        let Some((index, other)) = self.conflicting(kept, named, &key, Some(&was))? else {
+        let Some((index, other)) = self.conflicting(kept, table, named, &key, Some(&was))? else {
             return Ok(true);
         };
         match resolved(written, kept, index) {
@@ -3076,14 +3106,31 @@ impl Writer {
             .name
             .map(|span| crate::schema::dequote(span.text(sql)));
         let held = self.reindexed(named.as_deref())?;
-        for Rebuilt { index, root, table } in held {
+        for Rebuilt {
+            index,
+            root,
+            table,
+            sql: made,
+            arena: tree,
+        } in held
+        {
             crate::tree::clear_tree(&mut self.pages, root, Kind::LeafIndex)?;
             let entries = {
                 let bytes = self.image();
                 let database = Database::open(&bytes)?;
+                let (over, _) = database.table(&table).ok_or(Error::Unsupported)?;
+                let over = Over {
+                    arena: &tree,
+                    sql: &made,
+                    table: over,
+                    encoding: self.header.encoding,
+                };
                 let mut entries = Vec::new();
                 for (key, values) in database.held_rows_of(&table)? {
-                    entries.push(entry_of(&index, &values, &key));
+                    if !indexes_row(&index, &over, &values)? {
+                        continue;
+                    }
+                    entries.push(entry_of(&index, &over, &values, &key)?);
                 }
                 entries
             };
@@ -3106,13 +3153,15 @@ impl Writer {
             Some(_) if collation.is_some() => None,
             Some(named) if database.table(named).is_some() => Some(named.to_vec()),
             Some(named) => {
-                let (index, root) = database
-                    .index(named)
+                let kept = database
+                    .indexed(named)
                     .ok_or_else(|| Error::NoTable(named.to_vec()))?;
                 return Ok(alloc::vec![Rebuilt {
-                    index: index.clone(),
-                    root,
-                    table: index.table.clone(),
+                    index: kept.index.clone(),
+                    root: kept.root,
+                    table: kept.index.table.clone(),
+                    sql: kept.sql.to_vec(),
+                    arena: kept.arena.clone(),
                 }]);
             }
         };
@@ -3121,11 +3170,12 @@ impl Writer {
             if over.as_deref().is_some_and(|over| table.name != over) {
                 continue;
             }
-            for (index, root) in database.indexes(&table.name).iter().rev() {
+            for kept in database.indexes(&table.name).iter().rev() {
                 // `REINDEX <collation>` writes again every index one of
-                // whose columns is held in that collation.
+                // whose places is held in that collation.
                 if collation.is_some_and(|wanted| {
-                    !index
+                    !kept
+                        .index
                         .columns
                         .iter()
                         .any(|column| column.collation == wanted)
@@ -3133,9 +3183,11 @@ impl Writer {
                     continue;
                 }
                 held.push(Rebuilt {
-                    index: (*index).clone(),
-                    root: *root,
+                    index: kept.index.clone(),
+                    root: kept.root,
                     table: table.name.clone(),
+                    sql: kept.sql.to_vec(),
+                    arena: kept.arena.clone(),
                 });
             }
         }
@@ -3248,7 +3300,7 @@ impl Writer {
             // `sqlite3CompleteInsertion` writes the entry of every
             // index before the row, so the pages an entry runs onto
             // are taken before the pages the row runs onto.
-            self.index_row(&kept, &named, &keyed_as(rowid))?;
+            self.index_row(&kept, &table, &named, &keyed_as(rowid))?;
             insert(&mut self.pages, root, rowid, &record)?;
             written = written.saturating_add(1);
             let answered = (&table, named.as_slice(), Some(rowid));
@@ -3365,7 +3417,8 @@ impl Writer {
         )? {
             return Ok(Conflicted::Over);
         }
-        let Some((index, held)) = self.conflicting(into.kept, named, &keyed_as(rowid), None)?
+        let Some((index, held)) =
+            self.conflicting(into.kept, into.table, named, &keyed_as(rowid), None)?
         else {
             return Ok(Conflicted::Write);
         };
@@ -3562,20 +3615,20 @@ impl Writer {
                 Conflict::Unspecified,
             )?;
         }
-        if let Some((index, _)) =
-            self.conflicting(wanted.kept, &named, &keyed_as(key), Some(&keyed_as(rowid)))?
-        {
+        let (new, old) = (keyed_as(key), keyed_as(rowid));
+        let found = self.conflicting(wanted.kept, wanted.table, &named, &new, Some(&old))?;
+        if let Some((index, _)) = found {
             return Err(Error::Unique(Self::shown_key_of(table, wanted.kept, index)));
         }
         let record = crate::record::write(&values, wanted.affinities, 4);
         self.parented(table, &named, key)?;
         self.orphaned(&table.name, table, held, rowid, Some((&named, key)))?;
-        self.unindex_row(wanted.kept, held, &keyed_as(rowid))?;
+        self.unindex_row(wanted.kept, wanted.table, held, &keyed_as(rowid))?;
         let moved = key != rowid;
         if moved {
             crate::tree::remove(&mut self.pages, wanted.root, rowid)?;
         }
-        self.index_row(wanted.kept, &named, &keyed_as(key))?;
+        self.index_row(wanted.kept, wanted.table, &named, &keyed_as(key))?;
         if moved {
             insert(&mut self.pages, wanted.root, key, &record)?;
         } else {
@@ -3787,7 +3840,7 @@ fn resolved(written: Conflict, kept: &[Kept], at: usize) -> Conflict {
     }
     let own = kept
         .get(at)
-        .map_or(Conflict::Unspecified, |(index, _, _)| index.conflict);
+        .map_or(Conflict::Unspecified, |held| held.index.conflict);
     if own == Conflict::Unspecified {
         return Conflict::Abort;
     }
@@ -4201,7 +4254,7 @@ impl Writer {
             // point at is refused, or those rows are written, by what
             // the key says happens.
             self.orphaned(&name, &table, &values, key, None)?;
-            self.unindex_row(&kept, &values, &keyed_as(key))?;
+            self.unindex_row(&kept, &table, &values, &keyed_as(key))?;
             crate::tree::remove(&mut self.pages, root, key)?;
             taken = taken.saturating_add(1);
             let answered = (&table, values.as_slice(), Some(key));
@@ -4396,19 +4449,14 @@ impl Writer {
             if key != rowid && !self.keyed(root, &kept, &table, alias, key, statement.conflict)? {
                 continue;
             }
-            if let Some((index, other)) =
-                self.conflicting(&kept, &named, &keyed_as(key), Some(&keyed_as(rowid)))?
-            {
-                match resolved(statement.conflict, &kept, index) {
-                    crate::ast::Conflict::Ignore => continue,
-                    crate::ast::Conflict::Fail => {
-                        self.stopped = true;
-                        return Err(Error::Unique(Self::shown_key_of(&table, &kept, index)));
-                    }
-                    crate::ast::Conflict::Replace
-                        if self.replaced(root, &kept, &table, &other)? => {}
-                    _ => return Err(Error::Unique(Self::shown_key_of(&table, &kept, index))),
-                }
+            if !self.shared_key(
+                root,
+                &kept,
+                &table,
+                (&named, key, rowid),
+                statement.conflict,
+            )? {
+                continue;
             }
             let record = crate::record::write(&values, &affinities, 4);
             // `I.1` of `src/fkey.c` over the row as it will stand, and
@@ -4419,12 +4467,12 @@ impl Writer {
             // `sqlite3Update` removes the entries of the row, removes
             // the row itself where the key changes, and then writes
             // the new entries before the new row.
-            self.unindex_row(&kept, &held, &keyed_as(rowid))?;
+            self.unindex_row(&kept, &table, &held, &keyed_as(rowid))?;
             let moved = key != rowid;
             if moved {
                 crate::tree::remove(&mut self.pages, root, rowid)?;
             }
-            self.index_row(&kept, &named, &keyed_as(key))?;
+            self.index_row(&kept, &table, &named, &keyed_as(key))?;
             if moved {
                 insert(&mut self.pages, root, key, &record)?;
             } else {
@@ -4441,17 +4489,62 @@ impl Writer {
 }
 
 impl Writer {
+    /// What a row an `UPDATE` writes does where it shares the key of a
+    /// unique index with a row the table holds, which is
+    /// `sqlite3GenerateConstraintChecks` reading the clause: `false`
+    /// where the row is passed over and `true` where it is written.
+    ///
+    /// The row is the values it will hold, the key it will stand
+    /// under, and the key it stands under now.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unique`] names the key two rows share.
+    fn shared_key(
+        &mut self,
+        root: u32,
+        kept: &[Kept],
+        table: &Table,
+        row: (&[Value], i64, i64),
+        written: Conflict,
+    ) -> Result<bool, Error> {
+        let (named, key, rowid) = row;
+        let found = self.conflicting(kept, table, named, &keyed_as(key), Some(&keyed_as(rowid)))?;
+        let Some((index, other)) = found else {
+            return Ok(true);
+        };
+        match resolved(written, kept, index) {
+            Conflict::Ignore => Ok(false),
+            Conflict::Fail => {
+                self.stopped = true;
+                Err(Error::Unique(Self::shown_key_of(table, kept, index)))
+            }
+            Conflict::Replace if self.replaced(root, kept, table, &other)? => Ok(true),
+            _ => Err(Error::Unique(Self::shown_key_of(table, kept, index))),
+        }
+    }
+
     /// The entry every index over the table holds for one row, written,
     /// which is what `sqlite3GenerateConstraintChecks` writes beside
     /// the row.
-    fn index_row(&mut self, kept: &[Kept], values: &[Value], tail: &[Value]) -> Result<(), Error> {
-        for (index, collations, root) in kept {
-            let key = entry_of(index, values, tail);
+    fn index_row(
+        &mut self,
+        kept: &[Kept],
+        table: &Table,
+        values: &[Value],
+        tail: &[Value],
+    ) -> Result<(), Error> {
+        let encoding = self.header.encoding;
+        for held in kept {
+            let over = held.over(table, encoding);
+            if !indexes_row(&held.index, &over, values)? {
+                continue;
+            }
+            let key = entry_of(&held.index, &over, values, tail)?;
             let plain = alloc::vec![Affinity::None; key.len()];
             let entry = crate::record::write(&key, &plain, 4);
             let pages = &mut self.pages;
-            let root = *root;
-            crate::tree::insert_entry(pages, root, &entry, &key, collations, false)?;
+            crate::tree::insert_entry(pages, held.root, &entry, &key, &held.collations, false)?;
         }
         Ok(())
     }
@@ -4489,7 +4582,7 @@ impl Writer {
         if !self.fire(&before, &[], &row)? {
             return Ok(false);
         }
-        self.unindex_row(kept, &values, &keyed_as(rowid))?;
+        self.unindex_row(kept, table, &values, &keyed_as(rowid))?;
         crate::tree::remove(&mut self.pages, root, rowid)?;
         self.fire(&after, &[], &row)?;
         Ok(true)
@@ -4505,21 +4598,28 @@ impl Writer {
     fn conflicting(
         &self,
         kept: &[Kept],
+        table: &Table,
         values: &[Value],
         tail: &[Value],
         held: Option<&[Value]>,
     ) -> Result<Option<(usize, Vec<Value>)>, Error> {
-        for (at, (index, collations, root)) in kept.iter().enumerate() {
-            if !index.unique {
+        let encoding = self.header.encoding;
+        for (at, one) in kept.iter().enumerate() {
+            if !one.index.unique {
                 continue;
             }
-            let entry = entry_of(index, values, tail);
-            let key = entry.get(..index.columns.len()).unwrap_or_default();
+            let over = one.over(table, encoding);
+            if !indexes_row(&one.index, &over, values)? {
+                continue;
+            }
+            let entry = entry_of(&one.index, &over, values, tail)?;
+            let key = entry.get(..one.index.columns.len()).unwrap_or_default();
             if key.contains(&Value::Null) {
                 continue;
             }
+            let width = tail.len();
             let found =
-                crate::tree::entry_tail_at(&self.pages, *root, key, collations, tail.len())?;
+                crate::tree::entry_tail_at(&self.pages, one.root, key, &one.collations, width)?;
             let Some(found) = found else {
                 continue;
             };
@@ -4675,34 +4775,43 @@ impl Writer {
     /// The columns the index `at` is over, by name.
     fn key_columns(table: &Table, kept: &[Kept], at: usize) -> Vec<Vec<u8>> {
         kept.get(at)
-            .map(|(index, _, _)| {
-                index
+            .map(|held| {
+                held.index
                     .columns
                     .iter()
-                    .filter_map(|keyed| table.columns.get(keyed.column))
+                    .filter_map(|keyed| keyed.place().and_then(|at| table.columns.get(at)))
                     .map(|column| column.name.clone())
                     .collect()
             })
             .unwrap_or_default()
     }
 
-    /// The columns a key is over, as `sqlite3UniqueConstraint` writes
-    /// them into a message: `table.column`, one after another with a
-    /// comma between them.
+    /// The key a message names, as `sqlite3UniqueConstraint` writes it:
+    /// `table.column` per column with a comma between them, or `index
+    /// 'NAME'` for an index that holds a place over an expression.
     fn shown_key_of(table: &Table, kept: &[Kept], at: usize) -> Vec<u8> {
         let mut out = Vec::new();
         let columns = kept
             .get(at)
-            .map_or(&[][..], |(index, _, _)| index.columns.as_slice());
+            .map_or(&[][..], |held| held.index.columns.as_slice());
+        if columns.iter().any(|keyed| keyed.place().is_none()) {
+            let named = kept
+                .get(at)
+                .map_or(&[][..], |held| held.index.name.as_slice());
+            out.extend_from_slice(b"index '");
+            out.extend_from_slice(named);
+            out.push(b'\'');
+            return out;
+        }
         for keyed in columns {
             if !out.is_empty() {
                 out.extend_from_slice(b", ");
             }
             out.extend_from_slice(&table.name);
             out.push(b'.');
-            let named = table
-                .columns
-                .get(keyed.column)
+            let named = keyed
+                .place()
+                .and_then(|at| table.columns.get(at))
                 .map_or(&[][..], |column| column.name.as_slice());
             out.extend_from_slice(named);
         }
@@ -4714,21 +4823,53 @@ impl Writer {
     fn unindex_row(
         &mut self,
         kept: &[Kept],
+        table: &Table,
         values: &[Value],
         tail: &[Value],
     ) -> Result<(), Error> {
-        for (index, collations, root) in kept {
-            let key = entry_of(index, values, tail);
-            crate::tree::remove_entry(&mut self.pages, *root, &key, collations)?;
+        let encoding = self.header.encoding;
+        for held in kept {
+            let over = held.over(table, encoding);
+            if !indexes_row(&held.index, &over, values)? {
+                continue;
+            }
+            let key = entry_of(&held.index, &over, values, tail)?;
+            crate::tree::remove_entry(&mut self.pages, held.root, &key, &held.collations)?;
         }
         Ok(())
     }
 }
 
-/// One index over a table as a statement that writes rows reads it: the
-/// index, the collation of each of its columns, and the page its tree
-/// begins on.
-type Kept = (crate::schema::Index, Vec<Collation>, u32);
+/// One index over a table as a statement that writes rows reads it.
+#[derive(Clone)]
+struct Kept {
+    /// The index as its statement describes it.
+    index: crate::schema::Index,
+    /// The collation of each of its places.
+    collations: Vec<Collation>,
+    /// The page its tree begins on.
+    root: u32,
+    /// The `CREATE INDEX` text, which a place over an expression and a
+    /// partial index's `WHERE` point into, and empty for an index that
+    /// holds neither.
+    sql: Vec<u8>,
+    /// The tree that text was parsed into, and empty for an index that
+    /// holds neither.
+    arena: Arena,
+}
+
+impl Kept {
+    /// What the expressions of this index are read against, over
+    /// `table`.
+    fn over<'a>(&'a self, table: &'a Table, encoding: Encoding) -> Over<'a> {
+        Over {
+            arena: &self.arena,
+            sql: &self.sql,
+            table,
+            encoding,
+        }
+    }
+}
 
 /// Every index over the table `name`, read once so that the statement
 /// keeps them while it writes the rows the database answered.
@@ -4736,27 +4877,148 @@ fn kept_indexes(database: &Database<'_>, name: &[u8]) -> Vec<Kept> {
     database
         .indexes(name)
         .iter()
-        .map(|(index, root)| ((*index).clone(), collations_of(index), *root))
+        .map(|kept| {
+            // The statement that made the index is read for a place
+            // over an expression and for a partial index's `WHERE`, and
+            // for nothing else, so an index that holds neither is kept
+            // without it.
+            let reads = reads_expressions(kept.index);
+            Kept {
+                index: kept.index.clone(),
+                collations: collations_of(kept.index),
+                root: kept.root,
+                sql: if reads { kept.sql.to_vec() } else { Vec::new() },
+                arena: if reads {
+                    kept.arena.clone()
+                } else {
+                    Arena::default()
+                },
+            }
+        })
         .collect()
 }
 
-/// The entry an index holds for one row: the columns it is over, and
-/// the key of the row after them, which is what makes its order total.
+/// Whether an index holds a place over an expression or a `WHERE`,
+/// which are what the statement that made it is read for.
+fn reads_expressions(index: &crate::schema::Index) -> bool {
+    index.filter.is_some() || index.columns.iter().any(|keyed| keyed.place().is_none())
+}
+
+/// What the expressions of an index are read against: the statement
+/// that made the index, the table it is over, and the encoding the file
+/// keeps its text in.
+#[derive(Clone, Copy)]
+pub(crate) struct Over<'a> {
+    /// The tree the `CREATE INDEX` was parsed into.
+    pub arena: &'a Arena,
+    /// The `CREATE INDEX` text the tree points into.
+    pub sql: &'a [u8],
+    /// The table the index is over.
+    pub table: &'a Table,
+    /// What encoding the file keeps its text in.
+    pub encoding: Encoding,
+}
+
+/// One row of a table as the expressions of an index read it.
+struct Indexing<'a> {
+    /// The table.
+    table: &'a Table,
+    /// The value of each column, in the order the table was created
+    /// with.
+    values: &'a [Value],
+    /// What encoding the file keeps its text in.
+    encoding: Encoding,
+}
+
+impl crate::eval::Row for Indexing<'_> {
+    fn encoding(&self) -> Encoding {
+        self.encoding
+    }
+
+    fn column(
+        &self,
+        schema: Option<&[u8]>,
+        table: Option<&[u8]>,
+        column: &[u8],
+    ) -> Option<(Value, Affinity, Collation)> {
+        if schema.is_some_and(|name| !name.eq_ignore_ascii_case(b"main")) {
+            return None;
+        }
+        if table.is_some_and(|name| !name.eq_ignore_ascii_case(&self.table.name)) {
+            return None;
+        }
+        let at = self
+            .table
+            .columns
+            .iter()
+            .position(|held| held.name.eq_ignore_ascii_case(column))?;
+        let held = self.table.columns.get(at)?;
+        Some((self.values.get(at)?.clone(), held.affinity, held.collation))
+    }
+}
+
+/// Whether a partial index holds an entry for one row, which is
+/// `sqlite3ExprIfFalse` over `pPartIdxWhere`: a row the `WHERE` answers
+/// anything but true for has no entry.
 ///
-/// The key of a row is its rowid, one value, or the columns of the
-/// `PRIMARY KEY` where the table keeps its rows in the key's own tree.
+/// Reading one row costs what the `WHERE` costs.
+///
+/// # Errors
+///
+/// [`Error`] names what the `WHERE` could not answer.
+pub(crate) fn indexes_row(
+    index: &crate::schema::Index,
+    over: &Over<'_>,
+    values: &[Value],
+) -> Result<bool, Error> {
+    let Some(filter) = index.filter else {
+        return Ok(true);
+    };
+    let row = Indexing {
+        table: over.table,
+        values,
+        encoding: over.encoding,
+    };
+    let value = crate::eval::evaluate_row(over.arena, filter, over.sql, &row)?;
+    Ok(value.truth(false))
+}
+
+/// The entry an index holds for one row: what it holds at each of its
+/// places, and the key of the row after them, which is what makes its
+/// order total.
+///
+/// A place over an expression holds what that expression answers for
+/// the row, which is `sqlite3GenerateIndexKey` reading `aColExpr`. The
+/// key of a row is its rowid, one value, or the columns of the `PRIMARY
+/// KEY` where the table keeps its rows in the key's own tree.
+///
+/// Reading one row costs what the expressions of the index cost.
+///
+/// # Errors
+///
+/// [`Error`] names what an expression could not answer.
 pub(crate) fn entry_of(
     index: &crate::schema::Index,
+    over: &Over<'_>,
     values: &[Value],
     tail: &[Value],
-) -> Vec<Value> {
-    let mut key: Vec<Value> = index
-        .columns
-        .iter()
-        .map(|column| values.get(column.column).cloned().unwrap_or(Value::Null))
-        .collect();
+) -> Result<Vec<Value>, Error> {
+    let row = Indexing {
+        table: over.table,
+        values,
+        encoding: over.encoding,
+    };
+    let mut key = Vec::new();
+    for keyed in &index.columns {
+        key.push(match keyed.of {
+            crate::schema::Of::Place(at) => values.get(at).cloned().unwrap_or(Value::Null),
+            crate::schema::Of::Term(term) => {
+                crate::eval::evaluate_row(over.arena, term, over.sql, &row)?
+            }
+        });
+    }
     key.extend_from_slice(tail);
-    key
+    Ok(key)
 }
 
 /// The values of one row in the order the table stores them, which is
@@ -4934,7 +5196,7 @@ fn parent_places(key: &crate::schema::Foreign, parent: &Table) -> Result<Vec<usi
         let named: Vec<Vec<u8>> = held
             .columns
             .iter()
-            .filter_map(|keyed| parent.columns.get(keyed.column))
+            .filter_map(|keyed| keyed.place().and_then(|at| parent.columns.get(at)))
             .map(|column| column.name.clone())
             .collect();
         whole(&named)

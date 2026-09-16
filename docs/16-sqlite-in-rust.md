@@ -730,6 +730,9 @@ Size: L.
 22. The words a statement that writes is refused with, which
     `sqlite3Insert`, `sqlite3StartTable`, `sqlite3CreateIndex` and
     `sqlite3CheckObjectName` write. Built, which D-242 records.
+23. An index over an expression and an index over fewer rows than the
+    table has. Built, which D-243 records; a statement is planned
+    against neither and walks the table.
 
 ### Done when
 
@@ -739,8 +742,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 72 359 cases in 705 files, 57 100
-pass, 4454 answer differently, and 10 805 name something the engine
+under the `tclsh` of the machine. Of 72 502 cases in 705 files, 57 355
+pass, 4438 answer differently, and 10 709 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts
