@@ -766,8 +766,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same four, on the register engine (focused) | focused | `ded2cac` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/prototype/copyWithin test/built-ins/Array/prototype/fill test/built-ins/Array/prototype/splice test/built-ins/String/prototype/split --summary` | 262 | 524 | 396 (75.57%) | 50 (9.54%) | 78 (14.89%) |
 | `super` and the method definitions of 13.2.5 (focused) | focused | `80c7268` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/super test/language/expressions/object/method-definition --summary` | 397 | 741 | 262 (35.36%) | 27 (3.64%) | 452 (60.99%) |
 | The same two, on the register engine (focused) | focused | `80c7268` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/super test/language/expressions/object/method-definition --summary` | 397 | 741 | 108 (14.57%) | 9 (1.21%) | 624 (84.21%) |
-| Complete pinned suite, including staging and Intl | full | `80c7268` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `80c7268` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 28,952 (28.13%) | 19,432 (18.88%) | 54,541 (52.99%) |
+| `new.target` (focused) | focused | `9e0a0fb` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/new.target --summary` | 14 | 28 | 22 (78.57%) | 0 (0.00%) | 6 (21.43%) |
+| The same, on the register engine (focused) | focused | `9e0a0fb` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/new.target --summary` | 14 | 28 | 16 (57.14%) | 0 (0.00%) | 12 (42.86%) |
+| Complete pinned suite, including staging and Intl | full | `9e0a0fb` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `9e0a0fb` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 28,972 (28.15%) | 19,438 (18.89%) | 54,515 (52.96%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1613,7 +1615,10 @@ beside the positions each clause converts were measured at tree
 that step gained 112 variants and lost none. The `super` runs and both full
 runs beside 13.3.7 were measured at tree
 `17305e626ef5862abaae8dae38698b6197c62b6d`, which is the tree of `80c7268`;
-that step gained 40 variants and lost none.
+that step gained 40 variants and lost none. The `new.target` runs and both full
+runs beside 9.4.3 were measured at tree
+`eae44881c9c0a5f0ac537f0ccd1b94244064dcc2`, which is the tree of `9e0a0fb`;
+that step gained 20 variants and lost none.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
