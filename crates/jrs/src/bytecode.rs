@@ -873,6 +873,9 @@ enum RegisterLoopHead {
     Declared,
     /// Those merged with the types the body's assignments produce.
     Widened,
+    /// Those, and every Object a binding names has left, so the body reads
+    /// and writes it at run time and no layout has to match at the back edge.
+    Escaped,
 }
 
 #[derive(Clone)]
@@ -6438,8 +6441,15 @@ impl RegisterLowerer {
     /// operations specialized. The second attempt admits a loop whose binding a
     /// call the lowering could not name widens. A loop that fails both is
     /// refused, as before.
+    /// Lowers a loop, giving up what the body turned out to change.
+    ///
+    /// The first pass takes the types the bindings hold where the loop begins.
+    /// The second merges them with what the body's assignments produce. The
+    /// third also lets every Object a binding names leave, because a body that
+    /// edits one leaves a layout the back edge cannot match, and the run time
+    /// reads and writes an Object that left.
     fn lower_loop(&mut self, statement: &Stmt) -> Option<RegisterType> {
-        if self.loop_head_types == RegisterLoopHead::Widened {
+        if self.loop_head_types != RegisterLoopHead::Declared {
             return self.lower_loop_once(statement);
         }
         let snapshot = self.snapshot();
@@ -6448,13 +6458,32 @@ impl RegisterLowerer {
         if let Some(value) = self.lower_loop_once(statement) {
             return Some(value);
         }
-        self.restore(snapshot);
-        self.loops.truncate(loops);
-        self.completions.truncate(completions);
-        self.loop_head_types = RegisterLoopHead::Widened;
-        let value = self.lower_loop_once(statement);
-        self.loop_head_types = RegisterLoopHead::Declared;
-        value
+        for head in [RegisterLoopHead::Widened, RegisterLoopHead::Escaped] {
+            self.restore(snapshot.clone());
+            self.loops.truncate(loops);
+            self.completions.truncate(completions);
+            if head == RegisterLoopHead::Escaped {
+                self.escape_every_binding();
+            }
+            self.loop_head_types = head;
+            let value = self.lower_loop_once(statement);
+            self.loop_head_types = RegisterLoopHead::Declared;
+            if value.is_some() {
+                return value;
+            }
+        }
+        None
+    }
+
+    /// Lets every Object a binding names leave, which drops the layout the
+    /// lowering tracked for it.
+    fn escape_every_binding(&mut self) {
+        let named: Vec<RegisterType> = self
+            .bindings
+            .values()
+            .filter_map(|binding| binding.value_type)
+            .collect();
+        self.escape(&named);
     }
 
     fn lower_loop_once(&mut self, statement: &Stmt) -> Option<RegisterType> {
@@ -6489,7 +6518,7 @@ impl RegisterLowerer {
         infer_register_var_types_to_fixed_point(
             body,
             &mut bindings_at_head,
-            self.loop_head_types == RegisterLoopHead::Widened,
+            self.loop_head_types != RegisterLoopHead::Declared,
         )?;
         self.bindings = bindings_at_head.clone();
         let head = self.code.instructions.len();
@@ -6556,7 +6585,7 @@ impl RegisterLowerer {
         infer_register_var_types_to_fixed_point(
             body,
             &mut bindings_at_head,
-            self.loop_head_types == RegisterLoopHead::Widened,
+            self.loop_head_types != RegisterLoopHead::Declared,
         )?;
         self.bindings = bindings_at_head.clone();
         let head = self.code.instructions.len();
@@ -6682,7 +6711,7 @@ impl RegisterLowerer {
         infer_register_var_types_to_fixed_point(
             body,
             &mut bindings_at_head,
-            self.loop_head_types == RegisterLoopHead::Widened,
+            self.loop_head_types != RegisterLoopHead::Declared,
         )?;
         self.bindings = bindings_at_head.clone();
         let head = self.code.instructions.len();
@@ -7023,7 +7052,7 @@ impl RegisterLowerer {
         infer_register_var_types_to_fixed_point(
             body,
             &mut bindings_at_head,
-            self.loop_head_types == RegisterLoopHead::Widened,
+            self.loop_head_types != RegisterLoopHead::Declared,
         )?;
         self.bindings = bindings_at_head.clone();
         let head = self.code.instructions.len();
@@ -7303,7 +7332,7 @@ impl RegisterLowerer {
         infer_register_var_types_to_fixed_point(
             body,
             &mut bindings_at_head,
-            self.loop_head_types == RegisterLoopHead::Widened,
+            self.loop_head_types != RegisterLoopHead::Declared,
         )?;
         self.bindings = bindings_at_head.clone();
 
@@ -7603,7 +7632,7 @@ impl RegisterLowerer {
         infer_register_var_types_to_fixed_point(
             body,
             &mut bindings_at_head,
-            self.loop_head_types == RegisterLoopHead::Widened,
+            self.loop_head_types != RegisterLoopHead::Declared,
         )?;
         self.bindings = bindings_at_head.clone();
         let head = self.code.instructions.len();

@@ -4620,8 +4620,6 @@ fn register_lowering_rejects_for_in_heads_it_cannot_model() -> Result<(), Error>
         "for(const x of [1]){(()=>x)}",
         // A head that shadows a binding of the enclosing scope is not lowered.
         "let x=1;for(const x of [2]){}x",
-        // The body must not change the Array's tracked layout.
-        "let a=[1];for(const x of a){a[1]='s'}",
     ] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
@@ -8563,6 +8561,25 @@ fn a_symbol_where_7_1_17_wants_a_string_is_a_type_error() -> Result<(), Error> {
         // 7.1.19 keeps a Symbol as the key it is, so a property read of one
         // reaches no conversion at all.
         "var o={};o[Symbol.iterator]=1;typeof o[Symbol.iterator]",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
+
+#[test]
+fn a_loop_body_that_edits_an_object_lets_it_leave() -> Result<(), Error> {
+    for source in [
+        // The body writes an element the lowering tracked, so the layout it
+        // carried at the head is gone and the Array is read at run time.
+        "let a=[1];for(const x of a){a[1]='s'}a.join(',')",
+        "var j=[];var i=0;while(i<5){j.push(i);i++}j.join('-')",
+        "var j=[];for(var i=0;i<4;i++){j.push({p:i})}j.length",
+        "var o={};var i=0;while(i<3){o['k'+i]=i;i++}''+o.k0+o.k1+o.k2",
+        // A body that leaves the layout alone keeps it.
+        "var j=[1,2,3];var s=0;for(var i=0;i<j.length;i++){s+=j[i]}s",
+        // The head's own binding still holds what each step gives it.
+        "var s='';for(var k in {a:1,b:2}){s+=k}s",
     ] {
         differential_scripts(&[source])?;
     }
