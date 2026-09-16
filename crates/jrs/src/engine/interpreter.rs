@@ -3824,6 +3824,16 @@ impl RegisterVM {
 
     /// Whether the value is a function a Script wrote, which answers through a
     /// frame and so can carry a [`Resume`].
+    /// Whether a value is the function object of this intrinsic.
+    fn is_intrinsic(value: Value, intrinsic: Intrinsic, heap: &GenerationalHeap) -> bool {
+        value
+            .as_object()
+            .and_then(|reference| heap.get_object(reference))
+            .is_some_and(|object| {
+                matches!(object.kind, ObjectKind::NativeFunction { id, .. } if id == intrinsic.id())
+            })
+    }
+
     fn is_script_function(value: Value, heap: &GenerationalHeap) -> bool {
         value
             .as_object()
@@ -3882,6 +3892,12 @@ impl RegisterVM {
         // setter reaches its frame from a root instead, so one written in Rust
         // would be called with whatever those registers hold.
         if !Self::is_script_function(set, heap) {
+            // 10.2.4.1 throws for every call, whatever it is called with, so
+            // the restricted properties of 20.2.3 read no argument and the
+            // call needs none.
+            if Self::is_intrinsic(set, Intrinsic::ThrowTypeError, heap) {
+                return self.enter_call_value(set, code, active_feedback, heap, realm, call);
+            }
             return Err(VMError::Unsupported(
                 "a setter that is not a Script function",
             ));
@@ -8205,6 +8221,11 @@ impl RegisterVM {
         heap: &GenerationalHeap,
     ) -> Result<bool, VMError> {
         if Self::string_data(object, heap).is_none() {
+            return Ok(false);
+        }
+        // A name the Shape carries is an ordinary own property of the object,
+        // which 10.4.3.1 leaves to 10.1.
+        if Self::shape_holds(object, name, heap)? {
             return Ok(false);
         }
         Ok(heap.own_named_flags(object, name)?.is_some())

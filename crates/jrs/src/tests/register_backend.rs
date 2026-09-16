@@ -368,6 +368,64 @@ fn the_string_constructor_tells_a_missing_argument_from_undefined() -> Result<()
     Ok(())
 }
 
+#[test]
+fn the_restricted_properties_of_20_2_3_throw_on_every_function() -> Result<(), Error> {
+    for source in [
+        // Both accessors are %ThrowTypeError% on get and on set.
+        "(function(){try{(function(){}).caller}catch(e){return e instanceof TypeError}return false})()",
+        "(function(){try{(function(){}).arguments}catch(e){return e instanceof TypeError}return false})()",
+        "(function(){try{(function(){}).bind({}).caller}catch(e){return e instanceof TypeError}return false})()",
+        "(function(){try{Function.prototype.caller}catch(e){return e instanceof TypeError}return false})()",
+        "(function(){try{(function(){}).caller=1}catch(e){return e instanceof TypeError}return false})()",
+        // 20.2.3 puts them on the prototype with the attributes of 17.
+        "let d=Object.getOwnPropertyDescriptor(Function.prototype,'caller');typeof d.get+':'+typeof d.set+':'+(d.get===d.set)",
+        "let d=Object.getOwnPropertyDescriptor(Function.prototype,'arguments');d.enumerable+':'+d.configurable+':'+d.writable",
+        "Object.getOwnPropertyDescriptor(Function.prototype,'caller').get===Object.getOwnPropertyDescriptor(Function.prototype,'arguments').set",
+        "(function(){}).hasOwnProperty('caller')",
+        // 10.2.4.1 is the same function the strict `callee` of 10.4.4 uses.
+        "(function(){'use strict';try{arguments.callee}catch(e){return e instanceof TypeError}return false})()",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn the_wrapper_prototypes_carry_the_data_slot_of_their_clause() -> Result<(), Error> {
+    for source in [
+        // 20.3.3 gives %Boolean.prototype% [[BooleanData]] false, 21.1.3 gives
+        // %Number.prototype% [[NumberData]] +0 and 22.1.3 gives
+        // %String.prototype% [[StringData]] the empty String.
+        "Boolean.prototype.toString()",
+        "Boolean.prototype.valueOf()",
+        "Number.prototype.toString()",
+        "Number.prototype.toString(2)",
+        "Number.prototype.valueOf()",
+        "String.prototype.toString()",
+        "String.prototype.valueOf()",
+        "String.prototype.length",
+        "String.prototype[0]",
+        "Object.prototype.toString.call(Boolean.prototype)",
+        "Object.prototype.toString.call(Number.prototype)",
+        "Object.prototype.toString.call(String.prototype)",
+        // The methods each prototype carries are reachable as before.
+        "typeof String.prototype.charAt",
+        "'abc'.charAt(1)",
+        "(5).toString(2)",
+        "Object.keys(Boolean.prototype).length",
+        "Object.getOwnPropertyNames(String.prototype).indexOf('length')>=0",
+        // 10.4.3.1 gives a String exotic object its `length` and its indices;
+        // every other own property of one is ordinary.
+        "let s=new String('ab');s.x=1;delete s.x",
+        "let s=new String('ab');s.x=1;s.x=2;s.x",
+        "let s=new String('ab');s[0]=9;s[0]+':'+(delete s[0])+':'+(delete s.length)",
+        "delete String.prototype.constructor",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
 fn differential_scripts(scripts: &[&str]) -> Result<(), Error> {
     let outcome = |backend| -> Result<Result<Value, Error>, Error> {
         let mut host = SilentHost;

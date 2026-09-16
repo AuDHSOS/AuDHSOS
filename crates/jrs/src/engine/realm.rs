@@ -2230,7 +2230,8 @@ pub fn array_prototype_owns(name: &[u16]) -> bool {
 }
 
 /// The property names 10.2 gives an ordinary function object and 20.2.3 gives
-/// `%Function.prototype%`, excluding the one Symbol key the latter carries.
+/// `%Function.prototype%`, excluding the one Symbol key the latter carries and
+/// the two restricted properties it does carry.
 ///
 /// It serves the same purpose as [`OBJECT_PROTOTYPE_PROPERTIES`]: neither exists
 /// yet, so a read of one of these names off a function object is a gap and a
@@ -2723,18 +2724,32 @@ impl Realm {
         let array_prototype = heap.push_root(Value::from_object(array_prototype))?;
 
         // 22.1.3: %String.prototype% is a String exotic object whose
-        // [[Prototype]] is %Object.prototype%.
+        // [[Prototype]] is %Object.prototype% and whose [[StringData]] is the
+        // empty String, so 22.1.3.1 and the rest take it as a receiver.
         let string_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
+        let empty = Value::from_string(heap.strings.allocate_units(&[])?);
+        heap.set_object_kind(
+            string_prototype,
+            super::object::ObjectKind::StringWrapper(empty),
+        )?;
         let string_prototype = heap.push_root(Value::from_object(string_prototype))?;
 
-        // 21.1.3: %Number.prototype% is a Number exotic object whose
-        // [[Prototype]] is %Object.prototype%.
+        // 21.1.3: %Number.prototype% is a Number object whose [[Prototype]] is
+        // %Object.prototype% and whose [[NumberData]] is +0.
         let number_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
+        heap.set_object_kind(
+            number_prototype,
+            super::object::ObjectKind::NumberWrapper(0.0),
+        )?;
         let number_prototype = heap.push_root(Value::from_object(number_prototype))?;
 
-        // 20.3.3: %Boolean.prototype% is a Boolean exotic object whose
-        // [[Prototype]] is %Object.prototype%.
+        // 20.3.3: %Boolean.prototype% is a Boolean object whose [[Prototype]]
+        // is %Object.prototype% and whose [[BooleanData]] is false.
         let boolean_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
+        heap.set_object_kind(
+            boolean_prototype,
+            super::object::ObjectKind::BooleanWrapper(false),
+        )?;
         let boolean_prototype = heap.push_root(Value::from_object(boolean_prototype))?;
 
         // 22.2.6: %RegExp.prototype% is an ordinary object and not a RegExp.
@@ -2832,6 +2847,7 @@ impl Realm {
             &native_error_prototypes,
         )?;
         Self::define_species_getters(heap, &intrinsics)?;
+        Self::define_restricted_properties(heap, &intrinsics, function_prototype)?;
         Self::define_unscopables(heap, array_prototype)?;
         Self::define_to_string_tags(
             heap,
@@ -3375,6 +3391,55 @@ impl Realm {
             Value::from_object(list),
             builtin_metadata(),
         )?;
+        Ok(())
+    }
+
+    /// `caller` and `arguments` of 20.2.3.
+    ///
+    /// Both are accessors whose getter and setter are `%ThrowTypeError%`, so
+    /// reading either off any function object raises the `TypeError` of 10.2.4.1
+    /// rather than answering a frame of the caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    fn define_restricted_properties(
+        heap: &mut GenerationalHeap,
+        intrinsics: &[Root],
+        prototype: Root,
+    ) -> Result<(), HeapError> {
+        let thrower = Self::rooted(
+            heap,
+            *intrinsics
+                .get(Intrinsic::ThrowTypeError.index())
+                .ok_or(HeapError::InvalidReference)?,
+        )?;
+        let holder = Self::rooted(heap, prototype)?
+            .as_object()
+            .ok_or(HeapError::InvalidReference)?;
+        for name in ["caller", "arguments"] {
+            let shape = heap.shapes.root_shape();
+            let pair = heap.allocate_immortal_object(shape, super::value::VALUE_NULL)?;
+            heap.set_object_kind(
+                pair,
+                super::object::ObjectKind::Accessor {
+                    get: thrower,
+                    set: thrower,
+                },
+            )?;
+            let key = PropertyKey::String(heap.strings.intern(name)?);
+            heap.define_own_named(
+                holder,
+                key,
+                Value::from_object(pair),
+                PropertyFlags {
+                    writable: false,
+                    enumerable: false,
+                    configurable: true,
+                    is_accessor: true,
+                },
+            )?;
+        }
         Ok(())
     }
 
