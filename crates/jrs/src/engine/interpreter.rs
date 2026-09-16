@@ -7238,22 +7238,22 @@ impl RegisterVM {
             // this Realm builds no Symbol, so IsArray decides alone.
             Intrinsic::ArrayPrototypeConcat => {
                 let mut values = Vec::new();
-                // Step 3 makes the receiver the first item, which 23.1.3.2.1
-                // spreads only when it is an Array; every other object is one
-                // element of the answer.
-                if Self::is_array(call.receiver, heap) {
+                // Step 5 makes the receiver the first item, which 23.1.3.1.1
+                // spreads where it says so; every other object is one element
+                // of the answer.
+                if Self::spreads_into_concat(call.receiver, heap)? {
                     Self::spread_into(&mut values, object, length, heap)?;
                 } else {
                     values.push(Some(Value::from_object(object)));
                 }
                 for offset in 0..call.arg_count {
                     let item = self.call_argument(&call, offset, heap)?;
-                    match item.as_object().filter(|_| Self::is_array(item, heap)) {
-                        Some(part) => {
-                            let part_length = Self::array_like_length(heap, part, realm)?;
-                            Self::spread_into(&mut values, part, part_length, heap)?;
-                        }
-                        None => values.push(Some(item)),
+                    if Self::spreads_into_concat(item, heap)? {
+                        let part = item.as_object().ok_or(VMError::TypeError)?;
+                        let part_length = Self::array_like_length(heap, part, realm)?;
+                        Self::spread_into(&mut values, part, part_length, heap)?;
+                    } else {
+                        values.push(Some(item));
                     }
                 }
                 // 23.1.3.1 step 2 makes the answer with 23.1.3.4.
@@ -7456,6 +7456,26 @@ impl RegisterVM {
         }
         heap.set_array_element(object, index, value)?;
         Ok(())
+    }
+
+    /// `IsConcatSpreadable` of 23.1.3.1.1.
+    ///
+    /// `@@isConcatSpreadable` decides it where the object has one, whatever it
+    /// says, and 7.2.2 decides it otherwise. An accessor there is a call of
+    /// the Script that the clause has no frame to make.
+    fn spreads_into_concat(value: Value, heap: &GenerationalHeap) -> Result<bool, VMError> {
+        let Some(object) = value.as_object() else {
+            return Ok(false);
+        };
+        let key = super::realm::WellKnownSymbol::IsConcatSpreadable.key();
+        let Some(found) = heap.lookup_named(object, key)? else {
+            return Ok(Self::is_array(value, heap));
+        };
+        let spreadable = Self::plain_value(found)?;
+        if spreadable.is_undefined() {
+            return Ok(Self::is_array(value, heap));
+        }
+        Self::to_boolean(spreadable, heap)
     }
 
     /// `Set(O, "length", 𝔽(length), true)` of 7.3.4.

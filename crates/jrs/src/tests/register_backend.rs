@@ -7694,6 +7694,34 @@ fn a_promise_settles_through_the_job_queue_of_both_backends() -> Result<(), Erro
 }
 
 #[test]
+fn concat_spreads_what_23_1_3_1_1_says_it_spreads() -> Result<(), Error> {
+    for source in [
+        // `@@isConcatSpreadable` decides it where the object has one.
+        "var o={length:2,0:'a',1:'b'};o[Symbol.isConcatSpreadable]=true;[0].concat(o).join(',')",
+        "var a=[1,2];a[Symbol.isConcatSpreadable]=false;''+[0].concat(a).length",
+        "var a=[1];a[Symbol.isConcatSpreadable]=0;''+[0].concat(a).length",
+        "var a=[1];a[Symbol.isConcatSpreadable]='x';''+[0].concat(a).length",
+        // 7.2.2 decides it otherwise.
+        "[1,2].concat([3,4]).join(',')",
+        "var o={};''+[1].concat(o).length",
+        "[1].concat(2,[3]).join(',')",
+        // The receiver takes the same question.
+        "var o={length:1,0:'z'};o[Symbol.isConcatSpreadable]=true;Array.prototype.concat.call(o,1).join(',')",
+    ] {
+        let mut engine_host = SilentHost;
+        let mut engine = Realm::with_backend(Limits::default(), &mut engine_host, Backend::Engine)?;
+        let mut stack_host = SilentHost;
+        let mut stack = Realm::with_backend(Limits::default(), &mut stack_host, Backend::Stack)?;
+        assert_eq!(
+            engine.evaluate(source)?,
+            stack.evaluate(source)?,
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn a_class_body_reaches_the_class_through_a_binding_of_its_own() -> Result<(), Error> {
     // 15.7.14 steps 3, 4 and 17 give the class body a binding for the class
     // name that every method reaches and nothing can write.
