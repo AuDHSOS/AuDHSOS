@@ -8423,8 +8423,13 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Value, VMError> {
         const GAP: VMError = VMError::Unsupported("a well-known Symbol of an unbuilt Prototype");
+        // 22.1.3.34 is the one well-known Symbol of the Prototypes below that
+        // this Realm has not built; 21.1.3, 20.3.3 and 20.5.3 own none at all,
+        // so a miss on one of them is the undefined 7.4.2 turns into a
+        // TypeError and not a gap.
+        let owed = symbol == Some(super::realm::WellKnownSymbol::Iterator);
         if target.is_string() {
-            return Err(GAP);
+            return if owed { Err(GAP) } else { Ok(VALUE_UNDEFINED) };
         }
         // 22.2.6 gives `%RegExp.prototype%` five Symbol-keyed methods, and
         // this Realm has not built `@@matchAll`.
@@ -8438,13 +8443,7 @@ impl RegisterVM {
             return Err(VMError::Unsupported("a property of %RegExp.prototype%"));
         }
         match heap.get_object(object).map(|object| &object.kind) {
-            Some(
-                ObjectKind::StringWrapper(_)
-                | ObjectKind::ArrayIterator { .. }
-                | ObjectKind::NumberWrapper(_)
-                | ObjectKind::BooleanWrapper(_)
-                | ObjectKind::Error,
-            ) => Err(GAP),
+            Some(ObjectKind::StringWrapper(_)) if owed => Err(GAP),
             _ => Ok(VALUE_UNDEFINED),
         }
     }
@@ -12215,6 +12214,19 @@ impl RegisterVM {
         Ok(promise::slot(heap, capability, promise::CAPABILITY_PROMISE))
     }
 
+    /// The List of 13.3.8 and how many arguments it holds.
+    fn spread_arguments(list: Value, heap: &GenerationalHeap) -> Result<(Value, u16), VMError> {
+        let source = list.as_object().ok_or(VMError::TypeError)?;
+        let Some(&ObjectKind::Array { length, .. }) =
+            heap.get_object(source).map(|entry| &entry.kind)
+        else {
+            return Err(VMError::TypeError);
+        };
+        let count = u16::try_from(length)
+            .map_err(|_| VMError::Unsupported("a call of more arguments than a frame passes"))?;
+        Ok((list, count))
+    }
+
     /// The job queue of 9.5 this run enqueues into.
     fn job_queue(&self, heap: &GenerationalHeap) -> Value {
         self.jobs
@@ -15027,6 +15039,115 @@ impl RegisterVM {
                         current_code_id = Some(code_id);
                         pc = 0;
                     }
+                }
+                Instruction::CallSpread {
+                    receiver,
+                    func,
+                    list,
+                    slot,
+                } => {
+                    let (arguments, arg_count) =
+                        Self::spread_arguments(self.read_reg(list)?, heap)?;
+                    // The List outlives every frame the call opens, so it is a
+                    // root of a scope of its own, which the return leaves.
+                    heap.enter_scope();
+                    let held = heap.push_root(arguments)?;
+                    let call = Call {
+                        receiver: self.read_reg(receiver)?,
+                        func,
+                        arg_start: func,
+                        arg_count,
+                        slot,
+                        resume: Some(Resume::Spread { arguments: held }),
+                        construct: None,
+                        return_pc: pc,
+                        caller_code_id: current_code_id,
+                    };
+                    let callee = self.read_reg(func)?;
+                    match self.enter_call_value(
+                        callee,
+                        units,
+                        active_feedback,
+                        heap,
+                        realm,
+                        call,
+                    )? {
+                        Some(code_id) => {
+                            current_code_id = Some(code_id);
+                            pc = 0;
+                        }
+                        // A native answered without a frame, so nothing else
+                        // reads the List.
+                        None => heap.exit_scope(),
+                    }
+                    return Ok(None);
+                }
+                Instruction::ConstructSpread {
+                    func,
+                    target,
+                    list,
+                    slot,
+                } => {
+                    let (arguments, arg_count) =
+                        Self::spread_arguments(self.read_reg(list)?, heap)?;
+                    heap.enter_scope();
+                    let held = heap.push_root(arguments)?;
+                    let call = Call {
+                        receiver: VALUE_UNDEFINED,
+                        func,
+                        arg_start: func,
+                        arg_count,
+                        slot,
+                        resume: Some(Resume::Spread { arguments: held }),
+                        construct: Some(target),
+                        return_pc: pc,
+                        caller_code_id: current_code_id,
+                    };
+                    // 23.1.1.1 answers an Array of its own whichever way it
+                    // was reached, so a native constructor takes the arguments
+                    // and none of 10.1.13.
+                    if let Some(intrinsic) = self.native_constructor(func, heap) {
+                        if intrinsic == Intrinsic::PromiseConstructor {
+                            return Err(VMError::Unsupported(
+                                "a Promise constructed with a spread element",
+                            ));
+                        }
+                        self.acc = self.call_intrinsic(intrinsic, call, units, heap, realm)?;
+                        heap.exit_scope();
+                        self.write_reg(target, self.acc)?;
+                        return Ok(None);
+                    }
+                    // 10.2.2 step 5 creates the object for a base constructor
+                    // and leaves a derived one to make its own with 13.3.7.1.
+                    let receiver = if Self::derives(self.read_reg(func)?, units, heap) {
+                        self.write_reg(target, VALUE_UNDEFINED)?;
+                        VALUE_UNINITIALIZED
+                    } else {
+                        let object =
+                            self.ordinary_create_from_constructor(active_code, heap, realm, func)?;
+                        self.write_reg(target, Value::from_object(object))?;
+                        Value::from_object(object)
+                    };
+                    let call = Call { receiver, ..call };
+                    // 13.3.5.1 gives the call the constructor it named, and
+                    // nothing allocates between here and the frame.
+                    self.pending_new_target = self.read_reg(func)?;
+                    let callee = self.read_reg(func)?;
+                    match self.enter_call_value(
+                        callee,
+                        units,
+                        active_feedback,
+                        heap,
+                        realm,
+                        call,
+                    )? {
+                        Some(code_id) => {
+                            current_code_id = Some(code_id);
+                            pc = 0;
+                        }
+                        None => heap.exit_scope(),
+                    }
+                    return Ok(None);
                 }
                 Instruction::IteratorNext { state } => {
                     self.acc = self.iterator_next(state, units, heap, realm)?;

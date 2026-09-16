@@ -264,6 +264,34 @@ pub enum Instruction {
     /// method of the Script: the primitive comes back into the register and the
     /// instruction runs again.
     ToText(Reg),
+    /// A call whose arguments are the List 13.3.8 makes of an argument list
+    /// that holds a spread element.
+    ///
+    /// No register window holds a count the run time decides, so the
+    /// arguments travel in an Array and the frame takes its parameters from
+    /// there.
+    CallSpread {
+        /// Register holding the `this` value of the call.
+        receiver: Reg,
+        /// Register holding the callee.
+        func: Reg,
+        /// Register holding the Array of arguments.
+        list: Reg,
+        /// Call-site feedback slot.
+        slot: u16,
+    },
+    /// The same for `new`, whose object 10.1.13 makes as it does for a
+    /// construct with registers.
+    ConstructSpread {
+        /// Register holding the constructor.
+        func: Reg,
+        /// Register the object 10.1.13 makes is written to.
+        target: Reg,
+        /// Register holding the Array of arguments.
+        list: Reg,
+        /// Call-site feedback slot.
+        slot: u16,
+    },
     /// 27.7.5.3: the body waits for what the accumulator holds and leaves.
     ///
     /// The frame is copied into a continuation of the heap, the value is sent
@@ -1057,6 +1085,28 @@ impl BytecodeFunction {
             | Instruction::DefineMethodByValue { obj, key, .. } => {
                 self.verify_register(pc, obj)?;
                 Some(key)
+            }
+            Instruction::CallSpread {
+                receiver,
+                func,
+                list,
+                slot,
+            } => {
+                self.verify_register(pc, receiver)?;
+                self.verify_register(pc, func)?;
+                self.verify_feedback(pc, slot, FeedbackKind::Call)?;
+                Some(list)
+            }
+            Instruction::ConstructSpread {
+                func,
+                target,
+                list,
+                slot,
+            } => {
+                self.verify_register(pc, func)?;
+                self.verify_register(pc, target)?;
+                self.verify_feedback(pc, slot, FeedbackKind::Call)?;
+                Some(list)
             }
             Instruction::GetArrayLength { obj } => Some(obj),
             Instruction::SuperBase { target } => Some(target),

@@ -2614,6 +2614,13 @@ impl RegisterLowerer {
         if property_count > self.property_limit {
             return None;
         }
+        if items
+            .iter()
+            .flatten()
+            .any(|item| matches!(item.kind, ExprKind::Spread(_)))
+        {
+            return self.lower_spread_array(items);
+        }
         self.code.emit(Instruction::CreateArray(length));
         let array = self.allocate_register()?;
         self.code.emit(Instruction::Star(array));
@@ -2621,9 +2628,7 @@ impl RegisterLowerer {
             let Some(item) = item else {
                 continue;
             };
-            if matches!(item.kind, ExprKind::Spread(_)) {
-                return None;
-            }
+
             let index = u32::try_from(index).ok()?;
             self.emit_array_index(index)?;
             let key = self.allocate_register()?;
@@ -2651,6 +2656,268 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Ldar(array));
         self.release_register(array)?;
         Some(RegisterType::Array(object_id))
+    }
+
+    /// Whether an argument list or an element list holds a spread element,
+    /// which 13.3.8 turns into a List the run time decides the length of.
+    fn holds_a_spread(items: &[Expr]) -> bool {
+        items
+            .iter()
+            .any(|item| matches!(item.kind, ExprKind::Spread(_)))
+    }
+
+    /// The List of 13.3.8, as the Array the call carries.
+    ///
+    /// The caller releases the register this answers, which holds the Array,
+    /// and the one after it, which holds the index the writes stand at.
+    fn lower_argument_list(
+        &mut self,
+        arguments: &[Expr],
+    ) -> Option<(
+        crate::engine::bytecode::Reg,
+        crate::engine::bytecode::Reg,
+        crate::engine::bytecode::Reg,
+    )> {
+        use crate::engine::bytecode::Instruction;
+        let array = self.allocate_register()?;
+        let index = self.allocate_register()?;
+        let one = self.allocate_register()?;
+        self.code.emit(Instruction::CreateArray(0));
+        self.code.emit(Instruction::Star(array));
+        self.code.emit(Instruction::LdaSmi(0));
+        self.code.emit(Instruction::Star(index));
+        self.code.emit(Instruction::LdaSmi(1));
+        self.code.emit(Instruction::Star(one));
+        for argument in arguments {
+            if let ExprKind::Spread(inner) = &argument.kind {
+                self.lower_spread_operand(inner, array, index, one)?;
+                continue;
+            }
+            self.lower(argument)?;
+            self.append_to_list(array, index, one)?;
+        }
+        Some((array, index, one))
+    }
+
+    /// Writes the accumulator at the index the List stands at and moves it on.
+    fn append_to_list(
+        &mut self,
+        array: crate::engine::bytecode::Reg,
+        index: crate::engine::bytecode::Reg,
+        one: crate::engine::bytecode::Reg,
+    ) -> Option<()> {
+        use crate::engine::bytecode::Instruction;
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::SetByValue {
+            obj: array,
+            key: index,
+            slot,
+            define: true,
+            strict: false,
+        });
+        self.code.emit(Instruction::Ldar(index));
+        self.code.emit(Instruction::Add(one));
+        self.code.emit(Instruction::Star(index));
+        Some(())
+    }
+
+    /// 13.2.4.2 and 13.3.8.1: every value of the iterator of the operand goes
+    /// into the List, in the order 7.4.6 answers them.
+    fn lower_spread_operand(
+        &mut self,
+        operand: &Expr,
+        array: crate::engine::bytecode::Reg,
+        index: crate::engine::bytecode::Reg,
+        one: crate::engine::bytecode::Reg,
+    ) -> Option<()> {
+        use crate::engine::bytecode::Instruction;
+        self.lower(operand)?;
+        let iterable = self.allocate_register()?;
+        self.code.emit(Instruction::Star(iterable));
+        let iterator_slot =
+            self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetWellKnown {
+            obj: iterable,
+            symbol: u16::try_from(WELL_KNOWN_ITERATOR).ok()?,
+            slot: iterator_slot,
+        });
+        let method = self.allocate_register()?;
+        self.code.emit(Instruction::Star(method));
+        let open = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
+        self.code.emit(Instruction::CallMethod {
+            receiver: iterable,
+            func: method,
+            arg_start: method,
+            arg_count: 0,
+            slot: open,
+        });
+        let iterator = self.allocate_register()?;
+        self.code.emit(Instruction::Star(iterator));
+        let next = self.allocate_register()?;
+        let step = self.allocate_register()?;
+        let head = self.code.instructions.len();
+        let next_name = self.string_constant(&"next".encode_utf16().collect::<Vec<_>>())?;
+        let next_slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetNamed {
+            obj: iterator,
+            name: next_name,
+            slot: next_slot,
+        });
+        self.code.emit(Instruction::Star(next));
+        let step_slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
+        self.code.emit(Instruction::CallMethod {
+            receiver: iterator,
+            func: next,
+            arg_start: next,
+            arg_count: 0,
+            slot: step_slot,
+        });
+        self.code.emit(Instruction::Star(step));
+        let done_name = self.string_constant(&"done".encode_utf16().collect::<Vec<_>>())?;
+        let done_slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetNamed {
+            obj: step,
+            name: done_name,
+            slot: done_slot,
+        });
+        // 7.4.6 answers done by ToBoolean, and 7.4.7 reads `value` only where
+        // it is false, which is what the order of these two says.
+        let exit = self.code.emit(Instruction::JumpIfTrue(0));
+        let value_name = self.string_constant(&"value".encode_utf16().collect::<Vec<_>>())?;
+        let value_slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetNamed {
+            obj: step,
+            name: value_name,
+            slot: value_slot,
+        });
+        self.append_to_list(array, index, one)?;
+        let back = self.code.emit(Instruction::Jump(0));
+        self.patch_jump(back, head)?;
+        let done = self.code.instructions.len();
+        self.patch_jump(exit, done)?;
+        self.release_register(step)?;
+        self.release_register(next)?;
+        self.release_register(iterator)?;
+        self.release_register(method)?;
+        self.release_register(iterable)?;
+        Some(())
+    }
+
+    /// 13.3.6.2 and 13.3.8: a call whose argument list holds a spread element.
+    ///
+    /// A computed member callee is a named gap: 13.3.3 evaluates the key
+    /// before the arguments, which this path has no register window for.
+    fn lower_spread_call(&mut self, callee: &Expr, arguments: &[Expr]) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let receiver = self.allocate_register()?;
+        let function = self.allocate_register()?;
+        if let ExprKind::Member(base, key) = &callee.kind {
+            let name = Self::static_property_name(key)?.to_vec();
+            self.lower(base)?;
+            self.code.emit(Instruction::Star(receiver));
+            let constant = self.string_constant(&name)?;
+            let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+            self.code.emit(Instruction::GetNamed {
+                obj: receiver,
+                name: constant,
+                slot,
+            });
+            self.code.emit(Instruction::Star(function));
+        } else {
+            self.code.emit(Instruction::LdaUndefined);
+            self.code.emit(Instruction::Star(receiver));
+            self.lower(callee)?;
+            self.code.emit(Instruction::Star(function));
+        }
+        let (array, index, one) = self.lower_argument_list(arguments)?;
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
+        self.code.emit(Instruction::CallSpread {
+            receiver,
+            func: function,
+            list: array,
+            slot,
+        });
+        self.release_register(one)?;
+        self.release_register(index)?;
+        self.release_register(array)?;
+        self.release_register(function)?;
+        self.release_register(receiver)?;
+        self.escape(&[RegisterType::Unknown]);
+        Some(RegisterType::Unknown)
+    }
+
+    /// 13.3.5.1: `new` whose argument list holds a spread element.
+    fn lower_spread_construct(
+        &mut self,
+        callee: &Expr,
+        arguments: &[Expr],
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let function = self.allocate_register()?;
+        let target = self.allocate_register()?;
+        self.lower(callee)?;
+        self.code.emit(Instruction::Star(function));
+        let (array, index, one) = self.lower_argument_list(arguments)?;
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
+        self.code.emit(Instruction::ConstructSpread {
+            func: function,
+            target,
+            list: array,
+            slot,
+        });
+        self.release_register(one)?;
+        self.release_register(index)?;
+        self.release_register(array)?;
+        self.release_register(target)?;
+        self.release_register(function)?;
+        self.escape(&[RegisterType::Unknown]);
+        Some(RegisterType::Unknown)
+    }
+
+    /// 13.2.4.2: an Array literal that holds a spread element.
+    fn lower_spread_array(&mut self, items: &[Option<Expr>]) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let array = self.allocate_register()?;
+        let index = self.allocate_register()?;
+        let one = self.allocate_register()?;
+        self.code.emit(Instruction::CreateArray(0));
+        self.code.emit(Instruction::Star(array));
+        self.code.emit(Instruction::LdaSmi(0));
+        self.code.emit(Instruction::Star(index));
+        self.code.emit(Instruction::LdaSmi(1));
+        self.code.emit(Instruction::Star(one));
+        for item in items {
+            let Some(item) = item else {
+                // 13.2.4.2: an elision moves the index on and defines nothing.
+                self.code.emit(Instruction::Ldar(index));
+                self.code.emit(Instruction::Add(one));
+                self.code.emit(Instruction::Star(index));
+                continue;
+            };
+            if let ExprKind::Spread(inner) = &item.kind {
+                self.lower_spread_operand(inner, array, index, one)?;
+                continue;
+            }
+            self.lower(item)?;
+            self.append_to_list(array, index, one)?;
+        }
+        // 13.2.4.2 step 5 sets the length, which an elision at the end needs.
+        let length = self.string_constant(&"length".encode_utf16().collect::<Vec<_>>())?;
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::Ldar(index));
+        self.code.emit(Instruction::SetNamed {
+            obj: array,
+            name: length,
+            slot,
+            define: false,
+            strict: false,
+        });
+        self.code.emit(Instruction::Ldar(array));
+        self.release_register(one)?;
+        self.release_register(index)?;
+        self.release_register(array)?;
+        self.escape(&[RegisterType::Unknown]);
+        Some(RegisterType::Unknown)
     }
 
     fn lower_function(&mut self, function: &Function) -> Option<RegisterType> {
@@ -3499,6 +3766,9 @@ impl RegisterLowerer {
         if matches!(callee.kind, ExprKind::Super) {
             return self.lower_super_construct(arguments);
         }
+        if Self::holds_a_spread(arguments) {
+            return self.lower_spread_call(callee, arguments);
+        }
         if let ExprKind::Member(base, key) = &callee.kind {
             if matches!(base.kind, ExprKind::Super) {
                 return self.lower_super_call(key, arguments);
@@ -3590,6 +3860,9 @@ impl RegisterLowerer {
     /// the collector sees it while the constructor runs.
     fn lower_construct(&mut self, callee: &Expr, arguments: &[Expr]) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
+        if Self::holds_a_spread(arguments) {
+            return self.lower_spread_construct(callee, arguments);
+        }
         let callee_type = self.lower(callee)?;
         // In a Realm a function declaration is a binding of the Global
         // Environment Record, so its name reads as a type the lowering cannot

@@ -7693,6 +7693,50 @@ fn a_promise_settles_through_the_job_queue_of_both_backends() -> Result<(), Erro
 }
 
 #[test]
+fn a_spread_element_takes_every_value_of_its_iterator() -> Result<(), Error> {
+    for source in [
+        // 13.2.4.2: an Array literal.
+        "[...[1,2],3].join(',')",
+        "[0,...[1,2],3,...[4]].join(',')",
+        "var a=[,1,...[2]];''+a.length+'/'+a.join(',')",
+        "var a=[1,2],b=[...a];a.push(3);''+b.length+'/'+a.length",
+        // 13.3.8: a call, a method call and a native.
+        "function f(a,b,c){return ''+a+b+c}f(...[1,2,3])",
+        "function f(){return arguments.length}''+f(...[1,2,3],4)",
+        "var o={m:function(a,b){return this.n+a+b},n:10};''+o.m(...[1,2])",
+        "''+Math.max(...[1,9,3])",
+        "function f(){return Array.prototype.slice.call(arguments).join('|')}f(0,...[1,2],3)",
+        // 13.3.5.1: `new`.
+        "function C(a,b){this.v=a+b}''+new C(...[3,4]).v",
+        "class C{constructor(a,b){this.v=a*b}}''+new C(...[3,4]).v",
+        // 7.4.2 walks an iterator of the Script.
+        "var it={};it[Symbol.iterator]=function(){var i=0;var o={};o.next=function(){if(i<3){var v={value:i,done:false};i=i+1;return v}return {done:true}};return o};[...it].join(',')",
+        // 7.4.2 refuses a value that is not iterable, and a method that
+        // throws leaves the spread with its value.
+        "var r;try{[...5]}catch(e){r=e instanceof TypeError};''+r",
+        "var it={};it[Symbol.iterator]=function(){throw 'bad'};var r;try{[...it]}catch(e){r=e};''+r",
+    ] {
+        let mut engine_host = SilentHost;
+        let mut engine = Realm::with_backend(Limits::default(), &mut engine_host, Backend::Engine)?;
+        let mut stack_host = SilentHost;
+        let mut stack = Realm::with_backend(Limits::default(), &mut stack_host, Backend::Stack)?;
+        assert_eq!(
+            engine.evaluate(source)?,
+            stack.evaluate(source)?,
+            "{source}"
+        );
+    }
+    // 22.1.3.34 is the iterator of a String, which this Realm has not built.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    assert!(matches!(
+        realm.evaluate("[...'ab']"),
+        Err(Error::Unsupported { .. })
+    ));
+    Ok(())
+}
+
+#[test]
 fn an_async_function_answers_a_promise_and_waits_in_the_job_queue() -> Result<(), Error> {
     // 27.7.5.2 answers a capability before the body runs, and 27.7.5.3 leaves
     // the frame at every wait and takes it back from a job of 9.5. The log is
