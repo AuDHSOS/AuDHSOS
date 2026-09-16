@@ -161,8 +161,10 @@ struct ArrayWalk {
     /// rather than the callback of the clause.
     getter: bool,
     /// Whether the call in flight is the getter of the `length` 7.1.20 reads,
-    /// which runs before the walk begins.
+    /// or a method of 7.1.1 converting what that read answered.
     pending_length: bool,
+    /// Which method 7.1.1 has already asked for the `length`.
+    length_step: u8,
 }
 
 impl ArrayWalk {
@@ -4079,12 +4081,21 @@ impl RegisterVM {
                 | Intrinsic::ArrayPrototypeFindLastIndex
         );
         let pending = Self::array_like_length_getter(heap, target)?;
+        // A `length` that is a data property answers a value 7.1.20 converts;
+        // an Object there runs a method of the Script, which the walk enters
+        // the way it enters the getter.
+        let unconverted = if pending.is_some() {
+            VALUE_UNDEFINED
+        } else {
+            Self::array_like_length_value(heap, target, realm)?
+        };
         let mut length = 0;
-        if pending.is_none() {
-            let read = Self::array_like_length(heap, target, realm)?;
+        if pending.is_none() && !unconverted.is_object() {
+            let read = integer_argument(unconverted, heap)?.max(0);
             Self::refuse_long_array(intrinsic, read, heap, realm)?;
             length = u32::try_from(read).unwrap_or(u32::MAX);
         }
+        let converts = pending.is_none() && unconverted.is_object();
         let prototype = realm.object_prototype(heap)?;
         let shape = heap.shapes.root_shape();
         let state = heap.allocate_object(shape, prototype)?;
@@ -4096,13 +4107,14 @@ impl RegisterVM {
                 callback,
                 receiver,
                 output,
-                element: VALUE_UNDEFINED,
+                element: unconverted,
                 element_index: 0,
                 index: if backwards { length } else { 0 },
                 length,
                 started,
                 getter: false,
-                pending_length: pending.is_some(),
+                pending_length: pending.is_some() || converts,
+                length_step: 0,
             },
         )?;
         // The state outlives every frame the walk opens, so it is a root of a
@@ -4118,9 +4130,136 @@ impl RegisterVM {
             call.receiver = Value::from_object(target);
             call.resume = Some(Resume::Iteration { state });
             call.construct = None;
+            let mut walk = Self::read_iteration(state, heap)?;
+            walk.length_step = 1;
+            Self::write_iteration(state, &walk, heap)?;
             return self.enter_call_value(getter, units, active_feedback, heap, realm, call);
         }
+        if converts {
+            return self.convert_pending_length(state, call, units, active_feedback, heap, realm);
+        }
         self.begin_array_walk(state, call, units, active_feedback, heap, realm)
+    }
+
+    /// Asks the next method of 7.1.1 for the `length` the walk read, with the
+    /// hint `number`.
+    ///
+    /// The object waits in `element` of the walk state, which the collector
+    /// traces; `length_step` says which method has already answered. A method
+    /// of the Realm answers without a frame, so the loop takes that answer and
+    /// goes on rather than leaving.
+    fn convert_pending_length(
+        &mut self,
+        state: Root,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        loop {
+            let mut walk = Self::read_iteration(state, heap)?;
+            let object = walk
+                .element
+                .as_object()
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            // 7.1.1 step 1 would ask @@toPrimitive first, which takes the hint
+            // as an argument and so a register of the caller. A walk has none
+            // to give, so an object that carries one is a gap.
+            if walk.length_step < 2
+                && heap
+                    .lookup_named(object, super::realm::WellKnownSymbol::ToPrimitive.key())?
+                    .is_some()
+            {
+                heap.exit_scope();
+                return Err(VMError::Unsupported(
+                    "the @@toPrimitive of an array-like length",
+                ));
+            }
+            let step = walk.length_step.max(1).saturating_add(1);
+            let name = match step {
+                2 => "valueOf",
+                3 => "toString",
+                _ => {
+                    heap.exit_scope();
+                    return Err(type_error(heap, realm, "an object has no primitive value"));
+                }
+            };
+            walk.length_step = step;
+            Self::write_iteration(state, &walk, heap)?;
+            let key = PropertyKey::String(heap.strings.intern(name)?);
+            let object = Self::read_iteration(state, heap)?
+                .element
+                .as_object()
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let method = heap
+                .lookup_named(object, key)?
+                .map(Self::plain_value)
+                .transpose()?
+                .filter(|method| Self::is_callable(*method, heap));
+            let Some(method) = method else {
+                continue;
+            };
+            let mut call = call;
+            call.arg_count = 0;
+            call.arg_start = Reg(0);
+            call.receiver = Value::from_object(object);
+            call.resume = Some(Resume::Iteration { state });
+            call.construct = None;
+            if let Some(code_id) =
+                self.enter_call_value(method, units, active_feedback, heap, realm, call)?
+            {
+                return Ok(Some(code_id));
+            }
+            // A method of the Realm answered without a frame of its own.
+            let answer = self.acc;
+            if !answer.is_object() {
+                let mut walk = Self::read_iteration(state, heap)?;
+                walk.pending_length = false;
+                let length = integer_argument(answer, heap)?.max(0);
+                if let Err(refused) = Self::refuse_long_array(walk.intrinsic, length, heap, realm) {
+                    heap.exit_scope();
+                    return Err(refused);
+                }
+                walk.length = u32::try_from(length).unwrap_or(u32::MAX);
+                if walk.backwards() {
+                    walk.index = walk.length;
+                }
+                walk.element = VALUE_UNDEFINED;
+                Self::write_iteration(state, &walk, heap)?;
+                return self.begin_array_walk(state, call, units, active_feedback, heap, realm);
+            }
+        }
+    }
+
+    /// The value the `length` of an array-like holds, before 7.1.20 converts
+    /// it.
+    fn array_like_length_value(
+        heap: &GenerationalHeap,
+        object: ObjectRef,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if let Some(length) = heap.array_length(object) {
+            return Ok(index_value(i64::from(length)));
+        }
+        if let Some(count) = Self::string_data_length(object, heap)? {
+            return Ok(index_value(i64::from(count)));
+        }
+        let Some(name) = heap.strings.lookup_interned_units(&LENGTH_NAME) else {
+            return Ok(VALUE_UNDEFINED);
+        };
+        let Some(property) = heap.lookup_named(object, PropertyKey::String(name))? else {
+            Self::absent_property(Value::from_object(object), &LENGTH_NAME, heap, realm)?;
+            return Ok(VALUE_UNDEFINED);
+        };
+        if property.flags.is_accessor {
+            let (get, _) = Self::accessor_parts(property.value, heap)?;
+            if !get.is_undefined() {
+                return Err(VMError::Unsupported("a property that is an accessor"));
+            }
+            return Ok(VALUE_UNDEFINED);
+        }
+        Ok(property.value)
     }
 
     /// 10.4.2.2 step 1 refuses a length past 2^32-1, which 7.1.20 allows and
@@ -4292,6 +4431,24 @@ impl RegisterVM {
         if let Some(answer) = answered {
             let mut walk = Self::read_iteration(state, heap)?;
             if walk.pending_length {
+                // 7.1.1 asks the next method when the one that answered gave
+                // an Object. The getter answered the value to convert; a
+                // method of 7.1.1.1 answered something 7.1.1.1 discards, and
+                // the next method is asked of the same object.
+                if answer.is_object() {
+                    if walk.length_step <= 1 {
+                        walk.element = answer;
+                        Self::write_iteration(state, &walk, heap)?;
+                    }
+                    return self.convert_pending_length(
+                        state,
+                        call,
+                        units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    );
+                }
                 walk.pending_length = false;
                 let length = integer_argument(answer, heap)?.max(0);
                 if let Err(refused) = Self::refuse_long_array(walk.intrinsic, length, heap, realm) {
@@ -4460,6 +4617,7 @@ impl RegisterVM {
             started,
             getter,
             pending_length,
+            length_step,
         } = heap
             .get_object(reference)
             .ok_or(VMError::Heap(HeapError::InvalidReference))?
@@ -4480,6 +4638,7 @@ impl RegisterVM {
             started,
             getter,
             pending_length,
+            length_step,
         })
     }
 
@@ -4508,6 +4667,7 @@ impl RegisterVM {
                 started: walk.started,
                 getter: walk.getter,
                 pending_length: walk.pending_length,
+                length_step: walk.length_step,
             },
         )?;
         Ok(())

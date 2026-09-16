@@ -6597,3 +6597,28 @@ fn flat_sort_to_sorted_and_to_spliced_answer_on_the_new_engine() -> Result<(), E
     ));
     Ok(())
 }
+
+/// 7.1.20 reads the `length` of an array-like with 7.3.2 and converts it,
+/// which for an Object runs a method of the Script: the walk enters it the
+/// way it enters the getter of an accessor `length`.
+#[test]
+fn an_array_like_length_that_is_an_object_is_converted_in_a_frame() -> Result<(), Error> {
+    for source in [
+        "var o={0:1,1:2,length:{toString:function(){return '2'}}};\
+         ''+Array.prototype.map.call(o,function(x){return x})",
+        "var o={0:1,1:2,length:{valueOf:function(){return 2}}};\
+         ''+Array.prototype.indexOf.call(o,2)",
+        "var o={0:1,length:{}};''+Array.prototype.map.call(o,function(x){return x}).length",
+        "var n=0;var o={0:1,length:{valueOf:function(){n++;return 1}}};\
+         ''+Array.prototype.forEach.call(o,function(){})+n",
+        "var o={0:1,1:2,length:{valueOf:function(){return {}},\
+         toString:function(){return 2}}};''+Array.prototype.map.call(o,function(x){return x})",
+        "var o={0:1,length:{valueOf:function(){return 1}}};\
+         ''+Array.prototype.reduce.call(o,function(a,b){return a+b})",
+        // 7.1.20 keeps a length past 2^31-1, which the walk starts from.
+        "var a=[];a[Math.pow(2,32)-2]=null;''+a.lastIndexOf(null,Infinity)",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
