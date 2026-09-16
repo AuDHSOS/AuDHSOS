@@ -8721,3 +8721,18 @@ fn a_body_that_throws_after_a_wait_rejects_its_capability() -> Result<(), Error>
     }
     Ok(())
 }
+
+#[test]
+fn the_throw_type_error_of_10_2_4_1_is_frozen() -> Result<(), Error> {
+    // 10.2.4.1: the function is not extensible and its `length` and `name` are
+    // not configurable, so 7.3.15 answers it frozen.
+    for source in [
+        "var T=Object.getOwnPropertyDescriptor(function(){'use strict';return arguments}(),'callee').get;''+Object.isFrozen(T)",
+        "var T=Object.getOwnPropertyDescriptor(function(){'use strict';return arguments}(),'callee').get;''+Object.isExtensible(T)",
+        "var T=Object.getOwnPropertyDescriptor(function(){'use strict';return arguments}(),'callee').get;var d=Object.getOwnPropertyDescriptor(T,'length');''+d.writable+d.enumerable+d.configurable",
+        "var T=Object.getOwnPropertyDescriptor(function(){'use strict';return arguments}(),'callee').get;var d=Object.getOwnPropertyDescriptor(T,'name');''+d.value+d.configurable",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}

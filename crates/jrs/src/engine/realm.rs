@@ -4564,6 +4564,28 @@ impl Realm {
                 intrinsic.length(),
                 intrinsic.name(),
             )?;
+            // 10.2.4.1: `%ThrowTypeError%` is not extensible and its two
+            // properties are not configurable, so 7.3.15 answers it frozen.
+            if intrinsic == Intrinsic::ThrowTypeError {
+                let frozen = PropertyFlags {
+                    writable: false,
+                    enumerable: false,
+                    configurable: false,
+                    is_accessor: false,
+                };
+                heap.reshape_all(function, Some(false))?;
+                let length_key = intern(heap, "length")?;
+                let held = heap
+                    .lookup_named(function, length_key)?
+                    .map_or(VALUE_UNDEFINED, |property| property.value);
+                heap.define_own_named(function, length_key, held, frozen)?;
+                let name_key = intern(heap, "name")?;
+                let held = heap
+                    .lookup_named(function, name_key)?
+                    .map_or(VALUE_UNDEFINED, |property| property.value);
+                heap.define_own_named(function, name_key, held, frozen)?;
+                heap.prevent_extensions(function)?;
+            }
             *intrinsics
                 .get_mut(intrinsic.index())
                 .ok_or(HeapError::InvalidReference)? =
