@@ -601,6 +601,26 @@ fn a_method_carries_the_home_object_super_reads() -> Result<(), Error> {
     Ok(())
 }
 
+#[test]
+fn new_target_is_the_constructor_the_call_named() -> Result<(), Error> {
+    for source in [
+        // 9.4.3 answers the constructor `new` named, and undefined for every
+        // call `new` did not make.
+        "(function(){function F(){this.t=new.target===F}return new F().t})()",
+        "(function(){function F(){return typeof new.target}return F()})()",
+        "(function(){function F(){return new.target===undefined}return F()})()",
+        "(function(){function F(){this.t=typeof new.target}return F.call({}).t})()",
+        // 7.3.15 passes the `newTarget` 28.1.2 was given.
+        "(function(){function F(){this.t=new.target!==undefined}return Reflect.construct(F,[]).t})()",
+        "(function(){function F(){}function G(){this.same=new.target!==undefined}return Reflect.construct(G,[],F).same})()",
+        // The value travels into the frame, so a nested call sees its own.
+        "(function(){function I(){this.inner=typeof new.target}function O(){this.t=new I().inner}return new O().t})()",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
 fn differential_scripts(scripts: &[&str]) -> Result<(), Error> {
     let outcome = |backend| -> Result<Result<Value, Error>, Error> {
         let mut host = SilentHost;

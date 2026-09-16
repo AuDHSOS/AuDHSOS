@@ -684,6 +684,9 @@ pub struct BytecodeFunction {
     /// Register initialized with the `[[HomeObject]]` of the called function
     /// (10.2), which 13.3.7.3 reads the Prototype of.
     pub home_register: Option<Reg>,
+    /// Register initialized with the `[[NewTarget]]` of the call (9.4.3),
+    /// which is undefined for every call `new` did not make.
+    pub new_target_register: Option<Reg>,
     /// Register the arguments object of the call is built in (10.4.4), when
     /// the body reads it.
     pub arguments_register: Option<Reg>,
@@ -738,6 +741,7 @@ impl BytecodeFunction {
             self_register: None,
             this_register: None,
             home_register: None,
+            new_target_register: None,
             arguments_register: None,
             constructible: false,
             strict: false,
@@ -838,9 +842,14 @@ impl BytecodeFunction {
         if self.binding_count > self.register_count || self.parameter_count > self.binding_count {
             return Err(VerificationError::BindingsExceedRegisters);
         }
-        for register in [self.self_register, self.this_register, self.home_register]
-            .into_iter()
-            .flatten()
+        for register in [
+            self.self_register,
+            self.this_register,
+            self.home_register,
+            self.new_target_register,
+        ]
+        .into_iter()
+        .flatten()
         {
             self.verify_register(0, register)?;
         }

@@ -601,6 +601,11 @@ pub struct RegisterVM {
     /// How deep a `ToString` of 7.1.17 is nested in methods of this Realm,
     /// which bounds what a cyclic Array spends the Rust stack on.
     conversion_depth: usize,
+    /// `[[NewTarget]]` of the call about to be entered (9.4.3).
+    ///
+    /// It is set where the frame is opened and read where the frame is
+    /// entered, with no allocation between, so the collector never sees it.
+    pending_new_target: Value,
     /// The source text the run asked the embedding for, which stops it until
     /// the embedding answers.
     pending_source: Option<alloc::rc::Rc<[u16]>>,
@@ -677,6 +682,7 @@ impl RegisterVM {
             current_context: None,
             context_roots: Vec::with_capacity(register_capacity.saturating_add(1)),
             conversion_depth: 0,
+            pending_new_target: VALUE_UNDEFINED,
             pending_source: None,
             pending_script: false,
             resume_pc: 0,
@@ -1581,6 +1587,15 @@ impl RegisterVM {
                 .stack
                 .get_mut(next_frame.saturating_add(this_register.0 as usize))
                 .ok_or(VMError::StackOverflow)? = call.receiver;
+        }
+        // 9.4.3 answers the `[[NewTarget]]` of the call, which `new` and
+        // 7.3.15 give and every other call leaves undefined.
+        let new_target = core::mem::replace(&mut self.pending_new_target, VALUE_UNDEFINED);
+        if let Some(register) = callee.new_target_register {
+            *self
+                .stack
+                .get_mut(next_frame.saturating_add(register.0 as usize))
+                .ok_or(VMError::StackOverflow)? = new_target;
         }
         // 13.3.7.3 reads the `[[HomeObject]]` of the running function, which
         // is a value of the closure and not of the frame, so it travels into a
@@ -3802,6 +3817,9 @@ impl RegisterVM {
         let held = Reg(call.arg_start.0.saturating_add(1));
         self.write_reg(held, Value::from_object(object))?;
         let target = self.read_reg(call.arg_start)?;
+        // Step 5 gives the call the `newTarget` it was passed, and nothing
+        // allocates between here and the frame.
+        self.pending_new_target = self.read_reg(new_target)?;
         let call = Call {
             receiver: Value::from_object(object),
             arg_count,
@@ -11894,6 +11912,9 @@ impl RegisterVM {
                     let object =
                         self.ordinary_create_from_constructor(active_code, heap, realm, func)?;
                     self.write_reg(target, Value::from_object(object))?;
+                    // 13.3.5.1 gives the call the constructor it named, and
+                    // nothing allocates between here and the frame.
+                    self.pending_new_target = self.read_reg(func)?;
                     if let Some(code_id) = self.enter_call(
                         units,
                         active_feedback,

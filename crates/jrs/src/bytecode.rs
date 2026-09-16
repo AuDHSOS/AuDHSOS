@@ -558,6 +558,10 @@ const THIS_BINDING: &str = "this";
 /// 13.3.7.3 reads the Prototype of. No Script can name it.
 const HOME_BINDING: &str = "*home";
 
+/// The binding that holds the `[[NewTarget]]` of the call (9.4.3). No Script
+/// can name it.
+const NEW_TARGET_BINDING: &str = "*newTarget";
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RegisterType {
     Array(u32),
@@ -1903,6 +1907,13 @@ impl RegisterLowerer {
                     None => return None,
                 }
             }
+            // 9.4.3 answers the `[[NewTarget]]` of the call, which the frame
+            // holds in a register of its own.
+            ExprKind::NewTarget => {
+                let register = self.code.new_target_register?;
+                self.code.emit(Instruction::Ldar(register));
+                RegisterType::Unknown
+            }
             ExprKind::Name(name) => {
                 if let Some(binding) = self.bindings.get(name).copied() {
                     let value_type = binding.value_type?;
@@ -3010,6 +3021,21 @@ impl RegisterLowerer {
             child.arguments_binding = child.bindings.remove(ARGUMENTS);
             child.mapped_parameters = function.parameters.len();
             child.code.arguments_register = Some(register);
+        }
+        // 9.4.3 answers the `[[NewTarget]]` of the call, which an arrow takes
+        // from the function it was made in; 15.3.4 gives it none of its own.
+        if register_body_reads_new_target(&function.body) {
+            if function.arrow {
+                return None;
+            }
+            child.declare(NEW_TARGET_BINDING, false)?;
+            let RegisterBindingStorage::Register(register) =
+                child.bindings.get(NEW_TARGET_BINDING)?.storage
+            else {
+                return None;
+            };
+            child.bindings.remove(NEW_TARGET_BINDING);
+            child.code.new_target_register = Some(register);
         }
         // 13.3.7.3 reads the `[[HomeObject]]` of the running function, which
         // an arrow has none of: 15.3.4 gives it the `super` of the function it
@@ -8674,6 +8700,8 @@ enum Reads {
     This,
     /// The `[[HomeObject]]` 13.3.7.3 reads the Prototype of.
     Super,
+    /// The `[[NewTarget]]` of 9.4.3.
+    NewTarget,
 }
 
 fn register_body_reads_this(body: &[Stmt]) -> bool {
@@ -8684,6 +8712,11 @@ fn register_body_reads_this(body: &[Stmt]) -> bool {
 /// `[[HomeObject]]` of the running function.
 fn register_body_reads_super(body: &[Stmt]) -> bool {
     register_body_reads(body, Reads::Super)
+}
+
+/// Whether a body reads `new.target`, which 9.4.3 answers out of the call.
+fn register_body_reads_new_target(body: &[Stmt]) -> bool {
+    register_body_reads(body, Reads::NewTarget)
 }
 
 fn register_body_reads(body: &[Stmt], what: Reads) -> bool {
@@ -8758,8 +8791,10 @@ fn register_statement_reads(statement: &Stmt, what: Reads) -> bool {
 fn register_expression_reads(expression: &Expr, what: Reads) -> bool {
     match &expression.kind {
         // A class body the lowering does not take at all.
-        ExprKind::Super | ExprKind::DefaultSuper | ExprKind::Class(_) => true,
-        ExprKind::This | ExprKind::NewTarget => matches!(what, Reads::This),
+        ExprKind::Class(_) => true,
+        ExprKind::Super | ExprKind::DefaultSuper => !matches!(what, Reads::NewTarget),
+        ExprKind::NewTarget => matches!(what, Reads::This | Reads::NewTarget),
+        ExprKind::This => matches!(what, Reads::This),
         ExprKind::Literal(_) | ExprKind::Name(_) | ExprKind::Regex(_, _) | ExprKind::Update(..) => {
             false
         }
@@ -8874,6 +8909,7 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
         | ExprKind::Name(_)
         | ExprKind::This
         | ExprKind::Super
+        | ExprKind::NewTarget
         | ExprKind::Regex(_, _) => false,
         ExprKind::Destructure(pattern, right) => {
             register_expression_writes_names(right, names)?
@@ -8887,7 +8923,7 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
             }
             false
         }
-        ExprKind::Await(_) | ExprKind::NewTarget | ExprKind::DefaultSuper | ExprKind::Spread(_) => {
+        ExprKind::Await(_) | ExprKind::DefaultSuper | ExprKind::Spread(_) => {
             return None;
         }
     })
@@ -9192,7 +9228,11 @@ fn register_expression_references(
         // of every name this analysis collects.
         // 13.3.7.3 answers `super` out of the `[[HomeObject]]` of the running
         // function, which is no binding of the body.
-        ExprKind::Literal(_) | ExprKind::This | ExprKind::Super | ExprKind::Regex(_, _) => {}
+        ExprKind::Literal(_)
+        | ExprKind::This
+        | ExprKind::Super
+        | ExprKind::NewTarget
+        | ExprKind::Regex(_, _) => {}
         ExprKind::Destructure(pattern, right) => {
             register_expression_references(right, names, nested_free_names)?;
             register_assignment_pattern_references(pattern, names, nested_free_names)?;
@@ -9202,7 +9242,7 @@ fn register_expression_references(
                 register_expression_references(expression, names, nested_free_names)?;
             }
         }
-        ExprKind::Await(_) | ExprKind::NewTarget | ExprKind::DefaultSuper | ExprKind::Spread(_) => {
+        ExprKind::Await(_) | ExprKind::DefaultSuper | ExprKind::Spread(_) => {
             return None;
         }
     }
