@@ -651,7 +651,7 @@ a foreign key holds the rows of both tables it names, and the JSON
 functions answer what the shell answers; the rest is open.
 Depends on: Q6. Recorded in D-172 to D-174, D-182, D-186, D-187, D-189,
 D-191, D-193, D-195, D-196, D-205 to D-211, D-216 to D-218, D-219,
-D-224 to D-232 and D-234 to D-237.
+D-224 to D-232 and D-234 to D-238.
 Size: L.
 
 ### Does
@@ -716,6 +716,9 @@ Size: L.
 17. `ALTER TABLE ... RENAME TO`: every statement of the schema that
     names the table written again under the new name. Built, which
     D-237 records; `RENAME COLUMN` and `DROP COLUMN` are open.
+18. `INSERT ... ON CONFLICT`: the clause a row that shares a key
+    reaches, and what it writes. Built, which D-238 records; a table
+    that keeps its rows in the key's own tree is open.
 
 ### Done when
 
@@ -725,11 +728,12 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 72 197 cases in 705 files, 56 116
-pass, 4597 answer differently, and 11 484 name something the engine
-refuses or a command that needs the C library's internals. A file that
-runs past the deadline the harness gives it is cut off there, so the
-count of cases moves by some tens between runs.
+under the `tclsh` of the machine. Of 72 251 cases in 705 files, 56 338
+pass, 4604 answer differently, and 11 309 name something the engine
+refuses or a command that needs the C library's internals. Twenty files
+reach the sixty-second deadline and are counted with the cases they ran
+by then, four of them cut at a different case each run, so the counts
+move by some tens between runs.
 Depends on: Q7, Q8. Recorded in D-201, D-212, D-213, D-220, D-222,
 D-223 and D-224.
 Size: M.

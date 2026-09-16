@@ -116,6 +116,8 @@ pub enum Expected {
     Action,
     /// `ON`, in a `CREATE INDEX`.
     On,
+    /// `DO`, in an `ON CONFLICT`.
+    Do,
     /// `BEGIN`, `COMMIT`, `END` or `ROLLBACK`.
     Transaction,
     /// `SAVEPOINT`, `RELEASE` or `ROLLBACK`, which a savepoint is named
@@ -826,12 +828,84 @@ impl<'a> Parser<'a> {
         }
         let columns = self.arena.push_names(&columns);
         let select = self.select()?;
+        let mut upserts = Vec::new();
+        while self.eat_keyword(Keyword::On) {
+            self.expect_keyword(Keyword::Conflict, Expected::Conflict)?;
+            upserts.push(self.upsert()?);
+        }
+        let upserts = self.arena.push_upserts(&upserts);
         Ok(Insert {
             conflict,
             schema,
             name,
             columns,
             select,
+            upserts,
+        })
+    }
+
+    /// What follows `ON CONFLICT` in an `INSERT`, which is
+    /// `sqlite3UpsertNew`: the columns the clause is for, and what it
+    /// does where a row conflicts on them.
+    fn upsert(&mut self) -> Result<crate::ast::Upsert, Error> {
+        let mut targets = Vec::new();
+        let mut over = None;
+        if self.eat(Kind::Lp) {
+            loop {
+                targets.push(self.name()?);
+                // A target is an indexed column, so it may carry a
+                // collation and an order, which name the index and are
+                // not read again here.
+                if self.eat_keyword(Keyword::Collate) {
+                    self.name()?;
+                }
+                if !self.eat_keyword(Keyword::Asc) {
+                    self.eat_keyword(Keyword::Desc);
+                }
+                if !self.eat(Kind::Comma) {
+                    break;
+                }
+            }
+            self.expect(Kind::Rp, Expected::CloseParen)?;
+            if self.eat_keyword(Keyword::Where) {
+                over = Some(self.expression()?);
+            }
+        }
+        let targets = self.arena.push_names(&targets);
+        self.expect_keyword(Keyword::Do, Expected::Do)?;
+        if self.eat_keyword(Keyword::Nothing) {
+            return Ok(crate::ast::Upsert {
+                targets,
+                over,
+                sets: Range::default(),
+                writes: false,
+                filter: None,
+            });
+        }
+        self.expect_keyword(Keyword::Update, Expected::Update)?;
+        self.expect_keyword(Keyword::Set, Expected::Set)?;
+        let mut sets = Vec::new();
+        loop {
+            let column = self.name()?;
+            self.expect(Kind::Eq, Expected::Eq)?;
+            let value = self.expression()?;
+            sets.push(Set { column, value });
+            if !self.eat(Kind::Comma) {
+                break;
+            }
+        }
+        let sets = self.arena.push_sets(&sets);
+        let filter = if self.eat_keyword(Keyword::Where) {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+        Ok(crate::ast::Upsert {
+            targets,
+            over,
+            sets,
+            writes: true,
+            filter,
         })
     }
 

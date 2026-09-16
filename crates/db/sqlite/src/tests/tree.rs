@@ -1029,7 +1029,7 @@ fn what_a_statement_that_changes_a_database_refuses() {
     // A key that is not a whole number.
     assert!(matches!(
         refuse(&["CREATE TABLE t(a)", "INSERT INTO t(rowid,a) VALUES ('x',1)"]),
-        Error::Unsupported
+        Error::Mismatch
     ));
 }
 

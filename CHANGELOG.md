@@ -37,6 +37,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `INSERT ... ON CONFLICT` in `db-sqlite`. A clause names the columns of
+  a key of the table or names none at all, and a row that shares that
+  key reaches it: `DO NOTHING` passes the row over, and `DO UPDATE SET`
+  writes the row the conflict found, reading the row that was not
+  written under the name `excluded`. The key of a table now takes a
+  whole number and nothing else, so a value of another type is refused
+  as `datatype mismatch`. D-238 records it.
+
 - `ALTER TABLE ... RENAME TO` in `db-sqlite`. Every statement of the
   schema that names the table is written again under the new name: the
   table's own, an index over it, a trigger on it, and a view that reads

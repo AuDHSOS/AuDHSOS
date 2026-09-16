@@ -4999,6 +4999,24 @@ D-237, document 16 step Q8.
 - The file this crate writes for a rename is the file the shell wrote
   for the same statements, byte for byte.
 
+### 6.6.161 A row that reaches an `ON CONFLICT` clause (`db-sqlite`)
+
+D-238, document 16 step Q8.
+
+- A clause that does nothing passes the row over, and a row that shares
+  no key is written.
+- A clause that writes writes the row the conflict found, under the
+  columns of that row and of the row that was not written.
+- The clause a conflict reaches is the one over the key the row shares,
+  and a conflict on another key is refused.
+- A clause that names the columns of no key is refused before the
+  statement writes a row.
+- A clause that writes holds the row to every constraint of the table,
+  and the triggers of an `UPDATE` run over it.
+- A clause that writes the key moves the row, and a key another row
+  holds is refused.
+- The key of a table takes a whole number and nothing else.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

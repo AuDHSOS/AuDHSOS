@@ -37,6 +37,7 @@ mod savepoint;
 mod schema;
 mod token;
 mod tree;
+mod upsert;
 mod utf8;
 mod value;
 mod wal;

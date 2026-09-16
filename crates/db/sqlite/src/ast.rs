@@ -617,6 +617,25 @@ pub struct Insert {
     pub columns: Range,
     /// Where the rows come from, which is a `VALUES` or a `SELECT`.
     pub select: SelectId,
+    /// The `ON CONFLICT` clauses, in the order they were written.
+    pub upserts: Range,
+}
+
+/// One `ON CONFLICT` clause of an `INSERT`, which is `sqlite3UpsertNew`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Upsert {
+    /// The columns the clause names, or an empty run where it names
+    /// none, which is the clause every conflict reaches.
+    pub targets: Range,
+    /// The `WHERE` that names a partial index, where one was written.
+    pub over: Option<ExprId>,
+    /// What the clause writes, or an empty run for `DO NOTHING`.
+    pub sets: Range,
+    /// Whether the clause writes a row at all, which tells `DO UPDATE`
+    /// from `DO NOTHING`.
+    pub writes: bool,
+    /// The `WHERE` the write is held to, where one was written.
+    pub filter: Option<ExprId>,
 }
 
 /// `DELETE FROM name [WHERE filter]`.
@@ -1209,6 +1228,8 @@ pub struct Arena {
     ctes: Vec<Cte>,
     /// The statements of the trigger bodies, in runs.
     steps: Vec<TriggerStep>,
+    /// The `ON CONFLICT` clauses of the statements, in runs.
+    upserts: Vec<Upsert>,
     /// The columns of the tables, in runs.
     columns: Vec<ColumnDef>,
     /// What follows each column, in runs.
@@ -1227,6 +1248,7 @@ impl Arena {
     pub const fn new() -> Self {
         Arena {
             steps: Vec::new(),
+            upserts: Vec::new(),
             nodes: Vec::new(),
             heights: Vec::new(),
             children: Vec::new(),
@@ -1627,6 +1649,24 @@ impl Arena {
         let start = usize::try_from(range.start).unwrap_or(usize::MAX);
         let end = start.saturating_add(range.len());
         self.sets.get(start..end).unwrap_or_default()
+    }
+
+    /// Keeps `upserts` as a run and answers where it lies.
+    pub fn push_upserts(&mut self, upserts: &[Upsert]) -> Range {
+        let start = u32::try_from(self.upserts.len()).unwrap_or(u32::MAX);
+        self.upserts.extend_from_slice(upserts);
+        Range {
+            start,
+            len: u32::try_from(upserts.len()).unwrap_or(u32::MAX),
+        }
+    }
+
+    /// The `ON CONFLICT` clauses of a run.
+    #[must_use]
+    pub fn upserts(&self, range: Range) -> &[Upsert] {
+        let start = usize::try_from(range.start).unwrap_or(usize::MAX);
+        let end = start.saturating_add(range.len());
+        self.upserts.get(start..end).unwrap_or_default()
     }
 
     /// Keeps `ctes` as a run and answers where it lies.

@@ -106,6 +106,12 @@ pub enum Error {
     /// An `ALTER TABLE ... RENAME TO` whose new name the schema already
     /// holds, with that name.
     Named(Vec<u8>),
+    /// A value written where the key of the table stands that is no
+    /// whole number, which `sqlite3_column_int64` of the key refuses.
+    Mismatch,
+    /// An `ON CONFLICT` clause whose columns are the columns of no key
+    /// of the table, which `sqlite3UpsertAnalyzeTarget` refuses.
+    NoUpsertKey,
     /// An `ALTER TABLE` over a table SQLite keeps for itself, with the
     /// name of that table.
     NotAlterable(Vec<u8>),
@@ -179,6 +185,10 @@ impl Error {
             ),
             Error::Nested => "cannot start a transaction within a transaction".to_string(),
             Error::NoTransaction => "cannot commit - no transaction is active".to_string(),
+            Error::Mismatch => "datatype mismatch".to_string(),
+            Error::NoUpsertKey => {
+                "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint".to_string()
+            }
             Error::NotAlterable(name) => alloc::format!(
                 "table {} may not be altered",
                 alloc::string::String::from_utf8_lossy(name)

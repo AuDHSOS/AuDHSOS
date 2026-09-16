@@ -51,8 +51,8 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-72 197 cases of 705 files: 56 116 pass, 4597 answer differently and
-11 484 are refused.
+72 251 cases of 705 files: 56 338 pass, 4604 answer differently and
+11 309 are refused.
 
 ## 17.4 What is missing
 
