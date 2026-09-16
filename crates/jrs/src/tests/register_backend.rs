@@ -8549,3 +8549,22 @@ fn a_thrown_object_the_embedding_cannot_hold_names_itself() -> Result<(), Error>
     assert_eq!(description, "");
     Ok(())
 }
+
+#[test]
+fn a_symbol_where_7_1_17_wants_a_string_is_a_type_error() -> Result<(), Error> {
+    // 7.1.17 step 2 gives a Symbol no text, which is a `TypeError` of the
+    // Realm and not a step the engine is missing.
+    for source in [
+        "var r;try{'ab'.indexOf(Symbol())}catch(e){r=e instanceof TypeError}r",
+        "var r;try{'ab'+Symbol()}catch(e){r=e instanceof TypeError}r",
+        "var r;try{['a'].join(Symbol())}catch(e){r=e instanceof TypeError}r",
+        "var r;try{'ab'.split(Symbol())}catch(e){r=e instanceof TypeError}r",
+        "var r;try{'ab'.startsWith(Symbol())}catch(e){r=e instanceof TypeError}r",
+        // 7.1.19 keeps a Symbol as the key it is, so a property read of one
+        // reaches no conversion at all.
+        "var o={};o[Symbol.iterator]=1;typeof o[Symbol.iterator]",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}

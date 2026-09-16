@@ -1845,7 +1845,7 @@ impl RegisterVM {
                     };
                     let key = Self::element_at(heap, pair, 0)?.unwrap_or(VALUE_UNDEFINED);
                     let value = Self::element_at(heap, pair, 1)?.unwrap_or(VALUE_UNDEFINED);
-                    let key = property_key(key, heap)?;
+                    let key = property_key(key, heap, realm)?;
                     heap.define_own_named(answer, key, value, PropertyFlags::ordinary_data())?;
                 }
                 Ok(Value::from_object(answer))
@@ -1869,7 +1869,7 @@ impl RegisterVM {
             }
             Intrinsic::ReflectSet => {
                 let target = self.call_argument(&call, 0, heap)?;
-                let key = property_key(self.call_argument(&call, 1, heap)?, heap)?;
+                let key = property_key(self.call_argument(&call, 1, heap)?, heap, realm)?;
                 let value = self.call_argument(&call, 2, heap)?;
                 // 28.1.13 step 3 takes the target as the receiver where the
                 // call named none; every other receiver is a gap.
@@ -1996,7 +1996,7 @@ impl RegisterVM {
             // 19.2.5 and 19.2.4 read a Number out of the text of their first
             // argument. The walk charges for the text it passes over.
             Intrinsic::ParseInt | Intrinsic::ParseFloat => {
-                let text = property_name_units(self.call_argument(&call, 0, heap)?, heap)?;
+                let text = property_name_units(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 self.fuel = self
                     .fuel
                     .checked_sub(u64::try_from(text.len()).unwrap_or(u64::MAX))
@@ -2024,7 +2024,7 @@ impl RegisterVM {
                 self.call_regexp_symbol_intrinsic(intrinsic, &call, heap, realm)
             }
             Intrinsic::RegExpPrototypeReplace => {
-                let text = property_name_units(self.call_argument(&call, 0, heap)?, heap)?;
+                let text = property_name_units(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 let receiver = call
                     .receiver
                     .as_object()
@@ -2301,14 +2301,14 @@ impl RegisterVM {
                 let description = if description.is_undefined() {
                     None
                 } else {
-                    Some(property_name_units(description, heap)?)
+                    Some(property_name_units(description, heap, realm)?)
                 };
                 self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
                 Ok(Value::from_symbol(heap.create_symbol(description)?))
             }
             // 20.4.2.2 and 20.4.2.3 are the two halves of the registry.
             Intrinsic::SymbolFor => {
-                let key = property_name_units(self.call_argument(&call, 0, heap)?, heap)?;
+                let key = property_name_units(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
                 Ok(Value::from_symbol(heap.registered_symbol(&key)?))
             }
@@ -2806,7 +2806,7 @@ impl RegisterVM {
             // other conversion of one is a `TypeError`.
             Some(target) => match target.as_symbol().filter(|_| !construct) {
                 Some(symbol) => Self::symbol_descriptive_string(symbol, heap),
-                None => property_name_units(target, heap)?,
+                None => property_name_units(target, heap, realm)?,
             },
         };
         let text = heap.strings.allocate_units(&units)?;
@@ -2989,13 +2989,13 @@ impl RegisterVM {
             }
             // 28.1.8 is HasProperty of 7.3.11, which walks the chain.
             Intrinsic::ReflectHas => {
-                let name = property_key(key, heap)?;
+                let name = property_key(key, heap, realm)?;
                 Ok(Value::from_bool(heap.lookup_named(object, name)?.is_some()))
             }
             // 28.1.5 is [[Get]], which for this engine answers what a read
             // answers, and names the gap a read would name.
             Intrinsic::ReflectGet => {
-                let name = property_key(key, heap)?;
+                let name = property_key(key, heap, realm)?;
                 if let Some(property) = heap.lookup_named(object, name)? {
                     return Self::plain_value(property);
                 }
@@ -3008,7 +3008,7 @@ impl RegisterVM {
             // 28.1.4 is [[Delete]] of 10.1.10, answering whether it worked
             // where 13.5.1.2 throws in strict code.
             Intrinsic::ReflectDeleteProperty => {
-                let name = property_key(key, heap)?;
+                let name = property_key(key, heap, realm)?;
                 let units = name
                     .as_string()
                     .and_then(|name| heap.strings.to_utf16(Value::from_string(name)))
@@ -3036,7 +3036,7 @@ impl RegisterVM {
                         "property descriptor must be an object",
                     ));
                 };
-                let name = property_key(key, heap)?;
+                let name = property_key(key, heap, realm)?;
                 let descriptor = Self::to_property_descriptor(source, heap, realm)?;
                 Ok(Value::from_bool(Self::define_property_from(
                     object,
@@ -3413,7 +3413,7 @@ impl RegisterVM {
             // Prototype Chain, on a `this` that goes through ToObject.
             Intrinsic::ObjectHasOwn => {
                 let object = Self::coerce_object(target, heap, realm)?;
-                let name = property_key(key, heap)?;
+                let name = property_key(key, heap, realm)?;
                 Ok(Value::from_bool(
                     heap.own_named_flags(object, name)?.is_some(),
                 ))
@@ -3510,7 +3510,7 @@ impl RegisterVM {
             // 20.1.2.8: the own property, as the object 6.2.6.4 makes of it.
             Intrinsic::ObjectGetOwnPropertyDescriptor => {
                 let object = Self::coerce_object(target, heap, realm)?;
-                let name = property_key(key, heap)?;
+                let name = property_key(key, heap, realm)?;
                 let Some(flags) = heap.own_named_flags(object, name)? else {
                     // A name this Realm owes the object has no descriptor to
                     // answer, and undefined would say the object has none.
@@ -3534,7 +3534,7 @@ impl RegisterVM {
                         "Object.defineProperty called on a value that is not an object",
                     ));
                 };
-                let name = property_key(key, heap)?;
+                let name = property_key(key, heap, realm)?;
                 let Some(source) = attributes.as_object() else {
                     return Err(type_error(
                         heap,
@@ -4390,7 +4390,7 @@ impl RegisterVM {
                     .read_reg(register)?
                     .as_object()
                     .ok_or(VMError::TypeError)?;
-                let name = property_key(key, heap)?;
+                let name = property_key(key, heap, realm)?;
                 let Some(found) = heap.lookup_named(source, name)? else {
                     continue;
                 };
@@ -4447,7 +4447,7 @@ impl RegisterVM {
                 }
                 let key = Self::list_element(keys, key_index.saturating_sub(1), heap)?
                     .ok_or(VMError::InvalidFeedbackVector)?;
-                let name = property_key(key, heap)?;
+                let name = property_key(key, heap, realm)?;
                 let held = heap.root_value(target).unwrap_or(VALUE_UNDEFINED);
                 let copy = heap
                     .root_value(copy)
@@ -5821,7 +5821,7 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        let key = property_key(key, heap)?;
+        let key = property_key(key, heap, realm)?;
         let object = Self::coerce_object(call.receiver, heap, realm)?;
         let own = heap.own_named_flags(object, key)?;
         Ok(Value::from_bool(match intrinsic {
@@ -5851,7 +5851,7 @@ impl RegisterVM {
         let text = if message.is_undefined() {
             None
         } else {
-            Some(property_name_units(message, heap)?)
+            Some(property_name_units(message, heap, realm)?)
         };
         let error = match super::realm::NativeErrorKind::of(intrinsic) {
             Some(kind) => realm.create_native_error_units(heap, kind, text.as_deref())?,
@@ -7873,7 +7873,8 @@ impl RegisterVM {
         out.extend(tag.encode_utf16());
         if !attribute.is_empty() {
             let value = self.call_argument(call, 0, heap)?;
-            let value = property_name_units(self.primitive_string(value, heap, realm)?, heap)?;
+            let value =
+                property_name_units(self.primitive_string(value, heap, realm)?, heap, realm)?;
             out.push(u16::from(b' '));
             out.extend(attribute.encode_utf16());
             out.push(u16::from(b'='));
@@ -8320,7 +8321,7 @@ impl RegisterVM {
                 let separator = if search.is_undefined() {
                     alloc::vec![0x2C]
                 } else {
-                    property_name_units(search, heap)?
+                    property_name_units(search, heap, realm)?
                 };
                 let scanned = length.min(i64::from(u32::MAX));
                 let mut out: Vec<u16> = Vec::new();
@@ -8338,7 +8339,7 @@ impl RegisterVM {
                             .ok_or(VMError::Heap(HeapError::InvalidReference))?;
                         out.extend_from_slice(&text);
                     } else if !element.is_undefined() && !element.is_null() {
-                        out.extend(property_name_units(element, heap)?);
+                        out.extend(property_name_units(element, heap, realm)?);
                     }
                     if out.len() > self.string_units_limit {
                         return Err(VMError::StringLimit);
@@ -9464,7 +9465,7 @@ impl RegisterVM {
             if literal.is_object() {
                 return Err(VMError::Unsupported("ToString of an Object"));
             }
-            units.extend(property_name_units(literal, heap)?);
+            units.extend(property_name_units(literal, heap, realm)?);
             // Step 4.e: the last literal has no substitution after it.
             if i64::from(index).saturating_add(1) >= length {
                 break;
@@ -9479,7 +9480,7 @@ impl RegisterVM {
             if substitution.is_object() {
                 return Err(VMError::Unsupported("ToString of an Object"));
             }
-            units.extend(property_name_units(substitution, heap)?);
+            units.extend(property_name_units(substitution, heap, realm)?);
             if units.len() > self.string_units_limit {
                 return Err(VMError::StringLimit);
             }
@@ -9600,7 +9601,7 @@ impl RegisterVM {
             // 22.1.3.9: the search starts at the clamped position and -1 says
             // the String does not occur.
             Intrinsic::StringPrototypeIndexOf => {
-                let search = property_name_units(self.call_argument(&call, 0, heap)?, heap)?;
+                let search = property_name_units(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 let start = integer_argument(self.call_argument(&call, 1, heap)?, heap, realm)?
                     .clamp(0, i64::try_from(units.len()).unwrap_or(i64::MAX));
                 let start = usize::try_from(start).unwrap_or(0);
@@ -9639,13 +9640,14 @@ impl RegisterVM {
                     result.extend(property_name_units(
                         self.call_argument(&call, index, heap)?,
                         heap,
+                        realm,
                     )?);
                 }
                 self.allocate_string(heap, &result)
             }
             // 22.1.3.7: the search ends at the clamped position.
             Intrinsic::StringPrototypeEndsWith => {
-                let search = property_name_units(self.call_argument(&call, 0, heap)?, heap)?;
+                let search = property_name_units(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 let end = match self.call_argument(&call, 1, heap)? {
                     value if value.is_undefined() => units.len(),
                     value => clamped_index(integer_argument(value, heap, realm)?, units.len()),
@@ -9657,7 +9659,7 @@ impl RegisterVM {
             }
             // 22.1.3.8: the search starts at the clamped position.
             Intrinsic::StringPrototypeIncludes => {
-                let search = property_name_units(self.call_argument(&call, 0, heap)?, heap)?;
+                let search = property_name_units(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 let start = clamped_index(
                     integer_argument(self.call_argument(&call, 1, heap)?, heap, realm)?,
                     units.len(),
@@ -9668,7 +9670,7 @@ impl RegisterVM {
             }
             // 22.1.3.10: the last occurrence at or before the clamped position.
             Intrinsic::StringPrototypeLastIndexOf => {
-                let search = property_name_units(self.call_argument(&call, 0, heap)?, heap)?;
+                let search = property_name_units(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 let position = self.call_argument(&call, 1, heap)?;
                 let last = units.len().saturating_sub(search.len());
                 let end = if position.is_undefined() || primitive_number(position, heap)?.is_nan() {
@@ -9730,7 +9732,7 @@ impl RegisterVM {
             }
             // 22.1.3.24: the search starts at the clamped position.
             Intrinsic::StringPrototypeStartsWith => {
-                let search = property_name_units(self.call_argument(&call, 0, heap)?, heap)?;
+                let search = property_name_units(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 let start = clamped_index(
                     integer_argument(self.call_argument(&call, 1, heap)?, heap, realm)?,
                     units.len(),
@@ -9774,7 +9776,7 @@ impl RegisterVM {
                 let width = usize::try_from(width).unwrap_or(0);
                 let filler = match self.call_argument(&call, 1, heap)? {
                     value if value.is_undefined() => alloc::vec![0x20],
-                    value => property_name_units(value, heap)?,
+                    value => property_name_units(value, heap, realm)?,
                 };
                 if width <= units.len() || filler.is_empty() {
                     return self.allocate_string(heap, &units);
@@ -9884,7 +9886,7 @@ impl RegisterVM {
             // 22.1.3.12 orders by the code units, which is the order this
             // Realm has no locale data to refine.
             Intrinsic::StringPrototypeLocaleCompare => {
-                let other = property_name_units(self.call_argument(&call, 0, heap)?, heap)?;
+                let other = property_name_units(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 let order = match units.cmp(&other) {
                     core::cmp::Ordering::Less => -1,
                     core::cmp::Ordering::Equal => 0,
@@ -9974,7 +9976,7 @@ impl RegisterVM {
         if !Self::is_intrinsic(exec, Intrinsic::RegExpPrototypeExec, heap) {
             return Err(VMError::Unsupported("an exec of the Script"));
         }
-        let text = property_name_units(self.call_argument(call, 0, heap)?, heap)?;
+        let text = property_name_units(self.call_argument(call, 0, heap)?, heap, realm)?;
         if intrinsic == Intrinsic::RegExpPrototypeSearch {
             // Step 3 keeps `lastIndex` as it found it, and step 4 searches
             // from the start.
@@ -10132,7 +10134,7 @@ impl RegisterVM {
         if separator.is_undefined() {
             return self.split_result(&[Some(units)], heap, realm);
         }
-        let pattern = property_name_units(separator, heap)?;
+        let pattern = property_name_units(separator, heap, realm)?;
         let limit = usize::try_from(limit).unwrap_or(usize::MAX);
         // An empty separator matches no empty substring, so it answers the code
         // units themselves, at most `limit` of them.
@@ -10208,7 +10210,7 @@ impl RegisterVM {
         if let Some(object) = receiver.as_object() {
             return self.unframed_text_of(object, code, heap, realm);
         }
-        property_name_units(receiver, heap)
+        property_name_units(receiver, heap, realm)
     }
 
     /// The text 7.1.17 gives an Object whose conversion needs no frame.
@@ -10267,7 +10269,7 @@ impl RegisterVM {
             }
             _ => return Err(VMError::Unsupported("ToString of an Object")),
         };
-        property_name_units(text, heap)
+        property_name_units(text, heap, realm)
     }
 
     /// The value a String answers for one property name.
@@ -10476,7 +10478,7 @@ impl RegisterVM {
             if Self::is_callable(second, heap) {
                 return Err(VMError::Unsupported("a reviver of 25.5.1"));
             }
-            let text = property_name_units(first, heap)?;
+            let text = property_name_units(first, heap, realm)?;
             return self.json_parse(&text, heap, realm);
         }
         // 25.5.2 step 2 takes a replacer that is a function or an Array of
@@ -10996,8 +10998,8 @@ impl RegisterVM {
             return Err(VMError::Unsupported("ToString of an Object"));
         }
         let text = self.receiver_units(call.receiver, units, heap, realm)?;
-        let search = property_name_units(search, heap)?;
-        let replacement = property_name_units(replacement, heap)?;
+        let search = property_name_units(search, heap, realm)?;
+        let replacement = property_name_units(replacement, heap, realm)?;
         // Steps 6 and 7: the first occurrence alone, and the String itself
         // where there is none.
         let Some(position) = text
@@ -11040,7 +11042,7 @@ impl RegisterVM {
         if heap.own_named_flags(receiver, key)?.is_some() {
             return Err(VMError::Unsupported("an exec of the Script"));
         }
-        let replacement = property_name_units(replacement, heap)?;
+        let replacement = property_name_units(replacement, heap, realm)?;
         if pattern.global {
             Self::set_last_index(receiver, Value::from_smi(0), heap, realm)?;
         }
@@ -11184,7 +11186,7 @@ impl RegisterVM {
             }
             return self.allocate_string(heap, &units);
         }
-        let text = property_name_units(self.call_argument(call, 0, heap)?, heap)?;
+        let text = property_name_units(self.call_argument(call, 0, heap)?, heap, realm)?;
         let matched = self.regexp_exec(receiver, &pattern, &text, heap, realm)?;
         if intrinsic == Intrinsic::RegExpPrototypeTest {
             return Ok(Value::from_bool(matched.is_some()));
@@ -11226,7 +11228,7 @@ impl RegisterVM {
             let source: alloc::rc::Rc<[u16]> = if argument.is_undefined() {
                 alloc::rc::Rc::from(&[][..])
             } else {
-                alloc::rc::Rc::from(property_name_units(argument, heap)?)
+                alloc::rc::Rc::from(property_name_units(argument, heap, realm)?)
             };
             let compiled = crate::regexp::RegExp::compile(source, "").map_err(|_| {
                 raise(
@@ -11544,7 +11546,7 @@ impl RegisterVM {
             let source: alloc::rc::Rc<[u16]> = if pattern.is_undefined() {
                 alloc::rc::Rc::from(&[][..])
             } else {
-                alloc::rc::Rc::from(property_name_units(pattern, heap)?)
+                alloc::rc::Rc::from(property_name_units(pattern, heap, realm)?)
             };
             (source, Self::flag_units(flags, heap, realm)?)
         };
@@ -11572,7 +11574,7 @@ impl RegisterVM {
         if flags.is_object() {
             return Err(VMError::Unsupported("ToString of an Object"));
         }
-        let units = property_name_units(flags, heap)?;
+        let units = property_name_units(flags, heap, realm)?;
         alloc::string::String::from_utf16(&units).map_err(|_| {
             raise(
                 heap,
@@ -14222,7 +14224,7 @@ impl RegisterVM {
                             "the right-hand side of in is not an object",
                         ));
                     };
-                    let key = property_key(self.acc, heap)?;
+                    let key = property_key(self.acc, heap, realm)?;
                     self.acc = Value::from_bool(Self::has_property(object, key, heap, realm)?);
                 }
                 Instruction::TestInstanceOf(reg) => {
@@ -14662,7 +14664,7 @@ impl RegisterVM {
                     let key_val = self.read_reg(key)?;
                     let target = self.read_reg(obj)?;
                     if target.is_string() {
-                        let name = property_key(key_val, heap)?;
+                        let name = property_key(key_val, heap, realm)?;
                         self.acc = self.string_member(target, name, heap, realm)?;
                         return Ok(None);
                     }
@@ -14716,7 +14718,7 @@ impl RegisterVM {
                     if let Some(element) = element {
                         self.acc = element;
                     } else {
-                        let name = property_name_units(key_val, heap)?;
+                        let name = property_name_units(key_val, heap, realm)?;
                         if name.as_slice() == [0x6C, 0x65, 0x6E, 0x67, 0x74, 0x68]
                             && let Some(length) = heap.array_length(oref)
                         {
@@ -14834,7 +14836,7 @@ impl RegisterVM {
                     let Some(oref) = target.as_object() else {
                         return Err(property_store_error(target, heap, realm));
                     };
-                    let js_obj = heap.get_object(oref).ok_or(VMError::TypeError)?;
+                    let elements = heap.get_object(oref).ok_or(VMError::TypeError)?.elements;
                     let val = self.acc;
 
                     // 7.1.19 keeps a Symbol as the key it is, and no Symbol
@@ -14900,7 +14902,7 @@ impl RegisterVM {
                     }
                     let indexed = match array_index(key_val, heap)? {
                         Some(index) => {
-                            let units = property_name_units(key_val, heap)?;
+                            let units = property_name_units(key_val, heap, realm)?;
                             let name = heap
                                 .strings
                                 .lookup_interned_units(&units)
@@ -14915,10 +14917,10 @@ impl RegisterVM {
                         }
                         None => None,
                     };
-                    if js_obj.elements.is_some()
+                    if elements.is_some()
                         && let Some(index) = indexed
                     {
-                        let elements_reference = js_obj.elements.ok_or(VMError::TypeError)?;
+                        let elements_reference = elements.ok_or(VMError::TypeError)?;
                         let elements = heap
                             .get_elements(elements_reference)
                             .ok_or(VMError::TypeError)?;
@@ -14934,7 +14936,7 @@ impl RegisterVM {
                         }
                         heap.set_array_element(oref, index, val)?;
                     } else {
-                        let name_units = property_name_units(key_val, heap)?;
+                        let name_units = property_name_units(key_val, heap, realm)?;
                         if !define && store_reaches_unbuilt_prototype(oref, &name_units, heap) {
                             return Err(VMError::Unsupported(
                                 "a property write under a name an unbuilt Prototype owns",
@@ -15083,7 +15085,7 @@ impl RegisterVM {
                     let target = self.read_reg(obj)?;
                     let index = array_index(key, heap)?;
                     // 7.1.19 keeps a Symbol as the key it is.
-                    let name = property_key(key, heap)?;
+                    let name = property_key(key, heap, realm)?;
                     self.acc = delete_reference(target, name, index, strict, heap, realm)?;
                 }
                 Instruction::Require(kind) => {
@@ -15187,7 +15189,7 @@ impl RegisterVM {
                         return Ok(None);
                     }
                     let key_value = self.read_reg(key)?;
-                    let name = property_key(key_value, heap)?;
+                    let name = property_key(key_value, heap, realm)?;
                     if let Some(code_id) = self.read_super(
                         base,
                         name,
@@ -15215,7 +15217,7 @@ impl RegisterVM {
                     key,
                     enumerable,
                 } => {
-                    let name = property_key(self.read_reg(key)?, heap)?;
+                    let name = property_key(self.read_reg(key)?, heap, realm)?;
                     // 15.7.14 and 13.2.5.5 name a method after the key only
                     // the run time knows, which 10.2.10 does here.
                     self.name_from_key(name, None, heap)?;
@@ -15227,7 +15229,7 @@ impl RegisterVM {
                     setter,
                     enumerable,
                 } => {
-                    let name = property_key(self.read_reg(key)?, heap)?;
+                    let name = property_key(self.read_reg(key)?, heap, realm)?;
                     self.name_from_key(name, Some(setter), heap)?;
                     self.define_accessor(obj, name, setter, enumerable, heap)?;
                 }
@@ -15271,7 +15273,7 @@ impl RegisterVM {
                     let mut names = Vec::new();
                     for offset in 0..count {
                         let register = Reg(excluded.0.saturating_add(offset));
-                        names.push(property_key(self.read_reg(register)?, heap)?);
+                        names.push(property_key(self.read_reg(register)?, heap, realm)?);
                     }
                     // 10.4.3 gives the String exotic object 7.1.18 would make
                     // one own property per code unit, all of them enumerable.
@@ -16252,7 +16254,11 @@ fn array_index(value: Value, heap: &GenerationalHeap) -> Result<Option<u32>, VME
 ///
 /// An Object key needs `ToPrimitive`, which needs callable `valueOf` and
 /// `toString` intrinsics; until those exist such a key is refused.
-fn property_key(value: Value, heap: &mut GenerationalHeap) -> Result<PropertyKey, VMError> {
+fn property_key(
+    value: Value,
+    heap: &mut GenerationalHeap,
+    realm: &Realm,
+) -> Result<PropertyKey, VMError> {
     if let Some(symbol) = value.as_symbol() {
         return Ok(PropertyKey::Symbol(symbol));
     }
@@ -16263,7 +16269,7 @@ fn property_key(value: Value, heap: &mut GenerationalHeap) -> Result<PropertyKey
     {
         return Ok(PropertyKey::String(name));
     }
-    let units = property_name_units(value, heap)?;
+    let units = property_name_units(value, heap, realm)?;
     Ok(PropertyKey::String(heap.strings.intern_units(&units)?))
 }
 
@@ -16484,7 +16490,16 @@ fn string_index(units: &[u16]) -> Option<u32> {
 /// An Object would go through `ToPrimitive` (7.1.1), which runs a `valueOf` or
 /// a `toString` this function cannot enter, so it names that as a gap rather
 /// than answering the text of an object it did not ask.
-fn property_name_units(value: Value, heap: &GenerationalHeap) -> Result<Vec<u16>, VMError> {
+///
+/// # Errors
+///
+/// Returns [`VMError::Thrown`] with a `TypeError` for a Symbol, which 7.1.17
+/// step 2 gives no text at all.
+fn property_name_units(
+    value: Value,
+    heap: &mut GenerationalHeap,
+    realm: &Realm,
+) -> Result<Vec<u16>, VMError> {
     if value.is_string() {
         return heap
             .strings
@@ -16508,9 +16523,8 @@ fn property_name_units(value: Value, heap: &GenerationalHeap) -> Result<Vec<u16>
         return Ok("undefined".encode_utf16().collect());
     }
     if value.is_symbol() {
-        // 7.1.17 step 2: a Symbol has no String of its own, which is a
-        // `TypeError` this function has no Realm to raise.
-        return Err(VMError::Unsupported("ToString of a Symbol"));
+        // 7.1.17 step 2: a Symbol has no String of its own.
+        return Err(type_error(heap, realm, "a Symbol has no string value"));
     }
     Err(VMError::Unsupported("ToString of an Object"))
 }
@@ -17232,7 +17246,7 @@ mod tests {
             (VALUE_NULL, "null"),
             (VALUE_UNDEFINED, "undefined"),
         ] {
-            let key = property_key(value, &mut heap).unwrap();
+            let key = property_key(value, &mut heap, &realm).unwrap();
             assert_eq!(
                 heap.strings.to_rust_string(key.to_value()).unwrap(),
                 expected
@@ -17242,7 +17256,7 @@ mod tests {
         // it names the gap rather than answering a text it did not ask for.
         let object = realm.ordinary_object(&mut heap).unwrap();
         assert_eq!(
-            property_key(Value::from_object(object), &mut heap),
+            property_key(Value::from_object(object), &mut heap, &realm),
             Err(VMError::Unsupported("ToString of an Object"))
         );
     }
