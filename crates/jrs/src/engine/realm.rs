@@ -370,6 +370,9 @@ pub enum Intrinsic {
     FunctionPrototypeToString,
     /// `Object.prototype.valueOf` (20.1.3.7).
     ObjectPrototypeValueOf,
+    /// `%Function.prototype%` (20.2.3), which is itself a built-in function
+    /// that takes any argument and answers undefined.
+    FunctionPrototype,
     /// `Array.prototype.values`, which is also `%Array.prototype%[@@iterator]`
     /// (23.1.3.38 and 23.1.3.40).
     ArrayPrototypeValues,
@@ -622,7 +625,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 146] = [
+    pub const ALL: [Self; 147] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -769,6 +772,7 @@ impl Intrinsic {
         Self::ReflectSetPrototypeOf,
         Self::FunctionPrototypeToString,
         Self::ObjectPrototypeValueOf,
+        Self::FunctionPrototype,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -843,7 +847,8 @@ impl Intrinsic {
             Self::ArrayConstructor | Self::ObjectConstructor | Self::FunctionConstructor => {
                 IntrinsicHolder::Global
             }
-            Self::FunctionPrototypeCall
+            Self::FunctionPrototype
+            | Self::FunctionPrototypeCall
             | Self::FunctionPrototypeBind
             | Self::FunctionPrototypeApply
             | Self::FunctionPrototypeToString => IntrinsicHolder::FunctionPrototype,
@@ -1088,6 +1093,7 @@ impl Intrinsic {
             Self::ReflectSetPrototypeOf => 143,
             Self::FunctionPrototypeToString => 144,
             Self::ObjectPrototypeValueOf => 145,
+            Self::FunctionPrototype => 146,
         }
     }
 
@@ -1244,6 +1250,7 @@ impl Intrinsic {
             Self::ReflectSetPrototypeOf => 143,
             Self::FunctionPrototypeToString => 144,
             Self::ObjectPrototypeValueOf => 145,
+            Self::FunctionPrototype => 146,
         }
     }
 
@@ -1401,6 +1408,7 @@ impl Intrinsic {
             143 => Some(Self::ReflectSetPrototypeOf),
             144 => Some(Self::FunctionPrototypeToString),
             145 => Some(Self::ObjectPrototypeValueOf),
+            146 => Some(Self::FunctionPrototype),
             _ => None,
         }
     }
@@ -1429,7 +1437,7 @@ impl Intrinsic {
             | Self::SymbolPrototypeValueOf
             | Self::StringPrototypeValueOf
             | Self::ObjectPrototypeValueOf => "valueOf",
-            Self::ThrowTypeError => "",
+            Self::ThrowTypeError | Self::FunctionPrototype => "",
             Self::SymbolConstructor => "Symbol",
             Self::RegExpConstructor => "RegExp",
             Self::RegExpPrototypeExec => "exec",
@@ -1665,6 +1673,7 @@ impl Intrinsic {
             Self::ObjectPrototypeIsPrototypeOf
             | Self::ObjectPrototypeToString
             | Self::ObjectPrototypeValueOf
+            | Self::FunctionPrototype
             | Self::ArrayPrototypeValues
             | Self::ArrayPrototypeKeys
             | Self::ArrayPrototypeEntries
@@ -1800,6 +1809,7 @@ impl Intrinsic {
     pub const fn length(self) -> u32 {
         match self {
             Self::ThrowTypeError
+            | Self::FunctionPrototype
             | Self::SymbolConstructor
             | Self::RegExpPrototypeToString
             | Self::ObjectPrototypeToString
@@ -2575,9 +2585,12 @@ impl Realm {
         let ordinary = Self::rooted(heap, object_prototype)?;
 
         // 20.2.3: %Function.prototype% is a built-in function whose
-        // [[Prototype]] is %Object.prototype%. It is modelled as an ordinary
-        // object until callable intrinsics exist.
-        let function_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
+        // [[Prototype]] is %Object.prototype%. Every other intrinsic stands on
+        // it, so it is made here and the pass that installs them takes it as
+        // it is.
+        let function_prototype =
+            heap.allocate_immortal_native(ordinary, Intrinsic::FunctionPrototype.id(), 0)?;
+        Self::define_builtin_length_and_name(heap, function_prototype, 0, "")?;
         let function_prototype = heap.push_root(Value::from_object(function_prototype))?;
 
         // 23.1.3: %Array.prototype% is an Array exotic object.
@@ -3151,6 +3164,31 @@ impl Realm {
         Ok(())
     }
 
+    /// The `length` and `name` 17 gives a built-in function.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    fn define_builtin_length_and_name(
+        heap: &mut GenerationalHeap,
+        function: super::value::ObjectRef,
+        length: u32,
+        name: &str,
+    ) -> Result<(), HeapError> {
+        let length_key = intern(heap, "length")?;
+        let length = Value::from_smi(i32::try_from(length).unwrap_or(i32::MAX));
+        heap.define_own_named(function, length_key, length, builtin_metadata())?;
+        let name_key = intern(heap, "name")?;
+        let name = heap.strings.allocate_str(name)?;
+        heap.define_own_named(
+            function,
+            name_key,
+            Value::from_string(name),
+            builtin_metadata(),
+        )?;
+        Ok(())
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "one function installs every intrinsic on its holder"
@@ -3162,18 +3200,21 @@ impl Realm {
         let mut intrinsics = [holders.object_prototype; Intrinsic::ALL.len()];
         let function_parent = Self::rooted(heap, holders.function_prototype)?;
         for intrinsic in Intrinsic::ALL {
+            // The Realm made %Function.prototype% before this pass, because
+            // every other intrinsic has it as its [[Prototype]].
+            if intrinsic == Intrinsic::FunctionPrototype {
+                *intrinsics
+                    .get_mut(intrinsic.index())
+                    .ok_or(HeapError::InvalidReference)? = holders.function_prototype;
+                continue;
+            }
             let function =
                 heap.allocate_immortal_native(function_parent, intrinsic.id(), intrinsic.length())?;
-            let length_key = intern(heap, "length")?;
-            let length = Value::from_smi(i32::try_from(intrinsic.length()).unwrap_or(i32::MAX));
-            heap.define_own_named(function, length_key, length, builtin_metadata())?;
-            let name_key = intern(heap, "name")?;
-            let name = heap.strings.allocate_str(intrinsic.name())?;
-            heap.define_own_named(
+            Self::define_builtin_length_and_name(
+                heap,
                 function,
-                name_key,
-                Value::from_string(name),
-                builtin_metadata(),
+                intrinsic.length(),
+                intrinsic.name(),
             )?;
             *intrinsics
                 .get_mut(intrinsic.index())
@@ -3235,8 +3276,12 @@ impl Realm {
             }
             .as_object()
             .ok_or(HeapError::InvalidReference)?;
-            // 10.2.4.1 stands on no object at all, so nothing installs it.
-            if intrinsic == Intrinsic::ThrowTypeError {
+            // 10.2.4.1 stands on no object at all, and 20.2.3 is the holder
+            // rather than something on one, so nothing installs either.
+            if matches!(
+                intrinsic,
+                Intrinsic::ThrowTypeError | Intrinsic::FunctionPrototype
+            ) {
                 continue;
             }
             // 20.4.2 gives `%Symbol%` the thirteen Symbols of table 1 as soon
@@ -3302,6 +3347,15 @@ impl Realm {
             Intrinsic::ErrorConstructor,
             error_prototype,
         )?;
+        // 20.5.6.2 gives each native error constructor `%Error%` as its
+        // [[Prototype]], where every other intrinsic function has
+        // %Function.prototype%.
+        let parent = Self::rooted(
+            heap,
+            *intrinsics
+                .get(Intrinsic::ErrorConstructor.index())
+                .ok_or(HeapError::InvalidReference)?,
+        )?;
         for kind in NativeErrorKind::ALL {
             Self::pair_constructor_with_prototype(
                 heap,
@@ -3311,6 +3365,15 @@ impl Realm {
                     .get(kind.index())
                     .ok_or(HeapError::InvalidReference)?,
             )?;
+            let constructor = Self::rooted(
+                heap,
+                *intrinsics
+                    .get(kind.constructor().index())
+                    .ok_or(HeapError::InvalidReference)?,
+            )?
+            .as_object()
+            .ok_or(HeapError::InvalidReference)?;
+            heap.set_object_prototype(constructor, parent)?;
         }
         Ok(())
     }

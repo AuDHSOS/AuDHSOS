@@ -2928,25 +2928,13 @@ fn var_initializers_infer_anonymous_function_and_class_names() -> Result<(), Err
     // 8.5.2 gives an anonymous function or class the name of the binding it
     // is for, and one that carries its own keeps it.
     differential("var f=function inner(){},c=class Inner{};f.name==='inner'&&c.name==='Inner'")?;
-    let source = "var f=function(){},a=()=>{},c=class{},p=(function(){}),s=(0,function(){});f.name==='f'&&a.name==='a'&&c.name==='c'&&p.name==='p'&&s.name===''";
-    {
-        let program = compile(source, Limits::default())?;
-        assert_eq!(
-            Runtime::new(Limits::default()).run(&program, &mut SilentHost)?,
-            Value::Boolean(true),
-            "{source}"
-        );
-        // 8.5.2 names a sequence expression's function nothing at all, which
-        // this lowering does not tell apart from a name it has not given.
-        assert!(
-            matches!(
-                Runtime::with_backend(Limits::default(), Backend::Engine)
-                    .run(&program, &mut SilentHost),
-                Err(Error::Unsupported { .. }) | Ok(Value::Boolean(false))
-            ),
-            "{source}"
-        );
-    }
+    // 8.5.2 names a sequence expression's function nothing at all, and a
+    // function with no own `name` reads the empty String 20.2.3 gives
+    // %Function.prototype%, so both paths answer the same.
+    differential(
+        "var f=function(){},a=()=>{},c=class{},p=(function(){}),s=(0,function(){});\
+         f.name==='f'&&a.name==='a'&&c.name==='c'&&p.name==='p'&&s.name===''",
+    )?;
     Ok(())
 }
 
@@ -6466,6 +6454,40 @@ fn object_prototype_value_of_answers_the_object() -> Result<(), Error> {
         "var d=Object.getOwnPropertyDescriptor(Object.prototype,'valueOf');\
          ''+d.writable+d.enumerable+d.configurable",
         "var o={};o.valueOf.call(1)*2===2",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
+
+/// Three answers the engine gave that the Script can tell from the right one:
+/// 23.1.3.2 step 3, 20.5.6.2 and 13.10.2 step 5.
+#[test]
+fn the_engine_answers_concat_error_prototypes_and_instanceof_as_the_clauses_do() -> Result<(), Error>
+{
+    for source in [
+        // 23.1.3.2.1 spreads the receiver only when it is an Array.
+        "var x={};x.concat=Array.prototype.concat;var a=x.concat(1);''+a.length+(a[0]===x)",
+        "var x={length:2,0:'a',1:'b'};x.concat=Array.prototype.concat;''+x.concat(1).length",
+        "''+[1,2].concat([3],4)",
+        "''+[].concat()",
+        "''+[1].concat([2,3])",
+        // 20.5.6.2 gives a native error constructor %Error% as its parent.
+        "Object.getPrototypeOf(EvalError)===Error",
+        "Object.getPrototypeOf(TypeError)===Error",
+        "Object.getPrototypeOf(Error)===Function.prototype",
+        "Object.getPrototypeOf(RangeError.prototype)===Error.prototype",
+        // 13.10.2 step 5 throws for a right-hand side that is not callable.
+        "var t=false;try{({}) instanceof {}}catch(e){t=e instanceof TypeError}t",
+        "var t=false;try{1 instanceof 2}catch(e){t=e instanceof TypeError}t",
+        "({}) instanceof Object",
+        "1 instanceof Object",
+        // 20.2.3 makes %Function.prototype% a built-in function of its own.
+        "typeof Function.prototype",
+        "Function.prototype()===undefined",
+        "0 instanceof Function.prototype",
+        "Function.prototype.name===''&&Function.prototype.length===0",
+        "Object.prototype.toString.call(Function.prototype)",
     ] {
         differential_scripts(&[source])?;
     }

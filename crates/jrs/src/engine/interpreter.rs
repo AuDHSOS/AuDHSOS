@@ -768,8 +768,14 @@ impl RegisterVM {
                 "right-hand side of instanceof is not an object",
             ));
         };
+        // 13.10.2 step 5: an object that is not callable carries no
+        // `[[HasInstance]]` of any kind, which is a TypeError and not a false.
         if !Self::is_callable(constructor, heap) {
-            return Ok(false);
+            return Err(type_error(
+                heap,
+                realm,
+                "right-hand side of instanceof is not callable",
+            ));
         }
         let Some(mut current) = value.as_object() else {
             return Ok(false);
@@ -1536,6 +1542,8 @@ impl RegisterVM {
                 Self::own_property_test(intrinsic, self.call_argument(&call, 0)?, call, heap, realm)
             }
             Intrinsic::ObjectPrototypeToString => self.object_to_string(call.receiver, heap, realm),
+            // 20.2.3 accepts any argument and answers undefined.
+            Intrinsic::FunctionPrototype => Ok(VALUE_UNDEFINED),
             // 20.1.3.7 is `ToObject(this value)` and nothing else.
             Intrinsic::ObjectPrototypeValueOf => {
                 Self::coerce_object(call.receiver, heap, realm).map(Value::from_object)
@@ -4768,13 +4776,20 @@ impl RegisterVM {
             // this Realm builds no Symbol, so IsArray decides alone.
             Intrinsic::ArrayPrototypeConcat => {
                 let mut values = Vec::new();
-                Self::spread_into(&mut values, call.receiver, object, length, heap)?;
+                // Step 3 makes the receiver the first item, which 23.1.3.2.1
+                // spreads only when it is an Array; every other object is one
+                // element of the answer.
+                if Self::is_array(call.receiver, heap) {
+                    Self::spread_into(&mut values, object, length, heap)?;
+                } else {
+                    values.push(Some(Value::from_object(object)));
+                }
                 for offset in 0..call.arg_count {
                     let item = self.call_argument(&call, offset)?;
                     match item.as_object().filter(|_| Self::is_array(item, heap)) {
                         Some(part) => {
                             let part_length = Self::array_like_length(heap, part, realm)?;
-                            Self::spread_into(&mut values, item, part, part_length, heap)?;
+                            Self::spread_into(&mut values, part, part_length, heap)?;
                         }
                         None => values.push(Some(item)),
                     }
@@ -4932,15 +4947,10 @@ impl RegisterVM {
     /// Appends every index of an array-like, a hole as a hole.
     fn spread_into(
         values: &mut Vec<Option<Value>>,
-        source: Value,
         object: ObjectRef,
         length: i64,
         heap: &mut GenerationalHeap,
     ) -> Result<(), VMError> {
-        if source.as_object().is_none() {
-            values.push(Some(source));
-            return Ok(());
-        }
         for index in Self::scan_range(0, length) {
             values.push(Self::element_at(heap, object, index)?);
         }

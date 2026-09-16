@@ -7851,6 +7851,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ObjectFreeze
         | crate::engine::realm::Intrinsic::FunctionConstructor
         | crate::engine::realm::Intrinsic::FunctionPrototypeCall
+        // 20.2.3 answers undefined whatever it was given.
+        | crate::engine::realm::Intrinsic::FunctionPrototype
         // 20.1.3.7 answers the object it was given.
         | crate::engine::realm::Intrinsic::ObjectPrototypeValueOf
         | crate::engine::realm::Intrinsic::FunctionPrototypeApply
