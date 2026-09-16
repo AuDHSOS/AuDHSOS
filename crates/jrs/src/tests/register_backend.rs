@@ -537,6 +537,41 @@ fn a_var_head_of_a_nested_iteration_carries_the_top_of_the_lattice() -> Result<(
     Ok(())
 }
 
+#[test]
+fn the_positions_a_clause_converts_take_an_object() -> Result<(), Error> {
+    let number = "{valueOf:function(){return 1}}";
+    let text = "{toString:function(){return 'b'}}";
+    for source in [
+        // 21.1.1.1, 23.1.3.29, 23.1.3.6, 23.1.3.39 and 23.1.3.4 convert the
+        // positions they read, which leaves the clause to run 7.1.1.
+        &alloc::format!("Number({number})"),
+        &alloc::format!("[1,2,3].splice({number},1).join()"),
+        &alloc::format!("[1,2,3].fill(9,{number}).join()"),
+        &alloc::format!("[1,2,3].with({number},7).join()"),
+        &alloc::format!("[1,2,3,4].copyWithin(0,{number}).join()"),
+        &alloc::format!("'a,b,c'.split(',',{number}).join('|')"),
+        // The element each of them stores is taken as it is.
+        &alloc::format!("[1,2,3].fill({number}).length"),
+        &alloc::format!("[1,2].splice(0,1,{number}).length"),
+        &alloc::format!("[1,2].with(0,{number})[0].valueOf()"),
+        // 20.1.2.4, 20.1.2.8, 20.1.3.2, 20.1.3.4 and 28.1 apply ToPropertyKey.
+        &alloc::format!("Object.defineProperty({{}},{text},{{value:5}}).b"),
+        &alloc::format!("({{b:1}}).hasOwnProperty({text})"),
+        &alloc::format!("({{b:1}}).propertyIsEnumerable({text})"),
+        &alloc::format!("Object.getOwnPropertyDescriptor({{b:2}},{text}).value"),
+        &alloc::format!("Reflect.has({{b:1}},{text})"),
+        &alloc::format!("Reflect.get({{b:3}},{text})"),
+        // Step 1 of each reads the target before the name is converted.
+        "(function(){var n=0;try{Object.hasOwn(undefined,{toString:function(){n=1;return 'x'}})}catch(e){return (e instanceof TypeError)+':'+n}})()",
+        "(function(){var n=0;try{Reflect.has(1,{toString:function(){n=1;return 'x'}})}catch(e){return (e instanceof TypeError)+':'+n}})()",
+        "(function(){var n=0;try{Object.defineProperty(1,{toString:function(){n=1;return 'x'}},{})}catch(e){return (e instanceof TypeError)+':'+n}})()",
+        "(function(){var n=0;try{Object.getOwnPropertyDescriptor(null,{toString:function(){n=1;return 'x'}})}catch(e){return (e instanceof TypeError)+':'+n}})()",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
 fn differential_scripts(scripts: &[&str]) -> Result<(), Error> {
     let outcome = |backend| -> Result<Result<Value, Error>, Error> {
         let mut host = SilentHost;
@@ -4213,8 +4248,9 @@ fn register_lowering_rejects_intrinsic_arguments_it_cannot_coerce() -> Result<()
     for source in [
         // An intrinsic runs without a call frame, so a user valueOf in an
         // argument position whose conversion the native does not leave for
-        // keeps the call on the legacy backend.
-        "let n=0;({}).hasOwnProperty({toString(){n++;return 'a'}})",
+        // keeps the call on the legacy backend. 22.1.3.6 converts every
+        // argument it reads and has no position that leaves for one.
+        "let n=0;''.concat({toString(){n++;return 'a'}})",
         // 23.1.3.22 and 23.1.3.23 need the length the layout starts from.
         "let a=[1];let i=0;a[i]=2;a.pop()",
         "let a=[1];let i=0;a[i]=2;a.reverse()",

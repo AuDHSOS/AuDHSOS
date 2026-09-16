@@ -3163,9 +3163,34 @@ impl RegisterVM {
                     _ => type_error(heap, realm, "cannot box null or undefined"),
                 });
             }
+            // 20.1.2.4, 20.1.2.8, 20.1.2.13 and 28.1 read the target before
+            // they convert the name, so a target the clause refuses is
+            // refused by the clause and the conversion never runs.
+            if *index == 1 && Self::refuses_its_target(intrinsic, self.call_argument(call, 0)?) {
+                return Ok(None);
+            }
             return Ok(Some((*index, *hint)));
         }
         Ok(None)
+    }
+
+    /// Whether step 1 of the clause throws for this target, which it reads
+    /// before `ToPropertyKey` converts the name that follows.
+    const fn refuses_its_target(intrinsic: Intrinsic, target: Value) -> bool {
+        match intrinsic {
+            Intrinsic::ObjectDefineProperty
+            | Intrinsic::ReflectDefineProperty
+            | Intrinsic::ReflectDeleteProperty
+            | Intrinsic::ReflectGet
+            | Intrinsic::ReflectGetOwnPropertyDescriptor
+            | Intrinsic::ReflectHas => !target.is_object(),
+            // These two send the target through 7.1.18, which takes every
+            // value but null and undefined.
+            Intrinsic::ObjectGetOwnPropertyDescriptor | Intrinsic::ObjectHasOwn => {
+                target.is_undefined() || target.is_null()
+            }
+            _ => false,
+        }
     }
 
     /// Runs a native operation once its arguments need no conversion.

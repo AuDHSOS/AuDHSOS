@@ -1771,7 +1771,11 @@ impl Intrinsic {
             | Self::SymbolFor
             // 22.2.7.1 and 22.2.6.16 apply `ToString` to the text they search.
             | Self::RegExpPrototypeExec
-            | Self::RegExpPrototypeTest => TEXT,
+            | Self::RegExpPrototypeTest
+            // 20.1.3.2 and 20.1.3.4 apply `ToPropertyKey` to the name, which
+            // sends an Object through 7.1.1 with the hint `string`.
+            | Self::ObjectPrototypeHasOwnProperty
+            | Self::ObjectPrototypePropertyIsEnumerable => TEXT,
             // 22.1.3: one position, which `ToIntegerOrInfinity` converts.
             Self::StringPrototypeCharAt
             | Self::StringPrototypeCharCodeAt
@@ -1793,7 +1797,11 @@ impl Intrinsic {
             | Self::IsNaN
             | Self::IsFinite
             // 23.1.3.14 converts the depth it was given.
-            | Self::ArrayPrototypeFlat => NUMBER,
+            | Self::ArrayPrototypeFlat
+            // 23.1.3.39 converts the index and stores the value as it is;
+            // 21.1.1.1 converts the one argument it reads.
+            | Self::ArrayPrototypeWith
+            | Self::NumberConstructor => NUMBER,
             // 22.1.3.9, 22.1.3.11, 22.1.3.7, 22.1.3.8 and 22.1.3.24: the text
             // to search for, then where to start.
             Self::StringPrototypeIndexOf
@@ -1801,13 +1809,34 @@ impl Intrinsic {
             | Self::StringPrototypeIncludes
             | Self::StringPrototypeEndsWith
             | Self::StringPrototypeStartsWith => TEXT_THEN_NUMBER,
-            // 22.1.3.21, 22.1.3.25 and 23.1.3.28: two positions.
+            // 22.1.3.21, 22.1.3.25, 23.1.3.28 and 23.1.3.29: two positions.
             Self::StringPrototypeSlice
             | Self::StringPrototypeSubstring
             | Self::ArrayPrototypeSlice
             | Self::ArrayPrototypeToSpliced
+            | Self::ArrayPrototypeSplice
             | Self::MathPow
             | Self::MathImul => NUMBERS,
+            // 23.1.3.4: the target, then the two positions it copies from.
+            Self::ArrayPrototypeCopyWithin => &[
+                (0, PrimitiveHint::Number),
+                (1, PrimitiveHint::Number),
+                (2, PrimitiveHint::Number),
+            ],
+            // 23.1.3.6: the value is stored as it is, and the two positions
+            // that follow it are converted.
+            Self::ArrayPrototypeFill => &[(1, PrimitiveHint::Number), (2, PrimitiveHint::Number)],
+            // 20.1.2.4, 20.1.2.8, 20.1.2.13 and 28.1 apply `ToPropertyKey` to
+            // the name, which sends an Object through 7.1.1 with the hint
+            // `string`.
+            Self::ObjectDefineProperty
+            | Self::ObjectGetOwnPropertyDescriptor
+            | Self::ObjectHasOwn
+            | Self::ReflectDefineProperty
+            | Self::ReflectDeleteProperty
+            | Self::ReflectGet
+            | Self::ReflectGetOwnPropertyDescriptor
+            | Self::ReflectHas => &[(1, PrimitiveHint::String)],
             // 22.1.3.16 and 22.1.3.17: the length, then the text to pad with.
             Self::StringPrototypePadStart | Self::StringPrototypePadEnd => {
                 &[(0, PrimitiveHint::Number), (1, PrimitiveHint::String)]
@@ -1818,7 +1847,10 @@ impl Intrinsic {
             // it is, and only the index is converted.
             Self::ArrayPrototypeIndexOf
             | Self::ArrayPrototypeLastIndexOf
-            | Self::ArrayPrototypeIncludes => &[(1, PrimitiveHint::Number)],
+            | Self::ArrayPrototypeIncludes
+            // 22.1.3.23 step 6 applies `ToUint32` to the limit; the separator
+            // reaches `@@split`, which is a call of its own.
+            | Self::StringPrototypeSplit => &[(1, PrimitiveHint::Number)],
             _ => &[],
         }
     }
@@ -1909,11 +1941,7 @@ impl Intrinsic {
             | Self::ObjectIs
             | Self::ArrayPrototypeShift
             | Self::ArrayPrototypeUnshift
-            | Self::ArrayPrototypeSplice
-            | Self::ArrayPrototypeFill
-            | Self::ArrayPrototypeCopyWithin
             | Self::ArrayPrototypeConcat
-            | Self::ArrayPrototypeWith
             | Self::ArrayPrototypeToReversed
             | Self::MathAbs
             | Self::MathCeil
@@ -1947,7 +1975,6 @@ impl Intrinsic {
             | Self::ObjectIsFrozen
             | Self::ObjectValues
             | Self::ObjectEntries
-            | Self::NumberConstructor
             | Self::NumberIsFinite
             | Self::NumberIsInteger
             | Self::NumberIsNaN
@@ -1992,11 +2019,18 @@ impl Intrinsic {
             Self::ObjectPrototypeHasOwnProperty | Self::ObjectPrototypePropertyIsEnumerable => {
                 index == 0
             }
-            // 23.1.3.16, 23.1.3.17 and 23.1.3.20 compare the search element and
-            // coerce only the index that follows it.
+            // 23.1.3.16, 23.1.3.17, 23.1.3.20 and 23.1.3.6 take the element as
+            // it is and coerce only the positions that follow it.
             Self::ArrayPrototypeIncludes
             | Self::ArrayPrototypeIndexOf
-            | Self::ArrayPrototypeLastIndexOf => index > 0,
+            | Self::ArrayPrototypeLastIndexOf
+            | Self::ArrayPrototypeFill => index > 0,
+            // 23.1.3.29 coerces the start and the count, and takes every item
+            // after them as it is.
+            Self::ArrayPrototypeSplice => index < 2,
+            // 23.1.3.39 coerces the index and stores the value as it is;
+            // 21.1.1.1 reads one argument.
+            Self::ArrayPrototypeWith | Self::NumberConstructor => index == 0,
             // 22.1.3 and 23.1.3.1 coerce every argument they read.
             _ => true,
         }
