@@ -8661,3 +8661,45 @@ fn a_return_runs_the_finally_block_before_it_leaves() -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[test]
+fn a_clause_of_23_1_3_moves_the_elements_of_an_array_like() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // 23.1.3 is generic over an array-like: 7.3.4 writes an index of one that
+    // is no Array as an ordinary property, and 7.3.9 deletes it. The stack
+    // backend carries none of these clauses, so only the engine answers here.
+    for (source, answer) in [
+        (
+            "var o={0:'a',1:'b',length:2};''+Array.prototype.shift.call(o)+o.length+o[0]",
+            "a1b",
+        ),
+        (
+            "var o={0:'a',1:'b',length:2};Array.prototype.reverse.call(o);''+o[0]+o[1]",
+            "ba",
+        ),
+        (
+            "var o={0:'a',length:1};Array.prototype.unshift.call(o,'z');''+o[0]+o[1]+o.length",
+            "za2",
+        ),
+        (
+            "var o={0:'a',1:'b',length:2};''+Array.prototype.pop.call(o)+o.length+(1 in o)",
+            "b1false",
+        ),
+        (
+            "var o={0:'c',1:'a',2:'b',length:3};Array.prototype.sort.call(o);''+o[0]+o[1]+o[2]",
+            "abc",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    // An Array still keeps its indices in the Elements store.
+    for source in [
+        "var a=[1,,3];a.reverse();''+(0 in a)+(1 in a)+(2 in a)+a.join(',')",
+        "var a=[1,2,3];a.splice(1,1);a.join(',')",
+        "var a=Object.freeze([1,2]);var r;try{a.reverse()}catch(e){r=e instanceof TypeError};''+r",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}

@@ -7482,20 +7482,12 @@ impl RegisterVM {
                     return Ok(VALUE_UNDEFINED);
                 }
                 let first = Self::element_at(heap, object, 0)?.unwrap_or(VALUE_UNDEFINED);
-                let elements = Self::array_elements(heap, object)?;
                 for index in 1..Self::scan_range(0, length).end {
                     let moved = Self::element_at(heap, object, index)?;
-                    Self::place_element(
-                        heap,
-                        object,
-                        elements,
-                        index.saturating_sub(1),
-                        moved,
-                        realm,
-                    )?;
+                    Self::place_element(heap, object, index.saturating_sub(1), moved, realm)?;
                 }
                 let last = u32::try_from(length.saturating_sub(1)).unwrap_or(u32::MAX);
-                heap.delete_element(elements, last)?;
+                Self::delete_element_or_throw(object, last, heap, realm)?;
                 Self::set_array_like_length(object, last, heap, realm)?;
                 Ok(first)
             }
@@ -7504,12 +7496,11 @@ impl RegisterVM {
             Intrinsic::ArrayPrototypeUnshift => {
                 let count = i64::from(call.arg_count);
                 if count > 0 {
-                    let elements = Self::array_elements(heap, object)?;
                     for index in Self::scan_range(0, length).rev() {
                         let moved = Self::element_at(heap, object, index)?;
                         let target = u32::try_from(i64::from(index).saturating_add(count))
                             .map_err(|_| VMError::PropertyLimit)?;
-                        Self::place_element(heap, object, elements, target, moved, realm)?;
+                        Self::place_element(heap, object, target, moved, realm)?;
                     }
                     for offset in 0..call.arg_count {
                         Self::set_element(
@@ -7584,7 +7575,7 @@ impl RegisterVM {
                 for index in Self::scan_range(start, end) {
                     Self::set_element(object, index, value, heap, realm)?;
                 }
-                Ok(call.receiver)
+                Ok(Value::from_object(object))
             }
             // 23.1.3.4: a range of the Array is copied over another range of
             // it, and the length does not change.
@@ -7596,7 +7587,6 @@ impl RegisterVM {
                     .saturating_sub(start)
                     .min(length.saturating_sub(target))
                     .max(0);
-                let elements = Self::array_elements(heap, object)?;
                 // The ranges may overlap, so the copy reads every element
                 // before it writes any of them.
                 let mut taken = Vec::new();
@@ -7606,9 +7596,9 @@ impl RegisterVM {
                 for (offset, value) in taken.into_iter().enumerate() {
                     let index = target.saturating_add(i64::try_from(offset).unwrap_or(i64::MAX));
                     let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
-                    Self::place_element(heap, object, elements, index, value, realm)?;
+                    Self::place_element(heap, object, index, value, realm)?;
                 }
-                Ok(call.receiver)
+                Ok(Value::from_object(object))
             }
             // 23.1.3.2: the receiver and then each argument, an Array of them
             // one level flat. 23.1.3.2.1 asks @@isConcatSpreadable first, and
@@ -7713,17 +7703,16 @@ impl RegisterVM {
                 if !sorts_in_place {
                     return Self::array_from_holes(values, heap, realm);
                 }
-                let elements = Self::array_elements(heap, object)?;
                 let count = i64::try_from(values.len()).unwrap_or(i64::MAX);
                 for (offset, value) in values.into_iter().enumerate() {
                     let index = u32::try_from(offset).map_err(|_| VMError::PropertyLimit)?;
-                    Self::place_element(heap, object, elements, index, value, realm)?;
+                    Self::place_element(heap, object, index, value, realm)?;
                 }
                 // Step 8 deletes the indices the holes left behind.
                 for position in Self::scan_range(count, length) {
-                    heap.delete_element(elements, position)?;
+                    Self::delete_element_or_throw(object, position, heap, realm)?;
                 }
-                Ok(call.receiver)
+                Ok(Value::from_object(object))
             }
             // 23.1.3.39: a copy with one index replaced, which 23.1.3.39 step
             // 5 refuses for an index outside the Array.
@@ -7767,9 +7756,8 @@ impl RegisterVM {
 
     /// `Set(O, ! ToString(𝔽(index)), value, true)` of 7.3.4 for an index.
     ///
-    /// This engine keeps indexed elements in the store 10.4.2 gives an Array,
-    /// so an array-like without one has nowhere to put them, which it says
-    /// rather than reporting a broken frame.
+    /// 10.4.2 keeps an index of an Array in the Elements store; an array-like
+    /// that is no Array takes it as an ordinary property of its Shape.
     fn set_element(
         object: ObjectRef,
         index: u32,
@@ -7777,14 +7765,11 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<(), VMError> {
-        if heap.array_length(object).is_none() {
-            return Err(VMError::Unsupported(
-                "an indexed write to a receiver that is not an Array",
-            ));
-        }
+        let array = heap.array_length(object).is_some();
         // 10.4.2.1 step 3.g: an index at or above the length needs the length
         // to grow, which 10.4.2.4 refuses once 7.3.15 made it unwritable.
-        if !heap.array_length_is_writable(object).unwrap_or(true)
+        if array
+            && !heap.array_length_is_writable(object).unwrap_or(true)
             && index >= heap.array_length(object).unwrap_or(0)
         {
             return Err(type_error(
@@ -7800,14 +7785,18 @@ impl RegisterVM {
             .get_object(object)
             .ok_or(VMError::Heap(HeapError::InvalidReference))?
             .shape_id;
-        if shape != heap.shapes.root_shape() || !heap.is_extensible(object).unwrap_or(true) {
-            let name = alloc::format!("{index}");
-            let key = PropertyKey::String(
-                heap.strings
-                    .intern_units(&name.encode_utf16().collect::<Vec<u16>>())?,
-            );
+        if !array
+            || shape != heap.shapes.root_shape()
+            || !heap.is_extensible(object).unwrap_or(true)
+        {
+            let key = PropertyKey::String(heap.intern_index(index)?);
             match heap.own_named_flags(object, key)? {
-                Some(flags) if flags.is_accessor || !flags.writable => {
+                // 10.1.9.2 step 5 writes an accessor through its setter, which
+                // is a call of the Script this clause has no frame to make.
+                Some(flags) if flags.is_accessor => {
+                    return Err(VMError::Unsupported("a property that is an accessor"));
+                }
+                Some(flags) if !flags.writable => {
                     return Err(type_error(
                         heap,
                         realm,
@@ -7827,6 +7816,10 @@ impl RegisterVM {
                             realm,
                             "cannot add a property to an object that is not extensible",
                         ));
+                    }
+                    if !array {
+                        heap.define_own_named(object, key, value, PropertyFlags::ordinary_data())?;
+                        return Ok(());
                     }
                 }
             }
@@ -7944,6 +7937,18 @@ impl RegisterVM {
             return Ok(());
         }
         let name = PropertyKey::String(heap.strings.intern_units(&LENGTH_NAME)?);
+        // 10.4.3.1 gives a String exotic object a `length` that is neither
+        // writable nor configurable, which 7.3.4 raises a `TypeError` for.
+        if heap
+            .own_named_flags(object, name)?
+            .is_some_and(|flags| flags.is_accessor || !flags.writable)
+        {
+            return Err(type_error(
+                heap,
+                realm,
+                "cannot write a property that is not writable",
+            ));
+        }
         let length = i32::try_from(length).map_err(|_| VMError::PropertyLimit)?;
         heap.define_own_named(
             object,
@@ -7968,13 +7973,12 @@ impl RegisterVM {
         if inserted == removed {
             return Ok(());
         }
-        let elements = Self::array_elements(heap, object)?;
         let shift = |index: u32, heap: &mut GenerationalHeap| -> Result<(), VMError> {
             let from = i64::from(index);
             let moved = Self::element_at(heap, object, index)?;
             let to = from.saturating_sub(removed).saturating_add(inserted);
             let to = u32::try_from(to).map_err(|_| VMError::PropertyLimit)?;
-            Self::place_element(heap, object, elements, to, moved, realm)
+            Self::place_element(heap, object, to, moved, realm)
         };
         let tail = Self::scan_range(start.saturating_add(removed), length);
         if inserted < removed {
@@ -7986,7 +7990,7 @@ impl RegisterVM {
                 length.saturating_sub(removed).saturating_add(inserted),
                 length,
             ) {
-                heap.delete_element(elements, index)?;
+                Self::delete_element_or_throw(object, index, heap, realm)?;
             }
         } else {
             for index in tail.rev() {
@@ -8376,7 +8380,6 @@ impl RegisterVM {
             // 23.1.3.22: the last element leaves the Array, which is then one
             // shorter; an empty Array only has its length set again.
             Intrinsic::ArrayPrototypePop => {
-                let elements = Self::array_elements(heap, object)?;
                 let Ok(last) = u32::try_from(length.saturating_sub(1)) else {
                     Self::set_array_like_length(object, 0, heap, realm)?;
                     return Ok(VALUE_UNDEFINED);
@@ -8384,25 +8387,24 @@ impl RegisterVM {
                 let element = Self::element_at(heap, object, last)?.unwrap_or(VALUE_UNDEFINED);
                 // Step 4.b deletes the index with 7.3.9 and sets the length
                 // with 7.3.4, and both throw where 10.1 refuses.
-                Self::delete_element_or_throw(object, elements, last, heap, realm)?;
+                Self::delete_element_or_throw(object, last, heap, realm)?;
                 Self::set_array_like_length(object, last, heap, realm)?;
                 Ok(element)
             }
             // 23.1.3.26: the two ends swap until they meet, and an index that
             // is absent stays absent at the position it moves to.
             Intrinsic::ArrayPrototypeReverse => {
-                let elements = Self::array_elements(heap, object)?;
                 let mut lower = 0u32;
                 let mut upper = Self::scan_range(0, length).end.saturating_sub(1);
                 while lower < upper {
                     let lower_value = Self::element_at(heap, object, lower)?;
                     let upper_value = Self::element_at(heap, object, upper)?;
-                    Self::place_element(heap, object, elements, lower, upper_value, realm)?;
-                    Self::place_element(heap, object, elements, upper, lower_value, realm)?;
+                    Self::place_element(heap, object, lower, upper_value, realm)?;
+                    Self::place_element(heap, object, upper, lower_value, realm)?;
                     lower = lower.saturating_add(1);
                     upper = upper.saturating_sub(1);
                 }
-                Ok(call.receiver)
+                Ok(Value::from_object(object))
             }
             // 23.1.3.28: the elements of a range, in the Array 23.1.3.4
             // makes.
@@ -9090,59 +9092,35 @@ impl RegisterVM {
         raise_message(heap, realm, kind, &message)
     }
 
-    /// The Elements store of an Array receiver.
-    ///
-    /// A receiver `Function.prototype.call` brought here need not be one, so
-    /// the absence is named where it is found.
-    fn array_elements(
-        heap: &GenerationalHeap,
-        object: ObjectRef,
-    ) -> Result<super::elements::ElementsRef, VMError> {
-        heap.get_object(object)
-            .and_then(|object| object.elements)
-            // 23.1.3 is generic over an array-like, which it reads and writes
-            // through 7.3.2 and 7.3.4. This engine moves elements in the store
-            // 10.4.2 gives an Array, and a receiver without one has none to
-            // move, which it names rather than reporting a broken frame.
-            .ok_or(VMError::Unsupported(
-                "an Array method that moves elements, on a receiver that is not an Array",
-            ))
-    }
-
     /// `DeletePropertyOrThrow` of 7.3.9 for an index of an Array.
     ///
     /// An index 7.3.15 moved into the Shape is not configurable, which 10.1.10
     /// refuses to delete.
     fn delete_element_or_throw(
         object: ObjectRef,
-        elements: super::elements::ElementsRef,
         index: u32,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<(), VMError> {
-        let shape = heap
-            .get_object(object)
-            .ok_or(VMError::Heap(HeapError::InvalidReference))?
-            .shape_id;
-        if shape != heap.shapes.root_shape() {
-            let name = alloc::format!("{index}");
-            let key = PropertyKey::String(
-                heap.strings
-                    .intern_units(&name.encode_utf16().collect::<Vec<u16>>())?,
-            );
-            if let Some(flags) = heap.own_named_flags(object, key)? {
-                if !flags.configurable {
-                    return Err(type_error(
-                        heap,
-                        realm,
-                        "cannot delete a property that is not configurable",
-                    ));
-                }
+        let key = PropertyKey::String(heap.intern_index(index)?);
+        if let Some(flags) = heap.own_named_flags(object, key)? {
+            if !flags.configurable {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "cannot delete a property that is not configurable",
+                ));
+            }
+            let shape = heap
+                .get_object(object)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?
+                .shape_id;
+            if heap.shapes.lookup(shape, key).is_some() {
                 delete_property(object, key, None, heap)?;
                 return Ok(());
             }
         }
-        heap.delete_element(elements, index)?;
+        Self::delete_element_at(object, index, heap)?;
         Ok(())
     }
 
@@ -9151,15 +9129,36 @@ impl RegisterVM {
     fn place_element(
         heap: &mut GenerationalHeap,
         object: ObjectRef,
-        elements: super::elements::ElementsRef,
         index: u32,
         value: Option<Value>,
         realm: &Realm,
     ) -> Result<(), VMError> {
         match value {
             Some(value) => Self::set_element(object, index, value, heap, realm)?,
-            None => drop(heap.delete_element(elements, index)?),
+            None => Self::delete_element_or_throw(object, index, heap, realm)?,
         }
+        Ok(())
+    }
+
+    /// `DeletePropertyOrThrow` of 7.3.9 for an index, where the clause already
+    /// knows the property may be absent.
+    ///
+    /// 10.4.2 keeps an index of an Array in the Elements store and 10.1.6.3
+    /// moves one with its own attributes into the Shape, so both are asked.
+    fn delete_element_at(
+        object: ObjectRef,
+        index: u32,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        if let Some(elements) = heap
+            .get_object(object)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?
+            .elements
+        {
+            heap.delete_element(elements, index)?;
+        }
+        let key = PropertyKey::String(heap.intern_index(index)?);
+        heap.remove_own_named(object, key)?;
         Ok(())
     }
 
