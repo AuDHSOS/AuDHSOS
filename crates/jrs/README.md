@@ -739,8 +739,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Array.prototype%`, after the answered length, on the register engine (focused) | focused | `64f7a69` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/prototype --summary` | 2,811 | 5,583 | 4,509 (80.76%) | 600 (10.75%) | 474 (8.49%) |
 | `@@unscopables` of `%Array.prototype%` (focused) | focused | `eaaca5d` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/prototype/Symbol.unscopables --summary` | 5 | 10 | 10 (100.00%) | 0 (0.00%) | 0 (0.00%) |
 | The same, on the register engine (focused) | focused | `eaaca5d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/prototype/Symbol.unscopables --summary` | 5 | 10 | 8 (80.00%) | 2 (20.00%) | 0 (0.00%) |
-| Complete pinned suite, including staging and Intl | full | `eaaca5d` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `eaaca5d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 27,064 (26.29%) | 19,392 (18.84%) | 56,469 (54.86%) |
+| `Array.from` and `Array.of` (focused) | focused | `7eb647c` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/from test/built-ins/Array/of --summary` | 63 | 122 | 110 (90.16%) | 6 (4.92%) | 6 (4.92%) |
+| The same two, on the register engine (focused) | focused | `7eb647c` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/from test/built-ins/Array/of --summary` | 63 | 122 | 40 (32.79%) | 22 (18.03%) | 60 (49.18%) |
+| Complete pinned suite, including staging and Intl | full | `7eb647c` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `7eb647c` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 27,106 (26.34%) | 19,410 (18.86%) | 56,409 (54.81%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1535,7 +1537,10 @@ measured at tree `d497e660c1f0346e56cff9825ed0a25c8e83f9ef`, which is the tree
 of `64f7a69`; that step gained 26 variants and lost none. The `@@unscopables`
 runs and both full runs beside it were measured at tree
 `423f41aac930d5cba2c9c25abf7e7dffb9862a5e`, which is the tree of `eaaca5d`;
-that step gained 8 variants and lost none.
+that step gained 8 variants and lost none. The `Array.from` and `Array.of`
+runs and both full runs beside them were measured at tree
+`4722dc97bf87361f29915e3897960f8e417e27d0`, which is the tree of `7eb647c`;
+that step gained 42 variants and lost none.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
