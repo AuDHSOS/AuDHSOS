@@ -717,8 +717,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Reflect%`, after `construct`, on the register engine (focused) | focused | `0d60fa0` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Reflect --summary` | 153 | 306 | 214 (69.93%) | 8 (2.61%) | 84 (27.45%) |
 | `sort`, `toSorted`, `toSpliced` and `flat` (focused) | focused | `58401ba` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/prototype/sort test/built-ins/Array/prototype/toSorted test/built-ins/Array/prototype/toSpliced test/built-ins/Array/prototype/flat --summary` | 124 | 247 | 233 (94.33%) | 10 (4.05%) | 4 (1.62%) |
 | The same four, on the register engine (focused) | focused | `58401ba` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/prototype/sort test/built-ins/Array/prototype/toSorted test/built-ins/Array/prototype/toSpliced test/built-ins/Array/prototype/flat --summary` | 124 | 247 | 114 (46.15%) | 22 (8.91%) | 111 (44.94%) |
-| Complete pinned suite, including staging and Intl | full | `58401ba` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `58401ba` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 25,984 (25.25%) | 19,904 (19.34%) | 57,037 (55.42%) |
+| `%Array.prototype%`, after the converted `length` (focused) | focused | `41b7a16` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/prototype --summary` | 2,811 | 5,583 | 4,744 (84.97%) | 809 (14.49%) | 30 (0.54%) |
+| `%Array.prototype%`, after the converted `length`, on the register engine (focused) | focused | `41b7a16` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/prototype --summary` | 2,811 | 5,583 | 4,358 (78.06%) | 610 (10.93%) | 615 (11.02%) |
+| Complete pinned suite, including staging and Intl | full | `41b7a16` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `41b7a16` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 26,190 (25.45%) | 19,904 (19.34%) | 56,831 (55.22%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1479,7 +1481,10 @@ runs and both full runs beside them were measured at tree
 `2eed04779d98021977e1cf223b80718f3a8d31c7`, which is the tree of `58401ba`;
 that step gained 125 variants and lost none. A `sort` with a comparator of the
 Script is still a named gap, which is most of what the focused engine run
-counts as unsupported.
+counts as unsupported. The `%Array.prototype%` runs and both full runs beside
+the converted `length` were measured at tree
+`846db9695435d17726f87823056051f269162ebb`, which is the tree of `41b7a16`;
+that step gained 206 variants and lost none.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
