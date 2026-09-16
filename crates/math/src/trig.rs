@@ -170,6 +170,57 @@ fn sin_kernel(value: f64) -> f64 {
     sum
 }
 
+/// Returns an implementation-approximated cosine for every binary64 input.
+#[must_use]
+pub fn cos(value: f64) -> f64 {
+    if value.is_nan() {
+        return value;
+    }
+    if value.is_infinite() {
+        return f64::NAN;
+    }
+    if value == 0.0 {
+        return 1.0;
+    }
+    let magnitude = value.abs();
+    let (quadrant, reduced) = if magnitude <= core::f64::consts::FRAC_PI_4 {
+        (0, magnitude)
+    } else if magnitude < CODY_WAITE_LIMIT {
+        reduce_cody_waite(magnitude)
+    } else {
+        reduce_payne_hanek(magnitude)
+    };
+    // 21.3.2.12 is even, so the sign of the argument does not reach the
+    // answer; the quadrant of the reduction decides it.
+    match quadrant {
+        0 => cos_kernel(reduced),
+        1 => -sin_kernel(reduced),
+        2 => -cos_kernel(reduced),
+        _ => sin_kernel(reduced),
+    }
+}
+
+/// Returns an implementation-approximated tangent for every binary64 input.
+#[must_use]
+pub fn tan(value: f64) -> f64 {
+    if value.is_nan() || value == 0.0 {
+        return value;
+    }
+    if value.is_infinite() {
+        return f64::NAN;
+    }
+    let sine = sin(value);
+    let cosine = cos(value);
+    if cosine == 0.0 {
+        return if sine.is_sign_negative() == cosine.is_sign_negative() {
+            f64::INFINITY
+        } else {
+            f64::NEG_INFINITY
+        };
+    }
+    sine / cosine
+}
+
 #[expect(
     clippy::arithmetic_side_effects,
     reason = "the fixed loop index is in 1..=12"

@@ -728,6 +728,8 @@ pub struct RegisterVM {
     /// How many jobs of the queue have run, which is where the next one is
     /// taken from; the queue is emptied once the index reaches its end.
     job_head: u32,
+    /// The state 21.3.2.27 answers from, which every call moves on.
+    random_state: u64,
 }
 
 /// What the embedding made of the text the run gave it.
@@ -833,6 +835,7 @@ impl RegisterVM {
             job_arguments: None,
             completion: None,
             job_head: 0,
+            random_state: 0x2545_f491_4f6c_dd1d,
         }
     }
 
@@ -1886,6 +1889,20 @@ impl RegisterVM {
                     object, key, value, heap, realm,
                 )?))
             }
+            // 21.3.2.18 takes every argument, and an infinite one answers
+            // before a NaN does.
+            Intrinsic::MathHypot => {
+                let mut values = Vec::with_capacity(usize::from(call.arg_count));
+                for index in 0..call.arg_count {
+                    values.push(primitive_number(
+                        self.call_argument(&call, index, heap)?,
+                        heap,
+                    )?);
+                }
+                Ok(Value::from_f64(audhsos_math::hypot(&values)))
+            }
+            // 21.3.2.27 answers a Number in [0, 1) that no argument decides.
+            Intrinsic::MathRandom => Ok(Value::from_f64(self.next_random())),
             Intrinsic::Print => self.print_line(&call, heap, realm),
             Intrinsic::PromiseAll | Intrinsic::PromiseRace | Intrinsic::PromiseAllSettled => {
                 self.promise_combinator(intrinsic, &call, heap, realm)
@@ -2092,7 +2109,28 @@ impl RegisterVM {
             | Intrinsic::MathClz32
             | Intrinsic::MathImul
             | Intrinsic::MathFround
-            | Intrinsic::MathSin => Self::call_plain_intrinsic(
+            | Intrinsic::MathSin
+            | Intrinsic::MathAcos
+            | Intrinsic::MathAcosh
+            | Intrinsic::MathAsin
+            | Intrinsic::MathAsinh
+            | Intrinsic::MathAtan
+            | Intrinsic::MathAtanh
+            | Intrinsic::MathCbrt
+            | Intrinsic::MathCos
+            | Intrinsic::MathCosh
+            | Intrinsic::MathExp
+            | Intrinsic::MathExpm1
+            | Intrinsic::MathF16round
+            | Intrinsic::MathLog
+            | Intrinsic::MathLog10
+            | Intrinsic::MathLog1p
+            | Intrinsic::MathLog2
+            | Intrinsic::MathSinh
+            | Intrinsic::MathSqrt
+            | Intrinsic::MathTan
+            | Intrinsic::MathTanh
+            | Intrinsic::MathAtan2 => Self::call_plain_intrinsic(
                 intrinsic,
                 self.call_argument(&call, 0, heap)?,
                 self.call_argument(&call, 1, heap)?,
@@ -5559,8 +5597,74 @@ impl RegisterVM {
                 let right = number_to_i32(primitive_number(second, heap)?);
                 Ok(Value::from_smi(left.wrapping_mul(right)))
             }
-            // 21.3.2.30 is the only transcendental this Realm has built.
+            // 21.3.2.8 takes both of its arguments.
+            Intrinsic::MathAtan2 => Ok(Value::from_f64(audhsos_math::atan2(
+                primitive_number(first, heap)?,
+                primitive_number(second, heap)?,
+            ))),
+            // The transcendentals of 21.3.2, each of which answers the
+            // special values its clause names and approximates the rest.
             Intrinsic::MathSin => Ok(Value::from_f64(audhsos_math::sin(primitive_number(
+                first, heap,
+            )?))),
+            Intrinsic::MathAcos => Ok(Value::from_f64(audhsos_math::acos(primitive_number(
+                first, heap,
+            )?))),
+            Intrinsic::MathAcosh => Ok(Value::from_f64(audhsos_math::acosh(primitive_number(
+                first, heap,
+            )?))),
+            Intrinsic::MathAsin => Ok(Value::from_f64(audhsos_math::asin(primitive_number(
+                first, heap,
+            )?))),
+            Intrinsic::MathAsinh => Ok(Value::from_f64(audhsos_math::asinh(primitive_number(
+                first, heap,
+            )?))),
+            Intrinsic::MathAtan => Ok(Value::from_f64(audhsos_math::atan(primitive_number(
+                first, heap,
+            )?))),
+            Intrinsic::MathAtanh => Ok(Value::from_f64(audhsos_math::atanh(primitive_number(
+                first, heap,
+            )?))),
+            Intrinsic::MathCbrt => Ok(Value::from_f64(audhsos_math::cbrt(primitive_number(
+                first, heap,
+            )?))),
+            Intrinsic::MathCos => Ok(Value::from_f64(audhsos_math::cos(primitive_number(
+                first, heap,
+            )?))),
+            Intrinsic::MathCosh => Ok(Value::from_f64(audhsos_math::cosh(primitive_number(
+                first, heap,
+            )?))),
+            Intrinsic::MathExp => Ok(Value::from_f64(audhsos_math::exp(primitive_number(
+                first, heap,
+            )?))),
+            Intrinsic::MathExpm1 => Ok(Value::from_f64(audhsos_math::expm1(primitive_number(
+                first, heap,
+            )?))),
+            Intrinsic::MathF16round => Ok(Value::from_f64(audhsos_math::f16round(
+                primitive_number(first, heap)?,
+            ))),
+            Intrinsic::MathLog => Ok(Value::from_f64(audhsos_math::log(primitive_number(
+                first, heap,
+            )?))),
+            Intrinsic::MathLog10 => Ok(Value::from_f64(audhsos_math::log10(primitive_number(
+                first, heap,
+            )?))),
+            Intrinsic::MathLog1p => Ok(Value::from_f64(audhsos_math::log1p(primitive_number(
+                first, heap,
+            )?))),
+            Intrinsic::MathLog2 => Ok(Value::from_f64(audhsos_math::log2(primitive_number(
+                first, heap,
+            )?))),
+            Intrinsic::MathSinh => Ok(Value::from_f64(audhsos_math::sinh(primitive_number(
+                first, heap,
+            )?))),
+            Intrinsic::MathSqrt => Ok(Value::from_f64(audhsos_math::sqrt(primitive_number(
+                first, heap,
+            )?))),
+            Intrinsic::MathTan => Ok(Value::from_f64(audhsos_math::tan(primitive_number(
+                first, heap,
+            )?))),
+            Intrinsic::MathTanh => Ok(Value::from_f64(audhsos_math::tanh(primitive_number(
                 first, heap,
             )?))),
             _ => Ok(Value::from_f64(Self::math_of_one(
@@ -12540,6 +12644,24 @@ impl RegisterVM {
         let count = u16::try_from(length)
             .map_err(|_| VMError::Unsupported("a call of more arguments than a frame passes"))?;
         Ok((list, count))
+    }
+
+    /// 21.3.2.27: the next Number of the sequence this run answers `random`
+    /// with, in `[0, 1)`.
+    ///
+    /// The sequence is the xorshift of one 64-bit state, whose top 53 bits
+    /// make the significand. No clause of 21.3.2 names a distribution beyond
+    /// the interval, and the embedding gives the engine no entropy.
+    fn next_random(&mut self) -> f64 {
+        let mut state = self.random_state;
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        self.random_state = state;
+        // The exponent of 1.0 with a 52-bit significand answers [1, 2), which
+        // one subtraction moves to [0, 1).
+        let bits = 0x3ff0_0000_0000_0000_u64 | (state >> 12);
+        f64::from_bits(bits) - 1.0
     }
 
     /// The job queue of 9.5 this run enqueues into.

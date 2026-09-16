@@ -733,6 +733,52 @@ pub enum Intrinsic {
     ArrayPrototypeFlatMap,
     /// `Object.fromEntries`, 20.1.2.7.
     ObjectFromEntries,
+    /// `Math.acos`, 21.3.2.
+    MathAcos,
+    /// `Math.acosh`, 21.3.2.
+    MathAcosh,
+    /// `Math.asin`, 21.3.2.
+    MathAsin,
+    /// `Math.asinh`, 21.3.2.
+    MathAsinh,
+    /// `Math.atan`, 21.3.2.
+    MathAtan,
+    /// `Math.atan2`, 21.3.2.
+    MathAtan2,
+    /// `Math.atanh`, 21.3.2.
+    MathAtanh,
+    /// `Math.cbrt`, 21.3.2.
+    MathCbrt,
+    /// `Math.cos`, 21.3.2.
+    MathCos,
+    /// `Math.cosh`, 21.3.2.
+    MathCosh,
+    /// `Math.exp`, 21.3.2.
+    MathExp,
+    /// `Math.expm1`, 21.3.2.
+    MathExpm1,
+    /// `Math.f16round`, 21.3.2.
+    MathF16round,
+    /// `Math.hypot`, 21.3.2.
+    MathHypot,
+    /// `Math.log`, 21.3.2.
+    MathLog,
+    /// `Math.log10`, 21.3.2.
+    MathLog10,
+    /// `Math.log1p`, 21.3.2.
+    MathLog1p,
+    /// `Math.log2`, 21.3.2.
+    MathLog2,
+    /// `Math.random`, 21.3.2.
+    MathRandom,
+    /// `Math.sinh`, 21.3.2.
+    MathSinh,
+    /// `Math.sqrt`, 21.3.2.
+    MathSqrt,
+    /// `Math.tan`, 21.3.2.
+    MathTan,
+    /// `Math.tanh`, 21.3.2.
+    MathTanh,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -786,7 +832,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 215] = [
+    pub const ALL: [Self; 238] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1002,6 +1048,29 @@ impl Intrinsic {
         Self::ReflectSet,
         Self::ArrayPrototypeFlatMap,
         Self::ObjectFromEntries,
+        Self::MathAcos,
+        Self::MathAcosh,
+        Self::MathAsin,
+        Self::MathAsinh,
+        Self::MathAtan,
+        Self::MathAtan2,
+        Self::MathAtanh,
+        Self::MathCbrt,
+        Self::MathCos,
+        Self::MathCosh,
+        Self::MathExp,
+        Self::MathExpm1,
+        Self::MathF16round,
+        Self::MathHypot,
+        Self::MathLog,
+        Self::MathLog10,
+        Self::MathLog1p,
+        Self::MathLog2,
+        Self::MathRandom,
+        Self::MathSinh,
+        Self::MathSqrt,
+        Self::MathTan,
+        Self::MathTanh,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -1117,7 +1186,30 @@ impl Intrinsic {
             | Self::MathClz32
             | Self::MathImul
             | Self::MathFround
-            | Self::MathSin => IntrinsicHolder::Math,
+            | Self::MathSin
+            | Self::MathAcos
+            | Self::MathAcosh
+            | Self::MathAsin
+            | Self::MathAsinh
+            | Self::MathAtan
+            | Self::MathAtan2
+            | Self::MathAtanh
+            | Self::MathCbrt
+            | Self::MathCos
+            | Self::MathCosh
+            | Self::MathExp
+            | Self::MathExpm1
+            | Self::MathF16round
+            | Self::MathHypot
+            | Self::MathLog
+            | Self::MathLog10
+            | Self::MathLog1p
+            | Self::MathLog2
+            | Self::MathRandom
+            | Self::MathSinh
+            | Self::MathSqrt
+            | Self::MathTan
+            | Self::MathTanh => IntrinsicHolder::Math,
             Self::ReflectApply
             | Self::ReflectConstruct
             | Self::ReflectSetPrototypeOf
@@ -1467,6 +1559,29 @@ impl Intrinsic {
             Self::ReflectSet => 212,
             Self::ArrayPrototypeFlatMap => 213,
             Self::ObjectFromEntries => 214,
+            Self::MathAcos => 215,
+            Self::MathAcosh => 216,
+            Self::MathAsin => 217,
+            Self::MathAsinh => 218,
+            Self::MathAtan => 219,
+            Self::MathAtan2 => 220,
+            Self::MathAtanh => 221,
+            Self::MathCbrt => 222,
+            Self::MathCos => 223,
+            Self::MathCosh => 224,
+            Self::MathExp => 225,
+            Self::MathExpm1 => 226,
+            Self::MathF16round => 227,
+            Self::MathHypot => 228,
+            Self::MathLog => 229,
+            Self::MathLog10 => 230,
+            Self::MathLog1p => 231,
+            Self::MathLog2 => 232,
+            Self::MathRandom => 233,
+            Self::MathSinh => 234,
+            Self::MathSqrt => 235,
+            Self::MathTan => 236,
+            Self::MathTanh => 237,
         }
     }
 
@@ -1692,6 +1807,29 @@ impl Intrinsic {
             Self::ReflectSet => 212,
             Self::ArrayPrototypeFlatMap => 213,
             Self::ObjectFromEntries => 214,
+            Self::MathAcos => 215,
+            Self::MathAcosh => 216,
+            Self::MathAsin => 217,
+            Self::MathAsinh => 218,
+            Self::MathAtan => 219,
+            Self::MathAtan2 => 220,
+            Self::MathAtanh => 221,
+            Self::MathCbrt => 222,
+            Self::MathCos => 223,
+            Self::MathCosh => 224,
+            Self::MathExp => 225,
+            Self::MathExpm1 => 226,
+            Self::MathF16round => 227,
+            Self::MathHypot => 228,
+            Self::MathLog => 229,
+            Self::MathLog10 => 230,
+            Self::MathLog1p => 231,
+            Self::MathLog2 => 232,
+            Self::MathRandom => 233,
+            Self::MathSinh => 234,
+            Self::MathSqrt => 235,
+            Self::MathTan => 236,
+            Self::MathTanh => 237,
         }
     }
 
@@ -1918,6 +2056,29 @@ impl Intrinsic {
             212 => Some(Self::ReflectSet),
             213 => Some(Self::ArrayPrototypeFlatMap),
             214 => Some(Self::ObjectFromEntries),
+            215 => Some(Self::MathAcos),
+            216 => Some(Self::MathAcosh),
+            217 => Some(Self::MathAsin),
+            218 => Some(Self::MathAsinh),
+            219 => Some(Self::MathAtan),
+            220 => Some(Self::MathAtan2),
+            221 => Some(Self::MathAtanh),
+            222 => Some(Self::MathCbrt),
+            223 => Some(Self::MathCos),
+            224 => Some(Self::MathCosh),
+            225 => Some(Self::MathExp),
+            226 => Some(Self::MathExpm1),
+            227 => Some(Self::MathF16round),
+            228 => Some(Self::MathHypot),
+            229 => Some(Self::MathLog),
+            230 => Some(Self::MathLog10),
+            231 => Some(Self::MathLog1p),
+            232 => Some(Self::MathLog2),
+            233 => Some(Self::MathRandom),
+            234 => Some(Self::MathSinh),
+            235 => Some(Self::MathSqrt),
+            236 => Some(Self::MathTan),
+            237 => Some(Self::MathTanh),
             _ => None,
         }
     }
@@ -1977,6 +2138,29 @@ impl Intrinsic {
             Self::ReflectSet => "set",
             Self::ArrayPrototypeFlatMap => "flatMap",
             Self::ObjectFromEntries => "fromEntries",
+            Self::MathAcos => "acos",
+            Self::MathAcosh => "acosh",
+            Self::MathAsin => "asin",
+            Self::MathAsinh => "asinh",
+            Self::MathAtan => "atan",
+            Self::MathAtan2 => "atan2",
+            Self::MathAtanh => "atanh",
+            Self::MathCbrt => "cbrt",
+            Self::MathCos => "cos",
+            Self::MathCosh => "cosh",
+            Self::MathExp => "exp",
+            Self::MathExpm1 => "expm1",
+            Self::MathF16round => "f16round",
+            Self::MathHypot => "hypot",
+            Self::MathLog => "log",
+            Self::MathLog10 => "log10",
+            Self::MathLog1p => "log1p",
+            Self::MathLog2 => "log2",
+            Self::MathRandom => "random",
+            Self::MathSinh => "sinh",
+            Self::MathSqrt => "sqrt",
+            Self::MathTan => "tan",
+            Self::MathTanh => "tanh",
             Self::SpeciesGetter => "get [Symbol.species]",
             Self::RegExpPrototypeFlags => "get flags",
             Self::RegExpPrototypeSource => "get source",
@@ -2145,6 +2329,10 @@ impl Intrinsic {
     /// is a primitive, so a conversion must not be able to observe a step the
     /// native already took.
     #[must_use]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one table names every intrinsic beside the arguments it converts"
+    )]
     pub const fn coerced_arguments(self) -> &'static [(u16, PrimitiveHint)] {
         /// One position, converted by `ToIntegerOrInfinity` or `ToNumber`.
         const NUMBER: &[(u16, PrimitiveHint)] = &[(0, PrimitiveHint::Number)];
@@ -2216,7 +2404,27 @@ impl Intrinsic {
             // 23.1.3.39 converts the index and stores the value as it is;
             // 21.1.1.1 converts the one argument it reads.
             | Self::ArrayPrototypeWith
-            | Self::NumberConstructor => NUMBER,
+            | Self::NumberConstructor
+            | Self::MathAcos
+            | Self::MathAcosh
+            | Self::MathAsin
+            | Self::MathAsinh
+            | Self::MathAtan
+            | Self::MathAtanh
+            | Self::MathCbrt
+            | Self::MathCos
+            | Self::MathCosh
+            | Self::MathExp
+            | Self::MathExpm1
+            | Self::MathF16round
+            | Self::MathLog
+            | Self::MathLog10
+            | Self::MathLog1p
+            | Self::MathLog2
+            | Self::MathSinh
+            | Self::MathSqrt
+            | Self::MathTan
+            | Self::MathTanh => NUMBER,
             // 22.1.3.9, 22.1.3.11, 22.1.3.7, 22.1.3.8 and 22.1.3.24: the text
             // to search for, then where to start.
             Self::StringPrototypeIndexOf
@@ -2231,7 +2439,8 @@ impl Intrinsic {
             | Self::ArrayPrototypeToSpliced
             | Self::ArrayPrototypeSplice
             | Self::MathPow
-            | Self::MathImul => NUMBERS,
+            | Self::MathImul
+            | Self::MathAtan2 => NUMBERS,
             // 23.1.3.4: the target, then the two positions it copies from.
             Self::ArrayPrototypeCopyWithin => &[
                 (0, PrimitiveHint::Number),
@@ -2556,7 +2765,8 @@ impl Intrinsic {
             | Self::StringPrototypeSmall
             | Self::StringPrototypeStrike
             | Self::StringPrototypeSub
-            | Self::StringPrototypeSup => 0,
+            | Self::StringPrototypeSup
+            | Self::MathRandom => 0,
             Self::StringFromCharCode
             | Self::StringFromCodePoint
             | Self::StringRaw
@@ -2661,6 +2871,26 @@ impl Intrinsic {
             | Self::ObjectGetOwnPropertyDescriptors
             | Self::ArrayPrototypeFlatMap
             | Self::ObjectFromEntries
+            | Self::MathAcos
+            | Self::MathAcosh
+            | Self::MathAsin
+            | Self::MathAsinh
+            | Self::MathAtan
+            | Self::MathAtanh
+            | Self::MathCbrt
+            | Self::MathCos
+            | Self::MathCosh
+            | Self::MathExp
+            | Self::MathExpm1
+            | Self::MathF16round
+            | Self::MathLog
+            | Self::MathLog10
+            | Self::MathLog1p
+            | Self::MathLog2
+            | Self::MathSinh
+            | Self::MathSqrt
+            | Self::MathTan
+            | Self::MathTanh
             | Self::PromiseConstructor
             | Self::PromiseResolve
             | Self::PromiseReject
@@ -2718,6 +2948,8 @@ impl Intrinsic {
             | Self::ObjectAssign
             | Self::StringPrototypeSplit
             | Self::RegExpPrototypeSplit
+            | Self::MathAtan2
+            | Self::MathHypot
             | Self::PromisePrototypeThen => 2,
         }
     }

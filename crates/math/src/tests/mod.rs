@@ -218,3 +218,80 @@ fn sine_reduction_paths_agree_with_host_math() {
         );
     }
 }
+
+#[test]
+fn elementary_functions_answer_the_special_values_and_round_the_square_root() {
+    use crate::{
+        acos, acosh, asin, asinh, atan, atan2, atanh, cbrt, cos, cosh, exp, expm1, f16round, hypot,
+        log, log1p, log2, log10, sinh, sqrt, tan, tanh,
+    };
+    // 21.3.2.32 is the one clause that names an exact result.
+    for value in [0.0f64, 1.0, 4.0, 9.0, 2.0, 1e300, 1e-300, 0.5, 1234.5678] {
+        let root = sqrt(value);
+        assert_eq!(root, value.sqrt(), "sqrt({value})");
+    }
+    assert!(sqrt(-1.0).is_nan());
+    assert_eq!(sqrt(f64::INFINITY), f64::INFINITY);
+    assert!(sqrt(-0.0).is_sign_negative());
+    // Every other clause is implementation-approximated, so the checks below
+    // stand on the special values it names and on one ulp of the rest.
+    let close = |left: f64, right: f64, name: &str| {
+        let scale = right.abs().max(1.0);
+        assert!(
+            (left - right).abs() <= scale * 4.0 * f64::EPSILON,
+            "{name}: {left} != {right}"
+        );
+    };
+    close(exp(1.0), core::f64::consts::E, "exp(1)");
+    close(exp(-1.0), 1.0 / core::f64::consts::E, "exp(-1)");
+    close(log(core::f64::consts::E), 1.0, "log(e)");
+    close(log(1000.0), 1000.0f64.ln(), "log(1000)");
+    close(log2(1024.0), 10.0, "log2(1024)");
+    close(log10(1e21), 21.0, "log10(1e21)");
+    close(log1p(1e-8), 1e-8f64.ln_1p(), "log1p");
+    close(expm1(1e-8), 1e-8f64.exp_m1(), "expm1");
+    close(cbrt(27.0), 3.0, "cbrt(27)");
+    close(cbrt(-8.0), -2.0, "cbrt(-8)");
+    close(cos(0.5), 0.5f64.cos(), "cos");
+    close(tan(0.5), 0.5f64.tan(), "tan");
+    close(atan(0.5), 0.5f64.atan(), "atan");
+    close(atan(3.0), 3.0f64.atan(), "atan(3)");
+    close(atan2(1.0, 2.0), 1.0f64.atan2(2.0), "atan2");
+    close(asin(0.5), 0.5f64.asin(), "asin");
+    close(acos(0.5), 0.5f64.acos(), "acos");
+    close(sinh(0.5), 0.5f64.sinh(), "sinh");
+    close(cosh(0.5), 0.5f64.cosh(), "cosh");
+    close(tanh(0.5), 0.5f64.tanh(), "tanh");
+    close(asinh(0.5), 0.5f64.asinh(), "asinh");
+    close(acosh(2.0), 2.0f64.acosh(), "acosh");
+    close(atanh(0.5), 0.5f64.atanh(), "atanh");
+    close(hypot(&[3.0, 4.0]), 5.0, "hypot");
+    assert_eq!(hypot(&[f64::INFINITY, f64::NAN]), f64::INFINITY);
+    assert!(hypot(&[f64::NAN, 1.0]).is_nan());
+    assert_eq!(f16round(1.337), 1.336_914_062_5);
+    assert_eq!(f16round(65520.0), f64::INFINITY);
+    assert!(f16round(-0.0).is_sign_negative());
+    // 21.3.2 names the value each clause answers for zero and the infinities.
+    assert_eq!(exp(f64::NEG_INFINITY), 0.0);
+    assert_eq!(expm1(f64::NEG_INFINITY), -1.0);
+    assert_eq!(log(0.0), f64::NEG_INFINITY);
+    assert!(log(-1.0).is_nan());
+    assert!(cos(f64::INFINITY).is_nan());
+    assert_eq!(cos(0.0), 1.0);
+    assert!(tan(f64::INFINITY).is_nan());
+    assert!(tan(-0.0).is_sign_negative());
+    assert_eq!(atan(f64::INFINITY), core::f64::consts::FRAC_PI_2);
+    assert_eq!(atan2(0.0, -0.0), core::f64::consts::PI);
+    assert_eq!(atan2(-0.0, -1.0), -core::f64::consts::PI);
+    assert_eq!(
+        atan2(f64::INFINITY, f64::INFINITY),
+        core::f64::consts::FRAC_PI_4
+    );
+    assert_eq!(atan2(1.0, f64::NEG_INFINITY), core::f64::consts::PI);
+    assert!(asin(1.5).is_nan());
+    assert_eq!(acos(1.0), 0.0);
+    assert_eq!(cosh(f64::NEG_INFINITY), f64::INFINITY);
+    assert_eq!(tanh(f64::INFINITY), 1.0);
+    assert!(acosh(0.5).is_nan());
+    assert_eq!(atanh(1.0), f64::INFINITY);
+}

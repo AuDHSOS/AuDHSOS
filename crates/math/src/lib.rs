@@ -4,10 +4,15 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod elementary;
 mod integer;
 mod trig;
+pub use elementary::{
+    acos, acosh, asin, asinh, atan, atan2, atanh, cbrt, cosh, exp, expm1, f16round, hypot, log,
+    log1p, log2, log10, sinh, sqrt, tanh,
+};
 pub use integer::RadixInteger;
-pub use trig::sin;
+pub use trig::{cos, sin, tan};
 
 // Exact comparisons below classify IEEE special values and representable integers.
 #[expect(

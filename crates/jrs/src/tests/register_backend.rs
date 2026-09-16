@@ -7693,6 +7693,57 @@ fn a_promise_settles_through_the_job_queue_of_both_backends() -> Result<(), Erro
 }
 
 #[test]
+fn the_transcendentals_of_21_3_2_answer_the_special_values_they_name() -> Result<(), Error> {
+    // The stack backend carries none of them, so only the engine answers.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    for (source, expected) in [
+        // 21.3.2.32 names an exact result; every other clause approximates.
+        ("''+Math.sqrt(9)", "3"),
+        ("''+Math.sqrt(2)", "1.4142135623730951"),
+        ("''+Math.sqrt(-1)", "NaN"),
+        ("''+Math.cbrt(27)", "3"),
+        ("''+(1/Math.cbrt(-0))", "-Infinity"),
+        ("''+Math.cos(0)", "1"),
+        ("''+Math.cos(Infinity)", "NaN"),
+        ("''+(1/Math.tan(-0))", "-Infinity"),
+        ("''+Math.exp(0)", "1"),
+        ("''+Math.exp(-Infinity)", "0"),
+        ("''+Math.expm1(-Infinity)", "-1"),
+        ("''+Math.log(0)", "-Infinity"),
+        ("''+Math.log(-1)", "NaN"),
+        ("''+Math.log2(1024)", "10"),
+        ("''+Math.log10(1e21)", "21"),
+        ("''+Math.atan(Infinity)", "1.5707963267948966"),
+        ("''+Math.atan2(1,1)", "0.7853981633974483"),
+        ("''+Math.atan2(0,-0)", "3.141592653589793"),
+        ("''+Math.atan2(Infinity,Infinity)", "0.7853981633974483"),
+        ("''+Math.asin(1.5)", "NaN"),
+        ("''+Math.acos(1)", "0"),
+        ("''+Math.cosh(-Infinity)", "Infinity"),
+        ("''+Math.tanh(Infinity)", "1"),
+        ("''+Math.acosh(0.5)", "NaN"),
+        ("''+Math.atanh(1)", "Infinity"),
+        ("''+Math.hypot(3,4)", "5"),
+        ("''+Math.hypot()", "0"),
+        ("''+Math.hypot(Infinity,NaN)", "Infinity"),
+        ("''+Math.f16round(1.337)", "1.3369140625"),
+        ("''+Math.f16round(65520)", "Infinity"),
+        // 21.3.2.27 answers a Number of the interval and nothing else.
+        ("''+(Math.random()>=0&&Math.random()<1)", "true"),
+        // 17 gives each one the length and the name its clause names.
+        (
+            "''+Math.hypot.length+Math.atan2.length+Math.random.length+Math.sqrt.length",
+            "2201",
+        ),
+        ("Math.f16round.name", "f16round"),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(expected), "{source}");
+    }
+    Ok(())
+}
+
+#[test]
 fn flat_map_and_from_entries_answer_what_their_clauses_ask() -> Result<(), Error> {
     // 23.1.3.13 is 23.1.3.13.1 with the depth one: an answer that is an Array
     // contributes its elements and every other answer contributes itself.

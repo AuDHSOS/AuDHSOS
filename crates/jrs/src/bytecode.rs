@@ -8668,6 +8668,29 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::MathImul
         | crate::engine::realm::Intrinsic::MathFround
         | crate::engine::realm::Intrinsic::MathSin
+        | crate::engine::realm::Intrinsic::MathAcos
+        | crate::engine::realm::Intrinsic::MathAcosh
+        | crate::engine::realm::Intrinsic::MathAsin
+        | crate::engine::realm::Intrinsic::MathAsinh
+        | crate::engine::realm::Intrinsic::MathAtan
+        | crate::engine::realm::Intrinsic::MathAtanh
+        | crate::engine::realm::Intrinsic::MathCbrt
+        | crate::engine::realm::Intrinsic::MathCos
+        | crate::engine::realm::Intrinsic::MathCosh
+        | crate::engine::realm::Intrinsic::MathExp
+        | crate::engine::realm::Intrinsic::MathExpm1
+        | crate::engine::realm::Intrinsic::MathF16round
+        | crate::engine::realm::Intrinsic::MathLog
+        | crate::engine::realm::Intrinsic::MathLog10
+        | crate::engine::realm::Intrinsic::MathLog1p
+        | crate::engine::realm::Intrinsic::MathLog2
+        | crate::engine::realm::Intrinsic::MathSinh
+        | crate::engine::realm::Intrinsic::MathSqrt
+        | crate::engine::realm::Intrinsic::MathTan
+        | crate::engine::realm::Intrinsic::MathTanh
+        | crate::engine::realm::Intrinsic::MathAtan2
+        | crate::engine::realm::Intrinsic::MathHypot
+        | crate::engine::realm::Intrinsic::MathRandom
         // 21.1.1.1 answers the Number ToNumber makes of its argument.
         | crate::engine::realm::Intrinsic::NumberPrototypeValueOf
         | crate::engine::realm::Intrinsic::NumberConstructor => RegisterType::Number,
