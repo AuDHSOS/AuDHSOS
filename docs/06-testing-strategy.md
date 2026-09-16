@@ -5136,6 +5136,31 @@ Document 16 step Q8.
   the statement and is refused `UNIQUE constraint failed: xyz.d, xyz.c,
   xyz.b`.
 
+### 6.6.169 `ALTER TABLE ... RENAME COLUMN` (`db-sqlite`)
+
+Document 16 step Q8.
+
+- The table's own statement, a table that points at the column, an index
+  over the table, a trigger on it and a view that reads it are all
+  written again under the new name, byte for byte as the C library's
+  shell writes them.
+- The rows of the table answer under the new name, the old name names
+  nothing, and `PRAGMA integrity_check` answers `ok`.
+- A statement over another table is left alone, including its own
+  columns of the same name, its `CHECK`, its `DEFAULT`, its computed
+  column, its keys, its index, its trigger and its view.
+- A name written under another table names that table, and `old` alone
+  names the row a trigger stands on.
+- A `FROM` that names no table of the schema leaves a name written under
+  nothing alone.
+- A column the table does not hold is refused `no such column: "zz"`,
+  and a table SQLite keeps for itself `table sqlite_master may not be
+  altered`.
+- A rename that leaves the table with two columns of one name is refused
+  `error in table t after rename: duplicate column name: b`, and the
+  schema stands as it was.
+- A new name the statement wrote in quotes is written in quotes.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

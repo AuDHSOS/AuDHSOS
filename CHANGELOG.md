@@ -79,6 +79,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `ALTER TABLE ... RENAME COLUMN` in `db-sqlite`. Every statement of the
+  schema that names the column is written again under the new name: the
+  table's own statement, a table that points at the column, an index
+  over the table, a trigger on it and a view that reads it. A statement
+  over another table is left alone. A rename that leaves the table with
+  two columns of one name is refused and the schema stands as it was.
+  D-245 records it. Catalog 6.6.169.
+
 - An index over an expression and an index over fewer rows than the
   table has in `db-sqlite`. `CREATE INDEX t1a1 ON t1(substr(a,1,12))`
   holds what the expression answers for each row, and `CREATE INDEX t1p

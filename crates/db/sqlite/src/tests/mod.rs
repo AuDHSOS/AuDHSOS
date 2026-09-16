@@ -33,6 +33,7 @@ mod page;
 mod parse;
 mod record;
 mod rename;
+mod renamecol;
 mod reopen;
 mod returning;
 mod rowvalue;

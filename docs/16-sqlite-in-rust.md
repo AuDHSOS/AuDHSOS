@@ -715,7 +715,7 @@ Size: L.
     D-236 records.
 17. `ALTER TABLE ... RENAME TO`: every statement of the schema that
     names the table written again under the new name. Built, which
-    D-237 records; `RENAME COLUMN` and `DROP COLUMN` are open.
+    D-237 records.
 18. `INSERT ... ON CONFLICT`: the clause a row that shares a key
     reaches, and what it writes. Built, which D-238 records; a table
     that keeps its rows in the key's own tree is open.
@@ -723,8 +723,7 @@ Size: L.
     writes: `EXISTS`, `IN (SELECT ...)` and a statement that stands for
     a value. Built, which D-239 records.
 20. `ALTER TABLE ... DROP COLUMN`: the column out of the text that
-    made the table and out of every row. Built, which D-240 records;
-    `RENAME COLUMN` is open.
+    made the table and out of every row. Built, which D-240 records.
 21. `RETURNING`, and `INSERT INTO t DEFAULT VALUES`. Built, which
     D-241 records.
 22. The words a statement that writes is refused with, which
@@ -736,6 +735,9 @@ Size: L.
 24. The key an `ON CONFLICT` clause names, by the columns and the
     collations of that key. Built, which D-244 records; a clause that
     names an index over an expression or over fewer rows is open.
+25. `ALTER TABLE ... RENAME COLUMN`: every statement of the schema
+    that names the column written again under the new name. Built,
+    which D-245 records.
 
 ### Done when
 
@@ -745,8 +747,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 72 548 cases in 705 files, 57 416
-pass, 4422 answer differently, and 10 710 name something the engine
+under the `tclsh` of the machine. Of 72 400 cases in 705 files, 57 359
+pass, 4397 answer differently, and 10 644 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts

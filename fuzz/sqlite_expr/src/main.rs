@@ -158,7 +158,10 @@ fn walk_definition(arena: &Arena, definition: Definition) {
         // A `DROP` names a table, an index, a view or a trigger, a
         // `RENAME` names two tables and a `DROP COLUMN` names a column;
         // none of them holds an expression.
-        Definition::Drop(_) | Definition::Rename(_) | Definition::DropColumn(_) => {}
+        Definition::Drop(_)
+        | Definition::Rename(_)
+        | Definition::DropColumn(_)
+        | Definition::RenameColumn(_) => {}
     }
 }
 

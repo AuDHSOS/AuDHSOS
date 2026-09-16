@@ -137,6 +137,10 @@ pub enum Error {
     /// was dropped: what it makes, its name, and what reading it
     /// refused.
     AfterDrop(Vec<u8>, Vec<u8>, alloc::string::String),
+    /// A statement of the schema that no longer reads after a column
+    /// was renamed: what it makes, its name, and what reading it
+    /// refused.
+    AfterRename(Vec<u8>, Vec<u8>, alloc::string::String),
     /// A value written where the key of the table stands that is no
     /// whole number, which `sqlite3_column_int64` of the key refuses.
     Mismatch,
@@ -187,6 +191,51 @@ pub enum Error {
 }
 
 impl Error {
+    /// What an `ALTER TABLE` is refused with, or nothing where the
+    /// refusal is another.
+    fn altered(&self) -> Option<alloc::string::String> {
+        Some(match self {
+            Error::NoSuchColumn(name) => alloc::format!(
+                "no such column: \"{}\"",
+                alloc::string::String::from_utf8_lossy(name)
+            ),
+            Error::KeyColumn(key, name) => alloc::format!(
+                "cannot drop {} column: \"{}\"",
+                alloc::string::String::from_utf8_lossy(key),
+                alloc::string::String::from_utf8_lossy(name)
+            ),
+            Error::LastColumn(name) => alloc::format!(
+                "cannot drop column \"{}\": no other columns exist",
+                alloc::string::String::from_utf8_lossy(name)
+            ),
+            Error::AfterDrop(kind, name, refused) => alloc::format!(
+                "error in {} {} after drop column: {}",
+                alloc::string::String::from_utf8_lossy(kind),
+                alloc::string::String::from_utf8_lossy(name),
+                refused
+            ),
+            Error::AfterRename(kind, name, refused) => alloc::format!(
+                "error in {} {} after rename: {}",
+                alloc::string::String::from_utf8_lossy(kind),
+                alloc::string::String::from_utf8_lossy(name),
+                refused
+            ),
+            Error::NotAlterable(name) => alloc::format!(
+                "table {} may not be altered",
+                alloc::string::String::from_utf8_lossy(name)
+            ),
+            Error::NotATable(name) => alloc::format!(
+                "view {} may not be altered",
+                alloc::string::String::from_utf8_lossy(name)
+            ),
+            Error::Named(name) => alloc::format!(
+                "there is already another table or index with this name: {}",
+                alloc::string::String::from_utf8_lossy(name)
+            ),
+            _ => return None,
+        })
+    }
+
     /// The text the C library writes for this refusal, which is what a
     /// `catchsql` of SQLite's own test files compares.
     ///
@@ -195,6 +244,9 @@ impl Error {
     #[must_use]
     pub fn message(&self) -> alloc::string::String {
         use alloc::string::ToString as _;
+        if let Some(shown) = self.altered() {
+            return shown;
+        }
         match self {
             Error::NoTable(name) => alloc::format!(
                 "no such table: {}",
@@ -244,40 +296,9 @@ impl Error {
                 "table {} has {columns} columns but {values} values were supplied",
                 alloc::string::String::from_utf8_lossy(table)
             ),
-            Error::NoSuchColumn(name) => alloc::format!(
-                "no such column: \"{}\"",
-                alloc::string::String::from_utf8_lossy(name)
-            ),
-            Error::KeyColumn(key, name) => alloc::format!(
-                "cannot drop {} column: \"{}\"",
-                alloc::string::String::from_utf8_lossy(key),
-                alloc::string::String::from_utf8_lossy(name)
-            ),
-            Error::LastColumn(name) => alloc::format!(
-                "cannot drop column \"{}\": no other columns exist",
-                alloc::string::String::from_utf8_lossy(name)
-            ),
-            Error::AfterDrop(kind, name, refused) => alloc::format!(
-                "error in {} {} after drop column: {}",
-                alloc::string::String::from_utf8_lossy(kind),
-                alloc::string::String::from_utf8_lossy(name),
-                refused
-            ),
             Error::NoUpsertKey => {
                 "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint".to_string()
             }
-            Error::NotAlterable(name) => alloc::format!(
-                "table {} may not be altered",
-                alloc::string::String::from_utf8_lossy(name)
-            ),
-            Error::NotATable(name) => alloc::format!(
-                "view {} may not be altered",
-                alloc::string::String::from_utf8_lossy(name)
-            ),
-            Error::Named(name) => alloc::format!(
-                "there is already another table or index with this name: {}",
-                alloc::string::String::from_utf8_lossy(name)
-            ),
             Error::NoSavepoint(name) => alloc::format!(
                 "no such savepoint: {}",
                 alloc::string::String::from_utf8_lossy(name)

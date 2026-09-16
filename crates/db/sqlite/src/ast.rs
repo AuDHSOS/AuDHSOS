@@ -569,6 +569,19 @@ pub struct DropColumn {
     pub column: Span,
 }
 
+/// `ALTER TABLE [schema.]name RENAME [COLUMN] name TO name`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RenameColumn {
+    /// The schema, where one was named.
+    pub schema: Option<Span>,
+    /// The table.
+    pub table: Span,
+    /// The column as it stands.
+    pub column: Span,
+    /// The name it takes.
+    pub name: Span,
+}
+
 /// `ALTER TABLE [schema.]name RENAME TO name`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RenameTable {
@@ -758,6 +771,8 @@ pub enum Definition {
     Rename(RenameTable),
     /// `ALTER TABLE ... DROP COLUMN`.
     DropColumn(DropColumn),
+    /// `ALTER TABLE ... RENAME COLUMN`.
+    RenameColumn(RenameColumn),
     /// `CREATE TRIGGER`.
     Trigger(CreateTrigger),
     /// `DROP TABLE`, `DROP INDEX`, `DROP VIEW` and `DROP TRIGGER`.

@@ -108,6 +108,7 @@ fn table_of(sql: &str) -> (crate::ast::Arena, crate::ast::CreateTable) {
         | Definition::AddColumn(_)
         | Definition::Rename(_)
         | Definition::DropColumn(_)
+        | Definition::RenameColumn(_)
         | Definition::Trigger(_)
         | Definition::Drop(_) => {
             panic!("something other than a table was written")
@@ -405,6 +406,7 @@ fn trigger_of(sql: &str) -> (crate::ast::Arena, crate::ast::CreateTrigger) {
         | Definition::AddColumn(_)
         | Definition::Rename(_)
         | Definition::DropColumn(_)
+        | Definition::RenameColumn(_)
         | Definition::Drop(_) => panic!("something other than a trigger was written"),
     }
 }

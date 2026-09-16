@@ -209,7 +209,8 @@ fn what_the_parser_reads_of_a_rename() {
     for sql in [
         b"ALTER TABLE t RENAME".as_slice(),
         b"ALTER TABLE t RENAME TO",
-        b"ALTER TABLE t RENAME COLUMN a TO b",
+        b"ALTER TABLE t RENAME COLUMN a TO",
+        b"ALTER TABLE t RENAME a",
         b"ALTER TABLE t",
     ] {
         assert!(crate::parse::definition(sql).is_err(), "{sql:?}");

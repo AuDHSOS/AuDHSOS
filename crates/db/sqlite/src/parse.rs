@@ -1102,11 +1102,22 @@ impl<'a> Parser<'a> {
         self.expect_keyword(Keyword::Table, Expected::Table)?;
         let (schema, table) = self.qualified_name()?;
         if self.eat_keyword(Keyword::Rename) {
+            if self.eat_keyword(Keyword::To) {
+                let name = self.name()?;
+                return Ok(Definition::Rename(crate::ast::RenameTable {
+                    schema,
+                    table,
+                    name,
+                }));
+            }
+            self.eat_keyword(Keyword::Column);
+            let column = self.name()?;
             self.expect_keyword(Keyword::To, Expected::To)?;
             let name = self.name()?;
-            return Ok(Definition::Rename(crate::ast::RenameTable {
+            return Ok(Definition::RenameColumn(crate::ast::RenameColumn {
                 schema,
                 table,
+                column,
                 name,
             }));
         }

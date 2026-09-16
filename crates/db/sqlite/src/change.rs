@@ -269,6 +269,26 @@ enum Making {
     Index,
 }
 
+/// What reading a statement of the schema again refuses once a column
+/// carries the name `to`, or nothing where it reads, which is
+/// `renameTestSchema` under `after rename`.
+///
+/// Reading one statement costs O(n) in its nodes.
+fn reads_after(text: &[u8], to: &[u8]) -> Option<alloc::string::String> {
+    let (arena, definition) = crate::parse::definition(text).ok()?;
+    let Definition::Table(made) = definition else {
+        return None;
+    };
+    crate::schema::table(&arena, &made, text).err()?;
+    // A table the rename leaves with two columns of one name is the one
+    // way a statement stops reading, because a name is all the rename
+    // writes.
+    Some(alloc::format!(
+        "duplicate column name: {}",
+        alloc::string::String::from_utf8_lossy(to)
+    ))
+}
+
 /// Whether the schema already names a table, an index or a view, which
 /// are one namespace; a trigger is named in its own, so a trigger and
 /// an index may share a name.
@@ -682,6 +702,77 @@ impl Writer {
             crate::tree::update(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &record)?;
         }
         self.rename_sequence(&from, &to)?;
+        self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
+        Ok(())
+    }
+
+    /// `ALTER TABLE ... RENAME COLUMN`: every statement of the schema
+    /// that names the column is written again under the new name, which
+    /// is `sqlite3AlterRenameColumn`.
+    ///
+    /// The rows of the table are not written again, because a row holds
+    /// no name.
+    ///
+    /// Reading the schema costs O(m) in its rows and O(n) per statement
+    /// in the nodes of its tree.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotAlterable`] for a table SQLite keeps for itself,
+    /// [`Error::NoSuchColumn`] where the table holds no such column, and
+    /// [`Error::AfterDrop`] where a statement of the schema no longer
+    /// reads under the new name.
+    fn rename_column(&mut self, asked: &crate::ast::RenameColumn, sql: &[u8]) -> Result<(), Error> {
+        let name = crate::schema::dequote(asked.table.text(sql));
+        let from = crate::schema::dequote(asked.column.text(sql));
+        let to = crate::schema::dequote(asked.name.text(sql));
+        // `sqlite3AlterRenameColumn` reads `bQuote` off the first byte
+        // of the new name, so the name is written as the statement
+        // wrote it.
+        let as_written = asked.name.text(sql).to_vec();
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        alterable(&database, &name)?;
+        // The table was located above, so this refusal carries no name
+        // of its own.
+        let (table, _) = database.table(&name).ok_or(Error::NoTable(Vec::new()))?;
+        if !table
+            .columns
+            .iter()
+            .any(|held| held.name.eq_ignore_ascii_case(&from))
+        {
+            return Err(Error::NoSuchColumn(from));
+        }
+        let mut written: Vec<(i64, Vec<Value>)> = Vec::new();
+        for (rowid, values) in database.rows_of(SCHEMA_TABLE)? {
+            // A row SQLite made for itself carries no statement, and an
+            // index of a key is one of those.
+            let held = |at: usize| match values.get(at) {
+                Some(Value::Text(bytes)) => bytes.clone(),
+                _ => Vec::new(),
+            };
+            let statement = held(4);
+            let places = crate::rename::column_places(&statement, &name, &from);
+            if places.is_empty() {
+                continue;
+            }
+            let text = crate::rename::written_as(&statement, &places, &as_written);
+            // `renameTestSchema` under `after rename`: a statement that
+            // no longer reads refuses the whole rename.
+            if let Some(refused) = reads_after(&text, &to) {
+                return Err(Error::AfterRename(held(0), held(1), refused));
+            }
+            let mut values = values.clone();
+            for slot in values.iter_mut().skip(4).take(1) {
+                *slot = Value::Text(crate::value::stored(&text, self.header.encoding));
+            }
+            written.push((rowid, values));
+        }
+        drop(database);
+        for (rowid, values) in written {
+            let record = crate::record::write(&values, &SCHEMA, 4);
+            crate::tree::update(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &record)?;
+        }
         self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
         Ok(())
     }
@@ -2191,6 +2282,7 @@ impl Writer {
             Definition::AddColumn(asked) => return self.add_column(arena, &asked, sql),
             Definition::Rename(asked) => return self.rename_table(&asked, sql),
             Definition::DropColumn(asked) => return self.drop_column(&asked, sql),
+            Definition::RenameColumn(asked) => return self.rename_column(&asked, sql),
             Definition::Trigger(trigger) => return self.create_trigger(&trigger, sql),
             Definition::Table(table) => {
                 if let TableBody::Select(select) = table.body {
