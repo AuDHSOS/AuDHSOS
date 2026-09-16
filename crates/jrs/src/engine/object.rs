@@ -17,7 +17,7 @@ use super::{
     context::ContextRef,
     elements::ElementsRef,
     shape::ShapeId,
-    value::{VALUE_UNDEFINED, Value},
+    value::{SymbolRef, VALUE_UNDEFINED, Value},
 };
 use alloc::vec::Vec;
 
@@ -85,6 +85,11 @@ pub enum ObjectKind {
     NumberWrapper(f64),
     /// Boxed String primitive.
     StringWrapper(Value),
+    /// Boxed Symbol primitive, the `[[SymbolData]]` slot of 20.4.3.
+    SymbolWrapper(SymbolRef),
+    /// The arguments object of 10.4.4, which carries `[[ParameterMap]]` and so
+    /// takes the builtin tag `Arguments` of 20.1.3.6.
+    Arguments,
     /// Error instance, the `[[ErrorData]]` slot of 20.5.4.
     Error,
     /// Array Iterator instance, the slots of 23.1.5.3.

@@ -1868,14 +1868,14 @@ impl RegisterVM {
                     None => Ok(VALUE_UNDEFINED),
                 }
             }
-            // 20.4.3.3 and 20.4.3.4 take a `this` that is a Symbol; this
-            // engine has no Symbol wrapper object for one to be inside.
+            // 20.4.3.3 and 20.4.3.4 take a `this` that is a Symbol or the
+            // wrapper 7.1.18 makes of one.
             Intrinsic::SymbolPrototypeToString | Intrinsic::SymbolPrototypeValueOf => {
-                let Some(symbol) = call.receiver.as_symbol() else {
+                let Some(symbol) = Self::this_symbol_value(call.receiver, heap) else {
                     return Err(type_error(heap, realm, "value is not a Symbol"));
                 };
                 if intrinsic == Intrinsic::SymbolPrototypeValueOf {
-                    return Ok(call.receiver);
+                    return Ok(Value::from_symbol(symbol));
                 }
                 let text = Self::symbol_descriptive_string(symbol, heap);
                 self.allocate_string(heap, &text)
@@ -6828,10 +6828,6 @@ impl RegisterVM {
     /// rather than a missing feature. Naming the gap keeps it a gap.
     const fn unimplemented_conversion(kind: &ObjectKind) -> Option<&'static str> {
         match kind {
-            // 21.3 gives `%Math%` an @@toStringTag, which this Realm has not
-            // built, so `[object Math]` is not an answer it can give.
-            ObjectKind::Math => Some("the @@toStringTag of %Math%"),
-
             // 20.1.3.6 is the right answer for these, 23.1.3.37 and 20.5.3.4
             // are implemented.
             // 20.2.3.5 answers the source text of the function, which
@@ -6844,6 +6840,9 @@ impl RegisterVM {
             | ObjectKind::NumberWrapper(_)
             | ObjectKind::BooleanWrapper(_)
             | ObjectKind::StringWrapper(_)
+            | ObjectKind::SymbolWrapper(_)
+            | ObjectKind::Arguments
+            | ObjectKind::Math
             | ObjectKind::Array { .. }
             | ObjectKind::ArrayIterator { .. }
             // The state of a walk of 23.1.3 and the pair of 6.1.7.1 are
@@ -7066,6 +7065,11 @@ impl RegisterVM {
                 Err(VMError::Unsupported(
                     "a property of %ArrayIteratorPrototype%",
                 ))
+            }
+            // 20.4.3 gives `%Symbol.prototype%` a `description` accessor this
+            // Realm resolves for a Symbol and has not built as a property.
+            Some(ObjectKind::SymbolWrapper(_)) if super::realm::symbol_prototype_owns(name) => {
+                Err(VMError::Unsupported("a property of %Symbol.prototype%"))
             }
             _ if super::realm::object_prototype_owns(name) => {
                 Err(VMError::Unsupported("a property of %Object.prototype%"))
@@ -7421,12 +7425,16 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
+        let mut boxed = None;
         let tag = if receiver.is_undefined() {
             "Undefined"
         } else if receiver.is_null() {
             "Null"
         } else {
+            // Step 3 boxes the receiver, and step 14 reads @@toStringTag out
+            // of that object rather than out of the primitive.
             let object = Self::coerce_object(receiver, heap, realm)?;
+            boxed = Some(object);
             match heap.get_object(object).ok_or(VMError::TypeError)?.kind {
                 ObjectKind::Array { .. } => "Array",
                 ObjectKind::Function { .. }
@@ -7436,9 +7444,13 @@ impl RegisterVM {
                 ObjectKind::BooleanWrapper(_) => "Boolean",
                 ObjectKind::NumberWrapper(_) => "Number",
                 ObjectKind::StringWrapper(_) => "String",
-                // 23.1.5.2.2 tags the Array Iterator through @@toStringTag, so
-                // its builtin tag is the ordinary one.
+                // 10.4.4 gives the object [[ParameterMap]], which step 8 reads.
+                ObjectKind::Arguments => "Arguments",
+                // 20.4.3.5 tags a Symbol wrapper through @@toStringTag, so its
+                // builtin tag is the ordinary one, as it is for the namespaces
+                // of 21.3, 25.5 and 28.1 and the iterator of 23.1.5.2.2.
                 ObjectKind::Ordinary
+                | ObjectKind::SymbolWrapper(_)
                 | ObjectKind::ArrayIterator { .. }
                 | ObjectKind::ArrayIteration { .. }
                 | ObjectKind::Accessor { .. }
@@ -7451,8 +7463,7 @@ impl RegisterVM {
             }
         };
         let mut units: Vec<u16> = "[object ".encode_utf16().collect();
-        match receiver
-            .as_object()
+        match boxed
             .map(|object| {
                 heap.lookup_named(object, super::realm::WellKnownSymbol::ToStringTag.key())
             })
@@ -8100,6 +8111,18 @@ impl RegisterVM {
 
     /// The `[[Description]]` of a Symbol, which table 1 of 20.4.2 gives the
     /// well-known ones and the heap gives every other.
+    /// `thisSymbolValue` of 20.4.3: the Symbol itself or the one a wrapper
+    /// holds in `[[SymbolData]]`.
+    fn this_symbol_value(receiver: Value, heap: &GenerationalHeap) -> Option<SymbolRef> {
+        if let Some(symbol) = receiver.as_symbol() {
+            return Some(symbol);
+        }
+        match heap.get_object(receiver.as_object()?)?.kind {
+            ObjectKind::SymbolWrapper(symbol) => Some(symbol),
+            _ => None,
+        }
+    }
+
     fn symbol_description(symbol: SymbolRef, heap: &GenerationalHeap) -> Option<Vec<u16>> {
         if let Some(well_known) = super::realm::WellKnownSymbol::from_reference(symbol) {
             return Some(well_known.description().encode_utf16().collect());
@@ -9340,6 +9363,11 @@ impl RegisterVM {
                 ObjectKind::StringWrapper(value),
                 realm.string_prototype(heap)?,
             )
+        } else if let Some(symbol) = value.as_symbol() {
+            (
+                ObjectKind::SymbolWrapper(symbol),
+                realm.symbol_prototype(heap)?,
+            )
         } else {
             return Err(type_error(heap, realm, "cannot box null or undefined"));
         };
@@ -9488,6 +9516,7 @@ impl RegisterVM {
         }
         let root_shape = heap.shapes.root_shape();
         let object = self.allocate_object(code, heap, realm, root_shape)?;
+        heap.set_object_kind(object, ObjectKind::Arguments)?;
         self.write_reg(target, Value::from_object(object))?;
         for (index, argument) in passed.into_iter().enumerate() {
             let name = alloc::format!("{index}");

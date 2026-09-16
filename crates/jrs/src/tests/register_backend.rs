@@ -256,6 +256,75 @@ fn a_global_function_outlives_the_script_that_declared_it() -> Result<(), Error>
 
 /// Runs the Scripts in order in one Realm on each backend and compares the
 /// completion of the last one.
+#[test]
+fn object_prototype_to_string_answers_the_tag_of_20_1_3_6() -> Result<(), Error> {
+    for source in [
+        // Steps 1 and 2 answer before the receiver is boxed.
+        "Object.prototype.toString.call(null)",
+        "Object.prototype.toString.call(undefined)",
+        "Object.prototype.toString.call()",
+        // The builtin tags of steps 4 through 13.
+        "Object.prototype.toString.call([])",
+        "Object.prototype.toString.call(function(){})",
+        "Object.prototype.toString.call(new Error('x'))",
+        "Object.prototype.toString.call(new Boolean(true))",
+        "Object.prototype.toString.call(new Number(1))",
+        "Object.prototype.toString.call(new String('a'))",
+        "Object.prototype.toString.call(/a/)",
+        "Object.prototype.toString.call({})",
+        "(function(){return Object.prototype.toString.call(arguments)})()",
+        // Step 14 reads @@toStringTag out of the boxed object, so a primitive
+        // receiver answers the tag of its own prototype.
+        "Object.prototype.toString.call(Math)",
+        "Object.prototype.toString.call(JSON)",
+        "Object.prototype.toString.call(Reflect)",
+        "Object.prototype.toString.call([].values())",
+        "Object.prototype.toString.call(Symbol())",
+        "Object.prototype.toString.call(Object(Symbol()))",
+        "Object.prototype.toString.call(1)",
+        "Object.prototype.toString.call('s')",
+        "Object.prototype.toString.call(true)",
+        // An own tag wins over the builtin one, and a tag that is not a String
+        // is not read at all.
+        "let o={};o[Symbol.toStringTag]='Q';Object.prototype.toString.call(o)",
+        "let o={};o[Symbol.toStringTag]=1;Object.prototype.toString.call(o)",
+        // 20.4.3.5 gives the tag, so it is readable as a property.
+        "Symbol.prototype[Symbol.toStringTag]",
+        "Math[Symbol.toStringTag]",
+        "JSON[Symbol.toStringTag]",
+        "Object.getOwnPropertyDescriptor(Math,Symbol.toStringTag).configurable",
+        "Object.getOwnPropertyDescriptor(Math,Symbol.toStringTag).writable",
+        "Object.getOwnPropertyDescriptor(Math,Symbol.toStringTag).enumerable",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn a_symbol_boxes_into_the_wrapper_of_20_4_3() -> Result<(), Error> {
+    for source in [
+        // 7.1.18 gives the wrapper %Symbol.prototype%.
+        "typeof Object(Symbol())",
+        "Object(Symbol('z')).toString()",
+        "typeof Object(Symbol('z')).valueOf()",
+        "Object(Symbol('z')).valueOf()===Symbol.prototype.valueOf.call(Object(Symbol('z')))",
+        // Each wrapper is its own object, and 20.4.3.4 answers the Symbol it
+        // holds rather than the wrapper.
+        "Object(Symbol())===Object(Symbol())",
+        "let s=Symbol('q');Object(s).valueOf()===s",
+        "let s=Symbol('q');Symbol.prototype.toString.call(Object(s))",
+        // 20.4.3 refuses a receiver that is neither.
+        "try{Symbol.prototype.toString.call(1)}catch(e){e instanceof TypeError}",
+        "try{Symbol.prototype.valueOf.call({})}catch(e){e instanceof TypeError}",
+        // The wrapper owns nothing of its own.
+        "Object.keys(Object(Symbol('a'))).length",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
 fn differential_scripts(scripts: &[&str]) -> Result<(), Error> {
     let outcome = |backend| -> Result<Result<Value, Error>, Error> {
         let mut host = SilentHost;

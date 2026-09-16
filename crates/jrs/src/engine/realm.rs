@@ -2833,6 +2833,16 @@ impl Realm {
         )?;
         Self::define_species_getters(heap, &intrinsics)?;
         Self::define_unscopables(heap, array_prototype)?;
+        Self::define_to_string_tags(
+            heap,
+            &[
+                (math, "Math"),
+                (json, "JSON"),
+                (reflect, "Reflect"),
+                (symbol_prototype, "Symbol"),
+                (array_iterator_prototype, "Array Iterator"),
+            ],
+        )?;
 
         // 19.1 gives the global object `Math` with the attributes 17 gives
         // every value of clause 19 that is not a constant.
@@ -3300,6 +3310,30 @@ impl Realm {
     /// # Errors
     ///
     /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    /// Gives each holder the `@@toStringTag` its clause names, with the
+    /// attributes 20.1.3.6 reads and 17 gives every such value.
+    ///
+    /// 21.3.1.9 names `%Math%`, 25.5.3 `%JSON%`, 28.1.14 `%Reflect%`, 20.4.3.5
+    /// `%Symbol.prototype%` and 23.1.5.2.2 `%ArrayIteratorPrototype%`.
+    fn define_to_string_tags(
+        heap: &mut GenerationalHeap,
+        holders: &[(Root, &str)],
+    ) -> Result<(), HeapError> {
+        for (holder, tag) in holders {
+            let object = Self::rooted(heap, *holder)?
+                .as_object()
+                .ok_or(HeapError::InvalidReference)?;
+            let value = Value::from_string(heap.strings.intern(tag)?);
+            heap.define_own_named(
+                object,
+                WellKnownSymbol::ToStringTag.key(),
+                value,
+                builtin_metadata(),
+            )?;
+        }
+        Ok(())
+    }
+
     fn define_unscopables(heap: &mut GenerationalHeap, prototype: Root) -> Result<(), HeapError> {
         /// The names 23.1.3.37 lists, in the order it lists them.
         const NAMES: [&str; 16] = [
