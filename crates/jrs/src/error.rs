@@ -66,8 +66,13 @@ pub enum Error {
     /// The Script threw, which is a completion of the language and not a
     /// feature the engine is missing. An Object of the register engine has no
     /// identity outside it, so what was thrown cannot be handed over; that the
-    /// Script threw at all is what crosses.
-    ThrownUnrepresentable,
+    /// Script threw at all is what crosses, with the text 20.5.3.4 would
+    /// answer where the object holds its two names as data properties.
+    ThrownUnrepresentable {
+        /// `name: message` of the thrown object, empty where it holds neither
+        /// as a String of its own.
+        description: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -85,8 +90,11 @@ impl fmt::Display for Error {
             Self::Type { message } => write!(f, "TypeError: {message}"),
             Self::Range { message } => write!(f, "RangeError: {message}"),
             Self::Limit { resource } => write!(f, "resource limit: {resource}"),
-            Self::ThrownUnrepresentable => {
+            Self::ThrownUnrepresentable { description } if description.is_empty() => {
                 write!(f, "threw a value the embedding cannot hold")
+            }
+            Self::ThrownUnrepresentable { description } => {
+                write!(f, "threw a value the embedding cannot hold: {description}")
             }
             Self::Unsupported { feature } => write!(f, "unsupported feature: {feature}"),
             Self::InvalidBytecode => f.write_str("invalid bytecode"),

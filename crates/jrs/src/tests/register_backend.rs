@@ -1067,7 +1067,7 @@ fn a_value_the_embedding_cannot_hold_leaves_the_realm_usable() -> Result<(), Err
     }
     assert!(matches!(
         realm.evaluate("throw {}"),
-        Err(Error::ThrownUnrepresentable)
+        Err(Error::ThrownUnrepresentable { .. })
     ));
     assert_eq!(realm.evaluate("2*3")?, Value::Number(6.0));
     Ok(())
@@ -1666,7 +1666,7 @@ fn a_script_run_for_effect_ends_on_a_value_that_cannot_cross() -> Result<(), Err
     // nothing about the engine missing a feature, so it is not reported as one.
     assert!(matches!(
         realm.run_compiled(&compile_script("throw {}", limits)?),
-        Err(Error::ThrownUnrepresentable)
+        Err(Error::ThrownUnrepresentable { .. })
     ));
     assert!(matches!(
         realm.run_compiled(&compile_script("throw new TypeError('x')", limits)?),
@@ -8528,5 +8528,24 @@ fn the_parameter_map_of_10_4_4_7_reaches_both_ways() -> Result<(), Error> {
             "{source}"
         );
     }
+    Ok(())
+}
+
+#[test]
+fn a_thrown_object_the_embedding_cannot_hold_names_itself() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // 20.5.3.4 reads the two names of the object, which an error of the Script
+    // carries as data properties of its Prototype and of itself.
+    let source = "function E(m){this.message=m}E.prototype.name='E';throw new E('two')";
+    let Err(Error::ThrownUnrepresentable { description }) = realm.evaluate(source) else {
+        panic!("{source}");
+    };
+    assert_eq!(description, "E: two");
+    // An object that holds neither name answers the empty text.
+    let Err(Error::ThrownUnrepresentable { description }) = realm.evaluate("throw {}") else {
+        panic!("throw {{}}");
+    };
+    assert_eq!(description, "");
     Ok(())
 }

@@ -210,6 +210,37 @@ pub struct Runtime {
 /// cross, so the Realm stays usable.
 pub(crate) const UNCROSSABLE_OBJECT: &str = "an Object of the engine crossing to the embedding";
 
+/// The text 20.5.3.4 would answer for an object the embedding cannot hold.
+///
+/// Only a data property of the Prototype Chain is read, because calling a
+/// getter needs a frame this boundary has none of. An object that holds
+/// neither name as a String answers the empty text, which the report leaves
+/// out.
+fn thrown_description(
+    object: crate::engine::value::ObjectRef,
+    agent: &crate::engine::agent::Agent,
+) -> alloc::string::String {
+    let read = |name: &str| {
+        agent
+            .heap
+            .strings
+            .lookup_interned_units(&Value::string(name).units())
+            .map(crate::engine::value::PropertyKey::String)
+            .and_then(|key| agent.heap.lookup_named(object, key).ok().flatten())
+            .filter(|property| !property.flags.is_accessor)
+            .and_then(|property| agent.heap.strings.to_utf16(property.value))
+            .map(|units| alloc::string::String::from_utf16_lossy(&units))
+    };
+    match (read("name"), read("message")) {
+        (Some(name), Some(message)) if !message.is_empty() => {
+            alloc::format!("{name}: {message}")
+        }
+        (Some(name), _) => name,
+        (None, Some(message)) => message,
+        (None, None) => alloc::string::String::new(),
+    }
+}
+
 /// Converts a register-backend value into the legacy value the embedding sees.
 ///
 /// Objects, Symbols and `BigInt`s of the new engine have no legacy identity, so
@@ -542,10 +573,17 @@ impl Execution<'_> {
         // threw has no identity outside the engine, and saying the engine is
         // missing a feature would say the Script never reached its end.
         let Some(object) = value.as_object() else {
-            return Error::ThrownUnrepresentable;
+            return Error::ThrownUnrepresentable {
+                description: alloc::string::String::new(),
+            };
         };
         let Some(kind) = agent.realm.native_error_kind(&agent.heap, object) else {
-            return Error::ThrownUnrepresentable;
+            // 20.5.3.4 reads the two names of the object. Calling a getter
+            // needs a frame this boundary has none of, so only a data property
+            // is read, which is what an error of the Script carries.
+            return Error::ThrownUnrepresentable {
+                description: thrown_description(object, agent),
+            };
         };
         let message = agent
             .heap
