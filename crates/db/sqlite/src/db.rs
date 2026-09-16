@@ -179,6 +179,9 @@ pub enum Error {
     NotAlterable(Vec<u8>),
     /// An `ALTER TABLE` over a view, with the name of the view.
     NotATable(Vec<u8>),
+    /// A `DISTINCT` on an ordered-set aggregate, with the name of that
+    /// aggregate.
+    OrderedDistinct(Vec<u8>),
     /// A table an `ALTER TABLE` left in a state the schema cannot be
     /// read from, with the table, the words for the kind of alter, and
     /// what reading the schema refused.
@@ -245,6 +248,10 @@ impl Error {
                 shown(table),
                 shown(column),
                 shown(written)
+            ),
+            Error::OrderedDistinct(name) => alloc::format!(
+                "DISTINCT not allowed on ordered-set aggregate {}()",
+                shown(name)
             ),
             Error::AfterAlter(table, word, message) => alloc::format!(
                 "error in table {} after {}: {}",
@@ -449,6 +456,9 @@ impl Error {
             return self;
         };
         let held = sql.get(error.at..error.at.saturating_add(error.len));
+        if error.expected == parse::Expected::OrderedDistinct {
+            return Error::OrderedDistinct(held.unwrap_or_default().to_vec());
+        }
         match held.filter(|token| !token.is_empty()) {
             Some(token) => Error::Syntax(token.to_vec()),
             None => Error::Incomplete,

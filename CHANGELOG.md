@@ -141,6 +141,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `median`, `percentile`, `percentile_cont` and `percentile_disc` in
+  `db-sqlite`, and the `WITHIN GROUP (ORDER BY Y)` clause that names
+  their values, which the parser reads as the first argument of the
+  call. An aggregate called with a number of arguments it does not take
+  answers `wrong number of arguments to function NAME()`. D-259 records
+  it. Catalog 6.6.183.
+
 - `db-sqlite` holds the rows of a `STRICT` table to the types its
   columns declare, which is `OP_TypeCheck`, and names in a refusal the
   column whose type it cannot read and the value a column cannot hold.

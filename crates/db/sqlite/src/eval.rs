@@ -61,6 +61,18 @@ pub enum Error {
     /// A hex literal of more than sixteen digits, which SQLite refuses
     /// rather than reading as a real.
     HexTooBig,
+    /// The fraction argument of a percentile aggregate that is not a
+    /// number between nought and the largest the aggregate takes, with
+    /// the name and that largest as it is written.
+    Fraction(Vec<u8>, Vec<u8>),
+    /// The fraction argument of a percentile aggregate written
+    /// differently for two rows of one group, with the name.
+    Fractions(Vec<u8>),
+    /// A value a percentile aggregate was given that is neither nothing
+    /// nor a number, with the name.
+    NotNumeric(Vec<u8>),
+    /// An infinity a percentile aggregate was given, with the name.
+    Infinite(Vec<u8>),
     /// A function called with a number of arguments it does not take,
     /// by the name it was called under.
     WrongArguments(Vec<u8>),
@@ -100,6 +112,19 @@ impl Error {
             Error::WrongArguments(name) => {
                 alloc::format!("wrong number of arguments to function {}()", shown(name))
             }
+            Error::Fraction(name, largest) => alloc::format!(
+                "the fraction argument to {}() is not between 0.0 and {}",
+                shown(name),
+                shown(largest)
+            ),
+            Error::Fractions(name) => alloc::format!(
+                "the fraction argument to {}() is not the same for all input rows",
+                shown(name)
+            ),
+            Error::NotNumeric(name) => {
+                alloc::format!("input to {}() is not numeric", shown(name))
+            }
+            Error::Infinite(name) => alloc::format!("Inf input to {}()", shown(name)),
             Error::RowValue => "row value misused".to_string(),
             Error::Json(refused) => refused.message(),
             other => alloc::format!("{other:?}"),
@@ -581,7 +606,15 @@ fn called(
         carried.push(argument.json);
         values.push(argument.value);
     }
-    let function = func::lookup(&crate::schema::dequote(name.text(sql)), values.len())?;
+    let called = crate::schema::dequote(name.text(sql));
+    // An aggregate called with a number of arguments it does not take
+    // reaches the scalars, which hold none of that name.
+    let function = match func::lookup(&called, values.len()) {
+        Err(Error::NoFunction(_)) if crate::agg::named(&called) => {
+            return Err(Error::WrongArguments(called));
+        }
+        held => held?,
+    };
     if function == Function::Unlikely && values.len() == 2 {
         // `likelihood(X,Y)` tells the planner how often X holds,
         // so Y has to be a fraction and has to be written out.

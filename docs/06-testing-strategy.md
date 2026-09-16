@@ -5385,6 +5385,32 @@ Document 16 step Q8.
 - A `STRICT` table holds the value a column computes to the type of that
   column, so a column of `BLOB` that computes a number refuses the row.
 
+### 6.6.183 The four percentile aggregates (`db-sqlite`)
+
+Document 16 step Q8.
+
+- Over the nine values `1,4,6,7,8,9,11,11,11`, `percentile(x,15)`
+  answers 4.4, `percentile_cont(x,0.15)` the same, and
+  `percentile_disc(x,0.15)` answers 4.0, which is a value the group
+  holds.
+- `median(x)` answers 8.0 and `median(DISTINCT x)` answers 7.0.
+- `f(...) WITHIN GROUP (ORDER BY Y)` is `f(Y,...)`, so `percentile(15)
+  WITHIN GROUP (ORDER BY x)` answers 4.4 and `median() WITHIN GROUP
+  (ORDER BY x)` answers 8.0.
+- A fraction that is not a number, or one out of range, is refused `the
+  fraction argument to percentile() is not between 0.0 and 100.0`; one
+  that changes between rows of a group is refused `... is not the same
+  for all input rows`.
+- A value that is neither nothing nor a number is refused `input to
+  percentile() is not numeric`, and an infinity `Inf input to
+  percentile()`.
+- `percentile(DISTINCT 50) WITHIN GROUP (ORDER BY x)` is refused
+  `DISTINCT not allowed on ordered-set aggregate percentile()`.
+- An aggregate called with a number of arguments it does not take is
+  refused `wrong number of arguments to function percentile()`.
+- A group of no values answers nothing, and a group of one answers that
+  value whatever the fraction says.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

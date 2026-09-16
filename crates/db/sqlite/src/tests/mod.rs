@@ -35,6 +35,7 @@ mod matrix;
 mod number;
 mod page;
 mod parse;
+mod percentile;
 mod record;
 mod rename;
 mod renamecol;

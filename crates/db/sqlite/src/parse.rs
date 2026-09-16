@@ -72,6 +72,13 @@ pub enum Expected {
     From,
     /// `BY`, after `GROUP` or `ORDER`.
     By,
+    /// `GROUP`, after `WITHIN`.
+    Group,
+    /// `ORDER`, after the bracket of a `WITHIN GROUP`.
+    Order,
+    /// Nothing: a `DISTINCT` on an ordered-set aggregate, which the
+    /// span names the function of.
+    OrderedDistinct,
     /// `AS`, in a `WITH` clause.
     WithAs,
     /// `SELECT`, `VALUES` or `WITH`.
@@ -2445,6 +2452,31 @@ impl<'a> Parser<'a> {
             }
         }
         self.expect(Kind::Rp, Expected::CloseParen)?;
+        // `f(...) WITHIN GROUP (ORDER BY Y)` is `f(Y,...)`, which is
+        // `sqlite3ExprAddFunctionOrderBy` putting the one term of the
+        // clause in front of the arguments the call was written with.
+        if self.eat_keyword(Keyword::Within) {
+            // `sqlite3ExprAddFunctionOrderBy` refuses a `DISTINCT` on an
+            // ordered-set aggregate, naming the function.
+            if distinct {
+                return Err(Error {
+                    at: name.start,
+                    len: name.len,
+                    expected: Expected::OrderedDistinct,
+                });
+            }
+            self.expect_keyword(Keyword::Group, Expected::Group)?;
+            self.expect(Kind::Lp, Expected::OpenParen)?;
+            self.expect_keyword(Keyword::Order, Expected::Order)?;
+            self.expect_keyword(Keyword::By, Expected::By)?;
+            let held = self.expression()?;
+            // The term carries an order of its own, which the aggregate
+            // reads the values in and this crate answers the same way
+            // either way.
+            let _ = self.eat_keyword(Keyword::Asc) || self.eat_keyword(Keyword::Desc);
+            self.expect(Kind::Rp, Expected::CloseParen)?;
+            args.insert(0, held);
+        }
         let args = self.arena.push_children(&args);
         let filter = if self.eat_keyword(Keyword::Filter) {
             self.expect(Kind::Lp, Expected::OpenParen)?;

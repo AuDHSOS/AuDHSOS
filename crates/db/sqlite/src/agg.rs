@@ -18,6 +18,12 @@ use alloc::vec::Vec;
 use crate::eval::Error;
 use crate::value::{Collation, Value, apply_numeric, compare, integer_as_real};
 
+/// A count as the whole number it is, which is what a real is worked
+/// out from.
+fn count_of(count: usize) -> i64 {
+    i64::try_from(count).unwrap_or(i64::MAX)
+}
+
 /// Where an integer stops being exact as a double, which is where the
 /// Kahan sum splits one in two before adding it.
 const EXACT: i64 = 4_503_599_627_370_496;
@@ -62,6 +68,50 @@ pub enum Aggregate {
     JsonbGroupArray,
     /// `jsonb_group_object(L,X)`.
     JsonbGroupObject,
+    /// `median(Y)`, which is `percentile(Y,50)`.
+    Median,
+    /// `percentile(Y,P)`, where `P` runs from nought to a hundred.
+    Percentile,
+    /// `percentile_cont(Y,P)`, where `P` runs from nought to one.
+    PercentileCont,
+    /// `percentile_disc(Y,P)`, which answers a value the group holds
+    /// rather than one between two of them.
+    PercentileDisc,
+}
+
+impl Aggregate {
+    /// The name a message writes the aggregate under.
+    const fn name(self) -> &'static [u8] {
+        match self {
+            Aggregate::Median => b"median",
+            Aggregate::PercentileCont => b"percentile_cont",
+            Aggregate::PercentileDisc => b"percentile_disc",
+            _ => b"percentile",
+        }
+    }
+
+    /// The largest the fraction argument may be, which `percentile`
+    /// takes out of a hundred and the other two out of one.
+    const fn largest(self) -> f64 {
+        match self {
+            Aggregate::Percentile => 100.0,
+            _ => 1.0,
+        }
+    }
+
+    /// That largest as a message writes it, which is `%.1f` of it.
+    const fn largest_shown(self) -> &'static [u8] {
+        match self {
+            Aggregate::Percentile => b"100.0",
+            _ => b"1.0",
+        }
+    }
+
+    /// Whether the aggregate answers a value the group holds rather
+    /// than one between two of them.
+    const fn discrete(self) -> bool {
+        matches!(self, Aggregate::PercentileDisc)
+    }
 }
 
 /// One row of the table: a name, how many arguments the aggregate takes
@@ -128,10 +178,34 @@ const TABLE: &[Entry] = &[
         aggregate: Aggregate::Max,
     },
     Entry {
+        name: b"median",
+        least: 1,
+        most: 1,
+        aggregate: Aggregate::Median,
+    },
+    Entry {
         name: b"min",
         least: 1,
         most: 1,
         aggregate: Aggregate::Min,
+    },
+    Entry {
+        name: b"percentile",
+        least: 2,
+        most: 2,
+        aggregate: Aggregate::Percentile,
+    },
+    Entry {
+        name: b"percentile_cont",
+        least: 2,
+        most: 2,
+        aggregate: Aggregate::PercentileCont,
+    },
+    Entry {
+        name: b"percentile_disc",
+        least: 2,
+        most: 2,
+        aggregate: Aggregate::PercentileDisc,
     },
     Entry {
         name: b"string_agg",
@@ -169,6 +243,17 @@ pub fn lookup(name: &[u8], count: usize) -> Option<Aggregate> {
         .map(|entry| entry.aggregate)
 }
 
+/// Whether the table holds an aggregate of that name, whatever number
+/// of arguments it takes.
+///
+/// Reading the table costs O(n) in its rows.
+#[must_use]
+pub fn named(name: &[u8]) -> bool {
+    TABLE
+        .iter()
+        .any(|entry| name.eq_ignore_ascii_case(entry.name))
+}
+
 /// What one group has accumulated.
 #[derive(Clone, Debug)]
 pub struct Accumulator {
@@ -198,6 +283,11 @@ pub struct Accumulator {
     any: bool,
     /// Whether the last step left the group's bare columns alone.
     skipped: bool,
+    /// The values a percentile aggregate has been given, as reals.
+    reals: Vec<f64>,
+    /// The fraction the first row of the group wrote, which every row
+    /// after it writes again.
+    fraction: Option<f64>,
 }
 
 impl Accumulator {
@@ -217,6 +307,8 @@ impl Accumulator {
             held: Vec::new(),
             any: false,
             skipped: false,
+            reals: Vec::new(),
+            fraction: None,
         }
     }
 
@@ -274,8 +366,98 @@ impl Accumulator {
             | Aggregate::JsonGroupObject
             | Aggregate::JsonbGroupArray
             | Aggregate::JsonbGroupObject => self.collect(args, carried)?,
+            Aggregate::Median
+            | Aggregate::Percentile
+            | Aggregate::PercentileCont
+            | Aggregate::PercentileDisc => self.percentile(args)?,
         }
         Ok(())
+    }
+
+    /// One row of a percentile aggregate, which is `percentStep`: the
+    /// fraction is read first and is the same for every row of the
+    /// group, and the value is kept where it is a number.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Fraction`] where the fraction is not a number between
+    /// nought and the largest the aggregate takes,
+    /// [`Error::Fractions`] where two rows of the group wrote different
+    /// ones, [`Error::NotNumeric`] for a value that is not a number,
+    /// and [`Error::Infinite`] for an infinity.
+    fn percentile(&mut self, args: &[Value]) -> Result<(), Error> {
+        let name = self.which.name().to_vec();
+        let largest = self.which.largest();
+        let shown = self.which.largest_shown().to_vec();
+        // `median(Y)` is `percentile(Y,50)`, which writes the fraction
+        // itself.
+        let fraction = if self.which == Aggregate::Median {
+            0.5
+        } else {
+            let mut given = args.get(1).cloned().unwrap_or(Value::Null);
+            apply_numeric(&mut given, true);
+            let number = match given {
+                Value::Int(whole) => integer_as_real(whole),
+                Value::Real(number) => number,
+                _ => return Err(Error::Fraction(name, shown)),
+            };
+            let held = number / largest;
+            if !(0.0..=1.0).contains(&held) {
+                return Err(Error::Fraction(name, shown));
+            }
+            held
+        };
+        match self.fraction {
+            None => self.fraction = Some(fraction),
+            // Two fractions that differ by a thousandth or less are one
+            // fraction, which is `percentSameValue`.
+            Some(held) if (held - fraction).abs() <= 0.001 => {}
+            Some(_) => return Err(Error::Fractions(name)),
+        }
+        let value = args.first().cloned().unwrap_or(Value::Null);
+        if value == Value::Null {
+            return Ok(());
+        }
+        let number = match value {
+            Value::Int(whole) => integer_as_real(whole),
+            Value::Real(number) => number,
+            _ => return Err(Error::NotNumeric(name)),
+        };
+        if number.is_infinite() {
+            return Err(Error::Infinite(name));
+        }
+        self.reals.push(number);
+        Ok(())
+    }
+
+    /// What a percentile aggregate answers, which is `percentCompute`:
+    /// the value the fraction names among the values the group held, in
+    /// order, or nothing where the group held none.
+    fn percentile_of(&self) -> Value {
+        let mut held = self.reals.clone();
+        held.sort_by(|left, right| {
+            left.partial_cmp(right)
+                .unwrap_or(core::cmp::Ordering::Equal)
+        });
+        let Some(last) = held.len().checked_sub(1) else {
+            return Value::Null;
+        };
+        let place = self.fraction.unwrap_or(0.0) * integer_as_real(count_of(last));
+        let first = usize::try_from(crate::value::real_as_integer(place)).unwrap_or(0);
+        let one = held.get(first).copied().unwrap_or(0.0);
+        if self.which.discrete() {
+            return Value::Real(one);
+        }
+        // The value lies between the two the fraction falls between,
+        // and on the first where the fraction names it outright, which
+        // is what a distance of nought answers.
+        let second = if first == last {
+            first
+        } else {
+            first.saturating_add(1)
+        };
+        let other = held.get(second).copied().unwrap_or(one);
+        Value::Real(one + (other - one) * (place - integer_as_real(count_of(first))))
     }
 
     /// One number of a sum, which is `sumStep`.
@@ -471,6 +653,10 @@ impl Accumulator {
     /// JSON.
     pub fn finish(&self) -> Result<Value, Error> {
         Ok(match self.which {
+            Aggregate::Median
+            | Aggregate::Percentile
+            | Aggregate::PercentileCont
+            | Aggregate::PercentileDisc => self.percentile_of(),
             Aggregate::Count => Value::Int(self.count),
             Aggregate::Sum => match self.running {
                 _ if self.count == 0 => Value::Null,

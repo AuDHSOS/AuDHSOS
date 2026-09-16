@@ -766,6 +766,9 @@ Size: L.
 37. The types a `STRICT` table holds. Built, which D-257 records.
 38. The columns a `GENERATED ALWAYS AS` computes, written down where
     the column is `STORED`. Built, which D-258 records.
+39. `median`, `percentile`, `percentile_cont` and `percentile_disc`,
+    and the `WITHIN GROUP` clause that names their values. Built, which
+    D-259 records.
 
 ### Done when
 
@@ -775,8 +778,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 72 294 cases in 706 files, 58 633
-pass, 3389 answer differently, and 10 272 name something the engine
+under the `tclsh` of the machine. Of 72 271 cases in 706 files, 58 817
+pass, 3342 answer differently, and 10 112 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts
