@@ -729,6 +729,10 @@ pub enum Intrinsic {
     ObjectAssign,
     /// `Reflect.set`, 28.1.13.
     ReflectSet,
+    /// `Array.prototype.flatMap`, 23.1.3.13.
+    ArrayPrototypeFlatMap,
+    /// `Object.fromEntries`, 20.1.2.7.
+    ObjectFromEntries,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -782,7 +786,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 213] = [
+    pub const ALL: [Self; 215] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -996,6 +1000,8 @@ impl Intrinsic {
         Self::ObjectGetOwnPropertyDescriptors,
         Self::ObjectAssign,
         Self::ReflectSet,
+        Self::ArrayPrototypeFlatMap,
+        Self::ObjectFromEntries,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -1086,7 +1092,8 @@ impl Intrinsic {
             | Self::ArrayPrototypeKeys
             | Self::ArrayPrototypeEntries
             | Self::ArrayPrototypeReduce
-            | Self::ArrayPrototypeReduceRight => IntrinsicHolder::ArrayPrototype,
+            | Self::ArrayPrototypeReduceRight
+            | Self::ArrayPrototypeFlatMap => IntrinsicHolder::ArrayPrototype,
             Self::ArrayIteratorPrototypeNext | Self::IteratorPrototypeIterator => {
                 IntrinsicHolder::ArrayIteratorPrototype
             }
@@ -1228,7 +1235,8 @@ impl Intrinsic {
             | Self::ObjectEntries
             | Self::ObjectGetOwnPropertySymbols
             | Self::ObjectGetOwnPropertyDescriptors
-            | Self::ObjectAssign => IntrinsicHolder::ObjectConstructor,
+            | Self::ObjectAssign
+            | Self::ObjectFromEntries => IntrinsicHolder::ObjectConstructor,
             Self::NumberIsFinite
             | Self::NumberIsInteger
             | Self::NumberIsNaN
@@ -1457,6 +1465,8 @@ impl Intrinsic {
             Self::ObjectGetOwnPropertyDescriptors => 210,
             Self::ObjectAssign => 211,
             Self::ReflectSet => 212,
+            Self::ArrayPrototypeFlatMap => 213,
+            Self::ObjectFromEntries => 214,
         }
     }
 
@@ -1680,6 +1690,8 @@ impl Intrinsic {
             Self::ObjectGetOwnPropertyDescriptors => 210,
             Self::ObjectAssign => 211,
             Self::ReflectSet => 212,
+            Self::ArrayPrototypeFlatMap => 213,
+            Self::ObjectFromEntries => 214,
         }
     }
 
@@ -1904,6 +1916,8 @@ impl Intrinsic {
             210 => Some(Self::ObjectGetOwnPropertyDescriptors),
             211 => Some(Self::ObjectAssign),
             212 => Some(Self::ReflectSet),
+            213 => Some(Self::ArrayPrototypeFlatMap),
+            214 => Some(Self::ObjectFromEntries),
             _ => None,
         }
     }
@@ -1961,6 +1975,8 @@ impl Intrinsic {
             Self::ObjectGetOwnPropertyDescriptors => "getOwnPropertyDescriptors",
             Self::ObjectAssign => "assign",
             Self::ReflectSet => "set",
+            Self::ArrayPrototypeFlatMap => "flatMap",
+            Self::ObjectFromEntries => "fromEntries",
             Self::SpeciesGetter => "get [Symbol.species]",
             Self::RegExpPrototypeFlags => "get flags",
             Self::RegExpPrototypeSource => "get source",
@@ -2404,6 +2420,12 @@ impl Intrinsic {
             | Self::SymbolPrototypeToString
             | Self::SymbolPrototypeValueOf
             | Self::FunctionPrototypeToString
+            // 23.1.3.13 takes a callback and 20.1.2.7 an iterable, and both
+            // are stored or called rather than converted.
+            | Self::ArrayPrototypeFlatMap
+            | Self::ObjectFromEntries
+            | Self::ObjectAssign
+            | Self::ReflectSet
             | Self::SymbolKeyFor => false,
             // 20.1.2.4, 20.1.2.8 and 20.1.2.13 apply ToPropertyKey to the
             // second argument.
@@ -2637,6 +2659,8 @@ impl Intrinsic {
             | Self::ObjectGetOwnPropertyNames
             | Self::ObjectGetOwnPropertySymbols
             | Self::ObjectGetOwnPropertyDescriptors
+            | Self::ArrayPrototypeFlatMap
+            | Self::ObjectFromEntries
             | Self::PromiseConstructor
             | Self::PromiseResolve
             | Self::PromiseReject

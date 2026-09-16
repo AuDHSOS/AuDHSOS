@@ -1824,6 +1824,29 @@ impl RegisterVM {
             )),
             // 20.1.2.1 copies the own enumerable properties of every source
             // onto the target, and 28.1.13 writes one property.
+            // 20.1.2.7 makes an object of the pairs the iterable answers.
+            Intrinsic::ObjectFromEntries => {
+                let entries = self.call_argument(&call, 0, heap)?;
+                if entries.is_undefined() || entries.is_null() {
+                    return Err(type_error(
+                        heap,
+                        realm,
+                        "Object.fromEntries called on undefined or null",
+                    ));
+                }
+                let pairs = Self::iterable_elements(entries, heap, realm)?;
+                let answer = realm.ordinary_object(heap)?;
+                for pair in pairs {
+                    let Some(pair) = pair.as_object() else {
+                        return Err(type_error(heap, realm, "an entry that is no Object"));
+                    };
+                    let key = Self::element_at(heap, pair, 0)?.unwrap_or(VALUE_UNDEFINED);
+                    let value = Self::element_at(heap, pair, 1)?.unwrap_or(VALUE_UNDEFINED);
+                    let key = property_key(key, heap)?;
+                    heap.define_own_named(answer, key, value, PropertyFlags::ordinary_data())?;
+                }
+                Ok(Value::from_object(answer))
+            }
             Intrinsic::ObjectAssign => {
                 let target = self.call_argument(&call, 0, heap)?;
                 let object = Self::coerce_object(target, heap, realm)?;
@@ -2025,6 +2048,7 @@ impl RegisterVM {
             // 23.1.3 before an intrinsic is called at all.
             Intrinsic::ArrayPrototypeForEach
             | Intrinsic::ArrayPrototypeMap
+            | Intrinsic::ArrayPrototypeFlatMap
             | Intrinsic::ArrayPrototypeFilter
             | Intrinsic::ArrayPrototypeEvery
             | Intrinsic::ArrayPrototypeSome
@@ -6223,9 +6247,15 @@ impl RegisterVM {
         // Array cannot hold.
         if matches!(
             walk.intrinsic,
-            Intrinsic::ArrayPrototypeMap | Intrinsic::ArrayPrototypeFilter | Intrinsic::ArrayFrom
+            Intrinsic::ArrayPrototypeMap
+                | Intrinsic::ArrayPrototypeFilter
+                | Intrinsic::ArrayPrototypeFlatMap
+                | Intrinsic::ArrayFrom
         ) {
-            let wanted = if walk.intrinsic == Intrinsic::ArrayPrototypeFilter {
+            let wanted = if matches!(
+                walk.intrinsic,
+                Intrinsic::ArrayPrototypeFilter | Intrinsic::ArrayPrototypeFlatMap
+            ) {
                 0
             } else {
                 walk.length
@@ -6551,6 +6581,33 @@ impl RegisterVM {
                     .as_object()
                     .ok_or(VMError::Heap(HeapError::InvalidReference))?;
                 heap.set_array_element(array, walk.element_index, answer)?;
+            }
+            // 23.1.3.13 appends the elements of an answer that is an Array
+            // and the answer itself otherwise, which is 23.1.3.13.1 with the
+            // depth one.
+            Intrinsic::ArrayPrototypeFlatMap => {
+                let array = walk
+                    .output
+                    .as_object()
+                    .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+                let mut next = heap.array_length(array).unwrap_or(0);
+                if Self::is_array(answer, heap) {
+                    let part = answer
+                        .as_object()
+                        .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+                    let count = heap.array_length(part).unwrap_or(0);
+                    for index in 0..count {
+                        if let Some(value) = Self::element_at(heap, part, index)? {
+                            heap.set_array_element(array, next, value)?;
+                            next = next.saturating_add(1);
+                        } else {
+                            next = next.saturating_add(1);
+                            heap.set_array_length(array, next)?;
+                        }
+                    }
+                } else {
+                    heap.set_array_element(array, next, answer)?;
+                }
             }
             // 23.1.3.8 appends the element the answer kept.
             Intrinsic::ArrayPrototypeFilter => {
@@ -7172,6 +7229,7 @@ impl RegisterVM {
                 intrinsic,
                 Intrinsic::ArrayPrototypeForEach
                     | Intrinsic::ArrayPrototypeMap
+                    | Intrinsic::ArrayPrototypeFlatMap
                     | Intrinsic::ArrayPrototypeFilter
                     | Intrinsic::ArrayPrototypeEvery
                     | Intrinsic::ArrayPrototypeSome

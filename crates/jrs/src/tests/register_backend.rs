@@ -1776,7 +1776,7 @@ fn a_read_that_reaches_an_unbuilt_prototype_is_a_gap() -> Result<(), Error> {
     // computed one reaches the engine and used to answer undefined.
     for source in [
         "let o={a:1};let k='toLocaleString';typeof o[k]",
-        "let a=[1];let k='flatMap';typeof a[k]",
+        "let a=[1];let k='toLocaleString';typeof a[k]",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
@@ -7689,6 +7689,41 @@ fn a_promise_settles_through_the_job_queue_of_both_backends() -> Result<(), Erro
         let expected = stack.evaluate("l.join('|')")?;
         assert_eq!(engine.evaluate("l.join('|')")?, expected, "{source}");
     }
+    Ok(())
+}
+
+#[test]
+fn flat_map_and_from_entries_answer_what_their_clauses_ask() -> Result<(), Error> {
+    // 23.1.3.13 is 23.1.3.13.1 with the depth one: an answer that is an Array
+    // contributes its elements and every other answer contributes itself.
+    for source in [
+        "[1,2,3].flatMap(function(e){return [e*2]}).join(',')",
+        "[1,2].flatMap(function(e){return e*2}).join(',')",
+        "''+[1,2].flatMap(function(e){return [[e]]}).length",
+        "var l=[];[1,2].flatMap(function(e,i,a){l.push(e+'/'+i+'/'+a.length)});l.join('|')",
+        "''+[1,,3].flatMap(function(e){return [e]}).length",
+    ] {
+        let mut engine_host = SilentHost;
+        let mut engine = Realm::with_backend(Limits::default(), &mut engine_host, Backend::Engine)?;
+        let mut stack_host = SilentHost;
+        let mut stack = Realm::with_backend(Limits::default(), &mut stack_host, Backend::Stack)?;
+        assert_eq!(
+            engine.evaluate(source)?,
+            stack.evaluate(source)?,
+            "{source}"
+        );
+    }
+    // 20.1.2.7 makes an object of the pairs; the stack backend has it not.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    assert_eq!(
+        realm.evaluate("Object.keys(Object.fromEntries([['a',1],['b',2]])).join(',')")?,
+        Value::string("a,b")
+    );
+    assert_eq!(
+        realm.evaluate("''+Object.fromEntries([['a',1]]).a")?,
+        Value::string("1")
+    );
     Ok(())
 }
 

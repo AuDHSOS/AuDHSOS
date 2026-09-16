@@ -8617,6 +8617,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ObjectAssign
         | crate::engine::realm::Intrinsic::ObjectGetOwnPropertyDescriptors
         | crate::engine::realm::Intrinsic::ObjectGetOwnPropertySymbols
+        | crate::engine::realm::Intrinsic::ArrayPrototypeFlatMap
+        | crate::engine::realm::Intrinsic::ObjectFromEntries
         // 27.2 answers a Promise, a settled value, or nothing; none of the
         // four has a tracked layout.
         | crate::engine::realm::Intrinsic::PromiseConstructor
