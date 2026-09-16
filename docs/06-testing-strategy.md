@@ -5353,6 +5353,25 @@ Document 16 step Q8.
   triggers of the table run over the row the clause writes, and the
   `RETURNING` answers it.
 
+### 6.6.181 The types a `STRICT` table holds (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `CREATE TABLE t1(a) STRICT` is refused `missing datatype for t1.a`,
+  and a type that is not one of the six is refused `unknown datatype for
+  t1.f: "TEXT(50)"` with the type as the statement wrote it.
+- A value is converted under the affinity of the column and then held to
+  its type: `INSERT INTO t1(a) VALUES('xyz')` into a column of `INT` is
+  refused `cannot store TEXT value in INT column t1.a`, and a column of
+  `BLOB` refuses a number `cannot store INT value in BLOB column t1.c`.
+- A column of `INT` holds the text `'3'` as the number 3, one of `REAL`
+  holds the number 1 as 1.0, one of `TEXT` holds the number 4 as its
+  text, and one of `ANY` holds whatever it is given.
+- Every column holds nothing whatever its type says.
+- `ALTER TABLE t4 ADD COLUMN d VARCHAR` over a `STRICT` table is refused
+  `error in table t4 after add column: unknown datatype for t4.d:
+  "VARCHAR"`, and the table stands as the statement found it.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

@@ -26,7 +26,7 @@ use crate::ast::{
 use crate::value::{Affinity, Collation, Value};
 
 /// Why a definition is not a table.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Error {
     /// The columns come from a statement. A file never holds one: what
     /// `CREATE TABLE ... AS SELECT` writes into `sqlite_schema` is the
@@ -51,10 +51,12 @@ pub enum Error {
     AutoincrementWithoutRowid,
     /// `WITHOUT ROWID` with no primary key to take its place.
     MissingKey,
-    /// `STRICT` with a column that has no type.
-    MissingType,
-    /// `STRICT` with a column whose type is not one of the six.
-    UnknownType,
+    /// `STRICT` with a column that has no type, with the table and the
+    /// column.
+    MissingType(Vec<u8>, Vec<u8>),
+    /// `STRICT` with a column whose type is not one of the six, with the
+    /// table, the column and the type as the statement wrote it.
+    UnknownType(Vec<u8>, Vec<u8>, Vec<u8>),
     /// A primary key naming a column the table does not have.
     NoSuchColumn,
     /// A primary key whose term is an expression rather than a name.
@@ -974,10 +976,11 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
     if table.strict {
         for column in &mut table.columns {
             let Some(at) = standard(&column.declared) else {
+                let named = (table.name.clone(), column.name.clone());
                 return Err(if column.declared.is_empty() {
-                    Error::MissingType
+                    Error::MissingType(named.0, named.1)
                 } else {
-                    Error::UnknownType
+                    Error::UnknownType(named.0, named.1, column.declared.clone())
                 });
             };
             if at == 0 {

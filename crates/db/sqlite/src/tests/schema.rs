@@ -228,10 +228,17 @@ fn what_a_statement_says_that_makes_it_no_table() {
         build("CREATE TABLE t(x) WITHOUT ROWID"),
         Err(Error::MissingKey)
     );
-    assert_eq!(build("CREATE TABLE t(x) STRICT"), Err(Error::MissingType));
+    assert_eq!(
+        build("CREATE TABLE t(x) STRICT"),
+        Err(Error::MissingType(b"t".to_vec(), b"x".to_vec()))
+    );
     assert_eq!(
         build("CREATE TABLE t(x VARCHAR(9)) STRICT"),
-        Err(Error::UnknownType)
+        Err(Error::UnknownType(
+            b"t".to_vec(),
+            b"x".to_vec(),
+            b"VARCHAR(9)".to_vec()
+        ))
     );
     assert_eq!(
         build("CREATE TABLE t(x, PRIMARY KEY(nosuch))"),

@@ -678,7 +678,29 @@ impl Writer {
         drop(database);
         crate::tree::update(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &row)?;
         self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
-        Ok(())
+        self.reread(&name, b"add column")
+    }
+
+    /// The schema read again after an `ALTER TABLE` wrote a statement
+    /// into it, which is the `corruptSchema` of `src/prepare.c` naming
+    /// the alter that left it unreadable.
+    ///
+    /// Reading the schema costs O(n) in its rows.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AfterAlter`] carries the table, the words for the kind
+    /// of alter, and what reading the schema refused.
+    fn reread(&self, name: &[u8], word: &[u8]) -> Result<(), Error> {
+        let bytes = self.image();
+        match Database::open(&bytes) {
+            Ok(_) => Ok(()),
+            Err(error) => Err(Error::AfterAlter(
+                name.to_vec(),
+                word.to_vec(),
+                error.message().into_bytes(),
+            )),
+        }
     }
 
     /// Which row of `sqlite_schema` names the table, which is the row a
@@ -5251,6 +5273,69 @@ fn set_places(table: &Table, columns: &[Vec<u8>]) -> Result<Vec<Option<usize>>, 
         .collect()
 }
 
+/// Every value of a row held to the type of the column it goes in,
+/// which is `OP_TypeCheck`: a column of a `STRICT` table holds a value
+/// of its own type and nothing else, and every column holds nothing.
+///
+/// The affinity of the column is applied first, so a column of `INT`
+/// holds the text `'3'` as the number 3 and one of `REAL` holds the
+/// number 1 as 1.0.
+///
+/// Holding one row costs O(n) in its columns.
+///
+/// # Errors
+///
+/// [`Error::StoredType`] names the type of the value and the type of
+/// the column.
+fn stored_types(table: &Table, values: &mut [Value]) -> Result<(), Error> {
+    if !table.strict {
+        return Ok(());
+    }
+    for (value, column) in values.iter_mut().zip(&table.columns) {
+        crate::value::apply(value, column.affinity);
+        // A column of `REAL` holds a whole number as a real, which is
+        // `MEM_IntReal`.
+        if column.declared == b"REAL"
+            && let Value::Int(number) = *value
+        {
+            *value = Value::Real(crate::value::integer_as_real(number));
+        }
+        let Some(held) = refused_as(&column.declared, value) else {
+            continue;
+        };
+        return Err(Error::StoredType(
+            held.to_vec(),
+            column.declared.clone(),
+            table.name.clone(),
+            column.name.clone(),
+        ));
+    }
+    Ok(())
+}
+
+/// The type of a value as `vdbeMemTypeName` writes it, where a column
+/// of a `STRICT` table that declares `declared` may not hold it, and
+/// nothing where it may.
+///
+/// A column holds nothing whatever its type says, and a column of `ANY`
+/// holds whatever it is given.
+const fn refused_as(declared: &[u8], value: &Value) -> Option<&'static [u8]> {
+    match (declared, value) {
+        (_, Value::Null)
+        | (b"INT" | b"INTEGER", Value::Int(_))
+        | (b"REAL", Value::Real(_))
+        | (b"TEXT", Value::Text(_))
+        | (b"BLOB", Value::Blob(_)) => None,
+        (b"INT" | b"INTEGER" | b"REAL" | b"TEXT" | b"BLOB", value) => Some(match value {
+            Value::Int(_) => b"INT",
+            Value::Real(_) => b"REAL",
+            Value::Text(_) => b"TEXT",
+            _ => b"BLOB",
+        }),
+        _ => None,
+    }
+}
+
 /// Whether `name` is one of the three names the key of a table answers
 /// to.
 fn is_rowid(name: &[u8]) -> bool {
@@ -5750,6 +5835,7 @@ impl Writer {
         rowid: i64,
         written: Conflict,
     ) -> Result<bool, Error> {
+        stored_types(table, values)?;
         let bytes = self.image();
         let database = Database::open(&bytes)?;
         let falls_back = database.defaults(&table.name)?;

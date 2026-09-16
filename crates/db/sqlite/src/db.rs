@@ -179,6 +179,13 @@ pub enum Error {
     NotAlterable(Vec<u8>),
     /// An `ALTER TABLE` over a view, with the name of the view.
     NotATable(Vec<u8>),
+    /// A table an `ALTER TABLE` left in a state the schema cannot be
+    /// read from, with the table, the words for the kind of alter, and
+    /// what reading the schema refused.
+    AfterAlter(Vec<u8>, Vec<u8>, Vec<u8>),
+    /// A value a column of a `STRICT` table may not hold, with the type
+    /// of the value, the type of the column, the table and the column.
+    StoredType(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>),
     /// An `INSERT`, an `UPDATE` or a `DELETE` over a view the schema
     /// carries no `INSTEAD OF` trigger of that event for, with the name
     /// of the view.
@@ -224,6 +231,38 @@ pub enum Error {
 impl Error {
     /// What an `ALTER TABLE` is refused with, or nothing where the
     /// refusal is another.
+    /// The words the types of a `STRICT` table are refused with, and
+    /// the words an `ALTER TABLE` that left the schema unreadable is
+    /// named by.
+    fn datatypes(&self) -> Option<alloc::string::String> {
+        let shown = |bytes: &[u8]| alloc::string::String::from_utf8_lossy(bytes).into_owned();
+        Some(match self {
+            Error::Schema(schema::Error::MissingType(table, column)) => {
+                alloc::format!("missing datatype for {}.{}", shown(table), shown(column))
+            }
+            Error::Schema(schema::Error::UnknownType(table, column, written)) => alloc::format!(
+                "unknown datatype for {}.{}: \"{}\"",
+                shown(table),
+                shown(column),
+                shown(written)
+            ),
+            Error::AfterAlter(table, word, message) => alloc::format!(
+                "error in table {} after {}: {}",
+                shown(table),
+                shown(word),
+                shown(message)
+            ),
+            Error::StoredType(held, wanted, table, column) => alloc::format!(
+                "cannot store {} value in {} column {}.{}",
+                shown(held),
+                shown(wanted),
+                shown(table),
+                shown(column)
+            ),
+            _ => return None,
+        })
+    }
+
     fn altered(&self) -> Option<alloc::string::String> {
         use alloc::string::ToString as _;
         Some(match self {
@@ -290,6 +329,9 @@ impl Error {
     pub fn message(&self) -> alloc::string::String {
         use alloc::string::ToString as _;
         if let Some(shown) = self.altered() {
+            return shown;
+        }
+        if let Some(shown) = self.datatypes() {
             return shown;
         }
         match self {

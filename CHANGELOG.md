@@ -134,6 +134,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` holds the rows of a `STRICT` table to the types its
+  columns declare, which is `OP_TypeCheck`, and names in a refusal the
+  column whose type it cannot read and the value a column cannot hold.
+  An `ALTER TABLE ... ADD COLUMN` that leaves the schema unreadable
+  names itself. D-257 records it. Catalog 6.6.181.
+
 - `INSERT ... ON CONFLICT` in `db-sqlite` over a table that keeps its
   rows in the key's own tree. A clause names the `PRIMARY KEY` of the
   table or an index over it, `DO UPDATE` writes the row the conflict

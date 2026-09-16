@@ -42,6 +42,7 @@ mod returning;
 mod rowvalue;
 mod savepoint;
 mod schema;
+mod strict;
 mod token;
 mod tree;
 mod upsert;
