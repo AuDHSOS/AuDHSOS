@@ -1118,60 +1118,117 @@ fn converted(moment: &Moment, what: u8) -> Option<Vec<u8>> {
     })
 }
 
+/// The julian day the difference of two moments is written against,
+/// which is `1486995408 * 100000`: the first day of the year nought.
+const NOUGHT: i64 = 148_699_540_800_000;
+
 /// `timediff(ONE, OTHER)`: what must be added to the second moment to
 /// reach the first, written as `(+|-)YYYY-MM-DD HH:MM:SS.SSS`.
+///
+/// `timediffFunc` moves the year of the second moment to the year of
+/// the first, then its month to the month of the first, then walks it a
+/// month at a time until it stands on the near side of the first; what
+/// is left is written against the first day of the year nought, so the
+/// day of the month it lands on, less one, is the count of days.
+///
+/// Walking the months costs O(n) in them.
 #[must_use]
 pub fn timediff(args: &[Value]) -> Value {
-    let (Some(one), Some(other)) = (
+    let (Some(mut one), Some(mut other)) = (
         moment_of(args.get(..1).unwrap_or_default()),
         moment_of(args.get(1..2).unwrap_or_default()),
     ) else {
         return Value::Null;
     };
-    let (mut first, mut second, sign) = if one.jd >= other.jd {
-        (one, other, b'+')
+    one.compute_both();
+    other.compute_both();
+    let ahead = one.jd >= other.jd;
+    let (sign, years, months) = walked(&mut other, &one, ahead);
+    let rest = if ahead {
+        one.jd.saturating_sub(other.jd)
     } else {
-        (other, one, b'-')
+        other.jd.saturating_sub(one.jd)
     };
-    first.compute_both();
-    second.compute_both();
-    let mut years = first.year.saturating_sub(second.year);
-    let mut months = first.month.saturating_sub(second.month);
-    if months < 0 {
-        years = years.saturating_sub(1);
-        months = months.saturating_add(12);
-    }
-    let mut moved = second;
-    moved.year = moved.year.saturating_add(years);
-    moved.month = moved.month.saturating_add(months);
-    moved.has_jd = false;
-    moved.compute_jd();
-    if moved.jd > first.jd {
-        months = months.saturating_sub(1);
-        if months < 0 {
-            months = months.saturating_add(12);
-            years = years.saturating_sub(1);
-        }
-        moved = second;
-        moved.year = moved.year.saturating_add(years);
-        moved.month = moved.month.saturating_add(months);
-        moved.has_jd = false;
-        moved.compute_jd();
-    }
-    let rest = first.jd.saturating_sub(moved.jd);
-    let days = rest.div_euclid(DAY);
-    let inside = rest.rem_euclid(DAY);
+    // The years and the months are counted against the moment that was
+    // walked, so what is left is a run of days and a time of day.
+    let mut held = Moment {
+        jd: rest.saturating_add(NOUGHT),
+        has_jd: true,
+        ..Moment::default()
+    };
+    held.compute_both();
     let mut out = alloc::vec![sign];
     out.extend_from_slice(&padded(years, 4));
     out.push(b'-');
     out.extend_from_slice(&padded(months, 2));
     out.push(b'-');
-    out.extend_from_slice(&padded(days, 2));
+    out.extend_from_slice(&padded(held.day.saturating_sub(1), 2));
     out.push(b' ');
-    out.extend_from_slice(&padded(inside.div_euclid(3_600_000), 2));
+    out.extend_from_slice(&padded(held.hour, 2));
     out.push(b':');
-    out.extend_from_slice(&padded(inside.div_euclid(60_000).rem_euclid(60), 2));
+    out.extend_from_slice(&padded(held.minute, 2));
     out.push(b':');
-    out.extend_from_slice(&written_millis(inside.rem_euclid(60_000)));
+    out.extend_from_slice(&written_seconds(held.second));
     Value::Text(out)
+}
+
+/// The second moment walked to the first a year and then a month at a
+/// time, with the sign, the years and the months it took, which is the
+/// two halves of `timediffFunc`.
+///
+/// `ahead` says the first moment stands after the second.
+///
+/// Walking the months costs O(n) in them.
+fn walked(other: &mut Moment, one: &Moment, ahead: bool) -> (u8, i64, i64) {
+    let (sign, mut years) = if ahead {
+        (b'+', one.year.saturating_sub(other.year))
+    } else {
+        (b'-', other.year.saturating_sub(one.year))
+    };
+    if years != 0 {
+        other.year = one.year;
+        other.has_jd = false;
+        other.compute_jd();
+    }
+    let mut months = if ahead {
+        one.month.saturating_sub(other.month)
+    } else {
+        other.month.saturating_sub(one.month)
+    };
+    if months < 0 {
+        years = years.saturating_sub(1);
+        months = months.saturating_add(12);
+    }
+    if months != 0 {
+        other.month = one.month;
+        other.has_jd = false;
+        other.compute_jd();
+    }
+    while if ahead {
+        one.jd < other.jd
+    } else {
+        one.jd > other.jd
+    } {
+        months = months.saturating_sub(1);
+        if months < 0 {
+            months = 11;
+            years = years.saturating_sub(1);
+        }
+        if ahead {
+            other.month = other.month.saturating_sub(1);
+            if other.month < 1 {
+                other.month = 12;
+                other.year = other.year.saturating_sub(1);
+            }
+        } else {
+            other.month = other.month.saturating_add(1);
+            if other.month > 12 {
+                other.month = 1;
+                other.year = other.year.saturating_add(1);
+            }
+        }
+        other.has_jd = false;
+        other.compute_jd();
+    }
+    (sign, years, months)
 }

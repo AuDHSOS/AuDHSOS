@@ -189,6 +189,49 @@ fn every_format_answers_what_the_c_library_answers() {
     ]);
 }
 
+/// The second moment walked to the first a month at a time, which is
+/// `timediffFunc`.
+#[test]
+fn the_months_timediff_counts_are_the_months_it_walks() {
+    same_as_the_c_library(&[
+        // A month the moment it is walked to does not reach, so the
+        // walk takes a month off and the year with it.
+        (
+            r"timediff('2000-03-01','2000-01-31')",
+            r"'+0000-00-30 00:00:00.000'",
+        ),
+        (
+            r"timediff('2000-01-31','2000-03-01')",
+            r"'-0000-01-01 00:00:00.000'",
+        ),
+        (
+            r"timediff('2024-02-29','2023-03-31')",
+            r"'+0000-10-29 00:00:00.000'",
+        ),
+        (
+            r"timediff('0000-01-01','0000-01-03')",
+            r"'-0000-00-02 00:00:00.000'",
+        ),
+        (
+            r"timediff('1066-10-14 00:00:00','-4713-11-24 12:00:00')",
+            r"'+5778-10-19 12:00:00.000'",
+        ),
+        (
+            r"timediff('2000-01-01','2001-03-15 06:07:08.9')",
+            r"'-0001-02-14 06:07:08.900'",
+        ),
+        // The walk crosses the end of a year in both directions.
+        (
+            r"timediff('2000-12-15','2001-01-10')",
+            r"'-0000-00-26 00:00:00.000'",
+        ),
+        (
+            r"timediff('2001-01-10','2000-12-15')",
+            r"'+0000-00-26 00:00:00.000'",
+        ),
+    ]);
+}
+
 #[test]
 fn every_shape_the_c_library_refuses_is_refused() {
     same_as_the_c_library(&[

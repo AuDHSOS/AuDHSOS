@@ -5228,6 +5228,20 @@ Document 16 step Q8.
 - `PRAGMA foreign_keys` set while a transaction is open changes nothing,
   and every other pragma the connection keeps is set there.
 
+### 6.6.173 The years and the months `timediff` counts (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `timediff('2000-03-01','2000-01-31')` answers `+0000-00-30`, because
+  the walk takes the month back where the day of the month the second
+  moment lands on runs past the first.
+- `timediff('2024-02-29','2023-03-31')` answers `+0000-10-29`.
+- `timediff('2000-12-15','2001-01-10')` answers `-0000-00-26`, where the
+  walk crosses the end of a year going forward, and the two moments the
+  other way round answer `+0000-00-26`, where it crosses going back.
+- `timediff('1066-10-14 00:00:00','-4713-11-24 12:00:00')` answers
+  `+5778-10-19 12:00:00.000`.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

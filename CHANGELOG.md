@@ -71,6 +71,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `timediff` in `db-sqlite` counted the years and the months by
+  subtracting the two moments, which answers a day count that belongs to
+  no month, where `timediffFunc` walks the second moment to the first a
+  month at a time. `timediff1.test` goes from 982 cases passing to 1520
+  with none answering differently. D-249 records it. Catalog 6.6.173.
+
 - `db-sqlite` compared a foreign key under the affinity and the
   collation of the child's column where `R-04240-13860` says the
   parent's decide, so a child column written under `BINARY` pointing at
