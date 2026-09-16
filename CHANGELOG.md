@@ -88,6 +88,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` computes the columns of a `GENERATED ALWAYS AS` where a
+  statement writes a row: a column that is `STORED` is written down, and
+  a column computed where it is read takes no place in the record, so
+  the columns written after one answer what the statement wrote rather
+  than the value of the column before them. D-258 records it. Catalog
+  6.6.182.
+
 - A cell of fewer than four bytes in `db-sqlite` takes four bytes of the
   page, which is `cellSizePtr`. A three-byte cell given back wrote a
   freeblock that leaves the page, so a `DELETE` of the row under such a

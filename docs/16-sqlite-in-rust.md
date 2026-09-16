@@ -763,9 +763,9 @@ Size: L.
     D-255 records.
 36. `INSERT ... ON CONFLICT` over a table that keeps its rows in the
     key's own tree. Built, which D-256 records.
-37. The types a `STRICT` table holds. Built, which D-257 records; a
-    generated column is not held to them, because this crate computes
-    one where it is read and not where the row is written.
+37. The types a `STRICT` table holds. Built, which D-257 records.
+38. The columns a `GENERATED ALWAYS AS` computes, written down where
+    the column is `STORED`. Built, which D-258 records.
 
 ### Done when
 
@@ -775,8 +775,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 72 251 cases in 706 files, 58 556
-pass, 3425 answer differently, and 10 270 name something the engine
+under the `tclsh` of the machine. Of 72 294 cases in 706 files, 58 633
+pass, 3389 answer differently, and 10 272 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts

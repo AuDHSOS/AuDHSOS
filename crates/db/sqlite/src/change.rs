@@ -2454,19 +2454,18 @@ impl Writer {
             self.counted.total = self.counted.total.saturating_add(1);
             return Ok(());
         }
-        let affinities: Vec<Affinity> =
-            table.columns.iter().map(|column| column.affinity).collect();
-        let mut stored = values.to_vec();
+        let affinities = ordered_affinities(&table);
+        let mut held = values.to_vec();
         // The column the key is another name for takes no place in the
         // record, which is what `sqlite3TableColumnToStorage` leaves.
-        for slot in stored
+        for slot in held
             .iter_mut()
             .skip(table.rowid_alias.unwrap_or(usize::MAX))
             .take(1)
         {
             *slot = Value::Null;
         }
-        let record = crate::record::write(&stored, &affinities, 4);
+        let record = crate::record::write(&ordered(&table, &held), &affinities, 4);
         crate::tree::update(&mut self.pages, root, keyed_rowid(key), &record)?;
         // `sqlite3_total_changes` counts the rows a foreign key action
         // writes, which `sqlite3FkActions` writes through a trigger of
@@ -2985,8 +2984,7 @@ impl Writer {
             .iter()
             .map(|value| stored(value, self.header.encoding))
             .collect();
-        let affinities: Vec<Affinity> =
-            table.columns.iter().map(|column| column.affinity).collect();
+        let affinities = ordered_affinities(table);
         // `INSERT INTO t DEFAULT VALUES` writes one row of what every
         // column falls back to and reads no statement of its own.
         if statement.defaults {
@@ -4261,7 +4259,7 @@ impl Writer {
                     continue;
                 }
             }
-            let record = crate::record::write(&values, &affinities, 4);
+            let record = crate::record::write(&ordered(&table, &values), &affinities, 4);
             // `I.1` of `src/fkey.c`: a row whose foreign key points at
             // no row is refused before it is written.
             self.parented(&table, &named, rowid)?;
@@ -4496,7 +4494,6 @@ impl Writer {
             kept: into.kept,
             root: into.root,
             alias: into.alias,
-            affinities: into.affinities,
             proposed,
             given,
             rowid,
@@ -4636,7 +4633,8 @@ impl Writer {
         if let Some((index, _)) = found {
             return Err(Error::Unique(Self::shown_key_of(table, wanted.kept, index)));
         }
-        let record = crate::record::write(&values, wanted.affinities, 4);
+        let affinities = ordered_affinities(table);
+        let record = crate::record::write(&ordered(table, &values), &affinities, 4);
         self.parented(table, &named, key)?;
         self.orphaned(&table.name, table, held, rowid, Some((&named, key)))?;
         self.unindex_row(wanted.kept, wanted.table, held, &keyed_as(rowid))?;
@@ -5068,8 +5066,6 @@ struct Upserting<'a> {
     root: u32,
     /// The column the key is another name for, where the table has one.
     alias: Option<usize>,
-    /// What each column of the table converts a value under.
-    affinities: &'a [Affinity],
     /// The row the statement would have written.
     proposed: &'a [Value],
     /// The key the row the statement would have written was given.
@@ -5482,8 +5478,7 @@ impl Writer {
                 }
             })
             .collect::<Result<_, Error>>()?;
-        let affinities: Vec<Affinity> =
-            table.columns.iter().map(|column| column.affinity).collect();
+        let affinities = ordered_affinities(table);
         let mut written = Vec::new();
         for (rowid, values) in database.rows_of(name)? {
             let held = Held {
@@ -5631,7 +5626,7 @@ impl Writer {
             )? {
                 continue;
             }
-            let record = crate::record::write(&values, &affinities, 4);
+            let record = crate::record::write(&ordered(&table, &values), &affinities, 4);
             // `I.1` of `src/fkey.c` over the row as it will stand, and
             // `D.2` over the row as it stands: a row that points at no
             // row is refused, and so is one that rows point at.
@@ -5835,9 +5830,13 @@ impl Writer {
         rowid: i64,
         written: Conflict,
     ) -> Result<bool, Error> {
-        stored_types(table, values)?;
         let bytes = self.image();
         let database = Database::open(&bytes)?;
+        // `sqlite3ComputeGeneratedColumns` runs before the opcode that
+        // holds the row to the types of the table and before the
+        // constraints.
+        database.compute_row(&table.name, values)?;
+        stored_types(table, values)?;
         let falls_back = database.defaults(&table.name)?;
         for (at, column) in table.columns.iter().enumerate() {
             if !column.not_null || values.get(at) != Some(&Value::Null) {

@@ -5372,6 +5372,19 @@ Document 16 step Q8.
   `error in table t4 after add column: unknown datatype for t4.d:
   "VARCHAR"`, and the table stands as the statement found it.
 
+### 6.6.182 The columns a statement computes (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `CREATE TABLE t(c INT, a INT AS (c*3) VIRTUAL, d INT, b INT AS (c*2)
+  STORED)` with `INSERT INTO t(c,d) VALUES(1,9)` answers `1|3|9|2`: the
+  column computed where it is read takes no place in the record, so the
+  column after it answers what the statement wrote.
+- `UPDATE t SET c=5` computes both columns again, answering `5|15|9|10`.
+- One computed column names another, in either direction.
+- A `STRICT` table holds the value a column computes to the type of that
+  column, so a column of `BLOB` that computes a number refuses the row.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

@@ -1170,6 +1170,51 @@ impl<'a> Database<'a> {
         ))
     }
 
+    /// The columns of a row that are computed, filled in from the
+    /// columns the statement wrote, which is
+    /// `sqlite3ComputeGeneratedColumns`.
+    ///
+    /// One expression may name another computed column, so the cost is
+    /// O(k²) evaluations for `k` of them.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the expression of a computed column refuses.
+    pub fn compute_row(&self, name: &[u8], values: &mut [Value]) -> Result<(), Error> {
+        let Some(stored) = self.find(name) else {
+            return Ok(());
+        };
+        let computed: Vec<usize> = stored
+            .table
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, column)| column.generated != Generated::Never)
+            .map(|(at, _)| at)
+            .collect();
+        if computed.is_empty() {
+            return Ok(());
+        }
+        let mut held: Vec<Option<Value>> = values.iter().cloned().map(Some).collect();
+        for at in computed {
+            for slot in held.iter_mut().skip(at).take(1) {
+                *slot = None;
+            }
+        }
+        // A column whose expression this row cannot answer keeps the
+        // value it was given, because a statement writes down only the
+        // columns computed once and the read of a column computed where
+        // it is read refuses on its own.
+        let held = match compute(stored, &mut held, self.encoding, Collation::Binary) {
+            Ok(()) => held,
+            Err(_) => return Ok(()),
+        };
+        for (slot, value) in values.iter_mut().zip(held) {
+            *slot = value.unwrap_or(Value::Null);
+        }
+        Ok(())
+    }
+
     /// The statement the table of `name` was written with, and where a
     /// column added later goes in it.
     #[must_use]

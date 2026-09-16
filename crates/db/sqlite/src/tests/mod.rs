@@ -22,6 +22,7 @@ mod error;
 mod eval;
 mod foreign;
 mod fp;
+mod generated;
 mod header;
 mod image;
 mod index;
