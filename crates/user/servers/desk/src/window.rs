@@ -13,6 +13,10 @@
 //! Events wait here until the client asks for them. The queue holds
 //! [`EVENTS`] of them and drops the oldest when it is full, counting what
 //! it dropped: a client that stopped asking must not stop the desktop.
+//! The one event that is never dropped is [`Event::Closed`]: it is what
+//! tells a client to give the window back, and a client that lost it
+//! would wait for a window that is going away. It is held beside the
+//! queue and answered when the queue is empty.
 //!
 //! Invariants: the content rectangle lies inside the frame; a window that
 //! was placed on a screen has its whole frame on that screen, because the
@@ -74,6 +78,9 @@ pub struct Window {
     focused: bool,
     /// The events its client has not taken yet.
     events: ArrayVec<Event, EVENTS>,
+    /// Whether the client still has to hear that the window is going
+    /// away.
+    closing: bool,
     /// How many events were dropped because the queue was full.
     dropped: u32,
 }
@@ -100,6 +107,7 @@ impl Window {
             title,
             focused: false,
             events: ArrayVec::new(),
+            closing: false,
             dropped: 0,
         }
     }
@@ -265,7 +273,14 @@ impl Window {
 
     /// Puts `event` at the end of the queue. The oldest is dropped when the
     /// queue is full, and counted.
+    ///
+    /// [`Event::Closed`] takes no place in the queue: it is remembered on
+    /// its own, so no later event can push it out.
     pub fn push(&mut self, event: Event) {
+        if matches!(event, Event::Closed) {
+            self.closing = true;
+            return;
+        }
         if self.events.is_full() {
             self.events.remove(0);
             self.dropped = self.dropped.saturating_add(1);
@@ -273,18 +288,26 @@ impl Window {
         let _room = self.events.push(event);
     }
 
-    /// Takes the oldest event, if one waits.
+    /// Takes the oldest event, if one waits. The news that the window is
+    /// going away comes last, because everything queued before it
+    /// happened before it.
     pub fn pop(&mut self) -> Option<Event> {
-        if self.events.is_empty() {
-            return None;
+        if let Some(event) = self.events.remove(0) {
+            return Some(event);
         }
-        self.events.remove(0)
+        if self.closing {
+            self.closing = false;
+            return Some(Event::Closed);
+        }
+        None
     }
 
-    /// How many events wait.
+    /// How many events wait, the news of the window going away included.
     #[must_use]
     pub const fn waiting(&self) -> usize {
-        self.events.len()
+        self.events
+            .len()
+            .saturating_add(if self.closing { 1 } else { 0 })
     }
 
     /// How many events were dropped because the queue was full.

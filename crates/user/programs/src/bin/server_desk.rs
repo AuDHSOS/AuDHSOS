@@ -218,8 +218,27 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
     }
 }
 
-/// Takes the screen and the events, then serves until the desktop ends.
-fn run(gate: &mut Gate, startup: &Startup, endpoint: EndpointHandle) -> Result<(), Error> {
+/// What the compositor took before it began to serve: the screen it
+/// composes into and the events it composes for.
+struct Attached {
+    /// The display server, badged for this program.
+    display: EndpointHandle,
+    /// What the screen is.
+    mode: Mode,
+    /// The order of the channels of that screen.
+    format: PixelFormat,
+    /// The surface of the screen, as the display server named it.
+    given: user_proto::display::Surface,
+    /// Where its pixels are mapped here.
+    screen: Mapping,
+    /// Where the ring of input events is mapped.
+    events: Mapping,
+}
+
+/// Takes the surface of the screen and the ring of input events, and
+/// starts the thread that waits on the notification both the input server
+/// and the ends of the clients signal.
+fn attach(gate: &mut Gate, startup: &Startup, endpoint: EndpointHandle) -> Result<Attached, Error> {
     let process = startup.own_process.ok_or(Error::NotFound)?;
     let display = match startup.display_server {
         Some(given) => given,
@@ -232,11 +251,10 @@ fn run(gate: &mut Gate, startup: &Startup, endpoint: EndpointHandle) -> Result<(
     let mode = ask_mode(gate, display)?;
     let watched = gate.handle_duplicate(process.handle(), WATCHED)?;
     let given = ask_surface(gate, display, mode, watched)?;
-    let format = PixelFormat::from_boot(mode.format);
     let bytes = u64::from(mode.width)
         .saturating_mul(u64::from(mode.height))
         .saturating_mul(4);
-    let mut screen = Mapping::new(
+    let screen = Mapping::new(
         gate,
         process,
         MemoryHandle::from_handle(given.memory),
@@ -251,14 +269,44 @@ fn run(gate: &mut Gate, startup: &Startup, endpoint: EndpointHandle) -> Result<(
     gate.handle_close(signal)?;
     gate.handle_close(listener)?;
     let events = Mapping::new(gate, process, ring, RING, PAGE_SIZE)?;
-
     start_waker(gate, startup, endpoint, notification)?;
+    Ok(Attached {
+        display,
+        mode,
+        format: PixelFormat::from_boot(mode.format),
+        given,
+        screen,
+        events,
+    })
+}
 
+/// Serves the desktop until the key that ends it has been answered.
+fn run(gate: &mut Gate, startup: &Startup, endpoint: EndpointHandle) -> Result<(), Error> {
+    let Attached {
+        display,
+        mode,
+        format,
+        given,
+        mut screen,
+        events,
+    } = attach(gate, startup, endpoint)?;
     let mut desk = Desk::new(mode.width, mode.height);
     let mut held: [Option<Held>; WINDOWS] = [const { None }; WINDOWS];
     let mut serving = Serving::default();
     let mut goodbye: Option<u32> = None;
     let mut shown = false;
+    // A machine whose image carries no other program that draws has
+    // nothing to race with, so the desktop is there from the start and
+    // nobody has to press the key that shows it (D-156).
+    let mut region = Rect::EMPTY;
+    if startup.desk_alone == Some(1) {
+        region = desk.show();
+        // The sprite stands where the display server last put it, which is
+        // the corner of a screen nobody has pointed at yet; the desktop
+        // says where its own pointer is instead.
+        let (x, y) = desk.pointer();
+        let _moved = set_cursor(gate, display, x, y);
+    }
     say_line(
         gate,
         startup,
@@ -269,10 +317,23 @@ fn run(gate: &mut Gate, startup: &Startup, endpoint: EndpointHandle) -> Result<(
         .as_bytes(),
     );
     loop {
+        if paint(
+            gate,
+            startup,
+            &desk,
+            &mut held,
+            &mut screen,
+            display,
+            given.id,
+            format,
+            region,
+            &mut shown,
+        ) {
+            region = Rect::EMPTY;
+        }
         if receive(gate, endpoint, &mut serving).is_err() {
             return Ok(());
         }
-        let mut region = Rect::EMPTY;
         if serving.badge == WAKE_BADGE {
             let word = gate.reader().word(0).unwrap_or(0);
             let ended = woken(
@@ -311,18 +372,45 @@ fn run(gate: &mut Gate, startup: &Startup, endpoint: EndpointHandle) -> Result<(
             // message area this answer stands in.
             let _replied = reply(gate, &mut serving);
         }
-        if !region.is_empty() && desk.is_shown() {
-            let damage = compose(&desk, &mut held, &mut screen, format, region);
-            let _presented = present(gate, display, given.id, &damage);
-            if !shown {
-                shown = true;
-                say_line(gate, startup, b"[desk] shown\n");
-            }
-        }
     }
-    let _unmapped = screen.unmap(gate, process);
+    if let Some(process) = startup.own_process {
+        let _unmapped = screen.unmap(gate, process);
+    }
     let _destroyed = destroy_surface(gate, display, given.id);
     Ok(())
+}
+
+/// Composes `region` and puts it on the screen, and answers with whether
+/// there was anything to paint.
+///
+/// The first painting is said on the console, because the run that drives
+/// this machine waits for that line before it takes a picture.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a painting needs the desktop, the surfaces of its windows, the surface of the screen, the display server, the surface it presents to, the format they are drawn in, the region, and whether anything was painted before"
+)]
+fn paint(
+    gate: &mut Gate,
+    startup: &Startup,
+    desk: &Desk,
+    held: &mut [Option<Held>; WINDOWS],
+    screen: &mut Mapping,
+    display: EndpointHandle,
+    id: u32,
+    format: PixelFormat,
+    region: Rect,
+    shown: &mut bool,
+) -> bool {
+    if region.is_empty() || !desk.is_shown() {
+        return false;
+    }
+    let damage = compose(desk, held, screen, format, region);
+    let _presented = present(gate, display, id, &damage);
+    if !*shown {
+        *shown = true;
+        say_line(gate, startup, b"[desk] shown\n");
+    }
+    true
 }
 
 /// Takes what the waking thread heard: the ends of clients, the events in
@@ -385,8 +473,13 @@ fn gone(
         let Some(taken) = held.get_mut(slot).and_then(Option::take) else {
             continue;
         };
-        if let Some((_id, frame)) = desk.forget(taken.badge) {
+        let mut moved = Outcome::nothing();
+        if let Some((_id, frame)) = desk.forget(taken.badge, &mut moved) {
             *region = region.union(frame);
+        }
+        *region = region.union(moved.repaint);
+        for id in &moved.woken {
+            wake_client(gate, held, *id);
         }
         say_line(
             gate,
@@ -544,7 +637,7 @@ fn open(
             Ok(window)
         }
         Err(error) => {
-            let _closed = desk.close(badge, id);
+            let _closed = desk.close(badge, id, opening);
             Err(error)
         }
     }
@@ -638,13 +731,20 @@ fn close(
     id: u32,
     region: &mut Rect,
 ) -> Result<(), Error> {
-    let frame = desk.close(badge, id)?;
-    *region = region.union(frame);
+    let mut moved = Outcome::nothing();
+    let frame = desk.close(badge, id, &mut moved)?;
+    *region = region.union(frame).union(moved.repaint);
     let slot = held
         .iter()
         .position(|entry| entry.as_ref().is_some_and(|held| held.id == id));
     if let Some(taken) = slot.and_then(|slot| held.get_mut(slot)?.take()) {
         give_back(gate, startup, taken);
+    }
+    // The window that is now in front heard that it has the focus; it is
+    // woken after the one that left, because the entry of the one that
+    // left is gone by then.
+    for woken in &moved.woken {
+        wake_client(gate, held, *woken);
     }
     Ok(())
 }

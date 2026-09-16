@@ -13,6 +13,7 @@ mod image;
 mod json;
 mod layering;
 mod linker;
+mod loadable;
 mod out;
 mod policy;
 mod ppm;

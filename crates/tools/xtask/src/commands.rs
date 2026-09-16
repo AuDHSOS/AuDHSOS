@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use crate::anchors;
 use crate::error::Error;
-use crate::image::{archive, boot_image, disk, fat32};
+use crate::image::{archive, boot_image, disk, fat32, loadable};
 use crate::out::{self, note, note_raw};
 use crate::policy::{FUZZ_TARGETS, FuzzTarget, MIRI_TARGETS, Target, crates_for};
 use crate::ppm;
@@ -2172,10 +2172,21 @@ fn loader_bytes(root: &Path, profile: &str) -> Result<Vec<u8>, Error> {
 ///
 /// The errors of reading what the build wrote, and [`Error::Usage`] for a
 /// program whose name is no 8.3 one.
-fn volume_programs(root: &Path, profile: &str) -> Result<Vec<(String, Vec<u8>)>, Error> {
+fn volume_programs(
+    root: &Path,
+    profile: &str,
+    desktop: bool,
+) -> Result<Vec<(String, Vec<u8>)>, Error> {
     let built = root.join("target/x86_64-unknown-none").join(profile);
+    let carried: &[&str] = if desktop {
+        &archive::DESKTOP
+    } else {
+        &archive::ON_THE_VOLUME
+    };
     let mut files = Vec::new();
-    for name in archive::ON_THE_VOLUME {
+    let mut whole = 0usize;
+    let mut kept = 0usize;
+    for name in carried.iter().copied() {
         let (spelled, len) = user_loader::volume::file_name(name.as_bytes())
             .ok_or_else(|| Error::Usage(format!("`{name}` is no name a volume holds")))?;
         let spelled = std::str::from_utf8(spelled.get(..len).unwrap_or(&[]))
@@ -2185,8 +2196,21 @@ fn volume_programs(root: &Path, profile: &str) -> Result<Vec<(String, Vec<u8>)>,
             user_loader::volume::DIRECTORY[0],
             user_loader::volume::DIRECTORY[1]
         );
-        files.push((path, fs::read_bytes(&built.join(name))?));
+        // Only the part a loader reads goes onto the volume: the tail of
+        // an unoptimized build is debug information, and the root task
+        // reads every byte of a program off the disk two kibibytes per
+        // message.
+        let bytes = fs::read_bytes(&built.join(name))?;
+        let read = loadable::trim(name, &bytes)?;
+        whole = whole.saturating_add(bytes.len());
+        kept = kept.saturating_add(read.len());
+        files.push((path, read));
     }
+    note!(
+        "volume: {} of {} KiB is what the loader reads",
+        kept.wrapping_div(1024),
+        whole.wrapping_div(1024)
+    );
     Ok(files)
 }
 
@@ -2382,23 +2406,44 @@ fn report_tests(
 pub(crate) fn run(root: &Path, options: &[String]) -> Result<(), Error> {
     let mut display = false;
     let mut scratch = false;
+    let mut keys = false;
     let mut build_options = Vec::new();
+    let mut image_options = Vec::new();
     for option in options {
         match option.as_str() {
             "--display" => display = true,
             "--scratch" => scratch = true,
-            "--release" => build_options.push("--release".to_owned()),
+            "--ssh" => keys = true,
+            "--desktop" => image_options.push("--desktop".to_owned()),
+            "--release" => {
+                build_options.push("--release".to_owned());
+                image_options.push("--release".to_owned());
+            }
             other => return Err(Error::Usage(format!("unknown option `{other}` for run"))),
         }
     }
     build(root, &build_options)?;
-    image(root, &build_options)?;
+    image(root, &image_options)?;
     let machine = Machine::locate()?;
     let path = root.join("target").join("audhsos.img");
-    let machine_options = qemu::Options {
-        scratch: scratch
+    // `--ssh` carries the two files the shell of the desktop reads before
+    // it opens a connection (D-146): the fingerprints of every public key
+    // of `keys/ssh/` and the client's secret. It writes the disk rather
+    // than keeping it, because a fingerprint added to that directory has
+    // to reach the next run.
+    let scratch = if keys {
+        Some(written_scratch_image(
+            root,
+            "audhsos",
+            &ssh::trust_files(root)?,
+        )?)
+    } else {
+        scratch
             .then(|| scratch_image(root, "audhsos"))
-            .transpose()?,
+            .transpose()?
+    };
+    let machine_options = qemu::Options {
+        scratch,
         ..qemu::Options::windowed(display)
     };
     let status = machine.run_attached(&path, &machine_options)?;
@@ -3239,9 +3284,11 @@ pub(crate) fn build(root: &Path, options: &[String]) -> Result<(), Error> {
 /// the kernel has not been built, or if a file cannot be written.
 pub(crate) fn image(root: &Path, options: &[String]) -> Result<(), Error> {
     let mut profile = "debug";
+    let mut desktop = false;
     for option in options {
         match option.as_str() {
             "--release" => profile = "release",
+            "--desktop" => desktop = true,
             other => return Err(Error::Usage(format!("unknown option `{other}` for image"))),
         }
     }
@@ -3261,11 +3308,23 @@ pub(crate) fn image(root: &Path, options: &[String]) -> Result<(), Error> {
         (disk::KERNEL_PATH, fs::read_bytes(&kernel)?),
         (disk::BOOT_IMAGE_PATH, boot.clone()),
     ];
-    let programs = volume_programs(root, profile)?;
+    let programs = volume_programs(root, profile, desktop)?;
     for (path, bytes) in &programs {
         files.push((path.as_str(), bytes.clone()));
     }
-    note!("volume: {} programs under AUDHSOS/BIN/", programs.len());
+    note!(
+        "volume: {} programs under AUDHSOS/BIN/{}",
+        programs.len(),
+        if desktop { ", the desktop alone" } else { "" }
+    );
+    let list = archive::start_list(&archive::DESKTOP_START);
+    if desktop {
+        note!(
+            "volume: the boot starts {}",
+            archive::DESKTOP_START.join(", ")
+        );
+        files.push((archive::START_LIST_PATH, list));
+    }
     let anchors = anchors::of(root)?;
     let table = anchors::table(&anchors)?;
     let named: Vec<&str> = anchors.iter().map(|anchor| anchor.name.as_str()).collect();

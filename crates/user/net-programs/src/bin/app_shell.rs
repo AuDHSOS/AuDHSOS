@@ -40,6 +40,7 @@ use audhsos_ssh::auth::ClientKey;
 use audhsos_ssh::client::{
     Buffers, Config, Connection, Event as SshEvent, MIN_INCOMING, MIN_OUTGOING,
 };
+use audhsos_ssh::error::SshError;
 use audhsos_ssh::hostkey::{FINGERPRINT_LEN, Fingerprints};
 use crypto_rng::ChaChaRng;
 use gfx::draw::List;
@@ -107,6 +108,44 @@ const SECOND: u64 = 1_000_000;
 /// How long a line this program writes.
 type Report = Line<160>;
 
+/// How long the sentence of a refusal is. It is shorter than a line of
+/// the console, because a refusal is read in a window of
+/// `app_shell::COLUMNS` characters and the longest message of a system
+/// call is eighty-nine.
+type Sentence = Line<96>;
+
+/// Why something did not happen, as the sentence the shell writes.
+///
+/// A step that fails for a reason of its own says that reason; a system
+/// call and a protocol say theirs through the conversions below. So one
+/// line reaches the scrollback per failure, and it names what was
+/// missing rather than which error number stood for it.
+struct Refusal(Sentence);
+
+impl Refusal {
+    /// The refusal that says `text`.
+    fn of(text: &str) -> Self {
+        Refusal(Sentence::of(format_args!("{text}")))
+    }
+
+    /// The sentence, as the shell writes it.
+    fn text(&self) -> &str {
+        core::str::from_utf8(self.0.as_bytes()).unwrap_or_default()
+    }
+}
+
+impl From<Error> for Refusal {
+    fn from(error: Error) -> Self {
+        Refusal::of(error.message())
+    }
+}
+
+impl From<SshError> for Refusal {
+    fn from(error: SshError) -> Self {
+        Refusal(Sentence::of(format_args!("{error}")))
+    }
+}
+
 /// Opens a window and serves what is typed in it.
 #[expect(
     clippy::needless_pass_by_value,
@@ -154,6 +193,19 @@ fn run(gate: &mut Gate, startup: &Startup) -> Result<(), Error> {
     let idle = Idle::new(gate)?.with_step(STEP);
     let mut shell = Shell::new();
     shell.print("AuDHSOS shell. Type help.");
+    // The compositor grants what fits its screen, which on a small one is
+    // less than this shell draws into. What stands past the edge is
+    // clipped there, so the window says so rather than losing rows in
+    // silence.
+    if window.width < WIDTH || window.height < HEIGHT {
+        print(
+            &mut shell,
+            &Report::of(format_args!(
+                "the window is {}x{} of the {WIDTH}x{HEIGHT} this shell draws",
+                window.width, window.height
+            )),
+        );
+    }
     paint(gate, desk, window.id, &mut shell)?;
     loop {
         gate.notification_wait(notification)?;
@@ -215,13 +267,13 @@ fn act(
             print(shell, &Report::of(format_args!("no such command: {word}")));
         }
         Command::Ssh(target) => {
-            if let Err(error) = session(gate, startup, shell, &target, idle) {
-                print(shell, &Report::of(format_args!("ssh: {}", error.message())));
+            if let Err(why) = session(gate, startup, shell, &target, idle) {
+                print(shell, &Report::of(format_args!("ssh: {}", why.text())));
             }
         }
         Command::Get(locator) => {
-            if let Err(error) = fetch(gate, startup, shell, &locator, idle) {
-                print(shell, &Report::of(format_args!("get: {}", error.message())));
+            if let Err(why) = fetch(gate, startup, shell, &locator, idle) {
+                print(shell, &Report::of(format_args!("get: {}", why.text())));
             }
         }
     }
@@ -255,15 +307,17 @@ fn fetch(
     shell: &mut Shell,
     locator: &Locator<'_>,
     idle: Idle,
-) -> Result<(), Error> {
+) -> Result<(), Refusal> {
     if locator.secure {
         shell.print("https is not spoken by this shell yet");
         return Ok(());
     }
-    let server = network(gate, startup).ok_or(Error::NotFound)?;
-    let process = startup.own_process.ok_or(Error::NotFound)?;
+    let server = network(gate, startup).ok_or_else(no_network)?;
+    let process = startup
+        .own_process
+        .ok_or_else(|| Refusal::from(Error::NotFound))?;
     let until = gate.clock_now()?.saturating_add(DEADLINE);
-    let address = address_of(gate, server, shell, locator.host, idle, until)?;
+    let address = address_of(gate, server, locator.host, idle, until)?;
     let stream = Stream::connect(
         gate,
         server,
@@ -287,12 +341,12 @@ fn exchange(
     locator: &Locator<'_>,
     idle: Idle,
     until: u64,
-) -> Result<(), Error> {
+) -> Result<(), Refusal> {
     let mut request = [0u8; CHUNK];
     let mut writer = WireWriter::new(&mut request);
     HttpRequest::get(locator.path, locator.host)
         .write(&mut writer)
-        .map_err(|_| Error::InvalidArgument)?;
+        .map_err(|_| Refusal::of("the request does not fit one message"))?;
     let len = writer.position();
     stream.write_all(gate, request.get(..len).unwrap_or(&[]), idle, until)?;
 
@@ -311,10 +365,12 @@ fn exchange(
                 said(shell, status, length, body.get(..written).unwrap_or(&[]));
                 return Ok(());
             }
-            return Err(Error::Unavailable);
+            return Err(Refusal::of("the server closed before the answer was whole"));
         }
         while !rest.is_empty() {
-            let (used, event) = decoder.feed(rest).map_err(|_| Error::InvalidArgument)?;
+            let (used, event) = decoder
+                .feed(rest)
+                .map_err(|_| Refusal::of("the answer is no HTTP response"))?;
             rest = rest.get(used..).unwrap_or(&[]);
             match event {
                 HttpEvent::NeedMore => {
@@ -372,30 +428,29 @@ fn said(shell: &mut Shell, status: u16, length: usize, body: &[u8]) {
 fn address_of(
     gate: &mut Gate,
     server: EndpointHandle,
-    shell: &mut Shell,
     host: &str,
     idle: Idle,
     until: u64,
-) -> Result<IpAddr, Error> {
+) -> Result<IpAddr, Refusal> {
     if let Some(address) = dotted(host) {
         return Ok(IpAddr::V4(address));
     }
-    let name = Name::new(host.as_bytes())?;
+    let name = Name::new(host.as_bytes())
+        .map_err(|_| Refusal::of("that name is longer than the resolver takes"))?;
     loop {
         let reply = call(gate, server, &SocketRequest::Resolve { name })?;
         let SocketReply::Resolved(outcome) = reply else {
-            return Err(Error::InvalidArgument);
+            return Err(Refusal::of("the network server answered something else"));
         };
         match outcome {
             Ok(addresses) => {
                 let Some(address) = addresses.iter().next() else {
-                    shell.print("the resolver knows no address for that name");
-                    return Err(Error::NotFound);
+                    return Err(Refusal::of("the resolver knows no address for that name"));
                 };
                 return Ok(address);
             }
             Err(Error::WouldBlock) => idle.wait(gate, until)?,
-            Err(error) => return Err(error),
+            Err(error) => return Err(Refusal::from(error)),
         }
     }
 }
@@ -425,12 +480,14 @@ fn session(
     shell: &mut Shell,
     target: &Target<'_>,
     idle: Idle,
-) -> Result<(), Error> {
-    let server = network(gate, startup).ok_or(Error::NotFound)?;
-    let process = startup.own_process.ok_or(Error::NotFound)?;
+) -> Result<(), Refusal> {
+    let server = network(gate, startup).ok_or_else(no_network)?;
+    let process = startup
+        .own_process
+        .ok_or_else(|| Refusal::from(Error::NotFound))?;
     let (trusted, count, secret) = credentials(gate, startup)?;
     let until = gate.clock_now()?.saturating_add(DEADLINE);
-    let address = address_of(gate, server, shell, target.host, idle, until)?;
+    let address = address_of(gate, server, target.host, idle, until)?;
     let stream = Stream::connect(
         gate,
         server,
@@ -464,7 +521,7 @@ fn speak(
     secret: [u8; 32],
     idle: Idle,
     until: u64,
-) -> Result<(), Error> {
+) -> Result<(), Refusal> {
     let key = ClientKey::new(secret);
     let trust = Fingerprints::new(trusted.get(..count).unwrap_or(&[]));
     let command = target.command.as_bytes();
@@ -474,7 +531,7 @@ fn speak(
         trust: &trust,
         command: (!command.is_empty()).then_some(command),
         window: 32_768,
-        max_packet: u32::try_from(CHUNK).map_err(|_| Error::InvalidArgument)?,
+        max_packet: u32::try_from(CHUNK).unwrap_or(u32::MAX),
     };
     let mut generator = seed(gate)?;
     let mut incoming = [0u8; MIN_INCOMING];
@@ -488,14 +545,13 @@ fn speak(
             outgoing: &mut outgoing,
         },
         now,
-    )
-    .map_err(|_| Error::InvalidArgument)?;
+    )?;
 
     let mut chunk = [0u8; CHUNK];
     for _ in 0..MAX_EVENTS {
         drain(gate, stream, &mut client, &mut chunk, idle, until)?;
         let now = gate.clock_now()?;
-        let event = client.poll(now).map_err(|_| Error::Unavailable)?;
+        let event = client.poll(now)?;
         match event {
             SshEvent::WantsWrite => {}
             SshEvent::WantsRead => {
@@ -503,10 +559,12 @@ fn speak(
                     idle.wait(gate, until)?;
                 }
             }
-            SshEvent::Started => client.finish().map_err(|_| Error::Unavailable)?,
+            SshEvent::Started => client.finish()?,
             SshEvent::Data { stderr, len } => {
                 if len > CHUNK {
-                    return Err(Error::BufferTooSmall);
+                    return Err(Refusal::of(
+                        "the peer sent more in one message than this client takes",
+                    ));
                 }
                 let taken = client.recv(chunk.get_mut(..len).unwrap_or(&mut []));
                 wrote(shell, stderr, chunk.get(..taken).unwrap_or(&[]));
@@ -521,7 +579,7 @@ fn speak(
             }
         }
     }
-    Err(Error::Cancelled)
+    Err(Refusal::of("the session made no progress"))
 }
 
 /// Writes what one stream of the command wrote.
@@ -597,21 +655,28 @@ fn fill<R: crypto_rng::Rng, T: audhsos_ssh::hostkey::Trust>(
 fn credentials(
     gate: &mut Gate,
     startup: &Startup,
-) -> Result<([[u8; FINGERPRINT_LEN]; MAX_TRUSTED], usize, [u8; 32]), Error> {
-    let files = volume(gate, startup).ok_or(Error::NotFound)?;
+) -> Result<([[u8; FINGERPRINT_LEN]; MAX_TRUSTED], usize, [u8; 32]), Refusal> {
+    let files = volume(gate, startup).ok_or_else(|| Refusal::of("this machine has no volume"))?;
     let mut trusted = [[0u8; FINGERPRINT_LEN]; MAX_TRUSTED];
     let mut text = [0u8; MAX_TRUST_FILE];
-    let len = read_file(gate, files, TRUST, &mut text)?.ok_or(Error::NotFound)?;
+    let len = read_file(gate, files, TRUST, &mut text)?
+        .ok_or_else(|| Refusal::of("the volume carries no SSHTRUST.TXT"))?;
     let count = read_trust(text.get(..len).unwrap_or(&[]), &mut trusted)?;
     if count == 0 {
-        return Err(Error::NotFound);
+        return Err(Refusal::of("SSHTRUST.TXT names no fingerprint"));
     }
     let mut secret = [0u8; 32];
-    let len = read_file(gate, files, SECRET, &mut secret)?.ok_or(Error::NotFound)?;
+    let len = read_file(gate, files, SECRET, &mut secret)?
+        .ok_or_else(|| Refusal::of("the volume carries no SSHKEY.BIN"))?;
     if len != secret.len() {
-        return Err(Error::InvalidArgument);
+        return Err(Refusal::of("SSHKEY.BIN is not thirty-two octets"));
     }
     Ok((trusted, count, secret))
+}
+
+/// The refusal of a machine whose network server is not there.
+fn no_network() -> Refusal {
+    Refusal::of("this machine has no network server")
 }
 
 /// The fingerprints, one `SHA256:` line at a time, and how many there are.

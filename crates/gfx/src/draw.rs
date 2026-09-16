@@ -228,7 +228,18 @@ impl List {
 /// The walk is Bresenham with the error carried as one number: `width` is
 /// positive and `height` negative, so both axes advance by the same
 /// comparison and neither is a special case.
+///
+/// A segment longer than the surface is refused and draws nothing. The
+/// walk is one step per pixel of its longer axis whether that pixel is
+/// inside the surface or not, so a segment that spans the coordinate
+/// space would cost four thousand million steps for a picture of at most
+/// a few million pixels — and the commands of `draw_all` come from a
+/// client that a server may not let decide how long it runs. A caller
+/// that holds such a segment clips it to the surface first.
 pub fn line(surface: &mut Surface<'_>, from: (u32, u32), to: (u32, u32), color: Color) -> Rect {
+    if steps_of(from, to) > reach_of(surface) {
+        return Rect::EMPTY;
+    }
     let mut x = i64::from(from.0);
     let mut y = i64::from(from.1);
     let last_x = i64::from(to.0);
@@ -306,6 +317,20 @@ pub fn draw_all(surface: &mut Surface<'_>, commands: &List) -> Rect {
 #[must_use]
 pub fn text_bounds(x: u32, y: u32, text: &Text) -> Rect {
     Rect::new(x, y, text.width(), GLYPH_HEIGHT)
+}
+
+/// How many steps the walk of the segment from `from` to `to` takes,
+/// which is the longer of its two axes.
+fn steps_of(from: (u32, u32), to: (u32, u32)) -> u64 {
+    let across = u64::from(from.0.abs_diff(to.0));
+    let down = u64::from(from.1.abs_diff(to.1));
+    across.max(down)
+}
+
+/// How many steps a segment of this surface may take: one per column and
+/// one per row, which is longer than any segment with both ends inside.
+fn reach_of(surface: &Surface<'_>) -> u64 {
+    u64::from(surface.width()).saturating_add(u64::from(surface.height()))
 }
 
 /// A coordinate of a segment as a column or a row. It cannot be negative:

@@ -11,3 +11,4 @@ pub(crate) mod device;
 pub(crate) mod disk;
 pub(crate) mod fat32;
 pub(crate) mod gpt;
+pub(crate) mod loadable;

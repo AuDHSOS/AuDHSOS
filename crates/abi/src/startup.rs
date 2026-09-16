@@ -158,6 +158,7 @@ roles! {
     NetVectorBit = 37, value => "The bit of that notification the message interrupt sets. It closes the description `NetRegisters` opened.",
     NetServer = 38, handle => "The endpoint of the network server, badged with what that server is to know this process by. A program that uses a socket receives one, as a program that draws receives `DisplayServer`.",
     DeskServer = 39, handle => "The endpoint of the compositor, badged with what it is to know this process by. A program that opens a window receives one, as a program that draws on the whole screen receives `DisplayServer`, and for the same reason: the compositor keeps a window per client.",
+    DeskAlone = 40, value => "One when no other program that draws has started, zero when one has. Only the compositor receives it: it paints the desktop at once when it is one, and waits for the key that shows it when it is zero, because a program that draws on the whole screen would otherwise decide by a race which of the two the screen holds (D-156).",
 }
 
 /// Why a startup message could not be read.

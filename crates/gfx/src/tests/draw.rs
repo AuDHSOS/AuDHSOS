@@ -187,6 +187,23 @@ fn a_segment_that_runs_backwards_draws_the_same_pixels() {
 }
 
 #[test]
+fn a_segment_longer_than_the_surface_is_refused() {
+    let mut bytes = buffer(8, 8);
+    let mut surface = surface(&mut bytes, 8, 8);
+    // The walk is one step per pixel of the longer axis, so this would be
+    // four thousand million steps into a picture of sixty-four pixels.
+    assert_eq!(line(&mut surface, (0, 0), (u32::MAX, 0), INK), Rect::EMPTY);
+    assert_eq!(line(&mut surface, (4, 4), (4, u32::MAX), INK), Rect::EMPTY);
+    assert_eq!(count(&surface, surface.bounds(), INK), 0);
+    // One of exactly the reach of the surface is drawn.
+    assert_eq!(
+        line(&mut surface, (0, 0), (15, 0), INK),
+        Rect::new(0, 0, 8, 1)
+    );
+    assert_eq!(count(&surface, surface.bounds(), INK), 8);
+}
+
+#[test]
 fn a_segment_outside_the_surface_writes_nothing() {
     let mut bytes = buffer(8, 8);
     let mut surface = surface(&mut bytes, 8, 8);

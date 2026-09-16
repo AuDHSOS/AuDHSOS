@@ -538,6 +538,28 @@ fn command() -> String {
     )
 }
 
+/// The two files a machine needs before its shell can speak Secure
+/// Shell: the fingerprints of every public key of [`KEY_DIR`], and the
+/// client's secret.
+///
+/// The configuration of the interop run is not among them. What a person
+/// types names the host, the port and the account, so a file that named
+/// them again would say what the line already says.
+///
+/// # Errors
+///
+/// [`Error::Usage`] when `ssh-keygen` is missing or the directory holds
+/// no public key; the errors of reading the directory.
+pub(crate) fn trust_files(root: &Path) -> Result<Vec<(String, Vec<u8>)>, Error> {
+    let material = material(root)?;
+    let mut trust = material.fingerprints.join("\n");
+    trust.push('\n');
+    Ok(vec![
+        (guest::TRUST.to_owned(), trust.into_bytes()),
+        (guest::SECRET.to_owned(), material.seed.to_vec()),
+    ])
+}
+
 /// The three files the scratch disk of the interop run carries.
 pub(crate) fn scratch_files(
     port: u16,

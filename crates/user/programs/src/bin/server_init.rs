@@ -45,7 +45,7 @@ use virtio_queue as _;
 
 use audhsos_abi::layout::{MAX_MESSAGE_HANDLES, PAGE_SIZE};
 use audhsos_abi::startup::{BusRange, Location, Payload, Role, Screen, Writer};
-use audhsos_abi::{Error, Handle, Rights};
+use audhsos_abi::{Error, Handle};
 use audhsos_collections::ArrayVec;
 use pci::address::{Address, BYTES_PER_BUS, Window};
 use pci::bar::{Bar, Space as BarSpace, probe};
@@ -61,7 +61,7 @@ use user_loader::{Plan, STACK_PAGES};
 use user_programs::client::{allocate, release};
 use user_programs::config_space::MappedSpace;
 use user_programs::mapping::{Mapping, SCRATCH};
-use user_programs::{permissions, priority};
+use user_programs::{ObjectRights, permissions, priority};
 use user_rt::startup::MAX_BLOCK_DEVICES;
 use user_rt::{
     EndpointHandle, InterruptHandle, IoPortHandle, Line, MemoryHandle, NotificationHandle,
@@ -495,11 +495,6 @@ const PROGRAMS: [Program; 20] = [
     },
 ];
 
-/// How many programs of the table report when they are done.
-fn reporters() -> usize {
-    PROGRAMS.iter().filter(|program| program.reports).count()
-}
-
 /// The port of the exit device of the machine and how many there are.
 const EXIT_PORT: u64 = 0xF4;
 const EXIT_PORTS: u64 = 4;
@@ -523,6 +518,21 @@ const PS2_PORTS: u64 = 5;
 /// The line the keyboard asserts on, and the line the mouse asserts on.
 const PS2_KEYBOARD_LINE: u64 = 1;
 const PS2_MOUSE_LINE: u64 = 12;
+
+/// The name of the compositor in the start table.
+const DESK: &[u8] = b"server-desk";
+
+/// The file of the volume that says which programs are started at boot,
+/// spelled as the volume holds it: an 8.3 name, not a program name.
+///
+/// A volume that carries none starts every program of the table, which is
+/// what the image of the tests does. A volume that carries one starts what
+/// it names and nothing else; the rest of the table is what a program of
+/// the machine may ask for later.
+const START_LIST: &[u8] = b"START.TXT";
+
+/// How many bytes of that file are read.
+const MAX_START_LIST: usize = 512;
 
 /// The badge the root task's own messages to a server carry.
 ///
@@ -556,6 +566,7 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
         memory_for_self: None,
         console: None,
         desk: None,
+        drawers: 0,
         display: None,
         input: None,
         net: None,
@@ -570,18 +581,18 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
     };
 
     let image = map_image(&mut gate, &startup, own);
-    match image {
-        Some(mut image) => {
-            start_everything(&mut gate, &startup, &mut world, &mut image);
-            let _unmapped = image.unmap(&mut gate, own);
-        }
-        None => say(
+    let mut reporting = 0usize;
+    if let Some(mut image) = image {
+        reporting = start_everything(&mut gate, &startup, &mut world, &mut image);
+        let _unmapped = image.unmap(&mut gate, own);
+    } else {
+        say(
             &mut gate,
             &world,
             b"[init] the boot image is not readable\n",
-        ),
+        );
     }
-    serve_faults(&mut gate, &world, reporters())
+    serve_faults(&mut gate, &world, reporting)
 }
 
 /// What the root task knows about the system it has started.
@@ -605,6 +616,10 @@ struct World {
     net: Option<EndpointHandle>,
     /// The endpoint of the compositor.
     desk: Option<EndpointHandle>,
+    /// How many programs that draw on the whole screen have started. The
+    /// compositor is told whether this is zero, because that decides
+    /// whether it paints the desktop at once (D-156).
+    drawers: u32,
     /// The same, badged for the root task's own lines.
     console_for_self: Option<EndpointHandle>,
     /// The endpoint of the file system server, badged for the root task's
@@ -650,26 +665,36 @@ fn map_image(gate: &mut Gate, startup: &Startup, own: ProcessHandle) -> Option<M
 }
 
 /// Starts every program of the table, in order.
-fn start_everything(gate: &mut Gate, startup: &Startup, world: &mut World, image: &mut Mapping) {
+fn start_everything(
+    gate: &mut Gate,
+    startup: &Startup,
+    world: &mut World,
+    image: &mut Mapping,
+) -> usize {
+    let mut reporting = 0usize;
     let len = image.len();
     // SAFETY: the image is mapped and nothing else of this program holds a
     // reference to those bytes.
     let bytes = unsafe { image.bytes() };
     let Ok(header) = audhsos_abi::BootImageHeader::parse(bytes, len, len) else {
         say(gate, world, b"[init] the boot image header is not one\n");
-        return;
+        return reporting;
     };
     let from = usize::try_from(header.archive_offset).unwrap_or(usize::MAX);
     let to = from.saturating_add(usize::try_from(header.archive_len).unwrap_or(0));
     let Some(archive) = bytes.get(from..to) else {
         say(gate, world, b"[init] the archive is not inside the image\n");
-        return;
+        return reporting;
     };
     let archive = Archive::new(archive);
 
     // One region kept back, so that the memory server can be brought up out
     // of it; every other region goes to the memory server.
     let mut reserve = startup.ram.iter().copied().next();
+    // The list is read once, after the boot set is up: the file system
+    // server is what reads it, and it is the last program of that set.
+    let mut asked = false;
+    let mut list: Option<StartList> = None;
     for program in PROGRAMS {
         // The boot set comes out of the archive; everything else the file
         // system server reads off the volume, which is what it was
@@ -688,7 +713,20 @@ fn start_everything(gate: &mut Gate, startup: &Startup, world: &mut World, image
                 continue;
             }
             let outcome = start(gate, startup, world, &program, entry.data, &mut reserve);
+            started(world, &program, &outcome, &mut reporting);
             report(gate, world, program.name, outcome);
+            continue;
+        }
+        if !asked {
+            asked = true;
+            list = read_start_list(gate, world);
+            if list.is_some() {
+                say(gate, world, b"[init] the volume says what to start\n");
+            }
+        }
+        // A volume that says what to start starts that and nothing else.
+        // The rest of the table is what the compositor may ask for.
+        if list.as_ref().is_some_and(|list| !list.names(program.name)) {
             continue;
         }
         let read = match read_program(gate, world, &mut reserve, program.name) {
@@ -708,7 +746,33 @@ fn start_everything(gate: &mut Gate, startup: &Startup, world: &mut World, image
         };
         let (held, object) = read;
         let outcome = start_from(gate, startup, world, &program, held, object, &mut reserve);
+        started(world, &program, &outcome, &mut reporting);
         report(gate, world, program.name, outcome);
+    }
+    reporting
+}
+
+/// Counts what a program that started is: one that draws on the whole
+/// screen, one that reports when it is done, or neither.
+///
+/// A program that did not start counts as neither, so a machine whose
+/// volume carries fewer programs than the table names ends when those it
+/// has are done, and the compositor of such a machine hears that nothing
+/// else draws.
+fn started(
+    world: &mut World,
+    program: &Program,
+    outcome: &Result<(), Failure>,
+    reporting: &mut usize,
+) {
+    if outcome.is_err() {
+        return;
+    }
+    if program.draws && program.name != DESK {
+        world.drawers = world.drawers.saturating_add(1);
+    }
+    if program.reports {
+        *reporting = reporting.saturating_add(1);
     }
 }
 
@@ -774,18 +838,7 @@ fn read_program(
     name: &[u8],
 ) -> Result<(Mapping, MemoryHandle), Error> {
     let files = world.files_for_self.ok_or(Error::Unavailable)?;
-    // The directory is opened once and kept: every program after the first
-    // is one name away from it.
-    let bin = if let Some(handle) = world.bin {
-        handle
-    } else {
-        let mut parent = file::BOOT;
-        for step in volume::DIRECTORY {
-            parent = open_at(gate, files, parent, step.as_bytes())?.file;
-        }
-        world.bin = Some(parent);
-        parent
-    };
+    let bin = bin_directory(gate, world)?;
     let (spelled, len) = volume::file_name(name).ok_or(Error::InvalidArgument)?;
     let opened = open_at(gate, files, bin, spelled.get(..len).unwrap_or(&[]))?;
     let bytes = u64::from(opened.size).max(1).next_multiple_of(PAGE_SIZE);
@@ -810,6 +863,86 @@ fn read_program(
             Err(error)
         }
     }
+}
+
+/// The directory `AUDHSOS/BIN` of the volume, opened once and kept: every
+/// program after the first is one name away from it.
+fn bin_directory(gate: &mut Gate, world: &mut World) -> Result<u32, Error> {
+    if let Some(handle) = world.bin {
+        return Ok(handle);
+    }
+    let files = world.files_for_self.ok_or(Error::Unavailable)?;
+    let mut parent = file::BOOT;
+    for step in volume::DIRECTORY {
+        parent = open_at(gate, files, parent, step.as_bytes())?.file;
+    }
+    world.bin = Some(parent);
+    Ok(parent)
+}
+
+/// The names the start list holds.
+struct StartList {
+    /// The bytes of the file, of which the first `len` count.
+    bytes: [u8; MAX_START_LIST],
+    /// How many there are.
+    len: usize,
+}
+
+impl StartList {
+    /// Whether the list names `name`.
+    fn names(&self, name: &[u8]) -> bool {
+        self.bytes
+            .get(..self.len)
+            .unwrap_or(&[])
+            .split(|byte| *byte == b'\n')
+            .any(|line| trimmed(line) == name)
+    }
+}
+
+/// The line without the carriage return and the spaces around it.
+const fn trimmed(line: &[u8]) -> &[u8] {
+    let mut bytes = line;
+    while let Some((last, rest)) = bytes.split_last() {
+        if matches!(*last, b'\r' | b' ' | b'\t') {
+            bytes = rest;
+        } else {
+            break;
+        }
+    }
+    bytes
+}
+
+/// Reads the start list off the volume, or nothing when the volume
+/// carries none.
+fn read_start_list(gate: &mut Gate, world: &World) -> Option<StartList> {
+    let files = world.files_for_self?;
+    // The list lies beside the directory the programs lie in, one step
+    // below the root of the volume.
+    let step = volume::DIRECTORY.first()?;
+    let directory = open_at(gate, files, file::BOOT, step.as_bytes()).ok()?;
+    let found = open_at(gate, files, directory.file, START_LIST);
+    let _closed = close_file(gate, files, directory.file);
+    let opened = found.ok()?;
+    let want = opened.size.min(MAX_READ);
+    let request = file::Request::Read {
+        file: opened.file,
+        offset: 0,
+        len: want,
+    };
+    let read = call_files(gate, files, &request).ok();
+    let _closed = close_file(gate, files, opened.file);
+    let file::Reply::Read(Ok(data)) = read? else {
+        return None;
+    };
+    let mut list = StartList {
+        bytes: [0; MAX_START_LIST],
+        len: 0,
+    };
+    let taken = data.len().min(MAX_START_LIST);
+    let slot = list.bytes.get_mut(..taken)?;
+    slot.copy_from_slice(data.as_bytes().get(..taken)?);
+    list.len = taken;
+    Some(list)
 }
 
 /// Reads `size` bytes of `file` into `mapping`.
@@ -1058,6 +1191,17 @@ fn install_all(
         let handle = gate.process_install_handle(child, marked.handle(), ObjectRights::SEND)?;
         push(&mut given, &mut count, Role::NetServer, handle)?;
     }
+    // The compositor is told whether anything else draws on this screen:
+    // it paints the desktop at once when nothing does, and waits for the
+    // key that shows it when something does (D-156).
+    if program.name == DESK {
+        tell(
+            &mut given,
+            &mut count,
+            Role::DeskAlone,
+            u64::from(world.drawers == 0),
+        )?;
+    }
     // A program that opens a window is known to the compositor the same
     // way: the compositor keeps a window per client.
     if program.windows
@@ -1284,51 +1428,6 @@ fn record(
     *slot = (role, payload);
     *count = count.wrapping_add(1);
     Ok(())
-}
-
-/// The rights each kind of handle goes out with.
-struct ObjectRights;
-
-impl ObjectRights {
-    /// A program's own process: it maps memory into itself, manages its
-    /// own threads, and may hand a capability to itself to a server that
-    /// gives something back when it ends — which is `INFO` and, to be able
-    /// to give it away at all, `DUPLICATE` and `TRANSFER` (D-106).
-    const PROCESS: Rights = Rights::MAP
-        .union(Rights::MANAGE)
-        .union(Rights::INFO)
-        .union(Rights::DUPLICATE)
-        .union(Rights::TRANSFER);
-    /// A program's own endpoint: it receives on it, badges it for the
-    /// clients it hands it to, and passes it on — which is what registering
-    /// a name is, and what needs `TRANSFER`.
-    const RECV: Rights = Rights::RECV
-        .union(Rights::BADGE)
-        .union(Rights::SEND)
-        .union(Rights::TRANSFER)
-        .union(Rights::DUPLICATE);
-    const SEND: Rights = Rights::SEND.union(Rights::TRANSFER);
-    /// A memory object goes out with every right its type accepts but the
-    /// duplication of the handle. `EXECUTE` is among them and has to be:
-    /// memory the server hands back becomes the text of some program, and
-    /// an object without the right cannot be mapped executable.
-    const MEMORY: Rights = Rights::READ
-        .union(Rights::WRITE)
-        .union(Rights::EXECUTE)
-        .union(Rights::MAP)
-        .union(Rights::INFO)
-        .union(Rights::TRANSFER);
-    const PORTS: Rights = Rights::READ.union(Rights::WRITE);
-    /// The framebuffer: it is written to and mapped, and it is not code.
-    const DEVICE: Rights = Rights::READ
-        .union(Rights::WRITE)
-        .union(Rights::MAP)
-        .union(Rights::INFO);
-    const MANAGE: Rights = Rights::MANAGE;
-    /// A notification a driver was given: it waits on it, and what sets
-    /// the bit is the interrupt the root task bound to it. The driver
-    /// signals nothing and binds nothing, so it is given neither right.
-    const NOTIFY: Rights = Rights::WAIT;
 }
 
 /// The framebuffer of the machine as a memory object, with the mode the

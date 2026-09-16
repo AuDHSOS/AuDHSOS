@@ -133,6 +133,9 @@ pub struct Startup {
     /// The endpoint of the compositor, badged with what it knows this
     /// process by. A program that opens a window is given one.
     pub desk_server: Option<EndpointHandle>,
+    /// Whether the compositor is the only program that draws, as
+    /// [`Role::DeskAlone`] carries it. Only the compositor is given one.
+    pub desk_alone: Option<u64>,
 }
 
 /// How many virtio block devices a process can be given. The reference
@@ -239,6 +242,7 @@ impl Startup {
             net: None,
             net_server: None,
             desk_server: None,
+            desk_alone: None,
         }
     }
 
@@ -330,6 +334,7 @@ impl Startup {
         let field = match role {
             Role::FramebufferGeometry => &mut self.framebuffer_geometry,
             Role::FramebufferLine => &mut self.framebuffer_line,
+            Role::DeskAlone => &mut self.desk_alone,
             Role::EcamBuses => &mut self.ecam_buses,
             Role::BlockCommon
             | Role::BlockNotify
@@ -405,7 +410,8 @@ impl Startup {
             }
             Role::NetServer => once(&mut self.net_server, role, handle),
             Role::DeskServer => once(&mut self.desk_server, role, handle),
-            Role::FramebufferGeometry
+            Role::DeskAlone
+            | Role::FramebufferGeometry
             | Role::FramebufferLine
             | Role::EcamBuses
             | Role::BlockCommon

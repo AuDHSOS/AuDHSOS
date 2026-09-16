@@ -111,7 +111,7 @@ fn every_role_lands_in_the_field_it_names() {
     assert_eq!(startup.desk_server.unwrap().handle(), handle(23));
     // The name of this test is a promise, and a role added later would
     // break it silently otherwise: every role but `Ram`, which is a list
-    // and has a test of its own, and the fifteen value roles, which carry
+    // and has a test of its own, and the sixteen value roles, which carry
     // no handle and are read in
     // `the_mode_of_the_framebuffer_comes_as_two_words`,
     // `the_bus_range_of_the_configuration_window_comes_as_one_word`,
@@ -120,7 +120,7 @@ fn every_role_lands_in_the_field_it_names() {
     // one field above.
     assert_eq!(
         Role::ALL.len(),
-        39,
+        40,
         "a role was added; give it a field and a line here"
     );
 }
@@ -468,4 +468,12 @@ fn more_block_devices_than_the_list_holds_are_refused() {
         pairs.push((Role::BlockRegisters, handle(raw)));
     }
     assert_eq!(read(&pairs).unwrap_err(), ReadError::TooManyBlocks);
+}
+
+#[test]
+fn the_compositor_hears_whether_anything_else_draws() {
+    let startup = read_mixed(&[], &[(Role::DeskAlone, 1)]).unwrap();
+    assert_eq!(startup.desk_alone, Some(1));
+    let startup = read_mixed(&[], &[(Role::DeskAlone, 0)]).unwrap();
+    assert_eq!(startup.desk_alone, Some(0));
 }

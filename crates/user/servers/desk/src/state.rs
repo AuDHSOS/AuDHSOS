@@ -373,23 +373,25 @@ impl Desk {
     }
 
     /// Closes the window `badge` holds under `id` and answers with what
-    /// has to be painted.
+    /// has to be painted. The window that is then in front takes the
+    /// focus and hears that it has, which `outcome` carries.
     ///
     /// # Errors
     ///
     /// As [`holding`](Self::holding).
-    pub fn close(&mut self, badge: u64, id: u32) -> Result<Rect, Error> {
+    pub fn close(&mut self, badge: u64, id: u32, outcome: &mut Outcome) -> Result<Rect, Error> {
         let frame = self.holding(badge, id)?.frame();
-        self.drop_window(id);
+        self.drop_window(id, outcome);
         Ok(frame)
     }
 
     /// Forgets the window of a client that is gone, and answers with its
-    /// number and what has to be painted.
-    pub fn forget(&mut self, badge: u64) -> Option<(u32, Rect)> {
+    /// number and what has to be painted. The focus moves as it does on a
+    /// close.
+    pub fn forget(&mut self, badge: u64, outcome: &mut Outcome) -> Option<(u32, Rect)> {
         let window = self.of(badge)?;
         let (id, frame) = (window.id(), window.frame());
-        self.drop_window(id);
+        self.drop_window(id, outcome);
         Some((id, frame))
     }
 
@@ -398,9 +400,9 @@ impl Desk {
         self.windows.iter().position(|window| window.id() == id)
     }
 
-    /// Takes a window out of the order and leaves the focus on the window
-    /// that is then in front.
-    fn drop_window(&mut self, id: u32) {
+    /// Takes a window out of the order and gives the focus to the window
+    /// that is then in front, which hears that it has it.
+    fn drop_window(&mut self, id: u32, outcome: &mut Outcome) {
         let Some(at) = self.index_of(id) else {
             return;
         };
@@ -411,9 +413,15 @@ impl Desk {
         if self.menu == Some(bar::WINDOW_MENU) {
             self.menu = None;
         }
-        if let Some(front) = self.windows.iter().last().map(Window::id) {
-            self.focus(front);
-        }
+        let Some(front) = self
+            .windows
+            .iter()
+            .last()
+            .map(|window| (window.id(), window.frame()))
+        else {
+            return;
+        };
+        self.give_focus(front.0, front.1, outcome);
     }
 
     /// Gives the focus to `id` and takes it from every other window.

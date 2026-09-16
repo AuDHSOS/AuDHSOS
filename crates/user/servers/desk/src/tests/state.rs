@@ -241,7 +241,10 @@ fn a_client_cannot_name_another_clients_window() {
     assert_eq!(desk.holding_mut(2, first).err(), Some(Error::AccessDenied));
     assert_eq!(desk.holding(1, 99).err(), Some(Error::NotFound));
     assert_eq!(desk.poll(2, first).err(), Some(Error::AccessDenied));
-    assert_eq!(desk.close(2, first).err(), Some(Error::AccessDenied));
+    assert_eq!(
+        desk.close(2, first, &mut Outcome::nothing()).err(),
+        Some(Error::AccessDenied)
+    );
     assert!(desk.holding(1, first).is_ok());
 }
 
@@ -251,7 +254,7 @@ fn a_window_that_is_closed_is_gone_and_the_one_behind_it_takes_the_focus() {
     let first = open(&mut desk, 1, b"first");
     let second = open(&mut desk, 2, b"second");
     let frame = desk.window(second).unwrap().frame();
-    assert_eq!(desk.close(2, second), Ok(frame));
+    assert_eq!(desk.close(2, second, &mut Outcome::nothing()), Ok(frame));
     assert_eq!(desk.len(), 1);
     assert_eq!(desk.focused().map(Window::id), Some(first));
     assert!(desk.window(second).is_none());
@@ -262,9 +265,9 @@ fn a_client_that_is_gone_leaves_no_window_behind() {
     let mut desk = desk();
     let id = open(&mut desk, 1, b"first");
     let frame = desk.window(id).unwrap().frame();
-    assert_eq!(desk.forget(1), Some((id, frame)));
+    assert_eq!(desk.forget(1, &mut Outcome::nothing()), Some((id, frame)));
     assert!(desk.is_empty());
-    assert_eq!(desk.forget(1), None);
+    assert_eq!(desk.forget(1, &mut Outcome::nothing()), None);
 }
 
 #[test]
@@ -584,7 +587,7 @@ fn a_window_that_is_closed_while_its_menu_is_open_closes_the_menu() {
     let cell = bar::title_rect(bar::WINDOW_MENU);
     click(&mut desk, cell.x + 2, 2);
     assert_eq!(desk.menu(), Some(bar::WINDOW_MENU));
-    desk.close(1, id).unwrap();
+    desk.close(1, id, &mut Outcome::nothing()).unwrap();
     assert_eq!(desk.menu(), None);
 }
 
@@ -594,7 +597,7 @@ fn a_window_dragged_away_while_it_is_closed_drags_nothing() {
     let id = open(&mut desk, 1, b"only");
     let frame = desk.window(id).unwrap().frame();
     click(&mut desk, frame.x + 10, frame.y + 10);
-    desk.close(1, id).unwrap();
+    desk.close(1, id, &mut Outcome::nothing()).unwrap();
     let outcome = to(&mut desk, frame.x + 100, frame.y + 100, BUTTON_LEFT);
     assert!(outcome.repaint.is_empty());
 }
@@ -716,4 +719,37 @@ fn the_desktop_ends_whether_it_was_painted_or_not() {
     let outcome = desk.feed(key(ENDS, false));
     assert!(outcome.ended);
     assert_eq!(drain(&mut desk, 1, id), vec![Event::Closed]);
+}
+
+#[test]
+fn the_window_that_takes_the_focus_from_a_window_that_closed_hears_that_it_has() {
+    let mut desk = desk();
+    let first = open(&mut desk, 1, b"first");
+    let second = open(&mut desk, 2, b"second");
+    drain(&mut desk, 1, first);
+    drain(&mut desk, 2, second);
+    let mut outcome = Outcome::nothing();
+    desk.close(2, second, &mut outcome).unwrap();
+    assert_eq!(
+        outcome.woken.iter().copied().collect::<Vec<_>>(),
+        vec![first]
+    );
+    assert_eq!(drain(&mut desk, 1, first), vec![Event::Focus { has: true }]);
+}
+
+#[test]
+fn the_same_holds_for_a_window_the_desktop_forgets() {
+    let mut desk = desk();
+    let first = open(&mut desk, 1, b"first");
+    let second = open(&mut desk, 2, b"second");
+    drain(&mut desk, 1, first);
+    drain(&mut desk, 2, second);
+    let mut outcome = Outcome::nothing();
+    desk.forget(2, &mut outcome).unwrap();
+    assert_eq!(
+        outcome.woken.iter().copied().collect::<Vec<_>>(),
+        vec![first]
+    );
+    assert_eq!(drain(&mut desk, 1, first), vec![Event::Focus { has: true }]);
+    assert_eq!(desk.focused().map(Window::id), Some(first));
 }

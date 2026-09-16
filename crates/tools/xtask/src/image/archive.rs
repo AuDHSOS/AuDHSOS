@@ -53,6 +53,45 @@ pub(crate) const ON_THE_VOLUME: [&str; 16] = [
     "app-faulter",
 ];
 
+/// The programs a desktop image carries: the servers the compositor needs,
+/// the compositor, and the shell that runs in a window of it.
+///
+/// The root task starts the programs of its own table whatever the volume
+/// holds, and reports the ones it does not find; a machine built this way
+/// therefore boots in seconds rather than minutes, because the programs it
+/// leaves out are the megabytes of the network stack and of the
+/// demonstrations, read off the volume two kibibytes at a time (D-92).
+pub(crate) const DESKTOP: [&str; 5] = [
+    "server-display",
+    "server-input",
+    "server-desk",
+    "server-net",
+    "app-shell",
+];
+
+/// The programs a desktop image starts at boot: the servers, the
+/// compositor, and the shell that opens the one window of it.
+pub(crate) const DESKTOP_START: [&str; 5] = [
+    "server-display",
+    "server-input",
+    "server-net",
+    "server-desk",
+    "app-shell",
+];
+
+/// Where the list of what to start at boot lies on the volume.
+pub(crate) const START_LIST_PATH: &str = "AUDHSOS/START.TXT";
+
+/// The bytes of that list: one name per line.
+pub(crate) fn start_list(names: &[&str]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for name in names {
+        bytes.extend_from_slice(name.as_bytes());
+        bytes.push(b'\n');
+    }
+    bytes
+}
+
 /// Writes a ustar archive holding `files`.
 ///
 /// # Errors

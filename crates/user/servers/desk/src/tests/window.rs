@@ -125,7 +125,11 @@ fn a_full_queue_drops_the_oldest_event_and_counts_it() {
         });
     }
     assert_eq!(window.waiting(), EVENTS);
-    window.push(Event::Closed);
+    window.push(Event::Pointer {
+        x: 99,
+        y: 0,
+        buttons: 0,
+    });
     assert_eq!(window.waiting(), EVENTS);
     assert_eq!(window.dropped(), 1);
     assert_eq!(
@@ -136,4 +140,28 @@ fn a_full_queue_drops_the_oldest_event_and_counts_it() {
             buttons: 0,
         })
     );
+}
+
+#[test]
+fn the_news_that_the_window_is_going_away_is_never_dropped() {
+    let mut window = window();
+    window.push(Event::Closed);
+    // Every later event fills the queue twice over; the one that says the
+    // window is going away takes no place in it and cannot be pushed out.
+    for index in 0..EVENTS * 2 {
+        window.push(Event::Pointer {
+            x: u32::try_from(index).unwrap(),
+            y: 0,
+            buttons: 0,
+        });
+    }
+    let mut events = 0;
+    while let Some(event) = window.pop() {
+        events += 1;
+        if events > EVENTS {
+            assert_eq!(event, Event::Closed, "it comes last and it comes once");
+        }
+    }
+    assert_eq!(events, EVENTS + 1);
+    assert_eq!(window.pop(), None);
 }

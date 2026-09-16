@@ -68,8 +68,11 @@ subcommands:
                    build the loader and the kernel for their targets
   build-user-tests build the user programs of the test images and turn
                    each into a flat binary under target/user-tests/
-  image [--release]
-                   write the boot image and the disk image into target/
+  image [--release] [--desktop]
+                   write the boot image and the disk image into target/;
+                   --desktop leaves every program but the servers, the
+                   compositor and the shell off the volume, which boots in
+                   seconds instead of minutes
   qemu-runner <elf>
                    Cargo's runner for the kernel target: wrap a test kernel
                    into a disk image, run it, and read the serial protocol
@@ -87,10 +90,12 @@ subcommands:
                    --status only reports where they stand. The one
                    subcommand that uses the network, and never a step of
                    check
-  run [--release] [--display] [--scratch]
+  run [--release] [--display] [--scratch] [--ssh] [--desktop]
                    boot the system in QEMU with the console on the
                    terminal; --scratch attaches the second disk, blank when
-                   it is new and kept across runs under target/qemu/
+                   it is new and kept across runs under target/qemu/;
+                   --desktop boots the image of that name, where the
+                   desktop is painted at once and the `Desk` menu ends it
   check [--quiet]  everything CI runs, in CI order; --quiet leaves one
                    line per step and prints the output of a step only
                    when it fails
