@@ -385,6 +385,9 @@ pub enum Intrinsic {
     ArrayPrototypeToSorted,
     /// `Array.prototype.toSpliced` (23.1.3.35).
     ArrayPrototypeToSpliced,
+    /// `get [Symbol.species]` of 23.1.2.5 and 22.2.5.2, which answers the
+    /// `this` value.
+    SpeciesGetter,
     /// `Array.prototype.values`, which is also `%Array.prototype%[@@iterator]`
     /// (23.1.3.38 and 23.1.3.40).
     ArrayPrototypeValues,
@@ -639,7 +642,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 153] = [
+    pub const ALL: [Self; 154] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -793,6 +796,7 @@ impl Intrinsic {
         Self::ArrayPrototypeSort,
         Self::ArrayPrototypeToSorted,
         Self::ArrayPrototypeToSpliced,
+        Self::SpeciesGetter,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -925,6 +929,7 @@ impl Intrinsic {
             Self::SymbolConstructor
             | Self::RegExpConstructor
             | Self::ThrowTypeError
+            | Self::SpeciesGetter
             | Self::ErrorConstructor
             | Self::EvalErrorConstructor
             | Self::RangeErrorConstructor
@@ -1126,6 +1131,7 @@ impl Intrinsic {
             Self::ArrayPrototypeSort => 150,
             Self::ArrayPrototypeToSorted => 151,
             Self::ArrayPrototypeToSpliced => 152,
+            Self::SpeciesGetter => 153,
         }
     }
 
@@ -1289,6 +1295,7 @@ impl Intrinsic {
             Self::ArrayPrototypeSort => 150,
             Self::ArrayPrototypeToSorted => 151,
             Self::ArrayPrototypeToSpliced => 152,
+            Self::SpeciesGetter => 153,
         }
     }
 
@@ -1453,6 +1460,7 @@ impl Intrinsic {
             150 => Some(Self::ArrayPrototypeSort),
             151 => Some(Self::ArrayPrototypeToSorted),
             152 => Some(Self::ArrayPrototypeToSpliced),
+            153 => Some(Self::SpeciesGetter),
             _ => None,
         }
     }
@@ -1483,6 +1491,7 @@ impl Intrinsic {
             | Self::StringPrototypeValueOf
             | Self::ObjectPrototypeValueOf => "valueOf",
             Self::ThrowTypeError | Self::FunctionPrototype => "",
+            Self::SpeciesGetter => "get [Symbol.species]",
             Self::SymbolConstructor => "Symbol",
             Self::RegExpConstructor => "RegExp",
             Self::RegExpPrototypeExec => "exec",
@@ -1728,6 +1737,7 @@ impl Intrinsic {
             | Self::ObjectPrototypeValueOf
             | Self::FunctionPrototype
             | Self::ErrorPrototypeToString
+            | Self::SpeciesGetter
             | Self::ArrayPrototypeSort
             | Self::ArrayPrototypeToSorted
             | Self::ArrayPrototypeValues
@@ -1867,6 +1877,7 @@ impl Intrinsic {
         match self {
             Self::ThrowTypeError
             | Self::FunctionPrototype
+            | Self::SpeciesGetter
             | Self::SymbolConstructor
             | Self::RegExpPrototypeToString
             | Self::ObjectPrototypeToString
@@ -2770,6 +2781,7 @@ impl Realm {
             error_prototype,
             &native_error_prototypes,
         )?;
+        Self::define_species_getters(heap, &intrinsics)?;
 
         // 19.1 gives the global object `Math` with the attributes 17 gives
         // every value of clause 19 that is not a constant.
@@ -3229,6 +3241,57 @@ impl Realm {
         Ok(())
     }
 
+    /// `get [Symbol.species]` of 23.1.2.5 and 22.2.5.2.
+    ///
+    /// One getter stands for both, because each answers the `this` value it
+    /// was called on; the pair has no setter, which 17 makes undefined.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    fn define_species_getters(
+        heap: &mut GenerationalHeap,
+        intrinsics: &[Root],
+    ) -> Result<(), HeapError> {
+        let getter = Self::rooted(
+            heap,
+            *intrinsics
+                .get(Intrinsic::SpeciesGetter.index())
+                .ok_or(HeapError::InvalidReference)?,
+        )?;
+        for constructor in [Intrinsic::ArrayConstructor, Intrinsic::RegExpConstructor] {
+            let holder = Self::rooted(
+                heap,
+                *intrinsics
+                    .get(constructor.index())
+                    .ok_or(HeapError::InvalidReference)?,
+            )?
+            .as_object()
+            .ok_or(HeapError::InvalidReference)?;
+            let shape = heap.shapes.root_shape();
+            let pair = heap.allocate_immortal_object(shape, super::value::VALUE_NULL)?;
+            heap.set_object_kind(
+                pair,
+                super::object::ObjectKind::Accessor {
+                    get: getter,
+                    set: super::value::VALUE_UNDEFINED,
+                },
+            )?;
+            heap.define_own_named(
+                holder,
+                WellKnownSymbol::Species.key(),
+                Value::from_object(pair),
+                PropertyFlags {
+                    writable: false,
+                    enumerable: false,
+                    configurable: true,
+                    is_accessor: true,
+                },
+            )?;
+        }
+        Ok(())
+    }
+
     /// The `length` and `name` 17 gives a built-in function.
     ///
     /// # Errors
@@ -3344,9 +3407,11 @@ impl Realm {
             .ok_or(HeapError::InvalidReference)?;
             // 10.2.4.1 stands on no object at all, and 20.2.3 is the holder
             // rather than something on one, so nothing installs either.
+            // 23.1.2.5 and 22.2.5.2 are accessors installed under a Symbol
+            // key beside their constructors, not names on a holder.
             if matches!(
                 intrinsic,
-                Intrinsic::ThrowTypeError | Intrinsic::FunctionPrototype
+                Intrinsic::ThrowTypeError | Intrinsic::FunctionPrototype | Intrinsic::SpeciesGetter
             ) {
                 continue;
             }

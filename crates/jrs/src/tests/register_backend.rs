@@ -6679,3 +6679,22 @@ fn the_regexp_constructor_compiles_where_the_call_stands() -> Result<(), Error> 
     ));
     Ok(())
 }
+
+/// 23.1.2.5 and 22.2.5.2 give their constructor a `@@species` accessor whose
+/// getter answers the `this` value it was read off.
+#[test]
+fn the_species_getter_answers_the_constructor_it_was_read_off() -> Result<(), Error> {
+    for source in [
+        "''+(Array[Symbol.species]===Array)",
+        "''+(RegExp[Symbol.species]===RegExp)",
+        "typeof Object.getOwnPropertyDescriptor(Array,Symbol.species)",
+        "Object.getOwnPropertyDescriptor(Array,Symbol.species).get.name",
+        "''+Object.getOwnPropertyDescriptor(Array,Symbol.species).get.length",
+        "var d=Object.getOwnPropertyDescriptor(Array,Symbol.species);\
+         ''+(d.set===undefined)+d.enumerable+d.configurable",
+        "''+Object.getOwnPropertyDescriptor(Array,Symbol.species).get.call(7)",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}

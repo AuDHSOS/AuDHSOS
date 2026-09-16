@@ -1583,8 +1583,9 @@ impl RegisterVM {
             Intrinsic::StringPrototypeMatch | Intrinsic::StringPrototypeSearch => {
                 self.call_string_regexp_intrinsic(intrinsic, &call, units, heap, realm)
             }
-            // 27.1.2.1 answers the object it was called on.
-            Intrinsic::IteratorPrototypeIterator => Ok(call.receiver),
+            // 27.1.2.1, 23.1.2.5 and 22.2.5.2 answer the value they were
+            // called on.
+            Intrinsic::IteratorPrototypeIterator | Intrinsic::SpeciesGetter => Ok(call.receiver),
             Intrinsic::ArrayPrototypeValues
             | Intrinsic::ArrayPrototypeKeys
             | Intrinsic::ArrayPrototypeEntries
