@@ -780,8 +780,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same two, on the register engine (focused) | focused | `a3e49ee` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object/defineProperty test/built-ins/Reflect/defineProperty --summary` | 1,143 | 2,274 | 2,077 (91.34%) | 74 (3.25%) | 123 (5.41%) |
 | `Object.create` and `defineProperties` (focused) | focused | `9b84330` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object/create test/built-ins/Object/defineProperties --summary` | 952 | 1,904 | 1,840 (96.64%) | 60 (3.15%) | 4 (0.21%) |
 | The same two, on the register engine (focused) | focused | `9b84330` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object/create test/built-ins/Object/defineProperties --summary` | 952 | 1,904 | 1,737 (91.23%) | 46 (2.42%) | 121 (6.35%) |
-| Complete pinned suite, including staging and Intl | full | `9b84330` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `9b84330` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 29,746 (28.90%) | 19,501 (18.95%) | 53,678 (52.15%) |
+| The three functions of 22.1.2 (focused) | focused | `bcc2ce5` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/String/raw test/built-ins/String/fromCharCode test/built-ins/String/fromCodePoint --summary` | 58 | 116 | 40 (34.48%) | 66 (56.90%) | 10 (8.62%) |
+| The same three, on the register engine (focused) | focused | `bcc2ce5` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/String/raw test/built-ins/String/fromCharCode test/built-ins/String/fromCodePoint --summary` | 58 | 116 | 76 (65.52%) | 0 (0.00%) | 40 (34.48%) |
+| Complete pinned suite, including staging and Intl | full | `bcc2ce5` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `bcc2ce5` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 29,866 (29.02%) | 19,507 (18.95%) | 53,552 (52.03%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1653,7 +1655,12 @@ runs and both full runs beside 6.2.6.5 were measured at tree
 that step gained 86 variants and lost none. The `Object.create` runs and both
 full runs beside 7.3.25 were measured at tree
 `96b8794fcaea0dfaf53a0013166a84cfce8892e3`, which is the tree of `9b84330`;
-that step gained 236 variants and lost none.
+that step gained 236 variants and lost none. The `%String%` runs and both full
+runs beside 22.1.2 were measured at tree
+`bd25da145f8a2d680080647509b682b8acdcca8f`, which is the tree of `bcc2ce5`;
+that step gained 120 variants and lost none, and the register engine passes 36
+variants more than the stack backend on that focused set, which built only
+22.1.2.1.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
