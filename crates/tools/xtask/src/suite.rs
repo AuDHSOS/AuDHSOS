@@ -626,8 +626,11 @@ impl Session {
         let mut out = Vec::new();
         let mut ran = Ok(());
         for statement in statements(sql) {
-            let text = statement.trim();
-            if text.is_empty() {
+            // The bytes after the last one that carries meaning are the
+            // statement's own: `SELECT 1 /* ` is a comment that runs to
+            // the end and `SELECT 1 /*` is a slash and a star.
+            let text = statement.trim_start();
+            if text.trim().is_empty() {
                 continue;
             }
             match run_one(writer, text) {

@@ -44,6 +44,7 @@ mod returning;
 mod rowvalue;
 mod savepoint;
 mod schema;
+mod separator;
 mod strict;
 mod token;
 mod tree;

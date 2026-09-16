@@ -474,12 +474,14 @@ const fn is_space(byte: u8) -> bool {
 }
 
 /// Whether the byte is a decimal digit.
-const fn is_digit(byte: u8) -> bool {
+#[must_use]
+pub const fn is_digit(byte: u8) -> bool {
     byte.is_ascii_digit()
 }
 
 /// Whether the byte is a hexadecimal digit.
-const fn is_hex(byte: u8) -> bool {
+#[must_use]
+pub const fn is_hex(byte: u8) -> bool {
     byte.is_ascii_hexdigit()
 }
 

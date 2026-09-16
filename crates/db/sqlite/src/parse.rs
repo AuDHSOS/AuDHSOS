@@ -79,6 +79,9 @@ pub enum Expected {
     /// Nothing: a `DISTINCT` on an ordered-set aggregate, which the
     /// span names the function of.
     OrderedDistinct,
+    /// Nothing: a token the tokenizer read as no token at all, which
+    /// the span names.
+    Unrecognized,
     /// `AS`, in a `WITH` clause.
     WithAs,
     /// `SELECT`, `VALUES` or `WITH`.
@@ -1815,7 +1818,8 @@ impl<'a> Parser<'a> {
         };
         let span = Span::of(token);
         let literal = match token.kind {
-            Kind::Integer | Kind::QNumber => Literal::Integer(span),
+            Kind::Integer => Literal::Integer(span),
+            Kind::QNumber => self.separated(token)?,
             Kind::Float => Literal::Float(span),
             Kind::String | Kind::Id => Literal::Text(span),
             Kind::Blob => Literal::Blob(span),
@@ -2360,9 +2364,14 @@ impl<'a> Parser<'a> {
             Kind::Keyword(Keyword::Case) => self.case(),
             Kind::Keyword(Keyword::Raise) => self.raise(),
             Kind::Lp => self.parenthesized(),
-            Kind::Integer | Kind::QNumber => {
+            Kind::Integer => {
                 self.bump();
                 self.literal(Literal::Integer(Span::of(token)))
+            }
+            Kind::QNumber => {
+                let held = self.separated(token)?;
+                self.bump();
+                self.literal(held)
             }
             Kind::Float => {
                 self.bump();
@@ -2969,12 +2978,63 @@ impl<'a> Parser<'a> {
     }
 
     /// A refusal at `token`, or at the end of the statement.
+    ///
+    /// A token the tokenizer read as no token at all is refused as
+    /// itself whatever was wanted there, which is the `TK_ILLEGAL` of
+    /// `sqlite3RunParser`.
     fn error(&self, token: Option<Token>, expected: Expected) -> Error {
+        let expected = match token {
+            Some(found) if found.kind == Kind::Illegal => Expected::Unrecognized,
+            _ => expected,
+        };
         Error {
             at: token.map_or(self.sql.len(), |found| found.start),
             len: token.map_or(0, |found| found.len),
             expected,
         }
+    }
+
+    /// A number written with digit separators, as the literal it is
+    /// once they are taken out, which is `sqlite3DequoteNumber`: a
+    /// separator lies between two digits, a `.` or an `e` makes the
+    /// number a real, and a hex literal is a whole number whatever it
+    /// holds.
+    ///
+    /// Reading the token costs O(n) in its bytes.
+    ///
+    /// # Errors
+    ///
+    /// [`Expected::Unrecognized`] where a separator lies anywhere else.
+    fn separated(&self, token: Token) -> Result<Literal, Error> {
+        let span = Span::of(token);
+        let text = span.text(self.sql);
+        let hex = text.first() == Some(&b'0') && matches!(text.get(1), Some(b'x' | b'X'));
+        let digit = if hex {
+            crate::token::is_hex
+        } else {
+            crate::token::is_digit
+        };
+        let mut real = false;
+        for (at, byte) in text.iter().enumerate() {
+            if *byte != b'_' {
+                real = real || matches!(byte, b'e' | b'E' | b'.');
+                continue;
+            }
+            let before = at.checked_sub(1).and_then(|at| text.get(at)).copied();
+            let after = text.get(at.saturating_add(1)).copied();
+            if !before.is_some_and(digit) || !after.is_some_and(digit) {
+                return Err(Error {
+                    at: token.start,
+                    len: token.len,
+                    expected: Expected::Unrecognized,
+                });
+            }
+        }
+        Ok(if real && !hex {
+            Literal::Float(span)
+        } else {
+            Literal::Integer(span)
+        })
     }
 }
 

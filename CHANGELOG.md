@@ -88,6 +88,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` reads a number written with digit separators as the
+  number the separators are taken out of, so `1.1_1` is the real 1.11
+  rather than the whole number 1. A separator anywhere but between two
+  digits, and a letter stuck to a number, make the token one the parser
+  refuses `unrecognized token: "..."`. An `ORDER BY` or a `GROUP BY`
+  term out of range names its own place. D-260 records it. Catalog
+  6.6.184.
+
 - `db-sqlite` computes the columns of a `GENERATED ALWAYS AS` where a
   statement writes a row: a column that is `STORED` is written down, and
   a column computed where it is read takes no place in the record, so

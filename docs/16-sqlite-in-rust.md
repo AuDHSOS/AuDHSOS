@@ -769,6 +769,9 @@ Size: L.
 39. `median`, `percentile`, `percentile_cont` and `percentile_disc`,
     and the `WITHIN GROUP` clause that names their values. Built, which
     D-259 records.
+40. The digit separators a number is written with, and the words a
+    token the tokenizer read as no token at all is refused with. Built,
+    which D-260 records.
 
 ### Done when
 
@@ -778,8 +781,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 72 271 cases in 706 files, 58 817
-pass, 3342 answer differently, and 10 112 name something the engine
+under the `tclsh` of the machine. Of 72 320 cases in 706 files, 58 957
+pass, 3252 answer differently, and 10 111 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts

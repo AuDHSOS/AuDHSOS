@@ -137,8 +137,11 @@ fn a_statement_that_is_not_one_is_refused_as_one() {
         Err(Error::NoTable(b"nosuch".to_vec()))
     );
     assert_eq!(
-        database.query(b"SELECT a FROM t ORDER BY 9"),
-        Err(Error::OrderRange)
+        database
+            .query(b"SELECT a FROM t ORDER BY 9")
+            .unwrap_err()
+            .message(),
+        "1st ORDER BY term out of range - should be between 1 and 1"
     );
 }
 

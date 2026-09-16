@@ -5411,6 +5411,22 @@ Document 16 step Q8.
 - A group of no values answers nothing, and a group of one answers that
   value whatever the fraction says.
 
+### 6.6.184 The digit separators a number is written with (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `1_000` is the whole number 1000, `1.1_1` the real 1.11, and
+  `0x1_e` the whole number 30, because a hex literal is a whole number
+  whatever its digits are.
+- A separator anywhere but between two digits makes the token one the
+  tokenizer read as no token at all: `1_`, `1_.4`, `1e_4`, `12__34` and
+  `12.34_` are each refused `unrecognized token: "..."`.
+- A letter stuck to a number is one such token as well, so `123a456` is
+  refused under its own text and `1.4e+_4` under `1.4e`.
+- An `ORDER BY` or a `GROUP BY` term that counts to a column the answer
+  does not have names its own place: `SELECT 1,2,3 ORDER BY 1,9` is
+  refused `2nd ORDER BY term out of range - should be between 1 and 3`.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

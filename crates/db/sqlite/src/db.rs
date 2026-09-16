@@ -76,8 +76,11 @@ pub enum Error {
     Timed(Vec<u8>, Vec<u8>, Vec<u8>),
     /// A `CREATE TRIGGER` over a table SQLite keeps for itself.
     SystemTrigger,
-    /// An `ORDER BY` that counts to a column the answer does not have.
-    OrderRange,
+    /// An `ORDER BY` or a `GROUP BY` that counts to a column the answer
+    /// does not have, with which term it is, the word for the clause,
+    /// and how many columns the answer has.
+    OrderRange(usize, Vec<u8>, usize),
+
     /// An aggregate where there is nothing to aggregate over: in a
     /// `WHERE`, in a `GROUP BY`, inside another aggregate, or in an
     /// `ORDER BY` of a statement that does not group.
@@ -182,6 +185,9 @@ pub enum Error {
     /// A `DISTINCT` on an ordered-set aggregate, with the name of that
     /// aggregate.
     OrderedDistinct(Vec<u8>),
+    /// A token the tokenizer read as no token at all, as it was
+    /// written.
+    Unrecognized(Vec<u8>),
     /// A table an `ALTER TABLE` left in a state the schema cannot be
     /// read from, with the table, the words for the kind of alter, and
     /// what reading the schema refused.
@@ -249,6 +255,15 @@ impl Error {
                 shown(column),
                 shown(written)
             ),
+            Error::OrderRange(which, word, most) => alloc::format!(
+                "{} {} BY term out of range - should be between 1 and {}",
+                ordinal(*which),
+                shown(word),
+                most
+            ),
+            Error::Unrecognized(token) => {
+                alloc::format!("unrecognized token: \"{}\"", shown(token))
+            }
             Error::OrderedDistinct(name) => alloc::format!(
                 "DISTINCT not allowed on ordered-set aggregate {}()",
                 shown(name)
@@ -432,6 +447,20 @@ impl Error {
     }
 }
 
+/// A count with the two letters that name its place, which is `%r` of
+/// `sqlite3_mprintf`: `1st`, `2nd`, `3rd` and `4th` onward, with the
+/// teens taking `th`.
+fn ordinal(count: usize) -> alloc::string::String {
+    let word = match (count % 100, count % 10) {
+        (11..=13, _) => "th",
+        (_, 1) => "st",
+        (_, 2) => "nd",
+        (_, 3) => "rd",
+        _ => "th",
+    };
+    alloc::format!("{count}{word}")
+}
+
 impl From<error::Error> for Error {
     fn from(error: error::Error) -> Self {
         Error::Image(error)
@@ -458,6 +487,9 @@ impl Error {
         let held = sql.get(error.at..error.at.saturating_add(error.len));
         if error.expected == parse::Expected::OrderedDistinct {
             return Error::OrderedDistinct(held.unwrap_or_default().to_vec());
+        }
+        if error.expected == parse::Expected::Unrecognized {
+            return Error::Unrecognized(held.unwrap_or_default().to_vec());
         }
         match held.filter(|token| !token.is_empty()) {
             Some(token) => Error::Syntax(token.to_vec()),
@@ -3695,10 +3727,12 @@ fn grouping(
     let results = arena.results(select.columns);
     let answers = answered(arena, select, sql, sides);
     let mut out = Vec::new();
-    for term in arena.children(select.group) {
+    for (which, term) in arena.children(select.group).iter().enumerate() {
         if let Some(place) = whole_number(arena, *term, sql) {
-            let at = usize::try_from(place.saturating_sub(1)).map_err(|_| Error::OrderRange)?;
-            let found = answers.get(at).ok_or(Error::OrderRange)?;
+            let refused =
+                || Error::OrderRange(which.saturating_add(1), b"GROUP".to_vec(), answers.len());
+            let at = usize::try_from(place.saturating_sub(1)).map_err(|_| refused())?;
+            let found = answers.get(at).ok_or_else(refused)?;
             out.push(*found);
             continue;
         }
@@ -4015,16 +4049,18 @@ fn keys(
     collations: &[Collation],
 ) -> Result<Vec<Key>, Error> {
     let mut keys = Vec::new();
-    for term in arena.orders(select.order) {
+    for (which, term) in arena.orders(select.order).iter().enumerate() {
         let descending = term.order == Order::Descending;
         let nulls = term.nulls;
         // A whole number counts the answered columns from one; a
         // name that is one of them names it; anything else is read
         // against the row.
         if let Some(place) = whole_number(arena, term.expr, sql) {
-            let at = usize::try_from(place.saturating_sub(1)).map_err(|_| Error::OrderRange)?;
+            let refused =
+                || Error::OrderRange(which.saturating_add(1), b"ORDER".to_vec(), names.len());
+            let at = usize::try_from(place.saturating_sub(1)).map_err(|_| refused())?;
             if at >= names.len() {
-                return Err(Error::OrderRange);
+                return Err(refused());
             }
             keys.push(Key {
                 of: Keyed::Place(at, collation_at(collations, at)),
