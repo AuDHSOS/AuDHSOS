@@ -2330,20 +2330,21 @@ pub fn array_prototype_owns(name: &[u16]) -> bool {
 }
 
 /// The property names 10.2 gives an ordinary function object and 20.2.3 gives
-/// `%Function.prototype%`, excluding the one Symbol key the latter carries and
-/// the two restricted properties it does carry.
+/// `%Function.prototype%`, excluding the one Symbol key the latter carries, the
+/// two restricted properties it does carry, and `prototype`.
 ///
 /// It serves the same purpose as [`OBJECT_PROTOTYPE_PROPERTIES`]: neither exists
 /// yet, so a read of one of these names off a function object is a gap and a
-/// write of one would shadow a property that is not writable.
-pub const FUNCTION_PROPERTIES: [&str; 8] = [
+/// write of one would shadow a property that is not writable. `prototype` is
+/// not one of them: 10.2.5 gives it to a constructor and to nothing else, so a
+/// function object that does not carry it answers undefined for that name.
+pub const FUNCTION_PROPERTIES: [&str; 7] = [
     "apply",
     "bind",
     "call",
     "constructor",
     "length",
     "name",
-    "prototype",
     "toString",
 ];
 

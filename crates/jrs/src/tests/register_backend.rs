@@ -463,6 +463,37 @@ fn the_accessors_of_22_2_6_answer_the_flags_of_the_receiver() -> Result<(), Erro
     Ok(())
 }
 
+#[test]
+fn a_function_object_owns_the_name_and_the_prototype_10_2_gives_it() -> Result<(), Error> {
+    for source in [
+        // 10.2.5 step 8 gives every function object a `name`, which is the
+        // empty String where nothing named it.
+        "(function(){}).name===''",
+        "(function(){}).hasOwnProperty('name')",
+        "Object.getOwnPropertyDescriptor((function(){}),'name').value===''",
+        "let d=Object.getOwnPropertyDescriptor((()=>{}),'name');d.writable+':'+d.enumerable+':'+d.configurable",
+        // 10.2.5 gives `prototype` to a constructor and to nothing else, so a
+        // function without one answers undefined rather than a gap.
+        "String(Array.prototype.join.prototype)",
+        "String(Math.max.prototype)",
+        "String(({m(){}}).m.prototype)",
+        "String(Function.prototype.prototype)",
+        "String((()=>{}).prototype)",
+        "typeof (function(){}).prototype",
+        // 10.1.5 stops at the object, so a name a Prototype owns has no own
+        // descriptor and no gap either.
+        "String(Object.getOwnPropertyDescriptor((function(){}),'bind'))",
+        "String(Object.getOwnPropertyDescriptor([],'map'))",
+        "String(Object.getOwnPropertyDescriptor(new Number(1),'toFixed'))",
+        "String(Object.getOwnPropertyDescriptor(/a/,'test'))",
+        "Object.getOwnPropertyDescriptor(Array.prototype,'map').writable",
+        "String(Object.getOwnPropertyDescriptor(Math,'zzz'))",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
 fn differential_scripts(scripts: &[&str]) -> Result<(), Error> {
     let outcome = |backend| -> Result<Result<Value, Error>, Error> {
         let mut host = SilentHost;

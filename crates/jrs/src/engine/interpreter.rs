@@ -349,6 +349,19 @@ pub struct FrameHeader {
     pub arguments: Option<FrameArguments>,
 }
 
+/// How far a property question reaches (10.1.5 and 10.1.8).
+///
+/// An own query stops at the object; a read walks the Prototype Chain, so a
+/// name a Prototype owns and this Realm has not built is a gap there and not
+/// on the object.
+#[derive(Clone, Copy)]
+enum Reach {
+    /// `[[GetOwnProperty]]` of 10.1.5.
+    Own,
+    /// `[[Get]]` of 10.1.8.
+    Chain,
+}
+
 /// The registers of the caller frame that 10.4.4 reads to build an arguments
 /// object: the arguments themselves and the callable the call named.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2932,7 +2945,7 @@ impl RegisterVM {
                         .as_string()
                         .and_then(|name| heap.strings.to_utf16(Value::from_string(name)))
                         .unwrap_or_default();
-                    Self::absent_property(target, &units, heap, realm)?;
+                    Self::absent_own_property(target, &units, heap, realm)?;
                     return Ok(VALUE_UNDEFINED);
                 };
                 let indexed = Self::element_index_of(object, name, heap);
@@ -5646,14 +5659,17 @@ impl RegisterVM {
             .functions
             .get(code_id as usize)
             .ok_or(VMError::InvalidRegister)?;
-        let Some(index) = target.name else {
-            return Ok(());
+        // 10.2.5 step 8 gives every function object a `name`; one the lowering
+        // could not name is the empty String of 15.2.5 and 15.3.4, not a
+        // missing property.
+        let units = match target.name {
+            Some(index) => target
+                .string_constants
+                .get(index as usize)
+                .ok_or(VMError::InvalidRegister)?
+                .clone(),
+            None => Vec::new(),
         };
-        let units = target
-            .string_constants
-            .get(index as usize)
-            .ok_or(VMError::InvalidRegister)?
-            .clone();
         let text = self.allocate_string(heap, &units)?;
         let function = self.acc.as_object().ok_or(VMError::TypeError)?;
         let key = PropertyKey::String(heap.strings.intern("name")?);
@@ -7002,18 +7018,41 @@ impl RegisterVM {
     /// That is `undefined` only when the chain is complete. A prototype this
     /// Realm has not finished building would have owned the name, so the miss
     /// is a gap and never an answer.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one function names every Prototype that owes a name"
-    )]
     fn absent_property(
         target: Value,
         name: &[u16],
         heap: &GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
+        Self::missing_property(target, name, Reach::Chain, heap, realm)
+    }
+
+    /// The same question for an own property: only a name the object itself
+    /// owes is a gap, because 10.1.5 never reaches a Prototype.
+    fn absent_own_property(
+        target: Value,
+        name: &[u16],
+        heap: &GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        Self::missing_property(target, name, Reach::Own, heap, realm)
+    }
+
+    /// Whether the miss is an answer or a gap, for either reach.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function names every Prototype that owes a name"
+    )]
+    fn missing_property(
+        target: Value,
+        name: &[u16],
+        reach: Reach,
+        heap: &GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let chain = matches!(reach, Reach::Chain);
         if target.is_string() {
-            if super::realm::string_prototype_owns(name) {
+            if chain && super::realm::string_prototype_owns(name) {
                 return Err(VMError::Unsupported("a property of %String.prototype%"));
             }
             return Ok(VALUE_UNDEFINED);
@@ -7028,7 +7067,7 @@ impl RegisterVM {
             .and_then(|reference| heap.get_object(reference))
             .map(|object| object.kind.clone());
         match kind {
-            Some(ObjectKind::Array { .. }) if super::realm::array_prototype_owns(name) => {
+            Some(ObjectKind::Array { .. }) if chain && super::realm::array_prototype_owns(name) => {
                 Err(VMError::Unsupported("a property of %Array.prototype%"))
             }
             // 23.1.2 gives `%Array%` more than 17 gives a built-in function,
@@ -7054,7 +7093,9 @@ impl RegisterVM {
                 Err(VMError::Unsupported("a property of %Symbol%"))
             }
             // 22.2.6 gives `%RegExp.prototype%` more than this Realm builds.
-            Some(ObjectKind::RegExp { .. }) if super::realm::regexp_prototype_owns(name) => {
+            Some(ObjectKind::RegExp { .. })
+                if chain && super::realm::regexp_prototype_owns(name) =>
+            {
                 Err(VMError::Unsupported("a property of %RegExp.prototype%"))
             }
             // 28.1 gives `%Reflect%` more than this Realm builds.
@@ -7078,7 +7119,7 @@ impl RegisterVM {
                 Err(VMError::Unsupported("a property of %Object%"))
             }
             Some(ObjectKind::Function { .. } | ObjectKind::NativeFunction { .. })
-                if super::realm::function_prototype_owns(name) =>
+                if chain && super::realm::function_prototype_owns(name) =>
             {
                 Err(VMError::Unsupported("a property of %Function.prototype%"))
             }
@@ -7092,37 +7133,43 @@ impl RegisterVM {
             // anywhere: 20.3.3 gives %Boolean.prototype% no `length`, so an
             // Array method called on a boolean reads none and walks nothing.
             Some(ObjectKind::Error)
-                if super::realm::wrapper_prototype_owns(
-                    &super::realm::ERROR_PROTOTYPE_PROPERTIES,
-                    name,
-                ) =>
+                if chain
+                    && super::realm::wrapper_prototype_owns(
+                        &super::realm::ERROR_PROTOTYPE_PROPERTIES,
+                        name,
+                    ) =>
             {
                 Err(VMError::Unsupported("a property of %Error.prototype%"))
             }
-            Some(ObjectKind::StringWrapper(_)) if super::realm::string_prototype_owns(name) => {
+            Some(ObjectKind::StringWrapper(_))
+                if chain && super::realm::string_prototype_owns(name) =>
+            {
                 Err(VMError::Unsupported("a property of %String.prototype%"))
             }
             Some(ObjectKind::NumberWrapper(_))
-                if super::realm::wrapper_prototype_owns(
-                    &super::realm::NUMBER_PROTOTYPE_PROPERTIES,
-                    name,
-                ) =>
+                if chain
+                    && super::realm::wrapper_prototype_owns(
+                        &super::realm::NUMBER_PROTOTYPE_PROPERTIES,
+                        name,
+                    ) =>
             {
                 Err(VMError::Unsupported("a property of %Number.prototype%"))
             }
             Some(ObjectKind::BooleanWrapper(_))
-                if super::realm::wrapper_prototype_owns(
-                    &super::realm::BOOLEAN_PROTOTYPE_PROPERTIES,
-                    name,
-                ) =>
+                if chain
+                    && super::realm::wrapper_prototype_owns(
+                        &super::realm::BOOLEAN_PROTOTYPE_PROPERTIES,
+                        name,
+                    ) =>
             {
                 Err(VMError::Unsupported("a property of %Boolean.prototype%"))
             }
             Some(ObjectKind::ArrayIterator { .. })
-                if super::realm::wrapper_prototype_owns(
-                    &super::realm::ARRAY_ITERATOR_PROTOTYPE_PROPERTIES,
-                    name,
-                ) =>
+                if chain
+                    && super::realm::wrapper_prototype_owns(
+                        &super::realm::ARRAY_ITERATOR_PROTOTYPE_PROPERTIES,
+                        name,
+                    ) =>
             {
                 Err(VMError::Unsupported(
                     "a property of %ArrayIteratorPrototype%",
@@ -7130,10 +7177,12 @@ impl RegisterVM {
             }
             // 20.4.3 gives `%Symbol.prototype%` a `description` accessor this
             // Realm resolves for a Symbol and has not built as a property.
-            Some(ObjectKind::SymbolWrapper(_)) if super::realm::symbol_prototype_owns(name) => {
+            Some(ObjectKind::SymbolWrapper(_))
+                if chain && super::realm::symbol_prototype_owns(name) =>
+            {
                 Err(VMError::Unsupported("a property of %Symbol.prototype%"))
             }
-            _ if super::realm::object_prototype_owns(name) => {
+            _ if chain && super::realm::object_prototype_owns(name) => {
                 Err(VMError::Unsupported("a property of %Object.prototype%"))
             }
             _ => Ok(VALUE_UNDEFINED),
