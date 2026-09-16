@@ -5048,6 +5048,17 @@ impl RegisterVM {
         {
             return Ok(value);
         }
+        // 10.4.2.1: an Array keeps its `length` beside the Shape, so the
+        // descriptor of that name reads it from there.
+        if let Some(length) = heap.array_length(object)
+            && name
+                .as_string()
+                .and_then(|name| heap.strings.to_utf16(Value::from_string(name)))
+                .as_deref()
+                == Some(&LENGTH_NAME)
+        {
+            return Ok(index_value(i64::from(length)));
+        }
         Ok(heap
             .lookup_named(object, name)?
             .map_or(VALUE_UNDEFINED, |property| property.value))
@@ -14938,7 +14949,14 @@ fn delete_property(
     let elements = entry.elements;
     let shape = entry.shape_id;
     if let (Some(index), Some(elements)) = (index, elements) {
-        return Ok(heap.delete_element(elements, index)?);
+        // 10.1.6.3 moves an index that carries its own attributes out of the
+        // store and into the Shape, and the delete of one belongs there: the
+        // store holds a hole for it and answering from there would leave the
+        // name on the object.
+        if !RegisterVM::shape_holds(object, name, heap)? {
+            return Ok(heap.delete_element(elements, index)?);
+        }
+        heap.delete_element(elements, index)?;
     }
     // 10.4.2.1 gives an Array its own `length`, which no Shape carries and
     // which is never configurable.

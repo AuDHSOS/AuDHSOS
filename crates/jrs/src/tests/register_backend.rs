@@ -7735,6 +7735,34 @@ fn a_promise_settles_through_the_job_queue_of_both_backends() -> Result<(), Erro
 }
 
 #[test]
+fn an_array_answers_its_length_and_its_indices_as_own_properties() -> Result<(), Error> {
+    for source in [
+        // 10.4.2.1 keeps `length` beside the Shape, so 6.2.6.4 reads it from
+        // there and not from a slot no Shape carries.
+        "var d=Object.getOwnPropertyDescriptor([1,2],'length');''+d.value+d.writable+d.enumerable+d.configurable",
+        "var b=[];Object.defineProperty(b,'length',{});b.length=2;''+Object.getOwnPropertyDescriptor(b,'length').value",
+        // 10.1.6.3 moves an index with its own attributes into the Shape, and
+        // 10.1.10.1 deletes it from there.
+        "var a=[];Object.defineProperty(a,'0',{value:1,configurable:true});''+(delete a[0])+'/'+('0' in a)",
+        "var a=[];Object.defineProperty(a,'0',{value:1,configurable:false});''+(delete a[0])+'/'+('0' in a)",
+        // An ordinary index still leaves the store alone.
+        "var a=[1,2,3];''+(delete a[1])+'/'+a.length+'/'+(1 in a)",
+        "var a=Object.seal([1]);''+(delete a[0])+'/'+(0 in a)",
+    ] {
+        let mut engine_host = SilentHost;
+        let mut engine = Realm::with_backend(Limits::default(), &mut engine_host, Backend::Engine)?;
+        let mut stack_host = SilentHost;
+        let mut stack = Realm::with_backend(Limits::default(), &mut stack_host, Backend::Stack)?;
+        assert_eq!(
+            engine.evaluate(source)?,
+            stack.evaluate(source)?,
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn a_lexical_declaration_of_a_realm_script_names_its_function() -> Result<(), Error> {
     // 14.3.1.2 step 4: an anonymous function takes the name the declaration
     // binds it to, and 16.1.7 puts that binding on the Global Environment
