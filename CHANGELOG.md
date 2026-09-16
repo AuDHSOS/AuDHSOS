@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` names a statement the parser refuses by the token the
+  parser stopped at, `near "FROM": syntax error`, and answers
+  `incomplete input` where the tokens ran out before the grammar was
+  met. The readings of one statement are tried in turn and the one whose
+  span stands latest reports the error. D-252 records it. Catalog
+  6.6.176.
+
 - A `CREATE` and a `DROP` in `db-sqlite` name in a refusal what the
   statement wrote: `sqlite3StartTable` writes the name with its quotes,
   and each `DROP` names what the statement said it takes away. A

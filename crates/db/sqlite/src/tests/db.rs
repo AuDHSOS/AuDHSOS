@@ -127,10 +127,10 @@ fn a_file_that_is_not_a_database_is_refused_as_one() {
 fn a_statement_that_is_not_one_is_refused_as_one() {
     use crate::db::Error;
     let database = Database::open(super::SMALL).expect("a database");
-    assert!(matches!(
-        database.query(b"SELECT FROM").unwrap_err(),
-        Error::Parse(_)
-    ));
+    assert_eq!(
+        database.query(b"SELECT FROM").unwrap_err().message(),
+        "near \"FROM\": syntax error"
+    );
     assert_eq!(
         database.query(b"SELECT * FROM nosuch"),
         Err(Error::NoTable(b"nosuch".to_vec()))
@@ -138,6 +138,15 @@ fn a_statement_that_is_not_one_is_refused_as_one() {
     assert_eq!(
         database.query(b"SELECT a FROM t ORDER BY 9"),
         Err(Error::OrderRange)
+    );
+}
+
+#[test]
+fn a_statement_that_runs_out_is_incomplete_input() {
+    let database = Database::open(super::SMALL).expect("a database");
+    assert_eq!(
+        database.query(b"SELECT * FROM").unwrap_err().message(),
+        "incomplete input"
     );
 }
 

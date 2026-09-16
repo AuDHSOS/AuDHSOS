@@ -1277,6 +1277,15 @@ impl Writer {
     ///
     /// [`Error`] names what it could not read, answer or write.
     pub fn run(&mut self, sql: &[u8]) -> Result<Vec<Vec<Value>>, Error> {
+        self.ran_statement(sql).map_err(|error| error.near(sql))
+    }
+
+    /// One statement run, with a parse answered as the parser wrote it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what the statement could not do.
+    fn ran_statement(&mut self, sql: &[u8]) -> Result<Vec<Vec<Value>>, Error> {
         // A text of comments alone holds no statement, so it writes no
         // byte and raises no counter of the header.
         if crate::parse::blank(sql) {
@@ -1450,19 +1459,34 @@ impl Writer {
     /// One statement that makes something or changes rows, and how
     /// many rows it changed.
     fn ran(&mut self, sql: &[u8]) -> Result<i64, Error> {
-        if let Ok((arena, definition)) = crate::parse::definition(sql) {
-            self.define(&arena, definition, sql)?;
-            return Ok(0);
+        // The readings are tried in turn, and the one that took in most
+        // of the statement says where the parse stopped.
+        let mut held = None;
+        match crate::parse::definition(sql) {
+            Ok((arena, definition)) => {
+                self.define(&arena, definition, sql)?;
+                return Ok(0);
+            }
+            Err(error) => held = Some(crate::parse::furthest(held, error)),
         }
-        if let Ok(asked) = crate::parse::analyze(sql) {
-            self.analyze(&asked, sql)?;
-            return Ok(0);
+        match crate::parse::analyze(sql) {
+            Ok(asked) => {
+                self.analyze(&asked, sql)?;
+                return Ok(0);
+            }
+            Err(error) => held = Some(crate::parse::furthest(held, error)),
         }
-        if let Ok(asked) = crate::parse::reindex(sql) {
-            self.reindex(&asked, sql)?;
-            return Ok(0);
+        match crate::parse::reindex(sql) {
+            Ok(asked) => {
+                self.reindex(&asked, sql)?;
+                return Ok(0);
+            }
+            Err(error) => held = Some(crate::parse::furthest(held, error)),
         }
-        let (arena, change) = crate::parse::change(sql)?;
+        let (arena, change) = match crate::parse::change(sql) {
+            Ok(read) => read,
+            Err(error) => return Err(Error::Parse(crate::parse::furthest(held, error))),
+        };
         crate::eval::rows_placed(&arena)?;
         match change {
             Change::Insert(statement) => self.insert(&arena, &statement, sql, None),

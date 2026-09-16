@@ -65,6 +65,12 @@ pub enum Error {
     /// A `DROP` of a name the schema holds no such object under, with
     /// the word for what it makes and the name.
     NoObject(Vec<u8>, Vec<u8>),
+    /// A statement the parser stopped in, with the token it stopped at,
+    /// which is `near \"%T\": syntax error`.
+    Syntax(Vec<u8>),
+    /// A statement whose tokens ran out before it was whole, which is
+    /// `incomplete input`.
+    Incomplete,
     /// A `CREATE TRIGGER` whose time the thing it is over does not
     /// take, with the time, the word for what it is over, and its name.
     Timed(Vec<u8>, Vec<u8>, Vec<u8>),
@@ -287,6 +293,11 @@ impl Error {
                 "no such table: {}",
                 alloc::string::String::from_utf8_lossy(name)
             ),
+            Error::Syntax(token) => alloc::format!(
+                "near \"{}\": syntax error",
+                alloc::string::String::from_utf8_lossy(token)
+            ),
+            Error::Incomplete => "incomplete input".to_string(),
             Error::NoObject(kind, name) => alloc::format!(
                 "no such {}: {}",
                 alloc::string::String::from_utf8_lossy(kind),
@@ -373,6 +384,25 @@ impl From<error::Error> for Error {
 impl From<parse::Error> for Error {
     fn from(error: parse::Error) -> Self {
         Error::Parse(error)
+    }
+}
+
+impl Error {
+    /// This refusal with a parse written as the C library writes it:
+    /// `near \"TOKEN\": syntax error` for a token the parser stopped
+    /// at, and `incomplete input` where the tokens ran out first.
+    ///
+    /// Reading the token costs O(1).
+    #[must_use]
+    pub fn near(self, sql: &[u8]) -> Self {
+        let Error::Parse(error) = self else {
+            return self;
+        };
+        let held = sql.get(error.at..error.at.saturating_add(error.len));
+        match held.filter(|token| !token.is_empty()) {
+            Some(token) => Error::Syntax(token.to_vec()),
+            None => Error::Incomplete,
+        }
     }
 }
 
@@ -1449,6 +1479,16 @@ impl<'a> Database<'a> {
     ///
     /// [`Error`] names what it could not answer and why.
     pub fn query(&self, sql: &[u8]) -> Result<Answer, Error> {
+        self.queried(sql).map_err(|error| error.near(sql))
+    }
+
+    /// One statement answered, with a parse answered as the parser
+    /// wrote it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what the statement could not answer.
+    fn queried(&self, sql: &[u8]) -> Result<Answer, Error> {
         // A text of comments alone holds no statement and answers no
         // row, which is what `sqlite3_exec` runs for one.
         if parse::blank(sql) {

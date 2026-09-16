@@ -5274,6 +5274,19 @@ Document 16 step Q8.
 - A trigger over `sqlite_master` is refused `cannot create trigger on
   system table`.
 
+### 6.6.176 The token a refused statement is named by (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `SELECT FROM` is refused `near "FROM": syntax error`, and `SELECT *
+  FROM` is refused `incomplete input`, so a token at the stop names it
+  and tokens that ran out do not.
+- `UPDATE t SET a = FROM` is refused `near "FROM": syntax error`, so the
+  reading that took in most of the statement says where the parse
+  stopped, and `UPDATE t SET a =` is refused `incomplete input`.
+- `CREATE TABLE t AS SELECT 1 WITHOUT ROWID` is refused `near "ROWID":
+  syntax error`.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

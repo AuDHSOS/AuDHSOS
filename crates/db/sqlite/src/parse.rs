@@ -154,6 +154,17 @@ pub struct Error {
     pub expected: Expected,
 }
 
+/// The parse of two that got furthest, which is the one the C library
+/// reports: `sqlite3ErrorMsg` names the token the parser stopped at,
+/// and the reading that took in most of the statement stopped last.
+#[must_use]
+pub const fn furthest(held: Option<Error>, other: Error) -> Error {
+    match held {
+        Some(held) if held.at >= other.at => held,
+        _ => other,
+    }
+}
+
 /// The parser: a walk over the tokens of one statement, and the arena the
 /// tree is built in.
 #[derive(Clone, Debug)]

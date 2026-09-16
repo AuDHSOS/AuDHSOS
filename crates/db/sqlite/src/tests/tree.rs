@@ -1000,8 +1000,12 @@ fn what_a_statement_that_changes_a_database_refuses() {
     // A page size the format does not allow is refused before a
     // statement is read at all.
     assert!(Writer::new(500, 0, Encoding::Utf8).is_err());
-    // A statement this crate does not write.
-    assert!(matches!(refuse(&["SELECT 1"]), Error::Parse(_)));
+    // A statement this crate does not write, which the parser stops
+    // at the first token of.
+    assert_eq!(
+        refuse(&["SELECT 1"]).message(),
+        "near \"SELECT\": syntax error"
+    );
     // An index over a table the schema does not hold names that table
     // under the schema it would stand in.
     assert_eq!(
@@ -1010,10 +1014,18 @@ fn what_a_statement_that_changes_a_database_refuses() {
     );
     // A table made from a statement is written; the grammar writes no
     // `WITHOUT ROWID` and no `STRICT` after one.
-    assert!(matches!(
-        refuse(&["CREATE TABLE t AS SELECT 1 WITHOUT ROWID"]),
-        Error::Parse(_)
-    ));
+    assert_eq!(
+        refuse(&["CREATE TABLE t AS SELECT 1 WITHOUT ROWID"]).message(),
+        "near \"ROWID\": syntax error"
+    );
+    // A reading that took in more of the statement than the readings
+    // before it says where the parse stopped.
+    assert_eq!(
+        refuse(&["UPDATE t SET a = FROM"]).message(),
+        "near \"FROM\": syntax error"
+    );
+    // A statement whose tokens ran out before the grammar was met.
+    assert_eq!(refuse(&["UPDATE t SET a ="]).message(), "incomplete input");
     // A table the database does not hold, a column the table does not
     // have, and a row of another width.
     assert!(matches!(
