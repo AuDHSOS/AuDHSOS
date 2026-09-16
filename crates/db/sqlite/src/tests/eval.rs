@@ -53,6 +53,7 @@ fn shown(value: &Value) -> (Vec<u8>, Vec<u8>) {
             Collation::Binary,
             crate::header::Encoding::Utf8,
             None,
+            crate::func::Counted::default(),
         )
         .expect("a function that always answers")
         .0

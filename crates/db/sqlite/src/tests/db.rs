@@ -63,6 +63,7 @@ fn quoted(value: &Value) -> String {
         Collation::Binary,
         crate::header::Encoding::Utf8,
         None,
+        crate::func::Counted::default(),
     )
     .expect("a function that always answers");
     String::from_utf8_lossy(&answer.text().unwrap_or_default()).into_owned()

@@ -5305,6 +5305,25 @@ Document 16 step Q8.
 - `CREATE TRIGGER ... INSTEAD OF INSERT ON t` over a table is refused
   `cannot create INSTEAD OF trigger on table: t`.
 
+### 6.6.178 The three counters of a connection (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `changes()` answers the rows of the last statement that changed rows,
+  `total_changes()` the rows of every statement, and
+  `last_insert_rowid()` the key of the last `INSERT` into a table with a
+  rowid.
+- A `CREATE` leaves all three as it found them, and an `INSERT` into a
+  table without a rowid leaves the rowid.
+- A statement of a trigger's body sets `changes()` and
+  `last_insert_rowid()` as it runs; the statement that fired the trigger
+  sets `changes()` again when it ends and puts the rowid back.
+- A statement the engine refuses under `OE_Abort` leaves `changes()` at
+  nought, and one refused under `OE_Fail` leaves it at the rows it wrote
+  before it stopped.
+- A foreign key action counts toward `total_changes()`.
+- Two connections over one file each carry their own three counters.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

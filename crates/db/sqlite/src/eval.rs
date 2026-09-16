@@ -203,6 +203,12 @@ pub trait Row {
         None
     }
 
+    /// What the connection has written, which `changes()`,
+    /// `total_changes()` and `last_insert_rowid()` answer.
+    fn counted(&self) -> crate::func::Counted {
+        crate::func::Counted::default()
+    }
+
     /// What the aggregate call `id` answered for the group this row
     /// stands for, or nothing where the call is not an aggregate.
     ///
@@ -595,6 +601,7 @@ fn called(
         inside.unwrap_or(row.collation()),
         row.encoding(),
         row.random(),
+        row.counted(),
     )?;
     Ok(Answer {
         value,
@@ -1453,6 +1460,7 @@ fn like(
         row.collation(),
         row.encoding(),
         row.random(),
+        row.counted(),
     )?;
     Ok(Answer::plain(match (negated, logic(&answered)) {
         (_, None) => Value::Null,

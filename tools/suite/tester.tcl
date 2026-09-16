@@ -174,7 +174,7 @@ proc sqlite3 {name args} {
       exists { return [expr {[llength [harness_send eval %N% [bound [lindex $args 0]]]] > 0}] }
       close { return [harness_send close %N%] }
       changes { return [lindex [harness_send changes %N%] 0] }
-      total_changes { return [lindex [harness_send changes %N%] 0] }
+      total_changes { return [lindex [harness_send total_changes %N%] 0] }
       last_insert_rowid { return [lindex [harness_send rowid %N%] 0] }
       nullvalue { return [harness_send null %N% [lindex $args 0]] }
       errorcode { return [lindex [harness_send errorcode %N%] 0] }

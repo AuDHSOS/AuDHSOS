@@ -30,6 +30,7 @@ use std::time::{Duration, Instant};
 
 use db_sqlite::change::Writer;
 use db_sqlite::db::Database;
+use db_sqlite::func::Counted;
 use db_sqlite::header::Encoding;
 use db_sqlite::value::Value;
 
@@ -466,6 +467,9 @@ struct Session {
     connections: BTreeMap<String, String>,
     /// What a `NULL` prints as, per connection.
     nulls: BTreeMap<String, String>,
+    /// The three counters of each connection, which belong to a
+    /// connection and not to the file the connection opened.
+    counters: BTreeMap<String, Counted>,
     /// What the file has scored.
     score: Score,
     /// When the file began, which is what the deadline is counted from.
@@ -480,6 +484,7 @@ impl Session {
             held: BTreeMap::new(),
             connections: BTreeMap::new(),
             nulls: BTreeMap::new(),
+            counters: BTreeMap::new(),
             score: Score::default(),
             started: Instant::now(),
         }
@@ -523,6 +528,7 @@ impl Session {
             }
             "close" => {
                 self.connections.remove(first);
+                self.counters.remove(first);
                 Ok(Vec::new())
             }
             "delete" => {
@@ -537,10 +543,11 @@ impl Session {
             }
             "eval" => self.eval(first, second),
             "names" => self.names(first, second),
+            "changes" | "total_changes" | "rowid" => self.counted(verb, first),
             // What the engine's writer does not answer. A case that
             // reads one of these is refused rather than scored against
             // a number this harness made up.
-            "changes" | "rowid" | "errorcode" => Err(format!("this harness has no {verb}")),
+            "errorcode" => Err(format!("this harness has no {verb}")),
             "capable" => Ok(vec![usize::from(capable(first)).to_string()]),
             "case" => {
                 self.case(args);
@@ -555,6 +562,22 @@ impl Session {
         }
     }
 
+    /// One of the three counters of a connection: `db changes`,
+    /// `db total_changes` and `db last_insert_rowid`.
+    fn counted(&self, verb: &str, name: &str) -> Result<Vec<String>, String> {
+        let counted = self
+            .counters
+            .get(name)
+            .copied()
+            .ok_or_else(|| format!("no such connection: {name}"))?;
+        let answer = match verb {
+            "changes" => counted.changes,
+            "total_changes" => counted.total,
+            _ => counted.rowid,
+        };
+        Ok(vec![answer.to_string()])
+    }
+
     /// Opens a connection over a path, making the database where no
     /// connection has opened that path yet.
     fn open(&mut self, name: &str, path: &str) {
@@ -565,6 +588,9 @@ impl Session {
         }
         self.connections.insert(name.to_owned(), path.to_owned());
         self.nulls.entry(name.to_owned()).or_default();
+        // A connection that is opened again counts from nought, which
+        // is what `sqlite3 db test.db` in a file relies on.
+        self.counters.insert(name.to_owned(), Counted::default());
     }
 
     /// One database written again under another path, which is what a
@@ -588,20 +614,33 @@ impl Session {
             .get(name)
             .cloned()
             .ok_or_else(|| format!("no such connection: {name}"))?;
+        let counted = self.counters.get(name).copied().unwrap_or_default();
         let writer = self
             .held
             .get_mut(&path)
             .ok_or_else(|| format!("no such database: {path}"))?;
+        // The counters belong to the connection and the pages to the
+        // file, so the writer stands at this connection's counters for
+        // the statements of this request and answers them back.
+        writer.counts_as(counted);
         let mut out = Vec::new();
+        let mut ran = Ok(());
         for statement in statements(sql) {
             let text = statement.trim();
             if text.is_empty() {
                 continue;
             }
-            for value in &run_one(writer, text)? {
-                out.push(listed(value, &null));
+            match run_one(writer, text) {
+                Ok(values) => out.extend(values.iter().map(|value| listed(value, &null))),
+                Err(message) => {
+                    ran = Err(message);
+                    break;
+                }
             }
         }
+        let counted = writer.counts();
+        self.counters.insert(name.to_owned(), counted);
+        ran?;
         Ok(out)
     }
 
@@ -685,7 +724,9 @@ fn run_one(writer: &mut Writer, text: &str) -> Result<Vec<Value>, String> {
             Some(Err(error)) => return Err(format!("{error}")),
             None => Database::open(&bytes),
         };
+        let counted = writer.counts();
         let answered = opened
+            .map(|database| database.counting(counted))
             .and_then(|database| database.query(text.as_bytes()))
             .map_err(|error| shape(text, error.message()))?;
         for row in &answered.rows {

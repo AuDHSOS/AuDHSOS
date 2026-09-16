@@ -788,6 +788,9 @@ pub struct Database<'a> {
     encoding: Encoding,
     /// Where `random` and `randomblob` take their bytes from.
     random: crate::random::Source,
+    /// What the connection has written, which `changes()`,
+    /// `total_changes()` and `last_insert_rowid()` answer.
+    counted: crate::func::Counted,
 }
 
 /// One trigger of the schema: what it is on, and the statement that
@@ -915,6 +918,7 @@ impl<'a> Database<'a> {
             triggers: Vec::new(),
             encoding,
             random: crate::random::Source::default(),
+            counted: crate::func::Counted::default(),
         };
         database.read_indexes()?;
         database.read_views()?;
@@ -932,6 +936,18 @@ impl<'a> Database<'a> {
     #[must_use]
     pub const fn seeded(mut self, seed: u64) -> Self {
         self.random = crate::random::Source::new(seed);
+        self
+    }
+
+    /// The same database, with `changes()`, `total_changes()` and
+    /// `last_insert_rowid()` answering what the connection that writes
+    /// has written.
+    ///
+    /// The three are properties of a connection and not of a file, so a
+    /// database that is not told answers noughts.
+    #[must_use]
+    pub const fn counting(mut self, counted: crate::func::Counted) -> Self {
+        self.counted = counted;
         self
     }
 
@@ -4879,6 +4895,10 @@ impl eval::Row for Cursor<'_> {
 
     fn random(&self) -> Option<&crate::random::Source> {
         Some(&self.reach.database.random)
+    }
+
+    fn counted(&self) -> crate::func::Counted {
+        self.reach.database.counted
     }
 
     fn aggregate(&self, id: ExprId) -> Option<Value> {

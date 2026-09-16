@@ -13,6 +13,7 @@
 mod balance;
 mod bytes;
 mod constraint;
+mod counted;
 mod date;
 mod db;
 mod definition;

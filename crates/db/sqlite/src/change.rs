@@ -404,6 +404,13 @@ pub struct Writer {
     /// Whether a statement that changes rows answers how many it
     /// changed, which `PRAGMA count_changes` sets.
     counting: bool,
+    /// What the connection has written, which `changes()`,
+    /// `total_changes()` and `last_insert_rowid()` answer.
+    counted: crate::func::Counted,
+    /// How many rows the statement running now has written, which is
+    /// what `changes()` answers where the statement stops where it
+    /// stands and keeps them.
+    writing: i64,
     /// The header as the open transaction began, where a `BEGIN` opened
     /// one. A connection outside `BEGIN` holds none and commits every
     /// statement of its own.
@@ -458,6 +465,8 @@ impl Writer {
             log: None,
             origin: None,
             counting: false,
+            counted: crate::func::Counted::default(),
+            writing: 0,
             began: None,
             stopped: false,
             saved: Vec::new(),
@@ -517,6 +526,8 @@ impl Writer {
             log: None,
             origin: None,
             counting: false,
+            counted: crate::func::Counted::default(),
+            writing: 0,
             began: None,
             stopped: false,
             saved: Vec::new(),
@@ -576,6 +587,26 @@ impl Writer {
         self.header.version_valid_for = self.header.change_counter;
         self.origin = Some(self.pages.written(&self.header));
         self.log = Some(Log::new(self.header.page_size, salt, 0, false));
+    }
+
+    /// What the connection has written, which `changes()`,
+    /// `total_changes()` and `last_insert_rowid()` answer: a reader
+    /// built over this connection's file is told it by
+    /// [`Database::counting`].
+    #[must_use]
+    pub const fn counts(&self) -> crate::func::Counted {
+        self.counted
+    }
+
+    /// The counters this connection stands at, which a caller that
+    /// holds one writer per file and several connections over it sets
+    /// before each statement.
+    ///
+    /// The three counters belong to a connection and the pages belong
+    /// to a file, so a caller that shares a writer between connections
+    /// carries them itself.
+    pub const fn counts_as(&mut self, counted: crate::func::Counted) {
+        self.counted = counted;
     }
 
     /// The file the statements so far have made. In write-ahead logging
@@ -1017,6 +1048,7 @@ impl Writer {
             rowid,
             encoding: self.header.encoding,
             random: &self.random,
+            counted: self.counted,
             outer: None,
             reading: None,
         };
@@ -1316,6 +1348,7 @@ impl Writer {
         }
         let held = self.header;
         self.stopped = false;
+        self.writing = 0;
         self.returned.clear();
         let ran = self.ran(sql);
         // A statement that refuses what it was given leaves the file
@@ -1330,6 +1363,12 @@ impl Writer {
                 // wrote, which is `OE_Fail`. `OE_Rollback` undoes the
                 // whole transaction, which this crate answers as
                 // `OE_Abort`.
+                // A statement that leaves the file as it found it
+                // wrote no row that stands, and one that stops where it
+                // stands keeps what it wrote: `sqlite3_changes` counts
+                // the rows that stand either way.
+                let stands = if self.stopped { self.writing } else { 0 };
+                self.counts_step(stands);
                 if !self.stopped {
                     if self.began.is_none() {
                         self.pages.rollback();
@@ -1488,11 +1527,16 @@ impl Writer {
             Err(error) => return Err(Error::Parse(crate::parse::furthest(held, error))),
         };
         crate::eval::rows_placed(&arena)?;
-        match change {
+        let changed = match change {
             Change::Insert(statement) => self.insert(&arena, &statement, sql, None),
             Change::Delete(statement) => self.delete(&arena, &statement, sql, None),
             Change::Update(statement) => self.update(&arena, &statement, sql, None),
-        }
+        }?;
+        // `sqlite3_changes` counts the rows of the last statement that
+        // changed rows, and `sqlite3_total_changes` the rows of every
+        // statement of the connection.
+        self.counts_step(changed);
+        Ok(changed)
     }
 
     /// `BEGIN`, `COMMIT` and `ROLLBACK`.
@@ -1882,7 +1926,9 @@ impl Writer {
         }
         let (answer, affinities) = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?.seeded(self.random.word());
+            let database = Database::open(&bytes)?
+                .seeded(self.random.word())
+                .counting(self.counted);
             database.answered(arena, select, sql)?
         };
         let columns = crate::schema::columns_from(&answer.names);
@@ -2068,7 +2114,12 @@ impl Writer {
                 continue;
             }
             self.running.push(trigger.name.clone());
+            // `OP_Program` keeps `sqlite3_last_insert_rowid` over the
+            // body, so a row the body writes is one the statement that
+            // fired the trigger does not answer.
+            let held = self.counted.rowid;
             let ran = self.body(trigger, row);
+            self.counted.rowid = held;
             self.running.pop();
             match ran {
                 Err(Error::Eval(crate::eval::Error::Raised(crate::ast::Raise::Ignore))) => {
@@ -2304,9 +2355,11 @@ impl Writer {
         if table.without_rowid {
             let collations = crate::schema::key_collations(&table);
             crate::tree::remove_entry(&mut self.pages, root, key, &collations)?;
+            self.counted.total = self.counted.total.saturating_add(1);
             return Ok(());
         }
         crate::tree::remove(&mut self.pages, root, keyed_rowid(key))?;
+        self.counted.total = self.counted.total.saturating_add(1);
         Ok(())
     }
 
@@ -2376,6 +2429,7 @@ impl Writer {
             // which is one taken out and one put back.
             crate::tree::remove_entry(&mut self.pages, root, key, &collations)?;
             crate::tree::insert_entry(&mut self.pages, root, &record, key, &collations, false)?;
+            self.counted.total = self.counted.total.saturating_add(1);
             return Ok(());
         }
         let affinities: Vec<Affinity> =
@@ -2392,6 +2446,10 @@ impl Writer {
         }
         let record = crate::record::write(&stored, &affinities, 4);
         crate::tree::update(&mut self.pages, root, keyed_rowid(key), &record)?;
+        // `sqlite3_total_changes` counts the rows a foreign key action
+        // writes, which `sqlite3FkActions` writes through a trigger of
+        // its own.
+        self.counted.total = self.counted.total.saturating_add(1);
         Ok(())
     }
 
@@ -2460,25 +2518,39 @@ impl Writer {
         for step in arena.steps(trigger.written.body) {
             match *step {
                 crate::ast::TriggerStep::Insert(statement) => {
-                    self.insert(arena, &statement, sql, Some(row))?;
+                    let changed = self.insert(arena, &statement, sql, Some(row))?;
+                    self.counts_step(changed);
                 }
                 crate::ast::TriggerStep::Update(statement) => {
-                    self.update(arena, &statement, sql, Some(row))?;
+                    let changed = self.update(arena, &statement, sql, Some(row))?;
+                    self.counts_step(changed);
                 }
                 crate::ast::TriggerStep::Delete(statement) => {
-                    self.delete(arena, &statement, sql, Some(row))?;
+                    let changed = self.delete(arena, &statement, sql, Some(row))?;
+                    self.counts_step(changed);
                 }
                 // A statement that answers rows runs for what it reads
                 // and answers nothing, which is what a `SELECT` of a
                 // body is for: it carries the `RAISE`.
                 crate::ast::TriggerStep::Select(select) => {
                     let bytes = self.image();
-                    let database = Database::open(&bytes)?.seeded(self.random.word());
+                    let database = Database::open(&bytes)?
+                        .seeded(self.random.word())
+                        .counting(self.counted);
                     database.rows_under(arena, select, sql, Some(row))?;
                 }
             }
         }
         Ok(())
+    }
+
+    /// What one statement of a trigger's body leaves the counters at:
+    /// every statement that changes rows sets `changes()` to its own
+    /// count, and the statement that fired the trigger sets it again
+    /// when it ends.
+    const fn counts_step(&mut self, changed: i64) {
+        self.counted.changes = changed;
+        self.counted.total = self.counted.total.saturating_add(changed);
     }
 
     /// The record of five noughts `sqlite3StartTable` writes into
@@ -2876,7 +2948,9 @@ impl Writer {
         // Every statement draws from where the connection stands, so
         // two statements of one connection answer `randomblob`
         // differently.
-        let database = Database::open(&bytes)?.seeded(self.random.word());
+        let database = Database::open(&bytes)?
+            .seeded(self.random.word())
+            .counting(self.counted);
         let (table, root) = database
             .table(name)
             .ok_or_else(|| Error::NoTable(name.to_vec()))?;
@@ -3022,7 +3096,9 @@ impl Writer {
             .collect();
         let (table, rows) = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?.seeded(self.random.word());
+            let database = Database::open(&bytes)?
+                .seeded(self.random.word())
+                .counting(self.counted);
             let (table, _) = database.viewing(name)?;
             let places = places(&table, &named)?;
             let blank = alloc::vec![Value::Null; table.columns.len()];
@@ -3089,7 +3165,9 @@ impl Writer {
             .collect();
         let (table, written) = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?.seeded(self.random.word());
+            let database = Database::open(&bytes)?
+                .seeded(self.random.word())
+                .counting(self.counted);
             let (table, held) = database.viewing(name)?;
             let places = set_places(&table, &columns)?;
             let mut written = Vec::new();
@@ -3100,6 +3178,7 @@ impl Writer {
                     rowid: None,
                     encoding: self.header.encoding,
                     random: &self.random,
+                    counted: self.counted,
                     outer,
                     reading: Some(Reading {
                         database: &database,
@@ -3160,7 +3239,9 @@ impl Writer {
         let triggers = self.instead_of(name, TriggerEvent::Delete)?;
         let (table, taken) = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?.seeded(self.random.word());
+            let database = Database::open(&bytes)?
+                .seeded(self.random.word())
+                .counting(self.counted);
             let (table, held) = database.viewing(name)?;
             let mut taken = Vec::new();
             for values in &held {
@@ -3170,6 +3251,7 @@ impl Writer {
                     rowid: None,
                     encoding: self.header.encoding,
                     random: &self.random,
+                    counted: self.counted,
                     outer,
                     reading: Some(Reading {
                         database: &database,
@@ -3235,6 +3317,7 @@ impl Writer {
             rowid: None,
             encoding: self.header.encoding,
             random: &self.random,
+            counted: self.counted,
             outer,
             reading: Some(reading),
         };
@@ -3256,7 +3339,7 @@ impl Writer {
     ) -> Result<i64, Error> {
         let (root, rows, kept, table) = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?;
+            let database = Database::open(&bytes)?.counting(self.counted);
             // The table was found before this ran, so the refusal
             // carries no name to write into a message.
             let (table, root) = database.table(name).ok_or(Error::NoTable(Vec::new()))?;
@@ -3296,6 +3379,7 @@ impl Writer {
             self.unindex_row(&kept, &table, &values, &key)?;
             crate::tree::remove_entry(&mut self.pages, root, &key, &collations)?;
             taken = taken.saturating_add(1);
+            self.writing = taken;
             self.returns(arena, statement.returning, sql, (&table, &values, None))?;
             if fires {
                 self.fire(&after, &[], &row)?;
@@ -3500,7 +3584,7 @@ impl Writer {
         written_to(name)?;
         let sets = arena.sets(statement.sets);
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open(&bytes)?.counting(self.counted);
         // The table was found before this ran, so the refusal carries
         // no name to write into a message.
         let (table, root) = database.table(name).ok_or(Error::NoTable(Vec::new()))?;
@@ -3532,6 +3616,7 @@ impl Writer {
                 rowid: None,
                 encoding: self.header.encoding,
                 random: &self.random,
+                counted: self.counted,
                 outer,
                 reading: Some(reading),
             };
@@ -3630,6 +3715,7 @@ impl Writer {
             let record = crate::record::write(&stored, &affinities, 4);
             crate::tree::insert_entry(&mut self.pages, root, &record, &key, &collations, false)?;
             changed = changed.saturating_add(1);
+            self.writing = changed;
             self.returns(arena, statement.returning, sql, (&table, &named, None))?;
             if fires {
                 let row = Fired {
@@ -3921,6 +4007,10 @@ impl Writer {
             self.index_row(&kept, &table, &named, &keyed_as(rowid))?;
             insert(&mut self.pages, root, rowid, &record)?;
             written = written.saturating_add(1);
+            self.writing = written;
+            // `sqlite3_last_insert_rowid` is the key of the last row an
+            // `INSERT` wrote into a table with a rowid.
+            self.counted.rowid = rowid;
             let answered = (&table, named.as_slice(), Some(rowid));
             self.returns(arena, statement.returning, sql, answered)?;
             if fires {
@@ -4409,6 +4499,9 @@ struct Held<'a> {
     encoding: Encoding,
     /// Where `random` and `randomblob` take their bytes from.
     random: &'a crate::random::Source,
+    /// What the connection has written, which `changes()`,
+    /// `total_changes()` and `last_insert_rowid()` answer.
+    counted: crate::func::Counted,
     /// The row a trigger's body reads as `new` and `old`, where this
     /// row is one of a statement a trigger runs.
     outer: Option<&'a dyn crate::eval::Row>,
@@ -4420,6 +4513,10 @@ struct Held<'a> {
 impl crate::eval::Row for Held<'_> {
     fn random(&self) -> Option<&crate::random::Source> {
         Some(self.random)
+    }
+
+    fn counted(&self) -> crate::func::Counted {
+        self.counted
     }
 
     fn answered(&self, used: crate::eval::Used) -> Option<Value> {
@@ -4918,7 +5015,7 @@ impl Writer {
         }
         let (root, keys, kept, table) = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?;
+            let database = Database::open(&bytes)?.counting(self.counted);
             let (table, root) = database
                 .table(&name)
                 .ok_or_else(|| Error::NoTable(name.clone()))?;
@@ -4932,6 +5029,7 @@ impl Writer {
                     rowid: Some(*rowid),
                     encoding: self.header.encoding,
                     random: &self.random,
+                    counted: self.counted,
                     outer,
                     reading: Some(Reading {
                         database: &database,
@@ -4974,6 +5072,7 @@ impl Writer {
             self.unindex_row(&kept, &table, &values, &keyed_as(key))?;
             crate::tree::remove(&mut self.pages, root, key)?;
             taken = taken.saturating_add(1);
+            self.writing = taken;
             let answered = (&table, values.as_slice(), Some(key));
             self.returns(arena, statement.returning, sql, answered)?;
             if fires {
@@ -5008,7 +5107,7 @@ impl Writer {
         written_to(name)?;
         let sets = arena.sets(statement.sets);
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open(&bytes)?.counting(self.counted);
         let (table, root) = database
             .table(name)
             .ok_or_else(|| Error::NoTable(name.to_vec()))?;
@@ -5040,6 +5139,7 @@ impl Writer {
                 rowid: Some(rowid),
                 encoding: self.header.encoding,
                 random: &self.random,
+                counted: self.counted,
                 outer,
                 reading: Some(Reading {
                     database: &database,
@@ -5199,6 +5299,7 @@ impl Writer {
                 crate::tree::update(&mut self.pages, root, rowid, &record)?;
             }
             changed = changed.saturating_add(1);
+            self.writing = changed;
             self.returns(arena, statement.returning, sql, (&table, &named, Some(key)))?;
             if fires {
                 self.fire(&after, &columns, &row)?;
@@ -5422,6 +5523,7 @@ impl Writer {
             rowid: Some(rowid),
             encoding: self.header.encoding,
             random: &self.random,
+            counted: self.counted,
             outer: None,
             reading: None,
         };

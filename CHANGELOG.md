@@ -128,6 +128,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `changes()`, `total_changes()` and `last_insert_rowid()` in `db-sqlite`
+  answer what the connection has written. A statement of a trigger's
+  body sets the counters as it runs, a statement the engine refuses
+  leaves `changes()` at the rows that stand, and a foreign key action
+  counts toward the total. The suite harness answers `db changes`, `db
+  total_changes` and `db last_insert_rowid` from them, per connection.
+  D-254 records it. Catalog 6.6.178.
+
 - `db-sqlite` answers an `INSERT`, an `UPDATE` or a `DELETE` over a view
   with the `INSTEAD OF` triggers of the view, which read the row in
   `new` and `old` and write no row of the view. A view that carries no

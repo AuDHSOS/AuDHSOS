@@ -126,9 +126,12 @@ pub enum Function {
     Random,
     /// `randomblob(N)`.
     Randomblob,
-    /// `changes()`, `total_changes()` and `last_insert_rowid()`, each
-    /// of which is nought for a connection that has written nothing.
-    Written,
+    /// `changes()`.
+    Changes,
+    /// `total_changes()`.
+    TotalChanges,
+    /// `last_insert_rowid()`.
+    LastRowid,
     /// `mod(X,Y)`.
     Modulo,
     /// `length(X)`.
@@ -670,13 +673,13 @@ const TABLE: &[Entry] = &[
         name: b"changes",
         least: 0,
         most: Some(0),
-        function: Function::Written,
+        function: Function::Changes,
     },
     Entry {
         name: b"last_insert_rowid",
         least: 0,
         most: Some(0),
-        function: Function::Written,
+        function: Function::LastRowid,
     },
     Entry {
         name: b"mod",
@@ -760,7 +763,7 @@ const TABLE: &[Entry] = &[
         name: b"total_changes",
         least: 0,
         most: Some(0),
-        function: Function::Written,
+        function: Function::TotalChanges,
     },
     Entry {
         name: b"trunc",
@@ -818,6 +821,24 @@ pub fn lookup(name: &[u8], count: usize) -> Result<Function, Error> {
     }
 }
 
+/// What a connection has written, which `changes()`,
+/// `total_changes()` and `last_insert_rowid()` answer.
+///
+/// A connection that has written nothing carries noughts, which is what
+/// the three answer before its first statement.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Counted {
+    /// The rows the last statement that changed rows changed, which a
+    /// `CREATE` and a `SELECT` leave as they found it.
+    pub changes: i64,
+    /// The rows every statement of the connection changed, the
+    /// statements of a trigger's body among them.
+    pub total: i64,
+    /// The key the last `INSERT` into a table with a rowid wrote, which
+    /// an `INSERT` into a table without one leaves as it found it.
+    pub rowid: i64,
+}
+
 /// What `function` answers for `args`, under `collation` where it
 /// compares.
 ///
@@ -835,6 +856,7 @@ pub fn call(
     collation: Collation,
     encoding: Encoding,
     random: Option<&crate::random::Source>,
+    counted: Counted,
 ) -> Result<(Value, bool), Error> {
     let arg = |at: usize| args.get(at).cloned().unwrap_or(Value::Null);
     let first = arg(0);
@@ -863,10 +885,13 @@ pub fn call(
             },
             Function::Pi => Value::Real(core::f64::consts::PI),
             Function::Format => crate::format::format(args)?,
-            // This engine reads and does not write, so no statement of it
-            // has ever changed a row or made a rowid. Q7 of document 16 is
-            // where these stop being nought.
-            Function::Written => Value::Int(0),
+            // `sqlite3_changes`, `sqlite3_total_changes` and
+            // `sqlite3_last_insert_rowid`, which the connection carries
+            // and a connection that has written nothing answers nought
+            // for.
+            Function::Changes => Value::Int(counted.changes),
+            Function::TotalChanges => Value::Int(counted.total),
+            Function::LastRowid => Value::Int(counted.rowid),
             // `math2Func`: either value not a number after the numeric
             // affinity answers nothing, and a remainder that is not a number
             // answers nothing as well.
