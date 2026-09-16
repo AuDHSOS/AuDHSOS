@@ -2802,6 +2802,7 @@ impl Realm {
             &native_error_prototypes,
         )?;
         Self::define_species_getters(heap, &intrinsics)?;
+        Self::define_unscopables(heap, array_prototype)?;
 
         // 19.1 gives the global object `Math` with the attributes 17 gives
         // every value of clause 19 that is not a constant.
@@ -3258,6 +3259,58 @@ impl Realm {
             let key = intern(heap, name)?;
             heap.define_own_named(math, key, Value::from_f64(value), flags)?;
         }
+        Ok(())
+    }
+
+    /// `Array.prototype[@@unscopables]` of 23.1.3.37.
+    ///
+    /// An ordinary object with no Prototype, whose own properties are the
+    /// names 13.3.1.1 keeps out of a `with` binding, each of them true.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    fn define_unscopables(heap: &mut GenerationalHeap, prototype: Root) -> Result<(), HeapError> {
+        /// The names 23.1.3.37 lists, in the order it lists them.
+        const NAMES: [&str; 16] = [
+            "at",
+            "copyWithin",
+            "entries",
+            "fill",
+            "find",
+            "findIndex",
+            "findLast",
+            "findLastIndex",
+            "flat",
+            "flatMap",
+            "includes",
+            "keys",
+            "toReversed",
+            "toSorted",
+            "toSpliced",
+            "values",
+        ];
+        let shape = heap.shapes.root_shape();
+        let list = heap.allocate_immortal_object(shape, VALUE_NULL)?;
+        let ordinary = PropertyFlags {
+            writable: true,
+            enumerable: true,
+            configurable: true,
+            is_accessor: false,
+        };
+        for name in NAMES {
+            let key = intern(heap, name)?;
+            heap.define_own_named(list, key, Value::from_bool(true), ordinary)?;
+        }
+        let holder = Self::rooted(heap, prototype)?
+            .as_object()
+            .ok_or(HeapError::InvalidReference)?;
+        heap.define_own_named(
+            holder,
+            WellKnownSymbol::Unscopables.key(),
+            Value::from_object(list),
+            builtin_metadata(),
+        )?;
         Ok(())
     }
 

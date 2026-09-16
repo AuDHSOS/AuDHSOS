@@ -6917,3 +6917,23 @@ fn an_accessor_length_runs_its_getter_once_for_a_clause_of_23_1_3() -> Result<()
     }
     Ok(())
 }
+
+/// 23.1.3.37 gives `%Array.prototype%` an `@@unscopables` object with no
+/// Prototype, whose own properties are the names 13.3.1.1 keeps out of a
+/// `with` binding.
+#[test]
+fn array_prototype_carries_the_unscopables_of_23_1_3_37() -> Result<(), Error> {
+    for source in [
+        "typeof Array.prototype[Symbol.unscopables]",
+        "''+(Object.getPrototypeOf(Array.prototype[Symbol.unscopables])===null)",
+        "Object.keys(Array.prototype[Symbol.unscopables]).join()",
+        "var d=Object.getOwnPropertyDescriptor(Array.prototype,Symbol.unscopables);\
+         ''+d.writable+d.enumerable+d.configurable",
+        "''+Array.prototype[Symbol.unscopables].at",
+        "var d=Object.getOwnPropertyDescriptor(Array.prototype[Symbol.unscopables],'at');\
+         ''+d.writable+d.enumerable+d.configurable",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
