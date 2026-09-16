@@ -33,6 +33,9 @@ pub enum Error {
     /// A window function written where no window was worked out, with
     /// the name it was called under.
     NoWindow(Vec<u8>),
+    /// An aggregate written where no group has been made, with the name
+    /// it was called under.
+    MisusedAggregate(Vec<u8>),
     /// A scalar function carrying a `FILTER`, which only an aggregate
     /// reads, with the name it was called under.
     Filtered(Vec<u8>),
@@ -130,6 +133,9 @@ impl Error {
             Error::Infinite(name) => alloc::format!("Inf input to {}()", shown(name)),
             Error::NoWindow(name) => {
                 alloc::format!("misuse of window function {}()", shown(name))
+            }
+            Error::MisusedAggregate(name) => {
+                alloc::format!("misuse of aggregate function {}()", shown(name))
             }
             Error::Filtered(_) => {
                 "FILTER clause may only be used with aggregate window functions".to_string()
@@ -505,15 +511,11 @@ fn answer(
         // and so is a scalar function carrying a `FILTER`, which only
         // an aggregate reads.
         Node::Call {
-            name,
-            args,
-            distinct,
-            star,
-            filter,
+            name, args, filter, ..
         } => match row.aggregate(id) {
             Some(value) => Ok(Answer::plain(value)),
             None if filter.is_some() => Err(Error::Filtered(named_as(name, sql))),
-            None => called(arena, name, args, distinct, star, sql, row, deeper),
+            None => called(arena, name, args, sql, row, deeper),
         },
         Node::Over { name, .. } => row
             .aggregate(id)
@@ -577,24 +579,19 @@ fn used(row: &dyn Row, what: Used) -> Result<Answer, Error> {
 }
 
 /// `name(args)`, which is a function where this engine has one.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the node's own fields, and the walk the tree is read with"
-)]
+///
+/// `DISTINCT` before the arguments of a scalar function is read and
+/// dropped, which is what `sqlite3FindFunction` does with it, and a `*`
+/// for the arguments leaves the call with none, so a scalar that takes
+/// one or more is refused for the number it was called with.
 fn called(
     arena: &Arena,
     name: crate::ast::Span,
     args: crate::ast::Range,
-    distinct: bool,
-    star: bool,
     sql: &[u8],
     row: &dyn Row,
     deeper: u32,
 ) -> Result<Answer, Error> {
-    if distinct || star {
-        // Both belong to an aggregate, which is a later step.
-        return Err(Error::Unsupported);
-    }
     let mut values = Vec::new();
     // The collation the call compares under is the first argument that
     // carries one, which is what `sqlite3ExprCodeTarget` gives a
@@ -619,11 +616,12 @@ fn called(
         values.push(argument.value);
     }
     let called = crate::schema::dequote(name.text(sql));
-    // An aggregate called with a number of arguments it does not take
-    // reaches the scalars, which hold none of that name.
-    // One of the eleven written under no `OVER` reaches the scalars,
-    // which hold none of that name, and so does an aggregate called
-    // with a number of arguments it does not take.
+    // One of the eleven window functions written under no `OVER`
+    // reaches the scalars, which hold none of that name, and so does an
+    // aggregate written where no group has been made. `resolveExprStep`
+    // answers for the number of arguments before it answers for the
+    // misuse, so a name called with a number it does not take is
+    // refused for the number.
     let function = match func::lookup(&called, values.len()) {
         Err(Error::NoFunction(_)) if crate::window::named(&called) => {
             if crate::window::lookup(&called, values.len()).is_none() {
@@ -632,7 +630,10 @@ fn called(
             return Err(Error::NoWindow(called));
         }
         Err(Error::NoFunction(_)) if crate::agg::named(&called) => {
-            return Err(Error::WrongArguments(called));
+            if crate::agg::lookup(&called, values.len()).is_none() {
+                return Err(Error::WrongArguments(called));
+            }
+            return Err(Error::MisusedAggregate(called));
         }
         held => held?,
     };

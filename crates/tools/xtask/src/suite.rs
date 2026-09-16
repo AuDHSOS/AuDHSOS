@@ -668,10 +668,10 @@ impl Session {
             return Ok(Vec::new());
         }
         let bytes = writer.written();
-        let database = Database::open(&bytes).map_err(|error| format!("{error:?}"))?;
+        let database = Database::open(&bytes).map_err(|error| error.message())?;
         let answered = database
             .query(last.as_bytes())
-            .map_err(|error| format!("{error:?}"))?;
+            .map_err(|error| error.message())?;
         Ok(answered
             .names
             .iter()

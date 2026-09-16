@@ -7,6 +7,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` refuses an aggregate written where no group has been made
+  in the words the C library refuses it with: one in a `WHERE`, inside
+  another aggregate, in a `FILTER`, or in an `INSERT`, an `UPDATE` or a
+  `DELETE` is `misuse of aggregate function min()`, one in a `GROUP BY`
+  names that clause, one in the `ORDER BY` of a statement that groups
+  nothing is `misuse of aggregate: min()`, and a name the statement
+  answers an aggregate under, written inside another, is `misuse of
+  aliased aggregate m`. A `*` for the arguments leaves a call with none,
+  so `min(*)` is refused for the number of arguments, and a scalar reads
+  a `DISTINCT` and drops it. D-264 records it. Catalog 6.6.188.
+
 - `db-sqlite` refuses a window in the words the C library refuses it
   with: a window function where no window was worked out, a scalar
   under an `OVER`, a `FILTER` on one of the eleven, a window that names

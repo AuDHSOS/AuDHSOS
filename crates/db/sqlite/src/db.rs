@@ -81,10 +81,21 @@ pub enum Error {
     /// and how many columns the answer has.
     OrderRange(usize, Vec<u8>, usize),
 
-    /// An aggregate where there is nothing to aggregate over: in a
-    /// `WHERE`, in a `GROUP BY`, inside another aggregate, or in an
-    /// `ORDER BY` of a statement that does not group.
-    Aggregate,
+    /// An aggregate in a `WHERE`, or one inside another aggregate,
+    /// named as it was written.
+    MisusedAggregate(Vec<u8>),
+    /// An aggregate in a `GROUP BY`.
+    GroupedAggregate,
+    /// An aggregate in the `ORDER BY` of a statement that groups
+    /// nothing, named as it was written.
+    LooseAggregate(Vec<u8>),
+    /// A name the statement answers under, standing for an aggregate
+    /// and written inside another aggregate.
+    MisusedAlias(Vec<u8>),
+    /// `DISTINCT` before other than one argument of an aggregate.
+    DistinctAggregate,
+    /// `DISTINCT` before the arguments of a window function.
+    DistinctWindow,
     /// A `HAVING` on a statement that groups nothing.
     Having,
     /// Two sides of a compound that answer different numbers of columns.
@@ -258,6 +269,33 @@ pub enum Error {
 }
 
 impl Error {
+    /// The words an aggregate written where no group has been made is
+    /// refused with, or nothing where the refusal is another.
+    fn misused(&self) -> Option<alloc::string::String> {
+        let shown = |bytes: &[u8]| alloc::string::String::from_utf8_lossy(bytes).into_owned();
+        Some(match self {
+            Error::MisusedAggregate(name) => {
+                alloc::format!("misuse of aggregate function {}()", shown(name))
+            }
+            Error::GroupedAggregate => alloc::string::String::from(
+                "aggregate functions are not allowed in the GROUP BY clause",
+            ),
+            Error::LooseAggregate(name) => {
+                alloc::format!("misuse of aggregate: {}()", shown(name))
+            }
+            Error::MisusedAlias(name) => {
+                alloc::format!("misuse of aliased aggregate {}", shown(name))
+            }
+            Error::DistinctAggregate => {
+                alloc::string::String::from("DISTINCT aggregates must have exactly one argument")
+            }
+            Error::DistinctWindow => {
+                alloc::string::String::from("DISTINCT is not supported for window functions")
+            }
+            _ => return None,
+        })
+    }
+
     /// What an `ALTER TABLE` is refused with, or nothing where the
     /// refusal is another.
     /// The words the types of a `STRICT` table are refused with, and
@@ -398,6 +436,9 @@ impl Error {
             return shown;
         }
         if let Some(shown) = self.datatypes() {
+            return shown;
+        }
+        if let Some(shown) = self.misused() {
             return shown;
         }
         match self {
@@ -1956,7 +1997,7 @@ impl<'a> Database<'a> {
         } else {
             Vec::new()
         };
-        let calls = aggregates(arena, &select, sql)?;
+        let calls = aggregates(arena, &select, sql, &sides)?;
         let overs = overs(arena, &select, sql)?;
         let mut rows: Vec<Sorted> = Vec::new();
         if !overs.is_empty() {
@@ -3680,6 +3721,8 @@ struct Call {
     args: Range,
     /// The `FILTER`, which holds which rows it reads.
     filter: Option<ExprId>,
+    /// The name it was written under, which names it in a refusal.
+    name: Vec<u8>,
 }
 
 /// One group of rows while it is being accumulated.
@@ -3886,11 +3929,22 @@ fn aliased(results: &[ResultColumn], sql: &[u8], name: &[u8]) -> Option<ExprId> 
 
 /// Every aggregate call a statement answers with, and a refusal where
 /// one stands somewhere no group has been made yet.
-fn aggregates(arena: &Arena, select: &Select, sql: &[u8]) -> Result<Vec<Call>, Error> {
+fn aggregates(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    sides: &[Side<'_>],
+) -> Result<Vec<Call>, Error> {
+    let walk = Gathering {
+        arena,
+        sql,
+        results: arena.results(select.columns),
+        sides,
+    };
     let mut calls = Vec::new();
-    for column in arena.results(select.columns) {
+    for column in walk.results {
         if let ResultColumn::Expr { expr, .. } = *column {
-            gather(arena, expr, sql, &mut calls, false)?;
+            walk.gather(expr, &mut calls, false)?;
         }
     }
     // What makes a statement an aggregate one is an aggregate among the
@@ -3902,80 +3956,153 @@ fn aggregates(arena: &Arena, select: &Select, sql: &[u8]) -> Result<Vec<Call>, E
         return Err(Error::Having);
     }
     if let Some(having) = select.having {
-        gather(arena, having, sql, &mut calls, false)?;
+        walk.gather(having, &mut calls, false)?;
     }
     for term in arena.orders(select.order) {
-        gather(arena, term.expr, sql, &mut calls, false)?;
+        walk.gather(term.expr, &mut calls, false)?;
     }
     let mut misused = Vec::new();
-    for id in select.filter.iter().chain(arena.children(select.group)) {
-        gather(arena, *id, sql, &mut misused, false)?;
+    if let Some(id) = select.filter {
+        walk.gather(id, &mut misused, false)?;
     }
-    if !misused.is_empty() || (!grouped && !calls.is_empty()) {
-        return Err(Error::Aggregate);
+    if let Some(call) = misused.first() {
+        return Err(Error::MisusedAggregate(call.name.clone()));
     }
-    Ok(calls)
+    for id in arena.children(select.group) {
+        walk.gather(*id, &mut misused, false)?;
+    }
+    if !misused.is_empty() {
+        return Err(Error::GroupedAggregate);
+    }
+    // An aggregate reached only by the `ORDER BY` of a statement that
+    // groups nothing has no group to answer over, which
+    // `sqlite3ExprCodeTarget` refuses when it finds no `AggInfo`.
+    let loose = calls
+        .first()
+        .filter(|_| !grouped)
+        .map(|call| call.name.clone());
+    loose.map_or(Ok(calls), |name| Err(Error::LooseAggregate(name)))
 }
 
-/// Collects the aggregate calls of one expression.
-///
-/// The walk is as deep as the tree is tall, which the parser has already
-/// bounded, so nothing here counts the steps. `inside` is set under an
-/// aggregate, where another one is a misuse rather than a call.
-fn gather(
-    arena: &Arena,
-    id: ExprId,
-    sql: &[u8],
-    out: &mut Vec<Call>,
-    inside: bool,
-) -> Result<(), Error> {
-    arena
-        .node(id)
-        .map_or(Ok(()), |node| collect(arena, id, node, sql, out, inside))
+/// What the walk for the aggregate calls of one statement reads.
+struct Gathering<'a> {
+    /// The tree the statement was parsed into.
+    arena: &'a Arena,
+    /// The text that tree points into.
+    sql: &'a [u8],
+    /// The columns the statement answers, whose aliases a name written
+    /// inside an aggregate may stand for.
+    results: &'a [ResultColumn],
+    /// The sides of the `FROM`, which hold the names that are columns.
+    sides: &'a [Side<'a>],
 }
 
-/// The same for one node the arena holds.
-fn collect(
-    arena: &Arena,
-    id: ExprId,
-    node: Node,
-    sql: &[u8],
-    out: &mut Vec<Call>,
-    inside: bool,
-) -> Result<(), Error> {
-    let mut under = inside;
-    if let Node::Call {
-        name,
-        args,
-        distinct,
-        star,
-        filter,
-    } = node
-    {
-        let count = if star { 0 } else { arena.children(args).len() };
-        if let Some(which) = agg::lookup(&dequote(name.text(sql)), count) {
-            // `DISTINCT` puts the rows through one column, so there has
-            // to be exactly one for them to go through.
-            if inside || (distinct && count != 1) {
-                return Err(Error::Aggregate);
+impl Gathering<'_> {
+    /// Collects the aggregate calls of one expression.
+    ///
+    /// The walk is as deep as the tree is tall, which the parser has
+    /// already bounded, so nothing here counts the steps. `inside` is
+    /// set under an aggregate, where another one is a misuse rather
+    /// than a call.
+    fn gather(&self, id: ExprId, out: &mut Vec<Call>, inside: bool) -> Result<(), Error> {
+        self.arena
+            .node(id)
+            .map_or(Ok(()), |node| self.collect(id, node, out, inside))
+    }
+
+    /// The same for one node the arena holds.
+    fn collect(
+        &self,
+        id: ExprId,
+        node: Node,
+        out: &mut Vec<Call>,
+        inside: bool,
+    ) -> Result<(), Error> {
+        let mut under = inside;
+        if inside {
+            self.aliasing(node)?;
+        }
+        if let Node::Call {
+            name,
+            args,
+            distinct,
+            star,
+            filter,
+        } = node
+        {
+            let count = if star {
+                0
+            } else {
+                self.arena.children(args).len()
+            };
+            let called = dequote(name.text(self.sql));
+            if let Some(which) = agg::lookup(&called, count) {
+                if inside {
+                    return Err(Error::MisusedAggregate(called));
+                }
+                // `DISTINCT` puts the rows through one column, so there
+                // has to be exactly one for them to go through.
+                if distinct && count != 1 {
+                    return Err(Error::DistinctAggregate);
+                }
+                out.push(Call {
+                    id,
+                    which,
+                    distinct,
+                    args,
+                    filter,
+                    name: called,
+                });
+                under = true;
             }
-            out.push(Call {
-                id,
-                which,
-                distinct,
-                args,
-                filter,
-            });
-            under = true;
         }
+        let mut deeper = Ok(());
+        self.arena.under(node, |child| {
+            if deeper.is_ok() {
+                deeper = self.gather(child, out, under);
+            }
+        });
+        deeper
     }
-    let mut deeper = Ok(());
-    arena.under(node, |child| {
-        if deeper.is_ok() {
-            deeper = gather(arena, child, sql, out, under);
+
+    /// A refusal where the node is a bare name that no side holds and
+    /// the statement answers under that name with an aggregate, which
+    /// `lookupName` refuses once the name resolves to an alias marked
+    /// `EP_Agg`.
+    fn aliasing(&self, node: Node) -> Result<(), Error> {
+        let Node::Column {
+            schema: None,
+            table: None,
+            column,
+        } = node
+        else {
+            return Ok(());
+        };
+        let name = dequote(column.text(self.sql));
+        if holds(self.sides, &name) {
+            return Ok(());
         }
-    });
-    deeper
+        let aggregate = aliased(self.results, self.sql, &name)
+            .is_some_and(|expr| aggregating(self.arena, expr, self.sql));
+        if aggregate {
+            return Err(Error::MisusedAlias(name));
+        }
+        Ok(())
+    }
+}
+
+/// Whether an expression answers with an aggregate, which is `EP_Agg`.
+fn aggregating(arena: &Arena, id: ExprId, sql: &[u8]) -> bool {
+    arena.node(id).is_some_and(|node| {
+        let mut found = match node {
+            Node::Call { name, .. } => agg::named(&dequote(name.text(sql))),
+            _ => false,
+        };
+        arena.under(node, |child| {
+            found = found || aggregating(arena, child, sql);
+        });
+        found
+    })
 }
 
 /// The columns a statement answers: their names, and what a
@@ -5264,7 +5391,7 @@ fn gather_one(
         // refuses one for the eleven built-in window functions, and
         // refuses `DISTINCT` for every one of them.
         if distinct {
-            return Err(Error::Aggregate);
+            return Err(Error::DistinctWindow);
         }
         if filter.is_some() && !which.filtered() {
             return Err(Error::Eval(eval::Error::Filtered(called)));

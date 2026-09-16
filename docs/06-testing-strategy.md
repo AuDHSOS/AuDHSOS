@@ -5493,6 +5493,27 @@ Document 16 step Q8.
   must be a non-negative integer`, and one counted in the values of its
   term takes any, `... must be a non-negative number`.
 
+### 6.6.188 The words an aggregate out of place is refused with (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A `*` for the arguments leaves a call with none, so `min(*)` is refused
+  `wrong number of arguments to function min()` and `nosuch(*)` `no such
+  function: nosuch`, while `count(*)` answers.
+- An aggregate inside another, one in a `WHERE`, and one in the `FILTER`
+  of another are refused `misuse of aggregate function min()`.
+- An aggregate in a `GROUP BY` is refused `aggregate functions are not
+  allowed in the GROUP BY clause`, and one in the `ORDER BY` of a
+  statement that groups nothing `misuse of aggregate: min()`.
+- An aggregate in an `INSERT`, an `UPDATE` or a `DELETE`, which groups
+  nothing at all, is refused `misuse of aggregate function count()`.
+- A name a statement answers an aggregate under, written inside another
+  aggregate, is refused `misuse of aliased aggregate m`.
+- `DISTINCT` before other than one argument of an aggregate is refused
+  `DISTINCT aggregates must have exactly one argument` and before those
+  of a window function `DISTINCT is not supported for window functions`,
+  while a scalar reads it and drops it.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

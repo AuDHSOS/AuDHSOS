@@ -33,6 +33,7 @@ mod journal;
 mod json;
 mod key_tree;
 mod matrix;
+mod misuse;
 mod number;
 mod page;
 mod parse;
