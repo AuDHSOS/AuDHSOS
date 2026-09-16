@@ -754,6 +754,34 @@ fn an_integrity_level_reaches_the_indices_of_an_array() -> Result<(), Error> {
     Ok(())
 }
 
+#[test]
+fn a_descriptor_field_that_is_a_getter_runs_once_and_in_order() -> Result<(), Error> {
+    for source in [
+        // 6.2.6.5 reads six fields, and a getter among them is a method of
+        // the Script the clause leaves to run.
+        "let d={get value(){return 5}};let o={};Object.defineProperty(o,'x',d);o.x",
+        "let d={get get(){return function(){return 7}}};let o={};Object.defineProperty(o,'x',d);o.x",
+        "let d={get value(){return 1},get writable(){return true}};let o={};Object.defineProperty(o,'x',d);o.x=2;o.x",
+        "let d={get value(){return 1}};let o={};Reflect.defineProperty(o,'x',d);o.x",
+        // Each getter runs once, in the order 6.2.6.5 reads the fields.
+        "let n=[];let d={get enumerable(){n.push('e');return true},get configurable(){n.push('c');return true},get value(){n.push('v');return 1},get writable(){n.push('w');return true}};Object.defineProperty({},'x',d);n.join()",
+        // The field is read off the chain, as 7.3.2 reads it.
+        "let p={get value(){return 4}};let d=Object.create(p);let o={};Object.defineProperty(o,'x',d);o.x",
+        // A throw of a getter leaves the clause.
+        "let d={get value(){throw 9}};try{Object.defineProperty({},'x',d)}catch(e){e}",
+        // Steps 7.b and 8.b refuse a half that is not callable, and step 9 a
+        // descriptor that is both kinds.
+        "(function(){let d={get set(){return 1}};try{Object.defineProperty({},'x',d)}catch(e){return e instanceof TypeError}})()",
+        "(function(){let d={get value(){return 1},get get(){return function(){}}};try{Object.defineProperty({},'x',d)}catch(e){return e instanceof TypeError}})()",
+        // A descriptor of plain fields is read as before.
+        "let o={};Object.defineProperty(o,'x',{value:3});o.x",
+        "let o={};Object.defineProperty(o,'x',{get:function(){return 6}});o.x",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
 fn differential_scripts(scripts: &[&str]) -> Result<(), Error> {
     let outcome = |backend| -> Result<Result<Value, Error>, Error> {
         let mut host = SilentHost;

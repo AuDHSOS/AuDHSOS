@@ -419,6 +419,29 @@ pub enum Resume {
         /// receiver travels in takes the primitive instead.
         of_receiver: bool,
     },
+    /// 6.2.6.5 is reading the fields of a descriptor, and one of them is a
+    /// getter of the Script.
+    ///
+    /// Each field it has read waits in an object of its own, so every getter
+    /// runs once and the clause reads the copy rather than the descriptor.
+    Descriptor {
+        /// The intrinsic that asked, by [`Intrinsic::id`].
+        intrinsic: u32,
+        /// Root holding the `this` value of the call.
+        receiver: Root,
+        /// Root holding the object the fields are copied into.
+        copy: Root,
+        /// How many of the six fields 6.2.6.5 names have been read.
+        field: u8,
+        /// The argument register the descriptor came in and the copy goes to.
+        register: Reg,
+        /// First argument register of the call.
+        arg_start: Reg,
+        /// Number of arguments the call passed.
+        arg_count: u16,
+        /// Register `new` keeps its object in, when this was a construct.
+        construct: Option<Reg>,
+    },
     /// A method of 23.1.3 called the callback for one element.
     ///
     /// The walk keeps what it has reached in an object of the heap rather
@@ -3305,6 +3328,28 @@ impl RegisterVM {
         ) {
             return self.begin_spread_call(intrinsic, call, units, active_feedback, heap, realm);
         }
+        // 6.2.6.5 reads six fields of the descriptor, and a getter among them
+        // runs a method of the Script.
+        if matches!(
+            intrinsic,
+            Intrinsic::ObjectDefineProperty | Intrinsic::ReflectDefineProperty
+        ) && call.arg_count > 2
+        {
+            let register = Reg(call.arg_start.0.saturating_add(2));
+            if let Some(source) = self.read_reg(register)?.as_object()
+                && Self::descriptor_reads_a_getter(source, heap)?
+            {
+                return self.begin_descriptor_copy(
+                    intrinsic,
+                    register,
+                    call,
+                    units,
+                    active_feedback,
+                    heap,
+                    realm,
+                );
+            }
+        }
         // 22.1.3 sends the `this` value through ToString before it reads its
         // arguments, which is a method of the Script for an Object.
         if intrinsic.coerces_its_receiver() && call.receiver.is_object() {
@@ -3631,6 +3676,207 @@ impl RegisterVM {
             }
             held = heap.push_root(answered)?;
         }
+    }
+
+    /// The six fields 6.2.6.5 reads, in the order it reads them.
+    const DESCRIPTOR_FIELDS: [&'static str; 6] = [
+        "enumerable",
+        "configurable",
+        "value",
+        "writable",
+        "get",
+        "set",
+    ];
+
+    /// Whether any field 6.2.6.5 reads is an accessor of the chain.
+    fn descriptor_reads_a_getter(
+        source: ObjectRef,
+        heap: &mut GenerationalHeap,
+    ) -> Result<bool, VMError> {
+        for name in Self::DESCRIPTOR_FIELDS {
+            let key = PropertyKey::String(heap.strings.intern(name)?);
+            if heap
+                .lookup_named(source, key)?
+                .is_some_and(|found| found.flags.is_accessor)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Leaves a native operation to read a descriptor whose fields 6.2.6.5
+    /// has to call getters for.
+    ///
+    /// Each field waits in an object of its own, and the clause runs again on
+    /// that object, so every getter of the descriptor runs exactly once and in
+    /// the order 6.2.6.5 reads them.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a descriptor read opens a frame, which needs what a call needs"
+    )]
+    fn begin_descriptor_copy(
+        &mut self,
+        intrinsic: Intrinsic,
+        register: Reg,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        // The copy has no Prototype, so a field it does not carry is absent
+        // there as 6.2.6.5 found it absent here.
+        let shape = heap.shapes.root_shape();
+        let copy = heap.allocate_object(shape, VALUE_NULL)?;
+        heap.enter_scope();
+        let receiver = heap.push_root(call.receiver)?;
+        let copy = heap.push_root(Value::from_object(copy))?;
+        let resume = Resume::Descriptor {
+            intrinsic: intrinsic.id(),
+            receiver,
+            copy,
+            field: 0,
+            register,
+            arg_start: call.arg_start,
+            arg_count: call.arg_count,
+            construct: call.construct,
+        };
+        self.continue_descriptor(
+            resume,
+            call.return_pc,
+            call.caller_code_id,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )
+    }
+
+    /// Reads the fields 6.2.6.5 has still to read, and runs the clause on the
+    /// copy once none is left.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors the getters and the clause raise.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a descriptor read opens a frame, which needs what a call needs"
+    )]
+    fn continue_descriptor(
+        &mut self,
+        resume: Resume,
+        return_pc: usize,
+        caller_code_id: Option<u32>,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let Resume::Descriptor {
+            intrinsic,
+            receiver,
+            copy,
+            mut field,
+            register,
+            arg_start,
+            arg_count,
+            construct,
+        } = resume
+        else {
+            return Ok(None);
+        };
+        // The getter that just answered belongs to the field before this one.
+        let mut answered = (field > 0).then_some(self.acc);
+        loop {
+            if let Some(value) = answered.take() {
+                let name = Self::DESCRIPTOR_FIELDS
+                    .get(usize::from(field).saturating_sub(1))
+                    .ok_or(VMError::InvalidFeedbackVector)?;
+                Self::define_descriptor_field(copy, name, value, heap)?;
+            }
+            let Some(name) = Self::DESCRIPTOR_FIELDS.get(usize::from(field)) else {
+                break;
+            };
+            field = field.saturating_add(1);
+            let source = self
+                .read_reg(register)?
+                .as_object()
+                .ok_or(VMError::TypeError)?;
+            let key = PropertyKey::String(heap.strings.intern(name)?);
+            let Some(found) = heap.lookup_named(source, key)? else {
+                continue;
+            };
+            if !found.flags.is_accessor {
+                Self::define_descriptor_field(copy, name, found.value, heap)?;
+                continue;
+            }
+            let (get, _) = Self::accessor_parts(found.value, heap)?;
+            if get.is_undefined() {
+                Self::define_descriptor_field(copy, name, VALUE_UNDEFINED, heap)?;
+                continue;
+            }
+            let next = Call {
+                receiver: Value::from_object(source),
+                func: register,
+                arg_start: register,
+                arg_count: 0,
+                slot: 0,
+                resume: Some(Resume::Descriptor {
+                    intrinsic,
+                    receiver,
+                    copy,
+                    field,
+                    register,
+                    arg_start,
+                    arg_count,
+                    construct,
+                }),
+                construct: None,
+                return_pc,
+                caller_code_id,
+            };
+            if let Some(code_id) =
+                self.enter_call_value(get, units, active_feedback, heap, realm, next)?
+            {
+                return Ok(Some(code_id));
+            }
+            // A getter of the Realm answered without a frame of its own.
+            answered = Some(self.acc);
+        }
+        // Every field is in the copy, so the clause reads that instead.
+        let call = Call {
+            receiver: heap.root_value(receiver).unwrap_or(VALUE_UNDEFINED),
+            func: arg_start,
+            arg_start,
+            arg_count,
+            slot: 0,
+            resume: None,
+            construct,
+            return_pc,
+            caller_code_id,
+        };
+        let copy = heap.root_value(copy).unwrap_or(VALUE_UNDEFINED);
+        heap.exit_scope();
+        self.write_reg(register, copy)?;
+        let intrinsic = Intrinsic::from_id(intrinsic).ok_or(VMError::TypeError)?;
+        self.dispatch_native(intrinsic, call, units, active_feedback, heap, realm)
+    }
+
+    /// Puts one field 6.2.6.5 read into the copy the walk builds.
+    fn define_descriptor_field(
+        copy: Root,
+        name: &str,
+        value: Value,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        let key = PropertyKey::String(heap.strings.intern(name)?);
+        let copy = heap
+            .root_value(copy)
+            .and_then(Value::as_object)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        heap.define_own_named(copy, key, value, PropertyFlags::ordinary_data())?;
+        Ok(())
     }
 
     /// Leaves a native operation to convert one of its arguments (7.1.17).
@@ -12639,6 +12885,7 @@ impl RegisterVM {
                                 | Resume::Coercion { register, .. } => register,
                                 Resume::Iteration { .. }
                                 | Resume::Length { .. }
+                                | Resume::Descriptor { .. }
                                 | Resume::Getter
                                 | Resume::Spread { .. }
                                 | Resume::Setter { .. } => Reg(0),
@@ -12672,6 +12919,15 @@ impl RegisterVM {
                                     realm,
                                 )?,
                                 Resume::Length { .. } => self.finish_array_like_length(
+                                    resume,
+                                    pc,
+                                    current_code_id,
+                                    units,
+                                    feedback,
+                                    heap,
+                                    realm,
+                                )?,
+                                Resume::Descriptor { .. } => self.continue_descriptor(
                                     resume,
                                     pc,
                                     current_code_id,
