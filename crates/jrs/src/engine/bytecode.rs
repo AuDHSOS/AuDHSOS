@@ -488,6 +488,41 @@ pub enum Instruction {
         /// Property-name index in the heap-independent UTF-16 constant pool.
         name: u16,
     },
+    /// `MakeMethod` of 10.2.11: gives the function in `acc` the object in
+    /// `home` as its `[[HomeObject]]`, which 13.3.7.3 reads the Prototype of.
+    ///
+    /// 13.2.5.5 makes every method of a literal one; only a body that reads
+    /// `super` can tell, so the lowering emits it only there.
+    MakeMethod {
+        /// Register of the object the method belongs to.
+        home: Reg,
+    },
+    /// `MakeSuperPropertyReference` of 13.3.7.3: the `[[Prototype]]` of the
+    /// `[[HomeObject]]` the running function carries.
+    ///
+    /// The method that reads `super` carries its home, so no environment is
+    /// walked. A function with no home reaches no `super`, which is a
+    /// `SyntaxError` the parser raises and never this instruction.
+    SuperBase {
+        /// Register the base is written to.
+        target: Reg,
+    },
+    /// `super.name` of 13.3.7: the property of the base, read with `this` as
+    /// the receiver, which is what a getter of the chain is called with.
+    GetSuper {
+        /// Register holding the base of 13.3.7.3.
+        base: Reg,
+        /// Property-name index in the heap-independent UTF-16 constant pool.
+        name: u16,
+    },
+    /// [`Instruction::GetSuper`] under a key only the run time knows, which
+    /// 7.1.19 makes of the value in `key`.
+    GetSuperByValue {
+        /// Register holding the base of 13.3.7.3.
+        base: Reg,
+        /// Register holding the key.
+        key: Reg,
+    },
     /// Load indexed element: `acc = obj_reg[key_reg]` (uses feedback slot).
     GetByValue {
         /// Object register.
@@ -646,6 +681,9 @@ pub struct BytecodeFunction {
     pub self_register: Option<Reg>,
     /// Register initialized with the `this` value of the call (9.4.5).
     pub this_register: Option<Reg>,
+    /// Register initialized with the `[[HomeObject]]` of the called function
+    /// (10.2), which 13.3.7.3 reads the Prototype of.
+    pub home_register: Option<Reg>,
     /// Register the arguments object of the call is built in (10.4.4), when
     /// the body reads it.
     pub arguments_register: Option<Reg>,
@@ -699,6 +737,7 @@ impl BytecodeFunction {
             binding_count: parameter_count,
             self_register: None,
             this_register: None,
+            home_register: None,
             arguments_register: None,
             constructible: false,
             strict: false,
@@ -799,7 +838,7 @@ impl BytecodeFunction {
         if self.binding_count > self.register_count || self.parameter_count > self.binding_count {
             return Err(VerificationError::BindingsExceedRegisters);
         }
-        for register in [self.self_register, self.this_register]
+        for register in [self.self_register, self.this_register, self.home_register]
             .into_iter()
             .flatten()
         {
@@ -949,6 +988,16 @@ impl BytecodeFunction {
                 Some(key)
             }
             Instruction::GetArrayLength { obj } => Some(obj),
+            Instruction::SuperBase { target } => Some(target),
+            Instruction::MakeMethod { home } => Some(home),
+            Instruction::GetSuper { base, name } => {
+                self.verify_string_constant(pc, name)?;
+                Some(base)
+            }
+            Instruction::GetSuperByValue { base, key } => {
+                self.verify_register(pc, base)?;
+                Some(key)
+            }
             Instruction::Call {
                 func,
                 arg_start,

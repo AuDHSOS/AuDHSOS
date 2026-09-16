@@ -418,6 +418,34 @@ impl GenerationalHeap {
         Ok(())
     }
 
+    /// `[[HomeObject]]` of 10.2, which 13.3.7 reads the Prototype of.
+    #[must_use]
+    pub fn function_home(&self, reference: ObjectRef) -> Option<Value> {
+        match self.get_object(reference)?.kind {
+            ObjectKind::Function { home, .. } => Some(home),
+            _ => None,
+        }
+    }
+
+    /// `MakeMethod` of 10.2.11, which 13.2.5.5 and 15.7.14 call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when the object is not a
+    /// function of the Script.
+    pub fn set_function_home(
+        &mut self,
+        reference: ObjectRef,
+        value: Value,
+    ) -> Result<(), HeapError> {
+        let ObjectKind::Function { home, .. } = &mut self.object_mut(reference)?.kind else {
+            return Err(HeapError::InvalidReference);
+        };
+        *home = value;
+        self.remember_object_store(reference, value);
+        Ok(())
+    }
+
     /// Allocates an immortal object directly in the Old Generation.
     ///
     /// Realm intrinsics outlive every collection, so copying them through the
@@ -516,6 +544,7 @@ impl GenerationalHeap {
             unit,
             code_id,
             context,
+            home: VALUE_UNDEFINED,
         };
         Ok(reference)
     }
@@ -2679,6 +2708,7 @@ mod tests {
             unit: 0,
             code_id: 0,
             context: Some(stale),
+            home: VALUE_UNDEFINED,
         };
         minor.enter_scope();
         minor.push_root(Value::from_object(function)).unwrap();
@@ -2692,6 +2722,7 @@ mod tests {
             unit: 0,
             code_id: 0,
             context: Some(stale),
+            home: VALUE_UNDEFINED,
         };
         major.enter_scope();
         major.push_root(Value::from_object(function)).unwrap();

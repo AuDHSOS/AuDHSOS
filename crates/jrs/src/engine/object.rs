@@ -71,6 +71,11 @@ pub enum ObjectKind {
         code_id: u32,
         /// Heap context for captured variables.
         context: Option<ContextRef>,
+        /// `[[HomeObject]]` of 10.2, which 13.3.7 reads the Prototype of;
+        /// undefined for a function that is no method. An arrow takes the one
+        /// of the function it was made in, because 15.3.4 gives it no
+        /// `super` of its own.
+        home: Value,
     },
     /// Native Rust host/intrinsic callable.
     NativeFunction {
@@ -194,9 +199,9 @@ impl ObjectKind {
     #[must_use]
     pub const fn values(&self) -> [Option<Value>; 5] {
         match self {
-            Self::StringWrapper(value) | Self::ArrayIterator { target: value, .. } => {
-                [Some(*value), None, None, None, None]
-            }
+            Self::StringWrapper(value)
+            | Self::ArrayIterator { target: value, .. }
+            | Self::Function { home: value, .. } => [Some(*value), None, None, None, None],
             Self::BoundFunction {
                 target,
                 receiver,
@@ -227,9 +232,9 @@ impl ObjectKind {
     /// Every `Value` this kind holds, to be forwarded by a collection.
     pub const fn values_mut(&mut self) -> [Option<&mut Value>; 5] {
         match self {
-            Self::StringWrapper(value) | Self::ArrayIterator { target: value, .. } => {
-                [Some(value), None, None, None, None]
-            }
+            Self::StringWrapper(value)
+            | Self::ArrayIterator { target: value, .. }
+            | Self::Function { home: value, .. } => [Some(value), None, None, None, None],
             Self::BoundFunction {
                 target,
                 receiver,

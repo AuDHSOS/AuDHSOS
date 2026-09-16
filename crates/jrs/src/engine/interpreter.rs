@@ -1380,6 +1380,7 @@ impl RegisterVM {
                 unit,
                 code_id,
                 context,
+                ..
             } => (unit, code_id, context),
             ObjectKind::NativeFunction { id, .. } => {
                 let intrinsic = Intrinsic::from_id(id).ok_or(VMError::TypeError)?;
@@ -1580,6 +1581,16 @@ impl RegisterVM {
                 .stack
                 .get_mut(next_frame.saturating_add(this_register.0 as usize))
                 .ok_or(VMError::StackOverflow)? = call.receiver;
+        }
+        // 13.3.7.3 reads the `[[HomeObject]]` of the running function, which
+        // is a value of the closure and not of the frame, so it travels into a
+        // register the collector sees.
+        if let Some(home_register) = callee.home_register {
+            let home = heap.function_home(function).unwrap_or(VALUE_UNDEFINED);
+            *self
+                .stack
+                .get_mut(next_frame.saturating_add(home_register.0 as usize))
+                .ok_or(VMError::StackOverflow)? = home;
         }
         Ok(next_frame)
     }
@@ -5558,6 +5569,7 @@ impl RegisterVM {
     ) -> Result<(), VMError> {
         let method = self.acc;
         let target = self.read_reg(obj)?.as_object().ok_or(VMError::TypeError)?;
+        Self::make_method(method, target, heap)?;
         heap.define_own_named(
             target,
             name,
@@ -5567,6 +5579,95 @@ impl RegisterVM {
                 ..PropertyFlags::constructor_data()
             },
         )?;
+        Ok(())
+    }
+
+    /// The `[[HomeObject]]` the running function carries (10.2).
+    fn home_of(&self, code: &BytecodeFunction) -> Result<Value, VMError> {
+        let register = code
+            .home_register
+            .ok_or(VMError::Unsupported("super in a function with no home"))?;
+        self.read_reg(register)
+    }
+
+    /// `super.name` of 13.3.7: the property of the base, read through `this`.
+    ///
+    /// The receiver of the read is the `this` value of the running call, so a
+    /// getter of the chain is called with it and not with the base.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] for a base that is not an object.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a super read enters a getter, which needs what a call needs"
+    )]
+    fn read_super(
+        &mut self,
+        base: Reg,
+        name: PropertyKey,
+        return_pc: usize,
+        caller_code_id: Option<u32>,
+        code: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let value = self.read_reg(base)?;
+        let Some(object) = value.as_object() else {
+            return Err(property_base_error(value, heap, realm));
+        };
+        let receiver = self.this_of(code.active)?;
+        let Some(found) = heap.lookup_named(object, name)? else {
+            let units = name
+                .as_string()
+                .and_then(|name| heap.strings.to_utf16(Value::from_string(name)))
+                .unwrap_or_default();
+            self.acc = Self::absent_property(value, &units, heap, realm)?;
+            return Ok(None);
+        };
+        if !found.flags.is_accessor {
+            self.acc = found.value;
+            return Ok(None);
+        }
+        self.enter_accessor(
+            found.value,
+            receiver,
+            None,
+            return_pc,
+            caller_code_id,
+            code,
+            active_feedback,
+            heap,
+            realm,
+        )
+    }
+
+    /// The `this` value of the running call (9.4.5).
+    fn this_of(&self, code: &BytecodeFunction) -> Result<Value, VMError> {
+        let register = code
+            .this_register
+            .ok_or(VMError::Unsupported("super in a function with no this"))?;
+        self.read_reg(register)
+    }
+
+    /// `MakeMethod` of 10.2.11: 13.2.5.5 and 15.7.14 give the function the
+    /// object it is defined on as its `[[HomeObject]]`.
+    fn make_method(
+        method: Value,
+        target: ObjectRef,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        let Some(function) = method.as_object() else {
+            return Ok(());
+        };
+        if !matches!(
+            heap.get_object(function).map(|object| &object.kind),
+            Some(ObjectKind::Function { .. })
+        ) {
+            return Ok(());
+        }
+        heap.set_function_home(function, Value::from_object(target))?;
         Ok(())
     }
 
@@ -5583,6 +5684,7 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
     ) -> Result<(), VMError> {
         let oref = self.read_reg(obj)?.as_object().ok_or(VMError::TypeError)?;
+        Self::make_method(self.acc, oref, heap)?;
         let (get, set) = match heap.own_named_flags(oref, name)? {
             Some(flags) if flags.is_accessor => {
                 let held = heap
@@ -11468,6 +11570,61 @@ impl RegisterVM {
                         return Err(type_error(heap, realm, message));
                     }
                 }
+                Instruction::MakeMethod { home } => {
+                    let target = self.read_reg(home)?.as_object().ok_or(VMError::TypeError)?;
+                    Self::make_method(self.acc, target, heap)?;
+                }
+                Instruction::SuperBase { target } => {
+                    let home = self
+                        .home_of(active_code)?
+                        .as_object()
+                        .ok_or(VMError::Unsupported("super in a function with no home"))?;
+                    let base = heap
+                        .get_object(home)
+                        .ok_or(VMError::Heap(HeapError::InvalidReference))?
+                        .prototype;
+                    self.write_reg(target, base)?;
+                }
+                Instruction::GetSuper { base, name } => {
+                    let code_units = units;
+                    let text = active_code
+                        .string_constants
+                        .get(name as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    let name = PropertyKey::String(heap.strings.intern_units(text)?);
+                    if let Some(code_id) = self.read_super(
+                        base,
+                        name,
+                        pc,
+                        current_code_id,
+                        code_units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    )? {
+                        current_code_id = Some(code_id);
+                        pc = 0;
+                    }
+                }
+                Instruction::GetSuperByValue { base, key } => {
+                    let code_units = units;
+                    // 13.3.7.2 makes the key before the base is read again.
+                    let key_value = self.text_key(key, code_units, heap, realm)?;
+                    let name = property_key(key_value, heap)?;
+                    if let Some(code_id) = self.read_super(
+                        base,
+                        name,
+                        pc,
+                        current_code_id,
+                        code_units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    )? {
+                        current_code_id = Some(code_id);
+                        pc = 0;
+                    }
+                }
                 Instruction::DefineMethod { obj, name } => {
                     let units = active_code
                         .string_constants
@@ -11647,6 +11804,11 @@ impl RegisterVM {
                             is_accessor: false,
                         },
                     )?;
+                    // 15.7.14 step 16 makes the constructor a method of the
+                    // prototype, so `super` in its body reads that chain.
+                    if let Some(prototype) = prototype.as_object() {
+                        Self::make_method(self.acc, prototype, heap)?;
+                    }
                 }
                 Instruction::CreateClosure(code_id) => {
                     let target =

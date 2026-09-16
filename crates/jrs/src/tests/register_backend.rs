@@ -572,6 +572,35 @@ fn the_positions_a_clause_converts_take_an_object() -> Result<(), Error> {
     Ok(())
 }
 
+#[test]
+fn a_method_carries_the_home_object_super_reads() -> Result<(), Error> {
+    for source in [
+        // 13.3.7.3 reads the Prototype of the [[HomeObject]] 10.2.11 gave the
+        // method, and 13.3.7 reads the property through `this`.
+        "let o={m:function(){return 'base'}};let p={m(){return super.m()+'!'}};Object.setPrototypeOf(p,o);p.m()",
+        "let p={go(){return typeof super.toString}};p.go()",
+        "let p={go(){return super.toString()}};p.go()",
+        "let p={go(){return String(super.nope)}};p.go()",
+        "let k='toString';let p={go(){return typeof super[k]}};p.go()",
+        // A getter of the chain is called with `this` and not with the base.
+        "let o={get g(){return this.v}};let p={v:7,go(){return super.g}};Object.setPrototypeOf(p,o);p.go()",
+        // 13.2.5.1 gives each half of an accessor the same home.
+        "let p={get g(){return typeof super.toString}};p.g",
+        "let o={m:function(){return 1}};let p={set s(v){this.seen=super.m()+v}};Object.setPrototypeOf(p,o);p.s=1;p.seen",
+        // 15.7.14 gives a class method the prototype and a static one the
+        // constructor.
+        "(function(){class C{go(){return typeof super.toString}}return new C().go()})()",
+        "(function(){class C{static go(){return typeof super.toString}}return C.go()})()",
+        // 15.7.14 step 16 makes the constructor a method of the prototype.
+        "(function(){class C{constructor(){this.t=typeof super.toString}}return new C().t})()",
+        // The home travels with the function, not with the call.
+        "let p={go(){return typeof super.toString}};let q=p.go;q()",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
 fn differential_scripts(scripts: &[&str]) -> Result<(), Error> {
     let outcome = |backend| -> Result<Result<Value, Error>, Error> {
         let mut host = SilentHost;

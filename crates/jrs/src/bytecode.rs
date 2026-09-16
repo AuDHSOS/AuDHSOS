@@ -554,6 +554,10 @@ const WELL_KNOWN_ITERATOR: usize = 3;
 /// with one a Script writes.
 const THIS_BINDING: &str = "this";
 
+/// The binding that holds the `[[HomeObject]]` of the running function, which
+/// 13.3.7.3 reads the Prototype of. No Script can name it.
+const HOME_BINDING: &str = "*home";
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RegisterType {
     Array(u32),
@@ -2440,6 +2444,12 @@ impl RegisterLowerer {
             if matches!(value_type, RegisterType::NativeFunction(_)) {
                 return None;
             }
+            // 13.2.5.5 makes every method of a literal a method of the object;
+            // only a body that reads `super` can tell it from a function the
+            // property merely holds.
+            if register_is_method_reading_super(&property.value) {
+                self.code.emit(Instruction::MakeMethod { home: object });
+            }
             let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
             let property_name = match key {
                 RegisterMemberKey::Named { constant, name } => {
@@ -3001,6 +3011,23 @@ impl RegisterLowerer {
             child.mapped_parameters = function.parameters.len();
             child.code.arguments_register = Some(register);
         }
+        // 13.3.7.3 reads the `[[HomeObject]]` of the running function, which
+        // an arrow has none of: 15.3.4 gives it the `super` of the function it
+        // was made in, and this engine has not built that.
+        if register_body_reads_super(&function.body) {
+            if function.arrow {
+                return None;
+            }
+            child.declare(HOME_BINDING, false)?;
+            let RegisterBindingStorage::Register(register) =
+                child.bindings.get(HOME_BINDING)?.storage
+            else {
+                return None;
+            };
+            child.bindings.get_mut(HOME_BINDING)?.value_type = Some(RegisterType::Unknown);
+            child.bindings.remove(HOME_BINDING);
+            child.code.home_register = Some(register);
+        }
         if register_body_reads_this(&function.body) {
             // An arrow function has no Function Environment Record of its own
             // (10.2.1.1), so its `this` is the one of the enclosing function
@@ -3277,6 +3304,9 @@ impl RegisterLowerer {
     fn lower_call(&mut self, callee: &Expr, arguments: &[Expr]) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         if let ExprKind::Member(base, key) = &callee.kind {
+            if matches!(base.kind, ExprKind::Super) {
+                return self.lower_super_call(key, arguments);
+            }
             return self.lower_method_call(base, key, arguments);
         }
         let callee_type = self.lower(callee)?;
@@ -3694,6 +3724,58 @@ impl RegisterLowerer {
     /// 13.3.6.1 passes as the `this` value. Every argument must be a primitive:
     /// the lowering cannot say which function answers, and it compiled every
     /// candidate under the assumption that its parameters are primitives.
+    /// `MakeSuperPropertyReference` of 13.3.7.3, in a register of its own.
+    fn super_base(&mut self) -> Option<crate::engine::bytecode::Reg> {
+        use crate::engine::bytecode::Instruction;
+        let register = self.allocate_register()?;
+        self.code.emit(Instruction::SuperBase { target: register });
+        Some(register)
+    }
+
+    /// `super.name` and `super[key]` of 13.3.7, read through `this`.
+    fn lower_super_property(
+        &mut self,
+        base: crate::engine::bytecode::Reg,
+        key: &Expr,
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        if let Some(name) = Self::static_property_name(key) {
+            let name = self.string_constant(name)?;
+            self.code.emit(Instruction::GetSuper { base, name });
+            return Some(RegisterType::Unknown);
+        }
+        if !self.lower(key)?.converts_to_primitive() {
+            return None;
+        }
+        let register = self.allocate_register()?;
+        self.code.emit(Instruction::Star(register));
+        self.code.emit(Instruction::GetSuperByValue {
+            base,
+            key: register,
+        });
+        self.release_register(register)?;
+        Some(RegisterType::Unknown)
+    }
+
+    /// `super.name(...)` of 13.3.7, whose receiver 13.3.6.1 makes the `this`
+    /// value of the call and not the base the method was found on.
+    fn lower_super_call(&mut self, key: &Expr, arguments: &[Expr]) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let base = self.super_base()?;
+        self.lower_super_property(base, key)?;
+        self.release_register(base)?;
+        let receiver = self.allocate_register()?;
+        let this = self.bindings.get(THIS_BINDING).copied()?;
+        let function = self.allocate_register()?;
+        self.code.emit(Instruction::Star(function));
+        self.load_binding(this);
+        self.code.emit(Instruction::Star(receiver));
+        let result = self.lower_dynamic_method_call_with(receiver, function, arguments)?;
+        self.release_register(function)?;
+        self.release_register(receiver)?;
+        Some(result)
+    }
+
     fn lower_dynamic_method_call(
         &mut self,
         receiver: crate::engine::bytecode::Reg,
@@ -3702,6 +3784,19 @@ impl RegisterLowerer {
         use crate::engine::bytecode::Instruction;
         let function = self.allocate_register()?;
         self.code.emit(Instruction::Star(function));
+        let result = self.lower_dynamic_method_call_with(receiver, function, arguments);
+        self.release_register(function)?;
+        result
+    }
+
+    /// The same call with the callee already in a register of its own.
+    fn lower_dynamic_method_call_with(
+        &mut self,
+        receiver: crate::engine::bytecode::Reg,
+        function: crate::engine::bytecode::Reg,
+        arguments: &[Expr],
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
         let mut argument_registers = Vec::new();
         let mut argument_types = Vec::new();
         for argument in arguments {
@@ -3735,7 +3830,6 @@ impl RegisterLowerer {
         for register in argument_registers.into_iter().rev() {
             self.release_register(register)?;
         }
-        self.release_register(function)?;
         self.escape(&argument_types);
         Some(RegisterType::Unknown)
     }
@@ -3920,6 +4014,12 @@ impl RegisterLowerer {
 
     fn lower_member(&mut self, base: &Expr, key: &Expr) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
+        if matches!(base.kind, ExprKind::Super) {
+            let register = self.super_base()?;
+            let result = self.lower_super_property(register, key)?;
+            self.release_register(register)?;
+            return Some(result);
+        }
         self.reading_member_base = true;
         let base_type = self.lower(base)?;
         if base_type == RegisterType::String {
@@ -8555,51 +8655,88 @@ fn register_body_writes_parameters(body: &[Stmt], function: &Function) -> Option
     Some(false)
 }
 
-fn register_body_reads_this(body: &[Stmt]) -> bool {
-    body.iter().any(register_statement_reads_this)
+/// Whether the value of a property definition is a method whose body reads
+/// `super`, which 10.2.11 gives the object it is defined on.
+fn register_is_method_reading_super(value: &Expr) -> bool {
+    let ExprKind::Function(function) = &value.kind else {
+        return false;
+    };
+    // 15.4.4 makes a method non-constructible, which is what tells `m(){}`
+    // from `m: function(){}`.
+    !function.arrow && !function.constructible && register_body_reads_super(&function.body)
 }
 
-fn register_statement_reads_this(statement: &Stmt) -> bool {
+/// What a scan of a body looks for, because 9.4.5 and 13.3.7.3 read two
+/// different values of the same Function Environment Record.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reads {
+    /// The `this` value of 9.4.5.
+    This,
+    /// The `[[HomeObject]]` 13.3.7.3 reads the Prototype of.
+    Super,
+}
+
+fn register_body_reads_this(body: &[Stmt]) -> bool {
+    register_body_reads(body, Reads::This)
+}
+
+/// Whether a body reads `super`, which 13.3.7.3 answers out of the
+/// `[[HomeObject]]` of the running function.
+fn register_body_reads_super(body: &[Stmt]) -> bool {
+    register_body_reads(body, Reads::Super)
+}
+
+fn register_body_reads(body: &[Stmt], what: Reads) -> bool {
+    body.iter()
+        .any(|statement| register_statement_reads(statement, what))
+}
+
+fn register_statement_reads(statement: &Stmt, what: Reads) -> bool {
     match statement {
         Stmt::Expr(expression) | Stmt::Throw(expression) => {
-            register_expression_reads_this(expression)
+            register_expression_reads(expression, what)
         }
         Stmt::Return(expression) => expression
             .as_ref()
-            .is_some_and(register_expression_reads_this),
-        Stmt::Block(body) => register_body_reads_this(body),
+            .is_some_and(|expression| register_expression_reads(expression, what)),
+        Stmt::Block(body) => register_body_reads(body, what),
         Stmt::Declare(bindings) => bindings
             .iter()
             .filter_map(|(_, _, initializer)| initializer.as_ref())
-            .any(register_expression_reads_this),
+            .any(|expression| register_expression_reads(expression, what)),
         Stmt::Var(bindings) => bindings
             .iter()
             .filter_map(|(_, initializer)| initializer.as_ref())
-            .any(register_expression_reads_this),
+            .any(|expression| register_expression_reads(expression, what)),
         Stmt::If(condition, yes, no) => {
-            register_expression_reads_this(condition)
-                || register_statement_reads_this(yes)
-                || no.as_deref().is_some_and(register_statement_reads_this)
+            register_expression_reads(condition, what)
+                || register_statement_reads(yes, what)
+                || no
+                    .as_deref()
+                    .is_some_and(|statement| register_statement_reads(statement, what))
         }
         Stmt::While(condition, body) | Stmt::DoWhile(body, condition) => {
-            register_expression_reads_this(condition) || register_statement_reads_this(body)
+            register_expression_reads(condition, what) || register_statement_reads(body, what)
         }
         Stmt::For(initializer, condition, step, body) => {
-            register_statement_reads_this(initializer)
+            register_statement_reads(initializer, what)
                 || condition
                     .as_ref()
-                    .is_some_and(register_expression_reads_this)
-                || step.as_ref().is_some_and(register_expression_reads_this)
-                || register_statement_reads_this(body)
+                    .is_some_and(|expression| register_expression_reads(expression, what))
+                || step
+                    .as_ref()
+                    .is_some_and(|expression| register_expression_reads(expression, what))
+                || register_statement_reads(body, what)
         }
         Stmt::ForIn { object, body, .. } | Stmt::ForOf { object, body, .. } => {
-            register_expression_reads_this(object) || register_statement_reads_this(body)
+            register_expression_reads(object, what) || register_statement_reads(body, what)
         }
         Stmt::Switch(discriminant, clauses) => {
-            register_expression_reads_this(discriminant)
+            register_expression_reads(discriminant, what)
                 || clauses.iter().any(|(test, body)| {
-                    test.as_ref().is_some_and(register_expression_reads_this)
-                        || register_body_reads_this(body)
+                    test.as_ref()
+                        .is_some_and(|expression| register_expression_reads(expression, what))
+                        || register_body_reads(body, what)
                 })
         }
         Stmt::Try {
@@ -8607,25 +8744,22 @@ fn register_statement_reads_this(statement: &Stmt) -> bool {
             catch,
             finally,
         } => {
-            register_body_reads_this(body)
+            register_body_reads(body, what)
                 || catch
                     .as_ref()
-                    .is_some_and(|(_, body)| register_body_reads_this(body))
+                    .is_some_and(|(_, body)| register_body_reads(body, what))
                 || finally.as_deref().is_some_and(register_body_reads_this)
         }
-        Stmt::Function(_, function) => function.arrow && register_body_reads_this(&function.body),
+        Stmt::Function(_, function) => function.arrow && register_body_reads(&function.body, what),
         Stmt::Empty | Stmt::Break | Stmt::Continue => false,
     }
 }
 
-fn register_expression_reads_this(expression: &Expr) -> bool {
+fn register_expression_reads(expression: &Expr, what: Reads) -> bool {
     match &expression.kind {
         // A class body the lowering does not take at all.
-        ExprKind::This
-        | ExprKind::Super
-        | ExprKind::DefaultSuper
-        | ExprKind::NewTarget
-        | ExprKind::Class(_) => true,
+        ExprKind::Super | ExprKind::DefaultSuper | ExprKind::Class(_) => true,
+        ExprKind::This | ExprKind::NewTarget => matches!(what, Reads::This),
         ExprKind::Literal(_) | ExprKind::Name(_) | ExprKind::Regex(_, _) | ExprKind::Update(..) => {
             false
         }
@@ -8635,33 +8769,38 @@ fn register_expression_reads_this(expression: &Expr) -> bool {
         | ExprKind::Spread(inner)
         | ExprKind::Assign(_, _, inner)
         | ExprKind::Destructure(_, inner)
-        | ExprKind::UpdateMember(inner, _, _, _) => register_expression_reads_this(inner),
+        | ExprKind::UpdateMember(inner, _, _, _) => register_expression_reads(inner, what),
         ExprKind::Sequence(left, right)
         | ExprKind::Binary(_, left, right)
         | ExprKind::Member(left, right) => {
-            register_expression_reads_this(left) || register_expression_reads_this(right)
+            register_expression_reads(left, what) || register_expression_reads(right, what)
         }
         ExprKind::SetMember(target, _, value, _) => {
-            register_expression_reads_this(target) || register_expression_reads_this(value)
+            register_expression_reads(target, what) || register_expression_reads(value, what)
         }
         ExprKind::Conditional(condition, yes, no) => {
-            register_expression_reads_this(condition)
-                || register_expression_reads_this(yes)
-                || register_expression_reads_this(no)
+            register_expression_reads(condition, what)
+                || register_expression_reads(yes, what)
+                || register_expression_reads(no, what)
         }
         ExprKind::Call(callee, arguments) | ExprKind::Construct(callee, arguments) => {
-            register_expression_reads_this(callee)
-                || arguments.iter().any(register_expression_reads_this)
+            register_expression_reads(callee, what)
+                || arguments
+                    .iter()
+                    .any(|expression| register_expression_reads(expression, what))
         }
         ExprKind::Template(_, parts) => parts
             .iter()
-            .any(|(expression, _)| register_expression_reads_this(expression)),
+            .any(|(expression, _)| register_expression_reads(expression, what)),
         ExprKind::Object(properties) => properties.iter().any(|property| {
-            register_expression_reads_this(&property.key)
-                || register_expression_reads_this(&property.value)
+            register_expression_reads(&property.key, what)
+                || register_expression_reads(&property.value, what)
         }),
-        ExprKind::Array(items) => items.iter().flatten().any(register_expression_reads_this),
-        ExprKind::Function(function) => function.arrow && register_body_reads_this(&function.body),
+        ExprKind::Array(items) => items
+            .iter()
+            .flatten()
+            .any(|expression| register_expression_reads(expression, what)),
+        ExprKind::Function(function) => function.arrow && register_body_reads(&function.body, what),
     }
 }
 
@@ -8729,7 +8868,13 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
         // and names no binding of this analysis.
         // 22.2.4.1 makes an object of a pattern this unit compiled, and
         // reaches no binding of this analysis.
-        ExprKind::Literal(_) | ExprKind::Name(_) | ExprKind::This | ExprKind::Regex(_, _) => false,
+        // 13.3.7.3 answers `super` out of the `[[HomeObject]]` of the running
+        // function, which is no binding of the body.
+        ExprKind::Literal(_)
+        | ExprKind::Name(_)
+        | ExprKind::This
+        | ExprKind::Super
+        | ExprKind::Regex(_, _) => false,
         ExprKind::Destructure(pattern, right) => {
             register_expression_writes_names(right, names)?
                 || register_assignment_pattern_writes_names(pattern, names)?
@@ -8742,11 +8887,9 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
             }
             false
         }
-        ExprKind::Await(_)
-        | ExprKind::Super
-        | ExprKind::NewTarget
-        | ExprKind::DefaultSuper
-        | ExprKind::Spread(_) => return None,
+        ExprKind::Await(_) | ExprKind::NewTarget | ExprKind::DefaultSuper | ExprKind::Spread(_) => {
+            return None;
+        }
     })
 }
 
@@ -9047,7 +9190,9 @@ fn register_expression_references(
         ExprKind::Class(class) => register_class_references(class, names, nested_free_names)?,
         // `this` is resolved on the Function Environment Record, so it is free
         // of every name this analysis collects.
-        ExprKind::Literal(_) | ExprKind::This | ExprKind::Regex(_, _) => {}
+        // 13.3.7.3 answers `super` out of the `[[HomeObject]]` of the running
+        // function, which is no binding of the body.
+        ExprKind::Literal(_) | ExprKind::This | ExprKind::Super | ExprKind::Regex(_, _) => {}
         ExprKind::Destructure(pattern, right) => {
             register_expression_references(right, names, nested_free_names)?;
             register_assignment_pattern_references(pattern, names, nested_free_names)?;
@@ -9057,11 +9202,9 @@ fn register_expression_references(
                 register_expression_references(expression, names, nested_free_names)?;
             }
         }
-        ExprKind::Await(_)
-        | ExprKind::Super
-        | ExprKind::NewTarget
-        | ExprKind::DefaultSuper
-        | ExprKind::Spread(_) => return None,
+        ExprKind::Await(_) | ExprKind::NewTarget | ExprKind::DefaultSuper | ExprKind::Spread(_) => {
+            return None;
+        }
     }
     Some(())
 }
