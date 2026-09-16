@@ -1767,7 +1767,9 @@ impl RegisterVM {
             Intrinsic::ArrayConstructor => self.construct_array(call, heap, realm),
             Intrinsic::StringConstructor => Self::call_string_constructor(
                 call.construct.is_some(),
-                self.call_argument(&call, 0)?,
+                (call.arg_count > 0)
+                    .then(|| self.call_argument(&call, 0))
+                    .transpose()?,
                 heap,
                 realm,
             ),
@@ -2317,18 +2319,20 @@ impl RegisterVM {
     /// answers.
     fn call_string_constructor(
         construct: bool,
-        target: Value,
+        target: Option<Value>,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        let units = if target.is_undefined() && !construct {
-            alloc::vec::Vec::new()
-        } else if let Some(symbol) = target.as_symbol().filter(|_| !construct) {
-            // 22.1.1.1 step 2.a answers the text 20.4.3.3.1 gives a Symbol,
-            // where every other conversion of one is a `TypeError`.
-            Self::symbol_descriptive_string(symbol, heap)
-        } else {
-            property_name_units(target, heap)?
+        // 22.1.1.1 step 1: an argument that is not there is the empty String,
+        // where one that is `undefined` is the text of it.
+        let units = match target {
+            None => alloc::vec::Vec::new(),
+            // Step 2.a answers the text 20.4.3.3.1 gives a Symbol, where every
+            // other conversion of one is a `TypeError`.
+            Some(target) => match target.as_symbol().filter(|_| !construct) {
+                Some(symbol) => Self::symbol_descriptive_string(symbol, heap),
+                None => property_name_units(target, heap)?,
+            },
         };
         let text = heap.strings.allocate_units(&units)?;
         if construct {
@@ -2341,6 +2345,34 @@ impl RegisterVM {
             );
         }
         Ok(Value::from_string(text))
+    }
+
+    /// 10.1.6.3 step 2: a name the object does not own yet is added only while
+    /// the object is extensible.
+    ///
+    /// 10.1.9.2 step 3.d answers `false` for a refused write, which 13.15.2
+    /// turns into a `TypeError` for a strict Reference and drops otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a strict write.
+    fn refuses_a_new_property(
+        object: ObjectRef,
+        strict: bool,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<bool, VMError> {
+        if heap.is_extensible(object).unwrap_or(true) {
+            return Ok(false);
+        }
+        if strict {
+            return Err(type_error(
+                heap,
+                realm,
+                "cannot add a property to an object that is not extensible",
+            ));
+        }
+        Ok(true)
     }
 
     /// `OrdinarySetPrototypeOf` of 10.1.2: the same value is always taken, a
@@ -10730,11 +10762,15 @@ impl RegisterVM {
                         && !Self::shape_holds(oref, name, heap)?
                     {
                         let stored = heap.get_elements(eref).ok_or(VMError::TypeError)?;
-                        if stored.get(index).is_none()
-                            && heap.own_property_count(oref).unwrap_or(usize::MAX)
+                        if stored.get(index).is_none() {
+                            if heap.own_property_count(oref).unwrap_or(usize::MAX)
                                 >= self.property_limit
-                        {
-                            return Err(VMError::PropertyLimit);
+                            {
+                                return Err(VMError::PropertyLimit);
+                            }
+                            if !define && Self::refuses_a_new_property(oref, strict, heap, realm)? {
+                                return Ok(None);
+                            }
                         }
                         let value = self.acc;
                         heap.set_array_element(oref, index, value)?;
@@ -10820,6 +10856,9 @@ impl RegisterVM {
                             >= self.property_limit
                         {
                             return Err(VMError::PropertyLimit);
+                        }
+                        if !define && Self::refuses_a_new_property(oref, strict, heap, realm)? {
+                            return Ok(None);
                         }
                         // Transition to new Shape
                         let (new_shape, slot_idx) = heap.shapes.transition(
@@ -10998,11 +11037,15 @@ impl RegisterVM {
                     // is an index or a name of the element store.
                     if let Some(symbol) = key_val.as_symbol() {
                         let name = PropertyKey::Symbol(symbol);
-                        if heap.own_named_flags(oref, name)?.is_none()
-                            && heap.own_property_count(oref).unwrap_or(usize::MAX)
+                        if heap.own_named_flags(oref, name)?.is_none() {
+                            if heap.own_property_count(oref).unwrap_or(usize::MAX)
                                 >= self.property_limit
-                        {
-                            return Err(VMError::PropertyLimit);
+                            {
+                                return Err(VMError::PropertyLimit);
+                            }
+                            if !define && Self::refuses_a_new_property(oref, strict, heap, realm)? {
+                                return Ok(None);
+                            }
                         }
                         heap.define_own_named(oref, name, val, PropertyFlags::ordinary_data())?;
                         return Ok(None);
@@ -11031,11 +11074,15 @@ impl RegisterVM {
                         let elements = heap
                             .get_elements(elements_reference)
                             .ok_or(VMError::TypeError)?;
-                        if elements.get(index).is_none()
-                            && heap.own_property_count(oref).unwrap_or(usize::MAX)
+                        if elements.get(index).is_none() {
+                            if heap.own_property_count(oref).unwrap_or(usize::MAX)
                                 >= self.property_limit
-                        {
-                            return Err(VMError::PropertyLimit);
+                            {
+                                return Err(VMError::PropertyLimit);
+                            }
+                            if !define && Self::refuses_a_new_property(oref, strict, heap, realm)? {
+                                return Ok(None);
+                            }
                         }
                         heap.set_array_element(oref, index, val)?;
                     } else {
@@ -11125,6 +11172,9 @@ impl RegisterVM {
                                 >= self.property_limit
                             {
                                 return Err(VMError::PropertyLimit);
+                            }
+                            if !define && Self::refuses_a_new_property(oref, strict, heap, realm)? {
+                                return Ok(None);
                             }
                             let (new_shape, property_slot) = heap.shapes.transition(
                                 current_shape,

@@ -325,6 +325,49 @@ fn a_symbol_boxes_into_the_wrapper_of_20_4_3() -> Result<(), Error> {
     Ok(())
 }
 
+#[test]
+fn a_write_adds_a_property_only_while_the_object_is_extensible() -> Result<(), Error> {
+    for source in [
+        // 10.1.6.3 step 2 refuses a name the object does not own yet.
+        "let o={};Object.preventExtensions(o);o.x=1;o.x",
+        "let o={};Object.preventExtensions(o);o['y'+'']=1;o.y",
+        "let o={};Object.preventExtensions(o);o[Symbol.iterator]=1;o[Symbol.iterator]",
+        "let a=[1];Object.preventExtensions(a);a[3]=9;a.length+':'+a[3]",
+        "let o=Object.seal({a:1});o.b=2;o.a=3;o.a+':'+o.b",
+        "let o=Object.freeze({a:1});o.b=2;o.a+':'+o.b",
+        // A name it owns is written as before, and the object stays writable.
+        "let o={a:1};Object.preventExtensions(o);o.a=5;o.a",
+        "let a=[1,2];Object.preventExtensions(a);a[0]=9;a.join()",
+        // 13.15.2 turns the refusal of a strict Reference into a TypeError.
+        "(function(){'use strict';let o={};Object.preventExtensions(o);try{o.x=1}catch(e){return e instanceof TypeError}return false})()",
+        "(function(){'use strict';let a=[];Object.preventExtensions(a);try{a[0]=1}catch(e){return e instanceof TypeError}return false})()",
+        // An extensible object takes every write it took before.
+        "let o={};o.x=1;o['y']=2;o.x+o.y",
+        "let a=[];a[0]=1;a.push(2);a.join()",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn the_string_constructor_tells_a_missing_argument_from_undefined() -> Result<(), Error> {
+    for source in [
+        // 22.1.1.1 step 1 answers the empty String for an argument that is
+        // not there, and step 2.b the text of one that is `undefined`.
+        "'['+String()+']'",
+        "'['+String(undefined)+']'",
+        "'['+new String()+']'",
+        "'['+new String(undefined)+']'",
+        "new String().length",
+        "'['+String(null)+']'",
+        "'['+String(Symbol('k'))+']'",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
 fn differential_scripts(scripts: &[&str]) -> Result<(), Error> {
     let outcome = |backend| -> Result<Result<Value, Error>, Error> {
         let mut host = SilentHost;
