@@ -6493,3 +6493,31 @@ fn the_engine_answers_concat_error_prototypes_and_instanceof_as_the_clauses_do()
     }
     Ok(())
 }
+
+/// 10.4.3.1 gives a String exotic object its `length` and its indices, which
+/// is what a method of 23.1.3 walks when the `this` value is a String, and
+/// 23.1.3.24 step 6 has no accumulator when it found no element at all.
+#[test]
+fn a_string_receiver_and_an_empty_reduce_answer_as_their_clauses_do() -> Result<(), Error> {
+    for source in [
+        "''+Array.prototype.map.call('abc',function(v){return v})",
+        "''+Array.prototype.map.call('abc',function(v,i,o){return typeof o})",
+        "''+Array.prototype.filter.call('abc',function(v){return v!=='b'})",
+        "''+Array.prototype.indexOf.call('abc','b')",
+        "''+Array.prototype.join.call('abc','-')",
+        "''+Array.prototype.map.call('',function(v){return v}).length",
+        "var a=new Array(10);var t=false;\
+         try{a.reduce(function(){})}catch(e){t=e instanceof TypeError}t",
+        "var t=false;try{[].reduce(function(){})}catch(e){t=e instanceof TypeError}t",
+        "''+[].reduce(function(a,b){return a+b},7)",
+        "''+[1,,3].reduce(function(a,b){return a+b})",
+        "''+[1,2].reduce(function(a,b){return a+b})",
+        // 7.3.2 reads an index of the Prototype Chain as much as an own one.
+        "var a=[,,,];Array.prototype[1]='p';\
+         var r=a.reduce(function(x,y){return y});delete Array.prototype[1];''+r",
+        "var a=[,];Array.prototype[0]='p';var r=a.indexOf('p');delete Array.prototype[0];''+r",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}

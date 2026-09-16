@@ -2138,6 +2138,21 @@ impl RegisterVM {
         }
     }
 
+    /// The number of code units a String exotic object of 10.4.3 wraps.
+    fn string_data_length(
+        object: ObjectRef,
+        heap: &GenerationalHeap,
+    ) -> Result<Option<u32>, VMError> {
+        let Some(data) = Self::string_data(object, heap) else {
+            return Ok(None);
+        };
+        let length = heap
+            .strings
+            .length_of(data)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        Ok(Some(u32::try_from(length).unwrap_or(u32::MAX)))
+    }
+
     /// The `[[StringData]]` of a String exotic object of 10.4.3.
     fn string_data(object: ObjectRef, heap: &GenerationalHeap) -> Option<Value> {
         match heap.get_object(object)?.kind {
@@ -4105,6 +4120,22 @@ impl RegisterVM {
                 element
             } else {
                 let Some(element_index) = walk.next_index() else {
+                    // 23.1.3.24 step 6: a walk that found no element and was
+                    // given no initial value has no accumulator to answer. A
+                    // scan keeps its own meaning for `started`.
+                    if !walk.started
+                        && matches!(
+                            walk.intrinsic,
+                            Intrinsic::ArrayPrototypeReduce | Intrinsic::ArrayPrototypeReduceRight
+                        )
+                    {
+                        heap.exit_scope();
+                        return Err(type_error(
+                            heap,
+                            realm,
+                            "reduce of an empty Array with no initial value",
+                        ));
+                    }
                     heap.exit_scope();
                     self.acc = walk.answer();
                     return Ok(None);
@@ -5782,6 +5813,11 @@ impl RegisterVM {
         if let Some(length) = heap.array_length(object) {
             return Ok(i64::from(length));
         }
+        // 10.4.3.1 gives a String exotic object a `length` of its
+        // `[[StringData]]`, which no Shape of the object holds.
+        if let Some(count) = Self::string_data_length(object, heap)? {
+            return Ok(i64::from(count));
+        }
         let Some(name) = heap.strings.lookup_interned_units(&LENGTH_NAME) else {
             return Ok(0);
         };
@@ -5830,19 +5866,51 @@ impl RegisterVM {
         object: ObjectRef,
         index: u32,
     ) -> Result<Option<(Value, bool)>, VMError> {
-        let elements = heap.get_object(object).ok_or(VMError::TypeError)?.elements;
-        if let Some(elements) = elements
-            && let Some(value) = heap
-                .get_elements(elements)
-                .ok_or(VMError::TypeError)?
-                .get(index)
-        {
-            return Ok(Some((value, false)));
-        }
+        // A named property is found with its depth, so the chain walk below
+        // stops where a nearer one would already have answered. The lookup
+        // also rejects a cycle, which is why the walk needs no guard of its
+        // own.
         let key = PropertyKey::String(heap.intern_index(index)?);
-        Ok(heap
-            .lookup_named(object, key)?
-            .map(|found| (found.value, found.flags.is_accessor)))
+        let named = heap.lookup_named(object, key)?;
+        let limit = named.as_ref().map_or(u16::MAX, |found| found.holder_depth);
+        let mut current = object;
+        let mut depth = 0u16;
+        while depth <= limit {
+            // 10.4.3.1 owns every index below the length of its
+            // `[[StringData]]`, each one the String of that code unit.
+            if let Some(count) = Self::string_data_length(current, heap)?
+                && index < count
+            {
+                let data = Self::string_data(current, heap).ok_or(VMError::TypeError)?;
+                let unit = heap
+                    .strings
+                    .char_code_at(data, index as usize)
+                    .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+                let text = heap.strings.allocate_units(&[unit])?;
+                return Ok(Some((Value::from_string(text), false)));
+            }
+            // 10.4.2 keeps an index of an Array in the Elements store, which
+            // a Prototype of the chain has as much as the receiver does.
+            let elements = heap.get_object(current).ok_or(VMError::TypeError)?.elements;
+            if let Some(elements) = elements
+                && let Some(value) = heap
+                    .get_elements(elements)
+                    .ok_or(VMError::TypeError)?
+                    .get(index)
+            {
+                return Ok(Some((value, false)));
+            }
+            let prototype = heap
+                .get_object(current)
+                .ok_or(VMError::TypeError)?
+                .prototype;
+            let Some(next) = prototype.as_object() else {
+                break;
+            };
+            current = next;
+            depth = depth.saturating_add(1);
+        }
+        Ok(named.map(|found| (found.value, found.flags.is_accessor)))
     }
 
     /// Runs one of the Array iterator intrinsics of 23.1.5.
