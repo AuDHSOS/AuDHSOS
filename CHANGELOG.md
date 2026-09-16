@@ -7,6 +7,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- A `CREATE` and a `DROP` in `db-sqlite` name in a refusal what the
+  statement wrote: `sqlite3StartTable` writes the name with its quotes,
+  and each `DROP` names what the statement said it takes away. A
+  `CREATE TRIGGER` and a `CREATE INDEX` over a table the schema does not
+  hold name that table under the schema it would stand in. Only a view
+  carries an `INSTEAD OF` trigger and only a table carries a `BEFORE` or
+  an `AFTER`; a table whose name begins `sqlite_` carries none.
+  `CREATE TEMP TRIGGER` is read as a temporary trigger, which the parser
+  took for a name before. D-251 records it. Catalog 6.6.175.
+
 - A row in `db-sqlite` is held to the keys of a table in the order the
   `ON CONFLICT` clauses name them, which is
   `sqlite3GenerateConstraintChecks`: the keys the clauses name come

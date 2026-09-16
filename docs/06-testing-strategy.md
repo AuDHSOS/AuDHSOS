@@ -5254,6 +5254,26 @@ Document 16 step Q8.
 - `ON DELETE SET NULL` writes nothing into the columns that point, and
   the walk of `PRAGMA integrity_check` answers `ok` after it.
 
+### 6.6.175 What a `CREATE` and a `DROP` name in a refusal (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `CREATE TABLE "t"(y)` and `CREATE TABLE [t](y)` over a table named `t`
+  are refused `table "t" already exists` and `table [t] already exists`,
+  so the name carries the quotes the statement wrote.
+- `CREATE INDEX "t" ON t(x)` is refused `there is already a table named
+  t`, with the quotes off.
+- `DROP TABLE`, `DROP INDEX`, `DROP VIEW` and `DROP TRIGGER` of a name
+  the schema does not hold each name what the statement said it takes
+  away.
+- `CREATE TRIGGER` and `CREATE INDEX` over a table the schema does not
+  hold answer `no such table: main.nosuch`, and `CREATE TEMP TRIGGER`
+  answers `no such table: nosuch`.
+- `INSTEAD OF` over a table, and `BEFORE` or `AFTER` over a view, are
+  refused `cannot create WORD trigger on KIND: NAME`.
+- A trigger over `sqlite_master` is refused `cannot create trigger on
+  system table`.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

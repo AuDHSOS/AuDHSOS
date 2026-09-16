@@ -751,6 +751,8 @@ Size: L.
     moment walked to the first. Built, which D-249 records.
 30. A foreign key over a table that keeps its rows in the key's own
     tree. Built, which D-250 records.
+31. What a `CREATE` and a `DROP` name in a refusal. Built, which D-251
+    records; an `INSTEAD OF` trigger over a view is still open.
 
 ### Done when
 
@@ -760,8 +762,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 72 343 cases in 705 files, 58 183
-pass, 3588 answer differently, and 10 572 name something the engine
+under the `tclsh` of the machine. Of 72 389 cases in 705 files, 58 262
+pass, 3565 answer differently, and 10 562 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts

@@ -1050,7 +1050,9 @@ impl<'a> Parser<'a> {
         temporary
             && matches!(
                 self.ahead(1).map(|token| token.kind),
-                Some(Kind::Keyword(Keyword::Table | Keyword::View))
+                Some(Kind::Keyword(
+                    Keyword::Table | Keyword::View | Keyword::Trigger
+                ))
             )
     }
 

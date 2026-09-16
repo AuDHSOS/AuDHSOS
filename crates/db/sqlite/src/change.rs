@@ -1124,7 +1124,10 @@ impl Writer {
             return if asked.if_exists {
                 Ok(())
             } else {
-                Err(Error::NoTable(name.clone()))
+                // `sqlite3DropTable`, `sqlite3DropIndex` and
+                // `sqlite3DropTrigger` each name what the statement
+                // said it makes.
+                Err(Error::NoObject(dropped_word(asked.kind), name.clone()))
             };
         }
         for rowid in rowids {
@@ -1849,7 +1852,8 @@ impl Writer {
         sql: &[u8],
     ) -> Result<(), Error> {
         let name = crate::schema::dequote(table.name.text(sql));
-        if self.already(&name, table.if_not_exists, Making::Table)? {
+        let written = table.name.text(sql);
+        if self.already((&name, written), table.if_not_exists, Making::Table)? {
             return Ok(());
         }
         let (answer, affinities) = {
@@ -1903,32 +1907,63 @@ impl Writer {
     ///
     /// # Errors
     ///
-    /// [`Error::Unsupported`] for a trigger written `INSTEAD OF`,
-    /// which only a view carries and this crate writes no row of, and
-    /// for one on a table the database does not hold; [`Error::Nested`]
-    /// for a name the database already holds.
+    /// [`Error::Timed`] for a trigger whose time the table it is over
+    /// does not take, [`Error::SystemTrigger`] for one over a table
+    /// SQLite keeps for itself, [`Error::NoTable`] for one over a table
+    /// the database does not hold, and [`Error::Exists`] for a name the
+    /// database already holds.
     fn create_trigger(
         &mut self,
         trigger: &crate::ast::CreateTrigger,
         sql: &[u8],
     ) -> Result<(), Error> {
-        if trigger.time == crate::ast::TriggerTime::InsteadOf {
-            return Err(Error::Unsupported);
-        }
         let name = crate::schema::dequote(trigger.name.text(sql));
         let over = crate::schema::dequote(trigger.table.text(sql));
+        // `sqlite3CreateTrigger`: a table SQLite keeps for itself
+        // carries no trigger at all.
+        if over
+            .get(..7)
+            .is_some_and(|head| head.eq_ignore_ascii_case(b"sqlite_"))
+        {
+            return Err(Error::SystemTrigger);
+        }
         {
             let bytes = self.image();
             let database = Database::open(&bytes)?;
+            // `sqlite3CreateTrigger`: only a view carries an `INSTEAD
+            // OF` trigger, and only a table carries the other two.
+            let on_view = database.view(&over).is_some();
+            let instead = trigger.time == crate::ast::TriggerTime::InsteadOf;
+            if on_view != instead {
+                let word = match trigger.time {
+                    crate::ast::TriggerTime::Before => b"BEFORE".as_slice(),
+                    crate::ast::TriggerTime::After => b"AFTER",
+                    crate::ast::TriggerTime::InsteadOf => b"INSTEAD OF",
+                };
+                let held: &[u8] = if on_view { b"view" } else { b"table" };
+                return Err(Error::Timed(word.to_vec(), held.to_vec(), over));
+            }
+            if instead {
+                return Err(Error::Unsupported);
+            }
+            // `sqlite3TriggerBeginStep` names the schema the table
+            // would stand in, which a trigger of the temporary schema
+            // names no schema for.
             if database.table(&over).is_none() {
-                return Err(Error::NoTable(over));
+                let named = if trigger.temporary {
+                    over
+                } else {
+                    schema_named_as(&over)
+                };
+                return Err(Error::NoTable(named));
             }
             self.reserved(&name)?;
             if database.trigger(&name).is_some() {
                 if trigger.if_not_exists {
                     return Ok(());
                 }
-                return Err(Error::Exists(b"trigger".to_vec(), name));
+                let written = trigger.name.text(sql).to_vec();
+                return Err(Error::Exists(b"trigger".to_vec(), written));
             }
         }
         let mut written = b"CREATE TRIGGER ".to_vec();
@@ -2475,7 +2510,7 @@ impl Writer {
     /// `CREATE TABLE`: a page for the tree of the table and a row of
     /// `sqlite_schema` that names it.
     fn define(&mut self, arena: &Arena, definition: Definition, sql: &[u8]) -> Result<(), Error> {
-        let (kind, name, over, already, written) = match definition {
+        let (kind, name, over, already, written, written_name) = match definition {
             Definition::Drop(asked) => return self.drop_object(&asked, sql),
             Definition::AddColumn(asked) => return self.add_column(arena, &asked, sql),
             Definition::Rename(asked) => return self.rename_table(&asked, sql),
@@ -2503,6 +2538,7 @@ impl Writer {
                     name,
                     table.if_not_exists,
                     written_statement(b"CREATE TABLE ", table.name, sql),
+                    table.name.text(sql),
                 )
             }
             Definition::Index(index) => (
@@ -2519,6 +2555,7 @@ impl Writer {
                     index.name,
                     sql,
                 ),
+                index.name.text(sql),
             ),
             // A view holds no row of its own: it names a statement, and
             // the rows are the ones that statement answers.
@@ -2530,10 +2567,11 @@ impl Writer {
                     name,
                     view.if_not_exists,
                     written_statement(b"CREATE VIEW ", view.name, sql),
+                    view.name.text(sql),
                 )
             }
         };
-        if self.may_name(&name, already, &definition)? {
+        if self.may_name((&name, written_name), already, &definition)? {
             return Ok(());
         }
         let root = self.rooted(kind)?;
@@ -2567,18 +2605,7 @@ impl Writer {
             return self.fill(arena, &index, sql, root, &over);
         }
         let rowid = self.schema_blank()?;
-        // A `PRIMARY KEY` and a `UNIQUE` each carry an index of the
-        // table's own, which the grammar makes as it reads the
-        // constraint, so its row stands before the row of the table is
-        // written over the blank one.
-        let mut counts = false;
-        if let Definition::Table(written) = definition {
-            let table = crate::schema::table(arena, &written, sql)?;
-            for at in 0..table.keys.len() {
-                self.own_index(&table, at)?;
-            }
-            counts = table.autoincrement;
-        }
+        let counts = self.own_indexes(arena, definition, sql)?;
         self.schema_written(rowid, &row)?;
         // `sqlite3StartTable` makes `sqlite_sequence` with the first
         // table that counts its keys up, and the row of that table is
@@ -2616,7 +2643,13 @@ impl Writer {
     /// already holds the name and the statement wrote `IF NOT EXISTS`.
     ///
     /// Reading the schema costs O(n) in its rows.
-    fn already(&self, name: &[u8], if_not_exists: bool, making: Making) -> Result<bool, Error> {
+    fn already(
+        &self,
+        held: (&[u8], &[u8]),
+        if_not_exists: bool,
+        making: Making,
+    ) -> Result<bool, Error> {
+        let (name, written) = held;
         let bytes = self.image();
         let database = Database::open(&bytes)?;
         let held: Option<&[u8]> = if database.table(name).is_some() {
@@ -2642,7 +2675,9 @@ impl Writer {
             Making::Table => held != b"index",
         };
         if same {
-            return Err(Error::Exists(held.to_vec(), name.to_vec()));
+            // `sqlite3StartTable` writes the name as the statement
+            // wrote it, which `%T` of the token answers with its quotes.
+            return Err(Error::Exists(held.to_vec(), written.to_vec()));
         }
         let kind = if making == Making::Index {
             b"table"
@@ -2664,17 +2699,18 @@ impl Writer {
     /// whatever [`Writer::already`] refuses.
     fn may_name(
         &self,
-        name: &[u8],
+        held: (&[u8], &[u8]),
         if_not_exists: bool,
         definition: &Definition,
     ) -> Result<bool, Error> {
+        let (name, _) = held;
         let making = if matches!(definition, Definition::Index(_)) {
             Making::Index
         } else {
             Making::Table
         };
         self.reserved(name)?;
-        self.already(name, if_not_exists, making)
+        self.already(held, if_not_exists, making)
     }
 
     /// Whether the name is one this crate may write, which is
@@ -2695,6 +2731,33 @@ impl Writer {
             return Ok(());
         }
         Err(Error::Reserved(name.to_vec()))
+    }
+
+    /// The indexes a `CREATE TABLE` carries of its own, written, and
+    /// whether the table counts its keys up.
+    ///
+    /// A `PRIMARY KEY` and a `UNIQUE` each carry an index of the
+    /// table's own, which the grammar makes as it reads the constraint,
+    /// so its row stands before the row of the table is written over
+    /// the blank one.
+    ///
+    /// # Errors
+    ///
+    /// Whatever reading the statement or writing an index refuses.
+    fn own_indexes(
+        &mut self,
+        arena: &Arena,
+        definition: Definition,
+        sql: &[u8],
+    ) -> Result<bool, Error> {
+        let Definition::Table(written) = definition else {
+            return Ok(false);
+        };
+        let table = crate::schema::table(arena, &written, sql)?;
+        for at in 0..table.keys.len() {
+            self.own_index(&table, at)?;
+        }
+        Ok(table.autoincrement)
     }
 
     /// One index of a table's own, written: a page for its tree and a
@@ -2745,7 +2808,11 @@ impl Writer {
         let (entries, collations) = {
             let bytes = self.image();
             let database = Database::open(&bytes)?;
-            let (table, _) = database.table(over).ok_or(Error::Unsupported)?;
+            // `sqlite3CreateIndex` names the schema the table would
+            // stand in.
+            let (table, _) = database
+                .table(over)
+                .ok_or_else(|| Error::NoTable(schema_named_as(over)))?;
             let read = crate::schema::index(arena, index, sql, table)?;
             let collations = collations_of(&read);
             let over = Over {
@@ -5539,6 +5606,17 @@ struct Points {
 /// has no rowid for a name to answer.
 fn keyed_rowid(key: &[Value]) -> i64 {
     key.first().map_or(0, Value::to_integer)
+}
+
+/// The word a `DROP` names what it takes away by, which is what the
+/// refusal writes.
+fn dropped_word(kind: crate::ast::Dropped) -> Vec<u8> {
+    match kind {
+        crate::ast::Dropped::Table => b"table".to_vec(),
+        crate::ast::Dropped::Index => b"index".to_vec(),
+        crate::ast::Dropped::View => b"view".to_vec(),
+        crate::ast::Dropped::Trigger => b"trigger".to_vec(),
+    }
 }
 
 /// The name of a table under the schema it stands in, which is `main`

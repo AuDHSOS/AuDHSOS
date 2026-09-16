@@ -62,6 +62,14 @@ pub enum Error {
     /// it was named under, which is empty where the walk asked for a
     /// side it had put there itself.
     NoTable(Vec<u8>),
+    /// A `DROP` of a name the schema holds no such object under, with
+    /// the word for what it makes and the name.
+    NoObject(Vec<u8>, Vec<u8>),
+    /// A `CREATE TRIGGER` whose time the thing it is over does not
+    /// take, with the time, the word for what it is over, and its name.
+    Timed(Vec<u8>, Vec<u8>, Vec<u8>),
+    /// A `CREATE TRIGGER` over a table SQLite keeps for itself.
+    SystemTrigger,
     /// An `ORDER BY` that counts to a column the answer does not have.
     OrderRange,
     /// An aggregate where there is nothing to aggregate over: in a
@@ -279,6 +287,18 @@ impl Error {
                 "no such table: {}",
                 alloc::string::String::from_utf8_lossy(name)
             ),
+            Error::NoObject(kind, name) => alloc::format!(
+                "no such {}: {}",
+                alloc::string::String::from_utf8_lossy(kind),
+                alloc::string::String::from_utf8_lossy(name)
+            ),
+            Error::Timed(word, held, name) => alloc::format!(
+                "cannot create {} trigger on {}: {}",
+                alloc::string::String::from_utf8_lossy(word),
+                alloc::string::String::from_utf8_lossy(held),
+                alloc::string::String::from_utf8_lossy(name)
+            ),
+            Error::SystemTrigger => "cannot create trigger on system table".to_string(),
             Error::Foreign => "FOREIGN KEY constraint failed".to_string(),
             Error::ForeignMismatch(child, parent) => alloc::format!(
                 "foreign key mismatch - \"{}\" referencing \"{}\"",

@@ -1002,10 +1002,12 @@ fn what_a_statement_that_changes_a_database_refuses() {
     assert!(Writer::new(500, 0, Encoding::Utf8).is_err());
     // A statement this crate does not write.
     assert!(matches!(refuse(&["SELECT 1"]), Error::Parse(_)));
-    assert!(matches!(
-        refuse(&["CREATE INDEX i ON t(a)"]),
-        Error::Unsupported
-    ));
+    // An index over a table the schema does not hold names that table
+    // under the schema it would stand in.
+    assert_eq!(
+        refuse(&["CREATE INDEX i ON t(a)"]).message(),
+        "no such table: main.t"
+    );
     // A table made from a statement is written; the grammar writes no
     // `WITHOUT ROWID` and no `STRICT` after one.
     assert!(matches!(
@@ -4354,4 +4356,90 @@ fn a_row_a_trigger_keeps_holds_the_key_a_replace_of_a_table_with_a_rowid_wanted(
             alloc::vec![Value::Int(2), Value::Text(b"y".to_vec())]
         ]
     );
+}
+
+/// What a `CREATE` and a `DROP` name in the words they are refused
+/// with, which is `sqlite3StartTable`, `sqlite3CreateTrigger` and the
+/// `sqlite3Drop*` routines.
+#[test]
+fn what_a_create_and_a_drop_name_in_a_refusal() {
+    use crate::change::Writer;
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(x)".as_slice(),
+        b"CREATE VIEW v AS SELECT 1",
+        b"CREATE TRIGGER tr AFTER INSERT ON t BEGIN SELECT 1; END",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    for (sql, message) in [
+        // The name is written as the statement wrote it, which is `%T`
+        // of the token.
+        (
+            b"CREATE TABLE \"t\"(y)".as_slice(),
+            "table \"t\" already exists",
+        ),
+        (b"CREATE TABLE [t](y)", "table [t] already exists"),
+        (
+            b"CREATE VIEW \"t\" AS SELECT 1",
+            "table \"t\" already exists",
+        ),
+        (
+            b"CREATE TRIGGER [tr] AFTER INSERT ON t BEGIN SELECT 1; END",
+            "trigger [tr] already exists",
+        ),
+        // A name the other kind holds is written with its quotes off.
+        (
+            b"CREATE INDEX \"t\" ON t(x)",
+            "there is already a table named t",
+        ),
+        // A `DROP` names what the statement said it takes away.
+        (b"DROP TABLE nosuch", "no such table: nosuch"),
+        (b"DROP INDEX nosuch", "no such index: nosuch"),
+        (b"DROP VIEW nosuch", "no such view: nosuch"),
+        (b"DROP TRIGGER nosuch", "no such trigger: nosuch"),
+        // A trigger names the schema the table would stand in, and a
+        // temporary one names no schema.
+        (
+            b"CREATE TRIGGER t2 AFTER INSERT ON nosuch BEGIN SELECT 1; END",
+            "no such table: main.nosuch",
+        ),
+        (
+            b"CREATE TEMP TRIGGER t2 AFTER INSERT ON nosuch BEGIN SELECT 1; END",
+            "no such table: nosuch",
+        ),
+        (b"CREATE INDEX i ON nosuch(x)", "no such table: main.nosuch"),
+        // Only a view carries an `INSTEAD OF` trigger, and only a table
+        // carries the other two.
+        (
+            b"CREATE TRIGGER t2 INSTEAD OF INSERT ON t BEGIN SELECT 1; END",
+            "cannot create INSTEAD OF trigger on table: t",
+        ),
+        (
+            b"CREATE TRIGGER t2 AFTER INSERT ON v BEGIN SELECT 1; END",
+            "cannot create AFTER trigger on view: v",
+        ),
+        (
+            b"CREATE TRIGGER t2 BEFORE INSERT ON v BEGIN SELECT 1; END",
+            "cannot create BEFORE trigger on view: v",
+        ),
+        // A table SQLite keeps for itself carries no trigger.
+        (
+            b"CREATE TRIGGER t2 AFTER INSERT ON sqlite_master BEGIN SELECT 1; END",
+            "cannot create trigger on system table",
+        ),
+        // An `INSTEAD OF` trigger over a view is the one shape this
+        // crate writes no row of.
+        (
+            b"CREATE TRIGGER t2 INSTEAD OF INSERT ON v BEGIN SELECT 1; END",
+            "Unsupported",
+        ),
+    ] {
+        assert_eq!(
+            writer.run(sql).unwrap_err().message(),
+            message,
+            "{}",
+            alloc::string::String::from_utf8_lossy(sql)
+        );
+    }
 }
