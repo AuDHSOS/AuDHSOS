@@ -55,6 +55,7 @@ mod utf8;
 mod value;
 mod wal;
 mod window;
+mod window_words;
 
 /// One table, three rows, every storage class, page size 4096, UTF-8.
 ///

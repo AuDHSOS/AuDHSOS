@@ -30,9 +30,12 @@ pub enum Error {
     /// A function this engine does not have, by the name it was
     /// called under.
     NoFunction(Vec<u8>),
-    /// A window function written where no window was worked out, which
-    /// `sqlite3WindowRewrite` refuses as `misuse of window function`.
-    NoWindow,
+    /// A window function written where no window was worked out, with
+    /// the name it was called under.
+    NoWindow(Vec<u8>),
+    /// A scalar function carrying a `FILTER`, which only an aggregate
+    /// reads, with the name it was called under.
+    Filtered(Vec<u8>),
     /// A collation the connection does not hold, which is what a
     /// `COLLATE` naming one the C library would have been given
     /// through its API names.
@@ -125,6 +128,12 @@ impl Error {
                 alloc::format!("input to {}() is not numeric", shown(name))
             }
             Error::Infinite(name) => alloc::format!("Inf input to {}()", shown(name)),
+            Error::NoWindow(name) => {
+                alloc::format!("misuse of window function {}()", shown(name))
+            }
+            Error::Filtered(_) => {
+                "FILTER clause may only be used with aggregate window functions".to_string()
+            }
             Error::RowValue => "row value misused".to_string(),
             Error::Json(refused) => refused.message(),
             other => alloc::format!("{other:?}"),
@@ -503,10 +512,13 @@ fn answer(
             filter,
         } => match row.aggregate(id) {
             Some(value) => Ok(Answer::plain(value)),
-            None if filter.is_some() => Err(Error::NoWindow),
+            None if filter.is_some() => Err(Error::Filtered(named_as(name, sql))),
             None => called(arena, name, args, distinct, star, sql, row, deeper),
         },
-        Node::Over { .. } => row.aggregate(id).map(Answer::plain).ok_or(Error::NoWindow),
+        Node::Over { name, .. } => row
+            .aggregate(id)
+            .map(Answer::plain)
+            .ok_or_else(|| Error::NoWindow(named_as(name, sql))),
         Node::Like {
             op,
             value,
@@ -609,7 +621,16 @@ fn called(
     let called = crate::schema::dequote(name.text(sql));
     // An aggregate called with a number of arguments it does not take
     // reaches the scalars, which hold none of that name.
+    // One of the eleven written under no `OVER` reaches the scalars,
+    // which hold none of that name, and so does an aggregate called
+    // with a number of arguments it does not take.
     let function = match func::lookup(&called, values.len()) {
+        Err(Error::NoFunction(_)) if crate::window::named(&called) => {
+            if crate::window::lookup(&called, values.len()).is_none() {
+                return Err(Error::WrongArguments(called));
+            }
+            return Err(Error::NoWindow(called));
+        }
         Err(Error::NoFunction(_)) if crate::agg::named(&called) => {
             return Err(Error::WrongArguments(called));
         }
@@ -659,6 +680,11 @@ fn literal_value(literal: Literal, sql: &[u8], negated: bool) -> Result<Value, E
         Literal::Blob(span) => Ok(Value::Blob(hex(span.text(sql)))),
         Literal::CurrentTime(_) => Err(Error::Unsupported),
     }
+}
+
+/// A name as it was written, with its quotes taken off.
+fn named_as(name: crate::ast::Span, sql: &[u8]) -> Vec<u8> {
+    crate::schema::dequote(name.text(sql))
 }
 
 /// Whether the node is a fraction between zero and one written as a

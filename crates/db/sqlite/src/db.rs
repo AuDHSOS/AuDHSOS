@@ -222,6 +222,23 @@ pub enum Error {
     /// term that reads itself under an operator other than `UNION`, a
     /// table-valued function.
     Unsupported,
+    /// An `OVER` that names a window no `WINDOW` clause defines, with
+    /// that name.
+    NoWindowNamed(Vec<u8>),
+    /// A window that writes again what the window it builds on wrote,
+    /// with the words for what it wrote and the name of that window.
+    Override(Vec<u8>, Vec<u8>),
+    /// A scalar function written under an `OVER`, with its name.
+    NotAWindow(Vec<u8>),
+    /// A frame offset that is not a whole number of no sign, with
+    /// whether it is the one the frame begins at and whether the frame
+    /// counts in rows or in groups rather than in the values of its
+    /// term.
+    FrameOffset(bool, bool),
+    /// An `ntile` whose count is not one or more.
+    Tiles,
+    /// An `nth_value` whose count is not one or more.
+    Nth,
     /// A window written in a way `sqlite3WindowAlloc` refuses: a frame
     /// offset that is not a whole number of no sign, a `RANGE` offset
     /// where the window orders by other than one term, an `ntile` or an
@@ -264,6 +281,26 @@ impl Error {
                 shown(word),
                 most
             ),
+            Error::NotAWindow(name) => {
+                alloc::format!("{}() may not be used as a window function", shown(name))
+            }
+            Error::FrameOffset(starting, whole) => alloc::format!(
+                "frame {} offset must be a non-negative {}",
+                if *starting { "starting" } else { "ending" },
+                if *whole { "integer" } else { "number" }
+            ),
+            Error::Tiles => {
+                alloc::string::String::from("argument of ntile must be a positive integer")
+            }
+            Error::Nth => alloc::string::String::from(
+                "second argument to nth_value must be a positive integer",
+            ),
+            Error::NoWindowNamed(name) => {
+                alloc::format!("no such window: {}", shown(name))
+            }
+            Error::Override(what, name) => {
+                alloc::format!("cannot override {} of window: {}", shown(what), shown(name))
+            }
             Error::Unrecognized(token) => {
                 alloc::format!("unrecognized token: \"{}\"", shown(token))
             }
@@ -5222,13 +5259,15 @@ fn gather_one(
     {
         let count = if star { 0 } else { arena.children(args).len() };
         let called = dequote(name.text(sql));
-        let which = window::lookup(&called, count)
-            .ok_or_else(|| Error::Eval(eval::Error::NoFunction(called.clone())))?;
+        let which = window::lookup(&called, count).ok_or_else(|| refused_over(&called, count))?;
         // `sqlite3WindowRewrite` takes a `FILTER` for an aggregate and
         // refuses one for the eleven built-in window functions, and
         // refuses `DISTINCT` for every one of them.
-        if distinct || (filter.is_some() && !which.filtered()) {
+        if distinct {
             return Err(Error::Aggregate);
+        }
+        if filter.is_some() && !which.filtered() {
+            return Err(Error::Eval(eval::Error::Filtered(called)));
         }
         out.push(Over {
             id,
@@ -5270,6 +5309,20 @@ struct Framed {
     frame: Frames,
 }
 
+/// What a name an `OVER` follows that names no window function is
+/// refused with: a name the table holds under another number of
+/// arguments is that number, a name the scalars hold is one no window
+/// reads, and any other name is no function at all.
+fn refused_over(called: &[u8], count: usize) -> Error {
+    if window::named(called) || crate::agg::named(called) {
+        return Error::Eval(eval::Error::WrongArguments(called.to_vec()));
+    }
+    if crate::func::lookup(called, count).is_ok() {
+        return Error::NotAWindow(called.to_vec());
+    }
+    Error::Eval(eval::Error::NoFunction(called.to_vec()))
+}
+
 /// The window an `OVER` names, with the windows it builds on folded in.
 ///
 /// `sqlite3WindowAssemble`: a window that names another takes that
@@ -5293,7 +5346,7 @@ fn framed(arena: &Arena, select: &Select, sql: &[u8], id: WindowId) -> Result<Fr
             .named_windows(select.windows)
             .iter()
             .find(|held| dequote(held.name.text(sql)).eq_ignore_ascii_case(&named))
-            .ok_or(Error::Window)?;
+            .ok_or_else(|| Error::NoWindowNamed(named.clone()))?;
         let under = arena.window(found.window).ok_or(Error::Window)?;
         // `OVER name` is the named window itself, frame and all, which
         // is `sqlite3WindowUpdate`; `OVER (name ...)` builds on it, and
@@ -5304,14 +5357,21 @@ fn framed(arena: &Arena, select: &Select, sql: &[u8], id: WindowId) -> Result<Fr
             order = under.order;
             frame = under.frame;
         } else {
-            if !partition.is_empty() || under.frame.is_some() {
-                return Err(Error::Window);
+            // `sqlite3WindowChain` reads the three in this order, so a
+            // window that overrides more than one is named by the
+            // first of them.
+            if !partition.is_empty() {
+                return Err(Error::Override(b"PARTITION clause".to_vec(), named));
+            }
+            if !order.is_empty() && !under.order.is_empty() {
+                return Err(Error::Override(b"ORDER BY clause".to_vec(), named));
+            }
+            if under.frame.is_some() {
+                return Err(Error::Override(b"frame specification".to_vec(), named));
             }
             partition = under.partition;
             if order.is_empty() {
                 order = under.order;
-            } else if !under.order.is_empty() {
-                return Err(Error::Window);
             }
         }
         whole = under.named;
@@ -5416,9 +5476,16 @@ fn partitioned(
 
 /// A frame offset counted in rows or in groups, which SQLite refuses
 /// unless it is a whole number of no sign.
-fn offset_of(arena: &Arena, sql: &[u8], cursor: &Cursor<'_>, expr: ExprId) -> Result<usize, Error> {
-    let value = whole_of(&evaluate_row(arena, expr, sql, cursor)?).ok_or(Error::Frame)?;
-    usize::try_from(value).map_err(|_| Error::Frame)
+fn offset_of(
+    arena: &Arena,
+    sql: &[u8],
+    cursor: &Cursor<'_>,
+    expr: ExprId,
+    starting: bool,
+) -> Result<usize, Error> {
+    let refused = || Error::FrameOffset(starting, true);
+    let value = whole_of(&evaluate_row(arena, expr, sql, cursor)?).ok_or_else(refused)?;
+    usize::try_from(value).map_err(|_| refused())
 }
 
 /// A value as the whole number `OP_MustBeInt` would make of it, or
@@ -5447,13 +5514,18 @@ fn edge_of(
     sql: &[u8],
     cursor: &Cursor<'_>,
     bound: Edge,
+    starting: bool,
 ) -> Result<window::Edge, Error> {
     Ok(match bound {
         Edge::UnboundedPreceding => window::Edge::Start,
         Edge::CurrentRow => window::Edge::Current,
         Edge::UnboundedFollowing => window::Edge::End,
-        Edge::Preceding(expr) => window::Edge::Preceding(offset_of(arena, sql, cursor, expr)?),
-        Edge::Following(expr) => window::Edge::Following(offset_of(arena, sql, cursor, expr)?),
+        Edge::Preceding(expr) => {
+            window::Edge::Preceding(offset_of(arena, sql, cursor, expr, starting)?)
+        }
+        Edge::Following(expr) => {
+            window::Edge::Following(offset_of(arena, sql, cursor, expr, starting)?)
+        }
     })
 }
 
@@ -5613,7 +5685,7 @@ fn range_offsets(
                 match numeric {
                     Value::Int(count) if count >= 0 => Some(Value::Int(count)),
                     Value::Real(count) if count >= 0.0 => Some(Value::Real(count)),
-                    _ => return Err(Error::Frame),
+                    _ => return Err(Error::FrameOffset(!slot, false)),
                 }
             }
             _ => None,
@@ -5658,14 +5730,14 @@ fn frame_rows(
     let frame = &part.framed.frame;
     let span = match frame.kind {
         Frame::Rows => window::rows_frame(
-            edge_of(arena, sql, cursor, frame.start)?,
-            edge_of(arena, sql, cursor, frame.end)?,
+            edge_of(arena, sql, cursor, frame.start, true)?,
+            edge_of(arena, sql, cursor, frame.end, false)?,
             at,
             part.peers.rows(),
         ),
         Frame::Groups => window::groups_frame(
-            edge_of(arena, sql, cursor, frame.start)?,
-            edge_of(arena, sql, cursor, frame.end)?,
+            edge_of(arena, sql, cursor, frame.start, true)?,
+            edge_of(arena, sql, cursor, frame.end, false)?,
             at,
             part.peers,
         ),
@@ -5754,10 +5826,10 @@ fn framed_value(
         // rows from one.
         _ => {
             let id = *args.get(1).ok_or(Error::Frame)?;
-            let nth = whole_of(&evaluate_row(arena, id, sql, cursor)?).ok_or(Error::Frame)?;
-            let place = usize::try_from(nth).map_err(|_| Error::Frame)?;
+            let nth = whole_of(&evaluate_row(arena, id, sql, cursor)?).ok_or(Error::Nth)?;
+            let place = usize::try_from(nth).map_err(|_| Error::Nth)?;
             if place < 1 {
-                return Err(Error::Frame);
+                return Err(Error::Nth);
             }
             frame.get(place.saturating_sub(1))
         }
@@ -5839,11 +5911,11 @@ fn answered_over(
                 .ok_or(Error::NoTable(Vec::new()))?;
             let cursor = cursors.get(place).ok_or(Error::NoTable(Vec::new()))?;
             let id = *arena.children(over.args).first().ok_or(Error::Frame)?;
-            let tiles = whole_of(&evaluate_row(arena, id, sql, cursor)?).ok_or(Error::Frame)?;
+            let tiles = whole_of(&evaluate_row(arena, id, sql, cursor)?).ok_or(Error::Tiles)?;
             if tiles < 1 {
-                return Err(Error::Frame);
+                return Err(Error::Tiles);
             }
-            let tiles = usize::try_from(tiles).map_err(|_| Error::Frame)?;
+            let tiles = usize::try_from(tiles).map_err(|_| Error::Tiles)?;
             Ok(Value::Int(window::ntile(at, peers.rows(), tiles)))
         }
         Which::Lag => offset_value(arena, sql, cursors, over, part, at, false),

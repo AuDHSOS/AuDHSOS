@@ -5471,6 +5471,28 @@ Document 16 step Q8.
 - `ON DELETE RESTRICT` is held where the row is written whatever the key
   says, and `NO ACTION` counts the rows that lose their parent.
 
+### 6.6.187 The words a window is refused with (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A window function where no window was worked out is refused `misuse
+  of window function sum()`, a scalar under an `OVER` `trim() may not be
+  used as a window function`, and either called with a number of
+  arguments it does not take `wrong number of arguments to function
+  row_number()`.
+- A `FILTER` on one of the eleven is refused `FILTER clause may only be
+  used with aggregate window functions`.
+- A window that names one no `WINDOW` clause defines is refused `no such
+  window: nosuch`, and one that writes again what the window it builds
+  on wrote `cannot override PARTITION clause of window: win`, the
+  `ORDER BY` clause and the frame specification likewise, in that order.
+- `ntile(0)` is refused `argument of ntile must be a positive integer`
+  and `nth_value(a,0)` `second argument to nth_value must be a positive
+  integer`.
+- A frame counted in rows takes a whole number, `frame starting offset
+  must be a non-negative integer`, and one counted in the values of its
+  term takes any, `... must be a non-negative number`.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

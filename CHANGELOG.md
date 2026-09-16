@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` refuses a window in the words the C library refuses it
+  with: a window function where no window was worked out, a scalar
+  under an `OVER`, a `FILTER` on one of the eleven, a window that names
+  one no `WINDOW` clause defines or writes again what the one it builds
+  on wrote, and a frame offset or a count that is not the number it has
+  to be. D-263 records it. Catalog 6.6.187.
+
 - `db-sqlite` names a statement the parser refuses by the token the
   parser stopped at, `near "FROM": syntax error`, and answers
   `incomplete input` where the tokens ran out before the grammar was

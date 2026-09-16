@@ -778,6 +778,7 @@ Size: L.
     `update_delete_limit`.
 42. The foreign keys a transaction is held to at its end. Built, which
     D-262 records.
+43. The words a window is refused with. Built, which D-263 records.
 
 ### Done when
 
@@ -787,8 +788,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 72 277 cases in 703 files, 59 213
-pass, 3094 answer differently, and 9970 name something the engine
+under the `tclsh` of the machine. Of 72 341 cases in 703 files, 59 310
+pass, 3059 answer differently, and 9972 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts

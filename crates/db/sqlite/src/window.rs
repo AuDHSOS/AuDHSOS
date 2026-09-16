@@ -138,6 +138,17 @@ const TABLE: &[Entry] = &[
     },
 ];
 
+/// Whether the table holds a window function of that name, whatever
+/// number of arguments it takes.
+///
+/// Reading the table costs O(n) in its rows.
+#[must_use]
+pub fn named(name: &[u8]) -> bool {
+    TABLE
+        .iter()
+        .any(|entry| name.eq_ignore_ascii_case(entry.name))
+}
+
 /// Which window function `name` taking `count` arguments is, or nothing
 /// where it is neither one of the eleven nor an aggregate.
 #[must_use]
