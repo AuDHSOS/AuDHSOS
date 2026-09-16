@@ -1629,13 +1629,20 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Value, VMError> {
         match intrinsic {
-            Intrinsic::ObjectPrototypeIsPrototypeOf => {
-                Self::is_prototype_of(self.call_argument(&call, 0)?, call.receiver, heap, realm)
-            }
+            Intrinsic::ObjectPrototypeIsPrototypeOf => Self::is_prototype_of(
+                self.call_argument(&call, 0, heap)?,
+                call.receiver,
+                heap,
+                realm,
+            ),
             Intrinsic::ObjectPrototypeHasOwnProperty
-            | Intrinsic::ObjectPrototypePropertyIsEnumerable => {
-                Self::own_property_test(intrinsic, self.call_argument(&call, 0)?, call, heap, realm)
-            }
+            | Intrinsic::ObjectPrototypePropertyIsEnumerable => Self::own_property_test(
+                intrinsic,
+                self.call_argument(&call, 0, heap)?,
+                call,
+                heap,
+                realm,
+            ),
             Intrinsic::ObjectPrototypeToString => self.object_to_string(call.receiver, heap, realm),
             // 28.1.2 leaves to the constructor it was given, so it never
             // answers here.
@@ -1671,7 +1678,7 @@ impl RegisterVM {
             Intrinsic::StringPrototypeSplit => self.call_split_intrinsic(&call, units, heap, realm),
             // 19.2.2 and 19.2.3 answer about the Number their argument is.
             Intrinsic::IsNaN | Intrinsic::IsFinite => {
-                let number = primitive_number(self.call_argument(&call, 0)?, heap)?;
+                let number = primitive_number(self.call_argument(&call, 0, heap)?, heap)?;
                 Ok(Value::from_bool(if intrinsic == Intrinsic::IsNaN {
                     number.is_nan()
                 } else {
@@ -1681,7 +1688,7 @@ impl RegisterVM {
             // 19.2.5 and 19.2.4 read a Number out of the text of their first
             // argument. The walk charges for the text it passes over.
             Intrinsic::ParseInt | Intrinsic::ParseFloat => {
-                let text = property_name_units(self.call_argument(&call, 0)?, heap)?;
+                let text = property_name_units(self.call_argument(&call, 0, heap)?, heap)?;
                 self.fuel = self
                     .fuel
                     .checked_sub(u64::try_from(text.len()).unwrap_or(u64::MAX))
@@ -1690,7 +1697,7 @@ impl RegisterVM {
                     crate::number::parse_float(&text)
                 } else {
                     let radix = crate::value::number_uint32(primitive_number(
-                        self.call_argument(&call, 1)?,
+                        self.call_argument(&call, 1, heap)?,
                         heap,
                     )?);
                     crate::number::parse_integer(&text, i32::from_ne_bytes(radix.to_ne_bytes()))
@@ -1704,12 +1711,12 @@ impl RegisterVM {
             // `@@replace`, which 22.2.6.11 answers for a RegExp.
             Intrinsic::StringPrototypeReplace => self.string_replace(&call, units, heap, realm),
             Intrinsic::RegExpPrototypeReplace => {
-                let text = property_name_units(self.call_argument(&call, 0)?, heap)?;
+                let text = property_name_units(self.call_argument(&call, 0, heap)?, heap)?;
                 let receiver = call
                     .receiver
                     .as_object()
                     .ok_or_else(|| type_error(heap, realm, "this value is not a RegExp"))?;
-                let replacement = self.call_argument(&call, 1)?;
+                let replacement = self.call_argument(&call, 1, heap)?;
                 self.regexp_replace(receiver, &text, replacement, heap, realm)
             }
             // 27.1.2.1, 23.1.2.5 and 22.2.5.2 answer the value they were
@@ -1719,7 +1726,7 @@ impl RegisterVM {
             Intrinsic::ArrayOf => {
                 let mut values = Vec::new();
                 for index in 0..call.arg_count {
-                    values.push(self.call_argument(&call, index)?);
+                    values.push(self.call_argument(&call, index, heap)?);
                 }
                 Self::array_of(values, heap, realm)
             }
@@ -1790,8 +1797,8 @@ impl RegisterVM {
             | Intrinsic::MathFround
             | Intrinsic::MathSin => Self::call_plain_intrinsic(
                 intrinsic,
-                self.call_argument(&call, 0)?,
-                self.call_argument(&call, 1)?,
+                self.call_argument(&call, 0, heap)?,
+                self.call_argument(&call, 1, heap)?,
                 heap,
             ),
             Intrinsic::MathMax | Intrinsic::MathMin => {
@@ -1807,7 +1814,7 @@ impl RegisterVM {
             Intrinsic::StringConstructor => Self::call_string_constructor(
                 call.construct.is_some(),
                 (call.arg_count > 0)
-                    .then(|| self.call_argument(&call, 0))
+                    .then(|| self.call_argument(&call, 0, heap))
                     .transpose()?,
                 heap,
                 realm,
@@ -1816,7 +1823,7 @@ impl RegisterVM {
             // goes through ToNumber. `new` makes the Number exotic object of
             // 21.1.3, which this engine has not built.
             Intrinsic::NumberConstructor => {
-                let argument = self.call_argument(&call, 0)?;
+                let argument = self.call_argument(&call, 0, heap)?;
                 let number = if call.arg_count == 0 {
                     0.0
                 } else {
@@ -1836,7 +1843,7 @@ impl RegisterVM {
             // argument at all. `new` makes the Boolean exotic object of
             // 20.3.3, whose [[BooleanData]] this engine has not built.
             Intrinsic::BooleanConstructor => {
-                let boolean = Self::to_boolean(self.call_argument(&call, 0)?, heap)?;
+                let boolean = Self::to_boolean(self.call_argument(&call, 0, heap)?, heap)?;
                 if call.construct.is_some() {
                     // 20.3.3: the wrapper holds `[[BooleanData]]`.
                     return Self::wrapper(
@@ -1899,7 +1906,7 @@ impl RegisterVM {
                 if call.construct.is_some() {
                     return Err(type_error(heap, realm, "Symbol is not a constructor"));
                 }
-                let description = self.call_argument(&call, 0)?;
+                let description = self.call_argument(&call, 0, heap)?;
                 let description = if description.is_undefined() {
                     None
                 } else {
@@ -1910,12 +1917,12 @@ impl RegisterVM {
             }
             // 20.4.2.2 and 20.4.2.3 are the two halves of the registry.
             Intrinsic::SymbolFor => {
-                let key = property_name_units(self.call_argument(&call, 0)?, heap)?;
+                let key = property_name_units(self.call_argument(&call, 0, heap)?, heap)?;
                 self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
                 Ok(Value::from_symbol(heap.registered_symbol(&key)?))
             }
             Intrinsic::SymbolKeyFor => {
-                let Some(symbol) = self.call_argument(&call, 0)?.as_symbol() else {
+                let Some(symbol) = self.call_argument(&call, 0, heap)?.as_symbol() else {
                     return Err(type_error(heap, realm, "value is not a Symbol"));
                 };
                 match heap.symbol_registry_key(symbol).map(<[u16]>::to_vec) {
@@ -1961,7 +1968,7 @@ impl RegisterVM {
             | Intrinsic::NumberIsNaN
             | Intrinsic::NumberIsSafeInteger => Ok(Value::from_bool(Self::number_predicate(
                 intrinsic,
-                self.call_argument(&call, 0)?,
+                self.call_argument(&call, 0, heap)?,
             ))),
             Intrinsic::ErrorConstructor
             | Intrinsic::EvalErrorConstructor
@@ -2000,9 +2007,9 @@ impl RegisterVM {
             | Intrinsic::ReflectPreventExtensions
             | Intrinsic::ObjectGetOwnPropertyNames => Self::call_object_intrinsic(
                 intrinsic,
-                self.call_argument(&call, 0)?,
-                self.call_argument(&call, 1)?,
-                self.call_argument(&call, 2)?,
+                self.call_argument(&call, 0, heap)?,
+                self.call_argument(&call, 1, heap)?,
+                self.call_argument(&call, 2, heap)?,
                 heap,
                 realm,
             ),
@@ -2011,9 +2018,30 @@ impl RegisterVM {
 
     /// The argument at this position, or undefined when the call passed
     /// fewer, which 10.2.11 binds for a parameter the caller left out.
-    fn call_argument(&self, call: &Call, index: u16) -> Result<Value, VMError> {
+    fn call_argument(
+        &self,
+        call: &Call,
+        index: u16,
+        heap: &GenerationalHeap,
+    ) -> Result<Value, VMError> {
         if index >= call.arg_count {
             return Ok(VALUE_UNDEFINED);
+        }
+        // 7.3.15 and 20.2.3.1 pass a List, which no register of the caller
+        // holds; the Array the root names holds it instead.
+        if let Some(Resume::Spread { arguments }) = call.resume {
+            let list = heap
+                .root_value(arguments)
+                .and_then(Value::as_object)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let store = heap
+                .get_object(list)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?
+                .elements
+                .and_then(|elements| heap.get_elements(elements));
+            return Ok(store
+                .and_then(|store| store.get(u32::from(index)))
+                .unwrap_or(VALUE_UNDEFINED));
         }
         let slot = self
             .fp
@@ -2062,7 +2090,7 @@ impl RegisterVM {
             let held_receiver = heap.push_root(receiver)?;
             let mut held_arguments = Vec::new();
             for index in 1..call.arg_count {
-                held_arguments.push(heap.push_root(self.call_argument(&call, index)?)?);
+                held_arguments.push(heap.push_root(self.call_argument(&call, index, heap)?)?);
             }
             let count = held_arguments.len();
             // 20.2.3.2 steps 5 and 8 read the target before the bind exists,
@@ -3125,7 +3153,7 @@ impl RegisterVM {
             // 21.1.3.6 takes a radix between 2 and 36; 10 is 6.1.6.1.20 and
             // every other one is `Number::toString` with that radix.
             _ => {
-                let radix = self.call_argument(call, 0)?;
+                let radix = self.call_argument(call, 0, heap)?;
                 if !radix.is_undefined() {
                     let radix = integer_argument(radix, heap, realm)?;
                     if !(2..=36).contains(&radix) {
@@ -3171,8 +3199,18 @@ impl RegisterVM {
         if Self::iterates_with_callback(intrinsic) {
             return Ok(None);
         }
+        // A conversion writes the primitive back into the argument register,
+        // and a call that passes a List has none.
+        if matches!(call.resume, Some(Resume::Spread { .. })) {
+            return Ok(None);
+        }
         for (index, hint) in intrinsic.coerced_arguments() {
-            if *index >= call.arg_count || self.call_argument(call, *index)?.as_object().is_none() {
+            if *index >= call.arg_count
+                || self
+                    .call_argument(call, *index, heap)?
+                    .as_object()
+                    .is_none()
+            {
                 continue;
             }
             if (call.receiver.is_undefined() || call.receiver.is_null())
@@ -3192,7 +3230,9 @@ impl RegisterVM {
             // 20.1.2.4, 20.1.2.8, 20.1.2.13 and 28.1 read the target before
             // they convert the name, so a target the clause refuses is
             // refused by the clause and the conversion never runs.
-            if *index == 1 && Self::refuses_its_target(intrinsic, self.call_argument(call, 0)?) {
+            if *index == 1
+                && Self::refuses_its_target(intrinsic, self.call_argument(call, 0, heap)?)
+            {
                 return Ok(None);
             }
             return Ok(Some((*index, *hint)));
@@ -3634,15 +3674,15 @@ impl RegisterVM {
         let reflect = intrinsic == Intrinsic::ReflectApply;
         let (target, receiver, list) = if reflect {
             (
-                self.call_argument(&call, 0)?,
-                self.call_argument(&call, 1)?,
-                self.call_argument(&call, 2)?,
+                self.call_argument(&call, 0, heap)?,
+                self.call_argument(&call, 1, heap)?,
+                self.call_argument(&call, 2, heap)?,
             )
         } else {
             (
                 call.receiver,
-                self.call_argument(&call, 0)?,
-                self.call_argument(&call, 1)?,
+                self.call_argument(&call, 0, heap)?,
+                self.call_argument(&call, 1, heap)?,
             )
         };
         if !Self::is_script_function(target, heap) {
@@ -3712,7 +3752,7 @@ impl RegisterVM {
         }
         let mut arguments = Vec::new();
         for index in 0..call.arg_count {
-            arguments.push(self.call_argument(&call, index)?);
+            arguments.push(self.call_argument(&call, index, heap)?);
         }
         let mut current = function;
         let mut receiver = call.receiver;
@@ -3766,10 +3806,10 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Option<u32>, VMError> {
-        let target = self.call_argument(&call, 0)?;
-        let list = self.call_argument(&call, 1)?;
+        let target = self.call_argument(&call, 0, heap)?;
+        let list = self.call_argument(&call, 1, heap)?;
         let new_target = if call.arg_count > 2 {
-            self.call_argument(&call, 2)?
+            self.call_argument(&call, 2, heap)?
         } else {
             target
         };
@@ -4644,7 +4684,7 @@ impl RegisterVM {
         };
         let mut saw_nan = false;
         for index in 0..call.arg_count {
-            let value = primitive_number(self.call_argument(&call, index)?, heap)?;
+            let value = primitive_number(self.call_argument(&call, index, heap)?, heap)?;
             if value.is_nan() {
                 saw_nan = true;
                 continue;
@@ -4746,7 +4786,7 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Value, VMError> {
         if call.arg_count == 1 {
-            let length = self.call_argument(&call, 0)?;
+            let length = self.call_argument(&call, 0, heap)?;
             let Some(number) = length.as_f64() else {
                 let array = realm.array(heap, 1)?;
                 heap.set_array_element(array, 0, length)?;
@@ -4769,7 +4809,7 @@ impl RegisterVM {
         let count = u32::from(call.arg_count);
         let array = realm.array(heap, count)?;
         for index in 0..call.arg_count {
-            let value = self.call_argument(&call, index)?;
+            let value = self.call_argument(&call, index, heap)?;
             heap.set_array_element(array, u32::from(index), value)?;
         }
         Ok(Value::from_object(array))
@@ -4811,7 +4851,7 @@ impl RegisterVM {
         // callback.
         let from = intrinsic == Intrinsic::ArrayFrom;
         let source = if from {
-            let items = self.call_argument(&call, 0)?;
+            let items = self.call_argument(&call, 0, heap)?;
             if items.is_undefined() || items.is_null() {
                 return Err(type_error(heap, realm, "cannot box null or undefined"));
             }
@@ -4821,7 +4861,7 @@ impl RegisterVM {
         };
         let target = Self::coerce_object(source, heap, realm)?;
         if from {
-            let mapper = self.call_argument(&call, 1)?;
+            let mapper = self.call_argument(&call, 1, heap)?;
             if !mapper.is_undefined() && !Self::is_callable(mapper, heap) {
                 return Err(type_error(heap, realm, "the mapper is not callable"));
             }
@@ -4837,12 +4877,12 @@ impl RegisterVM {
                 return Err(VMError::Unsupported("an @@iterator in Array.from"));
             }
         }
-        let callback = self.call_argument(&call, u16::from(from))?;
+        let callback = self.call_argument(&call, u16::from(from), heap)?;
         // 23.1.3.24 takes its second argument as the accumulator; every other
         // clause takes it as the `this` value of the callback. Both are read
         // before the `length`, because reading a register has no effect a
         // Script can see and its getter may open a frame of its own.
-        let second = self.call_argument(&call, if from { 2 } else { 1 })?;
+        let second = self.call_argument(&call, if from { 2 } else { 1 }, heap)?;
         let reduces = matches!(
             intrinsic,
             Intrinsic::ArrayPrototypeReduce | Intrinsic::ArrayPrototypeReduceRight
@@ -5780,11 +5820,6 @@ impl RegisterVM {
         if !Self::constructs(parent, heap) {
             return Err(type_error(heap, realm, "super is not a constructor"));
         }
-        if !Self::is_script_function(parent, heap) {
-            return Err(VMError::Unsupported(
-                "a super call of a constructor written in Rust",
-            ));
-        }
         // 15.7.14 step 10: the default constructor passes the arguments its
         // own call was given, which are registers of the caller and not of
         // this frame, so they travel as the List of 7.3.15.
@@ -5824,6 +5859,32 @@ impl RegisterVM {
             return_pc,
             caller_code_id,
         };
+        // 10.1.13: every constructor of this Realm written in Rust makes its
+        // object with `OrdinaryCreateFromConstructor`, so the object it
+        // answers takes the Prototype the `newTarget` names.
+        if let Some(intrinsic) = Self::native_constructor_of(parent, heap) {
+            self.acc = self.call_intrinsic(intrinsic, call, units, heap, realm)?;
+            if spread.is_some() {
+                heap.exit_scope();
+            }
+            let prototype = self.prototype_of_new_target(new_target_register, heap)?;
+            if let Some(object) = self.acc.as_object()
+                && let Some(prototype) = prototype
+            {
+                heap.set_object_prototype(object, prototype)
+                    .map_err(VMError::Heap)?;
+            }
+            self.write_reg(this_register, self.acc)?;
+            return Ok(None);
+        }
+        if !Self::is_script_function(parent, heap) {
+            if spread.is_some() {
+                heap.exit_scope();
+            }
+            return Err(VMError::Unsupported(
+                "a super call of a constructor written in Rust",
+            ));
+        }
         self.enter_call_value(parent, units, active_feedback, heap, realm, call)
     }
 
@@ -5888,6 +5949,32 @@ impl RegisterVM {
             ));
         }
         Ok(value)
+    }
+
+    /// The intrinsic of a constructor of this Realm written in Rust.
+    fn native_constructor_of(value: Value, heap: &GenerationalHeap) -> Option<Intrinsic> {
+        let object = value.as_object()?;
+        let ObjectKind::NativeFunction { id, .. } = heap.get_object(object)?.kind else {
+            return None;
+        };
+        Intrinsic::from_id(id).filter(|intrinsic| intrinsic.constructs_an_object())
+    }
+
+    /// The `prototype` 10.1.13 reads off the `newTarget` of the call.
+    fn prototype_of_new_target(
+        &self,
+        new_target: Reg,
+        heap: &mut GenerationalHeap,
+    ) -> Result<Option<Value>, VMError> {
+        let Some(function) = self.read_reg(new_target)?.as_object() else {
+            return Ok(None);
+        };
+        let name = PropertyKey::String(heap.strings.intern("prototype")?);
+        let Some(found) = heap.lookup_named(function, name)? else {
+            return Ok(None);
+        };
+        let prototype = Self::plain_value(found)?;
+        Ok(prototype.as_object().map(|_| prototype))
     }
 
     /// Whether the function is the constructor of a class with a heritage.
@@ -6280,7 +6367,7 @@ impl RegisterVM {
                         heap.set_array_element(
                             object,
                             u32::from(offset),
-                            self.call_argument(&call, offset)?,
+                            self.call_argument(&call, offset, heap)?,
                         )?;
                     }
                 }
@@ -6289,13 +6376,13 @@ impl RegisterVM {
             // 23.1.3.31: the removed elements answer as an Array of their own,
             // and the tail closes the distance the arguments leave.
             Intrinsic::ArrayPrototypeSplice => {
-                let start = bounded(self.call_argument(&call, 0)?, 0, heap)?;
+                let start = bounded(self.call_argument(&call, 0, heap)?, 0, heap)?;
                 let removed = if call.arg_count == 0 {
                     0
                 } else if call.arg_count == 1 {
                     length.saturating_sub(start)
                 } else {
-                    integer_argument(self.call_argument(&call, 1)?, heap, realm)?
+                    integer_argument(self.call_argument(&call, 1, heap)?, heap, realm)?
                         .clamp(0, length.saturating_sub(start))
                 };
                 let inserted = i64::from(call.arg_count.saturating_sub(2));
@@ -6317,7 +6404,12 @@ impl RegisterVM {
                 for offset in 2..call.arg_count {
                     let index = start.saturating_add(i64::from(offset.saturating_sub(2)));
                     let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
-                    Self::set_element(object, index, self.call_argument(&call, offset)?, heap)?;
+                    Self::set_element(
+                        object,
+                        index,
+                        self.call_argument(&call, offset, heap)?,
+                        heap,
+                    )?;
                 }
                 let final_length = length.saturating_sub(removed).saturating_add(inserted);
                 Self::set_array_like_length(
@@ -6329,9 +6421,9 @@ impl RegisterVM {
             }
             // 23.1.3.7: one value fills the range, and answers the receiver.
             Intrinsic::ArrayPrototypeFill => {
-                let value = self.call_argument(&call, 0)?;
-                let start = bounded(self.call_argument(&call, 1)?, 0, heap)?;
-                let end = bounded(self.call_argument(&call, 2)?, length, heap)?;
+                let value = self.call_argument(&call, 0, heap)?;
+                let start = bounded(self.call_argument(&call, 1, heap)?, 0, heap)?;
+                let end = bounded(self.call_argument(&call, 2, heap)?, length, heap)?;
                 for index in Self::scan_range(start, end) {
                     Self::set_element(object, index, value, heap)?;
                 }
@@ -6340,9 +6432,9 @@ impl RegisterVM {
             // 23.1.3.4: a range of the Array is copied over another range of
             // it, and the length does not change.
             Intrinsic::ArrayPrototypeCopyWithin => {
-                let target = bounded(self.call_argument(&call, 0)?, 0, heap)?;
-                let start = bounded(self.call_argument(&call, 1)?, 0, heap)?;
-                let end = bounded(self.call_argument(&call, 2)?, length, heap)?;
+                let target = bounded(self.call_argument(&call, 0, heap)?, 0, heap)?;
+                let start = bounded(self.call_argument(&call, 1, heap)?, 0, heap)?;
+                let end = bounded(self.call_argument(&call, 2, heap)?, length, heap)?;
                 let count = end
                     .saturating_sub(start)
                     .min(length.saturating_sub(target))
@@ -6375,7 +6467,7 @@ impl RegisterVM {
                     values.push(Some(Value::from_object(object)));
                 }
                 for offset in 0..call.arg_count {
-                    let item = self.call_argument(&call, offset)?;
+                    let item = self.call_argument(&call, offset, heap)?;
                     match item.as_object().filter(|_| Self::is_array(item, heap)) {
                         Some(part) => {
                             let part_length = Self::array_like_length(heap, part, realm)?;
@@ -6393,7 +6485,7 @@ impl RegisterVM {
                 let depth = if call.arg_count == 0 {
                     1
                 } else {
-                    integer_argument(self.call_argument(&call, 0)?, heap, realm)?
+                    integer_argument(self.call_argument(&call, 0, heap)?, heap, realm)?
                 };
                 let values = self.flatten(object, length, depth, heap, realm)?;
                 // 23.1.3.14 step 4 makes the answer with 23.1.3.4.
@@ -6402,11 +6494,11 @@ impl RegisterVM {
             // 23.1.3.35: a copy with one range replaced, which reads every
             // index it passes and so answers no hole.
             Intrinsic::ArrayPrototypeToSpliced => {
-                let start = bounded(self.call_argument(&call, 0)?, 0, heap)?;
+                let start = bounded(self.call_argument(&call, 0, heap)?, 0, heap)?;
                 let skipped = match call.arg_count {
                     0 => 0,
                     1 => length.saturating_sub(start),
-                    _ => integer_argument(self.call_argument(&call, 1)?, heap, realm)?
+                    _ => integer_argument(self.call_argument(&call, 1, heap)?, heap, realm)?
                         .clamp(0, length.saturating_sub(start)),
                 };
                 let inserted = i64::from(call.arg_count).saturating_sub(2).max(0);
@@ -6418,7 +6510,7 @@ impl RegisterVM {
                 }
                 for offset in 0..inserted {
                     let index = u16::try_from(offset.saturating_add(2)).unwrap_or(u16::MAX);
-                    values.push(Some(self.call_argument(&call, index)?));
+                    values.push(Some(self.call_argument(&call, index, heap)?));
                 }
                 for position in Self::scan_range(start.saturating_add(skipped), length) {
                     values.push(Some(
@@ -6430,7 +6522,7 @@ impl RegisterVM {
             // 23.1.3.30 and 23.1.3.34: the elements in the order 23.1.3.30.1
             // compares them, written back over the receiver or into a copy.
             Intrinsic::ArrayPrototypeSort | Intrinsic::ArrayPrototypeToSorted => {
-                let comparator = self.call_argument(&call, 0)?;
+                let comparator = self.call_argument(&call, 0, heap)?;
                 if !comparator.is_undefined() {
                     if !Self::is_callable(comparator, heap) {
                         return Err(type_error(heap, realm, "comparator is not callable"));
@@ -6479,7 +6571,7 @@ impl RegisterVM {
             // 23.1.3.39: a copy with one index replaced, which 23.1.3.39 step
             // 5 refuses for an index outside the Array.
             Intrinsic::ArrayPrototypeWith => {
-                let relative = integer_argument(self.call_argument(&call, 0)?, heap, realm)?;
+                let relative = integer_argument(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 let index = absolute_index(relative, length);
                 if index < 0 || index >= length {
                     return Err(raise(
@@ -6489,7 +6581,7 @@ impl RegisterVM {
                         "index is outside the Array",
                     ));
                 }
-                let replacement = self.call_argument(&call, 1)?;
+                let replacement = self.call_argument(&call, 1, heap)?;
                 let mut values = Vec::new();
                 for position in Self::scan_range(0, length) {
                     let value = if i64::from(position) == index {
@@ -6866,7 +6958,7 @@ impl RegisterVM {
         ) {
             self.charge_for_scan(length)?;
         }
-        let search = self.call_argument(&call, 0)?;
+        let search = self.call_argument(&call, 0, heap)?;
         match intrinsic {
             // 23.1.3.1: an index outside the Array is undefined.
             Intrinsic::ArrayPrototypeAt => {
@@ -6881,7 +6973,7 @@ impl RegisterVM {
             }
             // 23.1.3.16: SameValueZero, and a missing index reads as undefined.
             Intrinsic::ArrayPrototypeIncludes => {
-                let from = integer_argument(self.call_argument(&call, 1)?, heap, realm)?;
+                let from = integer_argument(self.call_argument(&call, 1, heap)?, heap, realm)?;
                 let start = absolute_index(from, length).clamp(0, length);
                 for index in Self::scan_range(start, length) {
                     self.charge_for_one_of_a_scan(index)?;
@@ -6894,7 +6986,7 @@ impl RegisterVM {
             }
             // 23.1.3.17: IsStrictlyEqual, and a missing index is skipped.
             Intrinsic::ArrayPrototypeIndexOf => {
-                let from = integer_argument(self.call_argument(&call, 1)?, heap, realm)?;
+                let from = integer_argument(self.call_argument(&call, 1, heap)?, heap, realm)?;
                 let start = absolute_index(from, length).clamp(0, length);
                 for index in Self::scan_range(start, length) {
                     self.charge_for_one_of_a_scan(index)?;
@@ -6986,7 +7078,12 @@ impl RegisterVM {
                 let mut next = length;
                 for offset in 0..call.arg_count {
                     let index = u32::try_from(next).map_err(|_| VMError::PropertyLimit)?;
-                    Self::set_element(object, index, self.call_argument(&call, offset)?, heap)?;
+                    Self::set_element(
+                        object,
+                        index,
+                        self.call_argument(&call, offset, heap)?,
+                        heap,
+                    )?;
                     next = next.saturating_add(1);
                 }
                 Ok(index_value(next))
@@ -7025,7 +7122,7 @@ impl RegisterVM {
             Intrinsic::ArrayPrototypeSlice => {
                 let start =
                     absolute_index(integer_argument(search, heap, realm)?, length).clamp(0, length);
-                let last = self.call_argument(&call, 1)?;
+                let last = self.call_argument(&call, 1, heap)?;
                 let end = if last.is_undefined() {
                     length
                 } else {
@@ -7052,7 +7149,7 @@ impl RegisterVM {
             _ => {
                 let from = if call.arg_count > 1 {
                     absolute_index(
-                        integer_argument(self.call_argument(&call, 1)?, heap, realm)?,
+                        integer_argument(self.call_argument(&call, 1, heap)?, heap, realm)?,
                         length,
                     )
                     .min(length.saturating_sub(1))
@@ -7996,7 +8093,7 @@ impl RegisterVM {
         match intrinsic {
             // 22.1.3.1: an index outside the String is the empty String.
             Intrinsic::StringPrototypeCharAt => {
-                let position = integer_argument(self.call_argument(&call, 0)?, heap, realm)?;
+                let position = integer_argument(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 let unit = usize::try_from(position)
                     .ok()
                     .and_then(|position| units.get(position).copied());
@@ -8007,7 +8104,7 @@ impl RegisterVM {
             }
             // 22.1.3.2: an index outside the String is NaN.
             Intrinsic::StringPrototypeCharCodeAt => {
-                let position = integer_argument(self.call_argument(&call, 0)?, heap, realm)?;
+                let position = integer_argument(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 Ok(usize::try_from(position)
                     .ok()
                     .and_then(|position| units.get(position).copied())
@@ -8016,8 +8113,8 @@ impl RegisterVM {
             // 22.1.3.9: the search starts at the clamped position and -1 says
             // the String does not occur.
             Intrinsic::StringPrototypeIndexOf => {
-                let search = property_name_units(self.call_argument(&call, 0)?, heap)?;
-                let start = integer_argument(self.call_argument(&call, 1)?, heap, realm)?
+                let search = property_name_units(self.call_argument(&call, 0, heap)?, heap)?;
+                let start = integer_argument(self.call_argument(&call, 1, heap)?, heap, realm)?
                     .clamp(0, i64::try_from(units.len()).unwrap_or(i64::MAX));
                 let start = usize::try_from(start).unwrap_or(0);
                 let found = (start..=units.len().saturating_sub(search.len()))
@@ -8033,7 +8130,7 @@ impl RegisterVM {
             // 22.1.3.1: a negative index counts from the end, and an index
             // outside the String is undefined.
             Intrinsic::StringPrototypeAt => {
-                let relative = integer_argument(self.call_argument(&call, 0)?, heap, realm)?;
+                let relative = integer_argument(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 let length = i64::try_from(units.len()).unwrap_or(i64::MAX);
                 let index = if relative < 0 {
                     length.saturating_add(relative)
@@ -8053,7 +8150,7 @@ impl RegisterVM {
                 let mut result = units;
                 for index in 0..call.arg_count {
                     result.extend(property_name_units(
-                        self.call_argument(&call, index)?,
+                        self.call_argument(&call, index, heap)?,
                         heap,
                     )?);
                 }
@@ -8061,8 +8158,8 @@ impl RegisterVM {
             }
             // 22.1.3.7: the search ends at the clamped position.
             Intrinsic::StringPrototypeEndsWith => {
-                let search = property_name_units(self.call_argument(&call, 0)?, heap)?;
-                let end = match self.call_argument(&call, 1)? {
+                let search = property_name_units(self.call_argument(&call, 0, heap)?, heap)?;
+                let end = match self.call_argument(&call, 1, heap)? {
                     value if value.is_undefined() => units.len(),
                     value => clamped_index(integer_argument(value, heap, realm)?, units.len()),
                 };
@@ -8073,9 +8170,9 @@ impl RegisterVM {
             }
             // 22.1.3.8: the search starts at the clamped position.
             Intrinsic::StringPrototypeIncludes => {
-                let search = property_name_units(self.call_argument(&call, 0)?, heap)?;
+                let search = property_name_units(self.call_argument(&call, 0, heap)?, heap)?;
                 let start = clamped_index(
-                    integer_argument(self.call_argument(&call, 1)?, heap, realm)?,
+                    integer_argument(self.call_argument(&call, 1, heap)?, heap, realm)?,
                     units.len(),
                 );
                 Ok(Value::from_bool(
@@ -8084,8 +8181,8 @@ impl RegisterVM {
             }
             // 22.1.3.10: the last occurrence at or before the clamped position.
             Intrinsic::StringPrototypeLastIndexOf => {
-                let search = property_name_units(self.call_argument(&call, 0)?, heap)?;
-                let position = self.call_argument(&call, 1)?;
+                let search = property_name_units(self.call_argument(&call, 0, heap)?, heap)?;
+                let position = self.call_argument(&call, 1, heap)?;
                 let last = units.len().saturating_sub(search.len());
                 let end = if position.is_undefined() || primitive_number(position, heap)?.is_nan() {
                     last
@@ -8107,12 +8204,12 @@ impl RegisterVM {
             Intrinsic::StringPrototypeRepeat => {
                 // 22.1.3.17 steps 3 and 4: a negative or infinite count is a
                 // RangeError, before the String's own length is looked at.
-                if primitive_number(self.call_argument(&call, 0)?, heap)? == f64::INFINITY {
+                if primitive_number(self.call_argument(&call, 0, heap)?, heap)? == f64::INFINITY {
                     return Err(range_error(heap, realm, "repeat count is out of range"));
                 }
                 // ToIntegerOrInfinity truncates toward zero, so -0.5 is 0 and
                 // only a count that is negative after that is out of range.
-                let count = integer_argument(self.call_argument(&call, 0)?, heap, realm)?;
+                let count = integer_argument(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 if count < 0 {
                     return Err(range_error(heap, realm, "repeat count is out of range"));
                 }
@@ -8134,10 +8231,10 @@ impl RegisterVM {
             // inverted range is the empty String.
             Intrinsic::StringPrototypeSlice => {
                 let start = relative_index(
-                    integer_argument(self.call_argument(&call, 0)?, heap, realm)?,
+                    integer_argument(self.call_argument(&call, 0, heap)?, heap, realm)?,
                     units.len(),
                 );
-                let end = match self.call_argument(&call, 1)? {
+                let end = match self.call_argument(&call, 1, heap)? {
                     value if value.is_undefined() => units.len(),
                     value => relative_index(integer_argument(value, heap, realm)?, units.len()),
                 };
@@ -8146,9 +8243,9 @@ impl RegisterVM {
             }
             // 22.1.3.24: the search starts at the clamped position.
             Intrinsic::StringPrototypeStartsWith => {
-                let search = property_name_units(self.call_argument(&call, 0)?, heap)?;
+                let search = property_name_units(self.call_argument(&call, 0, heap)?, heap)?;
                 let start = clamped_index(
-                    integer_argument(self.call_argument(&call, 1)?, heap, realm)?,
+                    integer_argument(self.call_argument(&call, 1, heap)?, heap, realm)?,
                     units.len(),
                 );
                 let end = start.saturating_add(search.len());
@@ -8159,10 +8256,10 @@ impl RegisterVM {
             // 22.1.3.25: both ends are clamped and then ordered.
             Intrinsic::StringPrototypeSubstring => {
                 let first = clamped_index(
-                    integer_argument(self.call_argument(&call, 0)?, heap, realm)?,
+                    integer_argument(self.call_argument(&call, 0, heap)?, heap, realm)?,
                     units.len(),
                 );
-                let second = match self.call_argument(&call, 1)? {
+                let second = match self.call_argument(&call, 1, heap)? {
                     value if value.is_undefined() => units.len(),
                     value => clamped_index(integer_argument(value, heap, realm)?, units.len()),
                 };
@@ -8174,7 +8271,7 @@ impl RegisterVM {
             // 22.1.3.4: the code point at an index, which pairs a surrogate
             // with the one after it.
             Intrinsic::StringPrototypeCodePointAt => {
-                let position = integer_argument(self.call_argument(&call, 0)?, heap, realm)?;
+                let position = integer_argument(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 let Ok(position) = usize::try_from(position) else {
                     return Ok(VALUE_UNDEFINED);
                 };
@@ -8186,9 +8283,9 @@ impl RegisterVM {
             // 22.1.3.15 and 22.1.3.16: the filler is repeated and cut to the
             // width the String is short of, and an empty filler pads nothing.
             Intrinsic::StringPrototypePadStart | Intrinsic::StringPrototypePadEnd => {
-                let width = integer_argument(self.call_argument(&call, 0)?, heap, realm)?;
+                let width = integer_argument(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 let width = usize::try_from(width).unwrap_or(0);
-                let filler = match self.call_argument(&call, 1)? {
+                let filler = match self.call_argument(&call, 1, heap)? {
                     value if value.is_undefined() => alloc::vec![0x20],
                     value => property_name_units(value, heap)?,
                 };
@@ -8253,7 +8350,7 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Value, VMError> {
         let text = self.receiver_units(call.receiver, units, heap, realm)?;
-        let separator = self.call_argument(call, 0)?;
+        let separator = self.call_argument(call, 0, heap)?;
         if let Some(reference) = separator.as_object()
             && let Some(pattern) = Self::regexp_pattern(reference, heap)
         {
@@ -8279,7 +8376,7 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        let limit = self.call_argument(call, 1)?;
+        let limit = self.call_argument(call, 1, heap)?;
         let limit = if limit.is_undefined() {
             u32::MAX
         } else {
@@ -8364,8 +8461,8 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        let separator = self.call_argument(call, 0)?;
-        let limit = self.call_argument(call, 1)?;
+        let separator = self.call_argument(call, 0, heap)?;
+        let limit = self.call_argument(call, 1, heap)?;
         let limit = if limit.is_undefined() {
             u32::MAX
         } else {
@@ -8716,8 +8813,8 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        let first = self.call_argument(call, 0)?;
-        let second = self.call_argument(call, 1)?;
+        let first = self.call_argument(call, 0, heap)?;
+        let second = self.call_argument(call, 1, heap)?;
         if intrinsic == Intrinsic::JsonParse {
             // 25.5.1 step 7 calls the reviver for every name it parsed.
             if Self::is_callable(second, heap) {
@@ -8731,7 +8828,7 @@ impl RegisterVM {
         if !second.is_undefined() {
             return Err(VMError::Unsupported("a replacer of 25.5.2"));
         }
-        let third = self.call_argument(call, 2)?;
+        let third = self.call_argument(call, 2, heap)?;
         if !third.is_undefined() {
             return Err(VMError::Unsupported("a space of 25.5.2"));
         }
@@ -8957,7 +9054,7 @@ impl RegisterVM {
             };
         }
         // Step 2: anything but a String is the answer itself.
-        let source = self.call_argument(call, 0)?;
+        let source = self.call_argument(call, 0, heap)?;
         if !source.is_string() {
             return Ok(source);
         }
@@ -9033,7 +9130,7 @@ impl RegisterVM {
             if index > 0 {
                 text.push(0x2C);
             }
-            let part = self.call_argument(call, index)?;
+            let part = self.call_argument(call, index, heap)?;
             let part = self.text_of(part, units, heap, realm)?;
             text.extend(
                 heap.strings
@@ -9043,7 +9140,7 @@ impl RegisterVM {
         }
         text.extend("\n) {\n".encode_utf16());
         if call.arg_count > 0 {
-            let body = self.call_argument(call, call.arg_count.saturating_sub(1))?;
+            let body = self.call_argument(call, call.arg_count.saturating_sub(1), heap)?;
             let body = self.text_of(body, units, heap, realm)?;
             text.extend(
                 heap.strings
@@ -9161,8 +9258,8 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        let search = self.call_argument(call, 0)?;
-        let replacement = self.call_argument(call, 1)?;
+        let search = self.call_argument(call, 0, heap)?;
+        let replacement = self.call_argument(call, 1, heap)?;
         if Self::is_callable(replacement, heap) {
             return Err(VMError::Unsupported("a replace value that is callable"));
         }
@@ -9379,7 +9476,7 @@ impl RegisterVM {
             }
             return self.allocate_string(heap, &units);
         }
-        let text = property_name_units(self.call_argument(call, 0)?, heap)?;
+        let text = property_name_units(self.call_argument(call, 0, heap)?, heap)?;
         let matched = self.regexp_exec(receiver, &pattern, &text, heap, realm)?;
         if intrinsic == Intrinsic::RegExpPrototypeTest {
             return Ok(Value::from_bool(matched.is_some()));
@@ -9406,7 +9503,7 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Value, VMError> {
         let text = self.receiver_units(call.receiver, units, heap, realm)?;
-        let argument = self.call_argument(call, 0)?;
+        let argument = self.call_argument(call, 0, heap)?;
         // 22.1.3.13 step 5 and 22.1.3.15 step 4 make a RegExp of an argument
         // that is not one, with no flags.
         let held = argument
@@ -9700,8 +9797,8 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        let pattern = self.call_argument(call, 0)?;
-        let flags = self.call_argument(call, 1)?;
+        let pattern = self.call_argument(call, 0, heap)?;
+        let flags = self.call_argument(call, 1, heap)?;
         // Step 3: a RegExp pattern gives its own source, and its flags where
         // the call passed none.
         let held = pattern

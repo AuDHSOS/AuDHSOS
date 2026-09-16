@@ -669,6 +669,17 @@ fn a_class_derives_from_another_and_super_binds_its_this() -> Result<(), Error> 
         "(function(){class A{m(){return 'A'}}class B extends A{constructor(){super()}m(){return super.m()+'B'}}return new B().m()})()",
         // 15.7.14 gives the class a `prototype` no ordinary function has.
         "(function(){class A{}class B extends A{}let d=Object.getOwnPropertyDescriptor(B,'prototype');return d.writable+':'+d.enumerable+':'+d.configurable})()",
+        // 10.1.13: a constructor of this Realm written in Rust makes its
+        // object with the Prototype the `newTarget` names.
+        "(function(){class E extends Error{}return new E('m').message})()",
+        "(function(){class E extends Error{}return new E() instanceof E})()",
+        "(function(){class E extends Error{}return new E() instanceof Error})()",
+        "(function(){class E extends TypeError{}return new E('x').message})()",
+        "(function(){class E extends Error{constructor(m){super(m);this.t=1}}let e=new E('q');return e.message+e.t})()",
+        "(function(){class A extends Array{}return Array.isArray(new A())})()",
+        "(function(){class A extends Array{}return new A(3).length})()",
+        "(function(){class A extends Array{}return Object.getPrototypeOf(new A())===A.prototype})()",
+        "(function(){class O extends Object{}return typeof new O()})()",
     ] {
         differential(source)?;
     }

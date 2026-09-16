@@ -2036,6 +2036,28 @@ impl Intrinsic {
         }
     }
 
+    /// Whether this intrinsic is a constructor of this Realm that makes an
+    /// object of its own with 10.1.13.
+    #[must_use]
+    pub const fn constructs_an_object(self) -> bool {
+        matches!(
+            self,
+            Self::ArrayConstructor
+                | Self::ObjectConstructor
+                | Self::RegExpConstructor
+                | Self::ErrorConstructor
+                | Self::EvalErrorConstructor
+                | Self::RangeErrorConstructor
+                | Self::ReferenceErrorConstructor
+                | Self::SyntaxErrorConstructor
+                | Self::TypeErrorConstructor
+                | Self::UriErrorConstructor
+                | Self::StringConstructor
+                | Self::NumberConstructor
+                | Self::BooleanConstructor
+        )
+    }
+
     /// The `length` property of the function object (17).
     #[must_use]
     #[expect(
