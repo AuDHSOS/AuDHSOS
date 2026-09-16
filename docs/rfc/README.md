@@ -59,6 +59,7 @@ same rule and for the same reason (D-100).
 | `rfc7748.txt` | RFC 7748, *Elliptic Curves for Security*, A. Langley, M. Hamburg, S. Turner, January 2016 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc7748.txt` | 39298 | `279ca0ecc5e92e2962e27b846986aeb74729d9dd34bd4a04a362f80dcb596ad3` |
 | `rfc8017.txt` | RFC 8017, *PKCS #1: RSA Cryptography Specifications Version 2.2*, K. Moriarty (ed.), B. Kaliski, J. Jonsson, A. Rusch, November 2016 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc8017.txt` | 154696 | `1e72dc473d18df3fc5598cdc12795a9f18f36f1aef15abc23a55eb0d58151d11` |
 | `rfc8032.txt` | RFC 8032, *Edwards-Curve Digital Signature Algorithm (EdDSA)*, S. Josefsson, I. Liusvaara, January 2017 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc8032.txt` | 103210 | `ed63657ff389301282b169b0abde9b5dd2c7e4d524fdfa5da6ff3094fc93c4c3` |
+| `rfc8081.txt` | RFC 8081, *The "font" Top-Level Media Type*, C. Lilley, February 2017 | 2026-09-16 from `https://www.rfc-editor.org/rfc/rfc8081.txt` | 37428 | `4d0dbcf38ab38d87cd26e8f412c7b42ff53a47fc07ee5b69fddd0e42311e1f28` |
 | `rfc8106.txt` | RFC 8106, *IPv6 Router Advertisement Options for DNS Configuration*, J. Jeong, S. Park, L. Beloeil, S. Madanapalli, March 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8106.txt` | 43092 | `9a44a5e06d36506da358fa0d62d02f484dd76b4e6ca75920ebda2cfed315ef2f` |
 | `rfc8200.txt` | RFC 8200, *Internet Protocol, Version 6 (IPv6) Specification*, S. Deering, R. Hinden, July 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8200.txt` | 93162 | `371ae3f133d562db5d6385e6def4ca9914c4f831be228ea7779fd28799c2f490` |
 | `rfc8201.txt` | RFC 8201, *Path MTU Discovery for IP version 6*, J. McCann, S. Deering, J. Mogul, R. Hinden (ed.), July 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8201.txt` | 42751 | `96c2ea7ac1bf5810f6b817d4ac372a35f68231d2bd0e2675740f1268eb9ac752` |
@@ -81,10 +82,17 @@ edited. Each is the text as the RFC Editor publishes it, byte for byte,
 including the page breaks: 2887, 1218, 470, 171, 3077, 1417, 6844, 619,
 955, 619, 2523, 1907, 1067, 395, 1515, 563, 451, 1403, 507, 1123, 1683,
 955, 1795, 1347, 1403, 1347, 5435, 1683, 1123, 1123, 339, 451, 787, 899,
-787, 283, 1795, 4427, 1235, 4371, 3363, 1067, 2355, 1067, 451, 787, 507,
-2579, 8963, 3811, 317, 287, 10785, 2461, 1028, and 5576 lines
-respectively, in the order of the table.
-Every one was fetched twice and the two fetches agreed.
+787, 283, 1795, 4427, 1235, 4371, 3363, 1011, 1067, 2355, 1067, 451,
+787, 507, 2579, 8963, 3811, 317, 287, 10785, 2461, 1028, and 5576 lines
+respectively, in the order of the table. Every one was fetched twice and
+the two fetches agreed.
+
+## How the files were fetched
+
+`sh fetch.sh`, which writes every file of the table above and prints
+`<sha256>  <path>` for each. Comparing that output against the table is
+how a reader checks that this directory is what it says it is. The list
+of numbers is in the script.
 
 ## Terms
 
@@ -97,10 +105,10 @@ carries a notice of the form
 with the year 2009 for RFC 5480 and RFC 5656, 2010 for RFC 5756,
 RFC 5758, RFC 5869, RFC 5903, and RFC 5952, 2012 for RFC 6668 and
 RFC 6724, 2013 for RFC 6979, 2016 for RFC 7748 and RFC 8017, 2017 for
-RFC 8032, RFC 8106, RFC 8200, RFC 8201, and RFC 8268, 2018 for RFC 8308,
+RFC 8032, RFC 8081, RFC 8106, RFC 8200, RFC 8201, and RFC 8268, 2018 for RFC 8308,
 RFC 8332, RFC 8439, and RFC 8446, 2019 for RFC 8448, 2020 for RFC 8709
 and RFC 8731, and 2022 for RFC 9110, RFC 9112, RFC 9142, and RFC 9293.
-Those twenty-eight are subject to BCP 78 and the IETF Trust's Legal
+Those twenty-nine are subject to BCP 78 and the IETF Trust's Legal
 Provisions relating to IETF Documents, which permit reproduction in
 full.
 
@@ -975,3 +983,21 @@ distinction between a standard that is implemented in part and one
 implemented in whole. RFC 8448, which has been here from the beginning,
 is a trace of *this* protocol; keeping the trace and not the
 specification meant keeping the answers without the question.
+
+## Why RFC 8081
+
+It creates the `font` top-level media type and registers the subtypes
+under it, `font/sfnt`, `font/ttf`, `font/otf`, `font/collection`,
+`font/woff` and `font/woff2`. A font had been served as
+`application/font-woff` and half a dozen other spellings under the
+`application` tree, which is the tree for what an application defines for
+itself, and a font is not that: it is a resource kind of its own, read by
+anything that draws text.
+
+It is three pages of substance and is here for the registrations, which
+state for each subtype what the bytes are and which specification defines
+them — `font/woff2` pointing at the document under
+[`docs/w3c/`](../w3c/README.md), the sfnt family at the OpenType
+specification under [`docs/microsoft/`](../microsoft/README.md). A media
+type recalled rather than read is a constant with no source, which is
+what D-40 forbids.

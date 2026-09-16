@@ -1,0 +1,2402 @@
+ <!DOCTYPE html>
+		<html
+			class="layout layout-holy-grail   show-table-of-contents conceptual show-breadcrumb default-focus"
+			lang="en-us"
+			dir="ltr"
+			data-authenticated="false"
+			data-auth-status-determined="false"
+			data-target="docs"
+			x-ms-format-detection="none"
+		>
+			
+		<head>
+			<title>MATH - The mathematical typesetting table (OpenType 1.9.1) - Typography | Microsoft Learn</title>
+			<meta charset="utf-8" />
+			<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+			<meta name="color-scheme" content="light dark" />
+
+			<meta name="description" content="MATH - The mathematical typesetting table (OpenType 1.9.1)" />
+			<link rel="canonical" href="https://learn.microsoft.com/en-us/typography/opentype/spec/math" /> 
+
+			<!-- Non-customizable open graph and sharing-related metadata -->
+			<meta name="twitter:card" content="summary_large_image" />
+			<meta name="twitter:site" content="@MicrosoftLearn" />
+			<meta property="og:type" content="website" />
+			<meta property="og:image:alt" content="Microsoft Learn" />
+			<meta property="og:image" content="https://learn.microsoft.com/en-us/media/open-graph-image.png" />
+			<!-- Page specific open graph and sharing-related metadata -->
+			<meta property="og:title" content="MATH - The mathematical typesetting table (OpenType 1.9.1) - Typography" />
+			<meta property="og:url" content="https://learn.microsoft.com/en-us/typography/opentype/spec/math" />
+			<meta property="og:description" content="MATH - The mathematical typesetting table (OpenType 1.9.1)" />
+			<meta name="platform_id" content="6bf8c5cb-4a1c-687f-b4ae-5652895a7485" /> <meta name="scope" content="typography" />
+			<meta name="locale" content="en-us" />
+			 
+			<meta name="uhfHeaderId" content="MSDocsHeader-MSTypography" />
+
+			<meta name="page_type" content="conceptual" />
+
+			<!--page specific meta tags-->
+			
+
+			<!-- custom meta tags -->
+			
+		<meta name="ms.service" content="typography" />
+	
+		<meta name="breadcrumb_path" content="/typography/breadcrumbs/toc.json" />
+	
+		<meta name="feedback_system" content="OpenSource" />
+	
+		<meta name="author" content="PeterCon" />
+	
+		<meta name="ms.author" content="pconstable" />
+	
+		<meta name="ms.date" content="2024-05-29T00:00:00Z" />
+	
+		<meta name="feedback_product_url" content="https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml" />
+	
+		<meta name="keywords" content="typography" />
+	
+		<meta name="ms.topic" content="article" />
+	
+		<meta name="source-file" content="https://www.microsoft.com/typography/otspec/math.htm" />
+	
+		<meta name="document_id" content="f0076fd2-52b0-2989-3142-fd9e456b9514" />
+	
+		<meta name="document_version_independent_id" content="4aef8fa3-2ad3-7933-5a77-0a7473e66112" />
+	
+		<meta name="updated_at" content="2024-05-31T17:41:00Z" />
+	
+		<meta name="original_content_git_url" content="https://github.com/MicrosoftDocs/typography/blob/live/typographydocs/opentype/spec/math.md" />
+	
+		<meta name="gitcommit" content="https://github.com/MicrosoftDocs/typography/blob/810414e13e39f68adfb5f12d525e6b50c850fbbc/typographydocs/opentype/spec/math.md" />
+	
+		<meta name="git_commit_id" content="810414e13e39f68adfb5f12d525e6b50c850fbbc" />
+	
+		<meta name="site_name" content="Docs" />
+	
+		<meta name="depot_name" content="Win.typography" />
+	
+		<meta name="schema" content="Conceptual" />
+	
+		<meta name="toc_rel" content="../../toc.json" />
+	
+		<meta name="pdf_url_template" content="https://learn.microsoft.com/pdfstore/en-us/Win.typography/{branchName}{pdfName}" />
+	
+		<meta name="feedback_help_link_type" content="" />
+	
+		<meta name="feedback_help_link_url" content="" />
+	
+		<meta name="word_count" content="6372" />
+	
+		<meta name="asset_id" content="opentype/spec/math" />
+	
+		<meta name="moniker_range_name" content="" />
+	
+		<meta name="item_type" content="Content" />
+	
+		<meta name="source_path" content="typographydocs/opentype/spec/math.md" />
+	
+		<meta name="previous_tlsh_hash" content="16646A13970CE669FF524E132CA7AB40A5F0C70DF6B07E88117A2293D54E6D574B15F4EAB712BBCA333243030282FA1E62E5DB3990B853BAF66074BD811C5640D7555FFADA" />
+	
+		<meta name="github_feedback_content_git_url" content="https://github.com/MicrosoftDocs/typography/blob/live/typographydocs/opentype/spec/math.md" />
+	
+		<meta name="markdown_url" content="https://learn.microsoft.com/en-us/typography/opentype/spec/math?accept=text/markdown" />
+	 
+		<meta name="cmProducts" content="https://authoring-docs-microsoft.poolparty.biz/devrel/8b896464-3b7d-4e1f-84b0-9bb45aeb5f64" data-source="generated" />
+	
+		<meta name="spProducts" content="https://authoring-docs-microsoft.poolparty.biz/devrel/b1d2d671-9549-46e8-918c-24349120dbf5" data-source="generated" />
+	
+
+			<!-- Apply persisted/system theme before first paint to prevent wrong-theme flash when scripts are deferred. -->
+			<script id="theme-preference">
+				(function () {
+			try {
+				var stored = localStorage.getItem('theme');
+				var theme = /^(light|dark|high-contrast)$/.test(stored)
+					? stored
+					: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+				document.documentElement.classList.add('theme-' + theme);
+			} catch (e) {}
+		})();;
+			</script>
+
+			<script id="atlas-layout-preferences">
+				(function () {
+			try {
+				var state = JSON.parse(localStorage.getItem('atlas-layout-preferences') || '{}');
+				var view = state["docs-layout-persistence"] || {};
+				var excludesKey = "";
+				var blocked = {};
+				if (excludesKey) {
+					var exclusions = JSON.parse(localStorage.getItem('atlas-layout-exclusions') || '{}');
+					if (Object.prototype.hasOwnProperty.call(exclusions, excludesKey)) {
+						var scoped = exclusions[excludesKey];
+						if (scoped) {
+							if (typeof scoped === 'object') blocked = scoped;
+						}
+					}
+				}
+				var html = document.documentElement;
+				for (var c in view) {
+					if (Object.prototype.hasOwnProperty.call(blocked, c)) continue;
+					if (view[c]) html.classList.add(c);
+					else html.classList.remove(c);
+				}
+			} catch (e) {}
+		})();;
+			</script>
+
+			<!-- assets and js globals -->
+			
+			<link rel="stylesheet" href="/static/assets/0.4.03544.8243-8192ba90/styles/site.css" />
+			
+			<script src="https://wcpstatic.microsoft.com/mscc/lib/v2/wcp-consent.js"></script>
+			<!-- Keep this URL in sync with oneDSScriptSelector in instrumentation/one-ds.ts. -->
+			<script async src="https://js.monitor.azure.com/scripts/c/ms.jsll-4.min.js"></script>
+			
+
+			<!-- msdocs global object -->
+			<script id="msdocs-script">
+		var msDocs = {
+  "environment": {
+    "accessLevel": "online",
+    "azurePortalHostname": "portal.azure.com",
+    "reviewFeatures": false,
+    "supportLevel": "production",
+    "systemContent": true,
+    "siteName": "learn",
+    "legacyHosting": false
+  },
+  "data": {
+    "contentLocale": "en-us",
+    "contentDir": "ltr",
+    "userLocale": "en-us",
+    "userDir": "ltr",
+    "pageTemplate": "Conceptual",
+    "layoutStateStorageKey": "docs-layout-persistence",
+    "brand": "",
+    "context": {},
+    "standardFeedback": false,
+    "showFeedbackReport": false,
+    "feedbackHelpLinkType": "",
+    "feedbackHelpLinkUrl": "",
+    "feedbackSystem": "OpenSource",
+    "feedbackGitHubRepo": "",
+    "feedbackProductUrl": "https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml",
+    "extendBreadcrumb": false,
+    "isEditDisplayable": false,
+    "isPrivateUnauthorized": false,
+    "hideViewSource": false,
+    "isPermissioned": false,
+    "hasRecommendations": true,
+    "openSourceFeedbackIssueUrl": "https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml",
+    "openSourceFeedbackIssueTitle": ""
+  },
+  "functions": {}
+};;
+	</script>
+
+			<!-- base scripts, msdocs global should be before this -->
+			<script
+				src="/static/assets/0.4.03544.8243-8192ba90/scripts/en-us/index-docs.js"
+				async
+			></script>
+			
+
+			<!-- json-ld -->
+			
+		</head>
+	
+			<body
+				id="body"
+				data-bi-name="body"
+				class="layout-body "
+				lang="en-us"
+				dir="ltr"
+			>
+				<header class="layout-body-header background-color-body-medium">
+		<div class="header-holder has-default-focus">
+			
+		<a
+			href="#main"
+			
+			style="z-index: 1070"
+			class="outline-color-text visually-hidden-until-focused position-fixed inner-focus focus-visible top-0 left-0 right-0 padding-xs text-align-center background-color-body"
+			
+		>
+			Skip to main content
+		</a>
+	
+		<a
+			href="#"
+			data-skip-to-ask-learn
+			style="z-index: 1070"
+			class="outline-color-text visually-hidden-until-focused position-fixed inner-focus focus-visible top-0 left-0 right-0 padding-xs text-align-center background-color-body"
+			hidden
+		>
+			Skip to Ask Learn chat experience
+		</a>
+	
+
+			<div hidden id="cookie-consent-holder" data-test-id="cookie-consent-container"></div>
+			<!-- Unsupported browser warning -->
+			<div
+				id="unsupported-browser"
+				style="background-color: white; color: black; padding: 16px; border-bottom: 1px solid grey;"
+				hidden
+			>
+				<div style="max-width: 800px; margin: 0 auto;">
+					<p style="font-size: 24px">This browser is no longer supported.</p>
+					<p style="font-size: 16px; margin-top: 16px;">
+						Upgrade to Microsoft Edge to take advantage of the latest features, security updates, and technical support.
+					</p>
+					<div style="margin-top: 12px;">
+						<a
+							href="https://go.microsoft.com/fwlink/p/?LinkID=2092881 "
+							style="background-color: #0078d4; border: 1px solid #0078d4; color: white; padding: 6px 12px; border-radius: 2px; display: inline-block;"
+						>
+							Download Microsoft Edge
+						</a>
+						<a
+							href="https://learn.microsoft.com/en-us/lifecycle/faq/internet-explorer-microsoft-edge"
+							style="background-color: white; padding: 6px 12px; border: 1px solid #505050; color: #171717; border-radius: 2px; display: inline-block;"
+						>
+							More info about Internet Explorer and Microsoft Edge
+						</a>
+					</div>
+				</div>
+			</div>
+			<!-- site header -->
+			<div
+				id="ms--site-header"
+				data-test-id="site-header-wrapper"
+				itemscope="itemscope"
+				itemtype="http://schema.org/Organization"
+			>
+				<div
+					id="ms--mobile-nav"
+					class="site-header display-none-tablet padding-inline-none gap-none"
+					data-bi-name="mobile-header"
+					data-test-id="mobile-header"
+				></div>
+				<div
+					id="ms--primary-nav"
+					class="site-header display-none display-flex-tablet"
+					data-bi-name="L1-header"
+					data-test-id="primary-header"
+				></div>
+				<div
+					id="ms--secondary-nav"
+					class="site-header display-none display-flex-tablet"
+					data-bi-name="L2-header"
+					data-test-id="secondary-header"
+					
+				></div>
+			</div>
+			
+		<!-- banner -->
+		<div data-banner>
+			<div id="disclaimer-holder"></div>
+			
+		</div>
+		<!-- banner end -->
+	
+		</div>
+	</header>
+				 <section
+					id="layout-body-menu"
+					class="layout-body-menu border-right display-flex background-color-body-medium"
+					data-bi-name="menu"
+			  >
+					
+		<div
+			id="left-container"
+			class="left-container display-none padding-none display-block-tablet width-full display-none-until-layout-restored"
+			data-toc-container="true"
+		>
+			<div
+				id="ms--toc-content"
+				class="padding-left-sm padding-right-none padding-bottom-sm height-full"
+			>
+				<nav
+					id="affixed-left-container"
+					class="margin-top-xxs-tablet position-sticky display-flex flex-direction-column width-full"
+					aria-label="Primary"
+					data-bi-name="left-toc"
+					role="navigation"
+				>
+					<div
+						id="ms--collapsible-toc-header"
+						class="display-flex flex-direction-row-reverse justify-content-center align-items-center margin-bottom-xxs margin-right-xxs"
+					>
+						<button
+							type="button"
+							class="button button-clear button-sm inner-focus"
+							data-collapsible-toc-toggle
+							aria-expanded="true"
+							hidden
+							aria-controls="ms--toc-content"
+							aria-label="Table of contents"
+						>
+							<span class="icon icon-mirrored-rtl" aria-hidden="true">
+								<span
+									class="docon docon-panel-left-contract display-none-layout-menu-collapsed"
+								></span>
+								<span
+									class="docon docon-panel-left-expand display-none display-inline-layout-menu-collapsed"
+								></span>
+							</span>
+						</button>
+						<div
+							id="ms--collapsible-toc-moniker-slot"
+							class="flex-grow-1 display-none-layout-menu-collapsed"
+						></div>
+					</div>
+				</nav>
+			</div>
+		</div>
+	
+			  </section>
+
+				<main
+					id="main"
+					role="main"
+					class="layout-body-main "
+					data-bi-name="content"
+					lang="en-us"
+					dir="ltr"
+				>
+					
+			<div
+		id="ms--content-header"
+		class="content-header default-focus border-bottom-none"
+		data-bi-name="content-header"
+	>
+		<div class="content-header-controls margin-xxs margin-inline-sm-tablet">
+			<button
+				type="button"
+				class="contents-button button button-sm margin-right-xxs"
+				data-bi-name="contents-expand"
+				aria-haspopup="true"
+				data-contents-button
+			>
+				<span class="icon" aria-hidden="true"><span class="docon docon-menu"></span></span>
+				<span class="contents-expand-title"> Table of contents </span>
+			</button>
+			<button
+				type="button"
+				class="ap-collapse-behavior ap-expanded button button-sm"
+				data-bi-name="ap-collapse"
+				aria-controls="action-panel"
+			>
+				<span class="icon" aria-hidden="true"><span class="docon docon-exit-mode"></span></span>
+				<span>Exit editor mode</span>
+			</button>
+		</div>
+	</div> 
+		<div
+			id="action-panel"
+			role="region"
+			aria-label="Action Panel"
+			class="action-panel"
+			tabindex="-1"
+		></div>
+	
+			<div
+				data-main-column
+				class="reading-width margin-inline-auto layout-padding padding-top-none padding-top-sm-tablet padding-bottom-sm"
+			>
+				<div>
+					
+		<div id="article-header" class="background-color-body margin-bottom-xs display-none-print">
+			<div class="display-flex align-items-center justify-content-space-between">
+				
+		<details
+			id="article-header-breadcrumbs-overflow-popover"
+			class="popover popover-left"
+			data-for="article-header-breadcrumbs"
+		>
+			<summary
+				class="button button-clear button-primary button-sm inner-focus"
+				aria-label="All breadcrumbs"
+			>
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-more"></span>
+				</span>
+			</summary>
+			<div id="article-header-breadcrumbs-overflow" class="popover-content"></div>
+		</details>
+
+		<bread-crumbs
+			id="article-header-breadcrumbs"
+			role="group"
+			aria-label="Breadcrumbs"
+			data-test-id="article-header-breadcrumbs"
+			class="overflow-hidden flex-grow-1 margin-right-sm margin-right-md-tablet margin-right-lg-desktop margin-left-negative-xxs padding-left-xxs"
+		></bread-crumbs>
+	 
+		<div
+			id="article-header-page-actions"
+			class="opacity-none margin-left-auto display-flex flex-wrap-no-wrap align-items-stretch"
+		>
+			
+		<button
+			class="button button-sm border-none inner-focus display-none-tablet flex-shrink-0 "
+			data-bi-name="ask-learn-assistant-entry"
+			data-test-id="ask-learn-assistant-modal-entry-mobile"
+			data-ask-learn-modal-entry
+			
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-label="Ask Learn"
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+		</button>
+		<button
+			class="button button-sm display-none display-inline-flex-tablet display-none-desktop flex-shrink-0 margin-right-xxs border-color-ask-learn "
+			data-bi-name="ask-learn-assistant-entry"
+			
+			data-test-id="ask-learn-assistant-modal-entry-tablet"
+			data-ask-learn-modal-entry
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+		<button
+			class="button button-sm display-none flex-shrink-0 display-inline-flex-desktop margin-right-xxs border-color-ask-learn "
+			data-bi-name="ask-learn-assistant-entry"
+			
+			data-test-id="ask-learn-assistant-flyout-entry"
+			data-ask-learn-flyout-entry
+			data-flyout-button="toggle"
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-controls="ask-learn-flyout"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+	 
+
+			<details class="popover popover-right" id="article-header-page-actions-overflow">
+				<summary
+					class="justify-content-flex-start button button-clear button-sm button-primary inner-focus"
+					aria-label="More actions"
+					title="More actions"
+				>
+					<span class="icon" aria-hidden="true">
+						<span class="docon docon-more-vertical"></span>
+					</span>
+				</summary>
+				<div class="popover-content">
+					
+		<button
+			type="button"
+			id="ms--focus-mode-button"
+			data-focus-mode
+			data-bi-name="focus-mode-entry"
+			data-page-action-item="overflow-all"
+			data-popover-close
+			class="button button-clear button-sm button-block justify-content-flex-start text-align-left inner-focus display-none display-inline-flex-tablet"
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-glasses"></span>
+			</span>
+			<span>Reading mode</span>
+		</button>
+	 
+		<button
+			data-page-action-item="overflow-mobile"
+			type="button"
+			class="display-block-layout-menu-collapsed button-block button-sm inner-focus button button-clear display-none-tablet justify-content-flex-start text-align-left"
+			data-bi-name="contents-expand"
+			data-contents-button
+			data-popover-close
+		>
+			<span class="icon" aria-hidden="true"
+				><span class="docon docon-editor-list-bullet"></span
+			></span>
+			<span class="contents-expand-title">Table of contents</span>
+		</button>
+	 
+		<a
+			id="lang-link-overflow"
+			class="button-sm inner-focus button button-clear button-block justify-content-flex-start text-align-left"
+			data-bi-name="language-toggle"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			data-read-in-link
+			href="#"
+			hidden
+		>
+			<span class="icon" aria-hidden="true" data-read-in-link-icon>
+				<span class="docon docon-locale-globe"></span>
+			</span>
+			<span data-read-in-link-text>Read in English</span>
+		</a>
+	
+					
+		<button
+			type="button"
+			class="collection button button-clear button-sm button-block justify-content-flex-start text-align-left inner-focus"
+			data-list-type="collection"
+			data-bi-name="collection"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			data-popover-close
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-circle-addition"></span>
+			</span>
+			<span class="collection-status">Add</span>
+		</button>
+	 
+		<button
+			type="button"
+			class="collection button button-block button-clear button-sm justify-content-flex-start text-align-left inner-focus"
+			data-list-type="plan"
+			data-bi-name="plan"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			data-popover-close
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-circle-addition"></span>
+			</span>
+			<span class="plan-status">Add to Plans</span>
+		</button>
+	 
+					
+		<a
+			data-contenteditbtn
+			class="button button-clear button-block button-sm inner-focus justify-content-flex-start text-align-left text-decoration-none"
+			data-bi-name="edit"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			hidden
+			href=""
+			data-original_content_git_url="https://github.com/MicrosoftDocs/typography/blob/live/typographydocs/opentype/spec/math.md"
+			data-original_content_git_url_template="{repo}/blob/{branch}/typographydocs/opentype/spec/math.md"
+			data-pr_repo=""
+			data-pr_branch=""
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-edit-outline"></span>
+			</span>
+			<span>Edit</span>
+		</a>
+	  
+		<hr class="margin-block-xxs" />
+		
+				<button
+					class="button button-block button-clear button-sm justify-content-flex-start text-align-left inner-focus"
+					type="button"
+					data-bi-name="copy-markdown"
+					data-page-action-item="overflow-all"
+					data-copy-markdown
+					data-copy-state="idle"
+					data-check-hidden="true"
+				>
+					<span class="icon color-primary" aria-hidden="true">
+						<span data-show-when="idle" class="docon docon-code-lang"></span>
+						<span data-show-when="loading" class="loader" hidden></span>
+						<span data-show-when="success" class="docon docon-check-mark" hidden></span>
+					</span>
+					<span>Copy Markdown</span>
+				</button>
+		   
+				<button
+					class="button button-block button-clear button-sm justify-content-flex-start text-align-left inner-focus"
+					type="button"
+					data-bi-name="print"
+					data-page-action-item="overflow-all"
+					data-popover-close
+					data-print-page
+					data-check-hidden="true"
+				>
+					<span class="icon color-primary" aria-hidden="true">
+						<span class="docon docon-print"></span>
+					</span>
+					<span>Print</span>
+				</button>
+		  
+	
+				</div>
+			</details>
+		</div>
+	
+			</div>
+		</div>
+	  
+		<!-- privateUnauthorizedTemplate is hidden by default -->
+		<div unauthorized-private-section data-bi-name="permission-content-unauthorized-private" hidden>
+			<hr class="hr margin-top-xs margin-bottom-sm" />
+			<div class="notification notification-info">
+				<div class="notification-content">
+					<p class="margin-top-none notification-title">
+						<span class="icon" aria-hidden="true"
+							><span class="docon docon-exclamation-circle-solid"></span
+						></span>
+						<span>Note</span>
+					</p>
+					<p class="margin-top-none authentication-determined not-authenticated">
+						Access to this page requires authorization. You can try <a class="docs-sign-in" href="#" data-bi-name="permission-content-sign-in">signing in</a> or <a  class="docs-change-directory" data-bi-name="permisson-content-change-directory">changing directories</a>.
+					</p>
+					<p class="margin-top-none authentication-determined authenticated">
+						Access to this page requires authorization. You can try <a class="docs-change-directory" data-bi-name="permisson-content-change-directory">changing directories</a>.
+					</p>
+				</div>
+			</div>
+		</div>
+	
+					<div class="content"><h1 id="math---the-mathematical-typesetting-table">MATH - The Mathematical Typesetting Table</h1></div>
+					
+		<div
+			id="article-metadata"
+			data-bi-name="article-metadata"
+			data-test-id="article-metadata"
+			class="page-metadata-container display-flex gap-xxs justify-content-space-between align-items-center flex-wrap-wrap"
+		>
+			 
+				<div
+					id="user-feedback"
+					class="margin-block-xxs display-none display-none-print"
+					hidden
+					data-hide-on-archived
+				>
+					
+		<button
+			id="user-feedback-button"
+			data-test-id="conceptual-feedback-button"
+			class="button button-sm button-clear button-primary display-none"
+			type="button"
+			data-bi-name="user-feedback-button"
+			data-user-feedback-button
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-like"></span>
+			</span>
+			<span>Feedback</span>
+		</button>
+	
+				</div>
+		  
+		</div>
+	 
+		<div data-id="ai-summary" class="display-none-print">
+			<div id="ms--ai-summary-cta" class="margin-top-xs display-flex align-items-center">
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-sparkle-fill gradient-text-vivid"></span>
+				</span>
+				<button
+					id="ms--ai-summary"
+					type="button"
+					class="tag tag-sm tag-suggestion margin-left-xxs"
+					data-test-id="ai-summary-cta"
+					data-bi-name="ai-summary-cta"
+					data-an="ai-summary"
+				>
+					<span class="ai-summary-cta-text">
+						Summarize this article for me
+					</span>
+				</button>
+			</div>
+			<!-- Slot where the client will render the summary card after the user clicks the CTA -->
+			<div id="ms--ai-summary-header" class="margin-top-xs"></div>
+		</div>
+	 
+		<nav
+			id="center-doc-outline"
+			class="doc-outline display-none-desktop display-none-print margin-bottom-sm"
+			data-bi-name="intopic toc"
+			aria-label="In this article"
+		>
+			<h2 id="ms--in-this-article" class="title is-6 margin-block-xs">
+				In this article
+			</h2>
+		</nav>
+	 <div class="content"><p><a id="overview"></a></p>
+<h2 id="overview">Overview</h2>
+<p>Mathematical formulas are complex text objects in which multiple elements with various metric, style or positioning attributes are combined. In order for a math layout engine to support layout of mathematical formulas, several types of font-specific information particular to the layout of formulas are required. The MATH table provides this font-specific information necessary for math formula layout.</p>
+<p>Note that this is not a complete specification of math layout. The MATH table provides font data required for math layout, but detailed algorithms for use of the data are not specified. Different math layout engine implementations can use this data to produce different layout results in accordance with different purposes or goals.</p>
+<p>Layout of math formulas is quite different from regular text layout that is done using tables such as GSUB and GPOS. Regular text layout mainly deals with a line of text, often formatted with a single font. In this situation, actions such as contextual substitution or kerning can be done with access to the complete context of the line of text, and the rules can be expressed in terms of known glyph sequences. Math layout is quite different from this.</p>
+<p>The general structure of math formulas is hierarchical, with formulas composed of smaller sub-formula expressions, where each expression may be composed of even simpler expressions, and so on down to individual strings — operator symbols, variable names and numbers.</p>
+<figure>
+<img src="images/image001.jpg" alt="A complex math formula and the hierarchy of boxes in its layout" data-linktype="relative-path">
+<figcaption>Figure MATH.1. A complex math formula and a diagram showing the pieces of metal type and spacing materials used in a traditional printing application</figcaption>
+</figure>
+<p>Likewise, the process of math formula layout is also recursive. Child components are formatted first and then arranged to form their parent’s layout with this process repeated on every level starting from simplest blocks up to the whole formula. Each sub-formula has its own component structure and rules for how to perform layout. For example, a fraction expression consists of numerator and denominator sub-expressions, which will be placed on top one another with a fraction rule separating them. An integral expression contains an integral sign, optional upper-limit and lower-limit expressions, and a following sub-expression.</p>
+<p>The simplest blocks within a formula typically contain strings. In isolation, each could be laid out by regular text-layout processing using other tables such as GSUB and GPOS. Math layout goes beyond this. It deals mainly with layout processing involved in composing these simple blocks together into a complex, hierarchical formula. The data provided in the MATH table allows math layout processing to be typographically aware, so that presentation with high typographic quality can be achieved.</p>
+<p>A math layout engine works with boxes representing individual formula components as units of layout. During the layout process, individual boxes can be arranged relative to each other; they can be stretched, depending on the sizes of other boxes they interact with; or they can use different glyph variants, based on the box size or position in the formula. The MATH table provides data that informs how these operations are done. Each box has an associated font that supplies information comprising typographic requirements for that box. These may be requirements for that box alone, based on the results of layout operations internal to the box; or they may be requirements on how other boxes interact with that box in layout.</p>
+<p>By providing information about a font generally or about specific glyphs in the font, the MATH table can enable math-layout engines to produce layout that is appropriate for the font design, and that realizes the font’s full typographic potential by using stylistic and stretching glyph variants provided by the font.</p>
+<h2 id="math-table-structures">MATH table structures</h2>
+<p><a id="sharedFormats"></a></p>
+<h3 id="shared-formats-mathvaluerecord-coverage-table">Shared formats: MathValueRecord, Coverage table</h3>
+<p><a id="mathValueRecord"></a></p>
+<h4 id="mathvaluerecord">MathValueRecord</h4>
+<p>MATH subtables use math value records to describe values that place or adjust elements of math formulas. These values are expressed in font design units.</p>
+<p>A MathValueRecord may also specify an offset to a device table which provides corrections to a given value at particular display resolutions. The device table format is described in the <a href="chapter2#devVarIdxTbls" data-linktype="relative-path">OpenType Layout Common Table Formats</a> chapter. The device table can provide multiple correction values to be used for several different PPEM sizes. Different formats for representing the correction values are provided to allow for efficient representation, according to the size requirements of the correction values. When used in MathValueRecords, format 1 is recommended.</p>
+<p>When designing a MATH table, device tables can be specified for many values used for positioning elements of a formula. This creates the potential that many device corrections could accumulate in a given layout. However, such accumulation would result in metrics for formula elements that are significantly different from scale-adjusted dimensions of the same elements rendered on a high-resolution device. It would produce inconsistencies between screen and print renditions, and could also lead to clipping. For these reasons, accumulation of many corrections is undesirable.</p>
+<p>While a font may specify device corrections, use of these corrections is under the control of a given layout engine implementation. To maintain consistency across devices with different resolutions, an engine may limit the number of device corrections that are accumulated, or may ignore them altogether. A layout engine may also supply its own corrections where none are indicated in the font. Since the accumulated size of corrections should be kept to a minimum, it is recommended that device tables referenced by a MathValueRecord use format 1 for representation of correction values. This format allows corrections of at most -2 to +1 pixels. The recommended values to use in MathValueRecords are -1, 0, or 1.</p>
+<p><a id="mathValueRec"></a></p>
+<p><em>MathValueRecord</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr>
+<td>FWORD</td>
+<td>value</td>
+<td>The X or Y value in design units.</td>
+</tr>
+<tr>
+<td>Offset16</td>
+<td>deviceOffset</td>
+<td>Offset to the device table, from the beginning of parent table. May be NULL. Suggested format for device table is 1.</td>
+</tr>
+</tbody>
+</table>
+<p><a id="coverage"></a></p>
+<h4 id="coverage-table">Coverage table</h4>
+<p>MATH subtables make use of <a href="chapter2#coverageTbl" data-linktype="relative-path">Coverage tables</a>, defined in the OpenType Layout Common Table Formats chapter, to specify sets of glyphs. All Coverage table formats may be used in the MATH table.</p>
+<p><a id="header"></a></p>
+<h3 id="math-header">MATH Header</h3>
+<p>The MATH table begins with a header that consists of a version number for the table (majorVersion/minorVersion), which is currently set to 1.0, and specified offsets to the following tables that store information on positioning of math formula elements:</p>
+<ul>
+<li>MathConstants table stores font parameters to be used in typesetting of each supported mathematical function, such as a fraction or a radical.</li>
+<li>MathGlyphInfo table supplies positioning information that is defined on a per-glyph basis.</li>
+<li>MathVariants table contains information to be used in constructing glyph variants of different height or width, either by finding a pre-defined glyph with desired measurements in the font, or by assembling the required shape from pieces found in the glyph set.</li>
+</ul>
+<p><a id="mathTable"></a></p>
+<p><em>MATH Header</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr>
+<td>uint16</td>
+<td>majorVersion</td>
+<td>Major version of the MATH table, = 1.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>minorVersion</td>
+<td>Minor version of the MATH table, = 0.</td>
+</tr>
+<tr>
+<td>Offset16</td>
+<td>mathConstantsOffset</td>
+<td>Offset to MathConstants table, from the beginning of MATH table.</td>
+</tr>
+<tr>
+<td>Offset16</td>
+<td>mathGlyphInfoOffset</td>
+<td>Offset to MathGlyphInfo table, from the beginning of MATH table.</td>
+</tr>
+<tr>
+<td>Offset16</td>
+<td>mathVariantsOffset</td>
+<td>Offset to MathVariants table, from the beginning of MATH table.</td>
+</tr>
+</tbody>
+</table>
+<p><a id="mathConstants"></a></p>
+<h3 id="mathconstants-table">MathConstants table</h3>
+<p>The MathConstants table defines a number of constants required to properly position elements of mathematical formulas. These constants belong to several groups of semantically-related values, such as values for positioning of accents, positioning of superscripts and subscripts, and positioning of elements of fractions. The table also contains general-use constants that may affect all parts of the formula, such as axis height and math leading. Note that most of the constants deal with aspects of vertical positioning.</p>
+<p>In most cases, values in the MathConstants table are assumed to be positive. For example, for descenders and shift-down values a positive constant signifies movement in a downwards direction. Most values in the MathConstants table are represented by a MathValueRecord, which allows the font designer to supply device corrections to those values when necessary.</p>
+<p>For values that pertain to layout interactions between a base and dependent elements (e.g., superscripts or limits), the specific value used is taken from the font associated with the base, and the size of the value is relative to the size of the base.</p>
+<p>The following naming convention are used for fields in the MathConstants table:</p>
+<ul>
+<li><strong>Height</strong> — Specifies a distance from the main baseline.</li>
+<li><strong>Kern</strong> — Represents a fixed amount of empty space to be introduced.</li>
+<li><strong>Gap</strong> — Represents an amount of empty space that may need to be increased to meet certain criteria.</li>
+<li><strong>Drop and Rise</strong> — Specifies the relationship between measurements of two elements to be positioned relative to each other (but not necessarily in a stack-like manner) that must meet certain criteria. For a Drop, one of the positioned elements has to be moved down to satisfy those criteria; for a Rise, the movement is upwards.</li>
+<li><strong>Shift</strong> — Defines a vertical shift applied to an element sitting on a baseline. Note that the value is an amount of <em>adjustment</em> to the position of an element, not the resulting distance from the baseline or other reference line.</li>
+<li><strong>Dist</strong> — Defines a distance between baselines of two elements.</li>
+</ul>
+<p>The descriptions for several fields refer to <em>default rule thickness</em>. Layout engines control how rules are drawn and how their thickness is set. It is recommended that rules have the same thickness as a minus sign, low line, or a similar font value such as <a href="os2#ystrikeoutsize" data-linktype="relative-path">OS/2.yStrikeoutSize</a>. For fields that are described in reference to default rule thickness, one of these should be assumed.</p>
+<p><a id="mathConstantsTable"></a></p>
+<p><em>MathConstants table</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr>
+<td>int16</td>
+<td>scriptPercentScaleDown</td>
+<td>Percentage of scaling down for level 1 superscripts and subscripts. Suggested value: 80%.</td>
+</tr>
+<tr>
+<td>int16</td>
+<td>scriptScriptPercentScaleDown</td>
+<td>Percentage of scaling down for level 2 (scriptScript) superscripts and subscripts. Suggested value: 60%.</td>
+</tr>
+<tr>
+<td>UFWORD</td>
+<td>delimitedSubFormulaMinHeight</td>
+<td>Minimum height required for a delimited expression (contained within parentheses, etc.) to be treated as a sub-formula. Suggested value: normal line height × 1.5.</td>
+</tr>
+<tr>
+<td>UFWORD</td>
+<td>displayOperatorMinHeight</td>
+<td>Minimum height of n-ary operators (such as integral and summation) for formulas in display mode (that is, appearing as standalone page elements, not embedded inline within text).</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>mathLeading</td>
+<td>White space to be left between math formulas to ensure proper line spacing. For example, for applications that treat line gap as a part of line ascender, formulas with ink going above (os2.sTypoAscender + os2.sTypoLineGap - MathLeading) or with ink going below os2.sTypoDescender will result in increasing line height.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>axisHeight</td>
+<td>Axis height of the font.<br><br>In math typesetting, the term axis refers to a horizontal reference line used for positioning elements in a formula. The math axis is similar to but distinct from the baseline for regular text layout. For example, in a simple equation, a minus symbol or fraction rule would be on the axis, but a string for a variable name would be set on a baseline that is offset from the axis. The axisHeight value determines the amount of that offset.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>accentBaseHeight</td>
+<td>Maximum (ink) height of accent base that does not require raising the accents. Suggested: x‑height of the font (os2.sxHeight) plus any possible overshots.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>flattenedAccentBaseHeight</td>
+<td>Maximum (ink) height of accent base that does not require flattening the accents. Suggested: cap height of the font (os2.sCapHeight).</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>subscriptShiftDown</td>
+<td>The standard shift down applied to subscript elements. Positive for moving in the downward direction. Suggested: os2.ySubscriptYOffset.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>subscriptTopMax</td>
+<td>Maximum allowed height of the (ink) top of subscripts that does not require moving subscripts further down. Suggested: 4/5 x- height.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>subscriptBaselineDropMin</td>
+<td>Minimum allowed drop of the baseline of subscripts relative to the (ink) bottom of the base. Checked for bases that are treated as a box or extended shape. Positive for subscript baseline dropped below the base bottom.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>superscriptShiftUp</td>
+<td>Standard shift up applied to superscript elements. Suggested: os2.ySuperscriptYOffset.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>superscriptShiftUpCramped</td>
+<td>Standard shift of superscripts relative to the base, in cramped style.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>superscriptBottomMin</td>
+<td>Minimum allowed height of the (ink) bottom of superscripts that does not require moving subscripts further up. Suggested: ¼ x-height.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>superscriptBaselineDropMax</td>
+<td>Maximum allowed drop of the baseline of superscripts relative to the (ink) top of the base. Checked for bases that are treated as a box or extended shape. Positive for superscript baseline below the base top.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>subSuperscriptGapMin</td>
+<td>Minimum gap between the superscript and subscript ink. Suggested: 4 × default rule thickness.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>superscriptBottomMaxWithSubscript</td>
+<td>The maximum level to which the (ink) bottom of superscript can be pushed to increase the gap between superscript and subscript, before subscript starts being moved down. Suggested: 4/5 x-height.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>spaceAfterScript</td>
+<td>Extra white space to be added after each subscript and superscript that occurs after a baseline element, and before each subscript and superscript that occurs before a baseline element. Suggested: 0.5 pt for a 12 pt font.<br><br>Note that, in some math layout implementations, a constant value, such as 0.5 pt, could be used for all text sizes. Some implementations could use a constant ratio of text size, such as 1/24 of em.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>upperLimitGapMin</td>
+<td>Minimum gap between the (ink) bottom of the upper limit, and the (ink) top of the base operator.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>upperLimitBaselineRiseMin</td>
+<td>Minimum distance between baseline of upper limit and (ink) top of the base operator.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>lowerLimitGapMin</td>
+<td>Minimum gap between (ink) top of the lower limit, and (ink) bottom of the base operator.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>lowerLimitBaselineDropMin</td>
+<td>Minimum distance between baseline of the lower limit and (ink) bottom of the base operator.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>stackTopShiftUp</td>
+<td>Standard shift up applied to the top element of a stack.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>stackTopDisplayStyleShiftUp</td>
+<td>Standard shift up applied to the top element of a stack in display style.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>stackBottomShiftDown</td>
+<td>Standard shift down applied to the bottom element of a stack. Positive for moving in the downward direction.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>stackBottomDisplayStyleShiftDown</td>
+<td>Standard shift down applied to the bottom element of a stack in display style. Positive for moving in the downward direction.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>stackGapMin</td>
+<td>Minimum gap between (ink) bottom of the top element of a stack, and the (ink) top of the bottom element. Suggested: 3 × default rule thickness.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>stackDisplayStyleGapMin</td>
+<td>Minimum gap between (ink) bottom of the top element of a stack, and the (ink) top of the bottom element in display style. Suggested: 7 × default rule thickness.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>stretchStackTopShiftUp</td>
+<td>Standard shift up applied to the top element of the stretch stack.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>stretchStackBottomShiftDown</td>
+<td>Standard shift down applied to the bottom element of the stretch stack. Positive for moving in the downward direction.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>stretchStackGapAboveMin</td>
+<td>Minimum gap between the ink of the stretched element, and the (ink) bottom of the element above. Suggested: same value as upperLimitGapMin.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>stretchStackGapBelowMin</td>
+<td>Minimum gap between the ink of the stretched element, and the (ink) top of the element below. Suggested: same value as lowerLimitGapMin.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>fractionNumeratorShiftUp</td>
+<td>Standard shift up applied to the numerator.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>fractionNumeratorDisplayStyleShiftUp</td>
+<td>Standard shift up applied to the numerator in display style. Suggested: same value as stackTopDisplayStyleShiftUp.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>fractionDenominatorShiftDown</td>
+<td>Standard shift down applied to the denominator. Positive for moving in the downward direction.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>fractionDenominatorDisplayStyleShiftDown</td>
+<td>Standard shift down applied to the denominator in display style. Positive for moving in the downward direction. Suggested: same value as stackBottomDisplayStyleShiftDown.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>fractionNumeratorGapMin</td>
+<td>Minimum tolerated gap between the (ink) bottom of the numerator and the ink of the fraction bar. Suggested: default rule thickness.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>fractionNumDisplayStyleGapMin</td>
+<td>Minimum tolerated gap between the (ink) bottom of the numerator and the ink of the fraction bar in display style. Suggested: 3 × default rule thickness.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>fractionRuleThickness</td>
+<td>Thickness of the fraction bar. Suggested: default rule thickness.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>fractionDenominatorGapMin</td>
+<td>Minimum tolerated gap between the (ink) top of the denominator and the ink of the fraction bar. Suggested: default rule thickness.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>fractionDenomDisplayStyleGapMin</td>
+<td>Minimum tolerated gap between the (ink) top of the denominator and the ink of the fraction bar in display style. Suggested: 3 × default rule thickness.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>skewedFractionHorizontalGap</td>
+<td>Horizontal distance between the top and bottom elements of a skewed fraction.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>skewedFractionVerticalGap</td>
+<td>Vertical distance between the ink of the top and bottom elements of a skewed fraction.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>overbarVerticalGap</td>
+<td>Distance between the overbar and the (ink) top of the base. Suggested: 3 × default rule thickness.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>overbarRuleThickness</td>
+<td>Thickness of overbar. Suggested: default rule thickness.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>overbarExtraAscender</td>
+<td>Extra white space reserved above the overbar. Suggested: default rule thickness.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>underbarVerticalGap</td>
+<td>Distance between underbar and (ink) bottom of the base. Suggested: 3 × default rule thickness.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>underbarRuleThickness</td>
+<td>Thickness of underbar. Suggested: default rule thickness.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>underbarExtraDescender</td>
+<td>Extra white space reserved below the underbar. Always positive. Suggested: default rule thickness.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>radicalVerticalGap</td>
+<td>Space between the (ink) top of the expression and the bar over it. Suggested: 1¼ default rule thickness.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>radicalDisplayStyleVerticalGap</td>
+<td>Space between the (ink) top of the expression and the bar over it. Suggested: default rule thickness + ¼ x-height.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>radicalRuleThickness</td>
+<td>Thickness of the radical rule. This is the thickness of the rule in designed or constructed radical signs. Suggested: default rule thickness.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>radicalExtraAscender</td>
+<td>Extra white space reserved above the radical. Suggested: same value as radicalRuleThickness.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>radicalKernBeforeDegree</td>
+<td>Extra horizontal kern before the degree of a radical, if such is present. Suggested: 5/18 of em.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>radicalKernAfterDegree</td>
+<td>Negative kern after the degree of a radical, if such is present. Suggested: −10/18 of em.</td>
+</tr>
+<tr>
+<td>int16</td>
+<td>radicalDegreeBottomRaisePercent</td>
+<td>Height of the bottom of the radical degree, if such is present, in proportion to the height (ascender + descender) of the radical sign. Suggested: 60%.</td>
+</tr>
+</tbody>
+</table>
+<p><a id="mathGlyphInfo"></a></p>
+<h3 id="mathglyphinfo-table">MathGlyphInfo table</h3>
+<p>The MathGlyphInfo table contains positioning information that is defined on per-glyph basis. The table consists of the following parts:</p>
+<ul>
+<li>A MathItalicsCorrectionInfo table that contains information on italics correction values.</li>
+<li>A MathTopAccentAttachment table that contains horizontal positions for attaching mathematical accents.</li>
+<li>An Extended Shape coverage table. The glyphs covered by this table are to be considered extended shapes.</li>
+<li>A MathKernInfo table that provides per-glyph information for mathematical kerning.</li>
+</ul>
+<p><a id="mathGlyphInfoTable"></a></p>
+<p><em>MathGlyphInfo table</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr>
+<td>Offset16</td>
+<td>mathItalicsCorrectionInfoOffset</td>
+<td>Offset to MathItalicsCorrectionInfo table, from the beginning of the MathGlyphInfo table.</td>
+</tr>
+<tr>
+<td>Offset16</td>
+<td>mathTopAccentAttachmentOffset</td>
+<td>Offset to MathTopAccentAttachment table, from the beginning of the MathGlyphInfo table.</td>
+</tr>
+<tr>
+<td>Offset16</td>
+<td>extendedShapeCoverageOffset</td>
+<td>Offset to ExtendedShapes coverage table, from the beginning of the MathGlyphInfo table. When the glyph to the left or right of a box is an extended shape variant, the (ink) box should be used for vertical positioning purposes, not the default position defined by values in MathConstants table. May be NULL.</td>
+</tr>
+<tr>
+<td>Offset16</td>
+<td>mathKernInfoOffset</td>
+<td>Offset to MathKernInfo table, from the beginning of the MathGlyphInfo table.</td>
+</tr>
+</tbody>
+</table>
+<p><a id="mathItalicsCorrectionInfo"></a></p>
+<h3 id="mathitalicscorrectioninfo-table">MathItalicsCorrectionInfo table</h3>
+<p>The MathItalicsCorrectionInfo table contains italics correction values for slanted glyphs used in math layout. The top portion of slanted glyphs may protrude beyond the glyph’s advance width. This can result in collision with other interacting elements, or an appearance in the placement of other interacting elements that is unpleasing unless some accommodation is made for the protrusion. The MathItalicsCorrectionInfo table provides correction values to accommodate for such protrusion.</p>
+<p>The table consists of the following parts:</p>
+<ul>
+<li>Coverage of glyphs for which the italics correction values are provided. Italics correction is assumed to be zero for all other glyphs.</li>
+<li>Count of covered glyphs.</li>
+<li>Array of italic correction values for each covered glyph, in order of coverage. The italics correction value can be used as an adjustment for positioning of interacting elements to make allowance for protrusion to the right of the top part of the glyph. For example, taller letters tend to have larger italics correction, and a <em>V</em> will probably have larger italics correction than an <em>L</em>.</li>
+</ul>
+<p>Italics correction can be used in the following situations:</p>
+<ul>
+<li>When a run of slanted characters is followed by a straight character (such as an operator or a delimiter), the italics correction of the last glyph is added to its advance width.</li>
+<li>When positioning limits on an N-ary operator (e.g., integral sign), the horizontal position of the upper limit is moved to the right by ½ of the italics correction, while the position of the lower limit is moved to the left by the same distance.</li>
+<li>When positioning superscripts and subscripts, their default horizontal positions are also different by the amount of the italics correction of the preceding glyph.</li>
+</ul>
+<p><a id="mathItalicsCorrectionInfoTable"></a></p>
+<p><em>MathItalicsCorrectionInfo table</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr>
+<td>Offset16</td>
+<td>italicsCorrectionCoverageOffset</td>
+<td>Offset to Coverage table, from the beginning of MathItalicsCorrectionInfo table.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>italicsCorrectionCount</td>
+<td>Number of italics correction values. Should coincide with the number of covered glyphs.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>italicsCorrection[italicsCorrectionCount]</td>
+<td>Array of MathValueRecords defining italics correction values for each covered glyph.</td>
+</tr>
+</tbody>
+</table>
+<p><a id="mathTopAccentAttachment"></a></p>
+<h3 id="mathtopaccentattachment-table">MathTopAccentAttachment table</h3>
+<p>The MathTopAccentAttachment table contains information on horizontal positioning of top math accents. The table consists of the following parts:</p>
+<ul>
+<li>Coverage of glyphs for which information on horizontal positioning of math accents is provided. To position accents over any other glyph, its geometrical center (with respect to advance width) can be used.</li>
+<li>Count of covered glyphs.</li>
+<li>Array of top accent attachment points for each covered glyph, in order of coverage. These attachment points are to be used for finding horizontal positions of accents over characters. It is done by aligning the attachment point of the base glyph with the attachment point of the accent. Note that this is very similar to mark-to-base attachment, but here alignment only happens in the horizontal direction, and the vertical positions of accents are determined by different means.</li>
+</ul>
+<p><a id="mathTopAccentAttachmentTable"></a></p>
+<p><em>MathTopAccentAttachment table</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr>
+<td>Offset16</td>
+<td>topAccentCoverageOffset</td>
+<td>Offset to Coverage table, from the beginning of the MathTopAccentAttachment table.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>topAccentAttachmentCount</td>
+<td>Number of top accent attachment point values. Must be the same as the number of glyph IDs referenced in the Coverage table.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>topAccentAttachment[topAccentAttachmentCount]</td>
+<td>Array of MathValueRecords defining top accent attachment points for each covered glyph.</td>
+</tr>
+</tbody>
+</table>
+<p><a id="extendedShapes"></a></p>
+<h3 id="extendedshapecoverage-table">ExtendedShapeCoverage table</h3>
+<p>The glyphs covered by this table are to be considered extended shapes. These glyphs are variants extended in the vertical direction, e.g., to match the height of another part of the formula. Because their dimensions may be very large in comparison with normal glyphs in the glyph set, the standard positioning algorithms will not produce the best results when applied to them. In the vertical direction, other formula elements will be positioned not relative to those glyphs, but instead to the ink box of the subexpression containing them.</p>
+<p>For example, consider a fraction enclosed in parentheses with a superscript. Notice how the superscripts on ‘<em>z</em>’ and ‘<em>Z</em>’ are aligned vertically, although they have different heights. If the right parenthesis was not considered an extended shape, the superscript would be put in position aligned with any other superscript on the line, like this:</p>
+<p><img src="images/image002.png" alt="Formula with a poorly positioned superscript beside tall parentheses" data-linktype="relative-path"></p>
+<p>Because this is undesirable, the right parenthesis in this case should be considered an extended shape, resulting in superscript positioned relative to the whole subexpression:</p>
+<p><img src="images/image003.png" alt="Formula with a good superscript position beside tall parentheses" data-linktype="relative-path"></p>
+<p><a id="mathKernInfo"></a></p>
+<h3 id="mathkerninfo-table">MathKernInfo table</h3>
+<p>The MathKernInfo table provides mathematical kerning values used for kerning of subscript and superscript glyphs relative to a base glyph. Its purpose is to improve spacing in situations such as 𝜔<sup>𝑓</sup> or 𝑉<sub>𝐴</sub>.</p>
+<p>Mathematical kerning is height dependent; that is, different kerning amounts can be specified for different heights within a glyph’s vertical extent. For any given glyph, different values can be specified for four corner positions — top-right, to-left, etc. — allowing for different kerning adjustments according to whether the glyph occurs as a subscript, a superscript, a base being kerned with a subscript, or a base being kerned with a superscript.</p>
+<p>The kerning algorithm for subscripts and superscripts is as follows:</p>
+<ul>
+<li>Calculate the vertical positions of subscripts and superscripts using the MathConstants table.</li>
+<li>Set the default horizontal position for a subscript immediately after the base glyph.</li>
+<li>Set the default horizontal position for a superscript after the base, applying a shift for italics correction if indicated for the base glyph in the MathItalicsCorrectionInfo table.</li>
+<li>Calculate a superscript kerning value as follows:
+<ul>
+<li>Evaluate two correction heights (illustrated in the figure below):
+<ul>
+<li>At the bottom of the superscript-glyph bounding box. (The corresponding height for the base glyph is the distance from the base-glyph baseline to the bottom of the superscript bounding box.)</li>
+<li>At the top of the base-glyph bounding box. (The corresponding height for the superscript glyph is the distance from the superscript baseline to the top of the base-glyph bounding box.)</li>
+</ul>
+</li>
+<li>For each correction height, add the top-right kerning value for the base glyph to the bottom-left kerning value for the superscript glyph.</li>
+<li>Take the minimum of these two sums: kern the base and superscript by that amount.</li>
+</ul>
+</li>
+<li>Calculate a subscript kerning value as follows:
+<ul>
+<li>Evaluate two correction heights:
+<ul>
+<li>At the top of the subscript-glyph bounding box. (The corresponding height for the base glyph is the distance from the base-glyph baseline to the top of the subscript bounding box.)</li>
+<li>At the bottom of the base-glyph bounding box. (The corresponding height for the subscript glyph is the distance from the subscript baseline to the bottom of the base-glyph bounding box.)</li>
+</ul>
+</li>
+<li>For each correction height, add the bottom-right kerning value for the base glyph to the top-left kerning value for the subscript glyph.</li>
+<li>Take the minimum of these two sums: kern the base and subscript by that amount.</li>
+</ul>
+</li>
+</ul>
+<p>If a base expression, subscript expression or superscript expression is a box, a math-layout engine may use kerning values of zero for each corner of the box, or may calculate height-dependent kerning amounts by some means.</p>
+<p>The following figure illustrates the correction heights for a base and superscript:</p>
+<figure>
+<img src="images/image006.png" alt="omega with superscript f, with metric values for positioning the superscript" data-linktype="relative-path">
+<figcaption>Figure MATH.2. Example of horizontal and vertical kerning adjustments for superscript positioning</figcaption>
+</figure>
+<p>The MathKernInfo table consists of the following fields:</p>
+<ul>
+<li>A Coverage table of glyphs for which mathematical kerning information is provided. Mathematical kerning amounts are assumed to be zero for all other glyphs.</li>
+<li>Count of MathKernInfoRecords.</li>
+<li>Array of MathKernInfoRecords for each covered glyph, following the order of glyphs in the Coverage table.</li>
+</ul>
+<p><a id="mathKernInfoTable"></a></p>
+<p><em>MathKernInfo table</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr>
+<td>Offset16</td>
+<td>mathKernCoverageOffset</td>
+<td>Offset to Coverage table, from the beginning of the MathKernInfo table.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>mathKernCount</td>
+<td>Number of MathKernInfoRecords. Must be the same as the number of glyph IDs referenced in the Coverage table.</td>
+</tr>
+<tr>
+<td>MathKernInfoRecord</td>
+<td>mathKernInfoRecords[mathKernCount]</td>
+<td>Array of MathKernInfoRecords, one for each covered glyph.</td>
+</tr>
+</tbody>
+</table>
+<p><a id="mathKernInfoRecord"></a></p>
+<p><strong>MathKernInfoRecord</strong></p>
+<p>Each MathKernInfoRecord points to up to four kern tables for each of the corners around the glyph. If no kern table is provided for a corner, a kerning amount of zero is assumed.</p>
+<p><a id="mathKernInfoRecordFormat"></a></p>
+<p><em>MathKernInfoRecord</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr>
+<td>Offset16</td>
+<td>topRightMathKernOffset</td>
+<td>Offset to MathKern table for top right corner, from the beginning of the MathKernInfo table. May be NULL.</td>
+</tr>
+<tr>
+<td>Offset16</td>
+<td>topLeftMathKernOffset</td>
+<td>Offset to MathKern table for the top left corner, from the beginning of the MathKernInfo table. May be NULL.</td>
+</tr>
+<tr>
+<td>Offset16</td>
+<td>bottomRightMathKernOffset</td>
+<td>Offset to MathKern table for bottom right corner, from the beginning of the MathKernInfo table. May be NULL.</td>
+</tr>
+<tr>
+<td>Offset16</td>
+<td>bottomLeftMathKernOffset</td>
+<td>Offset to MathKern table for bottom left corner, from the beginning of the MathKernInfo table. May be NULL.</td>
+</tr>
+</tbody>
+</table>
+<p><a id="mathKern"></a></p>
+<p><strong>MathKern table</strong></p>
+<p>The MathKern table provides kerning amounts for different heights in a glyph’s vertical extent. An array of kerning values is provided, each of which applies to a height range. A corresponding array of heights indicate the transition points between consecutive ranges.</p>
+<p>Correction heights for each glyph are relative to the glyph baseline, with positive height values above the baseline, and negative height values below the baseline. The correctionHeights array is sorted in increasing order, from lowest to highest.</p>
+<p>The kerning value corresponding to a particular height is determined by finding two consecutive entries in the correctionHeight array such that the given height is greater than or equal to the first entry and less than the second entry. The index of the second entry is used to look up a kerning value in the kernValues array. If the given height is less than the first entry in the correctionHeights array, the first kerning value (index 0) is used. For a height that is greater than or equal to the last entry in the correctionHeights array, the last entry is used.</p>
+<p><a id="mathKernTable"></a></p>
+<p><em>MathKern table</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr>
+<td>uint16</td>
+<td>heightCount</td>
+<td>Number of heights at which the kern value changes.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>correctionHeight[heightCount]</td>
+<td>Array of correction heights, in design units, sorted from lowest to highest.</td>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>kernValues[heightCount + 1]</td>
+<td>Array of kerning values for different height ranges. Negative values are used to move glyphs closer to each other.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="math-variants">Math variants</h3>
+<p><a id="mathVariants"></a></p>
+<h4 id="mathvariants-table">MathVariants table</h4>
+<p>The MathVariants table solves the following problem: given a particular default glyph shape and a certain width or height, find a variant shape glyph (or construct created by putting several glyphs together) that has the required measurement. This functionality is needed for growing the parentheses to match the height of the expression within, growing the radical sign to match the height of the expression under the radical, stretching accents like tilde when they are put over several characters, for stretching arrows, horizontal curly braces, and so forth.</p>
+<p>The MathVariants table consists of the following fields:</p>
+<ul>
+<li>Count and coverage of glyphs that can grow in the vertical direction.</li>
+<li>Count and coverage of glyphs that can grow in the horizontal direction.</li>
+<li>The minConnectorOverlap field defines by how much two glyphs need to overlap with each other when used to construct a larger shape. Each glyph to be used as a building block in constructing extended shapes will have a straight part at either or both ends. This connector part is used to connect that glyph to other glyphs in the assembly. These connectors need to overlap to compensate for rounding errors and hinting corrections at a lower resolution. The minConnectorOverlap value tells how much overlap is necessary for this particular font.</li>
+<li>Two arrays of offsets to MathGlyphConstruction tables: one array for glyphs that grow in the vertical direction, and the other array for glyphs that grow in the horizontal direction. The arrays must be arranged in coverage order and have specified sizes.</li>
+</ul>
+<p><a id="mathVariantsTable"></a></p>
+<p><em>MathVariants table</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr>
+<td>UFWORD</td>
+<td>minConnectorOverlap</td>
+<td>Minimum overlap of connecting glyphs during glyph construction, in design units.</td>
+</tr>
+<tr>
+<td>Offset16</td>
+<td>vertGlyphCoverageOffset</td>
+<td>Offset to Coverage table, from the beginning of the MathVariants table.</td>
+</tr>
+<tr>
+<td>Offset16</td>
+<td>horizGlyphCoverageOffset</td>
+<td>Offset to Coverage table, from the beginning of the MathVariants table.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>vertGlyphCount</td>
+<td>Number of glyphs for which information is provided for vertically growing variants. Must be the same as the number of glyph IDs referenced in the vertical Coverage table.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>horizGlyphCount</td>
+<td>Number of glyphs for which information is provided for horizontally growing variants. Must be the same as the number of glyph IDs referenced in the horizontal Coverage table.</td>
+</tr>
+<tr>
+<td>Offset16</td>
+<td>vertGlyphConstructionOffsets[vertGlyphCount]</td>
+<td>Array of offsets to MathGlyphConstruction tables, from the beginning of the MathVariants table, for shapes growing in the vertical direction.</td>
+</tr>
+<tr>
+<td>Offset16</td>
+<td>horizGlyphConstructionOffsets[horizGlyphCount]</td>
+<td>Array of offsets to MathGlyphConstruction tables, from the beginning of the MathVariants table, for shapes growing in the horizontal direction.</td>
+</tr>
+</tbody>
+</table>
+<p><a id="mathGlyphConstruction"></a></p>
+<h4 id="mathglyphconstruction-table">MathGlyphConstruction table</h4>
+<p>The MathGlyphConstruction table provides information on finding or assembling extended variants for one particular glyph. It can be used for shapes that grow in either horizontal or vertical directions.</p>
+<p>The first entry is the offset to the GlyphAssembly table that specifies how the shape for this glyph can be assembled from parts found in the glyph set of the font. If no such assembly exists, this offset will be set to NULL.</p>
+<p>The MathGlyphConstruction table also contains the count and array of ready-made glyph variants for the specified glyph. Each variant consists of the glyph index and this glyph’s measurement in the direction of extension (vertical or horizontal).</p>
+<p>Note that it is quite possible that both the GlyphAssembly table and some variants are defined for a particular glyph. For example, the font may provide several variants of curly braces with different sizes, and also a general mechanism for constructing larger versions of curly braces by stacking parts found in the glyph set. First, an attempt is made to find glyph among provided variants. If the required size is larger than any of the glyph variants provided, however, then the general mechanism can be employed to typeset the curly braces as a glyph assembly.</p>
+<p><a id="mathGlyphConstructionTable"></a></p>
+<p><em>MathGlyphConstruction table</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr>
+<td>Offset16</td>
+<td>glyphAssemblyOffset</td>
+<td>Offset to the GlyphAssembly table for this shape, from the beginning of the MathGlyphConstruction table. May be NULL.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>variantCount</td>
+<td>Count of glyph growing variants for this glyph.</td>
+</tr>
+<tr>
+<td>MathGlyphVariantRecord</td>
+<td>mathGlyphVariantRecords[variantCount]</td>
+<td>MathGlyphVariantRecords for alternative variants of the glyphs.</td>
+</tr>
+</tbody>
+</table>
+<p><a id="mathGlyphVariantRecordFormat"></a></p>
+<p><em>MathGlyphVariantRecord</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr>
+<td>uint16</td>
+<td>variantGlyph</td>
+<td>Glyph ID for the variant.</td>
+</tr>
+<tr>
+<td>UFWORD</td>
+<td>advanceMeasurement</td>
+<td>Advance width/height, in design units, of the variant, in the direction of requested glyph extension.</td>
+</tr>
+</tbody>
+</table>
+<p><a id="glyphAssembly"></a></p>
+<h4 id="glyphassembly-table">GlyphAssembly table</h4>
+<p>The GlyphAssembly table specifies how the shape for a particular glyph can be constructed from parts found in the glyph set. The table defines the italics correction of the resulting assembly, and a number of parts that have to be put together to form the required shape. Some glyph parts can be designated as extenders, which can be repeated as needed to obtain a target size.</p>
+<p><a id="glyphAssemblyTable"></a></p>
+<p><em>GlyphAssembly table</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr>
+<td>MathValueRecord</td>
+<td>italicsCorrection</td>
+<td>Italics correction of this GlyphAssembly. Should not depend on the assembly size.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>partCount</td>
+<td>Number of parts in this assembly.</td>
+</tr>
+<tr>
+<td>GlyphPart</td>
+<td>partRecords[partCount]</td>
+<td>Array of GlyphPart records, from left to right (for assemblies that extend horizontally) or bottom to top (for assemblies that extend vertically).</td>
+</tr>
+</tbody>
+</table>
+<p>The result of the assembly process is an array of glyphs with an offset specified for each of those glyphs. When drawn consecutively at those offsets, the glyphs should combine correctly and produce the required shape.</p>
+<p>The offsets in the direction of growth (advance offsets), as well as the number of extender parts, are determined based on the size requirement for the resulting assembly.</p>
+<p>Note that the glyphs comprising the assembly should be designed so that they align properly in the direction that is orthogonal to the direction of growth.</p>
+<p>Thus, a GlyphPart record consists of the following fields:</p>
+<ul>
+<li><p>Glyph ID for the part.</p>
+</li>
+<li><p>Lengths of the connectors on each end of the glyph. The connectors are straight parts of the glyph that can be used to link it with the next or previous part. The connectors of neighboring parts can overlap by varying amounts, providing flexibility in how these glyphs can be put together. However, the overlap should not be less than the minConnectorOverlap value defined in the MathVariants tables, and it should not exceed the specified connector length for that end of the glyph. If the part does not have a connector on one of its ends, the corresponding connector length should be set to zero.</p>
+</li>
+<li><p>The full advance of the part. It is also used to determine the measurement of the result by using the following formula:<br>
+<br>
+<em>Size of Assembly = Offset of the Last Part + Full Advance of the Last Part</em></p>
+</li>
+<li><p>PartFlags is the last field. It identifies certain parts as <em>extenders</em>: those parts that can be repeated (that is, multiple instances of them can be used in place of one) or skipped altogether. Usually, the extenders are vertical or horizontal bars of the appropriate thickness, aligned with the rest of the assembly.</p>
+</li>
+</ul>
+<p>To ensure that the width/height is distributed equally and the symmetry of the shape is preserved, the following steps can be used by the math-layout engine.</p>
+<ol>
+<li>Assemble all parts with all extenders removed and with connections overlapping by the maximum amount. This gives the smallest possible result.</li>
+<li>Determine how much extra width/height can be obtained from all existing connections between neighboring parts by using minimal overlaps. If that is enough to achieve the size goal, extend each connection equally by changing overlaps of connectors to finish the job.</li>
+<li>If all connections have been extended to the minimum overlap and further growth is needed, add one of each extender, and repeat the process from the first step.</li>
+</ol>
+<p>Note that for assemblies growing in the vertical direction, the distribution of height between ascent and descent is not defined. The math-layout engine is responsible for positioning the resulting assembly relative to the baseline.</p>
+<p><a id="glyphPartRecord"></a></p>
+<p><em>GlyphPart record</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr>
+<td>uint16</td>
+<td>glyphID</td>
+<td>Glyph ID for the part.</td>
+</tr>
+<tr>
+<td>UFWORD</td>
+<td>startConnectorLength</td>
+<td>Advance width/ height, in design units, of the straight bar connector material at the start of the glyph in the direction of the extension (the left end for horizontal extension, the bottom end for vertical extension).</td>
+</tr>
+<tr>
+<td>UFWORD</td>
+<td>endConnectorLength</td>
+<td>Advance width/ height, in design units, of the straight bar connector material at the end of the glyph in the direction of the extension (the right end for horizontal extension, the top end for vertical extension).</td>
+</tr>
+<tr>
+<td>UFWORD</td>
+<td>fullAdvance</td>
+<td>Full advance width/height for this part in the direction of the extension, in design units.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>partFlags</td>
+<td>Part qualifiers. PartFlags enumeration currently uses only one bit:<br>
+0x0001 EXTENDER_FLAG: If set, the part can be skipped or repeated.<br>
+0xFFFE Reserved.</td>
+</tr>
+</tbody>
+</table>
+<p><a id="mathTags"></a></p>
+<h2 id="opentype-layout-tags-used-with-the-math-table">OpenType Layout tags used with the MATH table</h2>
+<p>The following OpenType Layout tags can be used by a math layout engine to access a particular set of glyph variants. For detailed descriptions of the feature tags, see the <a href="featuretags" data-linktype="relative-path">Feature Tags</a> section of the OpenType Layout Tag Registry.</p>
+<p><a id="mathTagsTbl"></a></p>
+<p><em>OpenType Layout tags for math processing</em></p>
+<table>
+<tbody>
+<tr>
+<th>Tag</th>
+<th>Description</th>
+</tr>
+<tr>
+<td>'math'</td>
+<td>Script tag to be used for features in math layout. The only language system supported with this tag is the default language system.</td>
+</tr>
+<tr>
+<td><a href="features_pt#ssty" data-linktype="relative-path">'ssty'</a></td>
+<td>Math Script-style Alternates
+<br><br>
+This feature provides glyph variants adjusted to be more suitable for use in subscripts and superscripts.
+<br><br>
+These script style forms should not be scaled or moved in the font; scaling and moving them is done by the math layout engine. Instead, the 'ssty' feature should provide glyph forms that result in shapes that look good as superscripts and subscripts when scaled and positioned by the math engine. When designing the script forms, the font developer may assume that the scriptPercentScaleDown and scriptScriptPercentScaleDown values in the MathConstants table will be scaling factors applied to the size of the alternate glyphs by the math engine.
+<br><br>
+This feature can have a parameter indicating the script level: 1 for simple subscripts and superscripts, 2 for second level subscripts and superscripts (that is, scripts on scripts), and so on. (Currently, only the first two alternates are used).
+<br><br>
+For glyphs that are not covered by this feature, the original glyph is used in subscripts and superscripts.
+<br><br>
+Recommended format: Alternate Substitution table (Single Substitution if there are no second level forms). There should be no context.</td>
+</tr>
+<tr>
+<td><a href="features_fj#flac" data-linktype="relative-path">'flac'</a></td>
+<td>Flattened Accent Forms
+<br><br>
+This feature provides flattened forms of accents to be used over high-rise bases such as capitals.
+<br><br>
+This feature should only change the shape of the accent and should not move it in the vertical or horizontal direction. Moving of the accents is done by the math layout engine.
+<br><br>
+Accents are flattened by the math engine if their base is higher than the flattenedAccentBaseHeight value in the MathConstants table.
+<br><br>
+Recommended format: Single Substitution table. There should be no context.</td>
+</tr>
+<tr>
+<td><a href="features_ae#dtls" data-linktype="relative-path">'dtls'</a></td>
+<td>Dotless Forms
+<br><br>
+This feature provides dotless forms for Math Alphanumeric characters, such as U+1D422 MATHEMATICAL BOLD SMALL I, U+1D423 MATHEMATICAL BOLD SMALL J, U+1D456 U+MATHEMATICAL ITALIC SMALL I, U+1D457 MATHEMATICAL ITALIC SMALL J, and so on.
+<br><br>
+The dotless forms are to be used as base forms for placing mathematical accents over them.
+<br><br>
+Recommended format: Single Substitution table. There should be no context.</td>
+</tr>
+</tbody>
+</table>
+</div>
+					
+		<div
+			id="ms--inline-notifications"
+			class="margin-block-xs"
+			data-bi-name="inline-notification"
+		></div>
+	 
+		<div
+			id="assertive-live-region"
+			role="alert"
+			aria-live="assertive"
+			class="visually-hidden"
+			aria-relevant="additions"
+			aria-atomic="true"
+		></div>
+		<div
+			id="polite-live-region"
+			role="status"
+			aria-live="polite"
+			class="visually-hidden"
+			aria-relevant="additions"
+			aria-atomic="true"
+		></div>
+	
+					
+			
+		<!-- feedback section -->
+		<section
+			class="feedback-section position-relative margin-top-lg border border-radius padding-xxs display-none-print"
+			data-bi-name="open-source-feedback-section"
+			data-open-source-feedback-section
+			hidden
+		>
+			<div class="display-flex flex-direction-column flex-direction-row-tablet">
+				<div
+					class="width-450-tablet padding-inline-xs padding-inline-xs-tablet padding-top-xs padding-bottom-sm padding-top-xs-tablet background-color-body-medium"
+				>
+					<div class="display-flex flex-direction-column">
+						<div class="padding-bottom-xxs">
+							<span class="icon margin-right-xxs" aria-hidden="true">
+								<span class="docon docon-brand-github"></span>
+							</span>
+							<span class="font-weight-semibold">
+								Collaborate with us on GitHub
+							</span>
+						</div>
+						<span class="line-height-normal">
+							The source for this content can be found on GitHub, where you can also create and review issues and pull requests. For more information, see <a href="https://learn.microsoft.com/contribute/content/">our contributor guide</a>.
+						</span>
+					</div>
+				</div>
+				<div
+					class="display-flex gap-xs width-full-tablet flex-direction-column padding-xs justify-content-space-evenly"
+				>
+					<div class="media">
+						
+
+						<div class="media-content">
+							<p
+								class="font-size-xl font-weight-semibold margin-bottom-xxs"
+								data-open-source-product-title
+							>
+								OpenType specification
+							</p>
+							<div class="display-flex gap-xs flex-direction-column">
+								<p class="line-height-normal" data-open-source-product-description></p>
+								<div class="display-flex gap-xs flex-direction-column">
+									<a href="#" data-github-link>
+										<span class="icon margin-right-xxs" aria-hidden="true">
+											<span class="docon docon-bug"></span>
+										</span>
+										<span>Open a documentation issue</span>
+									</a>
+									<a
+										href="https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml"
+										class="display-block margin-top-auto font-size-md"
+										data-feedback-product-url
+									>
+										<span class="icon margin-right-xxs" aria-hidden="true">
+											<span class="docon docon-feedback"></span>
+										</span>
+										<span>Provide product feedback</span>
+									</a>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</section>
+		<!-- end feedback section -->
+	
+			
+		<!-- feedback section -->
+		<section
+			id="site-user-feedback-footer"
+			class="font-size-sm margin-top-md display-none-print display-none-desktop"
+			data-test-id="site-user-feedback-footer"
+			data-bi-name="site-feedback-section"
+		>
+			<hr class="hr" />
+			<h2 id="ms--feedback" class="title is-3">Feedback</h2>
+			<div class="display-flex flex-wrap-wrap align-items-center">
+				<p class="font-weight-semibold margin-xxs margin-left-none">
+					Was this page helpful?
+				</p>
+				<div class="buttons">
+					<button
+						class="thumb-rating-button like button button-primary button-sm"
+						data-test-id="footer-rating-yes"
+						data-binary-rating-response="rating-yes"
+						type="button"
+						title="This article is helpful"
+						data-bi-name="button-rating-yes"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-like"></span>
+						</span>
+						<span>Yes</span>
+					</button>
+					<button
+						class="thumb-rating-button dislike button button-primary button-sm"
+						id="standard-rating-no-button"
+						hidden
+						data-test-id="footer-rating-no"
+						data-binary-rating-response="rating-no"
+						type="button"
+						title="This article is not helpful"
+						data-bi-name="button-rating-no"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-dislike"></span>
+						</span>
+						<span>No</span>
+					</button>
+					<details
+						class="popover popover-top"
+						id="mobile-help-popover"
+						data-test-id="footer-feedback-popover"
+					>
+						<summary
+							class="thumb-rating-button dislike button button-primary button-sm"
+							data-test-id="details-footer-rating-no"
+							data-binary-rating-response="rating-no"
+							title="This article is not helpful"
+							data-bi-name="button-rating-no"
+							aria-pressed="false"
+							data-bi-an="feedback-unhelpful-popover"
+						>
+							<span class="icon" aria-hidden="true">
+								<span class="docon docon-dislike"></span>
+							</span>
+							<span>No</span>
+						</summary>
+						<div
+							class="popover-content width-200 width-300-tablet"
+							role="dialog"
+							aria-labelledby="popover-heading"
+							aria-describedby="popover-description"
+						>
+							<p id="popover-heading" class="font-size-lg margin-bottom-xxs font-weight-semibold">
+								Need help with this topic?
+							</p>
+							<p id="popover-description" class="font-size-sm margin-bottom-xs">
+								Want to try using Ask Learn to clarify or guide you through this topic?
+							</p>
+							
+		<div class="buttons flex-direction-row flex-wrap justify-content-center gap-xxs">
+			<div>
+		<button
+			class="button button-sm border inner-focus display-none margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-test-id="ask-learn-assistant-modal-entry-mobile-feedback"
+			data-ask-learn-modal-entry-feedback
+			data-bi-an=feedback-unhelpful-popover
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-label="Ask Learn"
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+		</button>
+		<button
+			class="button button-sm display-inline-flex display-none-desktop flex-shrink-0 margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-modal-entry-tablet-feedback"
+			data-ask-learn-modal-entry-feedback
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+		<button
+			class="button button-sm display-none flex-shrink-0 display-inline-flex-desktop margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-flyout-entry-feedback"
+			data-ask-learn-flyout-entry-show-only
+			data-flyout-button="toggle"
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-controls="ask-learn-flyout"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+	</div>
+			<button
+				type="button"
+				class="button button-sm margin-right-xxs"
+				data-help-option="suggest-fix"
+				data-bi-name="feedback-suggest"
+				data-bi-an="feedback-unhelpful-popover"
+				data-test-id="suggest-fix"
+			>
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-feedback"></span>
+				</span>
+				<span> Suggest a fix? </span>
+			</button>
+		</div>
+	
+						</div>
+					</details>
+				</div>
+			</div>
+		</section>
+		<!-- end feedback section -->
+	
+		
+				</div>
+				
+		<div id="ms--additional-resources-mobile" class="display-none-print">
+			<hr class="hr" hidden />
+			<h2 id="ms--additional-resources-mobile-heading" class="title is-3" hidden>
+				Additional resources
+			</h2>
+			
+		<section
+			id="right-rail-recommendations-mobile"
+			class=""
+			data-bi-name="recommendations"
+			hidden
+		></section>
+	 
+		<section
+			id="right-rail-training-mobile"
+			class=""
+			data-bi-name="learning-resource-card"
+			hidden
+		></section>
+	 
+		<section
+			id="right-rail-events-mobile"
+			class=""
+			data-bi-name="events-card"
+			hidden
+		></section>
+	
+		</div>
+	 
+		<div
+			id="article-metadata-footer"
+			data-bi-name="article-metadata-footer"
+			data-test-id="article-metadata-footer"
+			class="page-metadata-container"
+		>
+			<hr class="hr" />
+			<ul class="metadata page-metadata" data-bi-name="page info" lang="en-us" dir="ltr">
+				<li class="visibility-hidden-visual-diff">
+			<span class="badge badge-sm text-wrap-pretty">
+				<span>Last updated on <local-time format="twoDigitNumeric"
+		datetime="2024-05-29T08:00:00.000Z"
+		data-article-date-source="calculated"
+		class="is-invisible"
+	>
+		2024-05-29
+	</local-time></span>
+			</span>
+		</li>
+			</ul>
+		</div>
+	
+			</div>
+		
+				</main>
+				<aside
+					id="layout-body-aside"
+					class="layout-body-aside  "
+					data-bi-name="aside"
+					aria-label="Additional resources"
+			  >
+					
+		<div
+			id="ms--additional-resources"
+			class="right-container padding-sm display-none display-block-desktop height-full"
+			data-bi-name="pageactions"
+		>
+			<div id="affixed-right-container" data-bi-name="right-column">
+				
+		<nav
+			id="side-doc-outline"
+			class="doc-outline border-bottom padding-bottom-xs margin-bottom-xs scrollbar-width-thin"
+			data-bi-name="intopic toc"
+			aria-label="In this article"
+		>
+			<h3>In this article</h3>
+		</nav>
+	
+				<!-- Feedback -->
+				
+		<section
+			id="ms--site-user-feedback-right-rail"
+			class="font-size-sm display-none-print"
+			data-test-id="site-user-feedback-right-rail"
+			data-bi-name="site-feedback-right-rail"
+		>
+			<div class="display-flex flex-wrap-wrap align-items-center">
+				<p class="font-weight-semibold margin-xxs margin-left-none">
+					Was this page helpful?
+				</p>
+				<div class="display-flex flex-wrap-nowrap">
+					<button
+						class="thumb-rating-button like inner-focus"
+						data-test-id="right-rail-rating-yes"
+						data-binary-rating-response="rating-yes"
+						type="button"
+						title="This article is helpful"
+						aria-label="This article is helpful"
+						data-bi-name="button-rating-yes"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-like"></span>
+						</span>
+					</button>
+					<button
+						class="thumb-rating-button dislike inner-focus"
+						id="right-rail-no-button"
+						hidden
+						data-test-id="right-rail-rating-no"
+						data-binary-rating-response="rating-no"
+						type="button"
+						title="This article is not helpful"
+						aria-label="This article is not helpful"
+						data-bi-name="button-rating-no"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-dislike"></span>
+						</span>
+					</button>
+					<details class="popover popover-right" id="help-popover" data-test-id="feedback-popover">
+						<summary
+							tabindex="0"
+							class="thumb-rating-button dislike inner-focus"
+							data-test-id="details-right-rail-rating-no"
+							data-binary-rating-response="rating-no"
+							title="This article is not helpful"
+							aria-label="This article is not helpful"
+							data-bi-name="button-rating-no"
+							aria-pressed="false"
+							data-bi-an="feedback-unhelpful-popover"
+						>
+							<span class="icon" aria-hidden="true">
+								<span class="docon docon-dislike"></span>
+							</span>
+						</summary>
+						<div
+							class="popover-content width-200 width-300-tablet"
+							role="dialog"
+							aria-labelledby="popover-heading-right-rail"
+							aria-describedby="popover-description-right-rail"
+						>
+							<p
+								id="popover-heading-right-rail"
+								class="font-size-lg margin-bottom-xxs font-weight-semibold"
+							>
+								Need help with this topic?
+							</p>
+							<p id="popover-description-right-rail" class="font-size-sm margin-bottom-xs">
+								Want to try using Ask Learn to clarify or guide you through this topic?
+							</p>
+							
+		<div class="buttons flex-direction-row flex-wrap justify-content-center gap-xxs">
+			<div>
+		<button
+			class="button button-sm border inner-focus display-none margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-test-id="ask-learn-assistant-modal-entry-mobile-feedback"
+			data-ask-learn-modal-entry-feedback
+			data-bi-an=feedback-unhelpful-popover
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-label="Ask Learn"
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+		</button>
+		<button
+			class="button button-sm display-inline-flex display-none-desktop flex-shrink-0 margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-modal-entry-tablet-feedback"
+			data-ask-learn-modal-entry-feedback
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+		<button
+			class="button button-sm display-none flex-shrink-0 display-inline-flex-desktop margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-flyout-entry-feedback"
+			data-ask-learn-flyout-entry-show-only
+			data-flyout-button="toggle"
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-controls="ask-learn-flyout"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+	</div>
+			<button
+				type="button"
+				class="button button-sm margin-right-xxs"
+				data-help-option="suggest-fix"
+				data-bi-name="feedback-suggest"
+				data-bi-an="feedback-unhelpful-popover"
+				data-test-id="suggest-fix"
+			>
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-feedback"></span>
+				</span>
+				<span> Suggest a fix? </span>
+			</button>
+		</div>
+	
+						</div>
+					</details>
+				</div>
+			</div>
+		</section>
+	
+			</div>
+		</div>
+	
+			  </aside> <section
+					id="layout-body-flyout"
+					class="layout-body-flyout "
+					data-bi-name="flyout"
+			  >
+					 <div
+	class="height-full border-left background-color-body-medium"
+	id="ask-learn-flyout"
+></div>
+			  </section> <div class="layout-body-footer " data-bi-name="layout-footer">
+		<footer
+			id="footer"
+			data-test-id="footer"
+			data-bi-name="footer"
+			class="footer-layout padding-xs padding-sm-desktop has-default-focus border-top"
+			role="contentinfo"
+		>
+			<div class="display-flex gap-xs flex-wrap-wrap is-full-height padding-right-lg-desktop">
+				
+		<a
+			data-mscc-ic="false"
+			href="#"
+			data-bi-name="select-locale"
+			class="locale-selector-link flex-shrink-0 button button-sm button-clear external-link-indicator"
+			id=""
+			title=""
+			><span class="icon" aria-hidden="true"
+				><span class="docon docon-world"></span></span
+			><span class="local-selector-link-text">en-us</span></a
+		>
+	 <div class="ccpa-privacy-link" data-ccpa-privacy-link hidden>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://aka.ms/yourcaliforniaprivacychoices"
+			data-bi-name="your-privacy-choices"
+			class="button button-sm button-clear flex-shrink-0 external-link-indicator"
+			id=""
+			title=""
+			>
+		<svg
+			xmlns="http://www.w3.org/2000/svg"
+			viewBox="0 0 30 14"
+			xml:space="preserve"
+			height="16"
+			width="43"
+			aria-hidden="true"
+			focusable="false"
+		>
+			<path
+				d="M7.4 12.8h6.8l3.1-11.6H7.4C4.2 1.2 1.6 3.8 1.6 7s2.6 5.8 5.8 5.8z"
+				style="fill-rule:evenodd;clip-rule:evenodd;fill:#fff"
+			></path>
+			<path
+				d="M22.6 0H7.4c-3.9 0-7 3.1-7 7s3.1 7 7 7h15.2c3.9 0 7-3.1 7-7s-3.2-7-7-7zm-21 7c0-3.2 2.6-5.8 5.8-5.8h9.9l-3.1 11.6H7.4c-3.2 0-5.8-2.6-5.8-5.8z"
+				style="fill-rule:evenodd;clip-rule:evenodd;fill:#06f"
+			></path>
+			<path
+				d="M24.6 4c.2.2.2.6 0 .8L22.5 7l2.2 2.2c.2.2.2.6 0 .8-.2.2-.6.2-.8 0l-2.2-2.2-2.2 2.2c-.2.2-.6.2-.8 0-.2-.2-.2-.6 0-.8L20.8 7l-2.2-2.2c-.2-.2-.2-.6 0-.8.2-.2.6-.2.8 0l2.2 2.2L23.8 4c.2-.2.6-.2.8 0z"
+				style="fill:#fff"
+			></path>
+			<path
+				d="M12.7 4.1c.2.2.3.6.1.8L8.6 9.8c-.1.1-.2.2-.3.2-.2.1-.5.1-.7-.1L5.4 7.7c-.2-.2-.2-.6 0-.8.2-.2.6-.2.8 0L8 8.6l3.8-4.5c.2-.2.6-.2.9 0z"
+				style="fill:#06f"
+			></path>
+		</svg>
+	
+			<span>Your Privacy Choices</span></a
+		>
+	
+	</div>
+				<div class="flex-shrink-0">
+		<div class="dropdown has-caret-up">
+			<button
+				data-test-id="theme-selector-button"
+				class="dropdown-trigger button button-clear button-sm inner-focus theme-dropdown-trigger"
+				aria-controls="{{ themeMenuId }}"
+				aria-haspopup="true"
+				aria-expanded="false"
+				data-bi-name="theme"
+			>
+				<span class="icon" aria-hidden="true"><span class="docon docon-sun"></span></span>
+				<span>Theme</span>
+				<span class="icon expanded-indicator" aria-hidden="true">
+					<span class="docon docon-chevron-down-light"></span>
+				</span>
+			</button>
+			<div class="dropdown-menu" id="{{ themeMenuId }}" role="menu">
+				<ul class="theme-selector padding-xxs" data-test-id="theme-dropdown-menu" role="none">
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="light"
+							tabindex="-1"
+						>
+							<span class="theme-light margin-right-xxs">
+								<span
+									class="theme-selector-icon border display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> Light </span>
+						</button>
+					</li>
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="dark"
+							tabindex="-1"
+						>
+							<span class="theme-dark margin-right-xxs">
+								<span
+									class="border theme-selector-icon display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> Dark </span>
+						</button>
+					</li>
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="high-contrast"
+							tabindex="-1"
+						>
+							<span class="theme-high-contrast margin-right-xxs">
+								<span
+									class="border theme-selector-icon display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> High contrast </span>
+						</button>
+					</li>
+				</ul>
+			</div>
+		</div>
+	</div>
+			</div>
+			<ul class="links" data-bi-name="footerlinks">
+				<li class="manage-cookies-holder" hidden=""></li>
+				<li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/principles-for-ai-generated-content"
+			data-bi-name="aiDisclaimer"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>AI Disclaimer</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/previous-versions/"
+			data-bi-name="archivelink"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Previous Versions</a
+		>
+	
+	</li> <li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://techcommunity.microsoft.com/t5/microsoft-learn-blog/bg-p/MicrosoftLearnBlog"
+			data-bi-name="bloglink"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Blog</a
+		>
+	
+	</li> <li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/contribute"
+			data-bi-name="contributorGuide"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Contribute</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://go.microsoft.com/fwlink/?LinkId=521839"
+			data-bi-name="privacy"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Privacy</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://go.microsoft.com/fwlink/?linkid=2259814"
+			data-bi-name="consumer-health-privacy"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Consumer Health Privacy</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/legal/termsofuse"
+			data-bi-name="termsofuse"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Terms of Use</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://www.microsoft.com/legal/intellectualproperty/Trademarks/"
+			data-bi-name="trademarks"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Trademarks</a
+		>
+	
+	</li>
+				<li>&copy; Microsoft 2026</li>
+			</ul>
+		</footer>
+	</footer>
+			</body>
+		</html>

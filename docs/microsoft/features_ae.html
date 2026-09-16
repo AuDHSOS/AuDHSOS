@@ -1,0 +1,1890 @@
+ <!DOCTYPE html>
+		<html
+			class="layout layout-holy-grail   show-table-of-contents conceptual show-breadcrumb default-focus"
+			lang="en-us"
+			dir="ltr"
+			data-authenticated="false"
+			data-auth-status-determined="false"
+			data-target="docs"
+			x-ms-format-detection="none"
+		>
+			
+		<head>
+			<title>Registered features, a-e (OpenType 1.9.1) - Typography | Microsoft Learn</title>
+			<meta charset="utf-8" />
+			<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+			<meta name="color-scheme" content="light dark" />
+
+			<meta name="description" content="Registered features, descriptions and implementations, a-e (OpenType 1.9.1)" />
+			<link rel="canonical" href="https://learn.microsoft.com/en-us/typography/opentype/spec/features_ae" /> 
+
+			<!-- Non-customizable open graph and sharing-related metadata -->
+			<meta name="twitter:card" content="summary_large_image" />
+			<meta name="twitter:site" content="@MicrosoftLearn" />
+			<meta property="og:type" content="website" />
+			<meta property="og:image:alt" content="Microsoft Learn" />
+			<meta property="og:image" content="https://learn.microsoft.com/en-us/media/open-graph-image.png" />
+			<!-- Page specific open graph and sharing-related metadata -->
+			<meta property="og:title" content="Registered features, a-e (OpenType 1.9.1) - Typography" />
+			<meta property="og:url" content="https://learn.microsoft.com/en-us/typography/opentype/spec/features_ae" />
+			<meta property="og:description" content="Registered features, descriptions and implementations, a-e (OpenType 1.9.1)" />
+			<meta name="platform_id" content="ed36df84-2e00-8ec4-5232-c5d7dea57362" /> <meta name="scope" content="typography" />
+			<meta name="locale" content="en-us" />
+			 
+			<meta name="uhfHeaderId" content="MSDocsHeader-MSTypography" />
+
+			<meta name="page_type" content="conceptual" />
+
+			<!--page specific meta tags-->
+			
+
+			<!-- custom meta tags -->
+			
+		<meta name="ms.service" content="typography" />
+	
+		<meta name="breadcrumb_path" content="/typography/breadcrumbs/toc.json" />
+	
+		<meta name="feedback_system" content="OpenSource" />
+	
+		<meta name="author" content="PeterCon" />
+	
+		<meta name="ms.author" content="pconstable" />
+	
+		<meta name="ms.date" content="2024-07-06T00:00:00Z" />
+	
+		<meta name="feedback_product_url" content="https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml" />
+	
+		<meta name="keywords" content="typography" />
+	
+		<meta name="ms.topic" content="article" />
+	
+		<meta name="source-file" content="https://www.microsoft.com/typography/otspec/features_ae.htm" />
+	
+		<meta name="document_id" content="4da11419-0864-96ff-7f67-296680843fc1" />
+	
+		<meta name="document_version_independent_id" content="1d46dac1-d559-ce3e-2f6f-f47cf8cd9e0f" />
+	
+		<meta name="updated_at" content="2025-03-17T22:44:00Z" />
+	
+		<meta name="original_content_git_url" content="https://github.com/MicrosoftDocs/typography/blob/live/typographydocs/opentype/spec/features_ae.md" />
+	
+		<meta name="gitcommit" content="https://github.com/MicrosoftDocs/typography/blob/1062e366296d328c5100dee4ee9c83d2f8e852eb/typographydocs/opentype/spec/features_ae.md" />
+	
+		<meta name="git_commit_id" content="1062e366296d328c5100dee4ee9c83d2f8e852eb" />
+	
+		<meta name="site_name" content="Docs" />
+	
+		<meta name="depot_name" content="Win.typography" />
+	
+		<meta name="schema" content="Conceptual" />
+	
+		<meta name="toc_rel" content="../../toc.json" />
+	
+		<meta name="pdf_url_template" content="https://learn.microsoft.com/pdfstore/en-us/Win.typography/{branchName}{pdfName}" />
+	
+		<meta name="feedback_help_link_type" content="" />
+	
+		<meta name="feedback_help_link_url" content="" />
+	
+		<meta name="word_count" content="8278" />
+	
+		<meta name="asset_id" content="opentype/spec/features_ae" />
+	
+		<meta name="moniker_range_name" content="" />
+	
+		<meta name="item_type" content="Content" />
+	
+		<meta name="source_path" content="typographydocs/opentype/spec/features_ae.md" />
+	
+		<meta name="previous_tlsh_hash" content="39226733A41CE720EF41C90B249BD641E5F0D591A4B01AD411212352E3873EE34E66E8D5AB5E17CE267E078300FA7B0FA2D68B7D50EC67BBB592346D81AC36C79E4927FAE4" />
+	
+		<meta name="github_feedback_content_git_url" content="https://github.com/MicrosoftDocs/typography/blob/live/typographydocs/opentype/spec/features_ae.md" />
+	
+		<meta name="markdown_url" content="https://learn.microsoft.com/en-us/typography/opentype/spec/features_ae?accept=text/markdown" />
+	 
+		<meta name="cmProducts" content="https://authoring-docs-microsoft.poolparty.biz/devrel/97159432-14a9-4307-a469-d2f2c75f0e33" data-source="generated" />
+	
+		<meta name="cmProducts" content="https://authoring-docs-microsoft.poolparty.biz/devrel/540ac133-a371-4dbb-8f94-28d6cc77a70b" data-source="generated" />
+	
+		<meta name="spProducts" content="https://authoring-docs-microsoft.poolparty.biz/devrel/50565c62-5f6b-4687-be38-323113c72c2e" data-source="generated" />
+	
+		<meta name="spProducts" content="https://authoring-docs-microsoft.poolparty.biz/devrel/60bfc045-f127-4841-9d00-ea35495a5800" data-source="generated" />
+	
+
+			<!-- Apply persisted/system theme before first paint to prevent wrong-theme flash when scripts are deferred. -->
+			<script id="theme-preference">
+				(function () {
+			try {
+				var stored = localStorage.getItem('theme');
+				var theme = /^(light|dark|high-contrast)$/.test(stored)
+					? stored
+					: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+				document.documentElement.classList.add('theme-' + theme);
+			} catch (e) {}
+		})();;
+			</script>
+
+			<script id="atlas-layout-preferences">
+				(function () {
+			try {
+				var state = JSON.parse(localStorage.getItem('atlas-layout-preferences') || '{}');
+				var view = state["docs-layout-persistence"] || {};
+				var excludesKey = "";
+				var blocked = {};
+				if (excludesKey) {
+					var exclusions = JSON.parse(localStorage.getItem('atlas-layout-exclusions') || '{}');
+					if (Object.prototype.hasOwnProperty.call(exclusions, excludesKey)) {
+						var scoped = exclusions[excludesKey];
+						if (scoped) {
+							if (typeof scoped === 'object') blocked = scoped;
+						}
+					}
+				}
+				var html = document.documentElement;
+				for (var c in view) {
+					if (Object.prototype.hasOwnProperty.call(blocked, c)) continue;
+					if (view[c]) html.classList.add(c);
+					else html.classList.remove(c);
+				}
+			} catch (e) {}
+		})();;
+			</script>
+
+			<!-- assets and js globals -->
+			
+			<link rel="stylesheet" href="/static/assets/0.4.03544.8243-8192ba90/styles/site.css" />
+			
+			<script src="https://wcpstatic.microsoft.com/mscc/lib/v2/wcp-consent.js"></script>
+			<!-- Keep this URL in sync with oneDSScriptSelector in instrumentation/one-ds.ts. -->
+			<script async src="https://js.monitor.azure.com/scripts/c/ms.jsll-4.min.js"></script>
+			
+
+			<!-- msdocs global object -->
+			<script id="msdocs-script">
+		var msDocs = {
+  "environment": {
+    "accessLevel": "online",
+    "azurePortalHostname": "portal.azure.com",
+    "reviewFeatures": false,
+    "supportLevel": "production",
+    "systemContent": true,
+    "siteName": "learn",
+    "legacyHosting": false
+  },
+  "data": {
+    "contentLocale": "en-us",
+    "contentDir": "ltr",
+    "userLocale": "en-us",
+    "userDir": "ltr",
+    "pageTemplate": "Conceptual",
+    "layoutStateStorageKey": "docs-layout-persistence",
+    "brand": "",
+    "context": {},
+    "standardFeedback": false,
+    "showFeedbackReport": false,
+    "feedbackHelpLinkType": "",
+    "feedbackHelpLinkUrl": "",
+    "feedbackSystem": "OpenSource",
+    "feedbackGitHubRepo": "",
+    "feedbackProductUrl": "https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml",
+    "extendBreadcrumb": false,
+    "isEditDisplayable": false,
+    "isPrivateUnauthorized": false,
+    "hideViewSource": false,
+    "isPermissioned": false,
+    "hasRecommendations": true,
+    "openSourceFeedbackIssueUrl": "https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml",
+    "openSourceFeedbackIssueTitle": ""
+  },
+  "functions": {}
+};;
+	</script>
+
+			<!-- base scripts, msdocs global should be before this -->
+			<script
+				src="/static/assets/0.4.03544.8243-8192ba90/scripts/en-us/index-docs.js"
+				async
+			></script>
+			
+
+			<!-- json-ld -->
+			
+		</head>
+	
+			<body
+				id="body"
+				data-bi-name="body"
+				class="layout-body "
+				lang="en-us"
+				dir="ltr"
+			>
+				<header class="layout-body-header background-color-body-medium">
+		<div class="header-holder has-default-focus">
+			
+		<a
+			href="#main"
+			
+			style="z-index: 1070"
+			class="outline-color-text visually-hidden-until-focused position-fixed inner-focus focus-visible top-0 left-0 right-0 padding-xs text-align-center background-color-body"
+			
+		>
+			Skip to main content
+		</a>
+	
+		<a
+			href="#"
+			data-skip-to-ask-learn
+			style="z-index: 1070"
+			class="outline-color-text visually-hidden-until-focused position-fixed inner-focus focus-visible top-0 left-0 right-0 padding-xs text-align-center background-color-body"
+			hidden
+		>
+			Skip to Ask Learn chat experience
+		</a>
+	
+
+			<div hidden id="cookie-consent-holder" data-test-id="cookie-consent-container"></div>
+			<!-- Unsupported browser warning -->
+			<div
+				id="unsupported-browser"
+				style="background-color: white; color: black; padding: 16px; border-bottom: 1px solid grey;"
+				hidden
+			>
+				<div style="max-width: 800px; margin: 0 auto;">
+					<p style="font-size: 24px">This browser is no longer supported.</p>
+					<p style="font-size: 16px; margin-top: 16px;">
+						Upgrade to Microsoft Edge to take advantage of the latest features, security updates, and technical support.
+					</p>
+					<div style="margin-top: 12px;">
+						<a
+							href="https://go.microsoft.com/fwlink/p/?LinkID=2092881 "
+							style="background-color: #0078d4; border: 1px solid #0078d4; color: white; padding: 6px 12px; border-radius: 2px; display: inline-block;"
+						>
+							Download Microsoft Edge
+						</a>
+						<a
+							href="https://learn.microsoft.com/en-us/lifecycle/faq/internet-explorer-microsoft-edge"
+							style="background-color: white; padding: 6px 12px; border: 1px solid #505050; color: #171717; border-radius: 2px; display: inline-block;"
+						>
+							More info about Internet Explorer and Microsoft Edge
+						</a>
+					</div>
+				</div>
+			</div>
+			<!-- site header -->
+			<div
+				id="ms--site-header"
+				data-test-id="site-header-wrapper"
+				itemscope="itemscope"
+				itemtype="http://schema.org/Organization"
+			>
+				<div
+					id="ms--mobile-nav"
+					class="site-header display-none-tablet padding-inline-none gap-none"
+					data-bi-name="mobile-header"
+					data-test-id="mobile-header"
+				></div>
+				<div
+					id="ms--primary-nav"
+					class="site-header display-none display-flex-tablet"
+					data-bi-name="L1-header"
+					data-test-id="primary-header"
+				></div>
+				<div
+					id="ms--secondary-nav"
+					class="site-header display-none display-flex-tablet"
+					data-bi-name="L2-header"
+					data-test-id="secondary-header"
+					
+				></div>
+			</div>
+			
+		<!-- banner -->
+		<div data-banner>
+			<div id="disclaimer-holder"></div>
+			
+		</div>
+		<!-- banner end -->
+	
+		</div>
+	</header>
+				 <section
+					id="layout-body-menu"
+					class="layout-body-menu border-right display-flex background-color-body-medium"
+					data-bi-name="menu"
+			  >
+					
+		<div
+			id="left-container"
+			class="left-container display-none padding-none display-block-tablet width-full display-none-until-layout-restored"
+			data-toc-container="true"
+		>
+			<div
+				id="ms--toc-content"
+				class="padding-left-sm padding-right-none padding-bottom-sm height-full"
+			>
+				<nav
+					id="affixed-left-container"
+					class="margin-top-xxs-tablet position-sticky display-flex flex-direction-column width-full"
+					aria-label="Primary"
+					data-bi-name="left-toc"
+					role="navigation"
+				>
+					<div
+						id="ms--collapsible-toc-header"
+						class="display-flex flex-direction-row-reverse justify-content-center align-items-center margin-bottom-xxs margin-right-xxs"
+					>
+						<button
+							type="button"
+							class="button button-clear button-sm inner-focus"
+							data-collapsible-toc-toggle
+							aria-expanded="true"
+							hidden
+							aria-controls="ms--toc-content"
+							aria-label="Table of contents"
+						>
+							<span class="icon icon-mirrored-rtl" aria-hidden="true">
+								<span
+									class="docon docon-panel-left-contract display-none-layout-menu-collapsed"
+								></span>
+								<span
+									class="docon docon-panel-left-expand display-none display-inline-layout-menu-collapsed"
+								></span>
+							</span>
+						</button>
+						<div
+							id="ms--collapsible-toc-moniker-slot"
+							class="flex-grow-1 display-none-layout-menu-collapsed"
+						></div>
+					</div>
+				</nav>
+			</div>
+		</div>
+	
+			  </section>
+
+				<main
+					id="main"
+					role="main"
+					class="layout-body-main "
+					data-bi-name="content"
+					lang="en-us"
+					dir="ltr"
+				>
+					
+			<div
+		id="ms--content-header"
+		class="content-header default-focus border-bottom-none"
+		data-bi-name="content-header"
+	>
+		<div class="content-header-controls margin-xxs margin-inline-sm-tablet">
+			<button
+				type="button"
+				class="contents-button button button-sm margin-right-xxs"
+				data-bi-name="contents-expand"
+				aria-haspopup="true"
+				data-contents-button
+			>
+				<span class="icon" aria-hidden="true"><span class="docon docon-menu"></span></span>
+				<span class="contents-expand-title"> Table of contents </span>
+			</button>
+			<button
+				type="button"
+				class="ap-collapse-behavior ap-expanded button button-sm"
+				data-bi-name="ap-collapse"
+				aria-controls="action-panel"
+			>
+				<span class="icon" aria-hidden="true"><span class="docon docon-exit-mode"></span></span>
+				<span>Exit editor mode</span>
+			</button>
+		</div>
+	</div> 
+		<div
+			id="action-panel"
+			role="region"
+			aria-label="Action Panel"
+			class="action-panel"
+			tabindex="-1"
+		></div>
+	
+			<div
+				data-main-column
+				class="reading-width margin-inline-auto layout-padding padding-top-none padding-top-sm-tablet padding-bottom-sm"
+			>
+				<div>
+					
+		<div id="article-header" class="background-color-body margin-bottom-xs display-none-print">
+			<div class="display-flex align-items-center justify-content-space-between">
+				
+		<details
+			id="article-header-breadcrumbs-overflow-popover"
+			class="popover popover-left"
+			data-for="article-header-breadcrumbs"
+		>
+			<summary
+				class="button button-clear button-primary button-sm inner-focus"
+				aria-label="All breadcrumbs"
+			>
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-more"></span>
+				</span>
+			</summary>
+			<div id="article-header-breadcrumbs-overflow" class="popover-content"></div>
+		</details>
+
+		<bread-crumbs
+			id="article-header-breadcrumbs"
+			role="group"
+			aria-label="Breadcrumbs"
+			data-test-id="article-header-breadcrumbs"
+			class="overflow-hidden flex-grow-1 margin-right-sm margin-right-md-tablet margin-right-lg-desktop margin-left-negative-xxs padding-left-xxs"
+		></bread-crumbs>
+	 
+		<div
+			id="article-header-page-actions"
+			class="opacity-none margin-left-auto display-flex flex-wrap-no-wrap align-items-stretch"
+		>
+			
+		<button
+			class="button button-sm border-none inner-focus display-none-tablet flex-shrink-0 "
+			data-bi-name="ask-learn-assistant-entry"
+			data-test-id="ask-learn-assistant-modal-entry-mobile"
+			data-ask-learn-modal-entry
+			
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-label="Ask Learn"
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+		</button>
+		<button
+			class="button button-sm display-none display-inline-flex-tablet display-none-desktop flex-shrink-0 margin-right-xxs border-color-ask-learn "
+			data-bi-name="ask-learn-assistant-entry"
+			
+			data-test-id="ask-learn-assistant-modal-entry-tablet"
+			data-ask-learn-modal-entry
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+		<button
+			class="button button-sm display-none flex-shrink-0 display-inline-flex-desktop margin-right-xxs border-color-ask-learn "
+			data-bi-name="ask-learn-assistant-entry"
+			
+			data-test-id="ask-learn-assistant-flyout-entry"
+			data-ask-learn-flyout-entry
+			data-flyout-button="toggle"
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-controls="ask-learn-flyout"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+	 
+
+			<details class="popover popover-right" id="article-header-page-actions-overflow">
+				<summary
+					class="justify-content-flex-start button button-clear button-sm button-primary inner-focus"
+					aria-label="More actions"
+					title="More actions"
+				>
+					<span class="icon" aria-hidden="true">
+						<span class="docon docon-more-vertical"></span>
+					</span>
+				</summary>
+				<div class="popover-content">
+					
+		<button
+			type="button"
+			id="ms--focus-mode-button"
+			data-focus-mode
+			data-bi-name="focus-mode-entry"
+			data-page-action-item="overflow-all"
+			data-popover-close
+			class="button button-clear button-sm button-block justify-content-flex-start text-align-left inner-focus display-none display-inline-flex-tablet"
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-glasses"></span>
+			</span>
+			<span>Reading mode</span>
+		</button>
+	 
+		<button
+			data-page-action-item="overflow-mobile"
+			type="button"
+			class="display-block-layout-menu-collapsed button-block button-sm inner-focus button button-clear display-none-tablet justify-content-flex-start text-align-left"
+			data-bi-name="contents-expand"
+			data-contents-button
+			data-popover-close
+		>
+			<span class="icon" aria-hidden="true"
+				><span class="docon docon-editor-list-bullet"></span
+			></span>
+			<span class="contents-expand-title">Table of contents</span>
+		</button>
+	 
+		<a
+			id="lang-link-overflow"
+			class="button-sm inner-focus button button-clear button-block justify-content-flex-start text-align-left"
+			data-bi-name="language-toggle"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			data-read-in-link
+			href="#"
+			hidden
+		>
+			<span class="icon" aria-hidden="true" data-read-in-link-icon>
+				<span class="docon docon-locale-globe"></span>
+			</span>
+			<span data-read-in-link-text>Read in English</span>
+		</a>
+	
+					
+		<button
+			type="button"
+			class="collection button button-clear button-sm button-block justify-content-flex-start text-align-left inner-focus"
+			data-list-type="collection"
+			data-bi-name="collection"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			data-popover-close
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-circle-addition"></span>
+			</span>
+			<span class="collection-status">Add</span>
+		</button>
+	 
+		<button
+			type="button"
+			class="collection button button-block button-clear button-sm justify-content-flex-start text-align-left inner-focus"
+			data-list-type="plan"
+			data-bi-name="plan"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			data-popover-close
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-circle-addition"></span>
+			</span>
+			<span class="plan-status">Add to Plans</span>
+		</button>
+	 
+					
+		<a
+			data-contenteditbtn
+			class="button button-clear button-block button-sm inner-focus justify-content-flex-start text-align-left text-decoration-none"
+			data-bi-name="edit"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			hidden
+			href=""
+			data-original_content_git_url="https://github.com/MicrosoftDocs/typography/blob/live/typographydocs/opentype/spec/features_ae.md"
+			data-original_content_git_url_template="{repo}/blob/{branch}/typographydocs/opentype/spec/features_ae.md"
+			data-pr_repo=""
+			data-pr_branch=""
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-edit-outline"></span>
+			</span>
+			<span>Edit</span>
+		</a>
+	  
+		<hr class="margin-block-xxs" />
+		
+				<button
+					class="button button-block button-clear button-sm justify-content-flex-start text-align-left inner-focus"
+					type="button"
+					data-bi-name="copy-markdown"
+					data-page-action-item="overflow-all"
+					data-copy-markdown
+					data-copy-state="idle"
+					data-check-hidden="true"
+				>
+					<span class="icon color-primary" aria-hidden="true">
+						<span data-show-when="idle" class="docon docon-code-lang"></span>
+						<span data-show-when="loading" class="loader" hidden></span>
+						<span data-show-when="success" class="docon docon-check-mark" hidden></span>
+					</span>
+					<span>Copy Markdown</span>
+				</button>
+		   
+				<button
+					class="button button-block button-clear button-sm justify-content-flex-start text-align-left inner-focus"
+					type="button"
+					data-bi-name="print"
+					data-page-action-item="overflow-all"
+					data-popover-close
+					data-print-page
+					data-check-hidden="true"
+				>
+					<span class="icon color-primary" aria-hidden="true">
+						<span class="docon docon-print"></span>
+					</span>
+					<span>Print</span>
+				</button>
+		  
+	
+				</div>
+			</details>
+		</div>
+	
+			</div>
+		</div>
+	  
+		<!-- privateUnauthorizedTemplate is hidden by default -->
+		<div unauthorized-private-section data-bi-name="permission-content-unauthorized-private" hidden>
+			<hr class="hr margin-top-xs margin-bottom-sm" />
+			<div class="notification notification-info">
+				<div class="notification-content">
+					<p class="margin-top-none notification-title">
+						<span class="icon" aria-hidden="true"
+							><span class="docon docon-exclamation-circle-solid"></span
+						></span>
+						<span>Note</span>
+					</p>
+					<p class="margin-top-none authentication-determined not-authenticated">
+						Access to this page requires authorization. You can try <a class="docs-sign-in" href="#" data-bi-name="permission-content-sign-in">signing in</a> or <a  class="docs-change-directory" data-bi-name="permisson-content-change-directory">changing directories</a>.
+					</p>
+					<p class="margin-top-none authentication-determined authenticated">
+						Access to this page requires authorization. You can try <a class="docs-change-directory" data-bi-name="permisson-content-change-directory">changing directories</a>.
+					</p>
+				</div>
+			</div>
+		</div>
+	
+					<div class="content"><h1 id="registered-features-descriptions-and-implementations-a--e">Registered Features: Descriptions and Implementations (a – e)</h1></div>
+					
+		<div
+			id="article-metadata"
+			data-bi-name="article-metadata"
+			data-test-id="article-metadata"
+			class="page-metadata-container display-flex gap-xxs justify-content-space-between align-items-center flex-wrap-wrap"
+		>
+			 
+				<div
+					id="user-feedback"
+					class="margin-block-xxs display-none display-none-print"
+					hidden
+					data-hide-on-archived
+				>
+					
+		<button
+			id="user-feedback-button"
+			data-test-id="conceptual-feedback-button"
+			class="button button-sm button-clear button-primary display-none"
+			type="button"
+			data-bi-name="user-feedback-button"
+			data-user-feedback-button
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-like"></span>
+			</span>
+			<span>Feedback</span>
+		</button>
+	
+				</div>
+		  
+		</div>
+	 
+		<div data-id="ai-summary" class="display-none-print">
+			<div id="ms--ai-summary-cta" class="margin-top-xs display-flex align-items-center">
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-sparkle-fill gradient-text-vivid"></span>
+				</span>
+				<button
+					id="ms--ai-summary"
+					type="button"
+					class="tag tag-sm tag-suggestion margin-left-xxs"
+					data-test-id="ai-summary-cta"
+					data-bi-name="ai-summary-cta"
+					data-an="ai-summary"
+				>
+					<span class="ai-summary-cta-text">
+						Summarize this article for me
+					</span>
+				</button>
+			</div>
+			<!-- Slot where the client will render the summary card after the user clicks the CTA -->
+			<div id="ms--ai-summary-header" class="margin-top-xs"></div>
+		</div>
+	 
+		<nav
+			id="center-doc-outline"
+			class="doc-outline display-none-desktop display-none-print margin-bottom-sm"
+			data-bi-name="intopic toc"
+			aria-label="In this article"
+		>
+			<h2 id="ms--in-this-article" class="title is-6 margin-block-xs">
+				In this article
+			</h2>
+		</nav>
+	 <div class="content"><p>a - e | <a href="features_fj" data-linktype="relative-path">f - j</a> | <a href="features_ko" data-linktype="relative-path">k - o</a> | <a href="features_pt" data-linktype="relative-path">p - t</a> | <a href="features_uz" data-linktype="relative-path">u - z</a></p>
+<p><a name="aalt" id="aalt"></a></p>
+<h2 id="tag-aalt">Tag: 'aalt'</h2>
+<p><em>Friendly name:</em> Access All Alternates</p>
+<p><em>Registered by:</em> Adobe</p>
+<p><em>Function:</em> This feature makes all variations of a selected character accessible. This serves several purposes: An application might not support the feature by which the desired glyph would normally be accessed; the user could need a glyph outside the context supported by the normal substitution, or the user might not know what feature produces the desired glyph.</p>
+<p><em>Example:</em> A user inputs the P in Poetica and is presented with a choice of the four standard capital forms, the eight swash capital forms, the initial capital form and the small capital form.</p>
+<p><em>Recommended implementation:</em> A GSUB type 3 lookup subtable should normally be used. The type 3 formats arrange glyphs into groupings of related glyphs. For example, the default glyph for a Unicode character and the associated set of alternate glyphs for that character. The default glyph can be included in the set of alternates, in which case it should be the first alternate.</p>
+<p>A GSUB type 1 lookup subtable could also be used if a default glyph has only one alternate. A lookup could combine type 3 and type 1 subtables. Other lookup subtable types are not recommended.</p>
+<p>Ligature glyphs should not be included as alternates of the glyph for any ligature component. For example, an fi ligature glyph should not be included as an alternate for f. Ligature glyphs can be included in an alternate set if they are variants of another ligature glyph, however.</p>
+<p>If different fonts within a typographic family have the same alternates, the ordering of glyphs within the alternate sets should match across these fonts so that corresponding alternates will be selected when switching between fonts in the family.</p>
+<p><em>Application interface:</em> Discretionary feature: can be applied to glyph runs based on document markup, user control or other application criteria. The application determines the glyph ID for the default form of a given character (default glyph from the 'cmap' table with no features applied). It then checks to see whether the glyph ID is found in the coverage table of an 'aalt' lookup. If so, the application retrieves the alternate glyphs mapped in the alternate substitution lookup and selects one.</p>
+<p><em>UI suggestion:</em> The application should indicate to the user which glyphs in the user’s document have alternative forms (i.e., which are in the coverage table for 'aalt'), and provide some means for the user to select an alternate glyph. An application could display the forms sequentially in context, or present a palette showing all the forms at once, or give the user a choice between these approaches. The application may assume that the first glyph in a set is the preferred form, so the font developer should order them accordingly. When only one alternate exists, this feature could toggle directly between the alternate and default forms.</p>
+<p><em>Script/language sensitivity:</em> None.</p>
+<p><em>Feature interaction:</em> This feature may be used in combination with other features.</p>
+<p><a name="abvf" id="abvf"></a></p>
+<h2 id="tag-abvf">Tag: 'abvf'</h2>
+<p><em>Friendly name:</em> Above-base Forms</p>
+<p><em>Registered by:</em> Microsoft</p>
+<p><em>Function:</em> Substitutes the above-base form of a vowel. In particular, this feature is used for certain “split” vowels in Khmer or other Brahmi-derived scripts if the character has separate components that appear before and above a consonant, but the Unicode character for the vowel does not have a decomposition into separate characters for the two components.</p>
+<p><em>Example:</em> In Khmer script, U+17BE KHMER VOWEL SIGN OE needs to be split into a pre-base form and an above-base form. The above-base form of OE would be substituted to form the correct piece of the vowel that is displayed above the base consonant.</p>
+<p><em>Recommended implementation:</em> This feature is used to map the default glyph for OE to a glyph for the above-base component (GSUB lookup type 1).</p>
+<p><em>Application interface:</em> In recommended usage, this feature triggers substitutions required for correct display of Khmer script. It should be applied in the appropriate contexts, as determined by script-specific processing requirements. In particular, in a cluster in which the applicable split vowel is used, the application must insert the pre-base glyph into the correct location and then apply the above-base form feature to the split vowel.</p>
+<p><em>UI suggestion:</em> Control of the feature should not generally be exposed to the user.</p>
+<p><em>Script/language sensitivity:</em> Used for Khmer script. May also be used for other Brahmi-derived scripts.</p>
+<p><em>Feature interaction:</em> This feature overrides the results of all other features.</p>
+<p><a name="abvm" id="abvm"></a></p>
+<h2 id="tag-abvm">Tag: 'abvm'</h2>
+<p><em>Friendly name:</em> Above-base Mark Positioning</p>
+<p><em>Registered by:</em> Microsoft</p>
+<p><em>Function:</em> Positions marks above base glyphs.</p>
+<p><em>Example:</em> In complex scripts like Devanagari (Indic), the Anuswar needs to be positioned above the base glyph. This base glyph can be a base consonant or conjunct. The base glyph and the presence/absence of other marks above the base glyph decides the location of the Anuswar, so that they do not overlap one another.</p>
+<p><em>Recommended implementation:</em> A lookup table for the 'abvm' feature provides positioning information (x,y) to enable mark positioning (GPOS lookup type 4, 5).</p>
+<p><em>Application interface:</em> In recommended usage, this feature triggers positioning of mark glyphs required for correct display of certain scripts. It should be applied in the appropriate contexts, as determined by script-specific processing requirements.</p>
+<p><em>UI suggestion:</em> Control of the feature should not generally be exposed to the user.</p>
+<p><em>Script/language sensitivity:</em> Used for Indic or other Brahmi-derived scripts.</p>
+<p><em>Feature interaction:</em> Can be used to position default marks; or those that have been selected from a number of alternates based on contextual requirement using a feature like <a href="#abvs" data-linktype="self-bookmark">'abvs'</a>.</p>
+<p><a name="abvs" id="abvs"></a></p>
+<h2 id="tag-abvs">Tag: 'abvs'</h2>
+<p><em>Friendly name:</em> Above-base Substitutions</p>
+<p><em>Registered by:</em> Microsoft</p>
+<p><em>Function:</em> Substitutes a ligature for a base glyph and mark that’s above it.</p>
+<p><em>Example:</em> In complex scripts like Kannada (Indic), the vowel sign for the vowel I which a mark, is positioned above base consonants. This mark combines with the consonant Ga to form a ligature.</p>
+<p><em>Recommended implementation:</em> The 'abvs' feature is used to map consonant vowel sequences to corresponding ligature glyphs (GSUB lookup type 4).</p>
+<p><em>Application interface:</em> In recommended usage, this feature triggers substitutions required for correct display of certain scripts. It should be applied in the appropriate contexts, as determined by script-specific processing requirements.</p>
+<p><em>UI suggestion:</em> Control of the feature should not generally be exposed to the user.</p>
+<p><em>Script/language sensitivity:</em> Used for Indic or other Brahmi-derived scripts.</p>
+<p><em>Feature interaction:</em> None.</p>
+<p><a name="afrc" id="afrc"></a></p>
+<h2 id="tag-afrc">Tag: 'afrc'</h2>
+<p><em>Friendly name:</em> Alternative Fractions</p>
+<p><em>Registered by:</em> Microsoft</p>
+<p><em>Function:</em> Replaces figures separated by a slash with an alternative form.</p>
+<p><em>Example:</em> The user enters 3/4 in a recipe and get the three-quarters nut fraction.</p>
+<p><em>Recommended implementation:</em> Sequences of glyphs for figures (digits) separated by a slash (U+002F) or fraction slash (U+2044) are mapped to a corresponding ligature glyph for the fraction (GSUB lookup type 4).</p>
+<p><em>Application interface:</em> Discretionary feature: can be applied to glyph runs based on document markup, user control or other application criteria. The application applies the feature to a complete sequence of figures separated by slash (U+002F) or fraction slash (U+2044).</p>
+<p><em>UI suggestion:</em> This feature should be off by default.</p>
+<p><em>Script/language sensitivity:</em> None.</p>
+<p><em>Feature interaction:</em> This feature overrides the results of all other features.</p>
+<p><a name="akhn" id="akhn"></a></p>
+<h2 id="tag-akhn">Tag: 'akhn'</h2>
+<p><em>Friendly name:</em> Akhand</p>
+<p><em>Registered by:</em> Microsoft</p>
+<p><em>Function:</em> Preferentially substitutes default glyphs for a sequence of characters with a ligature. This substitution is done irrespective of any characters that may precede or follow the sequence.</p>
+<p><em>Example:</em> In Devanagari script, the form Kssa is considered an Akhand character (meaning unbreakable), and the sequence Ka, Halant, Ssa should always produce the ligature Kssa, irrespective of characters that precede/follow the above given sequence.</p>
+<p><em>Recommended implementation:</em> This feature is used to map sequences that form Akhands to the corresponding ligature glyph (GSUB lookup type 4).</p>
+<p><em>Application interface:</em> In recommended usage, this feature triggers substitutions required for correct display of certain scripts. It should be applied in the appropriate contexts, as determined by script-specific processing requirements.</p>
+<p><em>UI suggestion:</em> Control of the feature should not generally be exposed to the user.</p>
+<p><em>Script/language sensitivity:</em> Used for Indic or other Brahmi-derived scripts.</p>
+<p><em>Feature interaction:</em> This feature is used in conjunction with certain other features to derive required forms of Indic scripts. The application is expected to process this feature and certain other features in an appropriate order to obtain the correct set of basic forms: <a href="features_ko#nukt" data-linktype="relative-path">'nukt'</a>, <a href="features_ae#akhn" data-linktype="relative-path">'akhn'</a>, <a href="features_pt#rphf" data-linktype="relative-path">'rphf'</a>, <a href="features_pt#rkrf" data-linktype="relative-path">'rkrf'</a>, <a href="features_pt#pref" data-linktype="relative-path">'pref'</a>, <a href="features_ae#blwf" data-linktype="relative-path">'blwf'</a>, <a href="features_fj#half" data-linktype="relative-path">'half'</a>, <a href="features_pt#pstf" data-linktype="relative-path">'pstf'</a>, <a href="features_ae#cjct" data-linktype="relative-path">'cjct'</a>. Other discretionary features for optional typographic effects may also be applied. Lookups for such discretionary features should be processed after lookups for this feature have been processed.</p>
+<p><a name="apkn" id="apkn"></a></p>
+<h2 id="tag-apkn">Tag: 'apkn'</h2>
+<p><em>Friendly name:</em> Kerning for Alternate Proportional Widths.</p>
+<p><em>Registerd by:</em> Adobe/Microsoft</p>
+<p><em>Function:</em> Applies kerning adjustments to glyphs that have fixed advance widths by default but have been adjusted to proportional widths by application of the 'palt' feature.</p>
+<p><em>Example:</em> A user activates proportional metrics ('palt') in Japanese text, which results in some glyphs that had fixed advance widths by default now having proportional widths. By activating the 'apkn' feature as well, those glyphs are then kerned with other glyphs. For instance, the glyphs for U+30A2 “ア” and U+30CE “ノ” have full-width advances by default; the 'palt' feature adjusts these glyphs to have a narrower, proportional width; the 'apkn' feature then shifts these glyphs closer together in the combination “アノ”.</p>
+<p><em>Recommended implementation:</em> The font kerns Kanji, Kana, Latin, punctuation, or other glyphs that have fixed-width metrics by default if those glyphs are also adjusted to proportional widths by the 'palt' feature.</p>
+<p>Primarily intended for use in the GPOS table. Positioning adjustments can be implemented using GPOS pair-adjustment (type 2) lookups. Single-adjustment and pair-adjustment lookups have simple additive effect, therefore relative ordering of lookups for this feature and type 1 or type 2 lookups for 'palt' or other similar features implemented using GPOS type 1 or type 2 lookups is not crucial.</p>
+<p>For glyphs that have fixed widths by default but that can have metrics adjusted by the 'palt' feature, it is strongly recommended that those glyphs not be kerned with other glyphs using the 'kern' feature; these should only be kerned by application of this feature.</p>
+<p><em>UI suggestion:</em> This feature should be off by default. If the font used for a text run implements the 'palt' feature, activation on that text run should be possible only if the 'palt' feature has been activated on that run. If 'palt' has been activated for a run, then this feature may be automatically activated, but the UI should also provide a way for a user optionally to deactivate the feature while 'palt' is still activated.</p>
+<p><em>Script/language sensitivity:</em> Intended primarily for CJK fonts but can be used in fonts for any script that have fixed advance widths by default.</p>
+<p><em>Feature interaction:</em> Should only be implemented in fonts that also implement the 'palt' feature, which this feature is intended to complement. This feature should only be activated on a text run if 'palt' has been activated, but activation when that feature has been applied is optional and should be under user control. If activated on a run and later the 'palt' feature is deactivated for that run, then this feature should also be deactivated, as the kerning adjustments applied by this feature would not be appropriate for glyphs with fixed-width metrics.</p>
+<p>In the recommended implementation for this feature, it acts only on characters that have fixed-width glyphs by default but that acquire proportional widths by application of the 'palt' feature. As a result, it can be deactivated on any text run that does not have 'palt' activated without any need to scan lookup tables to determine which glyphs do or do not require deactivation.</p>
+<p><a name="blwf" id="blwf"></a></p>
+<h2 id="tag-blwf">Tag: 'blwf'</h2>
+<p><em>Friendly name:</em> Below-base Forms</p>
+<p><em>Registered by:</em> Microsoft</p>
+<p><em>Function:</em> Substitutes the below-base form of a consonant in conjuncts.</p>
+<p><em>Example:</em> In complex scripts like Odia (Indic), the consonant Va has a below-base form that is used to generate conjuncts. Given a sequence Gha, Virama (Halant), Va; the below-base form of Va would be substituted to form the conjunct GhVa.</p>
+<p><em>Recommended implementation:</em> This feature is used to map a virama (halant) plus consonant sequence to the glyph for the below base form of the consonant (GSUB lookup type 4).</p>
+<p><em>Application interface:</em> In recommended usage, this feature triggers substitutions required for correct display of certain scripts. It should be applied in the appropriate contexts, as determined by script-specific processing requirements.</p>
+<p><em>UI suggestion:</em> Control of the feature should not generally be exposed to the user.</p>
+<p><em>Script/language sensitivity:</em> Used for many Indic or other Brahmi-derived scripts.</p>
+<p><em>Feature interaction:</em> This feature is used in conjunction with certain other features to derive required forms of Indic and Indic-related scripts. For Indic scripts, the application is expected to process this feature and certain other features in an appropriate order to obtain the correct set of basic forms: <a href="features_ko#nukt" data-linktype="relative-path">'nukt'</a>, <a href="features_ae#akhn" data-linktype="relative-path">'akhn'</a>, <a href="features_pt#rphf" data-linktype="relative-path">'rphf'</a>, <a href="features_pt#rkrf" data-linktype="relative-path">'rkrf'</a>, <a href="features_pt#pref" data-linktype="relative-path">'pref'</a>, <a href="features_ae#blwf" data-linktype="relative-path">'blwf'</a>, <a href="features_fj#half" data-linktype="relative-path">'half'</a>, <a href="features_pt#pstf" data-linktype="relative-path">'pstf'</a>, <a href="features_ae#cjct" data-linktype="relative-path">'cjct'</a>. Other discretionary features for optional typographic effects may also be applied. Lookups for such discretionary features should be processed after lookups for this feature have been processed.</p>
+<p><a name="blwm" id="blwm"></a></p>
+<h2 id="tag-blwm">Tag: 'blwm'</h2>
+<p><em>Friendly name:</em> Below-base Mark Positioning</p>
+<p><em>Registered by:</em> Microsoft</p>
+<p><em>Function:</em> Positions marks below base glyphs.</p>
+<p><em>Example:</em> In complex scripts like Gujarati (Indic), the vowel sign U needs to be positioned below base consonant/conjuncts that form the base glyph. This position can vary depending on the base glyph, as well as the presence/absence of other marks below the base glyph.</p>
+<p><em>Recommended implementation:</em> A lookup table for the 'blwm' feature provides positioning information (x,y) to enable mark positioning (GPOS lookup type 4, 5).</p>
+<p><em>Application interface:</em> In recommended usage, this feature triggers positioning of mark glyphs required for correct display of certain scripts. It should be applied in the appropriate contexts, as determined by script-specific processing requirements.</p>
+<p><em>UI suggestion:</em> Control of the feature should not generally be exposed to the user.</p>
+<p><em>Script/language sensitivity:</em> Used for Indic or other Brahmi-derived scripts.</p>
+<p><em>Feature interaction:</em> Can be used to position default marks; or those that have been selected from a number of alternates based on contextual requirement using a feature like <a href="#blws" data-linktype="self-bookmark">'blws'</a>.</p>
+<p><a name="blws" id="blws"></a></p>
+<h2 id="tag-blws">Tag: 'blws'</h2>
+<p><em>Friendly name:</em> Below-base Substitutions</p>
+<p><em>Registered by:</em> Microsoft</p>
+<p><em>Function:</em> Produces ligatures that comprise of base glyph and below-base forms.</p>
+<p><em>Example:</em> In the Malayalam script (Indic), the conjunct Kla, requires a ligature which is formed using the base glyph Ka and the below-base form of consonant La. This feature can also be used to substitute ligatures formed using base glyphs and below base matras in Indic scripts.</p>
+<p><em>Recommended implementation:</em> The 'blws' feature is used to map consonant conjunct sequences or consonant vowel sequences to corresponding ligature glyphs (GSUB lookup type 4).</p>
+<p><em>Application interface:</em> In recommended usage, this feature triggers substitutions required for correct display of certain scripts. It should be applied in the appropriate contexts, as determined by script-specific processing requirements.</p>
+<p><em>UI suggestion:</em> Control of the feature should not generally be exposed to the user.</p>
+<p><em>Script/language sensitivity:</em> Used for Indic or other Brahmi-derived scripts.</p>
+<p><em>Feature interaction:</em> This feature overrides the results of all other features.</p>
+<p><a name="calt" id="calt"></a></p>
+<h2 id="tag-calt">Tag: 'calt'</h2>
+<p><em>Friendly name:</em> Contextual Alternates</p>
+<p><em>Registered by:</em> Adobe</p>
+<p><em>Function:</em> In specified situations, replaces default glyphs with alternate forms which provide better joining behavior. Used in script typefaces which are designed to have some or all of their glyphs join.</p>
+<p><em>Example:</em> In Caflisch Script, o is replaced by o.alt2 when followed by an ascending letterform.</p>
+<p><em>Recommended implementation:</em> A lookup table for the 'calt' feature specifies the context in which each substitution occurs, and maps one or more default glyphs to replacement glyphs (GSUB lookup type 6).</p>
+<p><em>Application interface:</em> Discretionary feature: can be applied to glyph runs based on document markup, user control or other application criteria.</p>
+<p><em>UI suggestion:</em> This feature should be active by default.</p>
+<p><em>Script/language sensitivity:</em> Can be used with scripts that have optional, cursive styles.</p>
+<p><em>Feature interaction:</em> This feature may be used in combination with other substitution (GSUB) features, whose results it may override.</p>
+<p><a name="case" id="case"></a></p>
+<h2 id="tag-case">Tag: 'case'</h2>
+<p><em>Friendly name:</em> Case-sensitive Forms</p>
+<p><em>Registered by:</em> Adobe</p>
+<p><em>Function:</em> Shifts various punctuation marks up to a position that works better with all-capital sequences or sets of lining figures; also changes oldstyle figures to lining figures. By default, glyphs in a text face are designed to work with lowercase characters. Some characters should be shifted vertically to fit the higher visual center of all-capital or lining text. Also, lining figures are the same height (or close to it) as capitals, and fit much better with all-capital text.</p>
+<p><em>Example:</em> The user selects a block of text and applies this feature. The dashes, bracketing characters, guillemet quotes and the like shift up to match the capitals, and oldstyle figures change to lining figures.</p>
+<p><em>Recommended implementation:</em> The font may implement this change by substituting different glyphs (GSUB lookup type 1) or by repositioning the original glyphs (GPOS lookup type 1, xPlacement and yPlacement).</p>
+<p><em>Application interface:</em> Discretionary feature: can be applied to glyph runs based on document markup, user control or other application criteria.</p>
+<p><em>UI suggestion:</em> It would be good to apply this feature (or turn it off) automatically when the user changes case on a sequence of more than one character. Applications could also detect words consisting only of capitals, and apply this feature based on user preference settings.</p>
+<p><em>Script/language sensitivity:</em> Applies only to European scripts; particularly prominent in Spanish-language setting.</p>
+<p><em>Feature interaction:</em> This feature overrides the results of other features affecting the figures (e.g. <a href="features_ko#onum" data-linktype="relative-path">'onum'</a> and <a href="features_pt#tnum" data-linktype="relative-path">'tnum'</a>).</p>
+<p><a name="ccmp" id="ccmp"></a></p>
+<h2 id="tag-ccmp">Tag: 'ccmp'</h2>
+<p><em>Friendly name:</em> Glyph Composition / Decomposition</p>
+<p><em>Registered by:</em> Microsoft</p>
+<p><em>Function:</em> To minimize the number of glyph alternates, it is sometimes desirable to decompose the default glyph for a character into two or more glyphs. Additionally, it may be preferable to compose default glyphs for two or more characters into a single glyph for better glyph processing. This feature permits such composition/decomposition. The feature should be processed as the first feature processed, and should be processed only when it is called.</p>
+<p><em>Example:</em> In Syriac, the character 0x0732 is a combining mark that has a dot above AND a dot below the base character. To avoid multiple glyph variants to fit all base glyphs, the default glyph for the character is decomposed into two glyphs: a dot above and a dot below. These two glyphs can then be correctly placed using GPOS. In Arabic it might be preferred to combine the shadda with fatha (0x0651, 0x064E) into a ligature before processing shapes. This allows the font vendor to do special handling of the mark combination when doing further processing without requiring larger contextual rules.</p>
+<p><em>Recommended implementation:</em> Glyphs for multiple characters are mapped to a single glyph (GSUB lookup type 4), or the glyph for a character is mapped to a sequence of glyphs (GSUB lookup type 2).</p>
+<p><em>Application interface:</em> This feature should always be applied.</p>
+<p><em>UI suggestion:</em> Control of the feature should not generally be exposed to the user.</p>
+<p><em>Script/language sensitivity:</em> None.</p>
+<p><em>Feature interaction:</em> This feature needs to be implemented prior to any other feature.</p>
+<p><a name="cfar" id="cfar"></a></p>
+<h2 id="tag-cfar">Tag: 'cfar'</h2>
+<p><em>Friendly name:</em> Conjunct Form After Ro</p>
+<p><em>Registered by:</em> Microsoft</p>
+<p><em>Function:</em> Substitutes alternate below-base or post-base forms in Khmer script when occurring after conjoined Ro (“Coeng Ra”).</p>
+<p>In Khmer script, the conjoined form of Ro is reordered to the left of the base consonant. It wraps under the base consonant, however, and so can interact typographically with below-base or post-base conjoined consonant and vowel forms. After the application has reordered the glyph for the conjoined Ro, it is no longer in the immediate context of glyphs for below-base or post-base forms. The application can detect this and apply this feature over the range for the below-base and post-base conjoining forms, triggering lookups to substitute alternate below-base or post-base forms as may be needed.</p>
+<p><em>Example:</em> In the Khmer script, Coeng Ro is denoted by a pre-base conjoining form, and Coeng Yo is denoted by a post-base conjoining form, but in both cases part of the form wraps under the base. The consonant cluster TRYo is denoted with an alternate form of Coeng Ya that descends lower so that it does not collide below the base with the Coeng Ro.</p>
+<p><em>Recommended implementation:</em> A GSUB type 1 lookup substitutes a below-base or post-base conjoining form by an alternate form.</p>
+<p><em>Application interface:</em> In recommended usage, this feature triggers substitutions that are required for correct display of Khmer script. It should be applied in the appropriate contexts, as determined by script-specific processing requirements. In particular, the application is expected to apply this feature if a syllable contains a Coeng Ra followed by other conjoining consonants or vowels.</p>
+<p><em>UI suggestion:</em> Control of the feature should not generally be exposed to the user.</p>
+<p><em>Script/language sensitivity:</em> Used for Khmer script.</p>
+<p><em>Feature interaction:</em> This feature is used in conjunction with certain other features to derive required forms of Khmer script. Other discretionary features for optional typographic effects may also be applied. Lookups for such discretionary features should be processed after lookups for this feature have been processed.</p>
+<p><a name="chws" id="chws"></a></p>
+<h2 id="tag-chws">Tag: 'chws'</h2>
+<p><em>Friendly name:</em> Contextual Half-width Spacing</p>
+<p><em>Registered by:</em> Adobe/W3C</p>
+<p><em>Function:</em> Contextually re-spaces glyphs that have full-em widths by default, fitting them onto half-em horizontal widths to approximate more sophisticated text layout, such as what is described in <a href="https://www.w3.org/TR/jlreq/" data-linktype="external">Requirements for Japanese Text Layout (JLREQ)</a> or similar CJK text-layout specifications that expect half-width forms of characters whose default glyphs are full-width. This feature differs from <a href="features_fj#halt" data-linktype="relative-path">'halt'</a> in that the re-spacing is contextual. This feature may be invoked to get better fit for punctuation or symbol glyphs without disrupting the monospaced alignment, such as for UIs or terminal apps.</p>
+<p>(In JLREQ, see, in particular, <a href="https://www.w3.org/TR/jlreq/?lang=en#positioning_of_consecutive_opening_brackets_closing_brackets_comma_full_stops_and_middle_dots" data-linktype="external">3.1.4 Positioning of Consecutive Opening Brackets, Closing Brackets, Commas, Full Stops and Middle Dots</a>, and <a href="https://www.w3.org/TR/jlreq/?lang=en#spacing_between_characters" data-linktype="external">B. Spacing between Characters</a>. See also <a href="https://www.w3.org/TR/clreq/" data-linktype="external">Requirements for Chinese Text Layout (CLREQ)</a>, <a href="https://www.w3.org/TR/klreq/" data-linktype="external">Requirements for Hangul Text Layout (KLREQ)</a>.)</p>
+<p><em>Example:</em> When FULLWIDTH RIGHT PARENTHESIS (U+FF09; “）”) is followed by IDEOGRAPHIC COMMA (U+3001; “、”), the former is re-spaced to remove half-em of width between them.</p>
+<p><em>Recommended implementation:</em> The font specifies positioning adjustments for pairs of glyphs (GPOS lookup type 2 or 8, xPlacement, xAdvance, yPlacement, and yAdvance). Pairs can be defined using left and right classes of glyphs or using specific glyph IDs. Additional adjustments may be provided for larger sequences of glyphs (e.g., triplets, quadruplets, etc.) and ordered to take precedence over pair kern adjustments of particular combinations.</p>
+<p>When using a GPOS type 2 lookup for this feature, it is recommended that no positioning adjustment be applied to the second glyph in a pair. (That is, that valueFormat2 should be set to 0.) As a result, the next glyph pair to be processed after the lookup has been applied to this pair will start at the second glyph. In this way, every glyph in a sequence can undergo positioning adjustment as the first glyph in a pair. Otherwise, if positioning of the second glyph is adjusted, then the next glyph pair to be processed will begin with the glyph following the second glyph. That will result in spacing adjustment happening only for every <em>other</em> pair of glyphs.</p>
+<p><em>Application interface:</em> If a layout engine supports advanced layout for CJK text as described in <a href="https://www.w3.org/TR/clreq/" data-linktype="external">CLREQ</a>, <a href="https://www.w3.org/TR/jlreq/" data-linktype="external">JLREQ</a> or <a href="https://www.w3.org/TR/klreq/" data-linktype="external">KLREQ</a>, this feature should not be used. Otherwise, this feature should always be supported for horizontal layout of CJK text.</p>
+<p><em>UI suggestion:</em> This feature should not be used in combination with a layout engine that independently provides advanced layout as described in <a href="https://www.w3.org/TR/clreq/" data-linktype="external">CLREQ</a>, <a href="https://www.w3.org/TR/jlreq/" data-linktype="external">JLREQ</a> or <a href="https://www.w3.org/TR/klreq/" data-linktype="external">KLREQ</a>. For applications that provide such advanced layout, it may be appropriate not to expose control of this feature to users. In applications that do not support such advanced layout, this feature should be enabled by default for horizontal layout of CJK text. See below for details on important feature interactions.</p>
+<p><em>Script/language sensitivity:</em> Used mostly in CJKV fonts.</p>
+<p><em>Feature interaction:</em> This feature is mutually exclusive to all other horizontal glyph-width features (<a href="features_fj#fwid" data-linktype="relative-path">'fwid'</a>, <a href="features_fj#halt" data-linktype="relative-path">'halt'</a>, <a href="features_fj#hwid" data-linktype="relative-path">'hwid'</a>, <a href="features_pt#palt" data-linktype="relative-path">'palt'</a>, <a href="features_pt#pkna" data-linktype="relative-path">'pkna'</a>, <a href="features_pt#pwid" data-linktype="relative-path">'pwid'</a>, <a href="features_pt#qwid" data-linktype="relative-path">'qwid'</a>, <a href="features_pt#twid" data-linktype="relative-path">'twid'</a>, <a href="features_pt#pnum" data-linktype="relative-path">'pnum'</a>, <a href="features_pt#tnum" data-linktype="relative-path">'tnum'</a>), which should be turned off when this feature is applied. When applied to a text run, the <a href="#apkn" data-linktype="self-bookmark">'apkn'</a> and <a href="features_ko#kern" data-linktype="relative-path">'kern'</a> features should be disabled for that run. See also <a href="features_uz#vchw" data-linktype="relative-path">'vchw'</a>.</p>
+<p><a name="cjct" id="cjct"></a></p>
+<h2 id="tag-cjct">Tag: 'cjct'</h2>
+<p><em>Friendly name:</em> Conjunct Forms</p>
+<p><em>Registered by:</em> Microsoft</p>
+<p><em>Function:</em> Produces conjunct forms of consonants in Indic scripts. This is similar to the Akhands feature, but is applied at a different sequential point in the process of shaping an Indic syllable.</p>
+<p>Indic scripts are associated with conjoining-consonant behaviors, such as the use of “half” forms. Some consonants might not have half forms and not exhibit conjoining behavior when combined with certain consonants, yet may conjoin as ligature forms with other consonants. Whether a given pair of consonants conjoins may impact other shaping behaviors for a syllable, such as where a reordering vowel mark or reph is placed. The Conjunct Forms feature can be used at a point in the shaping process immediately before final reordering such that the application can determine whether a reordering vowel or reph is placed in relation to the consonants.</p>
+<p>More generally, the Akhands feature and Conjunct Forms feature can be used at two points in the shaping of an Indic syllable, together with other features such as Half Forms and Below Forms applied in between, providing the font developer with flexibility in how the shapes for Indic syllables are derived from the default glyphs for the character sequence.</p>
+<p><em>Example:</em> In Hindi (Devanagari script), the consonant cluster DGa is denoted with a conjunct ligature form.</p>
+<p><em>Recommended implementation:</em> A glyph for a consonant conjunct form is mapped from a sequence of two or more glyphs for consonants separated by virama (halant) (e.g., C H C, or C H C H C, etc.); or from sequences of glyphs involving simpler consonant conjuncts or conjoining consonant forms resulting from earlier substitutions from default consonant + virama + consonant (+ etc.) sequences (GSUB lookup type 4).</p>
+<p><em>Application interface:</em> In recommended usage, this feature triggers substitutions that are required for correct display of the given script. It should be applied in the appropriate contexts, as determined by script-specific processing requirements.</p>
+<p><em>UI suggestion:</em> Control of the feature should not generally be exposed to the user.</p>
+<p><em>Script/language sensitivity:</em> Used for Devanagari and other Indic or Brahmi-derived scripts.</p>
+<p><em>Feature interaction:</em> This feature is used in conjunction with certain other features to derive required forms of Indic scripts. The application is expected to process this feature and certain other features in an appropriate order to obtain the correct set of basic forms: <a href="features_ko#nukt" data-linktype="relative-path">'nukt'</a>, <a href="features_ae#akhn" data-linktype="relative-path">'akhn'</a>, <a href="features_pt#rphf" data-linktype="relative-path">'rphf'</a>, <a href="features_pt#rkrf" data-linktype="relative-path">'rkrf'</a>, <a href="features_pt#pref" data-linktype="relative-path">'pref'</a>, <a href="features_ae#blwf" data-linktype="relative-path">'blwf'</a>, <a href="features_fj#half" data-linktype="relative-path">'half'</a>, <a href="features_pt#pstf" data-linktype="relative-path">'pstf'</a>, <a href="features_ae#cjct" data-linktype="relative-path">'cjct'</a>. Other discretionary features for optional typographic effects may also be applied. Lookups for such discretionary features should be processed after lookups for this feature have been processed.</p>
+<p><a name="clig" id="clig"></a></p>
+<h2 id="tag-clig">Tag: 'clig'</h2>
+<p><em>Friendly name:</em> Contextual Ligatures</p>
+<p><em>Registered by:</em> Adobe</p>
+<p><em>Function:</em> Replaces a sequence of glyphs with a single glyph which is preferred for typographic purposes. Unlike other ligature features, 'clig' specifies the context in which the ligature is recommended. This capability is important in some script designs and for swash ligatures.</p>
+<p><em>Example:</em> The glyph for ft replaces the sequence f t in Bickham Script, except when preceded by an ascending letter.</p>
+<p><em>Recommended implementation:</em> A lookup table for the 'clig' feature maps sequences of glyphs to corresponding ligatures in a chained context (GSUB lookup type 8). Ligatures with more components need to be stored ahead of those with fewer components in order to be found. The set of contextual ligatures will vary by design and script.</p>
+<p><em>Application interface:</em> Discretionary feature: can be applied to glyph runs based on document markup, user control or other application criteria. When processing lookups, context before or after the glyph sequence to which the feature is applied should be considered.</p>
+<p><em>UI suggestion:</em> This feature should be active by default.</p>
+<p><em>Script/language sensitivity:</em> None.</p>
+<p><em>Feature interaction:</em> This feature may be used in combination with other substitution (GSUB) features, whose results it may override. See also <a href="#dlig" data-linktype="self-bookmark">'dlig'</a>.</p>
+<p><a name="cpct" id="cpct"></a></p>
+<h2 id="tag-cpct">Tag: 'cpct'</h2>
+<p><em>Friendly name:</em> Centered CJK Punctuation</p>
+<p><em>Registered by:</em> Adobe</p>
+<p><em>Function:</em> Centers specific punctuation marks for those fonts that do not include centered and non-centered forms.</p>
+<p><em>Example:</em> The user may invoke this feature in a Chinese font to get centered punctuation in case it is desired. Examples include U+3001 and U+3002, including their vertical variants, specifically U+FE11 and U+FE12, respectively.</p>
+<p><em>Recommended implementation:</em> The font specifies X- and Y-axis adjustments for a small number of full-width glyphs (GPOS lookup type 1, xPlacement, xAdvance, yPlacement and yAdvance).</p>
+<p><em>Application interface:</em> Discretionary feature: can be applied to glyph runs based on document markup, user control or other application criteria.</p>
+<p><em>UI suggestion:</em> This feature should be off by default.</p>
+<p><em>Script/language sensitivity:</em> Used primarily in Chinese fonts.</p>
+<p><em>Feature interaction:</em> This feature is mutually exclusive to all other glyph-width features (e.g. <a href="features_pt#tnum" data-linktype="relative-path">'tnum'</a>, <a href="features_fj#fwid" data-linktype="relative-path">'fwid'</a>, <a href="features_fj#hwid" data-linktype="relative-path">'hwid'</a>, <a href="features_fj#halt" data-linktype="relative-path">'halt'</a>, <a href="features_pt#palt" data-linktype="relative-path">'palt'</a>, <a href="features_pt#twid" data-linktype="relative-path">'twid'</a>), which should be turned off when it is applied.</p>
+<p><a name="cpsp" id="cpsp"></a></p>
+<h2 id="tag-cpsp">Tag: 'cpsp'</h2>
+<p><em>Friendly name:</em> Capital Spacing</p>
+<p><em>Registered by:</em> Adobe</p>
+<p><em>Function:</em> Globally adjusts inter-glyph spacing for all-capital text. Most typefaces contain capitals and lowercase characters, and the capitals are positioned to work with the lowercase. When capitals are used for words, they need more space between them for legibility and esthetics. This feature would not apply to monospaced designs.</p>
+<p><em>Example:</em> The user sets a title in all caps, and the Capital Spacing feature opens the spacing.</p>
+<p><em>Recommended implementation:</em> A lookup table for the 'cpsp' feature stores alternate advance widths for the capital letters covered, generally increasing them by a uniform percentage (GPOS lookup type 1, xPlacement and xAdvance).</p>
+<p><em>Application interface:</em> Discretionary feature: can be applied to glyph runs based on document markup, user control or other application criteria. The application may rely on the user to apply this feature (e.g., by selecting text for a change to all-caps) or apply its own heuristics for recognizing words consisting of capitals.</p>
+<p><em>UI suggestion:</em> This feature should be on by default. Applications may want to allow the user to override the percentage of adjustment to fit individual tastes and functions.</p>
+<p><em>Script/language sensitivity:</em> Should not be used in connecting scripts (e.g. most Arabic).</p>
+<p><em>Feature interaction:</em> May be used in combination with any other feature. Note that positioning adjustment effects of this and other features, such as <a href="features_ko#kern" data-linktype="relative-path">'kern'</a>, can be additive.</p>
+<p><a name="cswh" id="cswh"></a></p>
+<h2 id="tag-cswh">Tag: 'cswh'</h2>
+<p><em>Friendly name:</em> Contextual Swash</p>
+<p><em>Registered by:</em> Adobe</p>
+<p><em>Function:</em> This feature replaces default character glyphs with corresponding swash glyphs in a specified context. More than one swash alternate may be provided for a given character.</p>
+<p><em>Example:</em> The user sets the word “HOLIDAY” in Poetica with this feature active, and is presented with a choice of three alternate forms appropriate for an initial H and one alternate appropriate for a medial L.</p>
+<p><em>Recommended implementation:</em> A lookup table for the 'cswh' feature maps GIDs for default forms to those for one or more corresponding swash forms in a chained context (GSUB lookup type 8). If more than one contextual alternate is provided, the nested substitution lookup can be implemented using alternate substitution (GSUB lookup type 3). If several styles of swash are present across the font, the set of forms for each character should be ordered consistently.</p>
+<p><em>Application interface:</em> Discretionary feature: can be applied to glyph runs based on document markup, user control or other application criteria. If the font is implemented using an alternate substitution lookup, the application should provide a means for the user to select the one desired.</p>
+<p><em>UI suggestion:</em> This feature should be inactive by default. When implemented in the font using an alternate substitution lookup (GSUB type 3), an application could display the forms sequentially in context, or present a palette showing all the forms at once, or give the user a choice between these approaches. The application may assume that the first glyph in a set is the preferred form, so the font developer should order them accordingly.</p>
+<p><em>Script/language sensitivity:</em> Not used for ideographic scripts.</p>
+<p><em>Feature interaction:</em> This feature may be used in combination with other substitution (GSUB) features, whose results it may override. See also <a href="features_pt#swsh" data-linktype="relative-path">'swsh'</a> and <a href="features_fj#init" data-linktype="relative-path">'init'</a>.</p>
+<p><a name="curs" id="curs"></a></p>
+<h2 id="tag-curs">Tag: 'curs'</h2>
+<p><em>Friendly name:</em> Cursive Positioning</p>
+<p><em>Registered by:</em> Microsoft</p>
+<p><em>Function:</em> This feature is used to position adjacent glyphs for cursive connections.</p>
+<p><em>Example:</em> In Arabic, the Meem followed by a Reh are cursively positioned by overlapping the exit point of the Meem on the entry point of the Reh.</p>
+<p><em>Recommended implementation:</em> Lookup tables for the 'curs' feature provide entry and exit points (x,y) for glyphs to be cursively positioned (GPOS lookup type 3).</p>
+<p><em>Application interface:</em> In recommended usage, this feature triggers positioning adjustments that are required for correct display of fonts that implement cursive joining behavior. It should always be applied.</p>
+<p><em>UI suggestion:</em> Control of this feature should not normally be exposed to the user.</p>
+<p><em>Script/language sensitivity:</em> Used primarily for Arabic and other cursively connecting scripts, and also any other scripts for which cursive styles can optionally be used.</p>
+<p><em>Feature interaction:</em> None.</p>
+<p><a name="cv01-cv99" id="cv01-cv99"></a></p>
+<h2 id="tag-cv01--cv99">Tag: 'cv01' – 'cv99'</h2>
+<p><em>Friendly name:</em> Character Variant 1 – Character Variant 99</p>
+<p><em>Registered by:</em> Microsoft</p>
+<p><em>Function:</em> A font may have stylistic-variant glyphs for one or more characters where the variations for one character are not systematically related to those for other characters. Or, a variation may exist for a character and its casing pair or related pre-composed characters, but not be applicable to other unrelated characters. In some usage scenarios, it may be necessary to provide the application with control over glyph variations for different Unicode characters individually.</p>
+<p>The function of these features is similar to the function of the Stylistic Alternates feature <a href="features_pt#salt" data-linktype="relative-path">('salt')</a> and the Stylistic Set features (see <a href="features_pt#ssxx" data-linktype="relative-path">'ss01' – 'ss20'</a>). Whereas the Stylistic Set features assume recurring stylistic variations that apply to a broad set of Unicode characters, however, these features are intended for scenarios in which particular characters have variations not applicable to a broad set of characters. The Stylistic Alternates feature provides access to glyph variants but does not allow an application to control these on a character-by-character basis; the Character Variant features provide the greater granularity of control.</p>
+<p>The function of these features is also related to that of the Localized Forms <a href="features_ko#locl" data-linktype="relative-path">('locl')</a> feature, in that particular variations for a character may be preferred for particular languages. In practice, though, it might not be feasible to associate particular glyph variants with particular language systems for all the relevant languages; for example, the requirements of particular languages might not be known when a font is being developed.</p>
+<p>The distinction between these features and the Stylistic set features is most easily understood in terms of variants applying to a single character versus variants applying across a range of characters. In practice, if a variant applies to a character in a bicameral script, then the casing-pair character might have the same variant. Also, Unicode includes pre-composed characters for certain base + mark combinations, hence a single abstract character could be incorporated into a number of Unicode characters. Therefore, a variant for a particular abstract character could be applicable to several related Unicode characters. The Character Variant features can be used for sets of related characters in these cases. The key distinction between such use and the intended use for Stylistic Set features is that a Character Variant feature should apply only to one character or a set of characters closely related in this way, while Stylistic Set features are intended for broader sets of characters.</p>
+<p><em>Recommended implementation:</em> A 'cv<em>XX</em>' lookup table maps the GID for the default form of a character to the GIDs for stylistic alternates of that character. Each 'cv<em>XX</em>' feature uses alternate substitutions (GSUB lookup type 3). (If there is only one variant for a character, a single-substitution lookup, type 1, can also be used.) A given 'cv<em>XX</em>' feature acts on a single glyph or on multiple glyphs for closely related characters that have corresponding variants. Within each 'cv<em>XX</em>' feature, the number of variants should be identical for all glyphs, and the ordering of glyphs in lookup arrays should correspond such that the n<sup>th</sup> variants of all glyphs are corresponding variants.</p>
+<p>The featureParamsOffset field of the Feature Table of these GSUB features may be set to 0, or to an offset to a Feature Parameters table. The Feature Parameters table for this feature is structured as follows:</p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr>
+<td>uint16</td>
+<td>format</td>
+<td>Format number is set to 0.</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>featUiLabelNameId</td>
+<td>The 'name' table name ID that specifies a string (or strings, for multiple languages) for a user-interface label for this feature. (May be NULL.)</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>featUiTooltipTextNameId</td>
+<td>The 'name' table name ID that specifies a string (or strings, for multiple languages) that an application can use for tooltip text for this feature. (May be NULL.)</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>sampleTextNameId</td>
+<td>The 'name' table name ID that specifies sample text that illustrates the effect of this feature. (May be NULL.)</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>numNamedParameters</td>
+<td>Number of named parameters. (May be zero.)</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>firstParamUiLabelNameId</td>
+<td>The first 'name' table name ID used to specify strings for user-interface labels for the feature parameters. (Must be zero if numParameters is zero.)</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>charCount</td>
+<td>The count of characters for which this feature provides glyph variants. (May be zero.)</td>
+</tr>
+<tr>
+<td>uint24</td>
+<td>character[charCount]</td>
+<td>The Unicode Scalar Value of the characters for which this feature provides glyph variants.</td>
+</tr>
+</tbody>
+</table>
+<p>If a font supports two or more character variant features, use of Feature Parameters tables should be consistent across all of these features.</p>
+<p>The name ID provided by featUiLabelNameId is intended to provide a user-interface string for the feature; for example, “Capital-eng variants”. If set to NULL, no 'name' table string is used for the feature name.</p>
+<p>The name ID provided by featUiTooltipTextNameId is intended to provide a user-interface string that provides a brief description of the feature that applications can use in popup “tooltip” help windows (e.g. “Select glyph variants for capital eng.”). If set to NULL, no 'name' table string is used for the feature “tooltip” help text.</p>
+<p>The name ID provided by sampleTextNameId is intended to provide a string that can be used in a user-interface to illustrate the effect of the feature. If multiple characters are affected by the feature or if the feature affects a combining mark, it might not be evident to an application what string to use to present an illustrative sample; a 'name' table string can be provided for that purpose.</p>
+<p>If numNamedParameters is non-zero, then firstParamUiLabelNameId and numNamedParameters specify a sequence of consecutive name IDs in the 'name' table. These are used to provide user-interface strings for individual variants. The range of name IDs start at firstParamUiLabelNameId and end at firstParamUiLabelNameId + numNamedParameters - 1. Each of these name IDs corresponds to a feature parameter value used to select a particular GID from the array of GIDs returned by a type 3 substitution lookup; the relation between parameter values and name IDs is: name ID = parameter + firstParamUiLabelNameId - 1. The value of numNamedParameters should not exceed the number of alternate glyphs in lookups associated with the feature. However, the number of GIDs in the returned array for a GSUB type 3 lookup should not be assumed to be equal to numNamedParameters: numNamedParameters should not be more than the number of GIDs in the array, but it may be less. If numNamedParameters is zero, then no 'name' table strings are associated with feature parameters.</p>
+<p>The values of featUiLabelNameId, featUiTooltipTextNameId and firstParamUiLabelNameId are expected to be in the font-specific name ID range (256–32767), though that is not a requirement in this Feature Parameters specification. The value of firstParamUiLabelNameId + numNamedParameters - 1 should not exceed 32767.</p>
+<p>The user-interface label for the feature, for “tooltip” help text, or for feature parameters can be provided in multiple languages. English strings for each should be included as a fallback. A sample-text string likely would not need to be localized, though different sample-text strings for different UI languages can be used. If only one sample-text string is provided, applications may use it with any UI language.</p>
+<p>The charCount field and character array are used to identify the Unicode characters for which this feature provides glyph variants. Applications can use this information in presenting user interface or for other purposes. Content of the character list is at the discretion of the font developer — the list may be exhaustive, representative, or empty — and does not affect the operation of the feature. If a font developer chooses not to include such information, charCount may be set to zero, in which case no character array can be included.</p>
+<p>It is left to the discretion of application developers to determine whether or how to use the data provided in the feature parameters table or associated strings in the 'name' table.</p>
+<p>Since the strings provided using this feature parameter table will be used in application user interface, length is an important consideration. Strings should be as short as possible. It is recommended that the length of the feature or feature-parameter names be 25 characters or less, and that the length of “tooltip” help text be 250 characters or less.</p>
+<p><em>Application interface:</em> Discretionary features: can be applied to glyph runs based on document markup, user control or other application criteria. The application is responsible for counting and enumerating the number of features in the font with tag names of the format 'cv01' to 'cv99', and for presenting the user with an appropriate selection mechanism. The application is also responsible for interpreting any feature parameter tables (if the application developer wishes to use that data) and presenting referenced strings in a user interface. If the font is implemented using an alternate substitution lookup, the application may use an index parameter as an index into the array of mapped glyph IDs.</p>
+<p><em>UI suggestion:</em> This feature should be off by default. An application can display glyph variants for a given character as a glyph palette in the user interface. If a Feature Parameters table is provided, the feature UI label or the named parameter UI labels (if provided) can be presented in the application user interface; or the sample-text string (if provided) can be presented in the application user interface.</p>
+<p><em>Script/language sensitivity:</em> None.</p>
+<p><em>Feature interaction:</em> This feature may be used in combination with other substitution (GSUB) features, whose results it may override. Note that after a 'cv<em>XX</em>' feature has been applied, the user may wish to apply other typographic features, e.g. 'smcp'; font developers are responsible for ordering substitution lookups to obtain desired user experience. If it is to be used in conjunction with a complex script that requires obligatory substitution of ligatures or contextual forms, this feature should be applied before features for obligatory script behaviors.</p>
+<p><a name="c2pc" id="c2pc"></a></p>
+<h2 id="tag-c2pc">Tag: 'c2pc'</h2>
+<p><em>Friendly name:</em> Petite Capitals From Capitals</p>
+<p><em>Registered by:</em> Tiro Typeworks / Emigre</p>
+<p><em>Function:</em> This feature turns capital characters into petite capitals. It is generally used for words which would otherwise be set in all caps, such as acronyms, but which are desired in petite-cap form to avoid disrupting the flow of text. See the <a href="features_pt#pcap" data-linktype="relative-path">'pcap'</a> feature description for notes on the relationship of caps, smallcaps and petite caps.</p>
+<p><em>Example:</em> The user types UNICEF or NASA, applies 'c2pc' and gets petite cap text.</p>
+<p><em>Recommended implementation:</em> A lookup table for the 'c2pc' feature maps capital glyphs to the corresponding petite cap forms (GSUB lookup type 1).</p>
+<p><em>Application interface:</em> Discretionary feature: can be applied to glyph runs based on document markup, user control or other application criteria. Applications may use this feature in an implementation to support petite-cap formatting applied to text with language-specific case-mapping logic. See <a href="features_pt#pcap" data-linktype="relative-path">'pcap'</a> and <a href="features_pt#smcp" data-linktype="relative-path">'smcp'</a> for additional information.</p>
+<p><em>UI suggestion:</em> This feature should be off by default.</p>
+<p><em>Script/language sensitivity:</em> Used for bicameral scripts (i.e. those with case differences), such as Latin, Greek, Cyrillic, and Armenian.</p>
+<p><em>Feature interaction:</em> This feature may be used in combination with other substitution (GSUB) features, whose results it may override. Also see <a href="features_pt#pcap" data-linktype="relative-path">'pcap'</a>.</p>
+<p><a name="c2sc" id="c2sc"></a></p>
+<h2 id="tag-c2sc">Tag: 'c2sc'</h2>
+<p><em>Friendly name:</em> Small Capitals From Capitals</p>
+<p><em>Registered by:</em> Adobe</p>
+<p><em>Function:</em> This feature turns capital characters into small capitals. It is generally used for words which would otherwise be set in all caps, such as acronyms, but which are desired in small-cap form to avoid disrupting the flow of text.</p>
+<p><em>Example:</em> The user types UNICEF or SCUBA, applies 'c2sc' and gets small cap text.</p>
+<p><em>Recommended implementation:</em> A lookup table for the 'c2sc' feature maps capital glyphs to the corresponding small-cap forms (GSUB lookup type 1).</p>
+<p><em>Application interface:</em> Discretionary feature: can be applied to glyph runs based on document markup, user control or other application criteria. Applications may use this feature in an implementation to support small-cap formatting applied to text with language-specific case-mapping logic. See <a href="features_pt#smcp" data-linktype="relative-path">'smcp'</a> for additional information.</p>
+<p><em>UI suggestion:</em> This feature should be off by default.</p>
+<p><em>Script/language sensitivity:</em> Used for bicameral scripts (i.e. those with case differences), such as Latin, Greek, Cyrillic, and Armenian.</p>
+<p><em>Feature interaction:</em> This feature may be used in combination with other substitution (GSUB) features, whose results it may override. Also see <a href="features_pt#smcp" data-linktype="relative-path">'smcp'</a>.</p>
+<p><a name="dist" id="dist"></a></p>
+<h2 id="tag-dist">Tag: 'dist'</h2>
+<p><em>Friendly name:</em> Distances</p>
+<p><em>Registered by:</em> Microsoft</p>
+<p><em>Function:</em> Provides a means to control distance between glyphs.</p>
+<p>This feature should only be used for required positioning adjustments, not as an alternate kerning feature. For spacing adjustments that can be controlled by the user, the <a href="features_ko#kern" data-linktype="relative-path">'kern'</a> feature should be used.</p>
+<p><em>Example:</em> In Telugu script, adjust the placement of subjoined consonant forms to avoid collision with other glyphs.</p>
+<p><em>Recommended implementation:</em> The font provides distances by which a glyph needs to move towards or away from another glyph (GPOS lookup type 1, type 2, or contextual lookups that reference nested type 1 or type 2 lookups).</p>
+<p><em>Application interface:</em> In recommended usage, this feature triggers positioning adjustments that are required for correct display of the given script. It should be applied in the appropriate contexts, as determined by script-specific processing requirements.</p>
+<p><em>UI suggestion:</em> Control of the feature should not generally be exposed to the user.</p>
+<p><em>Script/language sensitivity:</em> Used for Indic or other Brahmi-derived scripts.</p>
+<p><em>Feature interaction:</em> This and other certain other features, such as <a href="features_ko#kern" data-linktype="relative-path">'kern'</a>, are typically implemented using single or pair adjustment positioning lookups. Note that positioning adjustment effects of this and other features can be additive. The glyphs affected by the 'dist' and 'kern' features should be distinct unless it is intended that their effects can be combined.</p>
+<p><a name="dlig" id="dlig"></a></p>
+<h2 id="tag-dlig">Tag: 'dlig'</h2>
+<p><em>Friendly name:</em> Discretionary Ligatures</p>
+<p><em>Registered by:</em> Adobe</p>
+<p><em>Function:</em> Replaces a sequence of glyphs with a single glyph which is preferred for typographic purposes. This feature covers those ligatures which may be used for special effect, at the user’s preference.</p>
+<p><em>Example:</em> The glyph for ct replaces the sequence of glyphs c t, or U+322E (Kanji ligature for “Friday”) replaces the sequence U+91D1 U+66DC U+65E5.</p>
+<p><em>Recommended implementation:</em> A lookup table for the 'dlig' feature maps sequences of glyphs to corresponding ligatures (GSUB lookup type 4). Ligatures with more components need to be stored ahead of those with fewer components in order to be found. The set of discretionary ligatures will vary by design and script.</p>
+<p><em>Application interface:</em> Discretionary feature: can be applied to glyph runs based on document markup, user control or other application criteria.</p>
+<p><em>UI suggestion:</em> This feature should be off by default.</p>
+<p><em>Script/language sensitivity:</em> None.</p>
+<p><em>Feature interaction:</em> This feature may be used in combination with other substitution (GSUB) features, whose results it may override. See also <a href="#clig" data-linktype="self-bookmark">'clig'</a>.</p>
+<p><a name="dnom" id="dnom"></a></p>
+<h2 id="tag-dnom">Tag: 'dnom'</h2>
+<p><em>Friendly name:</em> Denominators</p>
+<p><em>Registered by:</em> Adobe</p>
+<p><em>Function:</em> Replaces selected figures which follow a slash with denominator figures.</p>
+<p><em>Example:</em> In the string 11/17 selected by the user, the application turns the 17 into denominators when the user applies the fraction feature (<a href="features_fj#frac" data-linktype="relative-path">'frac'</a>).</p>
+<p><em>Recommended implementation:</em> Glyphs for figures (digits) and related characters (grouping or decimal separators) are mapped to corresponding denominator glyphs in the font (GSUB lookup type 1).</p>
+<p><em>Application interface:</em> In recommended usage, this feature is applied automatically as part of the application’s implementation for the 'frac' feature. See the <a href="features_fj#frac" data-linktype="relative-path">'frac'</a> for details.</p>
+<p><em>UI suggestion:</em> In recommended usage, this feature is applied to sequences automatically by applications when the 'frac' feature is used, and direct user control is not required.</p>
+<p><em>Script/language sensitivity:</em> None.</p>
+<p><em>Feature interaction:</em> This feature supports implementation of the <a href="features_fj#frac" data-linktype="relative-path">'frac'</a> feature. It may be used in combination with other substitution (GSUB) features, whose results it may override.</p>
+<p><a name="dtls" id="dtls"></a></p>
+<h2 id="tag-dtls">Tag: 'dtls'</h2>
+<p><em>Friendly name:</em> Dotless Forms</p>
+<p><em>Registered by:</em> Microsoft</p>
+<p><em>Function:</em> This feature provides dotless forms for Math Alphanumeric characters, such as U+1D422 MATHEMATICAL BOLD SMALL I, U+1D423 MATHEMATICAL BOLD SMALL J, U+1D456 U+MATHEMATICAL ITALIC SMALL I, U+1D457 MATHEMATICAL ITALIC SMALL J, and so on. The dotless forms are to be used as base forms for placing mathematical accents over them.</p>
+<p><em>Example:</em> When adding a tilde to an i, the dotless form is substituted before attaching the tilde accent on top of it.</p>
+<p><em>Recommended implementation:</em> Single substitution (GSUB lookup type 1), for glyphs of all dotted characters.</p>
+<p><em>Application interface:</em> In recommended usage, this feature is used to trigger substitutions that are required for correct display of math formulas. It should be applied to individual glyphs in appropriate contexts under the control of a math layout handler. See the <a href="math#opentype-layout-tags-used-with-the-math-table" data-linktype="relative-path">'MATH' table</a> chapter for additional information.</p>
+<p><em>UI suggestion:</em> Control of the feature should not generally be exposed to the user.</p>
+<p><em>Script/language sensitivity:</em> Used for math formula layout.</p>
+<p><em>Feature interaction:</em> None.</p>
+<p><a name="expt" id="expt"></a></p>
+<h2 id="tag-expt">Tag: 'expt'</h2>
+<p><em>Friendly name:</em> Expert Forms</p>
+<p><em>Registered by:</em> Adobe</p>
+<p><em>Function:</em> Like the <a href="features_fj#jp78" data-linktype="relative-path">JIS78 Forms</a> feature, this feature replaces standard forms in Japanese fonts with corresponding forms preferred by typographers. Although most of the JIS78 substitutions are included, the expert substitution goes on to handle many more characters.</p>
+<p><em>Example:</em> The user would invoke this feature to replace kanji character U+5516 with U+555E.</p>
+<p><em>Recommended implementation:</em> A lookup table for the 'expt' feature maps many default (JIS90) GIDs to corresponding alternates (GSUB lookup type 1).</p>
+<p><em>Application interface:</em> Discretionary feature: can be applied to glyph runs based on document markup, user control or other application criteria. Note that the effect of this feature is effectively equivalent to a change of character code. Besides the original character code, the application should store the character code for the new glyph.</p>
+<p><em>UI suggestion:</em> Applications may choose to have this feature active or inactive by default, depending on their target markets.</p>
+<p><em>Script/language sensitivity:</em> Applies only to Japanese.</p>
+<p><em>Feature interaction:</em> This feature is mutually exclusive to most other features, which should be turned off when it’s applied. Exceptions include the <a href="features_pt#palt" data-linktype="relative-path">'palt'</a>, <a href="features_uz#vpal" data-linktype="relative-path">'vpal'</a>, <a href="features_uz#vert" data-linktype="relative-path">'vert'</a> and <a href="features_uz#vrt2" data-linktype="relative-path">'vrt2'</a> features, which may be used in addition.</p>
+</div>
+					
+		<div
+			id="ms--inline-notifications"
+			class="margin-block-xs"
+			data-bi-name="inline-notification"
+		></div>
+	 
+		<div
+			id="assertive-live-region"
+			role="alert"
+			aria-live="assertive"
+			class="visually-hidden"
+			aria-relevant="additions"
+			aria-atomic="true"
+		></div>
+		<div
+			id="polite-live-region"
+			role="status"
+			aria-live="polite"
+			class="visually-hidden"
+			aria-relevant="additions"
+			aria-atomic="true"
+		></div>
+	
+					
+			
+		<!-- feedback section -->
+		<section
+			class="feedback-section position-relative margin-top-lg border border-radius padding-xxs display-none-print"
+			data-bi-name="open-source-feedback-section"
+			data-open-source-feedback-section
+			hidden
+		>
+			<div class="display-flex flex-direction-column flex-direction-row-tablet">
+				<div
+					class="width-450-tablet padding-inline-xs padding-inline-xs-tablet padding-top-xs padding-bottom-sm padding-top-xs-tablet background-color-body-medium"
+				>
+					<div class="display-flex flex-direction-column">
+						<div class="padding-bottom-xxs">
+							<span class="icon margin-right-xxs" aria-hidden="true">
+								<span class="docon docon-brand-github"></span>
+							</span>
+							<span class="font-weight-semibold">
+								Collaborate with us on GitHub
+							</span>
+						</div>
+						<span class="line-height-normal">
+							The source for this content can be found on GitHub, where you can also create and review issues and pull requests. For more information, see <a href="https://learn.microsoft.com/contribute/content/">our contributor guide</a>.
+						</span>
+					</div>
+				</div>
+				<div
+					class="display-flex gap-xs width-full-tablet flex-direction-column padding-xs justify-content-space-evenly"
+				>
+					<div class="media">
+						
+
+						<div class="media-content">
+							<p
+								class="font-size-xl font-weight-semibold margin-bottom-xxs"
+								data-open-source-product-title
+							>
+								OpenType specification
+							</p>
+							<div class="display-flex gap-xs flex-direction-column">
+								<p class="line-height-normal" data-open-source-product-description></p>
+								<div class="display-flex gap-xs flex-direction-column">
+									<a href="#" data-github-link>
+										<span class="icon margin-right-xxs" aria-hidden="true">
+											<span class="docon docon-bug"></span>
+										</span>
+										<span>Open a documentation issue</span>
+									</a>
+									<a
+										href="https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml"
+										class="display-block margin-top-auto font-size-md"
+										data-feedback-product-url
+									>
+										<span class="icon margin-right-xxs" aria-hidden="true">
+											<span class="docon docon-feedback"></span>
+										</span>
+										<span>Provide product feedback</span>
+									</a>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</section>
+		<!-- end feedback section -->
+	
+			
+		<!-- feedback section -->
+		<section
+			id="site-user-feedback-footer"
+			class="font-size-sm margin-top-md display-none-print display-none-desktop"
+			data-test-id="site-user-feedback-footer"
+			data-bi-name="site-feedback-section"
+		>
+			<hr class="hr" />
+			<h2 id="ms--feedback" class="title is-3">Feedback</h2>
+			<div class="display-flex flex-wrap-wrap align-items-center">
+				<p class="font-weight-semibold margin-xxs margin-left-none">
+					Was this page helpful?
+				</p>
+				<div class="buttons">
+					<button
+						class="thumb-rating-button like button button-primary button-sm"
+						data-test-id="footer-rating-yes"
+						data-binary-rating-response="rating-yes"
+						type="button"
+						title="This article is helpful"
+						data-bi-name="button-rating-yes"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-like"></span>
+						</span>
+						<span>Yes</span>
+					</button>
+					<button
+						class="thumb-rating-button dislike button button-primary button-sm"
+						id="standard-rating-no-button"
+						hidden
+						data-test-id="footer-rating-no"
+						data-binary-rating-response="rating-no"
+						type="button"
+						title="This article is not helpful"
+						data-bi-name="button-rating-no"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-dislike"></span>
+						</span>
+						<span>No</span>
+					</button>
+					<details
+						class="popover popover-top"
+						id="mobile-help-popover"
+						data-test-id="footer-feedback-popover"
+					>
+						<summary
+							class="thumb-rating-button dislike button button-primary button-sm"
+							data-test-id="details-footer-rating-no"
+							data-binary-rating-response="rating-no"
+							title="This article is not helpful"
+							data-bi-name="button-rating-no"
+							aria-pressed="false"
+							data-bi-an="feedback-unhelpful-popover"
+						>
+							<span class="icon" aria-hidden="true">
+								<span class="docon docon-dislike"></span>
+							</span>
+							<span>No</span>
+						</summary>
+						<div
+							class="popover-content width-200 width-300-tablet"
+							role="dialog"
+							aria-labelledby="popover-heading"
+							aria-describedby="popover-description"
+						>
+							<p id="popover-heading" class="font-size-lg margin-bottom-xxs font-weight-semibold">
+								Need help with this topic?
+							</p>
+							<p id="popover-description" class="font-size-sm margin-bottom-xs">
+								Want to try using Ask Learn to clarify or guide you through this topic?
+							</p>
+							
+		<div class="buttons flex-direction-row flex-wrap justify-content-center gap-xxs">
+			<div>
+		<button
+			class="button button-sm border inner-focus display-none margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-test-id="ask-learn-assistant-modal-entry-mobile-feedback"
+			data-ask-learn-modal-entry-feedback
+			data-bi-an=feedback-unhelpful-popover
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-label="Ask Learn"
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+		</button>
+		<button
+			class="button button-sm display-inline-flex display-none-desktop flex-shrink-0 margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-modal-entry-tablet-feedback"
+			data-ask-learn-modal-entry-feedback
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+		<button
+			class="button button-sm display-none flex-shrink-0 display-inline-flex-desktop margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-flyout-entry-feedback"
+			data-ask-learn-flyout-entry-show-only
+			data-flyout-button="toggle"
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-controls="ask-learn-flyout"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+	</div>
+			<button
+				type="button"
+				class="button button-sm margin-right-xxs"
+				data-help-option="suggest-fix"
+				data-bi-name="feedback-suggest"
+				data-bi-an="feedback-unhelpful-popover"
+				data-test-id="suggest-fix"
+			>
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-feedback"></span>
+				</span>
+				<span> Suggest a fix? </span>
+			</button>
+		</div>
+	
+						</div>
+					</details>
+				</div>
+			</div>
+		</section>
+		<!-- end feedback section -->
+	
+		
+				</div>
+				
+		<div id="ms--additional-resources-mobile" class="display-none-print">
+			<hr class="hr" hidden />
+			<h2 id="ms--additional-resources-mobile-heading" class="title is-3" hidden>
+				Additional resources
+			</h2>
+			
+		<section
+			id="right-rail-recommendations-mobile"
+			class=""
+			data-bi-name="recommendations"
+			hidden
+		></section>
+	 
+		<section
+			id="right-rail-training-mobile"
+			class=""
+			data-bi-name="learning-resource-card"
+			hidden
+		></section>
+	 
+		<section
+			id="right-rail-events-mobile"
+			class=""
+			data-bi-name="events-card"
+			hidden
+		></section>
+	
+		</div>
+	 
+		<div
+			id="article-metadata-footer"
+			data-bi-name="article-metadata-footer"
+			data-test-id="article-metadata-footer"
+			class="page-metadata-container"
+		>
+			<hr class="hr" />
+			<ul class="metadata page-metadata" data-bi-name="page info" lang="en-us" dir="ltr">
+				<li class="visibility-hidden-visual-diff">
+			<span class="badge badge-sm text-wrap-pretty">
+				<span>Last updated on <local-time format="twoDigitNumeric"
+		datetime="2024-07-06T08:00:00.000Z"
+		data-article-date-source="calculated"
+		class="is-invisible"
+	>
+		2024-07-06
+	</local-time></span>
+			</span>
+		</li>
+			</ul>
+		</div>
+	
+			</div>
+		
+				</main>
+				<aside
+					id="layout-body-aside"
+					class="layout-body-aside  "
+					data-bi-name="aside"
+					aria-label="Additional resources"
+			  >
+					
+		<div
+			id="ms--additional-resources"
+			class="right-container padding-sm display-none display-block-desktop height-full"
+			data-bi-name="pageactions"
+		>
+			<div id="affixed-right-container" data-bi-name="right-column">
+				
+		<nav
+			id="side-doc-outline"
+			class="doc-outline border-bottom padding-bottom-xs margin-bottom-xs scrollbar-width-thin"
+			data-bi-name="intopic toc"
+			aria-label="In this article"
+		>
+			<h3>In this article</h3>
+		</nav>
+	
+				<!-- Feedback -->
+				
+		<section
+			id="ms--site-user-feedback-right-rail"
+			class="font-size-sm display-none-print"
+			data-test-id="site-user-feedback-right-rail"
+			data-bi-name="site-feedback-right-rail"
+		>
+			<div class="display-flex flex-wrap-wrap align-items-center">
+				<p class="font-weight-semibold margin-xxs margin-left-none">
+					Was this page helpful?
+				</p>
+				<div class="display-flex flex-wrap-nowrap">
+					<button
+						class="thumb-rating-button like inner-focus"
+						data-test-id="right-rail-rating-yes"
+						data-binary-rating-response="rating-yes"
+						type="button"
+						title="This article is helpful"
+						aria-label="This article is helpful"
+						data-bi-name="button-rating-yes"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-like"></span>
+						</span>
+					</button>
+					<button
+						class="thumb-rating-button dislike inner-focus"
+						id="right-rail-no-button"
+						hidden
+						data-test-id="right-rail-rating-no"
+						data-binary-rating-response="rating-no"
+						type="button"
+						title="This article is not helpful"
+						aria-label="This article is not helpful"
+						data-bi-name="button-rating-no"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-dislike"></span>
+						</span>
+					</button>
+					<details class="popover popover-right" id="help-popover" data-test-id="feedback-popover">
+						<summary
+							tabindex="0"
+							class="thumb-rating-button dislike inner-focus"
+							data-test-id="details-right-rail-rating-no"
+							data-binary-rating-response="rating-no"
+							title="This article is not helpful"
+							aria-label="This article is not helpful"
+							data-bi-name="button-rating-no"
+							aria-pressed="false"
+							data-bi-an="feedback-unhelpful-popover"
+						>
+							<span class="icon" aria-hidden="true">
+								<span class="docon docon-dislike"></span>
+							</span>
+						</summary>
+						<div
+							class="popover-content width-200 width-300-tablet"
+							role="dialog"
+							aria-labelledby="popover-heading-right-rail"
+							aria-describedby="popover-description-right-rail"
+						>
+							<p
+								id="popover-heading-right-rail"
+								class="font-size-lg margin-bottom-xxs font-weight-semibold"
+							>
+								Need help with this topic?
+							</p>
+							<p id="popover-description-right-rail" class="font-size-sm margin-bottom-xs">
+								Want to try using Ask Learn to clarify or guide you through this topic?
+							</p>
+							
+		<div class="buttons flex-direction-row flex-wrap justify-content-center gap-xxs">
+			<div>
+		<button
+			class="button button-sm border inner-focus display-none margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-test-id="ask-learn-assistant-modal-entry-mobile-feedback"
+			data-ask-learn-modal-entry-feedback
+			data-bi-an=feedback-unhelpful-popover
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-label="Ask Learn"
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+		</button>
+		<button
+			class="button button-sm display-inline-flex display-none-desktop flex-shrink-0 margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-modal-entry-tablet-feedback"
+			data-ask-learn-modal-entry-feedback
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+		<button
+			class="button button-sm display-none flex-shrink-0 display-inline-flex-desktop margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-flyout-entry-feedback"
+			data-ask-learn-flyout-entry-show-only
+			data-flyout-button="toggle"
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-controls="ask-learn-flyout"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+	</div>
+			<button
+				type="button"
+				class="button button-sm margin-right-xxs"
+				data-help-option="suggest-fix"
+				data-bi-name="feedback-suggest"
+				data-bi-an="feedback-unhelpful-popover"
+				data-test-id="suggest-fix"
+			>
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-feedback"></span>
+				</span>
+				<span> Suggest a fix? </span>
+			</button>
+		</div>
+	
+						</div>
+					</details>
+				</div>
+			</div>
+		</section>
+	
+			</div>
+		</div>
+	
+			  </aside> <section
+					id="layout-body-flyout"
+					class="layout-body-flyout "
+					data-bi-name="flyout"
+			  >
+					 <div
+	class="height-full border-left background-color-body-medium"
+	id="ask-learn-flyout"
+></div>
+			  </section> <div class="layout-body-footer " data-bi-name="layout-footer">
+		<footer
+			id="footer"
+			data-test-id="footer"
+			data-bi-name="footer"
+			class="footer-layout padding-xs padding-sm-desktop has-default-focus border-top"
+			role="contentinfo"
+		>
+			<div class="display-flex gap-xs flex-wrap-wrap is-full-height padding-right-lg-desktop">
+				
+		<a
+			data-mscc-ic="false"
+			href="#"
+			data-bi-name="select-locale"
+			class="locale-selector-link flex-shrink-0 button button-sm button-clear external-link-indicator"
+			id=""
+			title=""
+			><span class="icon" aria-hidden="true"
+				><span class="docon docon-world"></span></span
+			><span class="local-selector-link-text">en-us</span></a
+		>
+	 <div class="ccpa-privacy-link" data-ccpa-privacy-link hidden>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://aka.ms/yourcaliforniaprivacychoices"
+			data-bi-name="your-privacy-choices"
+			class="button button-sm button-clear flex-shrink-0 external-link-indicator"
+			id=""
+			title=""
+			>
+		<svg
+			xmlns="http://www.w3.org/2000/svg"
+			viewBox="0 0 30 14"
+			xml:space="preserve"
+			height="16"
+			width="43"
+			aria-hidden="true"
+			focusable="false"
+		>
+			<path
+				d="M7.4 12.8h6.8l3.1-11.6H7.4C4.2 1.2 1.6 3.8 1.6 7s2.6 5.8 5.8 5.8z"
+				style="fill-rule:evenodd;clip-rule:evenodd;fill:#fff"
+			></path>
+			<path
+				d="M22.6 0H7.4c-3.9 0-7 3.1-7 7s3.1 7 7 7h15.2c3.9 0 7-3.1 7-7s-3.2-7-7-7zm-21 7c0-3.2 2.6-5.8 5.8-5.8h9.9l-3.1 11.6H7.4c-3.2 0-5.8-2.6-5.8-5.8z"
+				style="fill-rule:evenodd;clip-rule:evenodd;fill:#06f"
+			></path>
+			<path
+				d="M24.6 4c.2.2.2.6 0 .8L22.5 7l2.2 2.2c.2.2.2.6 0 .8-.2.2-.6.2-.8 0l-2.2-2.2-2.2 2.2c-.2.2-.6.2-.8 0-.2-.2-.2-.6 0-.8L20.8 7l-2.2-2.2c-.2-.2-.2-.6 0-.8.2-.2.6-.2.8 0l2.2 2.2L23.8 4c.2-.2.6-.2.8 0z"
+				style="fill:#fff"
+			></path>
+			<path
+				d="M12.7 4.1c.2.2.3.6.1.8L8.6 9.8c-.1.1-.2.2-.3.2-.2.1-.5.1-.7-.1L5.4 7.7c-.2-.2-.2-.6 0-.8.2-.2.6-.2.8 0L8 8.6l3.8-4.5c.2-.2.6-.2.9 0z"
+				style="fill:#06f"
+			></path>
+		</svg>
+	
+			<span>Your Privacy Choices</span></a
+		>
+	
+	</div>
+				<div class="flex-shrink-0">
+		<div class="dropdown has-caret-up">
+			<button
+				data-test-id="theme-selector-button"
+				class="dropdown-trigger button button-clear button-sm inner-focus theme-dropdown-trigger"
+				aria-controls="{{ themeMenuId }}"
+				aria-haspopup="true"
+				aria-expanded="false"
+				data-bi-name="theme"
+			>
+				<span class="icon" aria-hidden="true"><span class="docon docon-sun"></span></span>
+				<span>Theme</span>
+				<span class="icon expanded-indicator" aria-hidden="true">
+					<span class="docon docon-chevron-down-light"></span>
+				</span>
+			</button>
+			<div class="dropdown-menu" id="{{ themeMenuId }}" role="menu">
+				<ul class="theme-selector padding-xxs" data-test-id="theme-dropdown-menu" role="none">
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="light"
+							tabindex="-1"
+						>
+							<span class="theme-light margin-right-xxs">
+								<span
+									class="theme-selector-icon border display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> Light </span>
+						</button>
+					</li>
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="dark"
+							tabindex="-1"
+						>
+							<span class="theme-dark margin-right-xxs">
+								<span
+									class="border theme-selector-icon display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> Dark </span>
+						</button>
+					</li>
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="high-contrast"
+							tabindex="-1"
+						>
+							<span class="theme-high-contrast margin-right-xxs">
+								<span
+									class="border theme-selector-icon display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> High contrast </span>
+						</button>
+					</li>
+				</ul>
+			</div>
+		</div>
+	</div>
+			</div>
+			<ul class="links" data-bi-name="footerlinks">
+				<li class="manage-cookies-holder" hidden=""></li>
+				<li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/principles-for-ai-generated-content"
+			data-bi-name="aiDisclaimer"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>AI Disclaimer</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/previous-versions/"
+			data-bi-name="archivelink"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Previous Versions</a
+		>
+	
+	</li> <li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://techcommunity.microsoft.com/t5/microsoft-learn-blog/bg-p/MicrosoftLearnBlog"
+			data-bi-name="bloglink"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Blog</a
+		>
+	
+	</li> <li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/contribute"
+			data-bi-name="contributorGuide"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Contribute</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://go.microsoft.com/fwlink/?LinkId=521839"
+			data-bi-name="privacy"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Privacy</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://go.microsoft.com/fwlink/?linkid=2259814"
+			data-bi-name="consumer-health-privacy"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Consumer Health Privacy</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/legal/termsofuse"
+			data-bi-name="termsofuse"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Terms of Use</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://www.microsoft.com/legal/intellectualproperty/Trademarks/"
+			data-bi-name="trademarks"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Trademarks</a
+		>
+	
+	</li>
+				<li>&copy; Microsoft 2026</li>
+			</ul>
+		</footer>
+	</footer>
+			</body>
+		</html>

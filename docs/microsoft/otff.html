@@ -1,0 +1,2228 @@
+ <!DOCTYPE html>
+		<html
+			class="layout layout-holy-grail   show-table-of-contents conceptual show-breadcrumb default-focus"
+			lang="en-us"
+			dir="ltr"
+			data-authenticated="false"
+			data-auth-status-determined="false"
+			data-target="docs"
+			x-ms-format-detection="none"
+		>
+			
+		<head>
+			<title>OpenType font file (OpenType 1.9.1) - Typography | Microsoft Learn</title>
+			<meta charset="utf-8" />
+			<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+			<meta name="color-scheme" content="light dark" />
+
+			<meta name="description" content="OpenType font file specification (OpenType 1.9.1)" />
+			<link rel="canonical" href="https://learn.microsoft.com/en-us/typography/opentype/spec/otff" /> 
+
+			<!-- Non-customizable open graph and sharing-related metadata -->
+			<meta name="twitter:card" content="summary_large_image" />
+			<meta name="twitter:site" content="@MicrosoftLearn" />
+			<meta property="og:type" content="website" />
+			<meta property="og:image:alt" content="Microsoft Learn" />
+			<meta property="og:image" content="https://learn.microsoft.com/en-us/media/open-graph-image.png" />
+			<!-- Page specific open graph and sharing-related metadata -->
+			<meta property="og:title" content="OpenType font file (OpenType 1.9.1) - Typography" />
+			<meta property="og:url" content="https://learn.microsoft.com/en-us/typography/opentype/spec/otff" />
+			<meta property="og:description" content="OpenType font file specification (OpenType 1.9.1)" />
+			<meta name="platform_id" content="20f6370b-a490-405d-dbd1-312b324454a8" /> <meta name="scope" content="typography" />
+			<meta name="locale" content="en-us" />
+			 
+			<meta name="uhfHeaderId" content="MSDocsHeader-MSTypography" />
+
+			<meta name="page_type" content="conceptual" />
+
+			<!--page specific meta tags-->
+			
+
+			<!-- custom meta tags -->
+			
+		<meta name="ms.service" content="typography" />
+	
+		<meta name="breadcrumb_path" content="/typography/breadcrumbs/toc.json" />
+	
+		<meta name="feedback_system" content="OpenSource" />
+	
+		<meta name="author" content="PeterCon" />
+	
+		<meta name="ms.author" content="pconstable" />
+	
+		<meta name="ms.date" content="2024-05-29T00:00:00Z" />
+	
+		<meta name="feedback_product_url" content="https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml" />
+	
+		<meta name="keywords" content="typography" />
+	
+		<meta name="ms.topic" content="article" />
+	
+		<meta name="source-file" content="https://www.microsoft.com/typography/otspec/otff.htm" />
+	
+		<meta name="document_id" content="6a1bda96-a268-b684-6cea-9b0c7be6f24e" />
+	
+		<meta name="document_version_independent_id" content="36485fec-f05d-3984-6da8-ff2dd2799041" />
+	
+		<meta name="updated_at" content="2025-03-19T23:08:00Z" />
+	
+		<meta name="original_content_git_url" content="https://github.com/MicrosoftDocs/typography/blob/live/typographydocs/opentype/spec/otff.md" />
+	
+		<meta name="gitcommit" content="https://github.com/MicrosoftDocs/typography/blob/9fd3f7b24062807b6359a7d0b9b8c9ebef16677c/typographydocs/opentype/spec/otff.md" />
+	
+		<meta name="git_commit_id" content="9fd3f7b24062807b6359a7d0b9b8c9ebef16677c" />
+	
+		<meta name="site_name" content="Docs" />
+	
+		<meta name="depot_name" content="Win.typography" />
+	
+		<meta name="schema" content="Conceptual" />
+	
+		<meta name="toc_rel" content="../../toc.json" />
+	
+		<meta name="pdf_url_template" content="https://learn.microsoft.com/pdfstore/en-us/Win.typography/{branchName}{pdfName}" />
+	
+		<meta name="feedback_help_link_type" content="" />
+	
+		<meta name="feedback_help_link_url" content="" />
+	
+		<meta name="word_count" content="4270" />
+	
+		<meta name="asset_id" content="opentype/spec/otff" />
+	
+		<meta name="moniker_range_name" content="" />
+	
+		<meta name="item_type" content="Content" />
+	
+		<meta name="source_path" content="typographydocs/opentype/spec/otff.md" />
+	
+		<meta name="previous_tlsh_hash" content="BE6A66C2950CAA02EF815E2618A7AB50E1F4CC0B66B076B41A3D339281553F230B15F8BAAB137B84333745935191B74F61E4AB3EE1BC5BA551B5443E852E2681C6C53FBFFD" />
+	
+		<meta name="github_feedback_content_git_url" content="https://github.com/MicrosoftDocs/typography/blob/live/typographydocs/opentype/spec/otff.md" />
+	
+		<meta name="markdown_url" content="https://learn.microsoft.com/en-us/typography/opentype/spec/otff?accept=text/markdown" />
+	 
+		<meta name="cmProducts" content="https://microsoft-devrel.poolparty.biz/DevRelOfferingOntology/12ed19f9-ebdf-4c8a-8bcd-7a681836774d" data-source="generated" />
+	
+		<meta name="cmProducts" content="https://microsoft-devrel.poolparty.biz/DevRelOfferingOntology/c6f99e62-1cf6-4b71-af9b-649b05f80cce" data-source="generated" />
+	
+		<meta name="cmProducts" content="https://authoring-docs-microsoft.poolparty.biz/devrel/540ac133-a371-4dbb-8f94-28d6cc77a70b" data-source="generated" />
+	
+		<meta name="spProducts" content="https://microsoft-devrel.poolparty.biz/DevRelOfferingOntology/3a764584-4f97-452b-8f1d-36f19b12f6ae" data-source="generated" />
+	
+		<meta name="spProducts" content="https://microsoft-devrel.poolparty.biz/DevRelOfferingOntology/3f56b378-07a9-4fa1-afe8-9889fdc77628" data-source="generated" />
+	
+		<meta name="spProducts" content="https://authoring-docs-microsoft.poolparty.biz/devrel/60bfc045-f127-4841-9d00-ea35495a5800" data-source="generated" />
+	
+
+			<!-- Apply persisted/system theme before first paint to prevent wrong-theme flash when scripts are deferred. -->
+			<script id="theme-preference">
+				(function () {
+			try {
+				var stored = localStorage.getItem('theme');
+				var theme = /^(light|dark|high-contrast)$/.test(stored)
+					? stored
+					: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+				document.documentElement.classList.add('theme-' + theme);
+			} catch (e) {}
+		})();;
+			</script>
+
+			<script id="atlas-layout-preferences">
+				(function () {
+			try {
+				var state = JSON.parse(localStorage.getItem('atlas-layout-preferences') || '{}');
+				var view = state["docs-layout-persistence"] || {};
+				var excludesKey = "";
+				var blocked = {};
+				if (excludesKey) {
+					var exclusions = JSON.parse(localStorage.getItem('atlas-layout-exclusions') || '{}');
+					if (Object.prototype.hasOwnProperty.call(exclusions, excludesKey)) {
+						var scoped = exclusions[excludesKey];
+						if (scoped) {
+							if (typeof scoped === 'object') blocked = scoped;
+						}
+					}
+				}
+				var html = document.documentElement;
+				for (var c in view) {
+					if (Object.prototype.hasOwnProperty.call(blocked, c)) continue;
+					if (view[c]) html.classList.add(c);
+					else html.classList.remove(c);
+				}
+			} catch (e) {}
+		})();;
+			</script>
+
+			<!-- assets and js globals -->
+			
+			<link rel="stylesheet" href="/static/assets/0.4.03544.8243-8192ba90/styles/site.css" />
+			
+			<script src="https://wcpstatic.microsoft.com/mscc/lib/v2/wcp-consent.js"></script>
+			<!-- Keep this URL in sync with oneDSScriptSelector in instrumentation/one-ds.ts. -->
+			<script async src="https://js.monitor.azure.com/scripts/c/ms.jsll-4.min.js"></script>
+			
+
+			<!-- msdocs global object -->
+			<script id="msdocs-script">
+		var msDocs = {
+  "environment": {
+    "accessLevel": "online",
+    "azurePortalHostname": "portal.azure.com",
+    "reviewFeatures": false,
+    "supportLevel": "production",
+    "systemContent": true,
+    "siteName": "learn",
+    "legacyHosting": false
+  },
+  "data": {
+    "contentLocale": "en-us",
+    "contentDir": "ltr",
+    "userLocale": "en-us",
+    "userDir": "ltr",
+    "pageTemplate": "Conceptual",
+    "layoutStateStorageKey": "docs-layout-persistence",
+    "brand": "",
+    "context": {},
+    "standardFeedback": false,
+    "showFeedbackReport": false,
+    "feedbackHelpLinkType": "",
+    "feedbackHelpLinkUrl": "",
+    "feedbackSystem": "OpenSource",
+    "feedbackGitHubRepo": "",
+    "feedbackProductUrl": "https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml",
+    "extendBreadcrumb": false,
+    "isEditDisplayable": false,
+    "isPrivateUnauthorized": false,
+    "hideViewSource": false,
+    "isPermissioned": false,
+    "hasRecommendations": true,
+    "openSourceFeedbackIssueUrl": "https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml",
+    "openSourceFeedbackIssueTitle": ""
+  },
+  "functions": {}
+};;
+	</script>
+
+			<!-- base scripts, msdocs global should be before this -->
+			<script
+				src="/static/assets/0.4.03544.8243-8192ba90/scripts/en-us/index-docs.js"
+				async
+			></script>
+			
+
+			<!-- json-ld -->
+			
+		</head>
+	
+			<body
+				id="body"
+				data-bi-name="body"
+				class="layout-body "
+				lang="en-us"
+				dir="ltr"
+			>
+				<header class="layout-body-header background-color-body-medium">
+		<div class="header-holder has-default-focus">
+			
+		<a
+			href="#main"
+			
+			style="z-index: 1070"
+			class="outline-color-text visually-hidden-until-focused position-fixed inner-focus focus-visible top-0 left-0 right-0 padding-xs text-align-center background-color-body"
+			
+		>
+			Skip to main content
+		</a>
+	
+		<a
+			href="#"
+			data-skip-to-ask-learn
+			style="z-index: 1070"
+			class="outline-color-text visually-hidden-until-focused position-fixed inner-focus focus-visible top-0 left-0 right-0 padding-xs text-align-center background-color-body"
+			hidden
+		>
+			Skip to Ask Learn chat experience
+		</a>
+	
+
+			<div hidden id="cookie-consent-holder" data-test-id="cookie-consent-container"></div>
+			<!-- Unsupported browser warning -->
+			<div
+				id="unsupported-browser"
+				style="background-color: white; color: black; padding: 16px; border-bottom: 1px solid grey;"
+				hidden
+			>
+				<div style="max-width: 800px; margin: 0 auto;">
+					<p style="font-size: 24px">This browser is no longer supported.</p>
+					<p style="font-size: 16px; margin-top: 16px;">
+						Upgrade to Microsoft Edge to take advantage of the latest features, security updates, and technical support.
+					</p>
+					<div style="margin-top: 12px;">
+						<a
+							href="https://go.microsoft.com/fwlink/p/?LinkID=2092881 "
+							style="background-color: #0078d4; border: 1px solid #0078d4; color: white; padding: 6px 12px; border-radius: 2px; display: inline-block;"
+						>
+							Download Microsoft Edge
+						</a>
+						<a
+							href="https://learn.microsoft.com/en-us/lifecycle/faq/internet-explorer-microsoft-edge"
+							style="background-color: white; padding: 6px 12px; border: 1px solid #505050; color: #171717; border-radius: 2px; display: inline-block;"
+						>
+							More info about Internet Explorer and Microsoft Edge
+						</a>
+					</div>
+				</div>
+			</div>
+			<!-- site header -->
+			<div
+				id="ms--site-header"
+				data-test-id="site-header-wrapper"
+				itemscope="itemscope"
+				itemtype="http://schema.org/Organization"
+			>
+				<div
+					id="ms--mobile-nav"
+					class="site-header display-none-tablet padding-inline-none gap-none"
+					data-bi-name="mobile-header"
+					data-test-id="mobile-header"
+				></div>
+				<div
+					id="ms--primary-nav"
+					class="site-header display-none display-flex-tablet"
+					data-bi-name="L1-header"
+					data-test-id="primary-header"
+				></div>
+				<div
+					id="ms--secondary-nav"
+					class="site-header display-none display-flex-tablet"
+					data-bi-name="L2-header"
+					data-test-id="secondary-header"
+					
+				></div>
+			</div>
+			
+		<!-- banner -->
+		<div data-banner>
+			<div id="disclaimer-holder"></div>
+			
+		</div>
+		<!-- banner end -->
+	
+		</div>
+	</header>
+				 <section
+					id="layout-body-menu"
+					class="layout-body-menu border-right display-flex background-color-body-medium"
+					data-bi-name="menu"
+			  >
+					
+		<div
+			id="left-container"
+			class="left-container display-none padding-none display-block-tablet width-full display-none-until-layout-restored"
+			data-toc-container="true"
+		>
+			<div
+				id="ms--toc-content"
+				class="padding-left-sm padding-right-none padding-bottom-sm height-full"
+			>
+				<nav
+					id="affixed-left-container"
+					class="margin-top-xxs-tablet position-sticky display-flex flex-direction-column width-full"
+					aria-label="Primary"
+					data-bi-name="left-toc"
+					role="navigation"
+				>
+					<div
+						id="ms--collapsible-toc-header"
+						class="display-flex flex-direction-row-reverse justify-content-center align-items-center margin-bottom-xxs margin-right-xxs"
+					>
+						<button
+							type="button"
+							class="button button-clear button-sm inner-focus"
+							data-collapsible-toc-toggle
+							aria-expanded="true"
+							hidden
+							aria-controls="ms--toc-content"
+							aria-label="Table of contents"
+						>
+							<span class="icon icon-mirrored-rtl" aria-hidden="true">
+								<span
+									class="docon docon-panel-left-contract display-none-layout-menu-collapsed"
+								></span>
+								<span
+									class="docon docon-panel-left-expand display-none display-inline-layout-menu-collapsed"
+								></span>
+							</span>
+						</button>
+						<div
+							id="ms--collapsible-toc-moniker-slot"
+							class="flex-grow-1 display-none-layout-menu-collapsed"
+						></div>
+					</div>
+				</nav>
+			</div>
+		</div>
+	
+			  </section>
+
+				<main
+					id="main"
+					role="main"
+					class="layout-body-main "
+					data-bi-name="content"
+					lang="en-us"
+					dir="ltr"
+				>
+					
+			<div
+		id="ms--content-header"
+		class="content-header default-focus border-bottom-none"
+		data-bi-name="content-header"
+	>
+		<div class="content-header-controls margin-xxs margin-inline-sm-tablet">
+			<button
+				type="button"
+				class="contents-button button button-sm margin-right-xxs"
+				data-bi-name="contents-expand"
+				aria-haspopup="true"
+				data-contents-button
+			>
+				<span class="icon" aria-hidden="true"><span class="docon docon-menu"></span></span>
+				<span class="contents-expand-title"> Table of contents </span>
+			</button>
+			<button
+				type="button"
+				class="ap-collapse-behavior ap-expanded button button-sm"
+				data-bi-name="ap-collapse"
+				aria-controls="action-panel"
+			>
+				<span class="icon" aria-hidden="true"><span class="docon docon-exit-mode"></span></span>
+				<span>Exit editor mode</span>
+			</button>
+		</div>
+	</div> 
+		<div
+			id="action-panel"
+			role="region"
+			aria-label="Action Panel"
+			class="action-panel"
+			tabindex="-1"
+		></div>
+	
+			<div
+				data-main-column
+				class="reading-width margin-inline-auto layout-padding padding-top-none padding-top-sm-tablet padding-bottom-sm"
+			>
+				<div>
+					
+		<div id="article-header" class="background-color-body margin-bottom-xs display-none-print">
+			<div class="display-flex align-items-center justify-content-space-between">
+				
+		<details
+			id="article-header-breadcrumbs-overflow-popover"
+			class="popover popover-left"
+			data-for="article-header-breadcrumbs"
+		>
+			<summary
+				class="button button-clear button-primary button-sm inner-focus"
+				aria-label="All breadcrumbs"
+			>
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-more"></span>
+				</span>
+			</summary>
+			<div id="article-header-breadcrumbs-overflow" class="popover-content"></div>
+		</details>
+
+		<bread-crumbs
+			id="article-header-breadcrumbs"
+			role="group"
+			aria-label="Breadcrumbs"
+			data-test-id="article-header-breadcrumbs"
+			class="overflow-hidden flex-grow-1 margin-right-sm margin-right-md-tablet margin-right-lg-desktop margin-left-negative-xxs padding-left-xxs"
+		></bread-crumbs>
+	 
+		<div
+			id="article-header-page-actions"
+			class="opacity-none margin-left-auto display-flex flex-wrap-no-wrap align-items-stretch"
+		>
+			
+		<button
+			class="button button-sm border-none inner-focus display-none-tablet flex-shrink-0 "
+			data-bi-name="ask-learn-assistant-entry"
+			data-test-id="ask-learn-assistant-modal-entry-mobile"
+			data-ask-learn-modal-entry
+			
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-label="Ask Learn"
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+		</button>
+		<button
+			class="button button-sm display-none display-inline-flex-tablet display-none-desktop flex-shrink-0 margin-right-xxs border-color-ask-learn "
+			data-bi-name="ask-learn-assistant-entry"
+			
+			data-test-id="ask-learn-assistant-modal-entry-tablet"
+			data-ask-learn-modal-entry
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+		<button
+			class="button button-sm display-none flex-shrink-0 display-inline-flex-desktop margin-right-xxs border-color-ask-learn "
+			data-bi-name="ask-learn-assistant-entry"
+			
+			data-test-id="ask-learn-assistant-flyout-entry"
+			data-ask-learn-flyout-entry
+			data-flyout-button="toggle"
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-controls="ask-learn-flyout"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+	 
+
+			<details class="popover popover-right" id="article-header-page-actions-overflow">
+				<summary
+					class="justify-content-flex-start button button-clear button-sm button-primary inner-focus"
+					aria-label="More actions"
+					title="More actions"
+				>
+					<span class="icon" aria-hidden="true">
+						<span class="docon docon-more-vertical"></span>
+					</span>
+				</summary>
+				<div class="popover-content">
+					
+		<button
+			type="button"
+			id="ms--focus-mode-button"
+			data-focus-mode
+			data-bi-name="focus-mode-entry"
+			data-page-action-item="overflow-all"
+			data-popover-close
+			class="button button-clear button-sm button-block justify-content-flex-start text-align-left inner-focus display-none display-inline-flex-tablet"
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-glasses"></span>
+			</span>
+			<span>Reading mode</span>
+		</button>
+	 
+		<button
+			data-page-action-item="overflow-mobile"
+			type="button"
+			class="display-block-layout-menu-collapsed button-block button-sm inner-focus button button-clear display-none-tablet justify-content-flex-start text-align-left"
+			data-bi-name="contents-expand"
+			data-contents-button
+			data-popover-close
+		>
+			<span class="icon" aria-hidden="true"
+				><span class="docon docon-editor-list-bullet"></span
+			></span>
+			<span class="contents-expand-title">Table of contents</span>
+		</button>
+	 
+		<a
+			id="lang-link-overflow"
+			class="button-sm inner-focus button button-clear button-block justify-content-flex-start text-align-left"
+			data-bi-name="language-toggle"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			data-read-in-link
+			href="#"
+			hidden
+		>
+			<span class="icon" aria-hidden="true" data-read-in-link-icon>
+				<span class="docon docon-locale-globe"></span>
+			</span>
+			<span data-read-in-link-text>Read in English</span>
+		</a>
+	
+					
+		<button
+			type="button"
+			class="collection button button-clear button-sm button-block justify-content-flex-start text-align-left inner-focus"
+			data-list-type="collection"
+			data-bi-name="collection"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			data-popover-close
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-circle-addition"></span>
+			</span>
+			<span class="collection-status">Add</span>
+		</button>
+	 
+		<button
+			type="button"
+			class="collection button button-block button-clear button-sm justify-content-flex-start text-align-left inner-focus"
+			data-list-type="plan"
+			data-bi-name="plan"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			data-popover-close
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-circle-addition"></span>
+			</span>
+			<span class="plan-status">Add to Plans</span>
+		</button>
+	 
+					
+		<a
+			data-contenteditbtn
+			class="button button-clear button-block button-sm inner-focus justify-content-flex-start text-align-left text-decoration-none"
+			data-bi-name="edit"
+			data-page-action-item="overflow-all"
+			data-check-hidden="true"
+			hidden
+			href=""
+			data-original_content_git_url="https://github.com/MicrosoftDocs/typography/blob/live/typographydocs/opentype/spec/otff.md"
+			data-original_content_git_url_template="{repo}/blob/{branch}/typographydocs/opentype/spec/otff.md"
+			data-pr_repo=""
+			data-pr_branch=""
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-edit-outline"></span>
+			</span>
+			<span>Edit</span>
+		</a>
+	  
+		<hr class="margin-block-xxs" />
+		
+				<button
+					class="button button-block button-clear button-sm justify-content-flex-start text-align-left inner-focus"
+					type="button"
+					data-bi-name="copy-markdown"
+					data-page-action-item="overflow-all"
+					data-copy-markdown
+					data-copy-state="idle"
+					data-check-hidden="true"
+				>
+					<span class="icon color-primary" aria-hidden="true">
+						<span data-show-when="idle" class="docon docon-code-lang"></span>
+						<span data-show-when="loading" class="loader" hidden></span>
+						<span data-show-when="success" class="docon docon-check-mark" hidden></span>
+					</span>
+					<span>Copy Markdown</span>
+				</button>
+		   
+				<button
+					class="button button-block button-clear button-sm justify-content-flex-start text-align-left inner-focus"
+					type="button"
+					data-bi-name="print"
+					data-page-action-item="overflow-all"
+					data-popover-close
+					data-print-page
+					data-check-hidden="true"
+				>
+					<span class="icon color-primary" aria-hidden="true">
+						<span class="docon docon-print"></span>
+					</span>
+					<span>Print</span>
+				</button>
+		  
+	
+				</div>
+			</details>
+		</div>
+	
+			</div>
+		</div>
+	  
+		<!-- privateUnauthorizedTemplate is hidden by default -->
+		<div unauthorized-private-section data-bi-name="permission-content-unauthorized-private" hidden>
+			<hr class="hr margin-top-xs margin-bottom-sm" />
+			<div class="notification notification-info">
+				<div class="notification-content">
+					<p class="margin-top-none notification-title">
+						<span class="icon" aria-hidden="true"
+							><span class="docon docon-exclamation-circle-solid"></span
+						></span>
+						<span>Note</span>
+					</p>
+					<p class="margin-top-none authentication-determined not-authenticated">
+						Access to this page requires authorization. You can try <a class="docs-sign-in" href="#" data-bi-name="permission-content-sign-in">signing in</a> or <a  class="docs-change-directory" data-bi-name="permisson-content-change-directory">changing directories</a>.
+					</p>
+					<p class="margin-top-none authentication-determined authenticated">
+						Access to this page requires authorization. You can try <a class="docs-change-directory" data-bi-name="permisson-content-change-directory">changing directories</a>.
+					</p>
+				</div>
+			</div>
+		</div>
+	
+					<div class="content"><h1 id="the-opentype-font-file">The OpenType Font File</h1></div>
+					
+		<div
+			id="article-metadata"
+			data-bi-name="article-metadata"
+			data-test-id="article-metadata"
+			class="page-metadata-container display-flex gap-xxs justify-content-space-between align-items-center flex-wrap-wrap"
+		>
+			 
+				<div
+					id="user-feedback"
+					class="margin-block-xxs display-none display-none-print"
+					hidden
+					data-hide-on-archived
+				>
+					
+		<button
+			id="user-feedback-button"
+			data-test-id="conceptual-feedback-button"
+			class="button button-sm button-clear button-primary display-none"
+			type="button"
+			data-bi-name="user-feedback-button"
+			data-user-feedback-button
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-like"></span>
+			</span>
+			<span>Feedback</span>
+		</button>
+	
+				</div>
+		  
+		</div>
+	 
+		<div data-id="ai-summary" class="display-none-print">
+			<div id="ms--ai-summary-cta" class="margin-top-xs display-flex align-items-center">
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-sparkle-fill gradient-text-vivid"></span>
+				</span>
+				<button
+					id="ms--ai-summary"
+					type="button"
+					class="tag tag-sm tag-suggestion margin-left-xxs"
+					data-test-id="ai-summary-cta"
+					data-bi-name="ai-summary-cta"
+					data-an="ai-summary"
+				>
+					<span class="ai-summary-cta-text">
+						Summarize this article for me
+					</span>
+				</button>
+			</div>
+			<!-- Slot where the client will render the summary card after the user clicks the CTA -->
+			<div id="ms--ai-summary-header" class="margin-top-xs"></div>
+		</div>
+	 
+		<nav
+			id="center-doc-outline"
+			class="doc-outline display-none-desktop display-none-print margin-bottom-sm"
+			data-bi-name="intopic toc"
+			aria-label="In this article"
+		>
+			<h2 id="ms--in-this-article" class="title is-6 margin-block-xs">
+				In this article
+			</h2>
+		</nav>
+	 <div class="content"><p>An OpenType font file contains data, in table format, used for rendering of text. Portions of the data are used by applications to calculate the layout of text using the font; that is, the selection of glyphs and their placement within a line. Other data provide descriptions of glyphs as TrueType or Compact Font Format (CFF) outlines. Still other data can provide monochromatic or color bitmaps, SVG documents or binary, 2D vector graphics compositions as alternate glyph descriptions. The font data also includes meta-information, such as name strings that can be used to present the font as an available choice in a font-picker user interface. Each of these types of data is stored in one or more tables, each designed for a particular purpose.</p>
+<p><a id="filenames"></a></p>
+<h2 id="filenames">Filenames</h2>
+<p>OpenType font files may have the extension .OTF, .TTF, .OTC or .TTC. (The extension may be upper or lower case.) The extensions .OTC and .TTC should only be used for <a href="#collections" data-linktype="self-bookmark">font collection</a> files. For additional information on filename extension conventions, see “Filenames” in <a href="recom#filenames" data-linktype="relative-path">Recommendations for OpenType fonts</a>.</p>
+<p><a id="dataTypes"></a></p>
+<h2 id="data-types">Data Types</h2>
+<p>The following data types are used in the OpenType font file. All OpenType fonts use big-endian (network) byte order:</p>
+<table>
+<tbody>
+<tr>
+<th>Data Type</th>
+<th>Description</th>
+</tr>
+<tr id="dt_uint8">
+<td>uint8</td>
+<td>8-bit unsigned integer.</td>
+</tr>
+<tr id="dt_int8">
+<td>int8</td>
+<td>8-bit signed integer.</td>
+</tr>
+<tr id="dt_uint16">
+<td>uint16</td>
+<td>16-bit unsigned integer.</td>
+</tr>
+<tr id="dt_int16">
+<td>int16</td>
+<td>16-bit signed integer.</td>
+</tr>
+<tr id="dt_uint24">
+<td>uint24</td>
+<td>24-bit unsigned integer.</td>
+</tr>
+<tr id="dt_uint32">
+<td>uint32</td>
+<td>32-bit unsigned integer.</td>
+</tr>
+<tr id="dt_int32">
+<td>int32</td>
+<td>32-bit signed integer.</td>
+</tr>
+<tr id="dt_Fixed">
+<td>Fixed</td>
+<td>32-bit signed fixed-point number (16.16)</td>
+</tr>
+<tr id="dt_FWORD">
+<td>FWORD</td>
+<td>int16 that describes a quantity in font design units.</td>
+</tr>
+<tr id="dt_UFWORD">
+<td>UFWORD</td>
+<td>uint16 that describes a quantity in font design units.</td>
+</tr>
+<tr id="dt_F2DOT14">
+<td>F2DOT14</td>
+<td>16-bit signed fixed number with the low 14 bits of fraction (2.14).</td>
+</tr>
+<tr id="dt_LONGDATETIME">
+<td>LONGDATETIME</td>
+<td>Date and time represented in number of seconds since 12:00 midnight, January 1, 1904, UTC. The value is represented as a signed 64-bit integer.</td>
+</tr>
+<tr id="dt_Tag">
+<td>Tag</td>
+<td>Array of four uint8s (length = 32 bits) used to identify a table, design-variation axis, script, language system, feature, or baseline.</td>
+</tr>
+<tr id="dt_offset8">
+<td>Offset8</td>
+<td>8-bit offset to a table, same as uint8, NULL offset = 0x00</td>
+</tr>
+<tr id="dt_Offset16">
+<td>Offset16</td>
+<td>Short offset to a table, same as uint16, NULL offset = 0x0000</td>
+</tr>
+<tr id="dt_Offset24">
+<td>Offset24</td>
+<td>24-bit offset to a table, same as uint24, NULL offset = 0x000000</td>
+</tr>
+<tr id="dt_Offset32">
+<td>Offset32</td>
+<td>Long offset to a table, same as uint32, NULL offset = 0x00000000</td>
+</tr>
+<tr>
+<td>Version16Dot16</td>
+<td>Packed 32-bit value with major and minor version numbers. (See <a href="#table-version-numbers" data-linktype="self-bookmark">Table Version Numbers</a>.)</td>
+</tr>
+</tbody>
+</table>
+<p>The F2DOT14 format consists of a signed, 2’s complement integer and an unsigned fraction. To compute the actual value, take the integer and add the fraction. Examples of 2.14 values are:</p>
+<p><a id="examplesF2DOT14"></a></p>
+<table>
+<tbody>
+<tr>
+<th>Decimal Value</th>
+<th>Hex Value</th>
+<th>Integer</th>
+<th>Fraction</th>
+</tr>
+<tr>
+<td>1.999939</td>
+<td>0x7fff</td>
+<td>1</td>
+<td>16383/16384</td>
+</tr>
+<tr>
+<td>1.75</td>
+<td>0x7000</td>
+<td>1</td>
+<td>12288/16384</td>
+</tr>
+<tr>
+<td>0.000061</td>
+<td>0x0001</td>
+<td>0</td>
+<td>1/16384</td>
+</tr>
+<tr>
+<td>0.0</td>
+<td>0x0000</td>
+<td>0</td>
+<td>0/16384</td>
+</tr>
+<tr>
+<td>-0.000061</td>
+<td>0xffff</td>
+<td>-1</td>
+<td>16383/16384</td>
+</tr>
+<tr>
+<td>-2.0</td>
+<td>0x8000</td>
+<td>-2</td>
+<td>0/16384</td>
+</tr>
+</tbody>
+</table>
+<p>A Tag value is a uint8 array. Each byte within the array must have a value in the range 0x20 to 0x7E. This corresponds to the range of values of Unicode Basic Latin characters in UTF-8 encoding, which is the same as the printable ASCII characters. As a result, a Tag value can be re-interpreted as a four-character sequence, which is conventionally how they are referred to. Formally, however, the value is a byte array. When re-interpreted as characters, the Tag value is case sensitive. It must have one to four non-space characters, padded with trailing spaces (byte value 0x20). A space character must not be followed by a non-space character.</p>
+<p>Within this specification, many structures are defined in terms of the data types listed above. Structures are characterized as either <em>records</em> or <em>tables</em>. The distinction between records and tables is based on these general criteria:</p>
+<ul>
+<li>Tables are referenced by offsets. If a table contains an offset to a sub-structure, the offset is normally from the start of that table.</li>
+<li>Records occur sequentially within a parent structure, either within a sequence of table fields or within an array of records of a given type. If a record contains an offset to a sub-structure, that structure is logically a subtable of the record’s parent table and the offset is normally from the start of the parent table.</li>
+</ul>
+<p>In some cases, fields for subtable offsets are documented as permitting NULL values when the given subtable is optional. For example, in the <a href="base#base-header" data-linktype="relative-path">BASE table header</a>, the horizAxisOffset and vertAxisOffset fields may be NULL, meaning that either subtable (or both) is optional. A NULL subtable offset always indicates that the given subtable is not present. Applications must never interpret a NULL offset value as the offset to subtable data. For cases in which subtable offset fields are not documented as permitting NULL values, font compilers must include a subtable of the indicated format, even if it is a header stub without further data (for example, a <a href="chapter2#coverage-table" data-linktype="relative-path">coverage</a> table with no glyph IDs). Applications parsing font data should, however, anticipate non-conformant font data that has a NULL subtable offset where only a non-NULL value is expected.</p>
+<p><a id="versionNumbers"></a></p>
+<h2 id="table-version-numbers">Table Version Numbers</h2>
+<p>Most tables have version numbers, and the version number for the entire font is contained in the <a href="#tabledirectory" data-linktype="self-bookmark">table directory</a>. Note that there are five different table version number types, each with its own numbering scheme.</p>
+<ul>
+<li>A single uint16 field. This is used in a number of tables, usually with versions starting at zero (0).</li>
+<li>Separate, uint16 major and minor version fields. This is used in a number of tables, usually with versions starting at 1.0.</li>
+<li>A uint32 field with enumerated values.</li>
+<li>A uint32 field with a numeric value. This is used only in the <a href="dsig" data-linktype="relative-path">DSIG</a> and <a href="meta" data-linktype="relative-path">'meta'</a> tables.</li>
+<li>A Version16Dot16 field for major/minor version numbers. This is used only in the <a href="maxp" data-linktype="relative-path">'maxp'</a>, <a href="post" data-linktype="relative-path">'post'</a> and <a href="vhea" data-linktype="relative-path">'vhea'</a> tables.</li>
+</ul>
+<p>The Version16Dot16 type is used for the version field of certain tables, and only for reasons of backward compatibility. (In earlier versions, these fields were documented as using a Fixed value, but had minor version numbers that did not follow the definition of the Fixed type.) Version16Dot16 is a packed value: the upper 16 bits comprise a major version number, and the lower 16 bits, a minor version. Non-zero minor version numbers are represented using digits 0 to 9 in the highest-order nibbles of the lower 16 bits. For example, the version field of 'maxp' table version 0.5 is 0x00005000, and that of 'vhea' table version 1.1 is 0x00011000. This type is used only in the 'maxp', 'post' and 'vhea' tables, and will not be used for any other tables in the future.</p>
+<p>The table directory uses a uint32 field, sfntVersion, with an enumeration of defined values, some of which represent four-character tags; see the section below, “Organization of an OpenType Font”, for details.</p>
+<p>Implementations reading tables must include code to check version numbers so that, if and when the format and version number changes, older implementations will handle newer versions gracefully.</p>
+<p>Minor version number changes always imply format changes that are compatible extensions. If an implementation understands a major version number, then it can safely proceed with reading the table. If the minor version is greater than the latest version recognized by the implementation, then the extension fields will be undetectable to the implementation.</p>
+<p>For purposes of compatibility, version numbers that are represented using a single uint16 or uint32 value are treated like a minor version number, and any format changes are compatible extensions.</p>
+<p>Note that some field values that were undefined or reserved in an earlier revision may be assigned meanings in a minor version change. Implementations should never make assumptions regarding reserved or unassigned values or bits in bit fields, and can ignore them if encountered. When writing font data, tools should always write zero for reserved fields or bits. Validators should warn of any non-zero values for fields or bits that are not defined for the given version against which data is being validated.</p>
+<p>If the major version is not recognized, the implementation must not read the table as it can make no assumptions regarding interpretation of the binary data. The implementation should treat the table as missing.</p>
+<p><a id="otFontOrganization"></a></p>
+<h2 id="organization-of-an-opentype-font">Organization of an OpenType Font</h2>
+<p><a id="tabledirectory"></a>
+<a id="offsetTable"></a></p>
+<h3 id="table-directory">Table Directory</h3>
+<p>A key characteristic of the OpenType format is the TrueType sfnt “wrapper”, which provides organization for a collection of tables in a general and extensible manner.</p>
+<p>The OpenType font starts with the table directory, which is a directory of the top-level tables in a font. If the font file contains only one font, the table directory will begin at byte 0 of the file. If the font file is an OpenType Font Collection file (see below), the beginning point of the table directory for each font is indicated in the TTCHeader.</p>
+<p><em>TableDirectory:</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr id="sfntVersion">
+<td>uint32</td>
+<td>sfntVersion</td>
+<td>0x00010000 or 0x4F54544F ('OTTO') — see below.</td>
+</tr>
+<tr id="numTables">
+<td>uint16</td>
+<td>numTables</td>
+<td>Number of tables.</td>
+</tr>
+<tr id="searchRange">
+<td>uint16</td>
+<td>searchRange</td>
+<td>Maximum power of 2 less than or equal to numTables, times 16 ((2**floor(log2(numTables))) * 16, where “**” is an exponentiation operator).</td>
+</tr>
+<tr id="entrySelector">
+<td>uint16</td>
+<td>entrySelector</td>
+<td>Log<sub>2</sub> of the maximum power of 2 less than or equal to numTables (log<sub>2</sub>(searchRange/16), which is equal to floor(log<sub>2</sub>(numTables))).</td>
+</tr>
+<tr id="rangeShift">
+<td>uint16</td>
+<td>rangeShift</td>
+<td>numTables times 16, minus searchRange ((numTables * 16) - searchRange).</td>
+</tr>
+<tr id="tableRecords">
+<td>TableRecord</td>
+<td>tableRecords[numTables]</td>
+<td>Table records array—one for each top-level table in the font.</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><em>Note:</em> In the preceding table, the symbol “**” is an exponentiation operator, as used in several programming languages.</p>
+</blockquote>
+<p>OpenType fonts that contain TrueType outlines should use the value of 0x00010000 for sfntVersion. OpenType fonts containing CFF data (version 1 or 2) should use 0x4F54544F ('OTTO', when re-interpreted as a Tag) for sfntVersion.</p>
+<blockquote>
+<p><em>Note:</em> <a href="https://developer.apple.com/fonts/TrueType-Reference-Manual/" data-linktype="external">Apple's TrueType Reference Manual</a> allows for 'true' and 'typ1' for sfntVersion. These version tags should not be used for OpenType fonts.</p>
+</blockquote>
+<p>The table directory format allows for a large number of tables. To assist in quick binary searches, the searchRange, entrySelector and rangeShift fields are included as parameters that may be used in configuring search algorithms. Binary search is optimal when the number of entries is a power of two. The searchRange field provides the largest number of items that can be searched with that constraint (maximum power of two). The rangeShift field provides the remaining number of items that would also need to be searched. The entrySelector field indicates the maximum number of levels into the binary tree will need to be entered. Values are multiplied by 16, which is the size of each TableRecord.</p>
+<p>In early implementations on devices with limited hardware capabilities, optimizations provided by the searchRange, entrySelector and rangeShift fields were of high importance. They have less importance on modern devices, but may still be used in some implementations. However, incorrect values could potentially be used as an attack vector against some implementations. Since these values can be derived from the numTables field when the file is parsed, it is strongly recommended that parsing implementations not rely on the searchRange, entrySelector and rangeShift fields in the font but derive them independently from numTables. Font files, however, should continue to provide valid values for these fields to maintain compatibility with all existing implementations.</p>
+<p>The table directory ends with the tableRecords array. The TableRecord format is as follows.</p>
+<p><a id="tableRecord"></a></p>
+<p><em>TableRecord:</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr id="tblrec_tag">
+<td>Tag</td>
+<td>tableTag</td>
+<td>Table identifier.</td>
+</tr>
+<tr id="tblrec_checkSum">
+<td>uint32</td>
+<td>checksum</td>
+<td>Checksum for this table.</td>
+</tr>
+<tr id="tblrec_offset">
+<td>Offset32</td>
+<td>offset</td>
+<td>Offset from beginning of font file.</td>
+</tr>
+<tr id="tblrec_length">
+<td>uint32</td>
+<td>length</td>
+<td>Length of this table.</td>
+</tr>
+</tbody>
+</table>
+<p>Table tags are the names given to tables in the OpenType font file. The tableRecords array makes it possible for a given font to contain only those tables it actually needs. As a result, there is no standard value for numTables. The records in the array must be sorted in ascending order by tag.</p>
+<p>For requirements of Tag values, see <a href="#dataTypes" data-linktype="self-bookmark">Data Types</a>, above. Several tags and their associated table formats are defined in this specification. For table tags defined in this specification, a font resource should have at most one table record using a given tag. If a font resource does contain more than one table of a given type, behaviour is unpredictable: apps or platforms may select one of the tables arbitrarily, or may reject the font as invalid.</p>
+<p>Platform vendors may define additional tables and associated tags to provide platform-specific functionality See, for example, Apple’s <a href="https://developer.apple.com/fonts/TrueType-Reference-Manual/" data-linktype="external">TrueType Reference Manual</a> which defines various tables with associated tags not defined in OpenType. Some font development tools may also define special tables. Fonts that contain such additional tables can still qualify as OpenType fonts if they satisfy the requirements of this specification. For custom tables defined outside this specification, an external specification of such a table may permit multiple tables of that type within a single font resource.</p>
+<blockquote>
+<p><em>Note:</em> Vendors should notify Microsoft when they define custom tags to ensure forward compatibility in the event of future expansion of OpenType.</p>
+</blockquote>
+<blockquote>
+<p><em>Note:</em> <a href="https://developer.apple.com/fonts/TrueType-Reference-Manual/RM06/Chap6.html" data-linktype="external">Apple’s specification</a> stipulates that tag names consisting of all lower case letters are reserved for Apple’s use.</p>
+</blockquote>
+<p>All tables must begin on four-byte boundaries, and any remaining space between tables must be padded with zeros. The length of each table should be recorded in the table record with the actual length of data, not the padded length.</p>
+<blockquote>
+<p>Note: The requirement for four-byte alignment applies to top-level tables only and does not extend to sub-table offsets, records, or fields within tables or records.</p>
+</blockquote>
+<p>Some tables have an internal structure with subtables located at specified offsets, and as a result, it is possible to construct a font with data for different tables interleaved. In general, tables should be arranged contiguously without overlapping the ranges of distinct tables. In any case, however, table lengths measure a contiguous range of bytes that encompasses all of the data for a table. This applies to any subtables as well as to top-level tables.</p>
+<p><a id="checksums"></a></p>
+<h3 id="calculating-checksums">Calculating Checksums</h3>
+<p>Table checksums are the unsigned sum of the uint32 units of a given table. In C, the following function can be used to determine a checksum:</p>
+<pre><code>uint32
+CalcTableChecksum(uint32 *Table, uint32 Length)
+{
+uint32 Sum = 0L;
+uint32 *EndPtr = Table+((Length+3) &amp; ~3) / sizeof(uint32);
+while (Table &lt; EndPtr)
+    Sum += *Table++;
+return Sum;
+}
+</code></pre>
+<blockquote>
+<p><em>Note:</em> This function assumes that the length of any table is a multiple of four bytes, or that tables are padded with zero to four-byte aligned offsets. Actual table lengths recorded in the table directory should not include padding, however. To accommodate data with a length that is not a multiple of four, the above algorithm must be modified to treat the data as though it contains zero padding to a length that is a multiple of four.</p>
+</blockquote>
+<p>The 'head' table is a special case in checksum calculations, as it includes a checksumAdjustment field that is calculated and written after the table’s checksum is calculated and written into the table directory entry, necessarily invalidating that checksum value.</p>
+<p>When generating font data, to calculate and write the 'head' table checksum and checksumAdjustment field, do the following:</p>
+<ol>
+<li>Set the checksumAdjustment field to 0.</li>
+<li>Calculate the checksum for all tables including the 'head' table and enter the value for each table into the corresponding record in the table directory.</li>
+<li>Calculate the checksum for the entire font.</li>
+<li>Subtract that value from 0xB1B0AFBA.</li>
+<li>Store the result in the 'head' table checksumAdjustment field.</li>
+</ol>
+<p>An application attempting to verify that the 'head' table has not changed should calculate the checksum for that table assuming that the checksumAdjustment value is zero, rather than the actual value in the font, before comparing the result with the 'head' table record in the table directory.</p>
+<p>Within a font collection file (see below), table checksums must reflect the tables as they are in the collection file. The checksumAdjustment field in the 'head' table is not used for collection files and may be set to zero.</p>
+<p><a id="collections"></a></p>
+<h2 id="font-collections">Font Collections</h2>
+<p>An OpenType Font Collection (either TTC or OTC, formerly known as TrueType Collection) is a means of delivering multiple OpenType font resources in a single file structure. The format for font collections allows font tables that are identical between two or more fonts to be shared. Font collections containing outline glyph data (TrueType, CFF, CFF2 or SVG) are most useful when the fonts to be delivered together share many glyphs in common. By allowing multiple fonts to share glyph sets and other common font tables, font collections can result in a significant saving of file space.</p>
+<p>For example, a group of Japanese fonts may each have their own designs for the kana glyphs, but share identical designs for the kanji. With ordinary OpenType font files, the only way to include the common kanji glyphs is to copy their glyph data into each font. Since the kanji represent much more data than the kana, this results in a great deal of wasteful duplication of glyph data. Font collections were defined to solve this problem.</p>
+<blockquote>
+<p><em>Note:</em>
+Even though the original definition of Font Collection (as part of the TrueType specification) was intended to be used with fonts containing TrueType outlines, and this constraint was maintained in earlier OpenType versions, this is no longer a constraint in OpenType. Font collection files may contain various types of outlines (or a mix of them), regardless of whether or not fonts have layout tables present. For backward compatibility and simplicity, the description of the font collection file structure is using the term “TrueType Collection”, or “TTC”, though it is understood that it is used to identify a generic font collection structure containing any type of outline tables.</p>
+</blockquote>
+<blockquote>
+<p><em>Note:</em> An OpenType variable font is functionally equivalent to multiple non-variable fonts. Variable fonts do not need to be contained within a collection file. A collection file can include one or even multiple variable fonts, however, and may even combine variable and non-variable fonts.</p>
+</blockquote>
+<p><a id="collectionFile"></a></p>
+<h3 id="the-font-collection-file-structure">The Font Collection File Structure</h3>
+<p>A font collection file consists of a single TTC header table, one or more table directories (each corresponding to a different font resource), and a number of OpenType tables. The TTC header must be located at the beginning of the TTC file.</p>
+<p>The TTC file must contain a complete table directory for each font resource. The same TableDirectory format is used for each font resource in a collection file as is used in a non-collection file. The table offsets in all table directories within a TTC file are measured from the beginning of the TTC file.</p>
+<p>Each OpenType table in a TTC file is referenced through the table directory of each font which uses that table. Some of the OpenType tables must appear multiple times, once for each font included in the TTC; while other tables may be shared by multiple fonts in the TTC.</p>
+<p>As an example, consider a TTC file which combines two Japanese fonts (Font1 and Font2). The fonts have different kana designs (Kana1 and Kana2) but use the same design for kanji. The TTC file contains a single 'glyf' table which includes both designs of kana together with the kanji; both fonts’ table directories point to this 'glyf' table. But each font’s table directory points to a different 'cmap' table, which identifies the glyph set to use. Font1’s 'cmap' table points to the Kana1 region of the 'loca' and 'glyf' tables for kana glyphs, and to the kanji region for the kanji. Font2’s 'cmap' table points to the Kana2 region of the 'loca' and 'glyf' tables for kana glyphs, and to the same kanji region for the kanji.</p>
+<p>The tables that should have a unique copy per font are those that are used by the system in identifying the font and its character mapping, including 'cmap', 'name', and OS/2. The tables that should be shared by fonts in the TTC are those that define glyph and instruction data or use glyph indices to access data: 'glyf', 'loca', 'hmtx', 'hdmx', LTSH, 'cvt ', 'fpgm', 'prep', EBLC, EBDT, EBSC, 'maxp', and so on. In practice, any tables which have identical data for two or more fonts may be shared.</p>
+<blockquote>
+<p><em>Note:</em>
+When building a collection file from separate font files, close attention needs to be paid to the issue of glyph renumbering in a font and the side effects that can result in the 'cmap' table and elsewhere. The fonts to be merged also need to have compatible TrueType instructions; that is, their preprograms, function definitions, and control values cannot conflict.</p>
+</blockquote>
+<p>Collection files containing TrueType glyph outlines should use the file extension .TTC. Collection files containing CFF or CFF2 outlines should use the file extension .OTC.</p>
+<p><a id="ttcHeader"></a></p>
+<h3 id="ttc-header">TTC Header</h3>
+<p>There are two versions of the TTC header: Version 1.0 has been used for TTC files without digital signatures. Version 2.0 can be used for TTC files with <em>or</em> without digital signatures — if there’s no signature, then the last three fields of the version 2.0 header are left null.</p>
+<p>If a digital signature is used, the DSIG table for the file must be located at the end of the TTC file, following any other font tables. Signatures in a TTC file are expected to be Format 1 signatures.</p>
+<p>The purpose of the TTC header table is to locate the different table directories within a TTC file. The TTC header is located at the beginning of the TTC file (offset = 0). It consists of an identification tag, a version number, a count of the number of OpenType fonts in the file, and an array of offsets to each table directory.</p>
+<p><a id="ttcHeader_1"></a></p>
+<p><em>TTCHeader Version 1.0:</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr id="ttcTag_1">
+<td>Tag</td>
+<td>ttcTag</td>
+<td>Font Collection ID string: 'ttcf' (used for fonts with CFF or CFF2 outlines, as well as TrueType outlines)</td>
+</tr>
+<tr id="majorVersion_1">
+<td>uint16</td>
+<td>majorVersion</td>
+<td>Major version of the TTCHeader, = 1.</td>
+</tr>
+<tr id="minorVersion_1">
+<td>uint16</td>
+<td>minorVersion</td>
+<td>Minor version of the TTCHeader, = 0.</td>
+</tr>
+<tr id="numFonts_1">
+<td>uint32</td>
+<td>numFonts</td>
+<td>Number of fonts in TTC</td>
+</tr>
+<tr id="offsetTable_1">
+<td>Offset32</td>
+<td>tableDirectoryOffsets[numFonts]</td>
+<td>Array of offsets to the TableDirectory for each font from the beginning of the file</td>
+</tr>
+</tbody>
+</table>
+<p><a id="ttcHeader_2"></a></p>
+<p><em>TTCHeader Version 2.0:</em></p>
+<table>
+<tbody>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>Description</th>
+</tr>
+<tr id="ttcTag_2">
+<td>Tag</td>
+<td>ttcTag</td>
+<td>Font Collection ID string: 'ttcf'</td>
+</tr>
+<tr id="majorVersion_2">
+<td>uint16</td>
+<td>majorVersion</td>
+<td>Major version of the TTCHeader, = 2.</td>
+</tr>
+<tr id="minorVersion_2">
+<td>uint16</td>
+<td>minorVersion</td>
+<td>Minor version of the TTCHeader, = 0.</td>
+</tr>
+<tr id="numFonts_2">
+<td>uint32</td>
+<td>numFonts</td>
+<td>Number of fonts in TTC</td>
+</tr>
+<tr id="offsetTable_2">
+<td>Offset32</td>
+<td>tableDirectoryOffsets[numFonts]</td>
+<td>Array of offsets to the TableDirectory for each font from the beginning of the file</td>
+</tr>
+<tr id="dsigTag_2">
+<td>uint32</td>
+<td>dsigTag</td>
+<td>Tag indicating that a DSIG table exists, 0x44534947 ('DSIG') (null if no signature)</td>
+</tr>
+<tr id="dsigLength_2">
+<td>uint32</td>
+<td>dsigLength</td>
+<td>The length (in bytes) of the DSIG table (null if no signature)</td>
+</tr>
+<tr id="dsigOffset_2">
+<td>uint32</td>
+<td>dsigOffset</td>
+<td>The offset (in bytes) of the DSIG table from the beginning of the TTC file (null if no signature)</td>
+</tr>
+</tbody>
+</table>
+<p><a id="ottables"></a></p>
+<h2 id="font-tables">Font Tables</h2>
+<p><a id="reqdTables"></a></p>
+<h3 id="required-tables">Required Tables</h3>
+<p>Whether TrueType or CFF outlines are used in an OpenType font, the following tables are required for the font to function correctly:</p>
+<table>
+<tbody>
+<tr>
+<th>Tag</th>
+<th>Name</th>
+</tr>
+<tr>
+<td><a href="cmap" data-linktype="relative-path">'cmap'</a></td>
+<td>Character to glyph mapping</td>
+</tr>
+<tr>
+<td><a href="head" data-linktype="relative-path">'head'</a></td>
+<td>Font header</td>
+</tr>
+<tr>
+<td><a href="hhea" data-linktype="relative-path">'hhea'</a></td>
+<td>Horizontal header</td>
+</tr>
+<tr>
+<td><a href="hmtx" data-linktype="relative-path">'hmtx'</a></td>
+<td>Horizontal metrics</td>
+</tr>
+<tr>
+<td><a href="maxp" data-linktype="relative-path">'maxp'</a></td>
+<td>Maximum profile</td>
+</tr>
+<tr>
+<td><a href="name" data-linktype="relative-path">'name'</a></td>
+<td>Naming table</td>
+</tr>
+<tr>
+<td><a href="os2" data-linktype="relative-path">OS/2</a></td>
+<td>OS/2 and Windows specific metrics</td>
+</tr>
+<tr>
+<td><a href="post" data-linktype="relative-path">'post'</a></td>
+<td>PostScript information</td>
+</tr>
+</tbody>
+</table>
+<p><a id="ttTables"></a></p>
+<h3 id="tables-related-to-truetype-outlines">Tables Related to TrueType Outlines</h3>
+<p>For OpenType fonts based on TrueType outlines, the following tables are used:</p>
+<table>
+<tbody>
+<tr>
+<th>Tag</th>
+<th>Name</th>
+</tr>
+<tr>
+<td><a href="cvt" data-linktype="relative-path">'cvt '</a></td>
+<td>Control Value Table (optional table)</td>
+</tr>
+<tr>
+<td><a href="fpgm" data-linktype="relative-path">'fpgm'</a></td>
+<td>Font program (optional table)</td>
+</tr>
+<tr>
+<td><a href="glyf" data-linktype="relative-path">'glyf'</a></td>
+<td>Glyph data</td>
+</tr>
+<tr>
+<td><a href="loca" data-linktype="relative-path">'loca'</a></td>
+<td>Index to location</td>
+</tr>
+<tr>
+<td><a href="prep" data-linktype="relative-path">'prep'</a></td>
+<td>Control Value Program (optional table)</td>
+</tr>
+<tr>
+<td><a href="gasp" data-linktype="relative-path">'gasp'</a></td>
+<td>Grid-fitting/Scan-conversion (optional table)</td>
+</tr>
+</tbody>
+</table>
+<p><a id="cffTables"></a></p>
+<h3 id="tables-related-to-cff-outlines">Tables Related to CFF Outlines</h3>
+<p>For OpenType fonts based on CFF outlines, the following tables are used:</p>
+<table>
+<tbody>
+<tr>
+<th>Tag</th>
+<th>Name</th>
+</tr>
+<tr>
+<td><a href="cff" data-linktype="relative-path">'CFF '</a></td>
+<td>Compact Font Format 1.0</td>
+</tr>
+<tr>
+<td><a href="cff2" data-linktype="relative-path">CFF2</a></td>
+<td>Compact Font Format 2.0</td>
+</tr>
+<tr>
+<td><a href="vorg" data-linktype="relative-path">VORG</a></td>
+<td>Vertical Origin (optional table)</td>
+</tr>
+</tbody>
+</table>
+<p>It is strongly recommended that CFF OpenType fonts that are used for vertical writing include a <a href="vorg" data-linktype="relative-path">Vertical Origin (VORG) table</a>.</p>
+<p><a id="svgTables"></a></p>
+<h3 id="table-related-to-svg-outlines">Table Related to SVG Outlines</h3>
+<table>
+<tbody>
+<tr>
+<th>Tag</th>
+<th>Name</th>
+</tr>
+<tr>
+<td><a href="svg" data-linktype="relative-path">'SVG '</a></td>
+<td>The SVG (Scalable Vector Graphics) table</td>
+</tr>
+</tbody>
+</table>
+<p><a id="bitmapTables"></a></p>
+<h3 id="tables-related-to-bitmap-glyphs">Tables Related to Bitmap Glyphs</h3>
+<table>
+<tbody>
+<tr>
+<th>Tag</th>
+<th>Name</th>
+</tr>
+<tr>
+<td><a href="ebdt" data-linktype="relative-path">EBDT</a></td>
+<td>Embedded bitmap data</td>
+</tr>
+<tr>
+<td><a href="eblc" data-linktype="relative-path">EBLC</a></td>
+<td>Embedded bitmap location data</td>
+</tr>
+<tr>
+<td><a href="ebsc" data-linktype="relative-path">EBSC</a></td>
+<td>Embedded bitmap scaling data</td>
+</tr>
+<tr>
+<td><a href="cbdt" data-linktype="relative-path">CBDT</a></td>
+<td>Color bitmap data</td>
+</tr>
+<tr>
+<td><a href="cblc" data-linktype="relative-path">CBLC</a></td>
+<td>Color bitmap location data</td>
+</tr>
+<tr>
+<td><a href="sbix" data-linktype="relative-path">'sbix'</a></td>
+<td>Standard bitmap graphics</td>
+</tr>
+</tbody>
+</table>
+<p>OpenType fonts may also contain bitmaps of glyphs, in addition to outlines. Hand-tuned bitmaps are especially useful in OpenType fonts for representing complex glyphs at very small sizes. If a bitmap for a particular size is provided in a font, it will be used by the system instead of the outline when rendering the glyph.</p>
+<p><a id="otlTables"></a></p>
+<h3 id="advanced-typographic-tables">Advanced Typographic Tables</h3>
+<p>Several optional tables support advanced typographic functions:</p>
+<table>
+<tbody>
+<tr>
+<th>Tag</th>
+<th>Name</th>
+</tr>
+<tr>
+<td><a href="base" data-linktype="relative-path">BASE</a></td>
+<td>Baseline data</td>
+</tr>
+<tr>
+<td><a href="gdef" data-linktype="relative-path">GDEF</a></td>
+<td>Glyph definition data</td>
+</tr>
+<tr>
+<td><a href="gpos" data-linktype="relative-path">GPOS</a></td>
+<td>Glyph positioning data</td>
+</tr>
+<tr>
+<td><a href="gsub" data-linktype="relative-path">GSUB</a></td>
+<td>Glyph substitution data</td>
+</tr>
+<tr>
+<td><a href="jstf" data-linktype="relative-path">JSTF</a></td>
+<td>Justification data</td>
+</tr>
+<tr>
+<td><a href="math" data-linktype="relative-path">MATH</a></td>
+<td>Math layout data</td>
+</tr>
+</tbody>
+</table>
+<p>For information on common table formats, please see <a href="chapter2" data-linktype="relative-path">OpenType Layout Common Table Formats</a> .</p>
+<p><a id="vartables"></a></p>
+<h3 id="tables-used-for-opentype-font-variations">Tables used for OpenType Font Variations</h3>
+<table>
+<tbody>
+<tr>
+<th>Tag</th>
+<th>Name</th>
+</tr>
+<tr>
+<td><a href="avar" data-linktype="relative-path">'avar'</a></td>
+<td>Axis variations</td>
+</tr>
+<tr>
+<td><a href="cvar" data-linktype="relative-path">'cvar'</a></td>
+<td>CVT variations (TrueType outlines only)</td>
+</tr>
+<tr>
+<td><a href="fvar" data-linktype="relative-path">'fvar'</a></td>
+<td>Font variations</td>
+</tr>
+<tr>
+<td><a href="gvar" data-linktype="relative-path">'gvar'</a></td>
+<td>Glyph variations (TrueType outlines only)</td>
+</tr>
+<tr>
+<td><a href="hvar" data-linktype="relative-path">HVAR</a></td>
+<td>Horizontal metrics variations</td>
+</tr>
+<tr>
+<td><a href="mvar" data-linktype="relative-path">MVAR</a></td>
+<td>Metrics variations</td>
+</tr>
+<tr>
+<td><a href="stat" data-linktype="relative-path">STAT</a></td>
+<td>Style attributes (required for variable fonts, optional for non-variable fonts)</td>
+</tr>
+<tr>
+<td><a href="vvar" data-linktype="relative-path">VVAR</a></td>
+<td>Vertical metrics variations</td>
+</tr>
+</tbody>
+</table>
+<p>For an overview of OpenType Font Variations and the specification of the interpolation algorithm used for variations, see <a href="otvaroverview" data-linktype="relative-path">OpenType Font Variations Overview</a>. For details regarding which tables are required or optional in variable fonts, see <a href="otvaroverview#vartables" data-linktype="relative-path">Variation Data Tables and Miscellaneous Requirements</a> in the Overview chapter.</p>
+<p>For information on common table formats used for variations, see <a href="otvarcommonformats" data-linktype="relative-path">OpenType Font Variations Common Table Formats</a>.</p>
+<p>Note that some variation-related formats may be used in tables other than the variations-specific tables listed above. In particular, the GDEF, BASE or COLR tables in a variable font can include variation data using common table formats. A CFF2 table in a variable font can also include variation data, though using formats that are specific to the CFF2 table.</p>
+<p><a id="colorTables"></a></p>
+<h3 id="tables-related-to-color-fonts">Tables Related to Color Fonts</h3>
+<table>
+<tbody>
+<tr>
+<th>Tag</th>
+<th>Name</th>
+</tr>
+<tr>
+<td><a href="colr" data-linktype="relative-path">COLR</a></td>
+<td>Color table</td>
+</tr>
+<tr>
+<td><a href="cpal" data-linktype="relative-path">CPAL</a></td>
+<td>Color palette table</td>
+</tr>
+<tr>
+<td><a href="cbdt" data-linktype="relative-path">CBDT</a></td>
+<td>Color bitmap data</td>
+</tr>
+<tr>
+<td><a href="cblc" data-linktype="relative-path">CBLC</a></td>
+<td>Color bitmap location data</td>
+</tr>
+<tr>
+<td><a href="sbix" data-linktype="relative-path">'sbix'</a></td>
+<td>Standard bitmap graphics</td>
+</tr>
+<tr>
+<td><a href="svg" data-linktype="relative-path">'SVG '</a></td>
+<td>The SVG (Scalable Vector Graphics) table</td>
+</tr>
+</tbody>
+</table>
+<p>Note that several of these tables were also listed in other sections for tables related to SVG outlines, and for tables related to bitmap glyphs.</p>
+<p><a id="otherTables"></a></p>
+<h3 id="other-opentype-tables">Other OpenType Tables</h3>
+<table>
+<tbody>
+<tr>
+<th>Tag</th>
+<th>Name</th>
+</tr>
+<tr>
+<td><a href="dsig" data-linktype="relative-path">DSIG</a></td>
+<td>Digital signature</td>
+</tr>
+<tr>
+<td><a href="hdmx" data-linktype="relative-path">'hdmx'</a></td>
+<td>Horizontal device metrics</td>
+</tr>
+<tr>
+<td><a href="kern" data-linktype="relative-path">'kern'</a></td>
+<td>Kerning</td>
+</tr>
+<tr>
+<td><a href="ltsh" data-linktype="relative-path">LTSH</a></td>
+<td>Linear threshold data</td>
+</tr>
+<tr>
+<td><a href="merg" data-linktype="relative-path">MERG</a></td>
+<td>Merge</td>
+</tr>
+<tr>
+<td><a href="meta" data-linktype="relative-path">'meta'</a></td>
+<td>Metadata</td>
+</tr>
+<tr>
+<td><a href="stat" data-linktype="relative-path">STAT</a></td>
+<td>Style attributes</td>
+</tr>
+<tr>
+<td><a href="pclt" data-linktype="relative-path">PCLT</a></td>
+<td>PCL 5 data</td>
+</tr>
+<tr>
+<td><a href="vdmx" data-linktype="relative-path">VDMX</a></td>
+<td>Vertical device metrics</td>
+</tr>
+<tr>
+<td><a href="vhea" data-linktype="relative-path">'vhea'</a></td>
+<td>Vertical Metrics header</td>
+</tr>
+<tr>
+<td><a href="vmtx" data-linktype="relative-path">'vmtx'</a></td>
+<td>Vertical Metrics</td>
+</tr>
+</tbody>
+</table>
+<p>Note that the STAT table is required in variable fonts. Also, the 'hdmx' and VDMX tables are not used in variable fonts.</p>
+</div>
+					
+		<div
+			id="ms--inline-notifications"
+			class="margin-block-xs"
+			data-bi-name="inline-notification"
+		></div>
+	 
+		<div
+			id="assertive-live-region"
+			role="alert"
+			aria-live="assertive"
+			class="visually-hidden"
+			aria-relevant="additions"
+			aria-atomic="true"
+		></div>
+		<div
+			id="polite-live-region"
+			role="status"
+			aria-live="polite"
+			class="visually-hidden"
+			aria-relevant="additions"
+			aria-atomic="true"
+		></div>
+	
+					
+			
+		<!-- feedback section -->
+		<section
+			class="feedback-section position-relative margin-top-lg border border-radius padding-xxs display-none-print"
+			data-bi-name="open-source-feedback-section"
+			data-open-source-feedback-section
+			hidden
+		>
+			<div class="display-flex flex-direction-column flex-direction-row-tablet">
+				<div
+					class="width-450-tablet padding-inline-xs padding-inline-xs-tablet padding-top-xs padding-bottom-sm padding-top-xs-tablet background-color-body-medium"
+				>
+					<div class="display-flex flex-direction-column">
+						<div class="padding-bottom-xxs">
+							<span class="icon margin-right-xxs" aria-hidden="true">
+								<span class="docon docon-brand-github"></span>
+							</span>
+							<span class="font-weight-semibold">
+								Collaborate with us on GitHub
+							</span>
+						</div>
+						<span class="line-height-normal">
+							The source for this content can be found on GitHub, where you can also create and review issues and pull requests. For more information, see <a href="https://learn.microsoft.com/contribute/content/">our contributor guide</a>.
+						</span>
+					</div>
+				</div>
+				<div
+					class="display-flex gap-xs width-full-tablet flex-direction-column padding-xs justify-content-space-evenly"
+				>
+					<div class="media">
+						
+
+						<div class="media-content">
+							<p
+								class="font-size-xl font-weight-semibold margin-bottom-xxs"
+								data-open-source-product-title
+							>
+								OpenType specification
+							</p>
+							<div class="display-flex gap-xs flex-direction-column">
+								<p class="line-height-normal" data-open-source-product-description></p>
+								<div class="display-flex gap-xs flex-direction-column">
+									<a href="#" data-github-link>
+										<span class="icon margin-right-xxs" aria-hidden="true">
+											<span class="docon docon-bug"></span>
+										</span>
+										<span>Open a documentation issue</span>
+									</a>
+									<a
+										href="https://github.com/MicrosoftDocs/typography-issues/issues/new?template=opentype-docs-feedback.yml"
+										class="display-block margin-top-auto font-size-md"
+										data-feedback-product-url
+									>
+										<span class="icon margin-right-xxs" aria-hidden="true">
+											<span class="docon docon-feedback"></span>
+										</span>
+										<span>Provide product feedback</span>
+									</a>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</section>
+		<!-- end feedback section -->
+	
+			
+		<!-- feedback section -->
+		<section
+			id="site-user-feedback-footer"
+			class="font-size-sm margin-top-md display-none-print display-none-desktop"
+			data-test-id="site-user-feedback-footer"
+			data-bi-name="site-feedback-section"
+		>
+			<hr class="hr" />
+			<h2 id="ms--feedback" class="title is-3">Feedback</h2>
+			<div class="display-flex flex-wrap-wrap align-items-center">
+				<p class="font-weight-semibold margin-xxs margin-left-none">
+					Was this page helpful?
+				</p>
+				<div class="buttons">
+					<button
+						class="thumb-rating-button like button button-primary button-sm"
+						data-test-id="footer-rating-yes"
+						data-binary-rating-response="rating-yes"
+						type="button"
+						title="This article is helpful"
+						data-bi-name="button-rating-yes"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-like"></span>
+						</span>
+						<span>Yes</span>
+					</button>
+					<button
+						class="thumb-rating-button dislike button button-primary button-sm"
+						id="standard-rating-no-button"
+						hidden
+						data-test-id="footer-rating-no"
+						data-binary-rating-response="rating-no"
+						type="button"
+						title="This article is not helpful"
+						data-bi-name="button-rating-no"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-dislike"></span>
+						</span>
+						<span>No</span>
+					</button>
+					<details
+						class="popover popover-top"
+						id="mobile-help-popover"
+						data-test-id="footer-feedback-popover"
+					>
+						<summary
+							class="thumb-rating-button dislike button button-primary button-sm"
+							data-test-id="details-footer-rating-no"
+							data-binary-rating-response="rating-no"
+							title="This article is not helpful"
+							data-bi-name="button-rating-no"
+							aria-pressed="false"
+							data-bi-an="feedback-unhelpful-popover"
+						>
+							<span class="icon" aria-hidden="true">
+								<span class="docon docon-dislike"></span>
+							</span>
+							<span>No</span>
+						</summary>
+						<div
+							class="popover-content width-200 width-300-tablet"
+							role="dialog"
+							aria-labelledby="popover-heading"
+							aria-describedby="popover-description"
+						>
+							<p id="popover-heading" class="font-size-lg margin-bottom-xxs font-weight-semibold">
+								Need help with this topic?
+							</p>
+							<p id="popover-description" class="font-size-sm margin-bottom-xs">
+								Want to try using Ask Learn to clarify or guide you through this topic?
+							</p>
+							
+		<div class="buttons flex-direction-row flex-wrap justify-content-center gap-xxs">
+			<div>
+		<button
+			class="button button-sm border inner-focus display-none margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-test-id="ask-learn-assistant-modal-entry-mobile-feedback"
+			data-ask-learn-modal-entry-feedback
+			data-bi-an=feedback-unhelpful-popover
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-label="Ask Learn"
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+		</button>
+		<button
+			class="button button-sm display-inline-flex display-none-desktop flex-shrink-0 margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-modal-entry-tablet-feedback"
+			data-ask-learn-modal-entry-feedback
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+		<button
+			class="button button-sm display-none flex-shrink-0 display-inline-flex-desktop margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-flyout-entry-feedback"
+			data-ask-learn-flyout-entry-show-only
+			data-flyout-button="toggle"
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-controls="ask-learn-flyout"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+	</div>
+			<button
+				type="button"
+				class="button button-sm margin-right-xxs"
+				data-help-option="suggest-fix"
+				data-bi-name="feedback-suggest"
+				data-bi-an="feedback-unhelpful-popover"
+				data-test-id="suggest-fix"
+			>
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-feedback"></span>
+				</span>
+				<span> Suggest a fix? </span>
+			</button>
+		</div>
+	
+						</div>
+					</details>
+				</div>
+			</div>
+		</section>
+		<!-- end feedback section -->
+	
+		
+				</div>
+				
+		<div id="ms--additional-resources-mobile" class="display-none-print">
+			<hr class="hr" hidden />
+			<h2 id="ms--additional-resources-mobile-heading" class="title is-3" hidden>
+				Additional resources
+			</h2>
+			
+		<section
+			id="right-rail-recommendations-mobile"
+			class=""
+			data-bi-name="recommendations"
+			hidden
+		></section>
+	 
+		<section
+			id="right-rail-training-mobile"
+			class=""
+			data-bi-name="learning-resource-card"
+			hidden
+		></section>
+	 
+		<section
+			id="right-rail-events-mobile"
+			class=""
+			data-bi-name="events-card"
+			hidden
+		></section>
+	
+		</div>
+	 
+		<div
+			id="article-metadata-footer"
+			data-bi-name="article-metadata-footer"
+			data-test-id="article-metadata-footer"
+			class="page-metadata-container"
+		>
+			<hr class="hr" />
+			<ul class="metadata page-metadata" data-bi-name="page info" lang="en-us" dir="ltr">
+				<li class="visibility-hidden-visual-diff">
+			<span class="badge badge-sm text-wrap-pretty">
+				<span>Last updated on <local-time format="twoDigitNumeric"
+		datetime="2024-05-29T08:00:00.000Z"
+		data-article-date-source="calculated"
+		class="is-invisible"
+	>
+		2024-05-29
+	</local-time></span>
+			</span>
+		</li>
+			</ul>
+		</div>
+	
+			</div>
+		
+				</main>
+				<aside
+					id="layout-body-aside"
+					class="layout-body-aside  "
+					data-bi-name="aside"
+					aria-label="Additional resources"
+			  >
+					
+		<div
+			id="ms--additional-resources"
+			class="right-container padding-sm display-none display-block-desktop height-full"
+			data-bi-name="pageactions"
+		>
+			<div id="affixed-right-container" data-bi-name="right-column">
+				
+		<nav
+			id="side-doc-outline"
+			class="doc-outline border-bottom padding-bottom-xs margin-bottom-xs scrollbar-width-thin"
+			data-bi-name="intopic toc"
+			aria-label="In this article"
+		>
+			<h3>In this article</h3>
+		</nav>
+	
+				<!-- Feedback -->
+				
+		<section
+			id="ms--site-user-feedback-right-rail"
+			class="font-size-sm display-none-print"
+			data-test-id="site-user-feedback-right-rail"
+			data-bi-name="site-feedback-right-rail"
+		>
+			<div class="display-flex flex-wrap-wrap align-items-center">
+				<p class="font-weight-semibold margin-xxs margin-left-none">
+					Was this page helpful?
+				</p>
+				<div class="display-flex flex-wrap-nowrap">
+					<button
+						class="thumb-rating-button like inner-focus"
+						data-test-id="right-rail-rating-yes"
+						data-binary-rating-response="rating-yes"
+						type="button"
+						title="This article is helpful"
+						aria-label="This article is helpful"
+						data-bi-name="button-rating-yes"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-like"></span>
+						</span>
+					</button>
+					<button
+						class="thumb-rating-button dislike inner-focus"
+						id="right-rail-no-button"
+						hidden
+						data-test-id="right-rail-rating-no"
+						data-binary-rating-response="rating-no"
+						type="button"
+						title="This article is not helpful"
+						aria-label="This article is not helpful"
+						data-bi-name="button-rating-no"
+						aria-pressed="false"
+					>
+						<span class="icon" aria-hidden="true">
+							<span class="docon docon-dislike"></span>
+						</span>
+					</button>
+					<details class="popover popover-right" id="help-popover" data-test-id="feedback-popover">
+						<summary
+							tabindex="0"
+							class="thumb-rating-button dislike inner-focus"
+							data-test-id="details-right-rail-rating-no"
+							data-binary-rating-response="rating-no"
+							title="This article is not helpful"
+							aria-label="This article is not helpful"
+							data-bi-name="button-rating-no"
+							aria-pressed="false"
+							data-bi-an="feedback-unhelpful-popover"
+						>
+							<span class="icon" aria-hidden="true">
+								<span class="docon docon-dislike"></span>
+							</span>
+						</summary>
+						<div
+							class="popover-content width-200 width-300-tablet"
+							role="dialog"
+							aria-labelledby="popover-heading-right-rail"
+							aria-describedby="popover-description-right-rail"
+						>
+							<p
+								id="popover-heading-right-rail"
+								class="font-size-lg margin-bottom-xxs font-weight-semibold"
+							>
+								Need help with this topic?
+							</p>
+							<p id="popover-description-right-rail" class="font-size-sm margin-bottom-xs">
+								Want to try using Ask Learn to clarify or guide you through this topic?
+							</p>
+							
+		<div class="buttons flex-direction-row flex-wrap justify-content-center gap-xxs">
+			<div>
+		<button
+			class="button button-sm border inner-focus display-none margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-test-id="ask-learn-assistant-modal-entry-mobile-feedback"
+			data-ask-learn-modal-entry-feedback
+			data-bi-an=feedback-unhelpful-popover
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-label="Ask Learn"
+			hidden
+		>
+			<span class="icon" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+		</button>
+		<button
+			class="button button-sm display-inline-flex display-none-desktop flex-shrink-0 margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-modal-entry-tablet-feedback"
+			data-ask-learn-modal-entry-feedback
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+		<button
+			class="button button-sm display-none flex-shrink-0 display-inline-flex-desktop margin-right-xxs border-color-ask-learn margin-right-xxs"
+			data-bi-name="ask-learn-assistant-entry-troubleshoot"
+			data-bi-an=feedback-unhelpful-popover
+			data-test-id="ask-learn-assistant-flyout-entry-feedback"
+			data-ask-learn-flyout-entry-show-only
+			data-flyout-button="toggle"
+			type="button"
+			style="min-width: max-content;"
+			aria-expanded="false"
+			aria-controls="ask-learn-flyout"
+			hidden
+		>
+			<span class="icon font-size-lg" aria-hidden="true">
+				<span class="docon docon-chat-sparkle-fill gradient-ask-learn-logo"></span>
+			</span>
+			<span>Ask Learn</span>
+		</button>
+	</div>
+			<button
+				type="button"
+				class="button button-sm margin-right-xxs"
+				data-help-option="suggest-fix"
+				data-bi-name="feedback-suggest"
+				data-bi-an="feedback-unhelpful-popover"
+				data-test-id="suggest-fix"
+			>
+				<span class="icon" aria-hidden="true">
+					<span class="docon docon-feedback"></span>
+				</span>
+				<span> Suggest a fix? </span>
+			</button>
+		</div>
+	
+						</div>
+					</details>
+				</div>
+			</div>
+		</section>
+	
+			</div>
+		</div>
+	
+			  </aside> <section
+					id="layout-body-flyout"
+					class="layout-body-flyout "
+					data-bi-name="flyout"
+			  >
+					 <div
+	class="height-full border-left background-color-body-medium"
+	id="ask-learn-flyout"
+></div>
+			  </section> <div class="layout-body-footer " data-bi-name="layout-footer">
+		<footer
+			id="footer"
+			data-test-id="footer"
+			data-bi-name="footer"
+			class="footer-layout padding-xs padding-sm-desktop has-default-focus border-top"
+			role="contentinfo"
+		>
+			<div class="display-flex gap-xs flex-wrap-wrap is-full-height padding-right-lg-desktop">
+				
+		<a
+			data-mscc-ic="false"
+			href="#"
+			data-bi-name="select-locale"
+			class="locale-selector-link flex-shrink-0 button button-sm button-clear external-link-indicator"
+			id=""
+			title=""
+			><span class="icon" aria-hidden="true"
+				><span class="docon docon-world"></span></span
+			><span class="local-selector-link-text">en-us</span></a
+		>
+	 <div class="ccpa-privacy-link" data-ccpa-privacy-link hidden>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://aka.ms/yourcaliforniaprivacychoices"
+			data-bi-name="your-privacy-choices"
+			class="button button-sm button-clear flex-shrink-0 external-link-indicator"
+			id=""
+			title=""
+			>
+		<svg
+			xmlns="http://www.w3.org/2000/svg"
+			viewBox="0 0 30 14"
+			xml:space="preserve"
+			height="16"
+			width="43"
+			aria-hidden="true"
+			focusable="false"
+		>
+			<path
+				d="M7.4 12.8h6.8l3.1-11.6H7.4C4.2 1.2 1.6 3.8 1.6 7s2.6 5.8 5.8 5.8z"
+				style="fill-rule:evenodd;clip-rule:evenodd;fill:#fff"
+			></path>
+			<path
+				d="M22.6 0H7.4c-3.9 0-7 3.1-7 7s3.1 7 7 7h15.2c3.9 0 7-3.1 7-7s-3.2-7-7-7zm-21 7c0-3.2 2.6-5.8 5.8-5.8h9.9l-3.1 11.6H7.4c-3.2 0-5.8-2.6-5.8-5.8z"
+				style="fill-rule:evenodd;clip-rule:evenodd;fill:#06f"
+			></path>
+			<path
+				d="M24.6 4c.2.2.2.6 0 .8L22.5 7l2.2 2.2c.2.2.2.6 0 .8-.2.2-.6.2-.8 0l-2.2-2.2-2.2 2.2c-.2.2-.6.2-.8 0-.2-.2-.2-.6 0-.8L20.8 7l-2.2-2.2c-.2-.2-.2-.6 0-.8.2-.2.6-.2.8 0l2.2 2.2L23.8 4c.2-.2.6-.2.8 0z"
+				style="fill:#fff"
+			></path>
+			<path
+				d="M12.7 4.1c.2.2.3.6.1.8L8.6 9.8c-.1.1-.2.2-.3.2-.2.1-.5.1-.7-.1L5.4 7.7c-.2-.2-.2-.6 0-.8.2-.2.6-.2.8 0L8 8.6l3.8-4.5c.2-.2.6-.2.9 0z"
+				style="fill:#06f"
+			></path>
+		</svg>
+	
+			<span>Your Privacy Choices</span></a
+		>
+	
+	</div>
+				<div class="flex-shrink-0">
+		<div class="dropdown has-caret-up">
+			<button
+				data-test-id="theme-selector-button"
+				class="dropdown-trigger button button-clear button-sm inner-focus theme-dropdown-trigger"
+				aria-controls="{{ themeMenuId }}"
+				aria-haspopup="true"
+				aria-expanded="false"
+				data-bi-name="theme"
+			>
+				<span class="icon" aria-hidden="true"><span class="docon docon-sun"></span></span>
+				<span>Theme</span>
+				<span class="icon expanded-indicator" aria-hidden="true">
+					<span class="docon docon-chevron-down-light"></span>
+				</span>
+			</button>
+			<div class="dropdown-menu" id="{{ themeMenuId }}" role="menu">
+				<ul class="theme-selector padding-xxs" data-test-id="theme-dropdown-menu" role="none">
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="light"
+							tabindex="-1"
+						>
+							<span class="theme-light margin-right-xxs">
+								<span
+									class="theme-selector-icon border display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> Light </span>
+						</button>
+					</li>
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="dark"
+							tabindex="-1"
+						>
+							<span class="theme-dark margin-right-xxs">
+								<span
+									class="border theme-selector-icon display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> Dark </span>
+						</button>
+					</li>
+					<li class="theme display-block" role="none">
+						<button
+							class="button button-clear button-sm theme-control button-block justify-content-flex-start text-align-left"
+							role="menuitemradio"
+							aria-checked="false"
+							data-theme-to="high-contrast"
+							tabindex="-1"
+						>
+							<span class="theme-high-contrast margin-right-xxs">
+								<span
+									class="border theme-selector-icon display-inline-block has-body-background"
+									aria-hidden="true"
+								>
+									<svg class="svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 14">
+										<rect width="22" height="14" class="has-fill-body-background" />
+										<rect x="5" y="5" width="12" height="4" class="has-fill-secondary" />
+										<rect x="5" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="8" y="2" width="2" height="1" class="has-fill-secondary" />
+										<rect x="11" y="2" width="3" height="1" class="has-fill-secondary" />
+										<rect x="1" y="1" width="2" height="2" class="has-fill-secondary" />
+										<rect x="5" y="10" width="7" height="2" rx="0.3" class="has-fill-primary" />
+										<rect x="19" y="1" width="2" height="2" rx="1" class="has-fill-secondary" />
+									</svg>
+								</span>
+							</span>
+							<span> High contrast </span>
+						</button>
+					</li>
+				</ul>
+			</div>
+		</div>
+	</div>
+			</div>
+			<ul class="links" data-bi-name="footerlinks">
+				<li class="manage-cookies-holder" hidden=""></li>
+				<li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/principles-for-ai-generated-content"
+			data-bi-name="aiDisclaimer"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>AI Disclaimer</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/previous-versions/"
+			data-bi-name="archivelink"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Previous Versions</a
+		>
+	
+	</li> <li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://techcommunity.microsoft.com/t5/microsoft-learn-blog/bg-p/MicrosoftLearnBlog"
+			data-bi-name="bloglink"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Blog</a
+		>
+	
+	</li> <li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/contribute"
+			data-bi-name="contributorGuide"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Contribute</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://go.microsoft.com/fwlink/?LinkId=521839"
+			data-bi-name="privacy"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Privacy</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://go.microsoft.com/fwlink/?linkid=2259814"
+			data-bi-name="consumer-health-privacy"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Consumer Health Privacy</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://learn.microsoft.com/en-us/legal/termsofuse"
+			data-bi-name="termsofuse"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Terms of Use</a
+		>
+	
+	</li><li>
+		
+		<a
+			data-mscc-ic="false"
+			href="https://www.microsoft.com/legal/intellectualproperty/Trademarks/"
+			data-bi-name="trademarks"
+			class=" external-link-indicator"
+			id=""
+			title=""
+			>Trademarks</a
+		>
+	
+	</li>
+				<li>&copy; Microsoft 2026</li>
+			</ul>
+		</footer>
+	</footer>
+			</body>
+		</html>
