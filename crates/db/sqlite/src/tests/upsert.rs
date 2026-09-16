@@ -323,3 +323,153 @@ fn the_row_the_statement_would_have_written_carries_the_key_it_was_given() {
         "datatype mismatch"
     );
 }
+
+/// A statement written inside an expression of a statement that writes,
+/// which is what `sqlite3ExprCodeSubselect` answers there.
+#[test]
+fn a_statement_that_writes_reads_the_statements_written_inside_it() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t1(a PRIMARY KEY, b)".as_slice(),
+        b"CREATE TABLE chng(a PRIMARY KEY, b)",
+        b"INSERT INTO t1 VALUES(1,1),(2,2),(3,3),(4,4)",
+        b"INSERT INTO chng VALUES(2,3),(4,5)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    // A row that takes the key of a row the statement has not reached
+    // is refused, and the statement leaves the rows as they were.
+    assert_eq!(
+        writer
+            .run(b"UPDATE t1 SET a=(SELECT b FROM chng WHERE a=t1.a)")
+            .unwrap_err()
+            .message(),
+        "UNIQUE constraint failed: t1.a"
+    );
+    writer
+        .run(b"UPDATE t1 SET b=7 WHERE a IN (SELECT a FROM chng)")
+        .unwrap();
+    // Under `OR REPLACE` the row that held the key is taken out, and
+    // the statement passes it over when it reaches it, which is ticket
+    // #2832.
+    writer
+        .run(b"UPDATE OR REPLACE t1 SET a=(SELECT b FROM chng WHERE a=t1.a)")
+        .unwrap();
+    let image = writer.written();
+    let database = Database::open(&image).unwrap();
+    let answer = database
+        .query(b"SELECT quote(a)||'/'||b FROM t1 ORDER BY a")
+        .unwrap();
+    let shown: Vec<Vec<u8>> = answer
+        .rows
+        .iter()
+        .filter_map(|row| row.first().and_then(crate::value::Value::text))
+        .collect();
+    assert_eq!(
+        shown,
+        alloc::vec![b"NULL/1".to_vec(), b"3/7".to_vec(), b"5/7".to_vec()]
+    );
+    // The index of the key holds one entry per row, which is what the
+    // walk of the file answers.
+    assert_eq!(
+        database
+            .query(b"PRAGMA integrity_check")
+            .unwrap()
+            .rows
+            .first()
+            .and_then(|row| row.first()),
+        Some(&Value::Text(b"ok".to_vec()))
+    );
+}
+
+#[test]
+fn a_table_that_keeps_its_rows_in_the_key_s_own_tree_reads_them_the_same_way() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE k(a PRIMARY KEY, b) WITHOUT ROWID".as_slice(),
+        b"CREATE TABLE chng(a PRIMARY KEY, b)",
+        b"INSERT INTO k VALUES(1,1),(2,2),(3,3),(4,4)",
+        b"INSERT INTO chng VALUES(2,3),(4,5)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    // The key of such a table refuses nothing, so a row whose key the
+    // statement written inside it answers nothing for is refused.
+    assert_eq!(
+        writer
+            .run(b"UPDATE OR REPLACE k SET a=(SELECT b FROM chng WHERE a=k.a)")
+            .unwrap_err()
+            .message(),
+        "NOT NULL constraint failed: k.a"
+    );
+    writer
+        .run(b"UPDATE k SET b=9 WHERE a IN (SELECT a FROM chng)")
+        .unwrap();
+    writer
+        .run(b"DELETE FROM k WHERE a IN (SELECT a FROM chng WHERE b=3)")
+        .unwrap();
+    let image = writer.written();
+    let database = Database::open(&image).unwrap();
+    let answer = database
+        .query(b"SELECT quote(a)||'/'||quote(b) FROM k ORDER BY a")
+        .unwrap();
+    let shown: Vec<Vec<u8>> = answer
+        .rows
+        .iter()
+        .filter_map(|row| row.first().and_then(crate::value::Value::text))
+        .collect();
+    assert_eq!(
+        shown,
+        alloc::vec![b"1/1".to_vec(), b"3/3".to_vec(), b"4/9".to_vec()]
+    );
+    assert_eq!(
+        database
+            .query(b"PRAGMA integrity_check")
+            .unwrap()
+            .rows
+            .first()
+            .and_then(|row| row.first()),
+        Some(&Value::Text(b"ok".to_vec()))
+    );
+}
+
+/// A row a statement took out on the way, in a table that keeps its
+/// rows in the key's own tree.
+///
+/// The C library walks the tree itself and reaches a row again where
+/// the write moved it past the walk, so `UPDATE OR REPLACE k SET a=a+1`
+/// leaves it one row of the key 5; this crate reads the rows once, so
+/// each row is written once and the rows it took out are passed over.
+/// The file holds what it says either way, which is what the walk of
+/// `PRAGMA integrity_check` answers.
+#[test]
+fn a_row_the_statement_took_out_of_the_key_s_own_tree_is_passed_over() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE k(a PRIMARY KEY, b) WITHOUT ROWID".as_slice(),
+        b"INSERT INTO k VALUES(1,1),(2,2),(3,3),(4,4)",
+        b"UPDATE OR REPLACE k SET a=a+1",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    let database = Database::open(&image).unwrap();
+    let answer = database
+        .query(b"SELECT a||'/'||b FROM k ORDER BY a")
+        .unwrap();
+    let shown: Vec<Vec<u8>> = answer
+        .rows
+        .iter()
+        .filter_map(|row| row.first().and_then(crate::value::Value::text))
+        .collect();
+    assert_eq!(shown, alloc::vec![b"2/1".to_vec(), b"4/3".to_vec()]);
+    assert_eq!(
+        database
+            .query(b"PRAGMA integrity_check")
+            .unwrap()
+            .rows
+            .first()
+            .and_then(|row| row.first()),
+        Some(&Value::Text(b"ok".to_vec()))
+    );
+}

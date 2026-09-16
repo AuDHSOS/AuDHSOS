@@ -37,6 +37,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Statements written inside the expressions of a statement that writes,
+  in `db-sqlite`: `EXISTS`, `IN (SELECT ...)`, `IN table` and a
+  statement that stands for a value are answered under an `INSERT`, an
+  `UPDATE` and a `DELETE` as they are under a `SELECT`. A row a
+  statement wrote over under `OR REPLACE` is passed over when the walk
+  reaches it, which is ticket #2832. D-239 records it.
+
 - `INSERT ... ON CONFLICT` in `db-sqlite`. A clause names the columns of
   a key of the table or names none at all, and a row that shares that
   key reaches it: `DO NOTHING` passes the row over, and `DO UPDATE SET`

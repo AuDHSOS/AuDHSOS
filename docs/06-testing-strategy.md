@@ -5017,6 +5017,21 @@ D-238, document 16 step Q8.
   holds is refused.
 - The key of a table takes a whole number and nothing else.
 
+### 6.6.162 A statement written inside one that writes (`db-sqlite`)
+
+D-239, document 16 step Q8.
+
+- An `UPDATE` whose `SET` reads a statement writes what that statement
+  answers, and one whose `WHERE` reads one writes the rows it names.
+- A row that takes the key of a row the statement has not reached is
+  refused, and the statement leaves every row as it was.
+- Under `OR REPLACE` the row that held the key is taken out, and the
+  statement passes it over when it reaches it.
+- A table that keeps its rows in the key's own tree reads such
+  statements the same way, and an entry that is no longer the row that
+  was read is passed over.
+- The walk of `PRAGMA integrity_check` answers `ok` after each of them.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

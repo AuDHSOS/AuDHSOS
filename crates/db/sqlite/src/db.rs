@@ -1579,6 +1579,48 @@ impl<'a> Database<'a> {
     /// The statement is answered here and not before, so a correlated
     /// one is answered once per row of the statement that encloses it:
     /// O(n·m) for `n` outer rows and `m` inner ones.
+    /// The same, for a row of a statement that writes, which stands
+    /// inside no statement of its own.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what the statement could not answer.
+    pub(crate) fn subquery(
+        &self,
+        arena: &Arena,
+        sql: &[u8],
+        used: Used,
+        row: &dyn eval::Row,
+    ) -> Result<Value, Error> {
+        let scope = Scope {
+            terms: &[],
+            outer: None,
+            views: 0,
+        };
+        self.answer(arena, sql, used, scope, row)
+    }
+
+    /// The first row a statement written inside an expression answers,
+    /// for a row of a statement that writes.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what the statement could not answer.
+    pub(crate) fn subquery_items(
+        &self,
+        arena: &Arena,
+        sql: &[u8],
+        select: SelectId,
+        row: &dyn eval::Row,
+    ) -> Result<Vec<(Value, Affinity, Option<Collation>)>, Error> {
+        let scope = Scope {
+            terms: &[],
+            outer: None,
+            views: 0,
+        };
+        self.answer_items(arena, sql, select, scope, row)
+    }
+
     fn answer(
         &self,
         arena: &Arena,

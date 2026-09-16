@@ -2191,12 +2191,11 @@ impl Writer {
     /// Answering it costs what the expression costs.
     fn keeps(
         &self,
-        arena: &Arena,
         filter: Option<crate::ast::ExprId>,
-        sql: &[u8],
         table: &Table,
         values: &[Value],
         outer: Option<&dyn crate::eval::Row>,
+        reading: Reading<'_>,
     ) -> Result<bool, Error> {
         let Some(filter) = filter else {
             return Ok(true);
@@ -2210,8 +2209,9 @@ impl Writer {
             encoding: self.header.encoding,
             random: &self.random,
             outer,
+            reading: Some(reading),
         };
-        Ok(crate::eval::evaluate_row(arena, filter, sql, &held)?.truth(false))
+        Ok(crate::eval::evaluate_row(reading.arena, filter, reading.sql, &held)?.truth(false))
     }
 
     /// `DELETE` from a table that keeps its rows in the key's own tree:
@@ -2236,7 +2236,12 @@ impl Writer {
             let kept = kept_indexes(&database, name);
             let mut rows = Vec::new();
             for values in database.keyed_rows_of(name)? {
-                if self.keeps(arena, statement.filter, sql, table, &values, outer)? {
+                let reading = Reading {
+                    database: &database,
+                    arena,
+                    sql,
+                };
+                if self.keeps(statement.filter, table, &values, outer, reading)? {
                     rows.push(values);
                 }
             }
@@ -2481,7 +2486,12 @@ impl Writer {
             .collect::<Result<_, Error>>()?;
         let mut out = Vec::new();
         for values in database.keyed_rows_of(name)? {
-            if !self.keeps(arena, statement.filter, sql, table, &values, outer)? {
+            let reading = Reading {
+                database: &database,
+                arena,
+                sql,
+            };
+            if !self.keeps(statement.filter, table, &values, outer, reading)? {
                 continue;
             }
             let held = Held {
@@ -2491,6 +2501,7 @@ impl Writer {
                 encoding: self.header.encoding,
                 random: &self.random,
                 outer,
+                reading: Some(reading),
             };
             let mut next = values.clone();
             for (at, set) in places.iter().zip(sets) {
@@ -2540,6 +2551,24 @@ impl Writer {
         let affinities = ordered_affinities(&table);
         let mut changed = 0_i64;
         for (held, values) in rows {
+            // A row this statement wrote over under `OE_Replace` is
+            // gone, and the key it stood under may hold another row by
+            // now, which is ticket #2832: the rows were read before the
+            // first of them was written, so an entry that is no longer
+            // the row that was read is passed over.
+            let stood = crate::schema::key_of(&table, &held);
+            let was = ordered(&table, &held);
+            let tail: Vec<Value> = was
+                .get(stood.len()..)
+                .unwrap_or_default()
+                .iter()
+                .map(|value| stored(value, self.header.encoding))
+                .collect();
+            let found =
+                crate::tree::entry_tail_at(&self.pages, root, &stood, &collations, tail.len())?;
+            if found.as_deref() != Some(tail.as_slice()) {
+                continue;
+            }
             let mut named = values;
             if fires {
                 let row = Fired {
@@ -3227,6 +3256,19 @@ impl Writer {
 
 /// One row of a table, read against the `WHERE` of a statement that
 /// changes rows.
+/// What a row of a statement that writes reads a statement written
+/// inside an expression with: the database as the statement found it,
+/// and the tree and text that statement was read from.
+#[derive(Clone, Copy)]
+struct Reading<'a> {
+    /// The database as the statement found it.
+    database: &'a Database<'a>,
+    /// The tree the statement was read from.
+    arena: &'a Arena,
+    /// The text that tree points into.
+    sql: &'a [u8],
+}
+
 struct Held<'a> {
     /// The table it belongs to, because a column may be written with
     /// the table's name before it.
@@ -3245,11 +3287,33 @@ struct Held<'a> {
     /// The row a trigger's body reads as `new` and `old`, where this
     /// row is one of a statement a trigger runs.
     outer: Option<&'a dyn crate::eval::Row>,
+    /// What a statement written inside an expression is answered with,
+    /// where the caller holds the database open.
+    reading: Option<Reading<'a>>,
 }
 
 impl crate::eval::Row for Held<'_> {
     fn random(&self) -> Option<&crate::random::Source> {
         Some(self.random)
+    }
+
+    fn answered(&self, used: crate::eval::Used) -> Option<Value> {
+        let reading = self.reading?;
+        reading
+            .database
+            .subquery(reading.arena, reading.sql, used, self)
+            .ok()
+    }
+
+    fn answered_items(
+        &self,
+        select: crate::ast::SelectId,
+    ) -> Option<Vec<(Value, Affinity, Option<Collation>)>> {
+        let reading = self.reading?;
+        reading
+            .database
+            .subquery_items(reading.arena, reading.sql, select, self)
+            .ok()
     }
 
     fn encoding(&self) -> Encoding {
@@ -3683,6 +3747,11 @@ impl Writer {
                     encoding: self.header.encoding,
                     random: &self.random,
                     outer,
+                    reading: Some(Reading {
+                        database: &database,
+                        arena,
+                        sql,
+                    }),
                 };
                 let keep = match statement.filter {
                     None => true,
@@ -3784,6 +3853,11 @@ impl Writer {
                 encoding: self.header.encoding,
                 random: &self.random,
                 outer,
+                reading: Some(Reading {
+                    database: &database,
+                    arena,
+                    sql,
+                }),
             };
             let keep = match statement.filter {
                 None => true,
@@ -3851,6 +3925,14 @@ impl Writer {
         let fires = !before.is_empty() || !after.is_empty();
         let mut changed = 0_i64;
         for (rowid, mut key, held, mut values) in written {
+            // A row this statement wrote over under `OE_Replace` is
+            // gone, which is ticket #2832: the rows were read before
+            // the first of them was written, so a row the statement
+            // took out on the way is passed over rather than written
+            // again.
+            if !crate::tree::holds(&self.pages, root, rowid)? {
+                continue;
+            }
             // The column the key is another name for says the key, so a
             // statement that writes that column writes the key, and the
             // row holds no value for that column.
@@ -4088,6 +4170,7 @@ impl Writer {
             encoding: self.header.encoding,
             random: &self.random,
             outer: None,
+            reading: None,
         };
         // `PRAGMA ignore_check_constraints` leaves every `CHECK` of
         // the table unread.
