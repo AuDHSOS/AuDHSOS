@@ -737,8 +737,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same two, on the register engine (focused) | focused | `88370c5` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/prototype/join test/language/expressions/property-accessors --summary` | 44 | 88 | 54 (61.36%) | 6 (6.82%) | 28 (31.82%) |
 | `%Array.prototype%`, after the answered length (focused) | focused | `64f7a69` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/prototype --summary` | 2,811 | 5,583 | 4,744 (84.97%) | 809 (14.49%) | 30 (0.54%) |
 | `%Array.prototype%`, after the answered length, on the register engine (focused) | focused | `64f7a69` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/prototype --summary` | 2,811 | 5,583 | 4,509 (80.76%) | 600 (10.75%) | 474 (8.49%) |
-| Complete pinned suite, including staging and Intl | full | `64f7a69` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `64f7a69` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 27,056 (26.29%) | 19,400 (18.85%) | 56,469 (54.86%) |
+| `@@unscopables` of `%Array.prototype%` (focused) | focused | `eaaca5d` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/prototype/Symbol.unscopables --summary` | 5 | 10 | 10 (100.00%) | 0 (0.00%) | 0 (0.00%) |
+| The same, on the register engine (focused) | focused | `eaaca5d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/prototype/Symbol.unscopables --summary` | 5 | 10 | 8 (80.00%) | 2 (20.00%) | 0 (0.00%) |
+| Complete pinned suite, including staging and Intl | full | `eaaca5d` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `eaaca5d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 27,064 (26.29%) | 19,392 (18.84%) | 56,469 (54.86%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1530,7 +1532,10 @@ an Object were measured at tree `cfee7fb52e9d04033205033eb049875bf8a218c8`,
 which is the tree of `88370c5`; that step gained 13 variants and lost none. The
 `%Array.prototype%` runs and both full runs beside the answered length were
 measured at tree `d497e660c1f0346e56cff9825ed0a25c8e83f9ef`, which is the tree
-of `64f7a69`; that step gained 26 variants and lost none.
+of `64f7a69`; that step gained 26 variants and lost none. The `@@unscopables`
+runs and both full runs beside it were measured at tree
+`423f41aac930d5cba2c9c25abf7e7dffb9862a5e`, which is the tree of `eaaca5d`;
+that step gained 8 variants and lost none.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
