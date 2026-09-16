@@ -5060,6 +5060,17 @@ D-241, document 16 step Q8.
 - `INSERT INTO t DEFAULT VALUES` writes one row of what every column
   falls back to.
 
+### 6.6.165 A page that has no room for a cell (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A row in the middle of a leaf, written longer than the page holds room
+  for, leaves every page of the tree named once, which the walk of
+  `PRAGMA integrity_check` answers `ok` for.
+- The rows of such a table are read back whole, whichever row grew.
+- A row written past the last of them goes on a page of its own, which
+  is the one place the quick balance holds.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

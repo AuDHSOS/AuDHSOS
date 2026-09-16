@@ -35,6 +35,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   under the sequential code and 3271 and 3327 under the pool, and the
   highest of the four is the pool's.
 
+### Fixed
+
+- `db-sqlite` wrote a page of a table tree into the parent's right
+  pointer where the quick balance was reached from a leaf the parent's
+  right pointer does not name, so the parent named one page of the tree
+  twice and left another with nothing naming it. `balance` now holds
+  that routine to the rules `balance()` of the C library holds it to:
+  one cell at the end of the leaf, a parent that is not page one, and a
+  leaf the parent's right pointer names. `btree01.test` goes from 12
+  cases passing to 214 with none failing. Catalog 6.6.165.
+
 ### Added
 
 - `RETURNING` and `INSERT INTO t DEFAULT VALUES` in `db-sqlite`. An

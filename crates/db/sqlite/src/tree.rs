@@ -1772,14 +1772,19 @@ fn balance(
             stack = alloc::vec![(page, 0), (child, at)];
             continue;
         };
-        // `balance_quick` is the C library's own routine for a cell at
-        // the end of the right-most leaf. The descent reaches such a
-        // leaf only through the right pointer of every page above it,
-        // and only the page the descent ended on holds a cell that did
-        // not fit, so the kind of the page and the place of the cell
-        // settle the rest.
+        // `balance_quick` is the C library's own routine for one cell at
+        // the end of a leaf of a table that the parent's right pointer
+        // names: it writes a page of that one cell and hangs it from the
+        // parent, which holds only where nothing of the leaf lies to the
+        // right of it. A parent on page one is left to the balance
+        // proper, because that page begins a hundred bytes in.
         let first = spill.first().map(|(at, _)| *at);
-        if pages.page(page)?.kind() == Kind::LeafTable && first == Some(pages.page(page)?.cells()) {
+        if pages.page(page)?.kind() == Kind::LeafTable
+            && spill.len() == 1
+            && first == Some(pages.page(page)?.cells())
+            && parent != crate::image::SCHEMA_ROOT
+            && pages.page(parent)?.cells() == at_above
+        {
             let (_, bytes) = spill.first().ok_or(Error::Balance)?;
             return quick(pages, parent, page, bytes).map(|()| stack.len());
         }

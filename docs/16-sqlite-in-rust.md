@@ -736,8 +736,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 72 112 cases in 705 files, 56 620
-pass, 4487 answer differently, and 11 005 name something the engine
+under the `tclsh` of the machine. Of 72 218 cases in 705 files, 56 933
+pass, 4481 answer differently, and 10 804 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts
