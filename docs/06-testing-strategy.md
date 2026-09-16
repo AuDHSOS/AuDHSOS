@@ -5552,6 +5552,22 @@ Document 16 step Q8.
 - A `*` written where the statement reads no table is refused `no
   tables specified`.
 
+### 6.6.191 What a compound is refused with (`db-sqlite`)
+
+Document 16 step Q8.
+
+- Two cores that answer different numbers of columns are refused
+  `SELECTs to the left and right of UNION do not have the same number of
+  result columns`, naming the word that joins them, and two `VALUES`
+  `all VALUES must have the same number of terms`.
+- An `ORDER BY` or a `LIMIT` written on a core other than the last is
+  refused `ORDER BY clause should come after UNION ALL not before`.
+- A term of the `ORDER BY` counts to the column of the first core that
+  answers one of that name, so `SELECT a FROM t1 UNION ALL SELECT n FROM
+  t2 ORDER BY n` sorts by the column the core on the right answers.
+- A term no core answers is refused `1st ORDER BY term does not match
+  any column in the result set`, naming which term it is.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

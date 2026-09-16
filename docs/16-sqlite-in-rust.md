@@ -785,6 +785,8 @@ Size: L.
     D-265 records.
 46. The names a statement answers its columns under, which two pragmas
     move. Built, which D-266 records.
+47. The words a compound is refused with, and which column a term of
+    its `ORDER BY` counts to. Built, which D-267 records.
 
 ### Done when
 
@@ -794,8 +796,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 72 313 cases in 703 files, 59 350
-pass, 2994 answer differently, and 9969 name something the engine
+under the `tclsh` of the machine. Of 72 386 cases in 703 files, 59 521
+pass, 2953 answer differently, and 9912 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts

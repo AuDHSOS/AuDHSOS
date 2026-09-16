@@ -101,12 +101,16 @@ pub enum Error {
     /// A `HAVING` on a statement that groups nothing.
     Having,
     /// Two sides of a compound that answer different numbers of columns.
-    Compound,
-    /// An `ORDER BY` of a compound that names none of its columns, which
-    /// is the only thing one may name.
-    OrderMatch,
+    Compound(Vec<u8>),
+    /// An `ORDER BY` term of a compound that names no column any of its
+    /// cores answers, with which term it is.
+    OrderMatch(usize),
     /// A `VALUES` whose rows are not all the same width.
     Values,
+    /// An `ORDER BY` or a `LIMIT` written on a core of a compound other
+    /// than the last, with which clause it is and the word that joins
+    /// that core to the one after it.
+    BeforeCompound(bool, Compound),
     /// A join that cannot be made: a `NATURAL` with a condition written
     /// on it as well, or a `USING` that names a column one of the two
     /// tables does not have.
@@ -271,6 +275,31 @@ pub enum Error {
 }
 
 impl Error {
+    /// The words a compound is refused with, or nothing where the
+    /// refusal is another.
+    fn compounds(&self) -> Option<alloc::string::String> {
+        let shown = |bytes: &[u8]| alloc::string::String::from_utf8_lossy(bytes).into_owned();
+        Some(match self {
+            Error::Compound(word) => alloc::format!(
+                "SELECTs to the left and right of {} do not have the same number of result columns",
+                shown(word)
+            ),
+            Error::OrderMatch(which) => alloc::format!(
+                "{} ORDER BY term does not match any column in the result set",
+                ordinal(*which)
+            ),
+            Error::Values => {
+                alloc::string::String::from("all VALUES must have the same number of terms")
+            }
+            Error::BeforeCompound(ordered, operator) => alloc::format!(
+                "{} clause should come after {} not before",
+                if *ordered { "ORDER BY" } else { "LIMIT" },
+                shown(&compound_named(*operator))
+            ),
+            _ => return None,
+        })
+    }
+
     /// The words an aggregate written where no group has been made is
     /// refused with, or nothing where the refusal is another.
     fn misused(&self) -> Option<alloc::string::String> {
@@ -435,13 +464,12 @@ impl Error {
     #[must_use]
     pub fn message(&self) -> alloc::string::String {
         use alloc::string::ToString as _;
-        if let Some(shown) = self.altered() {
-            return shown;
-        }
-        if let Some(shown) = self.datatypes() {
-            return shown;
-        }
-        if let Some(shown) = self.misused() {
+        if let Some(shown) = self
+            .altered()
+            .or_else(|| self.datatypes())
+            .or_else(|| self.misused())
+            .or_else(|| self.compounds())
+        {
             return shown;
         }
         match self {
@@ -578,6 +606,9 @@ impl Error {
         }
         if error.expected == parse::Expected::Unrecognized {
             return Error::Unrecognized(held.unwrap_or_default().to_vec());
+        }
+        if let parse::Expected::BeforeCompound(ordered, operator) = error.expected {
+            return Error::BeforeCompound(ordered, operator);
         }
         if error.expected == parse::Expected::TargetInFrom {
             return Error::TargetInFrom(held.unwrap_or_default().to_vec());
@@ -2086,8 +2117,13 @@ impl<'a> Database<'a> {
             return self.core(arena, id, sql, true, scope);
         }
         let mut answers: Vec<Answered> = Vec::new();
+        let mut cores: Vec<Vec<Vec<u8>>> = Vec::new();
         let mut operators: Vec<Compound> = Vec::new();
         let mut at = Some(id);
+        // Every core answers as many columns as the first, and the
+        // refusal names the word that joins the one that does not to
+        // the core before it.
+        let mut joined: Option<Compound> = None;
         while let Some(id) = at {
             let core = arena.select(id).ok_or(Error::Unsupported)?;
             let mine = self.core(arena, id, sql, false, scope)?;
@@ -2095,11 +2131,13 @@ impl<'a> Database<'a> {
                 .first()
                 .is_some_and(|first: &Answered| first.answer.names.len() != mine.answer.names.len())
             {
-                return Err(Error::Compound);
+                return Err(unjoined(joined, !core.values.is_empty()));
             }
+            cores.push(named_of(&mine.shape));
             answers.push(mine);
             at = core.compound.map(|(operator, next)| {
                 operators.push(operator);
+                joined = Some(operator);
                 next
             });
         }
@@ -2121,7 +2159,7 @@ impl<'a> Database<'a> {
         for (operator, right) in operators.into_iter().zip(others) {
             combine(operator, &mut answer, right.answer, &collations);
         }
-        let keys = matched(arena, &first, sql, &answer.names, &collations)?;
+        let keys = matched(arena, &first, sql, &cores, &collations)?;
         if !keys.is_empty() {
             sort_by_keys(&mut answer.rows, &keys);
         }
@@ -2575,7 +2613,8 @@ impl<'a> Database<'a> {
         // the walk takes is answered and then read by the cores that
         // read the term.
         let head = arena.select(cte.select).ok_or(Error::Unsupported)?;
-        let order = matched(arena, &head, sql, &answered.answer.names, &collations)?;
+        let named = named_of(&answered.shape);
+        let order = matched(arena, &head, sql, &[named], &collations)?;
         let reach = Reach {
             database: self,
             arena,
@@ -2633,7 +2672,7 @@ impl<'a> Database<'a> {
             for (step, link) in links.iter().enumerate().skip(first) {
                 let answer = self.core(arena, link.id, sql, false, mine)?;
                 if answer.answer.names.len() != width {
-                    return Err(Error::Compound);
+                    return Err(unjoined(before(&links, step), false));
                 }
                 let once = before(&links, step) == Some(Compound::Union);
                 for new in answer.answer.rows {
@@ -2668,7 +2707,7 @@ impl<'a> Database<'a> {
                 continue;
             };
             if answered.answer.names.len() != mine.answer.names.len() {
-                return Err(Error::Compound);
+                return Err(unjoined(Some(operator), false));
             }
             let collations = self.collations(&answered.shape);
             combine(operator, &mut answered.answer, mine.answer, &collations);
@@ -4828,6 +4867,37 @@ fn order_of_rows(left: &[Value], right: &[Value], terms: &[Ordered]) -> core::cm
     core::cmp::Ordering::Equal
 }
 
+/// What two cores of a compound that answer different numbers of
+/// columns are refused with, which `sqlite3SelectWrongNumTermsError`
+/// names by the word that joins them, or by the rows themselves where
+/// the cores are `VALUES`.
+fn unjoined(joined: Option<Compound>, values: bool) -> Error {
+    if values {
+        return Error::Values;
+    }
+    Error::Compound(compound_named(joined.unwrap_or(Compound::Union)))
+}
+
+/// The word one compound operator is written as, which is
+/// `sqlite3SelectOpName`.
+fn compound_named(operator: Compound) -> Vec<u8> {
+    match operator {
+        Compound::Union => b"UNION".to_vec(),
+        Compound::UnionAll => b"UNION ALL".to_vec(),
+        Compound::Except => b"EXCEPT".to_vec(),
+        Compound::Intersect => b"INTERSECT".to_vec(),
+    }
+}
+
+/// The name a statement above it reaches each column of a shape by.
+fn named_of(shape: &Shape) -> Vec<Vec<u8>> {
+    shape
+        .columns
+        .iter()
+        .map(|column| column.name.clone())
+        .collect()
+}
+
 /// The `ORDER BY` of a compound, whose every term has to count or name
 /// a column of the answer: there is no row left to read an expression
 /// against.
@@ -4835,25 +4905,57 @@ fn matched(
     arena: &Arena,
     select: &Select,
     sql: &[u8],
-    names: &[Vec<u8>],
+    cores: &[Vec<Vec<u8>>],
     collations: &[Collation],
 ) -> Result<Vec<Ordered>, Error> {
+    let first = cores.first().map_or(&[][..], Vec::as_slice);
     let mut out = Vec::new();
-    for key in keys(arena, select, sql, names, collations)? {
-        match key.of {
+    for (which, key) in keys(arena, select, sql, first, collations)?
+        .into_iter()
+        .enumerate()
+    {
+        let found = match key.of {
             // A `COLLATE` on the term is what the sort compares under,
             // which `multiSelectOrderBy` reads off the term and not off
             // the column it counts to.
-            Keyed::Place(at, collation) => out.push(Ordered {
-                at,
-                descending: key.descending,
-                collation,
-                nulls: key.nulls,
-            }),
-            Keyed::Expr(_) => return Err(Error::OrderMatch),
-        }
+            Keyed::Place(at, collation) => Some((at, collation)),
+            Keyed::Expr(_) => elsewhere(arena, select, sql, cores, collations, which)?,
+        };
+        let (at, collation) = found.ok_or(Error::OrderMatch(which.saturating_add(1)))?;
+        out.push(Ordered {
+            at,
+            descending: key.descending,
+            collation,
+            nulls: key.nulls,
+        });
     }
     Ok(out)
+}
+
+/// Where one `ORDER BY` term counts to among the cores after the first,
+/// which `resolveCompoundOrderBy` reads from the left and stops at the
+/// first core that answers a column of that name.
+///
+/// Reading one term against every core costs O(cores · terms).
+fn elsewhere(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    cores: &[Vec<Vec<u8>>],
+    collations: &[Collation],
+    which: usize,
+) -> Result<Option<(usize, Collation)>, Error> {
+    for names in cores.iter().skip(1) {
+        let keyed = keys(arena, select, sql, names, collations)?;
+        if let Some(Key {
+            of: Keyed::Place(at, collation),
+            ..
+        }) = keyed.into_iter().nth(which)
+        {
+            return Ok(Some((at, collation)));
+        }
+    }
+    Ok(None)
 }
 
 /// One table of the schema, read out of the statement that made it,

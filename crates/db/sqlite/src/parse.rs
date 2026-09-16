@@ -82,6 +82,10 @@ pub enum Expected {
     /// Nothing: a token the tokenizer read as no token at all, which
     /// the span names.
     Unrecognized,
+    /// Nothing: an `ORDER BY` or a `LIMIT` written on a core of a
+    /// compound other than the last, which the word it carries names,
+    /// the truth telling the `ORDER BY` from the `LIMIT`.
+    BeforeCompound(bool, crate::ast::Compound),
     /// Nothing: the table an `UPDATE` changes named again in its
     /// `FROM`, which the span names.
     TargetInFrom,
@@ -278,8 +282,18 @@ impl<'a> Parser<'a> {
         {
             return Err(self.error(self.peek(), Expected::Eof));
         }
+        let ordered = self.at_keyword(Keyword::Order);
         let order = self.order_by()?;
         let limit = self.limit()?;
+        // `parserDoubleLinkSelect` refuses an `ORDER BY` or a `LIMIT`
+        // written on a core other than the last one, naming the word
+        // that joins that core to the one after it.
+        // The loop above took every word that joins two cores, so a
+        // word standing here is one an `ORDER BY` or a `LIMIT` stopped
+        // the loop before.
+        if let Some(operator) = self.compound_ahead() {
+            return Err(self.error(self.peek(), Expected::BeforeCompound(ordered, operator)));
+        }
         // The chain is built from the back, so that each core can name
         // the one after it. There is always a first core, which is the
         // statement, and the clauses of the whole belong to it.
@@ -744,6 +758,27 @@ impl<'a> Parser<'a> {
             return Some(Compound::Except);
         }
         if self.eat_keyword(Keyword::Intersect) {
+            return Some(Compound::Intersect);
+        }
+        None
+    }
+
+    /// The compound operator the next tokens are, where they are one,
+    /// read without taking them.
+    fn compound_ahead(&self) -> Option<Compound> {
+        if self.at_keyword(Keyword::Union) {
+            if self
+                .ahead(1)
+                .is_some_and(|token| token.kind == Kind::Keyword(Keyword::All))
+            {
+                return Some(Compound::UnionAll);
+            }
+            return Some(Compound::Union);
+        }
+        if self.at_keyword(Keyword::Except) {
+            return Some(Compound::Except);
+        }
+        if self.at_keyword(Keyword::Intersect) {
             return Some(Compound::Intersect);
         }
         None

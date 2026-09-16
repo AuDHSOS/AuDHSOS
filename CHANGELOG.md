@@ -7,6 +7,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` refuses a compound in the words the C library refuses it
+  with: two cores that answer different numbers of columns name the word
+  that joins them, two `VALUES` name the rows, and an `ORDER BY` or a
+  `LIMIT` written on a core other than the last names the word after it.
+  A term of the `ORDER BY` counts to the column of the first core that
+  answers one of that name, where the engine read the first core alone,
+  and a term no core answers says which term it is. D-267 records it.
+  Catalog 6.6.191.
+
 - `db-sqlite` refuses a name more than one side of a `FROM` answers to
   with `ambiguous column name: a`, naming it as it was written, where it
   answered `no such column: a` before. A name one `USING` or one
