@@ -248,6 +248,7 @@ impl ArrayWalk {
 ///
 /// A field that is `None` is one the descriptor does not have, which 10.1.6.3
 /// treats differently from one that is present and undefined.
+#[derive(Default)]
 struct PartialDescriptor {
     value: Option<Value>,
     writable: Option<bool>,
@@ -2699,6 +2700,7 @@ impl RegisterVM {
         intrinsic: Intrinsic,
         target: Value,
         heap: &mut GenerationalHeap,
+        realm: &Realm,
     ) -> Result<Value, VMError> {
         let tests = matches!(
             intrinsic,
@@ -2707,11 +2709,30 @@ impl RegisterVM {
         let Some(object) = target.as_object() else {
             return Ok(if tests { VALUE_TRUE } else { target });
         };
-        Self::refuse_indexed_integrity(object, heap)?;
         if !tests {
+            // 7.3.15 step 3 prevents extensions and then makes every own
+            // property of the object the level asks for.
             heap.prevent_extensions(object)?;
-            let writable = (intrinsic == Intrinsic::ObjectFreeze).then_some(false);
-            heap.reshape_all(object, writable)?;
+            let frozen = intrinsic == Intrinsic::ObjectFreeze;
+            for (key, _) in heap.own_keys(object)? {
+                let Some(current) = heap.own_named_flags(object, key)? else {
+                    continue;
+                };
+                // 10.4.3.1 gives a String exotic object own names that are
+                // neither writable nor configurable, so both levels hold of
+                // them already and 10.1.6.3 would answer true for each.
+                if Self::owns_string_exotic(object, key, heap)? {
+                    continue;
+                }
+                let descriptor = PartialDescriptor {
+                    configurable: Some(false),
+                    // Step 3.b.ii.2: a frozen data property is not writable
+                    // either; an accessor keeps the two halves it has.
+                    writable: (frozen && !current.is_accessor).then_some(false),
+                    ..PartialDescriptor::default()
+                };
+                Self::define_property_from(object, key, &descriptor, heap, realm)?;
+            }
             return Ok(target);
         }
         if heap.is_extensible(object).unwrap_or(true) {
@@ -2727,25 +2748,6 @@ impl RegisterVM {
             }
         }
         Ok(VALUE_TRUE)
-    }
-
-    /// Refuses an integrity level on an object that holds indexed elements.
-    ///
-    /// 7.3.14 and 7.3.15 speak of every own property, and this engine keeps an
-    /// index in an Elements store that carries no attributes of its own, so it
-    /// can neither seal one nor tell whether it is sealed.
-    fn refuse_indexed_integrity(object: ObjectRef, heap: &GenerationalHeap) -> Result<(), VMError> {
-        let holds_indices = heap
-            .get_object(object)
-            .and_then(|object| object.elements)
-            .and_then(|elements| heap.get_elements(elements))
-            .is_some_and(|elements| !elements.is_empty());
-        if holds_indices {
-            return Err(VMError::Unsupported(
-                "an integrity level on an object that holds indexed elements",
-            ));
-        }
-        Ok(())
     }
 
     /// The own String keys of an object, in the order 10.1.11 gives them:
@@ -3006,7 +3008,7 @@ impl RegisterVM {
             Intrinsic::ObjectSeal
             | Intrinsic::ObjectFreeze
             | Intrinsic::ObjectIsSealed
-            | Intrinsic::ObjectIsFrozen => Self::integrity_level(intrinsic, target, heap),
+            | Intrinsic::ObjectIsFrozen => Self::integrity_level(intrinsic, target, heap, realm),
             // 20.1.2.8: the own property, as the object 6.2.6.4 makes of it.
             Intrinsic::ObjectGetOwnPropertyDescriptor => {
                 let object = Self::coerce_object(target, heap, realm)?;
@@ -4411,14 +4413,10 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
     ) -> Result<(), VMError> {
         // 10.4.3.1 answers an index and the `length` from the
-        // `[[StringData]]`, so a Shape that took the name would hold a second
-        // answer beside the one a read finds.
-        if heap.own_named_flags(object, name)?.is_some()
-            && matches!(
-                heap.get_object(object).map(|entry| &entry.kind),
-                Some(ObjectKind::StringWrapper(_))
-            )
-        {
+        // `[[StringData]]`, so a Shape that took one of those names would hold
+        // a second answer beside the one a read finds. Every other own name of
+        // such an object is ordinary and belongs in the Shape.
+        if Self::owns_string_exotic(object, name, heap)? {
             return Err(VMError::Unsupported(
                 "a descriptor for an own name of a String exotic object",
             ));
@@ -6425,18 +6423,25 @@ impl RegisterVM {
             // and the Array is one shorter.
             Intrinsic::ArrayPrototypeShift => {
                 if length <= 0 {
-                    Self::set_array_like_length(object, 0, heap)?;
+                    Self::set_array_like_length(object, 0, heap, realm)?;
                     return Ok(VALUE_UNDEFINED);
                 }
                 let first = Self::element_at(heap, object, 0)?.unwrap_or(VALUE_UNDEFINED);
                 let elements = Self::array_elements(heap, object)?;
                 for index in 1..Self::scan_range(0, length).end {
                     let moved = Self::element_at(heap, object, index)?;
-                    Self::place_element(heap, object, elements, index.saturating_sub(1), moved)?;
+                    Self::place_element(
+                        heap,
+                        object,
+                        elements,
+                        index.saturating_sub(1),
+                        moved,
+                        realm,
+                    )?;
                 }
                 let last = u32::try_from(length.saturating_sub(1)).unwrap_or(u32::MAX);
                 heap.delete_element(elements, last)?;
-                Self::set_array_like_length(object, last, heap)?;
+                Self::set_array_like_length(object, last, heap, realm)?;
                 Ok(first)
             }
             // 23.1.3.37: the arguments go in front, so every element moves up
@@ -6449,7 +6454,7 @@ impl RegisterVM {
                         let moved = Self::element_at(heap, object, index)?;
                         let target = u32::try_from(i64::from(index).saturating_add(count))
                             .map_err(|_| VMError::PropertyLimit)?;
-                        Self::place_element(heap, object, elements, target, moved)?;
+                        Self::place_element(heap, object, elements, target, moved, realm)?;
                     }
                     for offset in 0..call.arg_count {
                         heap.set_array_element(
@@ -6488,7 +6493,7 @@ impl RegisterVM {
                     }
                     target = target.saturating_add(1);
                 }
-                Self::splice_tail(object, start, removed, inserted, length, heap)?;
+                Self::splice_tail(object, start, removed, inserted, length, heap, realm)?;
                 for offset in 2..call.arg_count {
                     let index = start.saturating_add(i64::from(offset.saturating_sub(2)));
                     let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
@@ -6497,6 +6502,7 @@ impl RegisterVM {
                         index,
                         self.call_argument(&call, offset, heap)?,
                         heap,
+                        realm,
                     )?;
                 }
                 let final_length = length.saturating_sub(removed).saturating_add(inserted);
@@ -6504,6 +6510,7 @@ impl RegisterVM {
                     object,
                     u32::try_from(final_length).map_err(|_| VMError::PropertyLimit)?,
                     heap,
+                    realm,
                 )?;
                 Ok(Value::from_object(result))
             }
@@ -6513,7 +6520,7 @@ impl RegisterVM {
                 let start = bounded(self.call_argument(&call, 1, heap)?, 0, heap)?;
                 let end = bounded(self.call_argument(&call, 2, heap)?, length, heap)?;
                 for index in Self::scan_range(start, end) {
-                    Self::set_element(object, index, value, heap)?;
+                    Self::set_element(object, index, value, heap, realm)?;
                 }
                 Ok(call.receiver)
             }
@@ -6537,7 +6544,7 @@ impl RegisterVM {
                 for (offset, value) in taken.into_iter().enumerate() {
                     let index = target.saturating_add(i64::try_from(offset).unwrap_or(i64::MAX));
                     let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
-                    Self::place_element(heap, object, elements, index, value)?;
+                    Self::place_element(heap, object, elements, index, value, realm)?;
                 }
                 Ok(call.receiver)
             }
@@ -6648,7 +6655,7 @@ impl RegisterVM {
                 let count = i64::try_from(values.len()).unwrap_or(i64::MAX);
                 for (offset, value) in values.into_iter().enumerate() {
                     let index = u32::try_from(offset).map_err(|_| VMError::PropertyLimit)?;
-                    Self::place_element(heap, object, elements, index, value)?;
+                    Self::place_element(heap, object, elements, index, value, realm)?;
                 }
                 // Step 8 deletes the indices the holes left behind.
                 for position in Self::scan_range(count, length) {
@@ -6706,11 +6713,50 @@ impl RegisterVM {
         index: u32,
         value: Value,
         heap: &mut GenerationalHeap,
+        realm: &Realm,
     ) -> Result<(), VMError> {
         if heap.array_length(object).is_none() {
             return Err(VMError::Unsupported(
                 "an indexed write to a receiver that is not an Array",
             ));
+        }
+        // 7.3.4 writes with `Throw` true, so a write 10.1.9.2 refuses raises a
+        // TypeError. An Array whose Shape carries no name of its own and that
+        // is extensible refuses none, and 7.3.15 is what puts an index there.
+        let shape = heap
+            .get_object(object)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?
+            .shape_id;
+        if shape != heap.shapes.root_shape() || !heap.is_extensible(object).unwrap_or(true) {
+            let name = alloc::format!("{index}");
+            let key = PropertyKey::String(
+                heap.strings
+                    .intern_units(&name.encode_utf16().collect::<Vec<u16>>())?,
+            );
+            match heap.own_named_flags(object, key)? {
+                Some(flags) if flags.is_accessor || !flags.writable => {
+                    return Err(type_error(
+                        heap,
+                        realm,
+                        "cannot write a property that is not writable",
+                    ));
+                }
+                // The index is a property of the Shape, which 7.3.15 moved it
+                // to, so the write belongs there and not in the store.
+                Some(_) => {
+                    heap.define_own_named(object, key, value, PropertyFlags::ordinary_data())?;
+                    return Ok(());
+                }
+                None => {
+                    if !heap.is_extensible(object).unwrap_or(true) {
+                        return Err(type_error(
+                            heap,
+                            realm,
+                            "cannot add a property to an object that is not extensible",
+                        ));
+                    }
+                }
+            }
         }
         heap.set_array_element(object, index, value)?;
         Ok(())
@@ -6747,8 +6793,18 @@ impl RegisterVM {
         object: ObjectRef,
         length: u32,
         heap: &mut GenerationalHeap,
+        realm: &Realm,
     ) -> Result<(), VMError> {
         if heap.array_length(object).is_some() {
+            // 7.3.4 writes with `Throw` true, and 10.4.2.4 refuses a `length`
+            // 7.3.15 made unwritable.
+            if !heap.array_length_is_writable(object).unwrap_or(true) {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "cannot write a property that is not writable",
+                ));
+            }
             heap.set_array_length(object, length)?;
             return Ok(());
         }
@@ -6772,6 +6828,7 @@ impl RegisterVM {
         inserted: i64,
         length: i64,
         heap: &mut GenerationalHeap,
+        realm: &Realm,
     ) -> Result<(), VMError> {
         if inserted == removed {
             return Ok(());
@@ -6782,7 +6839,7 @@ impl RegisterVM {
             let moved = Self::element_at(heap, object, index)?;
             let to = from.saturating_sub(removed).saturating_add(inserted);
             let to = u32::try_from(to).map_err(|_| VMError::PropertyLimit)?;
-            Self::place_element(heap, object, elements, to, moved)
+            Self::place_element(heap, object, elements, to, moved, realm)
         };
         let tail = Self::scan_range(start.saturating_add(removed), length);
         if inserted < removed {
@@ -7171,6 +7228,7 @@ impl RegisterVM {
                         index,
                         self.call_argument(&call, offset, heap)?,
                         heap,
+                        realm,
                     )?;
                     next = next.saturating_add(1);
                 }
@@ -7181,12 +7239,14 @@ impl RegisterVM {
             Intrinsic::ArrayPrototypePop => {
                 let elements = Self::array_elements(heap, object)?;
                 let Ok(last) = u32::try_from(length.saturating_sub(1)) else {
-                    heap.set_array_length(object, 0)?;
+                    Self::set_array_like_length(object, 0, heap, realm)?;
                     return Ok(VALUE_UNDEFINED);
                 };
                 let element = Self::element_at(heap, object, last)?.unwrap_or(VALUE_UNDEFINED);
-                heap.delete_element(elements, last)?;
-                heap.set_array_length(object, last)?;
+                // Step 4.b deletes the index with 7.3.9 and sets the length
+                // with 7.3.4, and both throw where 10.1 refuses.
+                Self::delete_element_or_throw(object, elements, last, heap, realm)?;
+                Self::set_array_like_length(object, last, heap, realm)?;
                 Ok(element)
             }
             // 23.1.3.26: the two ends swap until they meet, and an index that
@@ -7198,8 +7258,8 @@ impl RegisterVM {
                 while lower < upper {
                     let lower_value = Self::element_at(heap, object, lower)?;
                     let upper_value = Self::element_at(heap, object, upper)?;
-                    Self::place_element(heap, object, elements, lower, upper_value)?;
-                    Self::place_element(heap, object, elements, upper, lower_value)?;
+                    Self::place_element(heap, object, elements, lower, upper_value, realm)?;
+                    Self::place_element(heap, object, elements, upper, lower_value, realm)?;
                     lower = lower.saturating_add(1);
                     upper = upper.saturating_sub(1);
                 }
@@ -7866,6 +7926,43 @@ impl RegisterVM {
             ))
     }
 
+    /// `DeletePropertyOrThrow` of 7.3.9 for an index of an Array.
+    ///
+    /// An index 7.3.15 moved into the Shape is not configurable, which 10.1.10
+    /// refuses to delete.
+    fn delete_element_or_throw(
+        object: ObjectRef,
+        elements: super::elements::ElementsRef,
+        index: u32,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let shape = heap
+            .get_object(object)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?
+            .shape_id;
+        if shape != heap.shapes.root_shape() {
+            let name = alloc::format!("{index}");
+            let key = PropertyKey::String(
+                heap.strings
+                    .intern_units(&name.encode_utf16().collect::<Vec<u16>>())?,
+            );
+            if let Some(flags) = heap.own_named_flags(object, key)? {
+                if !flags.configurable {
+                    return Err(type_error(
+                        heap,
+                        realm,
+                        "cannot delete a property that is not configurable",
+                    ));
+                }
+                delete_property(object, key, None, heap)?;
+                return Ok(());
+            }
+        }
+        heap.delete_element(elements, index)?;
+        Ok(())
+    }
+
     /// `Set(O, ! ToString(𝔽(index)), value, true)` of 7.3.4, or
     /// `DeletePropertyOrThrow` of 7.3.9 when the index it came from was absent.
     fn place_element(
@@ -7874,9 +7971,10 @@ impl RegisterVM {
         elements: super::elements::ElementsRef,
         index: u32,
         value: Option<Value>,
+        realm: &Realm,
     ) -> Result<(), VMError> {
         match value {
-            Some(value) => Self::set_element(object, index, value, heap)?,
+            Some(value) => Self::set_element(object, index, value, heap, realm)?,
             None => drop(heap.delete_element(elements, index)?),
         }
         Ok(())

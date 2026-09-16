@@ -714,6 +714,46 @@ fn a_string_method_converts_the_this_value_it_was_given() -> Result<(), Error> {
     Ok(())
 }
 
+#[test]
+fn an_integrity_level_reaches_the_indices_of_an_array() -> Result<(), Error> {
+    for source in [
+        // 7.3.15 makes every own property of the object the level asks for,
+        // and an index of an Array is one of them.
+        "let a=[1,2,3];Object.freeze(a);a[0]=9;a.join()",
+        "let a=[1,2,3];Object.freeze(a);''+Object.isFrozen(a)",
+        "let a=[1,2];Object.seal(a);a[0]=9;a.join()+':'+Object.isSealed(a)",
+        "let a=[1,2];Object.seal(a);''+Object.isFrozen(a)",
+        "let a=[1,2];Object.freeze(a);''+Object.getOwnPropertyDescriptor(a,'0').writable",
+        "let a=[1,2];Object.seal(a);''+Object.getOwnPropertyDescriptor(a,'0').configurable",
+        "let a=[1,2];Object.freeze(a);''+Object.getOwnPropertyDescriptor(a,'length').writable",
+        "let a=[1,2];Object.seal(a);delete a[0];a.join()+':'+a.length",
+        "''+Object.isFrozen([])",
+        "let a=[];Object.freeze(a);''+Object.isFrozen(a)",
+        // 7.3.4 and 7.3.9 write and delete with `Throw` true, so a clause of
+        // 23.1.3 that edits a frozen Array raises the TypeError.
+        "(function(){let a=[1,2,3];Object.freeze(a);try{a.push(4)}catch(e){return e instanceof TypeError}return false})()",
+        "(function(){let a=[1,2,3];Object.freeze(a);try{a.pop()}catch(e){return e instanceof TypeError}return false})()",
+        "(function(){let a=[1,2,3];Object.seal(a);try{a.pop()}catch(e){return e instanceof TypeError}return false})()",
+        "(function(){let a=[1,2,3];Object.preventExtensions(a);try{a.push(4)}catch(e){return e instanceof TypeError}return false})()",
+        // An Array nothing froze takes every edit it took before.
+        "let a=[1,2,3];a.push(4)+':'+a.join()",
+        "let a=[1,2,3];a.pop()+':'+a.join()",
+        "let a=[1,2,3];Object.preventExtensions(a);a.pop()+':'+a.join()",
+        "let a=[1,2,3];a.splice(1,1).join()+':'+a.join()",
+        "let a=[1,2,3];a.reverse().join()",
+        "let a=[1,2,3];a.fill(0).join()",
+        "let a=[];a.push(1,2);a.join()",
+        // 10.4.3.1 gives a String exotic object own names that both levels
+        // already hold of.
+        "let s=new String('ab');Object.freeze(s);''+Object.isFrozen(s)",
+        "let s=new String('ab');Object.seal(s);''+Object.isSealed(s)",
+        "(function(){let s=new String('abc');s.foo=10;Object.freeze(s);let d=Object.getOwnPropertyDescriptor(s,'foo');return d.value+':'+d.writable+':'+d.configurable})()",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
 fn differential_scripts(scripts: &[&str]) -> Result<(), Error> {
     let outcome = |backend| -> Result<Result<Value, Error>, Error> {
         let mut host = SilentHost;
@@ -5201,19 +5241,13 @@ fn the_integrity_levels_of_20_1_2_hold_on_the_new_engine() -> Result<(), Error> 
     ] {
         differential(source)?;
     }
-    // 7.3.14 speaks of every own property, and this engine keeps an index in
-    // a store that carries no attributes of its own.
-    for source in ["Object.freeze([1])", "Object.isFrozen([1])"] {
-        let program = compile(source, Limits::default())?;
-        assert!(program.uses_register_backend(), "{source}");
-        assert!(
-            matches!(
-                Runtime::with_backend(Limits::default(), Backend::Engine)
-                    .run(&program, &mut SilentHost),
-                Err(Error::Unsupported { .. })
-            ),
-            "{source}"
-        );
+    // 7.3.14 and 7.3.15 speak of every own property, and an index of an Array
+    // is one of them.
+    for source in [
+        "''+Object.isFrozen([1])",
+        "let a=[1];Object.freeze(a);''+Object.isFrozen(a)",
+    ] {
+        differential(source)?;
     }
     Ok(())
 }
