@@ -2209,12 +2209,11 @@ impl RegisterLowerer {
             return None;
         }
         let value_type = self.lower(right)?;
-        // 13.15.5.2 takes the value as it is; an array pattern reaches it
-        // through 7.4.2 and an object pattern through 7.3.5, both of which
-        // run on a value the lowering could not name.
-        if !value_type.is_object() && value_type != RegisterType::Unknown {
-            return None;
-        }
+        // 13.15.5.2 takes the value as it is: an array pattern reaches it
+        // through 7.4.2, which throws for a value that carries no
+        // `@@iterator`, and an object pattern through 7.3.5, which 13.15.5.5
+        // step 1 guards with `RequireObjectCoercible`. Both run on a primitive
+        // as they run on an Object.
         let result = self.allocate_register()?;
         self.code.emit(Instruction::Star(result));
         self.assign_pattern(value_type, pattern)?;

@@ -8605,3 +8605,24 @@ fn a_spread_element_inside_a_function_reaches_the_lowering() -> Result<(), Error
     }
     Ok(())
 }
+
+#[test]
+fn a_destructuring_assignment_takes_a_primitive_value() -> Result<(), Error> {
+    for source in [
+        // 13.15.5.5 reaches an array pattern through 7.4.2, which throws for a
+        // value that carries no `@@iterator`.
+        "var r;try{[]=true}catch(e){r=e instanceof TypeError};''+r",
+        "var r;try{[,]=null}catch(e){r=e instanceof TypeError};''+r",
+        "var a;var r;try{[a]=7}catch(e){r=e instanceof TypeError};''+r",
+        // 13.15.5.5 step 1 refuses undefined and null before it reads a
+        // property, and takes every other primitive through 7.3.5.
+        "var r;try{({}=null)}catch(e){r=e instanceof TypeError};''+r",
+        "var r;try{({}=undefined)}catch(e){r=e instanceof TypeError};''+r",
+        "var o={};({a:o.x}=true);''+o.x",
+        "var n;({length:n}='abc');''+n",
+        "var r={};({}=true);''+typeof r",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
