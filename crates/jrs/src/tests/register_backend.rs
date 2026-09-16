@@ -8585,3 +8585,23 @@ fn a_loop_body_that_edits_an_object_lets_it_leave() -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[test]
+fn a_spread_element_inside_a_function_reaches_the_lowering() -> Result<(), Error> {
+    // The scans that collect the names a body reads and writes stopped at a
+    // spread element, so every function that held one was refused before the
+    // lowering of 13.2.4.2 was reached.
+    for source in [
+        "function f(){return [...[1,2],3].join(',')}f()",
+        "function f(){var a=[1,2];return [...a].length}f()",
+        "function f(){return Math.max(...[1,9,3])}f()",
+        "function f(a,b){return ''+a+b}function g(){return f(...[1,2])}g()",
+        "function C(a){this.v=a}function g(){return new C(...[7]).v}g()",
+        "function g(){var x=1;var h=function(){return x};[...[2]];return h()}g()",
+        // The operand's own writes are seen through the spread.
+        "function g(){var x=1;var a=[...[x=5]];return ''+x+a[0]}g()",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}

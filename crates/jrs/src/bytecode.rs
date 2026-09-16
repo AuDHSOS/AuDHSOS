@@ -9568,9 +9568,12 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
             register_expression_writes_names(left, names)?
                 || register_expression_writes_names(right, names)?
         }
-        ExprKind::Group(inner) | ExprKind::Unary(_, inner) => {
-            register_expression_writes_names(inner, names)?
-        }
+        // 27.7.5.3 and 13.2.4.2 evaluate their operand like any other
+        // expression, as a group and a unary operator do.
+        ExprKind::Group(inner)
+        | ExprKind::Unary(_, inner)
+        | ExprKind::Await(inner)
+        | ExprKind::Spread(inner) => register_expression_writes_names(inner, names)?,
         ExprKind::Conditional(condition, yes, no) => {
             register_expression_writes_names(condition, names)?
                 || register_expression_writes_names(yes, names)?
@@ -9640,11 +9643,6 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
                 }
             }
             false
-        }
-        // 27.7.5.3 evaluates its operand like any other expression.
-        ExprKind::Await(inner) => register_expression_writes_names(inner, names)?,
-        ExprKind::Spread(_) => {
-            return None;
         }
     })
 }
@@ -9910,7 +9908,10 @@ fn register_expression_references(
             register_expression_references(left, names, nested_free_names)?;
             register_expression_references(right, names, nested_free_names)?;
         }
-        ExprKind::Group(inner) | ExprKind::Unary(_, inner) => {
+        ExprKind::Group(inner)
+        | ExprKind::Unary(_, inner)
+        | ExprKind::Await(inner)
+        | ExprKind::Spread(inner) => {
             register_expression_references(inner, names, nested_free_names)?;
         }
         ExprKind::Conditional(condition, yes, no) => {
@@ -9964,10 +9965,6 @@ fn register_expression_references(
             for (expression, _) in parts {
                 register_expression_references(expression, names, nested_free_names)?;
             }
-        }
-        ExprKind::Await(inner) => register_expression_references(inner, names, nested_free_names)?,
-        ExprKind::Spread(_) => {
-            return None;
         }
     }
     Some(())
