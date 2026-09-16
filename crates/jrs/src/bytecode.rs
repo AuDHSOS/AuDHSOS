@@ -7873,6 +7873,10 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ReflectApply
         | crate::engine::realm::Intrinsic::ReflectConstruct
         | crate::engine::realm::Intrinsic::SpeciesGetter
+        // 23.1.2.1 and 23.1.2.3 answer an Array whose elements this lowering
+        // did not make.
+        | crate::engine::realm::Intrinsic::ArrayOf
+        | crate::engine::realm::Intrinsic::ArrayFrom
         // 22.2.6.11 answers the String it built, which no lowering names.
         | crate::engine::realm::Intrinsic::RegExpPrototypeReplace
         // 23.1.3.14, 23.1.3.30, 23.1.3.34 and 23.1.3.35 answer an Array whose

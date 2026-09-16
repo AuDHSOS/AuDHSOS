@@ -6937,3 +6937,41 @@ fn array_prototype_carries_the_unscopables_of_23_1_3_37() -> Result<(), Error> {
     }
     Ok(())
 }
+
+/// 23.1.2.3 makes an Array of the arguments, and 23.1.2.1 takes the elements
+/// of an array-like. A mapper and an `@@iterator` each run a method of the
+/// Script, which the native names.
+#[test]
+fn array_of_and_array_from_build_an_array_of_what_they_were_given() -> Result<(), Error> {
+    for source in [
+        "''+Array.of(1,2,3)",
+        "''+Array.of()",
+        "''+Array.of(undefined).length",
+        "''+Array.from({0:'a',1:'b',length:2})",
+        "''+Array.from({length:2})",
+        "''+Array.from({length:0}).length",
+        "''+Array.of.length+Array.from.length",
+        "Array.of.name+Array.from.name",
+        "var t=false;try{Array.from(null)}catch(e){t=e instanceof TypeError}''+t",
+        "var t=false;try{Array.from({length:1},1)}catch(e){t=e instanceof TypeError}''+t",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // An `@@iterator` and a mapper each need a frame this native has none of.
+    for source in [
+        "Array.from([1,2])",
+        "Array.from({length:1},function(x){return x})",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        assert!(
+            matches!(
+                Runtime::with_backend(Limits::default(), Backend::Engine)
+                    .run(&program, &mut SilentHost),
+                Err(Error::Unsupported { .. })
+            ),
+            "{source}"
+        );
+    }
+    Ok(())
+}

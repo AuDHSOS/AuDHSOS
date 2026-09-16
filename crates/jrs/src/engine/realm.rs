@@ -392,6 +392,10 @@ pub enum Intrinsic {
     StringPrototypeReplace,
     /// `%RegExp.prototype%[@@replace]` (22.2.6.11).
     RegExpPrototypeReplace,
+    /// `Array.of` (23.1.2.3).
+    ArrayOf,
+    /// `Array.from` (23.1.2.1).
+    ArrayFrom,
     /// `Array.prototype.values`, which is also `%Array.prototype%[@@iterator]`
     /// (23.1.3.38 and 23.1.3.40).
     ArrayPrototypeValues,
@@ -646,7 +650,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 156] = [
+    pub const ALL: [Self; 158] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -803,6 +807,8 @@ impl Intrinsic {
         Self::SpeciesGetter,
         Self::StringPrototypeReplace,
         Self::RegExpPrototypeReplace,
+        Self::ArrayOf,
+        Self::ArrayFrom,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -952,7 +958,9 @@ impl Intrinsic {
             | Self::IsFinite
             | Self::ParseInt
             | Self::ParseFloat => IntrinsicHolder::Global,
-            Self::ArrayIsArray => IntrinsicHolder::ArrayConstructor,
+            Self::ArrayIsArray | Self::ArrayOf | Self::ArrayFrom => {
+                IntrinsicHolder::ArrayConstructor
+            }
             Self::ObjectDefineProperty
             | Self::ObjectGetOwnPropertyDescriptor
             | Self::ObjectGetOwnPropertyNames
@@ -1142,6 +1150,8 @@ impl Intrinsic {
             Self::SpeciesGetter => 153,
             Self::StringPrototypeReplace => 154,
             Self::RegExpPrototypeReplace => 155,
+            Self::ArrayOf => 156,
+            Self::ArrayFrom => 157,
         }
     }
 
@@ -1308,6 +1318,8 @@ impl Intrinsic {
             Self::SpeciesGetter => 153,
             Self::StringPrototypeReplace => 154,
             Self::RegExpPrototypeReplace => 155,
+            Self::ArrayOf => 156,
+            Self::ArrayFrom => 157,
         }
     }
 
@@ -1475,6 +1487,8 @@ impl Intrinsic {
             153 => Some(Self::SpeciesGetter),
             154 => Some(Self::StringPrototypeReplace),
             155 => Some(Self::RegExpPrototypeReplace),
+            156 => Some(Self::ArrayOf),
+            157 => Some(Self::ArrayFrom),
             _ => None,
         }
     }
@@ -1538,6 +1552,8 @@ impl Intrinsic {
             Self::ArrayPrototypeShift => "shift",
             Self::ArrayPrototypeUnshift => "unshift",
             Self::ArrayPrototypeSplice => "splice",
+            Self::ArrayOf => "of",
+            Self::ArrayFrom => "from",
             Self::ArrayPrototypeFlat => "flat",
             Self::ArrayPrototypeSort => "sort",
             Self::ArrayPrototypeToSorted => "toSorted",
@@ -1754,6 +1770,8 @@ impl Intrinsic {
             | Self::FunctionPrototype
             | Self::ErrorPrototypeToString
             | Self::SpeciesGetter
+            | Self::ArrayOf
+            | Self::ArrayFrom
             | Self::StringPrototypeReplace
             | Self::RegExpPrototypeReplace
             | Self::ArrayPrototypeSort
@@ -1922,6 +1940,7 @@ impl Intrinsic {
             | Self::ArrayPrototypeShift
             | Self::IteratorPrototypeIterator
             | Self::ArrayPrototypeFlat
+            | Self::ArrayOf
             | Self::ArrayPrototypeToReversed => 0,
             Self::ObjectPrototypeHasOwnProperty
             | Self::ObjectPrototypeIsPrototypeOf
@@ -2016,6 +2035,7 @@ impl Intrinsic {
             | Self::ReflectPreventExtensions
             | Self::ArrayPrototypeSort
             | Self::ArrayPrototypeToSorted
+            | Self::ArrayFrom
             | Self::ObjectGetOwnPropertyNames => 1,
             Self::ObjectDefineProperty | Self::ReflectDefineProperty | Self::ReflectApply => 3,
             Self::MathPow

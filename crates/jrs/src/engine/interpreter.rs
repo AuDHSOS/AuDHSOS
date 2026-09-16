@@ -1633,6 +1633,18 @@ impl RegisterVM {
             // 27.1.2.1, 23.1.2.5 and 22.2.5.2 answer the value they were
             // called on.
             Intrinsic::IteratorPrototypeIterator | Intrinsic::SpeciesGetter => Ok(call.receiver),
+            // 23.1.2.3 makes an Array of the arguments it was given.
+            Intrinsic::ArrayOf => {
+                let mut values = Vec::new();
+                for index in 0..call.arg_count {
+                    values.push(self.call_argument(&call, index)?);
+                }
+                Self::array_of(values, heap, realm)
+            }
+            // 23.1.2.1 takes the elements of an array-like. A mapper and an
+            // `@@iterator` each run a method of the Script, which this native
+            // has no frame for.
+            Intrinsic::ArrayFrom => self.array_from(&call, heap, realm),
             Intrinsic::ArrayPrototypeValues
             | Intrinsic::ArrayPrototypeKeys
             | Intrinsic::ArrayPrototypeEntries
@@ -8182,6 +8194,48 @@ impl RegisterVM {
         }
         out.push(0x7D);
         Ok(true)
+    }
+
+    /// `Array.from` of 23.1.2.1 for an array-like without a mapper.
+    ///
+    /// Step 2 reads `@@iterator` and step 5 the `length`; a method of the
+    /// Script in either place needs a frame this native has none of.
+    fn array_from(
+        &mut self,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let items = self.call_argument(call, 0)?;
+        let mapper = self.call_argument(call, 1)?;
+        if !mapper.is_undefined() {
+            if !Self::is_callable(mapper, heap) {
+                return Err(type_error(heap, realm, "the mapper is not callable"));
+            }
+            return Err(VMError::Unsupported("a mapper in Array.from"));
+        }
+        if items.is_undefined() || items.is_null() {
+            return Err(type_error(heap, realm, "cannot box null or undefined"));
+        }
+        let source = Self::coerce_object(items, heap, realm)?;
+        // Step 2: an `@@iterator` decides the whole clause, and this Realm
+        // reaches one only through a frame.
+        if heap
+            .lookup_named(source, super::realm::WellKnownSymbol::Iterator.key())?
+            .is_some()
+        {
+            return Err(VMError::Unsupported("an @@iterator in Array.from"));
+        }
+        let length = Self::array_like_length(heap, source, realm)?;
+        self.charge_for_scan(length)?;
+        let mut values = Vec::new();
+        for index in Self::scan_range(0, length) {
+            // Step 5.e reads every index with 7.3.2, so a hole is undefined.
+            values.push(Some(
+                Self::element_at(heap, source, index)?.unwrap_or(VALUE_UNDEFINED),
+            ));
+        }
+        Self::array_from_holes(values, heap, realm)
     }
 
     /// The value a register holds as a property key, with an Object sent
