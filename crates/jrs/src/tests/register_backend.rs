@@ -10316,3 +10316,52 @@ fn the_three_further_rows_of_table_71_hold_a_binary16_and_a_bigint() -> Result<(
     }
     Ok(())
 }
+
+#[test]
+fn the_iterator_of_27_1_4_is_abstract_and_carries_two_accessors() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend carries no clause 27.1.4, so only the engine answers.
+    for (source, answer) in [
+        ("typeof Iterator", "function"),
+        // 27.1.4.2 gives it the `%IteratorPrototype%` every iterator of the
+        // Realm already inherits from.
+        (
+            "''+(Iterator.prototype===Object.getPrototypeOf(Object.getPrototypeOf([].values())))",
+            "true",
+        ),
+        // 27.1.4.1 refuses a call and refuses to be the target of its own
+        // construction.
+        (
+            "var r;try{Iterator()}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{new Iterator()}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        // 27.1.4.2 and 27.1.4.3 are accessor pairs, not the data properties
+        // every other prototype of the specification carries there.
+        (
+            "''+(Iterator.prototype.constructor===Iterator)+' '+Iterator.prototype[Symbol.toStringTag]",
+            "true Iterator",
+        ),
+        (
+            "''+Object.getOwnPropertyDescriptor(Iterator.prototype,'constructor').get.name",
+            "get constructor",
+        ),
+        // `SetterThatIgnoresPrototypeProperties` of 27.1.4.2.1 refuses a write
+        // on the prototype itself and makes a property of any other receiver.
+        (
+            "var o=Object.create(Iterator.prototype);o.constructor=5;''+o.constructor",
+            "5",
+        ),
+        (
+            "var r;try{Iterator.prototype.constructor=5}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}

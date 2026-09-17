@@ -2349,6 +2349,60 @@ impl RegisterVM {
             // 21.3.2.27 answers a Number in [0, 1) that no argument decides.
             Intrinsic::MathRandom => Ok(Value::from_f64(self.next_random())),
             Intrinsic::Print => self.print_line(&call, heap, realm),
+            // 27.1.4.1 is abstract: it refuses a call and refuses to be the
+            // target of a construction of its own.
+            Intrinsic::IteratorConstructor => {
+                let direct = call.construct.is_none()
+                    || call
+                        .construct
+                        .map(|target| self.read_reg(target))
+                        .transpose()?
+                        .is_some_and(|target| {
+                            Self::is_intrinsic(target, Intrinsic::IteratorConstructor, heap)
+                        });
+                if direct {
+                    return Err(type_error(heap, realm, "%Iterator% is abstract"));
+                }
+                Err(VMError::Unsupported("a subclass of %Iterator%"))
+            }
+            // 27.1.4.2 answers the constructor and 27.1.4.3 the name of the
+            // clause, whichever object the accessor was read off.
+            Intrinsic::IteratorPrototypeConstructorGet => realm
+                .intrinsic(heap, Intrinsic::IteratorConstructor)
+                .map_err(VMError::Heap),
+            Intrinsic::IteratorPrototypeToStringTagGet => {
+                let units: Vec<u16> = "Iterator".encode_utf16().collect();
+                self.allocate_string(heap, &units)
+            }
+            // `SetterThatIgnoresPrototypeProperties` of 27.1.4.2.1: a write on
+            // the prototype itself is refused, and a write on anything else
+            // makes a property of that object.
+            Intrinsic::IteratorPrototypeConstructorSet
+            | Intrinsic::IteratorPrototypeToStringTagSet => {
+                let home = realm.iterator_prototype(heap)?;
+                let Some(receiver) = call.receiver.as_object() else {
+                    return Err(type_error(
+                        heap,
+                        realm,
+                        "the receiver of 27.1.4.2.1 is no Object",
+                    ));
+                };
+                if home.as_object() == Some(receiver) {
+                    return Err(type_error(
+                        heap,
+                        realm,
+                        "a write of 27.1.4.2.1 on %Iterator.prototype%",
+                    ));
+                }
+                let name = if intrinsic == Intrinsic::IteratorPrototypeConstructorSet {
+                    PropertyKey::String(heap.strings.intern("constructor")?)
+                } else {
+                    super::realm::WellKnownSymbol::ToStringTag.key()
+                };
+                let value = self.call_argument(&call, 0, heap)?;
+                heap.define_own_named(receiver, name, value, PropertyFlags::ordinary_data())?;
+                Ok(VALUE_UNDEFINED)
+            }
             // 25.1.3.4 through the host object of the conformance suite; the
             // collector runs at a Safe Point of the interpreter and not here,
             // so the second capability answers without one.
@@ -6004,14 +6058,31 @@ impl RegisterVM {
             return Ok(None);
         }
         // A native takes its arguments from registers of the caller, and a
-        // setter reaches its frame from a root instead, so one written in Rust
-        // would be called with whatever those registers hold.
+        // setter reaches its frame from a root instead, so the value it was
+        // given travels in the List of 7.3.18 that a spread call carries.
         if !Self::is_script_function(set, heap) {
             // 10.2.4.1 throws for every call, whatever it is called with, so
             // the restricted properties of 20.2.3 read no argument and the
             // call needs none.
             if Self::is_intrinsic(set, Intrinsic::ThrowTypeError, heap) {
                 return self.enter_call_value(set, code, active_feedback, heap, realm, call);
+            }
+            if Self::is_callable(set, heap) {
+                let list = Self::array_of(alloc::vec![assigned], heap, realm)?;
+                heap.enter_scope();
+                let arguments = heap.push_root(list)?;
+                let call = Call {
+                    arg_count: 1,
+                    resume: Some(Resume::Spread { arguments }),
+                    ..call
+                };
+                let entered = self.enter_call_value(set, code, active_feedback, heap, realm, call);
+                // A native answers in place and opens no frame, so the scope
+                // the List stands in is left here rather than by a return.
+                if !matches!(entered, Ok(Some(_))) {
+                    heap.exit_scope();
+                }
+                return entered;
             }
             return Err(VMError::Unsupported(
                 "a setter that is not a Script function",

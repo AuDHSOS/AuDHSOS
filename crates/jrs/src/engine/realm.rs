@@ -1120,6 +1120,16 @@ pub enum Intrinsic {
     TypedArrayPrototypeReduceRight,
     /// `some`, 23.2.3.25.
     TypedArrayPrototypeSome,
+    /// `Iterator`, 27.1.4.1.
+    IteratorConstructor,
+    /// `get constructor`, 27.1.4.2.
+    IteratorPrototypeConstructorGet,
+    /// `set constructor`, 27.1.4.2.
+    IteratorPrototypeConstructorSet,
+    /// `get [Symbol.toStringTag]`, 27.1.4.3.
+    IteratorPrototypeToStringTagGet,
+    /// `set [Symbol.toStringTag]`, 27.1.4.3.
+    IteratorPrototypeToStringTagSet,
     /// `$262.detachArrayBuffer`, the `DetachArrayBuffer` of 25.1.3.4 the host
     /// of the conformance suite exposes.
     HostDetachArrayBuffer,
@@ -1263,7 +1273,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 435] = [
+    pub const ALL: [Self; 440] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1672,6 +1682,11 @@ impl Intrinsic {
         Self::TypedArrayPrototypeReduce,
         Self::TypedArrayPrototypeReduceRight,
         Self::TypedArrayPrototypeSome,
+        Self::IteratorConstructor,
+        Self::IteratorPrototypeConstructorGet,
+        Self::IteratorPrototypeConstructorSet,
+        Self::IteratorPrototypeToStringTagGet,
+        Self::IteratorPrototypeToStringTagSet,
         Self::HostDetachArrayBuffer,
         Self::HostGc,
         Self::BigIntConstructor,
@@ -1794,7 +1809,11 @@ impl Intrinsic {
             Self::ArrayIteratorPrototypeNext => IntrinsicHolder::ArrayIteratorPrototype,
             // 27.1.2.1 stands on %IteratorPrototype%, which every iterator of
             // the specification inherits.
-            Self::IteratorPrototypeIterator => IntrinsicHolder::IteratorPrototype,
+            Self::IteratorPrototypeIterator
+            | Self::IteratorPrototypeConstructorGet
+            | Self::IteratorPrototypeConstructorSet
+            | Self::IteratorPrototypeToStringTagGet
+            | Self::IteratorPrototypeToStringTagSet => IntrinsicHolder::IteratorPrototype,
             Self::ArrayConstructor | Self::ObjectConstructor | Self::FunctionConstructor => {
                 IntrinsicHolder::Global
             }
@@ -2137,6 +2156,7 @@ impl Intrinsic {
             | Self::Print
             // The host object of the conformance suite carries the two, which
             // the Realm attaches where the embedding asks for it.
+            | Self::IteratorConstructor
             | Self::HostDetachArrayBuffer
             | Self::HostGc => IntrinsicHolder::Global,
             Self::ArrayIsArray | Self::ArrayOf | Self::ArrayFrom => {
@@ -2593,6 +2613,11 @@ impl Intrinsic {
             Self::TypedArrayPrototypeReduce => 430,
             Self::TypedArrayPrototypeReduceRight => 431,
             Self::TypedArrayPrototypeSome => 432,
+            Self::IteratorConstructor => 435,
+            Self::IteratorPrototypeConstructorGet => 436,
+            Self::IteratorPrototypeConstructorSet => 437,
+            Self::IteratorPrototypeToStringTagGet => 438,
+            Self::IteratorPrototypeToStringTagSet => 439,
             Self::HostDetachArrayBuffer => 433,
             Self::HostGc => 434,
             Self::SharedArrayBufferConstructor => 378,
@@ -3038,6 +3063,11 @@ impl Intrinsic {
             Self::TypedArrayPrototypeReduce => 430,
             Self::TypedArrayPrototypeReduceRight => 431,
             Self::TypedArrayPrototypeSome => 432,
+            Self::IteratorConstructor => 435,
+            Self::IteratorPrototypeConstructorGet => 436,
+            Self::IteratorPrototypeConstructorSet => 437,
+            Self::IteratorPrototypeToStringTagGet => 438,
+            Self::IteratorPrototypeToStringTagSet => 439,
             Self::HostDetachArrayBuffer => 433,
             Self::HostGc => 434,
             Self::SharedArrayBufferConstructor => 378,
@@ -3484,6 +3514,11 @@ impl Intrinsic {
             430 => Some(Self::TypedArrayPrototypeReduce),
             431 => Some(Self::TypedArrayPrototypeReduceRight),
             432 => Some(Self::TypedArrayPrototypeSome),
+            435 => Some(Self::IteratorConstructor),
+            436 => Some(Self::IteratorPrototypeConstructorGet),
+            437 => Some(Self::IteratorPrototypeConstructorSet),
+            438 => Some(Self::IteratorPrototypeToStringTagGet),
+            439 => Some(Self::IteratorPrototypeToStringTagSet),
             433 => Some(Self::HostDetachArrayBuffer),
             434 => Some(Self::HostGc),
             378 => Some(Self::SharedArrayBufferConstructor),
@@ -3681,8 +3716,14 @@ impl Intrinsic {
             Self::TypedArrayBigInt64Constructor => "BigInt64Array",
             Self::TypedArrayBigUint64Constructor => "BigUint64Array",
             Self::TypedArrayPrototypeLength => "get length",
-            Self::TypedArrayPrototypeToStringTag => "get [Symbol.toStringTag]",
+            Self::TypedArrayPrototypeToStringTag | Self::IteratorPrototypeToStringTagGet => {
+                "get [Symbol.toStringTag]"
+            }
             Self::TypedArrayPrototypeSubarray => "subarray",
+            Self::IteratorConstructor => "Iterator",
+            Self::IteratorPrototypeConstructorGet => "get constructor",
+            Self::IteratorPrototypeConstructorSet => "set constructor",
+            Self::IteratorPrototypeToStringTagSet => "set [Symbol.toStringTag]",
             Self::HostDetachArrayBuffer => "detachArrayBuffer",
             Self::HostGc => "gc",
             Self::BigIntConstructor => "BigInt",
@@ -4639,6 +4680,9 @@ impl Intrinsic {
             | Self::SharedArrayBufferPrototypeGrowable
             | Self::SharedArrayBufferPrototypeMaxByteLength
             | Self::AtomicsPause
+            | Self::IteratorConstructor
+            | Self::IteratorPrototypeConstructorGet
+            | Self::IteratorPrototypeToStringTagGet
             | Self::HostGc
             | Self::BigIntPrototypeToLocaleString
             | Self::BigIntPrototypeValueOf
@@ -4849,6 +4893,8 @@ impl Intrinsic {
             | Self::AtomicsIsLockFree
             | Self::BigIntConstructor
             | Self::BigIntPrototypeToString
+            | Self::IteratorPrototypeConstructorSet
+            | Self::IteratorPrototypeToStringTagSet
             | Self::HostDetachArrayBuffer
             | Self::TypedArrayPrototypeAt
             | Self::TypedArrayPrototypeFill
@@ -5876,6 +5922,7 @@ pub struct Realm {
     map_iterator_prototype: Root,
     set_iterator_prototype: Root,
     array_iterator_prototype: Root,
+    iterator_prototype: Root,
     error_prototype: Root,
     native_error_prototypes: [Root; NATIVE_ERROR_COUNT],
     intrinsics: [Root; Intrinsic::ALL.len()],
@@ -6228,6 +6275,16 @@ impl Realm {
         Self::define_array_buffer_getters(heap, &intrinsics, array_buffer_prototype)?;
         Self::define_data_view_getters(heap, &intrinsics, data_view_prototype)?;
         Self::define_typed_array_getters(heap, &intrinsics, typed_array_prototype)?;
+        Self::define_iterator_accessors(heap, &intrinsics, iterator_prototype_root)?;
+        // 27.1.4.2 gives `%Iterator%` its prototype; the prototype carries the
+        // accessor of 27.1.4.2 rather than the data `constructor` every other
+        // one of the specification has, so it takes no pairing of its own.
+        Self::define_prototype_property(
+            heap,
+            &intrinsics,
+            Intrinsic::IteratorConstructor,
+            iterator_prototype_root,
+        )?;
         // 23.2.3.33: %TypedArray.prototype.toString% is the same function
         // object as %Array.prototype.toString%.
         Self::define_alias(
@@ -6319,6 +6376,7 @@ impl Realm {
             map_iterator_prototype,
             set_iterator_prototype,
             array_iterator_prototype,
+            iterator_prototype: iterator_prototype_root,
             error_prototype,
             native_error_prototypes,
             intrinsics,
@@ -7098,6 +7156,99 @@ impl Realm {
         Ok(())
     }
 
+    /// Gives a constructor the `prototype` 17 gives it, without the
+    /// `constructor` the prototype of every other clause carries back.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    fn define_prototype_property(
+        heap: &mut GenerationalHeap,
+        intrinsics: &[Root],
+        which: Intrinsic,
+        prototype: Root,
+    ) -> Result<(), HeapError> {
+        let constructor = Self::rooted(
+            heap,
+            *intrinsics
+                .get(which.index())
+                .ok_or(HeapError::InvalidReference)?,
+        )?
+        .as_object()
+        .ok_or(HeapError::InvalidReference)?;
+        let key = intern(heap, "prototype")?;
+        let value = Self::rooted(heap, prototype)?;
+        heap.define_own_named(
+            constructor,
+            key,
+            value,
+            PropertyFlags {
+                writable: false,
+                enumerable: false,
+                configurable: false,
+                is_accessor: false,
+            },
+        )?;
+        Ok(())
+    }
+
+    /// The `constructor` of 27.1.4.2 and the `@@toStringTag` of 27.1.4.3,
+    /// which are accessor pairs rather than the data properties every other
+    /// prototype of the specification carries there.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    fn define_iterator_accessors(
+        heap: &mut GenerationalHeap,
+        intrinsics: &[Root],
+        iterator_prototype: Root,
+    ) -> Result<(), HeapError> {
+        let holder = Self::rooted(heap, iterator_prototype)?
+            .as_object()
+            .ok_or(HeapError::InvalidReference)?;
+        for (getter, setter, key) in [
+            (
+                Intrinsic::IteratorPrototypeConstructorGet,
+                Intrinsic::IteratorPrototypeConstructorSet,
+                PropertyKey::String(heap.strings.intern("constructor")?),
+            ),
+            (
+                Intrinsic::IteratorPrototypeToStringTagGet,
+                Intrinsic::IteratorPrototypeToStringTagSet,
+                WellKnownSymbol::ToStringTag.key(),
+            ),
+        ] {
+            let get = Self::rooted(
+                heap,
+                *intrinsics
+                    .get(getter.index())
+                    .ok_or(HeapError::InvalidReference)?,
+            )?;
+            let set = Self::rooted(
+                heap,
+                *intrinsics
+                    .get(setter.index())
+                    .ok_or(HeapError::InvalidReference)?,
+            )?;
+            let shape = heap.shapes.root_shape();
+            let pair = heap.allocate_immortal_object(shape, super::value::VALUE_NULL)?;
+            heap.set_object_kind(pair, super::object::ObjectKind::Accessor { get, set })?;
+            heap.define_own_named(
+                holder,
+                key,
+                Value::from_object(pair),
+                PropertyFlags {
+                    writable: false,
+                    enumerable: false,
+                    configurable: true,
+                    is_accessor: true,
+                },
+            )?;
+        }
+        Ok(())
+    }
+
     /// The three accessors of 25.2.5.
     ///
     /// # Errors
@@ -7584,6 +7735,10 @@ impl Realm {
                     | Intrinsic::TypedArrayPrototypeByteOffset
                     | Intrinsic::TypedArrayPrototypeLength
                     | Intrinsic::TypedArrayPrototypeToStringTag
+                    | Intrinsic::IteratorPrototypeConstructorGet
+                    | Intrinsic::IteratorPrototypeConstructorSet
+                    | Intrinsic::IteratorPrototypeToStringTagGet
+                    | Intrinsic::IteratorPrototypeToStringTagSet
                     | Intrinsic::HostDetachArrayBuffer
                     | Intrinsic::HostGc
                     | Intrinsic::SharedArrayBufferPrototypeByteLength
@@ -7948,6 +8103,15 @@ impl Realm {
         let key = PropertyKey::String(heap.strings.intern("$262")?);
         heap.define_own_named(global, key, Value::from_object(host), builtin_data())?;
         Ok(())
+    }
+
+    /// `%Iterator.prototype%`, 27.1.2.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale root.
+    pub fn iterator_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.iterator_prototype)
     }
 
     /// `%BigInt.prototype%`, 21.2.3.
