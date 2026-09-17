@@ -164,6 +164,23 @@ fn double(bytes: &[u8]) -> u64 {
 /// and 9, so a zero and a one take a byte of the body each.
 #[must_use]
 pub fn write(values: &[value::Value], affinities: &[Affinity], format: u32) -> Vec<u8> {
+    write_in(values, affinities, format, crate::header::Encoding::Utf8)
+}
+
+/// The same, written into the encoding the file names.
+///
+/// The affinity is applied to the text an expression answered, which is
+/// UTF-8, before the text is written into that encoding, because
+/// `sqlite3ApplyAffinity` reads the text as a number and the bytes of
+/// UTF-16 are not the digits of one. Costs O(n) over the bytes of the
+/// row.
+#[must_use]
+pub fn write_in(
+    values: &[value::Value],
+    affinities: &[Affinity],
+    format: u32,
+    encoding: crate::header::Encoding,
+) -> Vec<u8> {
     let mut fields = Vec::with_capacity(values.len());
     let mut codes: usize = 0;
     let mut body: usize = 0;
@@ -171,6 +188,9 @@ pub fn write(values: &[value::Value], affinities: &[Affinity], format: u32) -> V
         let mut value = value.clone();
         let affinity = affinities.get(at).copied().unwrap_or(Affinity::None);
         value::apply(&mut value, affinity);
+        if let value::Value::Text(bytes) = &value {
+            value = value::Value::Text(value::stored(bytes, encoding));
+        }
         let (serial, value) = stored_as(value, affinity, format);
         codes = codes.saturating_add(varint_len(serial.code()));
         body = body.saturating_add(serial.len());

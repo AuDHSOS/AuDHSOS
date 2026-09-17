@@ -302,7 +302,13 @@ fn entries_held(
             continue;
         }
         held_rows = held_rows.saturating_add(1);
-        let wanted = crate::change::entry_of(index, &over, values, key)?;
+        // An entry holds its text in the encoding the file names, and
+        // the row was read into UTF-8, so the entry this row would make
+        // is written into that encoding before the two are compared.
+        let wanted = crate::value::written(
+            &crate::change::entry_of(index, &over, values, key)?,
+            database.encoding(),
+        );
         if keys
             .binary_search_by(|held| order_of(held, &wanted, &collations))
             .is_ok()

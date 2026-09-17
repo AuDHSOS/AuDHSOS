@@ -692,8 +692,8 @@ impl Writer {
         text.extend_from_slice(statement.get(at..).unwrap_or_default());
         // The row keeps its place, its type, its name and its root, and
         // gains the statement the column is written into.
-        let value = |bytes: &[u8]| Value::Text(crate::value::stored(bytes, self.header.encoding));
-        let row = crate::record::write(
+        let value = |bytes: &[u8]| Value::Text(bytes.to_vec());
+        let row = crate::record::write_in(
             &[
                 value(b"table"),
                 value(&name),
@@ -703,6 +703,7 @@ impl Writer {
             ],
             &SCHEMA,
             4,
+            self.header.encoding,
         );
         drop(database);
         crate::tree::update(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &row)?;
@@ -783,7 +784,7 @@ impl Writer {
         }
         drop(database);
         for (rowid, values) in written {
-            let record = crate::record::write(&values, &SCHEMA, 4);
+            let record = crate::record::write_in(&values, &SCHEMA, 4, self.header.encoding);
             crate::tree::update(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &record)?;
         }
         self.rename_sequence(&from, &to)?;
@@ -859,8 +860,8 @@ impl Writer {
         };
         let schema_rowid = self.row_of(&name)?;
         drop(database);
-        let value = |bytes: &[u8]| Value::Text(crate::value::stored(bytes, self.header.encoding));
-        let row = crate::record::write(
+        let value = |bytes: &[u8]| Value::Text(bytes.to_vec());
+        let row = crate::record::write_in(
             &[
                 value(b"table"),
                 value(&name),
@@ -870,6 +871,7 @@ impl Writer {
             ],
             &SCHEMA,
             4,
+            self.header.encoding,
         );
         let schema = crate::image::SCHEMA_ROOT;
         crate::tree::update(&mut self.pages, schema, schema_rowid, &row)?;
@@ -991,13 +993,13 @@ impl Writer {
             }
             let mut values = values.clone();
             for slot in values.iter_mut().skip(4).take(1) {
-                *slot = Value::Text(crate::value::stored(&text, self.header.encoding));
+                *slot = Value::Text(text.clone());
             }
             written.push((rowid, values));
         }
         drop(database);
         for (rowid, values) in written {
-            let record = crate::record::write(&values, &SCHEMA, 4);
+            let record = crate::record::write_in(&values, &SCHEMA, 4, self.header.encoding);
             crate::tree::update(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &record)?;
         }
         self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
@@ -1046,8 +1048,8 @@ impl Writer {
         let rows = database.rows_of(&name)?;
         let schema_rowid = self.row_of(&name)?;
         drop(database);
-        let value = |bytes: &[u8]| Value::Text(crate::value::stored(bytes, self.header.encoding));
-        let row = crate::record::write(
+        let value = |bytes: &[u8]| Value::Text(bytes.to_vec());
+        let row = crate::record::write_in(
             &[
                 value(b"table"),
                 value(&name),
@@ -1057,6 +1059,7 @@ impl Writer {
             ],
             &SCHEMA,
             4,
+            self.header.encoding,
         );
         let schema = crate::image::SCHEMA_ROOT;
         crate::tree::update(&mut self.pages, schema, schema_rowid, &row)?;
@@ -1069,7 +1072,7 @@ impl Writer {
                 .filter(|(place, _)| *place != at)
                 .map(|(_, value)| value)
                 .collect();
-            let record = crate::record::write(&held, &affinities, 4);
+            let record = crate::record::write_in(&held, &affinities, 4, self.header.encoding);
             crate::tree::update(&mut self.pages, root, key, &record)?;
         }
         self.reads_without(&name, &column)?;
@@ -1186,7 +1189,8 @@ impl Writer {
             for slot in values.iter_mut().take(1) {
                 *slot = Value::Text(to.to_vec());
             }
-            let record = crate::record::write(&values, &[Affinity::None; 2], 4);
+            let record =
+                crate::record::write_in(&values, &[Affinity::None; 2], 4, self.header.encoding);
             crate::tree::update(&mut self.pages, root, rowid, &record)?;
         }
         Ok(())
@@ -1575,13 +1579,14 @@ impl Writer {
     ///
     /// Writing one row costs O(log n) in the rows of the table.
     fn stat_row(&mut self, root: u32, stat: &crate::analyze::Stat) -> Result<(), Error> {
-        let text = |bytes: &[u8]| Value::Text(crate::value::stored(bytes, self.header.encoding));
+        let text = |bytes: &[u8]| Value::Text(bytes.to_vec());
         let values = [
             text(&stat.table),
             stat.index.as_deref().map_or(Value::Null, text),
             text(&stat.stat),
         ];
-        let record = crate::record::write(&values, &[Affinity::None; 3], 4);
+        let record =
+            crate::record::write_in(&values, &[Affinity::None; 3], 4, self.header.encoding);
         let rowid = largest(&self.pages, root)?.unwrap_or(0).saturating_add(1);
         insert(&mut self.pages, root, rowid, &record)?;
         Ok(())
@@ -2070,8 +2075,8 @@ impl Writer {
         if self.header.largest_root != 0 {
             self.header.largest_root = root;
         }
-        let text = |bytes: &[u8]| Value::Text(crate::value::stored(bytes, self.header.encoding));
-        let row = crate::record::write(
+        let text = |bytes: &[u8]| Value::Text(bytes.to_vec());
+        let row = crate::record::write_in(
             &[
                 text(b"table"),
                 text(&name),
@@ -2081,16 +2086,13 @@ impl Writer {
             ],
             &SCHEMA,
             4,
+            self.header.encoding,
         );
         let at = self.schema_blank()?;
         self.schema_written(at, &row)?;
         let mut rowid = 0_i64;
         for row in &answer.rows {
-            let values: Vec<Value> = row
-                .iter()
-                .map(|value| stored(value, self.header.encoding))
-                .collect();
-            let record = crate::record::write(&values, &affinities, 4);
+            let record = crate::record::write_in(row, &affinities, 4, self.header.encoding);
             rowid = rowid.saturating_add(1);
             insert(&mut self.pages, root, rowid, &record)?;
         }
@@ -2167,8 +2169,8 @@ impl Writer {
         }
         let mut written = b"CREATE TRIGGER ".to_vec();
         written.extend_from_slice(trigger.written.text(sql));
-        let text = |bytes: &[u8]| Value::Text(crate::value::stored(bytes, self.header.encoding));
-        let row = crate::record::write(
+        let text = |bytes: &[u8]| Value::Text(bytes.to_vec());
+        let row = crate::record::write_in(
             &[
                 text(b"trigger"),
                 text(&name),
@@ -2178,6 +2180,7 @@ impl Writer {
             ],
             &SCHEMA,
             4,
+            self.header.encoding,
         );
         let rowid = largest(&self.pages, crate::image::SCHEMA_ROOT)?
             .unwrap_or(0)
@@ -2675,7 +2678,8 @@ impl Writer {
         self.unindex_row(&kept, &table, &values, key)?;
         if table.without_rowid {
             let collations = crate::schema::key_collations(&table);
-            crate::tree::remove_entry(&mut self.pages, root, key, &collations)?;
+            let order = ordering(&collations, self.header.encoding);
+            crate::tree::remove_entry(&mut self.pages, root, key, order)?;
             self.counted.total = self.counted.total.saturating_add(1);
             return Ok(());
         }
@@ -2744,12 +2748,14 @@ impl Writer {
             // refuses nothing.
             let affinities = ordered_affinities(&table);
             let stored = ordered(&table, values);
-            let record = crate::record::write(&stored, &affinities, 4);
+            let record = crate::record::write_in(&stored, &affinities, 4, self.header.encoding);
             let collations = crate::schema::key_collations(&table);
             // The entry the row stands under is written again in place,
             // which is one taken out and one put back.
-            crate::tree::remove_entry(&mut self.pages, root, key, &collations)?;
-            crate::tree::insert_entry(&mut self.pages, root, &record, key, &collations, false)?;
+            let order = ordering(&collations, self.header.encoding);
+            crate::tree::remove_entry(&mut self.pages, root, key, order)?;
+            let order = ordering(&collations, self.header.encoding);
+            crate::tree::insert_entry(&mut self.pages, root, &record, key, order, false)?;
             self.counted.total = self.counted.total.saturating_add(1);
             return Ok(());
         }
@@ -2764,7 +2770,12 @@ impl Writer {
         {
             *slot = Value::Null;
         }
-        let record = crate::record::write(&ordered(&table, &held), &affinities, 4);
+        let record = crate::record::write_in(
+            &ordered(&table, &held),
+            &affinities,
+            4,
+            self.header.encoding,
+        );
         crate::tree::update(&mut self.pages, root, keyed_rowid(key), &record)?;
         // `sqlite3_total_changes` counts the rows a foreign key action
         // writes, which `sqlite3FkActions` writes through a trigger of
@@ -2880,7 +2891,7 @@ impl Writer {
         let rowid = largest(&self.pages, crate::image::SCHEMA_ROOT)?
             .unwrap_or(0)
             .saturating_add(1);
-        let blank = crate::record::write(
+        let blank = crate::record::write_in(
             &[
                 Value::Null,
                 Value::Null,
@@ -2890,6 +2901,7 @@ impl Writer {
             ],
             &SCHEMA,
             4,
+            self.header.encoding,
         );
         insert(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &blank)?;
         Ok(rowid)
@@ -2992,8 +3004,8 @@ impl Writer {
             return Ok(());
         }
         let root = self.rooted(kind)?;
-        let text = |bytes: &[u8]| Value::Text(crate::value::stored(bytes, self.header.encoding));
-        let row = crate::record::write(
+        let text = |bytes: &[u8]| Value::Text(bytes.to_vec());
+        let row = crate::record::write_in(
             &[
                 text(match definition {
                     Definition::Index(_) => b"index".as_slice(),
@@ -3007,6 +3019,7 @@ impl Writer {
             ],
             &SCHEMA,
             4,
+            self.header.encoding,
         );
         // `sqlite3StartTable` writes a record of five noughts and
         // `sqlite3EndTable` writes over it, so the page keeps the bytes
@@ -3227,8 +3240,8 @@ impl Writer {
         if self.header.largest_root != 0 {
             self.header.largest_root = root;
         }
-        let text = |bytes: &[u8]| Value::Text(crate::value::stored(bytes, self.header.encoding));
-        let row = crate::record::write(
+        let text = |bytes: &[u8]| Value::Text(bytes.to_vec());
+        let row = crate::record::write_in(
             &[
                 text(b"index"),
                 text(&index.name),
@@ -3238,6 +3251,7 @@ impl Writer {
             ],
             &SCHEMA,
             4,
+            self.header.encoding,
         );
         let rowid = largest(&self.pages, crate::image::SCHEMA_ROOT)?
             .unwrap_or(0)
@@ -3279,7 +3293,6 @@ impl Writer {
                 // A row read out of the file carries its text in UTF-8,
                 // and an entry holds what the file holds, so the text
                 // goes back into the encoding the file names.
-                let values = written_as(&values, self.header.encoding);
                 if !indexes_row(&read, &over, &values)? {
                     continue;
                 }
@@ -3323,11 +3336,7 @@ impl Writer {
         let places = places(table, &named)?;
         // A column the statement names no value for holds what it falls
         // back to, which is nothing where it has no `DEFAULT`.
-        let falls_back: Vec<Value> = database
-            .defaults(name)?
-            .iter()
-            .map(|value| stored(value, self.header.encoding))
-            .collect();
+        let falls_back: Vec<Value> = database.defaults(name)?;
         let affinities = ordered_affinities(table);
         // `INSERT INTO t DEFAULT VALUES` writes one row of what every
         // column falls back to and reads no statement of its own.
@@ -3363,7 +3372,7 @@ impl Writer {
                 match at {
                     Some(at) => {
                         for slot in values.iter_mut().skip(*at).take(1) {
-                            *slot = stored(value, self.header.encoding);
+                            slot.clone_from(value);
                         }
                     }
                     None => key = value.clone(),
@@ -3487,7 +3496,7 @@ impl Writer {
                     // view goes nowhere, because a view has no key.
                     for (at, value) in places.iter().zip(row) {
                         for slot in values.iter_mut().skip(at.unwrap_or(usize::MAX)).take(1) {
-                            *slot = stored(value, self.header.encoding);
+                            slot.clone_from(value);
                         }
                     }
                     rows.push(values);
@@ -3587,7 +3596,7 @@ impl Writer {
                     for (at, set) in places.iter().zip(sets) {
                         let value = crate::eval::evaluate_row(arena, set.value, sql, &row)?;
                         for slot in next.iter_mut().skip(at.unwrap_or(usize::MAX)).take(1) {
-                            *slot = stored(&value, self.header.encoding);
+                            slot.clone_from(&value);
                         }
                     }
                     written.push((values.clone(), next));
@@ -3774,7 +3783,8 @@ impl Writer {
             self.orphaned(name, &table, &values, 0, None)?;
             let key = crate::schema::key_of(&table, &values);
             self.unindex_row(&kept, &table, &values, &key)?;
-            crate::tree::remove_entry(&mut self.pages, root, &key, &collations)?;
+            let order = ordering(&collations, self.header.encoding);
+            crate::tree::remove_entry(&mut self.pages, root, &key, order)?;
             taken = taken.saturating_add(1);
             self.writing = taken;
             self.returns(arena, statement.returning, sql, (&table, &values, None))?;
@@ -3851,8 +3861,9 @@ impl Writer {
             }
             self.parented(&table, &named, 0)?;
             self.index_row(&kept, &table, &named, &key)?;
-            let record = crate::record::write(&stored, &affinities, 4);
-            crate::tree::insert_entry(&mut self.pages, root, &record, &key, &collations, false)?;
+            let record = crate::record::write_in(&stored, &affinities, 4, self.header.encoding);
+            let order = ordering(&collations, self.header.encoding);
+            crate::tree::insert_entry(&mut self.pages, root, &record, &key, order, false)?;
             count = count.saturating_add(1);
             self.writing = count;
             self.returns(arena, statement.returning, sql, (&table, &named, None))?;
@@ -3989,12 +4000,11 @@ impl Writer {
         let held = {
             let bytes = self.image();
             let database = Database::open_collating(&bytes, self.collating)?;
-            let held = database
+            database
                 .keyed_rows_of(&table.name)?
                 .into_iter()
                 .find(|values| crate::schema::key_of(table, values) == wanted.found)
-                .ok_or(Error::NoTable(Vec::new()))?;
-            written_as(&held, self.header.encoding)
+                .ok_or(Error::NoTable(Vec::new()))?
         };
         let row = Excluded {
             table,
@@ -4020,7 +4030,7 @@ impl Writer {
                 .ok_or_else(|| Error::Eval(crate::eval::Error::NoColumn(name.clone())))?;
             let value = crate::eval::evaluate_row(wanted.arena, set.value, wanted.sql, &row)?;
             for slot in values.iter_mut().skip(at).take(1) {
-                *slot = stored(&value, self.header.encoding);
+                slot.clone_from(&value);
             }
             columns.push(name);
         }
@@ -4081,11 +4091,13 @@ impl Writer {
         self.parented(table, &named, 0)?;
         self.orphaned(&table.name, table, held, 0, Some((&named, 0)))?;
         self.unindex_row(wanted.kept, table, held, &was)?;
-        crate::tree::remove_entry(&mut self.pages, root, &was, &collations)?;
+        let order = ordering(&collations, self.header.encoding);
+        crate::tree::remove_entry(&mut self.pages, root, &was, order)?;
         self.index_row(wanted.kept, table, &named, &key)?;
         let stored = ordered(table, &named);
-        let record = crate::record::write(&stored, wanted.affinities, 4);
-        crate::tree::insert_entry(&mut self.pages, root, &record, &key, &collations, false)?;
+        let record = crate::record::write_in(&stored, wanted.affinities, 4, self.header.encoding);
+        let order = ordering(&collations, self.header.encoding);
+        crate::tree::insert_entry(&mut self.pages, root, &record, &key, order, false)?;
         let answered = (table, named.as_slice(), None);
         self.returns(wanted.arena, wanted.returning, wanted.sql, answered)?;
         if fires {
@@ -4163,7 +4175,8 @@ impl Writer {
             return Ok(false);
         }
         self.unindex_row(kept, table, &values, key)?;
-        crate::tree::remove_entry(&mut self.pages, root, key, &collations)?;
+        let order = ordering(&collations, self.header.encoding);
+        crate::tree::remove_entry(&mut self.pages, root, key, order)?;
         self.fire(&after, &[], &row)?;
         Ok(true)
     }
@@ -4297,7 +4310,7 @@ impl Writer {
                 for (at, set) in places.iter().zip(sets) {
                     let value = crate::eval::evaluate_row(arena, set.value, sql, &held)?;
                     for slot in next.iter_mut().skip(*at).take(1) {
-                        *slot = stored(&value, self.header.encoding);
+                        slot.clone_from(&value);
                     }
                 }
                 found = Some(next);
@@ -4358,8 +4371,8 @@ impl Writer {
                 .iter()
                 .map(|value| stored(value, self.header.encoding))
                 .collect();
-            let found =
-                crate::tree::entry_tail_at(&self.pages, root, &stood, &collations, tail.len())?;
+            let order = ordering(&collations, self.header.encoding);
+            let found = crate::tree::entry_tail_at(&self.pages, root, &stood, order, tail.len())?;
             if found.as_deref() != Some(tail.as_slice()) {
                 continue;
             }
@@ -4387,11 +4400,13 @@ impl Writer {
             self.orphaned(name, &table, &held, 0, Some((&named, 0)))?;
             let was = crate::schema::key_of(&table, &held);
             self.unindex_row(&kept, &table, &held, &was)?;
-            crate::tree::remove_entry(&mut self.pages, root, &was, &collations)?;
+            let order = ordering(&collations, self.header.encoding);
+            crate::tree::remove_entry(&mut self.pages, root, &was, order)?;
             self.index_row(&kept, &table, &named, &key)?;
             let stored = ordered(&table, &named);
-            let record = crate::record::write(&stored, &affinities, 4);
-            crate::tree::insert_entry(&mut self.pages, root, &record, &key, &collations, false)?;
+            let record = crate::record::write_in(&stored, &affinities, 4, self.header.encoding);
+            let order = ordering(&collations, self.header.encoding);
+            crate::tree::insert_entry(&mut self.pages, root, &record, &key, order, false)?;
             changed = changed.saturating_add(1);
             self.writing = changed;
             self.returns(arena, statement.returning, sql, (&table, &named, None))?;
@@ -4464,8 +4479,9 @@ impl Writer {
         entries.sort_by(|one, other| order_of_keys(one, other, collations));
         let affinities = alloc::vec![Affinity::None; collations.len().saturating_add(1)];
         for key in entries {
-            let record = crate::record::write(&key, &affinities, 4);
-            crate::tree::insert_entry(&mut self.pages, root, &record, &key, collations, true)?;
+            let record = crate::record::write_in(&key, &affinities, 4, self.header.encoding);
+            let order = ordering(collations, self.header.encoding);
+            crate::tree::insert_entry(&mut self.pages, root, &record, &key, order, true)?;
         }
         Ok(())
     }
@@ -4506,7 +4522,6 @@ impl Writer {
                 };
                 let mut entries = Vec::new();
                 for (key, values) in database.held_rows_of(&table)? {
-                    let values = written_as(&values, self.header.encoding);
                     if !indexes_row(&index, &over, &values)? {
                         continue;
                     }
@@ -4606,6 +4621,37 @@ impl Writer {
         Ok((rowid, given, named))
     }
 
+    /// The key one row of an `UPDATE` is written under and the values
+    /// an index over the table reads.
+    ///
+    /// The column the key is another name for says the key, so a
+    /// statement that writes that column writes the key; the row holds
+    /// no value for that column, and an index over it holds the key.
+    /// Costs O(n) over the columns of the row.
+    fn rekeying(
+        values: &mut [Value],
+        alias: Option<usize>,
+        held: i64,
+    ) -> Result<(i64, Vec<Value>), Error> {
+        let mut key = held;
+        if let Some(at) = alias {
+            let mut given = values.get(at).cloned().unwrap_or(Value::Null);
+            crate::value::apply(&mut given, Affinity::Integer);
+            match given {
+                Value::Int(number) => key = number,
+                _ => return Err(Error::Mismatch),
+            }
+            for slot in values.iter_mut().skip(at).take(1) {
+                *slot = Value::Null;
+            }
+        }
+        let mut named = values.to_vec();
+        for slot in named.iter_mut().skip(alias.unwrap_or(usize::MAX)).take(1) {
+            *slot = Value::Int(key);
+        }
+        Ok((key, named))
+    }
+
     /// `INSERT`: the rows the statement answers, each put in the tree
     /// of the table it names and in every index over that table.
     fn insert(
@@ -4691,7 +4737,12 @@ impl Writer {
                     continue;
                 }
             }
-            let record = crate::record::write(&ordered(&table, &values), &affinities, 4);
+            let record = crate::record::write_in(
+                &ordered(&table, &values),
+                &affinities,
+                4,
+                self.header.encoding,
+            );
             // `I.1` of `src/fkey.c`: a row whose foreign key points at
             // no row is refused before it is written.
             self.parented(&table, &named, rowid)?;
@@ -4952,10 +5003,7 @@ impl Writer {
                 .into_iter()
                 .find(|(key, _)| *key == wanted.rowid)
                 .ok_or(Error::NoTable(Vec::new()))?;
-            // A row read out of the file carries its text in UTF-8, and
-            // this row is written again, so the text goes back into the
-            // encoding the file names.
-            (rowid, written_as(&held, self.header.encoding))
+            (rowid, held)
         };
         let row = Excluded {
             table,
@@ -4981,7 +5029,7 @@ impl Writer {
                 .ok_or_else(|| Error::Eval(crate::eval::Error::NoColumn(name.clone())))?;
             let value = crate::eval::evaluate_row(wanted.arena, set.value, wanted.sql, &row)?;
             for slot in values.iter_mut().skip(at).take(1) {
-                *slot = stored(&value, self.header.encoding);
+                slot.clone_from(&value);
             }
             columns.push(name);
         }
@@ -5069,7 +5117,12 @@ impl Writer {
             return Err(Error::Unique(Self::shown_key_of(table, wanted.kept, index)));
         }
         let affinities = ordered_affinities(table);
-        let record = crate::record::write(&ordered(table, &values), &affinities, 4);
+        let record = crate::record::write_in(
+            &ordered(table, &values),
+            &affinities,
+            4,
+            self.header.encoding,
+        );
         self.unparented(table, held, rowid)?;
         self.parented(table, &named, key)?;
         self.orphaned(&table.name, table, held, rowid, Some((&named, key)))?;
@@ -5152,10 +5205,11 @@ impl Writer {
                 .map(|(rowid, _)| *rowid);
             (root, rowid)
         };
-        let record = crate::record::write(
+        let record = crate::record::write_in(
             &[Value::Text(wanted), Value::Int(held)],
             &[Affinity::None; 2],
             4,
+            self.header.encoding,
         );
         if let Some(rowid) = rowid {
             crate::tree::update(&mut self.pages, root, rowid, &record)?;
@@ -6056,7 +6110,7 @@ impl Writer {
                     match at {
                         Some(at) => {
                             for slot in next.iter_mut().skip(*at).take(1) {
-                                *slot = stored(&value, self.header.encoding);
+                                slot.clone_from(&value);
                             }
                         }
                         None => match value {
@@ -6127,23 +6181,8 @@ impl Writer {
             // The column the key is another name for says the key, so a
             // statement that writes that column writes the key, and the
             // row holds no value for that column.
-            if let Some(at) = alias {
-                let mut given = values.get(at).cloned().unwrap_or(Value::Null);
-                crate::value::apply(&mut given, Affinity::Integer);
-                match given {
-                    Value::Int(number) => key = number,
-                    _ => return Err(Error::Mismatch),
-                }
-                for slot in values.iter_mut().skip(at).take(1) {
-                    *slot = Value::Null;
-                }
-            }
-            // The column the key is another name for answers the key,
-            // which is what an index over that column holds.
-            let mut named = values.clone();
-            for slot in named.iter_mut().skip(alias.unwrap_or(usize::MAX)).take(1) {
-                *slot = Value::Int(key);
-            }
+            let mut named;
+            (key, named) = Self::rekeying(&mut values, alias, key)?;
             if fires {
                 let row = Fired {
                     table: &table,
@@ -6178,7 +6217,12 @@ impl Writer {
             )? {
                 continue;
             }
-            let record = crate::record::write(&ordered(&table, &values), &affinities, 4);
+            let record = crate::record::write_in(
+                &ordered(&table, &values),
+                &affinities,
+                4,
+                self.header.encoding,
+            );
             // `I.1` of `src/fkey.c` over the row as it will stand, and
             // `D.2` over the row as it stands: a row that points at no
             // row is refused, and so is one that rows point at.
@@ -6263,9 +6307,10 @@ impl Writer {
             }
             let key = entry_of(&held.index, &over, values, tail)?;
             let plain = alloc::vec![Affinity::None; key.len()];
-            let entry = crate::record::write(&key, &plain, 4);
+            let entry = crate::record::write_in(&key, &plain, 4, self.header.encoding);
             let pages = &mut self.pages;
-            crate::tree::insert_entry(pages, held.root, &entry, &key, &held.collations, false)?;
+            let order = ordering(&held.collations, encoding);
+            crate::tree::insert_entry(pages, held.root, &entry, &key, order, false)?;
         }
         Ok(())
     }
@@ -6362,7 +6407,8 @@ impl Writer {
             return Ok(None);
         }
         let width = tail.len();
-        let found = crate::tree::entry_tail_at(&self.pages, one.root, key, &one.collations, width)?;
+        let order = ordering(&one.collations, self.header.encoding);
+        let found = crate::tree::entry_tail_at(&self.pages, one.root, key, order, width)?;
         Ok(found.filter(|found| held != Some(found.as_slice())))
     }
 
@@ -6401,7 +6447,7 @@ impl Writer {
             if answer == Conflict::Replace {
                 let held = falls_back.get(at).cloned().unwrap_or(Value::Null);
                 for slot in values.iter_mut().skip(at).take(1) {
-                    *slot = stored(&held, self.header.encoding);
+                    slot.clone_from(&held);
                 }
                 if values.get(at) != Some(&Value::Null) {
                     continue;
@@ -6601,7 +6647,8 @@ impl Writer {
                 continue;
             }
             let key = entry_of(&held.index, &over, values, tail)?;
-            crate::tree::remove_entry(&mut self.pages, held.root, &key, &held.collations)?;
+            let order = ordering(&held.collations, self.header.encoding);
+            crate::tree::remove_entry(&mut self.pages, held.root, &key, order)?;
         }
         Ok(())
     }
@@ -6919,10 +6966,13 @@ fn written_statement(prefix: &[u8], name: Span, sql: &[u8]) -> Vec<u8> {
     out
 }
 
-/// A row as the database stores it, which turns every text of it into
-/// the encoding the file names. Costs O(n) over the bytes of the row.
-fn written_as(values: &[Value], encoding: Encoding) -> Vec<Value> {
-    values.iter().map(|value| stored(value, encoding)).collect()
+/// How an index tree orders its entries, from the collations of the
+/// index and the encoding of the file.
+const fn ordering(collations: &[Collation], encoding: Encoding) -> crate::tree::Ordering<'_> {
+    crate::tree::Ordering {
+        collations,
+        encoding,
+    }
 }
 
 /// A value as the database stores it, which turns text into the

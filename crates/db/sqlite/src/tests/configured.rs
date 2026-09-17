@@ -188,3 +188,96 @@ fn what_an_upsert_writes_under_every_encoding() {
         }
     }
 }
+
+/// The affinity of a column is applied to the text a statement wrote
+/// and not to the bytes the file holds, so `'03'` into an `INTEGER`
+/// column is the number 3 under every encoding.
+#[test]
+fn what_an_affinity_makes_of_text_under_every_encoding() {
+    for encoding in ENCODINGS {
+        let mut writer = Writer::new(1024, 0, encoding).unwrap();
+        writer
+            .run(b"CREATE TABLE t(i INTEGER, r REAL, n NUMERIC, t TEXT)")
+            .unwrap();
+        writer
+            .run(b"INSERT INTO t VALUES('03','03','03','03')")
+            .unwrap();
+        // A text the affinity cannot read as a number stays text.
+        writer
+            .run(b"INSERT INTO t VALUES('1x','1x','1x','1x')")
+            .unwrap();
+        let image = writer.written();
+        let database = Database::open(&image).expect("a database");
+        assert_eq!(
+            rows(&database, b"SELECT i, r, n, t FROM t"),
+            alloc::vec![
+                alloc::vec![
+                    Value::Int(3),
+                    Value::Real(3.0),
+                    Value::Int(3),
+                    Value::Text(b"03".to_vec())
+                ],
+                alloc::vec![
+                    Value::Text(b"1x".to_vec()),
+                    Value::Text(b"1x".to_vec()),
+                    Value::Text(b"1x".to_vec()),
+                    Value::Text(b"1x".to_vec())
+                ]
+            ],
+            "{encoding:?}"
+        );
+    }
+}
+
+/// A trigger reads `new` and `old` as the statement wrote them, so a
+/// value it carries into another table reads back as it was written.
+#[test]
+fn what_a_trigger_carries_under_every_encoding() {
+    for encoding in ENCODINGS {
+        let mut writer = Writer::new(1024, 0, encoding).unwrap();
+        writer.run(b"CREATE TABLE t6(a)").unwrap();
+        writer.run(b"CREATE TABLE seen(old, new)").unwrap();
+        writer
+            .run(
+                b"CREATE TRIGGER g AFTER UPDATE ON t6 BEGIN                   INSERT INTO seen VALUES(old.a, new.a); END",
+            )
+            .unwrap();
+        writer.run(b"INSERT INTO t6 VALUES('one')").unwrap();
+        writer.run(b"UPDATE t6 SET a='two'").unwrap();
+        let image = writer.written();
+        let database = Database::open(&image).expect("a database");
+        assert_eq!(
+            rows(&database, b"SELECT old, new FROM seen"),
+            alloc::vec![alloc::vec![
+                Value::Text(b"one".to_vec()),
+                Value::Text(b"two".to_vec())
+            ]],
+            "{encoding:?}"
+        );
+    }
+}
+
+/// `PRAGMA integrity_check` holds the entries of an index against the
+/// rows of the table under every encoding, so a file the engine wrote
+/// answers `ok`.
+#[test]
+fn what_the_integrity_check_answers_under_every_encoding() {
+    for encoding in ENCODINGS {
+        let mut writer = Writer::new(1024, 0, encoding).unwrap();
+        writer.run(b"CREATE TABLE t7(a TEXT, b)").unwrap();
+        writer.run(b"CREATE INDEX i7 ON t7(a)").unwrap();
+        for value in ["one", "two", "three"] {
+            let mut sql = b"INSERT INTO t7 VALUES('".to_vec();
+            sql.extend_from_slice(value.as_bytes());
+            sql.extend_from_slice(b"', 1)");
+            writer.run(&sql).unwrap();
+        }
+        let image = writer.written();
+        let database = Database::open(&image).expect("a database");
+        assert_eq!(
+            rows(&database, b"PRAGMA integrity_check"),
+            alloc::vec![alloc::vec![Value::Text(b"ok".to_vec())]],
+            "{encoding:?}"
+        );
+    }
+}

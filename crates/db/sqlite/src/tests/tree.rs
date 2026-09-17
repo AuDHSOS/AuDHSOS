@@ -66,6 +66,13 @@ fn schema_row(name: &str, root: i64, sql: &str, encoding: Encoding) -> Vec<u8> {
     )
 }
 
+/// How the trees of these tests order their entries: no collation of
+/// any column, and text as UTF-8.
+const ORDER: crate::tree::Ordering<'static> = crate::tree::Ordering {
+    collations: &[],
+    encoding: Encoding::Utf8,
+};
+
 #[test]
 fn a_database_written_from_a_schema_and_its_rows_is_the_file_the_shell_wrote() {
     // `CREATE TABLE t(a INTEGER, b TEXT, c REAL, d BLOB);` and the three
@@ -331,12 +338,12 @@ fn a_tree_that_is_not_a_table_and_a_tree_deeper_than_the_walk_are_refused() {
         above = number;
     }
     assert_eq!(
-        crate::tree::insert_entry(&mut pages, 2, &record, &[Value::Int(1)], &[], false),
+        crate::tree::insert_entry(&mut pages, 2, &record, &[Value::Int(1)], ORDER, false),
         Err(Error::Depth)
     );
     // The descent that looks for one entry stops the same way.
     assert_eq!(
-        crate::tree::remove_entry(&mut pages, 2, &[Value::Int(1)], &[]),
+        crate::tree::remove_entry(&mut pages, 2, &[Value::Int(1)], ORDER),
         Err(Error::Depth)
     );
     // The walk to the entry before one on an interior page stops the
@@ -362,7 +369,7 @@ fn a_tree_that_is_not_a_table_and_a_tree_deeper_than_the_walk_are_refused() {
     });
     assert!(pages.writer(root).unwrap().insert(0, &cell).unwrap());
     assert_eq!(
-        crate::tree::remove_entry(&mut pages, root, &[Value::Int(1)], &[]),
+        crate::tree::remove_entry(&mut pages, root, &[Value::Int(1)], ORDER),
         Err(Error::Depth)
     );
     // The walk that frees a tree stops the same way, which a page that
@@ -2766,8 +2773,8 @@ fn an_entry_moved_up_into_a_page_with_no_room_for_it_is_balanced_with_it() {
     // The root holds less room than the entry that moves up needs.
     assert!(pages.page(root).unwrap().free().unwrap() < 40);
     let gone = dividers[0].clone();
-    assert!(remove_entry(&mut pages, root, &gone, &[]).unwrap());
-    assert!(!remove_entry(&mut pages, root, &gone, &[]).unwrap());
+    assert!(remove_entry(&mut pages, root, &gone, ORDER).unwrap());
+    assert!(!remove_entry(&mut pages, root, &gone, ORDER).unwrap());
     // The entry that moved up is still in the tree, as a divider.
     for kept in keys.iter().chain(dividers.iter().skip(1)) {
         assert!(
@@ -2844,7 +2851,7 @@ fn sweep(page_size: u32, shape: u8, stride: usize) {
         text.extend(core::iter::repeat_n('a', length));
         let key = alloc::vec![Value::Text(text.into_bytes()), Value::Int(number)];
         let record = write(&key, &[Affinity::None, Affinity::None], 4);
-        insert_entry(&mut pages, 2, &record, &key, &[], false).unwrap();
+        insert_entry(&mut pages, 2, &record, &key, ORDER, false).unwrap();
         keys.push(key);
     }
     // The entries come out in an order that is neither the one they
@@ -2855,10 +2862,10 @@ fn sweep(page_size: u32, shape: u8, stride: usize) {
     while !left.is_empty() {
         step = step.saturating_add(stride) % left.len();
         let key = left.remove(step);
-        assert!(remove_entry(&mut pages, 2, &key, &[]).unwrap());
+        assert!(remove_entry(&mut pages, 2, &key, ORDER).unwrap());
         // An entry the tree no longer holds is one the descent reaches
         // a leaf without finding.
-        assert!(!remove_entry(&mut pages, 2, &key, &[]).unwrap());
+        assert!(!remove_entry(&mut pages, 2, &key, ORDER).unwrap());
         // Every entry left is read back every sixteenth removal, which
         // holds the cost of the sweep to O(n²/16) descents.
         if left.len().is_multiple_of(16) {

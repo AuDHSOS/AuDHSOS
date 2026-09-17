@@ -1179,6 +1179,19 @@ fn spilled_as<'a>(
     Ok((held, Some(first)))
 }
 
+/// How an index tree orders its entries.
+///
+/// The collation of each column says how two values of that column
+/// compare, and the encoding says what bytes the file holds text in,
+/// which is what `sqlite3VdbeRecordCompare` compares.
+#[derive(Clone, Copy)]
+pub struct Ordering<'a> {
+    /// The collation of each column of the index, in its order.
+    pub collations: &'a [Collation],
+    /// The encoding the file writes its text in.
+    pub encoding: crate::header::Encoding,
+}
+
 /// Puts one entry in the index tree that begins at `root`.
 ///
 /// `key` is what `record` holds, decoded, because an index tree is
@@ -1199,9 +1212,11 @@ pub fn insert_entry(
     root: u32,
     record: &[u8],
     key: &[Value],
-    collations: &[Collation],
+    order: Ordering<'_>,
     bulk: bool,
 ) -> Result<(), Error> {
+    let key = &crate::value::written(key, order.encoding);
+    let collations = order.collations;
     let path = place_entry(pages, root, key, collations)?;
     let (leaf, at) = *path.last().ok_or(Error::Depth)?;
     let (local, overflow) = spilled_entry(pages, record)?;
@@ -1339,8 +1354,10 @@ pub fn remove_entry(
     pages: &mut Pages,
     root: u32,
     key: &[Value],
-    collations: &[Collation],
+    order: Ordering<'_>,
 ) -> Result<bool, Error> {
+    let key = &crate::value::written(key, order.encoding);
+    let collations = order.collations;
     let Some(path) = find_entry(pages, root, key, collations)? else {
         return Ok(false);
     };
@@ -1417,9 +1434,11 @@ pub(crate) fn entry_tail_at(
     pages: &Pages,
     root: u32,
     key: &[Value],
-    collations: &[Collation],
+    order: Ordering<'_>,
     width: usize,
 ) -> Result<Option<Vec<Value>>, Error> {
+    let key = &crate::value::written(key, order.encoding);
+    let collations = order.collations;
     let Some(path) = find_entry(pages, root, key, collations)? else {
         return Ok(None);
     };

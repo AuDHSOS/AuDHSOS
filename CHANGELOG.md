@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` holds every value of the write path in UTF-8 and writes
+  it into the encoding the file names in one place, `record::write_in`,
+  so an affinity reads the text a statement wrote rather than the bytes
+  of UTF-16, and a value that reaches a record through two paths is
+  written into that encoding once. The trees take the encoding where
+  they compare a key, and `PRAGMA integrity_check` writes the entry a
+  row would make into it. D-277 records it. Catalog 6.6.199.
+
 - `db-sqlite` writes the row a `DO UPDATE` found and the values the
   clause sets in the encoding the file names, over a table with a rowid
   and over one without, so text an upsert wrote reads back as it was

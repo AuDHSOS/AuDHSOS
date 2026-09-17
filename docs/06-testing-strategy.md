@@ -5727,6 +5727,14 @@ Document 16 step Q8.
   encoding the file names, over a table with a rowid and over one
   without, so `SET b='new'` reads back as `new` and a column the clause
   does not set keeps its text.
+- The affinity of a column is applied to the text a statement wrote and
+  not to the bytes the file holds, so `'03'` into an `INTEGER` column is
+  the number 3 under every encoding, and `'1x'` stays text.
+- A trigger reads `new` and `old` as the statement wrote them, so a
+  value it carries into another table reads back as it was written.
+- `PRAGMA integrity_check` holds the entries of an index against the
+  rows of the table under every encoding, so a file the engine wrote
+  answers `ok`.
 
 ## 6.7 CI pipeline
 

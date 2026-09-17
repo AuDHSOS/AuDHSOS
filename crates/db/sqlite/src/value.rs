@@ -527,6 +527,19 @@ pub fn decoded(bytes: &[u8], encoding: Encoding) -> Vec<u8> {
     }
 }
 
+/// A row as the database holds it, whose text is written into the
+/// encoding the file names. Costs O(n) over the bytes of the row.
+#[must_use]
+pub fn written(values: &[Value], encoding: Encoding) -> Vec<Value> {
+    values
+        .iter()
+        .map(|value| match value {
+            Value::Text(bytes) => Value::Text(stored(bytes, encoding)),
+            other => other.clone(),
+        })
+        .collect()
+}
+
 /// Text as the database holds it, which is what a blob made of it is.
 #[must_use]
 pub fn stored(bytes: &[u8], encoding: Encoding) -> Vec<u8> {

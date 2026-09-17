@@ -811,6 +811,8 @@ Size: L.
     may not run a statement of its own.
 55. The same statements under every page size, every encoding and every
     journal mode a connection opens under. Built, which D-275 records.
+56. One place that writes text into the encoding the file names, which
+    is `record::write_in`. Built, which D-277 records.
 
 ### Done when
 
