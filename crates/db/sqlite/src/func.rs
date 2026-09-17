@@ -831,18 +831,33 @@ pub fn lookup(name: &[u8], count: usize) -> Result<Function, Error> {
 pub struct Defined {
     /// The name it is called under.
     pub name: &'static [u8],
-    /// How many arguments it takes.
-    pub count: usize,
-    /// What it answers for them, with the source of bytes the
-    /// connection was given where it draws any.
-    pub answer: fn(&[Value], Option<&crate::random::Source>) -> Result<Value, crate::eval::Error>,
+    /// How many arguments it takes, and nothing where it takes any
+    /// number, which is `nArg` of `sqlite3_create_function` at -1.
+    pub count: Option<usize>,
+    /// What it answers for its name, its arguments and the source of
+    /// bytes the connection was given where it draws any.
+    pub answer: Answering,
 }
+
+/// What a function an application defined answers for its name, its
+/// arguments and the source of bytes the connection was given.
+///
+/// The name is given because one function may answer for every name an
+/// application defined, which is how a harness reaches back to the
+/// interpreter that holds them.
+pub type Answering = fn(
+    &'static [u8],
+    &[Value],
+    Option<&crate::random::Source>,
+) -> Result<Value, crate::eval::Error>;
 
 /// The function `defined` holds under `name` for `count` arguments.
 #[must_use]
 pub fn defined(held: &[Defined], name: &[u8], count: usize) -> Option<Defined> {
     held.iter()
-        .find(|one| one.count == count && name.eq_ignore_ascii_case(one.name))
+        .find(|one| {
+            one.count.is_none_or(|takes| takes == count) && name.eq_ignore_ascii_case(one.name)
+        })
         .copied()
 }
 

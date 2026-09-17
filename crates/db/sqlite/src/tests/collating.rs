@@ -155,3 +155,45 @@ fn a_statement_that_writes_compares_under_a_defined_collation() {
     let database = Database::open_log_collating(&image, &log, COLLATING).expect("a database");
     assert_eq!(texts(&database, b"SELECT a FROM t4 ORDER BY a"), [b"Ba"]);
 }
+
+/// A `COLLATE` on a whole number of an `ORDER BY` or a `GROUP BY`
+/// leaves the number counting the answered columns, and names the
+/// collation the sort uses.
+#[test]
+fn a_collate_on_a_number_leaves_it_counting_the_columns() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.collates(COLLATING);
+    writer.run(b"CREATE TABLE t5(a)").unwrap();
+    writer
+        .run(b"INSERT INTO t5 VALUES('aa'),('ab'),('ba'),('bb')")
+        .unwrap();
+    let image = writer.written();
+    let database = Database::open_collating(&image, COLLATING).expect("a database");
+    assert_eq!(
+        texts(&database, b"SELECT a FROM t5 ORDER BY 1 COLLATE BACKWARDS"),
+        [b"aa", b"ba", b"ab", b"bb"]
+    );
+    assert_eq!(
+        texts(
+            &database,
+            b"SELECT a FROM t5 ORDER BY 1 COLLATE BACKWARDS DESC"
+        ),
+        [b"bb", b"ab", b"ba", b"aa"]
+    );
+    assert_eq!(
+        texts(
+            &database,
+            b"SELECT a FROM t5 GROUP BY 1 COLLATE BACKWARDS ORDER BY 1"
+        ),
+        [b"aa", b"ab", b"ba", b"bb"]
+    );
+    // A number past the columns is refused with the `COLLATE` on it
+    // taken off, which is what `resolveOrderGroupBy` counts against.
+    assert_eq!(
+        database
+            .query(b"SELECT a FROM t5 ORDER BY 2 COLLATE BACKWARDS")
+            .unwrap_err()
+            .message(),
+        "1st ORDER BY term out of range - should be between 1 and 1"
+    );
+}

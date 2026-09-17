@@ -18,7 +18,11 @@ use crate::value::Value;
     clippy::unnecessary_wraps,
     reason = "the shape every function the application defines answers in"
 )]
-fn twice(args: &[Value], _random: Option<&Source>) -> Result<Value, crate::eval::Error> {
+fn twice(
+    _name: &'static [u8],
+    args: &[Value],
+    _random: Option<&Source>,
+) -> Result<Value, crate::eval::Error> {
     let held = args.first().map_or(0, Value::to_integer);
     Ok(Value::Int(held.saturating_mul(2)))
 }
@@ -29,23 +33,51 @@ fn twice(args: &[Value], _random: Option<&Source>) -> Result<Value, crate::eval:
     clippy::unnecessary_wraps,
     reason = "the shape every function the application defines answers in"
 )]
-fn drawn(_args: &[Value], random: Option<&Source>) -> Result<Value, crate::eval::Error> {
+fn drawn(
+    _name: &'static [u8],
+    _args: &[Value],
+    random: Option<&Source>,
+) -> Result<Value, crate::eval::Error> {
     Ok(Value::Blob(
         random.map_or_else(Vec::new, |source| source.bytes(4)),
     ))
 }
 
-/// The two, as a connection holds them.
+/// `joined(...)`, which takes any number of arguments and answers
+/// their text run together, which is `nArg` at -1.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the shape every function the application defines answers in"
+)]
+fn joined(
+    name: &'static [u8],
+    args: &[Value],
+    _random: Option<&Source>,
+) -> Result<Value, crate::eval::Error> {
+    let mut out = name.to_vec();
+    for value in args {
+        out.push(b':');
+        out.extend_from_slice(&value.text().unwrap_or_default());
+    }
+    Ok(Value::Text(out))
+}
+
+/// The three, as a connection holds them.
 static DEFINED: &[Defined] = &[
     Defined {
         name: b"twice",
-        count: 1,
+        count: Some(1),
         answer: twice,
     },
     Defined {
         name: b"drawn",
-        count: 0,
+        count: Some(0),
         answer: drawn,
+    },
+    Defined {
+        name: b"joined",
+        count: None,
+        answer: joined,
     },
 ];
 
@@ -83,6 +115,19 @@ fn what_a_statement_reaches_of_the_functions_the_application_defined() {
             .message(),
         "no such function: twice"
     );
+    // A function the application defined for any number of arguments
+    // answers for every count, and is given the name it was called
+    // under.
+    for (sql, text) in [
+        (b"SELECT joined()".as_slice(), "joined"),
+        (b"SELECT joined('x')", "joined:x"),
+        (b"SELECT joined('x','y','z')", "joined:x:y:z"),
+    ] {
+        assert_eq!(
+            database.query(sql).unwrap().rows,
+            alloc::vec![alloc::vec![Value::Text(text.as_bytes().to_vec())]]
+        );
+    }
     // A connection told of no function reads the name as one the
     // library holds, which it does not.
     let plain = Database::open(&image).expect("a database");

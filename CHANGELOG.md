@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` takes a `COLLATE` off a whole number of an `ORDER BY` or
+  a `GROUP BY` before it reads the number, so `ORDER BY 1 COLLATE
+  numeric` counts to the first answered column and sorts it under
+  `numeric`; the term was read as a constant before, which left the
+  rows in the order they were written. D-274 records it.
+  Catalog 6.6.198.
+
 - `db-sqlite` refuses `NULLS FIRST` and `NULLS LAST` where an index
   takes its terms, which is a `CREATE INDEX`, a `PRIMARY KEY`, a
   `UNIQUE` and an `ON CONFLICT` target. D-272 records it. Catalog
@@ -222,6 +229,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   cases passing to 214 with none failing. Catalog 6.6.165.
 
 ### Added
+
+- A function an application defines on a `db-sqlite` connection takes
+  any number of arguments where `func::Defined::count` is nothing, and
+  is given the name it was called under, so one function answers for
+  every name an application defined. The suite's own harness answers
+  `db function` by calling the tester's proc back over the line.
+  D-274 records it. Catalog 6.6.198.
 
 - An application defines collations on a `db-sqlite` connection:
   `value::Collating` carries a name and a comparison,

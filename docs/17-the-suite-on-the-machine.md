@@ -51,8 +51,8 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-73 576 cases of 703 files: 61 653 pass, 2389 answer differently and
-9534 are refused.
+73 538 cases of 703 files: 61 659 pass, 2371 answer differently and
+9508 are refused.
 
 ## 17.4 What is missing
 
@@ -172,7 +172,14 @@ Size: M.
    its length and its bytes.
 4. An answer is `OK`, a count and that many values, or `ERR`, a length
    and a message.
-5. The harness stops reading when the runner closes the line or the
+5. An answer may be preceded by `CALL`, what kind of proc is called, a
+   count and that many values, which the tester answers with `RET`, a
+   count and that many values; the harness writes one where a collation
+   or a function the tester defined is reached from inside a statement.
+6. A proc the tester runs for a `CALL` may write no request of its own,
+   because the answer to the call is read from that line, so the tester
+   refuses one.
+7. The harness stops reading when the runner closes the line or the
    deadline passes, and ends the interpreter either way.
 
 ### Produces

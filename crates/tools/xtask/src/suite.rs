@@ -482,6 +482,9 @@ struct Session {
     /// The collations the tester defined on each connection, which a
     /// connection that is opened again holds none of.
     collations: BTreeMap<String, &'static [Collating]>,
+    /// The functions the tester defined on each connection, beside the
+    /// ones this harness holds.
+    functions: BTreeMap<String, &'static [Defined]>,
     /// What the file has scored.
     score: Score,
     /// When the file began, which is what the deadline is counted from.
@@ -499,6 +502,7 @@ impl Session {
             counters: BTreeMap::new(),
             pragmas: BTreeMap::new(),
             collations: BTreeMap::new(),
+            functions: BTreeMap::new(),
             score: Score::default(),
             started: Instant::now(),
         }
@@ -568,6 +572,7 @@ impl Session {
                 self.counters.remove(first);
                 self.pragmas.remove(first);
                 self.collations.remove(first);
+                self.functions.remove(first);
                 Ok(Vec::new())
             }
             "delete" => {
@@ -585,6 +590,12 @@ impl Session {
             // the engine reaches that proc back over the line.
             "collate" => {
                 self.collates(first, second);
+                Ok(Vec::new())
+            }
+            // `sqlite3_create_function`: the tester names a proc, and
+            // the engine reaches that proc back over the line.
+            "function" => {
+                self.functions(first, second);
                 Ok(Vec::new())
             }
             "null" => {
@@ -647,6 +658,7 @@ impl Session {
         // `sqlite3_create_collation` holds a collation on one
         // connection, so a connection that opens again defines none.
         self.collations.remove(name);
+        self.functions.remove(name);
     }
 
     /// Keeps a collation the tester defined under its name, leaking the
@@ -667,6 +679,36 @@ impl Session {
             by: asked,
         });
         *held = Box::leak(collating.into_boxed_slice());
+    }
+
+    /// Keeps a function the tester defined under its name, beside the
+    /// ones this harness holds, leaking the name and the list so that
+    /// both outlive the file.
+    ///
+    /// The function takes any number of arguments, which `db function`
+    /// of `testfixture` registers as `nArg` at -1.
+    fn functions(&mut self, connection: &str, name: &str) {
+        let held = self.functions.entry(connection.to_owned()).or_default();
+        let mut defined: Vec<Defined> = held
+            .iter()
+            .filter(|one| one.name != name.as_bytes())
+            .copied()
+            .collect();
+        if defined.is_empty() {
+            defined.extend_from_slice(DEFINED);
+        }
+        defined.push(Defined {
+            name: Box::leak(name.as_bytes().to_vec().into_boxed_slice()),
+            count: None,
+            answer: called,
+        });
+        *held = Box::leak(defined.into_boxed_slice());
+    }
+
+    /// The functions one connection reads, which are the ones this
+    /// harness holds where the tester defined none.
+    fn defines(&self, connection: &str) -> &'static [Defined] {
+        self.functions.get(connection).copied().unwrap_or(DEFINED)
     }
 
     /// One database written again under another path, which is what a
@@ -694,6 +736,7 @@ impl Session {
         let counted = self.counters.get(name).copied().unwrap_or_default();
         let kept = self.pragmas.get(name).cloned().unwrap_or_default();
         let collating = self.collations.get(name).copied().unwrap_or_default();
+        let defines = self.defines(name);
         let writer = self
             .held
             .get_mut(&path)
@@ -704,6 +747,7 @@ impl Session {
         writer.counts_as(counted);
         writer.kept_as(kept);
         writer.collates(collating);
+        writer.defines(defines);
         let mut out = Vec::new();
         let mut ran = Ok(());
         for statement in statements(sql) {
@@ -714,7 +758,7 @@ impl Session {
             if text.trim().is_empty() {
                 continue;
             }
-            match run_one(writer, text, collating) {
+            match run_one(writer, text, collating, defines) {
                 Ok(values) => out.extend(values.iter().map(|value| listed(value, &null))),
                 Err(message) => {
                     ran = Err(message);
@@ -750,12 +794,13 @@ impl Session {
             return Ok(Vec::new());
         }
         let collating = self.collations.get(name).copied().unwrap_or_default();
+        let defines = self.defines(name);
         let bytes = writer.written();
         let database = Database::open_collating(&bytes, collating)
             .map(|database| {
                 database
                     .naming(writer.naming())
-                    .defining(DEFINED)
+                    .defining(defines)
                     .journalling(writer.journalled())
             })
             .map_err(|error| error.message())?;
@@ -828,17 +873,20 @@ fn asked(name: &'static [u8], left: &[u8], right: &[u8]) -> Ordering {
             String::from_utf8_lossy(left).into_owned(),
             String::from_utf8_lossy(right).into_owned(),
         ];
-        if write_call(&mut line.writer, &values).is_err() {
+        if write_call(&mut line.writer, "collate", &values).is_err() {
             return Ordering::Equal;
         }
-        let answered = returned(&mut line.reader).unwrap_or(0);
+        let answered = returned(&mut line.reader)
+            .and_then(|text| text.trim().parse::<i64>().ok())
+            .unwrap_or(0);
         answered.cmp(&0)
     })
 }
 
-/// Asks the tester to run a proc, written as `CALL` and its values.
-fn write_call(stream: &mut TcpStream, values: &[String]) -> Result<(), Error> {
-    let mut out = format!("CALL {}\n", values.len()).into_bytes();
+/// Asks the tester to run a proc, written as `CALL`, what kind of proc
+/// it is, and its values.
+fn write_call(stream: &mut TcpStream, kind: &str, values: &[String]) -> Result<(), Error> {
+    let mut out = format!("CALL {kind} {}\n", values.len()).into_bytes();
     for value in values {
         out.extend_from_slice(format!("{}\n", value.len()).as_bytes());
         out.extend_from_slice(value.as_bytes());
@@ -850,7 +898,7 @@ fn write_call(stream: &mut TcpStream, values: &[String]) -> Result<(), Error> {
 }
 
 /// What the tester's proc answered, read as `RET` and one value.
-fn returned(reader: &mut BufReader<TcpStream>) -> Option<i64> {
+fn returned(reader: &mut BufReader<TcpStream>) -> Option<String> {
     let head = line(reader).ok()??;
     if head.split_whitespace().next() != Some("RET") {
         return None;
@@ -859,7 +907,32 @@ fn returned(reader: &mut BufReader<TcpStream>) -> Option<i64> {
     let mut bytes = vec![0_u8; length];
     reader.read_exact(&mut bytes).ok()?;
     line(reader).ok()?;
-    String::from_utf8_lossy(&bytes).trim().parse().ok()
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// What a function the tester defined answers, which is one `CALL` onto
+/// the line and the `RET` that answers it.
+///
+/// `sqlite3_create_function` hands the call to the application, so the
+/// tester's own proc answers, as text of one value. Costs one round
+/// trip per call.
+fn called(
+    name: &'static [u8],
+    args: &[Value],
+    _random: Option<&Source>,
+) -> Result<Value, db_sqlite::eval::Error> {
+    LINE.with(|line| {
+        let mut held = line.borrow_mut();
+        let Some(line) = held.as_mut() else {
+            return Ok(Value::Null);
+        };
+        let mut values = vec![String::from_utf8_lossy(name).into_owned()];
+        values.extend(args.iter().map(|value| listed(value, "")));
+        if write_call(&mut line.writer, "function", &values).is_err() {
+            return Ok(Value::Null);
+        }
+        Ok(returned(&mut line.reader).map_or(Value::Null, |text| Value::Text(text.into_bytes())))
+    })
 }
 
 /// One line to the process that started this run, written as it
@@ -874,7 +947,7 @@ fn say(line: &str) {
 /// which SQLite's own files call in their statements.
 static DEFINED: &[Defined] = &[Defined {
     name: b"randstr",
-    count: 2,
+    count: Some(2),
     answer: randstr,
 }];
 
@@ -893,7 +966,11 @@ const LONGEST: i64 = 999;
     clippy::unnecessary_wraps,
     reason = "the shape every function the application defines answers in"
 )]
-fn randstr(args: &[Value], random: Option<&Source>) -> Result<Value, db_sqlite::eval::Error> {
+fn randstr(
+    _name: &'static [u8],
+    args: &[Value],
+    random: Option<&Source>,
+) -> Result<Value, db_sqlite::eval::Error> {
     let held = |value: Option<&Value>| value.map_or(0, Value::to_integer).clamp(0, LONGEST);
     let least = held(args.first());
     let most = held(args.get(1)).max(least);
@@ -923,6 +1000,7 @@ fn run_one(
     writer: &mut Writer,
     text: &str,
     collating: &'static [Collating],
+    defines: &'static [Defined],
 ) -> Result<Vec<Value>, String> {
     let mut out = Vec::new();
     if reads(text) {
@@ -943,7 +1021,7 @@ fn run_one(
                 database
                     .counting(counted)
                     .naming(naming)
-                    .defining(DEFINED)
+                    .defining(defines)
                     .journalling(journalled)
             })
             .and_then(|database| database.query(text.as_bytes()))

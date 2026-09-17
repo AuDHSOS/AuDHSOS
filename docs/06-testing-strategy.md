@@ -5684,6 +5684,24 @@ Document 16 step Q8.
   refused where the statement is read, whether the name stands in a
   column of a `CREATE TABLE` or in a `COLLATE` of a statement.
 
+### 6.6.198 A function of any number of arguments, and a `COLLATE` on a number (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A function the application defined for no fixed number of arguments
+  answers for every count, so `joined()`, `joined('x')` and
+  `joined('x','y','z')` all reach it.
+- Such a function is given the name it was called under, so one
+  function answers for every name the application defined.
+- A `COLLATE` on a whole number of an `ORDER BY` leaves the number
+  counting the answered columns and names the collation the sort uses:
+  `ORDER BY 1 COLLATE BACKWARDS` orders the first column under that
+  collation, and `DESC` reverses it.
+- A `GROUP BY 1 COLLATE BACKWARDS` counts to the first answered column
+  too.
+- A number past the columns is refused with the `COLLATE` taken off:
+  `1st ORDER BY term out of range - should be between 1 and 1`.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

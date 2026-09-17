@@ -11,10 +11,17 @@
 set ::testprefix ""
 set ::nErr 0
 
+# Whether a proc this harness called is running, which no request of
+# its own may be written during.
+set ::calling 0
+
 # One request over the line: the verb, how many values follow, and each
 # value as its length and its bytes. The answer is `OK` and that many
 # values, or `ERR` and a message, which becomes an error here.
 proc harness_send {verb args} {
+  if {$::calling} {
+    error "this harness cannot run a statement inside a call"
+  }
   set h $::harness
   puts $h "REQ $verb [llength $args]"
   foreach a $args {
@@ -26,6 +33,8 @@ proc harness_send {verb args} {
   set head [gets $h]
   set n [lindex $head 1]
   while {[lindex $head 0] eq "CALL"} {
+    set kind [lindex $head 1]
+    set n [lindex $head 2]
     set vals {}
     for {set i 0} {$i < $n} {incr i} {
       set len [gets $h]
@@ -33,7 +42,12 @@ proc harness_send {verb args} {
       gets $h
       lappend vals [encoding convertfrom utf-8 $val]
     }
-    if {[catch {harness_call $vals} out]} { set out 0 }
+    # A proc that runs a statement of its own would write a request
+    # onto the line the answer to this call is read from, so it is
+    # refused rather than let past.
+    set ::calling 1
+    if {[catch {harness_call $kind $vals} out]} { set out 0 }
+    set ::calling 0
     set b [encoding convertto utf-8 $out]
     puts $h "RET 1"
     puts $h [string length $b]
@@ -60,11 +74,17 @@ proc harness_send {verb args} {
 # The procs the collations of this file name, by collation name.
 array set ::collations {}
 
-# One call the engine wrote onto the line: the collation's name and the
-# two values, answered by the proc the file named for that collation.
-proc harness_call {vals} {
-  set held $::collations([lindex $vals 0])
-  return [uplevel #0 [concat $held [list [lindex $vals 1]] [list [lindex $vals 2]]]]
+# The procs the functions of this file name, by function name.
+array set ::functions {}
+
+# One call the engine wrote onto the line: the name of the collation or
+# the function, then its values, answered by the proc the file named.
+proc harness_call {kind vals} {
+  set name [lindex $vals 0]
+  set held [expr {$kind eq "collate" ? $::collations($name) : $::functions($name)}]
+  set cmd $held
+  foreach v [lrange $vals 1 end] { lappend cmd $v }
+  return [uplevel #0 $cmd]
 }
 
 # What the TCL interface binds: `$name`, `$name(key)`, `:name` and
@@ -212,6 +232,10 @@ proc sqlite3 {name args} {
       collate {
         set ::collations([lindex $args 0]) [lindex $args 1]
         return [harness_send collate %N% [lindex $args 0]]
+      }
+      function {
+        set ::functions([lindex $args 0]) [lindex $args end]
+        return [harness_send function %N% [lindex $args 0]]
       }
       transaction {
         harness_send eval %N% BEGIN

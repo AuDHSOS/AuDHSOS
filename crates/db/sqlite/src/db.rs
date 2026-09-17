@@ -4788,8 +4788,12 @@ fn keys(
             if at >= names.len() {
                 return Err(refused());
             }
+            // A `COLLATE` on the number is the collation the sort uses,
+            // whatever the column it counts to was declared with.
+            let written = term_collation(arena, term.expr, sql, collating)?;
+            let collation = written.unwrap_or_else(|| collation_at(collations, at));
             keys.push(Key {
-                of: Keyed::Place(at, collation_at(collations, at)),
+                of: Keyed::Place(at, collation),
                 descending,
                 nulls,
             });
@@ -5335,7 +5339,7 @@ fn rowid_named(name: &[u8]) -> bool {
 /// This is `sqlite3ExprIsInteger`, which reads the sign as part of the
 /// number so that `ORDER BY -1` counts to the column before the first.
 fn whole_number(arena: &Arena, id: ExprId, sql: &[u8]) -> Option<i64> {
-    match arena.node(id)? {
+    match arena.node(uncollated(arena, id))? {
         Node::Literal(Literal::Integer(span)) => Some(number::integer(span.text(sql)).value),
         Node::Unary {
             op: UnaryOp::Negate,

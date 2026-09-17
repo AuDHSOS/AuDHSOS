@@ -653,7 +653,11 @@ fn called(
     // `sqlite3FindFunction` reads the functions the application defined
     // before the ones the library holds.
     if let Some(defined) = row.defined(&called, values.len()) {
-        return Ok(Answer::plain((defined.answer)(&values, row.random())?));
+        return Ok(Answer::plain((defined.answer)(
+            defined.name,
+            &values,
+            row.random(),
+        )?));
     }
     // One of the eleven window functions written under no `OVER`
     // reaches the scalars, which hold none of that name, and so does an
