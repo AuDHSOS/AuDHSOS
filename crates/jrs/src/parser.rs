@@ -2041,10 +2041,8 @@ impl Parser {
                 }
                 continue;
             }
-            if self.is("*") {
-                return Err(Self::unsupported("generator methods"));
-            }
             let method_start = self.token()?.offset;
+            let generator = self.eat("*");
             let async_method = self.async_method_head();
             if async_method {
                 self.need("async")?;
@@ -2100,7 +2098,10 @@ impl Parser {
             let value = if colon {
                 self.expression(0)?
             } else if self.is("(") {
-                let mut function = self.method_function(
+                if generator && accessor.is_some() {
+                    return Err(self.error("a generator with a method modifier"));
+                }
+                let mut function = self.generator_method(
                     None,
                     if async_method {
                         AsyncKind::Async
@@ -2108,6 +2109,7 @@ impl Parser {
                         AsyncKind::Sync
                     },
                     false,
+                    generator,
                 )?;
                 function.constructible = false;
                 function.source = Some(self.source_since(method_start)?);

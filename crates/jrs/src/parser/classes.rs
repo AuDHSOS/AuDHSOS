@@ -127,11 +127,14 @@ impl Parser {
         Ok(names)
     }
 
-    pub(super) fn method_function(
+    /// A method of 15.4 or a generator method of 27.5, whose body reads
+    /// `yield` as the expression of 15.5.
+    pub(super) fn generator_method(
         &mut self,
         name: Option<String>,
         kind: AsyncKind,
         derived: bool,
+        generator: bool,
     ) -> Result<Function, Error> {
         let context = core::mem::replace(
             &mut self.super_context,
@@ -141,9 +144,14 @@ impl Parser {
                 SuperContext::Method
             },
         );
+        self.pending_generator = generator;
         let result = self.function_contents(name, kind);
+        self.pending_generator = false;
         self.super_context = context;
-        result
+        result.map(|mut function| {
+            function.generator = generator;
+            function
+        })
     }
     pub(super) fn class_expression(
         &mut self,
@@ -206,9 +214,7 @@ impl Parser {
                     return Err(Self::unsupported("async generator methods"));
                 }
             }
-            if self.is("*") {
-                return Err(Self::unsupported("generator methods"));
-            }
+            let generator = self.eat("*");
             let accessor = if (self.is("get") || self.is("set"))
                 && self
                     .tokens
@@ -296,7 +302,10 @@ impl Parser {
                 }
                 continue;
             }
-            let mut function = self.method_function(
+            if generator && (accessor.is_some() || is_constructor) {
+                return Err(self.error("a generator with a method modifier"));
+            }
+            let mut function = self.generator_method(
                 None,
                 if async_method {
                     AsyncKind::Async
@@ -304,6 +313,7 @@ impl Parser {
                     AsyncKind::Sync
                 },
                 is_constructor && heritage.is_some(),
+                generator,
             )?;
             function.constructible = is_constructor;
             function.source = Some(self.source_since(method_start)?);

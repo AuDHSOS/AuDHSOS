@@ -658,7 +658,7 @@ fn unsupported_syntax_is_distinct_from_syntax_errors() {
         "class C{x=1}",
         "let x={};x?.y",
         "let x={...{a:1}}",
-        "let x={*g(){}}",
+        "let x={async *g(){}}",
         "let x={async *g(){}}",
         "label: function f(){}",
         "let café=1",
