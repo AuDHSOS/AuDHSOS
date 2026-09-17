@@ -9372,3 +9372,28 @@ fn a_member_target_of_13_15_5_2_takes_any_base_and_key() -> Result<(), Error> {
         "var o={a:{}};[o.a.x,o.a.y]=[1,2];''+o.a.x+o.a.y",
     ])
 }
+
+#[test]
+fn a_function_declaration_of_14_2_2_binds_in_its_block() -> Result<(), Error> {
+    // 14.2.3 step 1 instantiates it before the first statement of the Block.
+    differential_scripts(&["'use strict';{ function g(){return 3} ''+g() }"])?;
+    differential_scripts(&[
+        "'use strict';function f(){ { function g(){return 1} return g() } } ''+f()",
+    ])?;
+    // The binding leaves with the Block.
+    differential_scripts(&[
+        "'use strict';function f(){ { function g(){return 1} } return typeof g } ''+f()",
+    ])?;
+    differential_scripts(&["'use strict';{ function g(){return 3} } ''+typeof g"])?;
+    // It stands before the statements that precede it in the text.
+    differential_scripts(&[
+        "'use strict';function f(){ { return typeof g; function g(){} } } ''+f()",
+    ])?;
+    // Two Blocks bind the same name apart.
+    differential_scripts(&[
+        "'use strict';{ function g(){return 1} } { function g(){return 2} } ''+'ok'",
+    ])?;
+    differential_scripts(&[
+        "'use strict';function f(){ { function g(){return 1} function h(){return 2} return h() } } ''+f()",
+    ])
+}

@@ -6332,6 +6332,27 @@ impl RegisterLowerer {
         let result_register = self.allocate_register()?;
         self.code.emit(Instruction::Star(result_register));
         let scoped_bindings = self.enter_block_scope(body)?;
+        // 14.2.3 step 1 instantiates the functions of the Block before its
+        // first statement runs. B.3.2.1 gives a sloppy one a `var` binding of
+        // the enclosing function as well, which this lowering does not make,
+        // so only a strict Block takes one.
+        if body
+            .iter()
+            .any(|statement| matches!(statement, Stmt::Function(_, _)))
+        {
+            if !self.code.strict {
+                self.refuse("a function declaration in a sloppy Block");
+                return None;
+            }
+            for statement in body {
+                if let Stmt::Function(name, function) = statement {
+                    let value_type = self.lower_function_declaration(name, function)?;
+                    let binding = *self.bindings.get(name)?;
+                    self.store_binding(binding);
+                    self.bindings.get_mut(name)?.value_type = Some(value_type);
+                }
+            }
+        }
         self.completions.push(result_register);
         let mut result_type = None;
         let mut flow = RegisterFlow::Empty;
@@ -6362,6 +6383,8 @@ impl RegisterLowerer {
                     }
                     RegisterFlow::Empty
                 }
+                // 14.2.3 step 1 already instantiated these.
+                Stmt::Function(_, _) => RegisterFlow::Empty,
                 _ => self.lower_statement(statement)?,
             };
             match flow {
@@ -10121,7 +10144,11 @@ fn register_block_local_names(body: &[Stmt]) -> Option<BTreeMap<String, bool>> {
                     }
                 }
             }
-            Stmt::Function(_, _) => return None,
+            // 14.2.2 makes a function declaration a binding of the Block,
+            // which 14.2.3 initializes before the first statement runs.
+            Stmt::Function(name, _) if names.insert(name.clone(), true).is_some() => {
+                return None;
+            }
             _ => {}
         }
     }
@@ -10737,6 +10764,25 @@ const fn statement_refusal(statement: &Stmt) -> &'static str {
 
 /// Lowers a Script, and names the construct it would not take when it takes
 /// none, so the gap reports what is missing rather than that something is.
+/// Whether the Directive Prologue of 11.2.1 makes this Script strict.
+///
+/// The parser has already decided what is a directive and what is an
+/// expression, so a leading String literal statement is one.
+fn register_directive_prologue_is_strict(body: &[Stmt]) -> bool {
+    for statement in body {
+        let Stmt::Expr(expression) = statement else {
+            return false;
+        };
+        let ExprKind::Literal(crate::value::Value::String(units)) = &expression.kind else {
+            return false;
+        };
+        if units.iter().copied().eq("use strict".encode_utf16()) {
+            return true;
+        }
+    }
+    false
+}
+
 fn lower_register_script(
     body: &[Stmt],
     realm: bool,
@@ -10759,6 +10805,7 @@ fn lower_register_script(
         maximum.max(register_statement_stack_requirement(statement))
     });
     let mut lowerer = RegisterLowerer::new(entry_fuel_cost, stack_requirement, property_limit, 0);
+    lowerer.code.strict = register_directive_prologue_is_strict(body);
     lowerer.realm = realm;
     lowerer.script_globals = realm;
     let mut code = lower_register_body(&mut lowerer, body, realm, saw_declaration, saw_function);
