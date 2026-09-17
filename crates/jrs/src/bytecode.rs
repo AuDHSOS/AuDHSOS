@@ -9042,6 +9042,18 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // 25.1.4.1 and 25.1.6.7 answer the block they made.
         | crate::engine::realm::Intrinsic::ArrayBufferConstructor
         | crate::engine::realm::Intrinsic::ArrayBufferPrototypeSlice
+        // 25.3.3.1 answers the view, 25.3.4.1 the block it looks into, and
+        // every write of 25.3.4 answers undefined.
+        | crate::engine::realm::Intrinsic::DataViewConstructor
+        | crate::engine::realm::Intrinsic::DataViewPrototypeBuffer
+        | crate::engine::realm::Intrinsic::DataViewPrototypeSetInt8
+        | crate::engine::realm::Intrinsic::DataViewPrototypeSetUint8
+        | crate::engine::realm::Intrinsic::DataViewPrototypeSetInt16
+        | crate::engine::realm::Intrinsic::DataViewPrototypeSetUint16
+        | crate::engine::realm::Intrinsic::DataViewPrototypeSetInt32
+        | crate::engine::realm::Intrinsic::DataViewPrototypeSetUint32
+        | crate::engine::realm::Intrinsic::DataViewPrototypeSetFloat32
+        | crate::engine::realm::Intrinsic::DataViewPrototypeSetFloat64
         // 24.1.5.1 and 24.2.5.1 answer an iterator, and 7.4.14 an ordinary
         // object with a `value` and a `done`.
         | crate::engine::realm::Intrinsic::MapPrototypeEntries
@@ -9134,6 +9146,17 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // 25.1.6.2 and 25.1.6.4 answer a Number.
         | crate::engine::realm::Intrinsic::ArrayBufferPrototypeByteLength
         | crate::engine::realm::Intrinsic::ArrayBufferPrototypeMaxByteLength
+        // 25.3.4 answers a Number from every read and from two accessors.
+        | crate::engine::realm::Intrinsic::DataViewPrototypeByteLength
+        | crate::engine::realm::Intrinsic::DataViewPrototypeByteOffset
+        | crate::engine::realm::Intrinsic::DataViewPrototypeGetInt8
+        | crate::engine::realm::Intrinsic::DataViewPrototypeGetUint8
+        | crate::engine::realm::Intrinsic::DataViewPrototypeGetInt16
+        | crate::engine::realm::Intrinsic::DataViewPrototypeGetUint16
+        | crate::engine::realm::Intrinsic::DataViewPrototypeGetInt32
+        | crate::engine::realm::Intrinsic::DataViewPrototypeGetUint32
+        | crate::engine::realm::Intrinsic::DataViewPrototypeGetFloat32
+        | crate::engine::realm::Intrinsic::DataViewPrototypeGetFloat64
         | crate::engine::realm::Intrinsic::DatePrototypeSetMilliseconds
         | crate::engine::realm::Intrinsic::DatePrototypeSetUtcMilliseconds
         | crate::engine::realm::Intrinsic::DatePrototypeSetSeconds

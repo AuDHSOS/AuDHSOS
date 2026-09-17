@@ -9792,3 +9792,72 @@ fn the_block_of_25_1_holds_the_bytes_it_was_given() -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[test]
+fn the_view_of_25_3_reads_the_block_it_looks_into() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend carries no clause 25.3, so only the engine answers.
+    for (source, answer) in [
+        (
+            "var v=new DataView(new ArrayBuffer(8));''+v.byteLength+' '+v.byteOffset",
+            "8 0",
+        ),
+        (
+            "var b=new ArrayBuffer(8);var v=new DataView(b,4);''+v.byteLength+' '+v.byteOffset+' '+(v.buffer===b)",
+            "4 4 true",
+        ),
+        // 25.1.3.12 writes what 25.1.3.10 reads back, for each width.
+        (
+            "var v=new DataView(new ArrayBuffer(8));v.setInt32(0,-2);''+v.getInt32(0)",
+            "-2",
+        ),
+        (
+            "var v=new DataView(new ArrayBuffer(4));v.setInt8(0,-1);''+v.getInt8(0)+' '+v.getUint8(0)",
+            "-1 255",
+        ),
+        (
+            "var v=new DataView(new ArrayBuffer(8));v.setUint16(0,65535);''+v.getUint16(0)+' '+v.getInt16(0)",
+            "65535 -1",
+        ),
+        (
+            "var v=new DataView(new ArrayBuffer(8));v.setFloat64(0,1.5);''+v.getFloat64(0)",
+            "1.5",
+        ),
+        (
+            "var v=new DataView(new ArrayBuffer(8));v.setFloat32(0,1.5);''+v.getFloat32(0)",
+            "1.5",
+        ),
+        // The byte order of the write is the one the read has to undo.
+        (
+            "var v=new DataView(new ArrayBuffer(8));v.setInt16(0,258,true);''+v.getInt16(0)",
+            "513",
+        ),
+        // Step 6 and step 8.b.ii of 25.3.3.1 refuse a view past the block.
+        (
+            "var r;try{new DataView(new ArrayBuffer(4),8)}catch(e){r=e instanceof RangeError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{new DataView({})}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        // 25.3.1.1 refuses an index that reaches past the view.
+        (
+            "var v=new DataView(new ArrayBuffer(4));var r;try{v.getInt32(1)}catch(e){r=e instanceof RangeError};''+r",
+            "true",
+        ),
+        // 25.1.5.1 now has a view to answer for.
+        (
+            "''+ArrayBuffer.isView(new DataView(new ArrayBuffer(1)))+' '+ArrayBuffer.isView({})",
+            "true false",
+        ),
+        (
+            "''+Object.prototype.toString.call(new DataView(new ArrayBuffer(1)))",
+            "[object DataView]",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}

@@ -990,6 +990,46 @@ pub enum Intrinsic {
     ArrayBufferPrototypeResizable,
     /// `get maxByteLength`, 25.1.6.4.
     ArrayBufferPrototypeMaxByteLength,
+    /// `DataView`, 25.3.3.1.
+    DataViewConstructor,
+    /// `get buffer`, 25.3.4.1.
+    DataViewPrototypeBuffer,
+    /// `get byteLength`, 25.3.4.2.
+    DataViewPrototypeByteLength,
+    /// `get byteOffset`, 25.3.4.3.
+    DataViewPrototypeByteOffset,
+    /// `getInt8`, 25.3.4.
+    DataViewPrototypeGetInt8,
+    /// `setInt8`, 25.3.4.
+    DataViewPrototypeSetInt8,
+    /// `getUint8`, 25.3.4.
+    DataViewPrototypeGetUint8,
+    /// `setUint8`, 25.3.4.
+    DataViewPrototypeSetUint8,
+    /// `getInt16`, 25.3.4.
+    DataViewPrototypeGetInt16,
+    /// `setInt16`, 25.3.4.
+    DataViewPrototypeSetInt16,
+    /// `getUint16`, 25.3.4.
+    DataViewPrototypeGetUint16,
+    /// `setUint16`, 25.3.4.
+    DataViewPrototypeSetUint16,
+    /// `getInt32`, 25.3.4.
+    DataViewPrototypeGetInt32,
+    /// `setInt32`, 25.3.4.
+    DataViewPrototypeSetInt32,
+    /// `getUint32`, 25.3.4.
+    DataViewPrototypeGetUint32,
+    /// `setUint32`, 25.3.4.
+    DataViewPrototypeSetUint32,
+    /// `getFloat32`, 25.3.4.
+    DataViewPrototypeGetFloat32,
+    /// `setFloat32`, 25.3.4.
+    DataViewPrototypeSetFloat32,
+    /// `getFloat64`, 25.3.4.
+    DataViewPrototypeGetFloat64,
+    /// `setFloat64`, 25.3.4.
+    DataViewPrototypeSetFloat64,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -1047,6 +1087,8 @@ pub enum IntrinsicHolder {
     ArrayBufferPrototype,
     /// `%ArrayBuffer%`, which carries the function 25.1.5 gives it.
     ArrayBufferConstructor,
+    /// `%DataView.prototype%`, which carries what 25.3.4 gives it.
+    DataViewPrototype,
     /// `%WeakMap.prototype%`, which carries the methods 24.3.3 gives it.
     WeakMapPrototype,
     /// `%WeakSet.prototype%`, which carries the methods 24.4.3 gives it.
@@ -1065,7 +1107,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 343] = [
+    pub const ALL: [Self; 363] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1409,6 +1451,26 @@ impl Intrinsic {
         Self::ArrayBufferPrototypeDetached,
         Self::ArrayBufferPrototypeResizable,
         Self::ArrayBufferPrototypeMaxByteLength,
+        Self::DataViewConstructor,
+        Self::DataViewPrototypeBuffer,
+        Self::DataViewPrototypeByteLength,
+        Self::DataViewPrototypeByteOffset,
+        Self::DataViewPrototypeGetInt8,
+        Self::DataViewPrototypeSetInt8,
+        Self::DataViewPrototypeGetUint8,
+        Self::DataViewPrototypeSetUint8,
+        Self::DataViewPrototypeGetInt16,
+        Self::DataViewPrototypeSetInt16,
+        Self::DataViewPrototypeGetUint16,
+        Self::DataViewPrototypeSetUint16,
+        Self::DataViewPrototypeGetInt32,
+        Self::DataViewPrototypeSetInt32,
+        Self::DataViewPrototypeGetUint32,
+        Self::DataViewPrototypeSetUint32,
+        Self::DataViewPrototypeGetFloat32,
+        Self::DataViewPrototypeSetFloat32,
+        Self::DataViewPrototypeGetFloat64,
+        Self::DataViewPrototypeSetFloat64,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -1625,6 +1687,22 @@ impl Intrinsic {
             Self::DateNow | Self::DateUtc | Self::DateParse => IntrinsicHolder::DateConstructor,
             Self::ArrayBufferIsView => IntrinsicHolder::ArrayBufferConstructor,
             Self::ArrayBufferPrototypeSlice => IntrinsicHolder::ArrayBufferPrototype,
+            Self::DataViewPrototypeGetInt8
+            | Self::DataViewPrototypeSetInt8
+            | Self::DataViewPrototypeGetUint8
+            | Self::DataViewPrototypeSetUint8
+            | Self::DataViewPrototypeGetInt16
+            | Self::DataViewPrototypeSetInt16
+            | Self::DataViewPrototypeGetUint16
+            | Self::DataViewPrototypeSetUint16
+            | Self::DataViewPrototypeGetInt32
+            | Self::DataViewPrototypeSetInt32
+            | Self::DataViewPrototypeGetUint32
+            | Self::DataViewPrototypeSetUint32
+            | Self::DataViewPrototypeGetFloat32
+            | Self::DataViewPrototypeSetFloat32
+            | Self::DataViewPrototypeGetFloat64
+            | Self::DataViewPrototypeSetFloat64 => IntrinsicHolder::DataViewPrototype,
             Self::DatePrototypeValueOf
             | Self::DatePrototypeGetTime
             | Self::DatePrototypeSetTime
@@ -1721,6 +1799,11 @@ impl Intrinsic {
             | Self::Unescape
             | Self::DateConstructor
             | Self::ArrayBufferConstructor
+            | Self::DataViewConstructor
+            // 25.3.4 gives three of them as accessors too.
+            | Self::DataViewPrototypeBuffer
+            | Self::DataViewPrototypeByteLength
+            | Self::DataViewPrototypeByteOffset
             // 25.1.6 gives four of them as accessors, which the Realm installs
             // beside the methods, so the Global holder installs none of them.
             | Self::ArrayBufferPrototypeByteLength
@@ -2133,6 +2216,26 @@ impl Intrinsic {
             Self::ArrayBufferPrototypeDetached => 340,
             Self::ArrayBufferPrototypeResizable => 341,
             Self::ArrayBufferPrototypeMaxByteLength => 342,
+            Self::DataViewConstructor => 343,
+            Self::DataViewPrototypeBuffer => 344,
+            Self::DataViewPrototypeByteLength => 345,
+            Self::DataViewPrototypeByteOffset => 346,
+            Self::DataViewPrototypeGetInt8 => 347,
+            Self::DataViewPrototypeSetInt8 => 348,
+            Self::DataViewPrototypeGetUint8 => 349,
+            Self::DataViewPrototypeSetUint8 => 350,
+            Self::DataViewPrototypeGetInt16 => 351,
+            Self::DataViewPrototypeSetInt16 => 352,
+            Self::DataViewPrototypeGetUint16 => 353,
+            Self::DataViewPrototypeSetUint16 => 354,
+            Self::DataViewPrototypeGetInt32 => 355,
+            Self::DataViewPrototypeSetInt32 => 356,
+            Self::DataViewPrototypeGetUint32 => 357,
+            Self::DataViewPrototypeSetUint32 => 358,
+            Self::DataViewPrototypeGetFloat32 => 359,
+            Self::DataViewPrototypeSetFloat32 => 360,
+            Self::DataViewPrototypeGetFloat64 => 361,
+            Self::DataViewPrototypeSetFloat64 => 362,
         }
     }
 
@@ -2486,6 +2589,26 @@ impl Intrinsic {
             Self::ArrayBufferPrototypeDetached => 340,
             Self::ArrayBufferPrototypeResizable => 341,
             Self::ArrayBufferPrototypeMaxByteLength => 342,
+            Self::DataViewConstructor => 343,
+            Self::DataViewPrototypeBuffer => 344,
+            Self::DataViewPrototypeByteLength => 345,
+            Self::DataViewPrototypeByteOffset => 346,
+            Self::DataViewPrototypeGetInt8 => 347,
+            Self::DataViewPrototypeSetInt8 => 348,
+            Self::DataViewPrototypeGetUint8 => 349,
+            Self::DataViewPrototypeSetUint8 => 350,
+            Self::DataViewPrototypeGetInt16 => 351,
+            Self::DataViewPrototypeSetInt16 => 352,
+            Self::DataViewPrototypeGetUint16 => 353,
+            Self::DataViewPrototypeSetUint16 => 354,
+            Self::DataViewPrototypeGetInt32 => 355,
+            Self::DataViewPrototypeSetInt32 => 356,
+            Self::DataViewPrototypeGetUint32 => 357,
+            Self::DataViewPrototypeSetUint32 => 358,
+            Self::DataViewPrototypeGetFloat32 => 359,
+            Self::DataViewPrototypeSetFloat32 => 360,
+            Self::DataViewPrototypeGetFloat64 => 361,
+            Self::DataViewPrototypeSetFloat64 => 362,
         }
     }
 
@@ -2840,6 +2963,26 @@ impl Intrinsic {
             340 => Some(Self::ArrayBufferPrototypeDetached),
             341 => Some(Self::ArrayBufferPrototypeResizable),
             342 => Some(Self::ArrayBufferPrototypeMaxByteLength),
+            343 => Some(Self::DataViewConstructor),
+            344 => Some(Self::DataViewPrototypeBuffer),
+            345 => Some(Self::DataViewPrototypeByteLength),
+            346 => Some(Self::DataViewPrototypeByteOffset),
+            347 => Some(Self::DataViewPrototypeGetInt8),
+            348 => Some(Self::DataViewPrototypeSetInt8),
+            349 => Some(Self::DataViewPrototypeGetUint8),
+            350 => Some(Self::DataViewPrototypeSetUint8),
+            351 => Some(Self::DataViewPrototypeGetInt16),
+            352 => Some(Self::DataViewPrototypeSetInt16),
+            353 => Some(Self::DataViewPrototypeGetUint16),
+            354 => Some(Self::DataViewPrototypeSetUint16),
+            355 => Some(Self::DataViewPrototypeGetInt32),
+            356 => Some(Self::DataViewPrototypeSetInt32),
+            357 => Some(Self::DataViewPrototypeGetUint32),
+            358 => Some(Self::DataViewPrototypeSetUint32),
+            359 => Some(Self::DataViewPrototypeGetFloat32),
+            360 => Some(Self::DataViewPrototypeSetFloat32),
+            361 => Some(Self::DataViewPrototypeGetFloat64),
+            362 => Some(Self::DataViewPrototypeSetFloat64),
             _ => None,
         }
     }
@@ -2966,10 +3109,31 @@ impl Intrinsic {
             Self::DatePrototypeToLocaleTimeString => "toLocaleTimeString",
             Self::ArrayBufferConstructor => "ArrayBuffer",
             Self::ArrayBufferIsView => "isView",
-            Self::ArrayBufferPrototypeByteLength => "get byteLength",
+            Self::ArrayBufferPrototypeByteLength | Self::DataViewPrototypeByteLength => {
+                "get byteLength"
+            }
             Self::ArrayBufferPrototypeDetached => "get detached",
             Self::ArrayBufferPrototypeResizable => "get resizable",
             Self::ArrayBufferPrototypeMaxByteLength => "get maxByteLength",
+            Self::DataViewConstructor => "DataView",
+            Self::DataViewPrototypeBuffer => "get buffer",
+            Self::DataViewPrototypeByteOffset => "get byteOffset",
+            Self::DataViewPrototypeGetInt8 => "getInt8",
+            Self::DataViewPrototypeSetInt8 => "setInt8",
+            Self::DataViewPrototypeGetUint8 => "getUint8",
+            Self::DataViewPrototypeSetUint8 => "setUint8",
+            Self::DataViewPrototypeGetInt16 => "getInt16",
+            Self::DataViewPrototypeSetInt16 => "setInt16",
+            Self::DataViewPrototypeGetUint16 => "getUint16",
+            Self::DataViewPrototypeSetUint16 => "setUint16",
+            Self::DataViewPrototypeGetInt32 => "getInt32",
+            Self::DataViewPrototypeSetInt32 => "setInt32",
+            Self::DataViewPrototypeGetUint32 => "getUint32",
+            Self::DataViewPrototypeSetUint32 => "setUint32",
+            Self::DataViewPrototypeGetFloat32 => "getFloat32",
+            Self::DataViewPrototypeSetFloat32 => "setFloat32",
+            Self::DataViewPrototypeGetFloat64 => "getFloat64",
+            Self::DataViewPrototypeSetFloat64 => "setFloat64",
             Self::DatePrototypeSetMilliseconds => "setMilliseconds",
             Self::DatePrototypeSetUtcMilliseconds => "setUTCMilliseconds",
             Self::DatePrototypeSetSeconds => "setSeconds",
@@ -3682,6 +3846,9 @@ impl Intrinsic {
             | Self::ArrayBufferPrototypeDetached
             | Self::ArrayBufferPrototypeResizable
             | Self::ArrayBufferPrototypeMaxByteLength
+            | Self::DataViewPrototypeBuffer
+            | Self::DataViewPrototypeByteLength
+            | Self::DataViewPrototypeByteOffset
             | Self::MapIteratorPrototypeNext
             | Self::SetIteratorPrototypeNext => 0,
             Self::StringFromCharCode
@@ -3831,6 +3998,15 @@ impl Intrinsic {
             | Self::DatePrototypeSetYear
             | Self::ArrayBufferConstructor
             | Self::ArrayBufferIsView
+            | Self::DataViewConstructor
+            | Self::DataViewPrototypeGetInt8
+            | Self::DataViewPrototypeGetUint8
+            | Self::DataViewPrototypeGetInt16
+            | Self::DataViewPrototypeGetUint16
+            | Self::DataViewPrototypeGetInt32
+            | Self::DataViewPrototypeGetUint32
+            | Self::DataViewPrototypeGetFloat32
+            | Self::DataViewPrototypeGetFloat64
             | Self::WeakMapPrototypeGet
             | Self::WeakMapPrototypeHas
             | Self::WeakMapPrototypeDelete
@@ -3921,6 +4097,14 @@ impl Intrinsic {
             | Self::DatePrototypeSetMonth
             | Self::DatePrototypeSetUtcMonth
             | Self::ArrayBufferPrototypeSlice
+            | Self::DataViewPrototypeSetInt8
+            | Self::DataViewPrototypeSetUint8
+            | Self::DataViewPrototypeSetInt16
+            | Self::DataViewPrototypeSetUint16
+            | Self::DataViewPrototypeSetInt32
+            | Self::DataViewPrototypeSetUint32
+            | Self::DataViewPrototypeSetFloat32
+            | Self::DataViewPrototypeSetFloat64
             | Self::PromisePrototypeThen => 2,
             // 21.4.2.1 and 21.4.3.4 take a year, a month, a day, an hour, a
             // minute, a second and a millisecond.
@@ -4406,6 +4590,42 @@ pub fn array_buffer_prototype_owns(name: &[u16]) -> bool {
     wrapper_prototype_owns(&ARRAY_BUFFER_PROTOTYPE_PROPERTIES, name)
 }
 
+/// The property names 25.3.4 gives `%DataView.prototype%`.
+pub const DATA_VIEW_PROTOTYPE_PROPERTIES: [&str; 25] = [
+    "buffer",
+    "byteLength",
+    "byteOffset",
+    "constructor",
+    "getBigInt64",
+    "getBigUint64",
+    "getFloat16",
+    "getFloat32",
+    "getFloat64",
+    "getInt16",
+    "getInt32",
+    "getInt8",
+    "getUint16",
+    "getUint32",
+    "getUint8",
+    "setBigInt64",
+    "setBigUint64",
+    "setFloat16",
+    "setFloat32",
+    "setFloat64",
+    "setInt16",
+    "setInt32",
+    "setInt8",
+    "setUint16",
+    "setUint32",
+];
+
+/// Whether `%DataView.prototype%` or `%Object.prototype%` owns a property of
+/// this name, which a view resolves on its Prototype Chain.
+#[must_use]
+pub fn data_view_prototype_owns(name: &[u16]) -> bool {
+    wrapper_prototype_owns(&DATA_VIEW_PROTOTYPE_PROPERTIES, name)
+}
+
 /// The property names 27.2.5 gives `%Promise.prototype%`.
 pub const PROMISE_PROTOTYPE_PROPERTIES: [&str; 4] = ["catch", "constructor", "finally", "then"];
 
@@ -4697,6 +4917,7 @@ pub struct Realm {
     set_prototype: Root,
     date_prototype: Root,
     array_buffer_prototype: Root,
+    data_view_prototype: Root,
     weak_map_prototype: Root,
     weak_set_prototype: Root,
     map_iterator_prototype: Root,
@@ -4747,6 +4968,7 @@ struct Holders {
     set_prototype: Root,
     date_prototype: Root,
     array_buffer_prototype: Root,
+    data_view_prototype: Root,
     weak_map_prototype: Root,
     weak_set_prototype: Root,
     map_iterator_prototype: Root,
@@ -4854,6 +5076,10 @@ impl Realm {
         let array_buffer_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
         let array_buffer_prototype = heap.push_root(Value::from_object(array_buffer_prototype))?;
 
+        // 25.3.4: %DataView.prototype% is an ordinary object and no view.
+        let data_view_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
+        let data_view_prototype = heap.push_root(Value::from_object(data_view_prototype))?;
+
         // 24.3.3 and 24.4.3: %WeakMap.prototype% and %WeakSet.prototype% are
         // ordinary objects and neither a WeakMap nor a WeakSet.
         let weak_map_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
@@ -4942,6 +5168,7 @@ impl Realm {
                 set_prototype,
                 date_prototype,
                 array_buffer_prototype,
+                data_view_prototype,
                 weak_map_prototype,
                 weak_set_prototype,
                 map_iterator_prototype,
@@ -4964,6 +5191,7 @@ impl Realm {
             (Intrinsic::SetConstructor, set_prototype),
             (Intrinsic::DateConstructor, date_prototype),
             (Intrinsic::ArrayBufferConstructor, array_buffer_prototype),
+            (Intrinsic::DataViewConstructor, data_view_prototype),
             (Intrinsic::WeakMapConstructor, weak_map_prototype),
             (Intrinsic::WeakSetConstructor, weak_set_prototype),
         ] {
@@ -4980,6 +5208,7 @@ impl Realm {
         Self::define_regexp_accessors(heap, &intrinsics, regexp_prototype)?;
         Self::define_collection_size_getters(heap, &intrinsics, map_prototype, set_prototype)?;
         Self::define_array_buffer_getters(heap, &intrinsics, array_buffer_prototype)?;
+        Self::define_data_view_getters(heap, &intrinsics, data_view_prototype)?;
         Self::define_trim_aliases(heap, &intrinsics, string_prototype, date_prototype)?;
         Self::define_unscopables(heap, array_prototype)?;
         Self::define_to_string_tags(
@@ -4996,6 +5225,7 @@ impl Realm {
                 (map_iterator_prototype, "Map Iterator"),
                 (set_iterator_prototype, "Set Iterator"),
                 (array_buffer_prototype, "ArrayBuffer"),
+                (data_view_prototype, "DataView"),
                 (weak_map_prototype, "WeakMap"),
                 (weak_set_prototype, "WeakSet"),
             ],
@@ -5042,6 +5272,7 @@ impl Realm {
             set_prototype,
             date_prototype,
             array_buffer_prototype,
+            data_view_prototype,
             weak_map_prototype,
             weak_set_prototype,
             map_iterator_prototype,
@@ -5685,6 +5916,55 @@ impl Realm {
         Ok(())
     }
 
+    /// The three accessors 25.3.4 gives `%DataView.prototype%`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    fn define_data_view_getters(
+        heap: &mut GenerationalHeap,
+        intrinsics: &[Root],
+        data_view_prototype: Root,
+    ) -> Result<(), HeapError> {
+        let holder = Self::rooted(heap, data_view_prototype)?
+            .as_object()
+            .ok_or(HeapError::InvalidReference)?;
+        for (intrinsic, name) in [
+            (Intrinsic::DataViewPrototypeBuffer, "buffer"),
+            (Intrinsic::DataViewPrototypeByteLength, "byteLength"),
+            (Intrinsic::DataViewPrototypeByteOffset, "byteOffset"),
+        ] {
+            let getter = Self::rooted(
+                heap,
+                *intrinsics
+                    .get(intrinsic.index())
+                    .ok_or(HeapError::InvalidReference)?,
+            )?;
+            let shape = heap.shapes.root_shape();
+            let pair = heap.allocate_immortal_object(shape, super::value::VALUE_NULL)?;
+            heap.set_object_kind(
+                pair,
+                super::object::ObjectKind::Accessor {
+                    get: getter,
+                    set: super::value::VALUE_UNDEFINED,
+                },
+            )?;
+            let key = PropertyKey::String(heap.strings.intern(name)?);
+            heap.define_own_named(
+                holder,
+                key,
+                Value::from_object(pair),
+                PropertyFlags {
+                    writable: false,
+                    enumerable: false,
+                    configurable: true,
+                    is_accessor: true,
+                },
+            )?;
+        }
+        Ok(())
+    }
+
     /// The `size` 24.1.3.10 and 24.2.3.14 give their Prototype.
     ///
     /// # Errors
@@ -5947,6 +6227,9 @@ impl Realm {
                 IntrinsicHolder::DatePrototype => Self::rooted(heap, holders.date_prototype)?,
                 IntrinsicHolder::ArrayBufferPrototype => {
                     Self::rooted(heap, holders.array_buffer_prototype)?
+                }
+                IntrinsicHolder::DataViewPrototype => {
+                    Self::rooted(heap, holders.data_view_prototype)?
                 }
                 IntrinsicHolder::ArrayBufferConstructor => Self::rooted(
                     heap,
@@ -6333,6 +6616,15 @@ impl Realm {
     /// Returns [`HeapError::InvalidReference`] for a stale root.
     pub fn array_buffer_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
         Self::rooted(heap, self.array_buffer_prototype)
+    }
+
+    /// `%DataView.prototype%`, 25.3.4.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale root.
+    pub fn data_view_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.data_view_prototype)
     }
 
     /// `%WeakMap.prototype%`, 24.3.3.

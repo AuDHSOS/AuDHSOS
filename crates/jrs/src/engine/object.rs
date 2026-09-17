@@ -136,6 +136,15 @@ pub enum ObjectKind {
     /// The `[[ArrayBufferData]]` of 25.1.5, whose bytes are the block 25.1.3.1
     /// created; `None` is the detached block of 25.1.3.4.
     ArrayBuffer(Option<alloc::vec::Vec<u8>>),
+    /// The `[[DataView]]` of 25.3.5: the block it looks into, and where.
+    DataView {
+        /// `[[ViewedArrayBuffer]]`.
+        buffer: Value,
+        /// `[[ByteOffset]]`.
+        offset: u32,
+        /// `[[ByteLength]]`.
+        length: u32,
+    },
     /// The `[[DateValue]]` of 21.4.4: the time value, or `NaN` for the Date
     /// 21.4.1.1 calls invalid.
     Date(f64),
@@ -299,6 +308,7 @@ impl ObjectKind {
             | Self::CollectionIterator { target: value, .. }
             | Self::NativeFunction { state: value, .. }
             | Self::Collection { entries: value, .. }
+            | Self::DataView { buffer: value, .. }
             | Self::Function { home: value, .. } => [Some(*value), None, None, None, None],
             Self::Promise {
                 value,
@@ -389,6 +399,7 @@ impl ObjectKind {
             | Self::CollectionIterator { target: value, .. }
             | Self::NativeFunction { state: value, .. }
             | Self::Collection { entries: value, .. }
+            | Self::DataView { buffer: value, .. }
             | Self::Function { home: value, .. } => [Some(value), None, None, None, None],
             Self::Promise {
                 value,

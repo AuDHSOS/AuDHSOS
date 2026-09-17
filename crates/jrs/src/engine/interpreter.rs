@@ -2490,6 +2490,28 @@ impl RegisterVM {
             | Intrinsic::ArrayBufferPrototypeMaxByteLength => {
                 self.call_array_buffer_intrinsic(intrinsic, &call, heap, realm)
             }
+            Intrinsic::DataViewConstructor
+            | Intrinsic::DataViewPrototypeBuffer
+            | Intrinsic::DataViewPrototypeByteLength
+            | Intrinsic::DataViewPrototypeByteOffset
+            | Intrinsic::DataViewPrototypeGetInt8
+            | Intrinsic::DataViewPrototypeSetInt8
+            | Intrinsic::DataViewPrototypeGetUint8
+            | Intrinsic::DataViewPrototypeSetUint8
+            | Intrinsic::DataViewPrototypeGetInt16
+            | Intrinsic::DataViewPrototypeSetInt16
+            | Intrinsic::DataViewPrototypeGetUint16
+            | Intrinsic::DataViewPrototypeSetUint16
+            | Intrinsic::DataViewPrototypeGetInt32
+            | Intrinsic::DataViewPrototypeSetInt32
+            | Intrinsic::DataViewPrototypeGetUint32
+            | Intrinsic::DataViewPrototypeSetUint32
+            | Intrinsic::DataViewPrototypeGetFloat32
+            | Intrinsic::DataViewPrototypeSetFloat32
+            | Intrinsic::DataViewPrototypeGetFloat64
+            | Intrinsic::DataViewPrototypeSetFloat64 => {
+                self.call_data_view_intrinsic(intrinsic, &call, heap, realm)
+            }
             Intrinsic::EncodeUri
             | Intrinsic::EncodeUriComponent
             | Intrinsic::DecodeUri
@@ -3091,6 +3113,7 @@ impl RegisterVM {
                     | Intrinsic::WeakSetConstructor
                     | Intrinsic::DateConstructor
                     | Intrinsic::ArrayBufferConstructor
+                    | Intrinsic::DataViewConstructor
             )
         })
     }
@@ -10859,8 +10882,10 @@ impl RegisterVM {
             // The object of the rawJSON proposal has a null Prototype, so no
             // conversion of it is owed either.
             | ObjectKind::RawJson
-            // 25.1.6 gives a block the `toString` of 20.1.3.6.
+            // 25.1.6 gives a block the `toString` of 20.1.3.6, and 25.3.4
+            // gives a view of one the same.
             | ObjectKind::ArrayBuffer(_)
+            | ObjectKind::DataView { .. }
             | ObjectKind::Continuation { .. }
             | ObjectKind::Accessor { .. }
             | ObjectKind::RegExp { .. }
@@ -11114,6 +11139,14 @@ impl RegisterVM {
                 Err(VMError::Unsupported(
                     "a property of %ArrayBuffer.prototype%",
                 ))
+            }
+            // 25.3.4 gives `%DataView.prototype%` the reads and writes of the
+            // BigInt and the binary16 of the proposal, which this Realm has
+            // not built.
+            Some(ObjectKind::DataView { .. })
+                if chain && super::realm::data_view_prototype_owns(name) =>
+            {
+                Err(VMError::Unsupported("a property of %DataView.prototype%"))
             }
             // 20.4.2 gives `%Symbol%` more than the thirteen of table 1.
             Some(ObjectKind::NativeFunction { id, .. })
@@ -11732,9 +11765,11 @@ impl RegisterVM {
                 // WeakSet.
                 | ObjectKind::WeakCollection { .. }
                 | ObjectKind::RawJson
-                // 25.1.6.10 tags a block through @@toStringTag, so its
-                // builtin tag is the ordinary one.
+                // 25.1.6.10 and 25.3.4.6 tag a block and a view of one
+                // through @@toStringTag, so the builtin tag is the ordinary
+                // one for both.
                 | ObjectKind::ArrayBuffer(_)
+                | ObjectKind::DataView { .. }
                 | ObjectKind::CollectionIterator { .. }
                 | ObjectKind::ArrayIterator { .. }
                 | ObjectKind::ArrayIteration { .. }
@@ -13257,6 +13292,271 @@ impl RegisterVM {
         Ok(Value::from_object(object))
     }
 
+    /// The kind of number one read or write of 25.3.4 names: how many bytes it
+    /// takes and how they are read back.
+    const fn view_element(intrinsic: Intrinsic) -> Option<(usize, u8)> {
+        // The second field says what the bytes are: 0 signed, 1 unsigned,
+        // 2 a binary32, 3 a binary64.
+        Some(match intrinsic {
+            Intrinsic::DataViewPrototypeGetInt8 | Intrinsic::DataViewPrototypeSetInt8 => (1, 0),
+            Intrinsic::DataViewPrototypeGetUint8 | Intrinsic::DataViewPrototypeSetUint8 => (1, 1),
+            Intrinsic::DataViewPrototypeGetInt16 | Intrinsic::DataViewPrototypeSetInt16 => (2, 0),
+            Intrinsic::DataViewPrototypeGetUint16 | Intrinsic::DataViewPrototypeSetUint16 => (2, 1),
+            Intrinsic::DataViewPrototypeGetInt32 | Intrinsic::DataViewPrototypeSetInt32 => (4, 0),
+            Intrinsic::DataViewPrototypeGetUint32 | Intrinsic::DataViewPrototypeSetUint32 => (4, 1),
+            Intrinsic::DataViewPrototypeGetFloat32 | Intrinsic::DataViewPrototypeSetFloat32 => {
+                (4, 2)
+            }
+            Intrinsic::DataViewPrototypeGetFloat64 | Intrinsic::DataViewPrototypeSetFloat64 => {
+                (8, 3)
+            }
+            _ => return None,
+        })
+    }
+
+    /// Whether the intrinsic is one of the writes of 25.3.4.
+    const fn writes_a_view(intrinsic: Intrinsic) -> bool {
+        matches!(
+            intrinsic,
+            Intrinsic::DataViewPrototypeSetInt8
+                | Intrinsic::DataViewPrototypeSetUint8
+                | Intrinsic::DataViewPrototypeSetInt16
+                | Intrinsic::DataViewPrototypeSetUint16
+                | Intrinsic::DataViewPrototypeSetInt32
+                | Intrinsic::DataViewPrototypeSetUint32
+                | Intrinsic::DataViewPrototypeSetFloat32
+                | Intrinsic::DataViewPrototypeSetFloat64
+        )
+    }
+
+    /// The clauses of 25.3, which look into the block of a 25.1.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a receiver that is
+    /// no view and for a block 25.1.3.4 detached, and with a `RangeError` for
+    /// an index that reaches past the view.
+    fn call_data_view_intrinsic(
+        &self,
+        intrinsic: Intrinsic,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if intrinsic == Intrinsic::DataViewConstructor {
+            return self.construct_data_view(call, heap, realm);
+        }
+        let view = call
+            .receiver
+            .as_object()
+            .filter(|object| {
+                matches!(
+                    heap.get_object(*object).map(|entry| &entry.kind),
+                    Some(&ObjectKind::DataView { .. })
+                )
+            })
+            .ok_or_else(|| type_error(heap, realm, "this value carries no DataView of its own"))?;
+        let Some(ObjectKind::DataView {
+            buffer,
+            offset,
+            length,
+        }) = heap.get_object(view).map(|entry| entry.kind.clone())
+        else {
+            return Err(VMError::TypeError);
+        };
+        let block = buffer.as_object().ok_or(VMError::TypeError)?;
+        let detached = Self::array_buffer_bytes(block, heap).is_none();
+        match intrinsic {
+            Intrinsic::DataViewPrototypeBuffer => return Ok(buffer),
+            // 25.3.4.2 and 25.3.4.3 refuse a view whose block is gone.
+            Intrinsic::DataViewPrototypeByteLength | Intrinsic::DataViewPrototypeByteOffset => {
+                if detached {
+                    return Err(type_error(heap, realm, "the ArrayBuffer is detached"));
+                }
+                let answer = if intrinsic == Intrinsic::DataViewPrototypeByteLength {
+                    length
+                } else {
+                    offset
+                };
+                return Ok(Value::from_f64(f64::from(answer)));
+            }
+            _ => {}
+        }
+        let (size, kind) = Self::view_element(intrinsic).ok_or(VMError::TypeError)?;
+        // Step 2 of 25.3.1.1 and 25.3.1.2 read the index before anything else.
+        let index = Self::byte_index(self.call_argument(call, 0, heap)?, heap, realm)?;
+        let writes = Self::writes_a_view(intrinsic);
+        // Step 3 of 25.3.1.2 reads the value where the write takes one, and
+        // step 3 of 25.3.1.1 the byte order where the read does.
+        let written = if writes {
+            Self::number_argument(self.call_argument(call, 1, heap)?, heap)?
+        } else {
+            0.0
+        };
+        let little = Self::to_boolean(
+            self.call_argument(call, u16::from(writes).saturating_add(1), heap)?,
+            heap,
+        )?;
+        if detached {
+            return Err(type_error(heap, realm, "the ArrayBuffer is detached"));
+        }
+        let start = Self::integral(index).saturating_add(i64::from(offset));
+        let end = start.saturating_add(i64::try_from(size).unwrap_or(0));
+        if Self::integral(index).saturating_add(i64::try_from(size).unwrap_or(0))
+            > i64::from(length)
+        {
+            return Err(raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::RangeError,
+                "the index reaches past the DataView",
+            ));
+        }
+        let (Ok(start), Ok(end)) = (usize::try_from(start), usize::try_from(end)) else {
+            return Err(VMError::TypeError);
+        };
+        if writes {
+            let bytes = Self::view_bytes(written, size, kind, little);
+            if let Some(ObjectKind::ArrayBuffer(Some(block))) =
+                heap.object_kind_mut(block).map(|entry| &mut entry.kind)
+                && let Some(slot) = block.get_mut(start..end)
+            {
+                slot.copy_from_slice(bytes.get(..size).unwrap_or_default());
+            }
+            return Ok(VALUE_UNDEFINED);
+        }
+        let mut raw = [0u8; 8];
+        let read = Self::array_buffer_bytes(block, heap)
+            .and_then(|bytes| bytes.get(start..end))
+            .ok_or(VMError::TypeError)?;
+        raw.get_mut(..size)
+            .ok_or(VMError::TypeError)?
+            .copy_from_slice(read);
+        Ok(Value::from_f64(Self::view_number(raw, size, kind, little)))
+    }
+
+    /// `GetValueFromBuffer` of 25.1.3.10 for the kinds 25.3.4 names.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "every width below 2^53 is a binary64 exactly"
+    )]
+    fn view_number(raw: [u8; 8], size: usize, kind: u8, little: bool) -> f64 {
+        let mut value = 0u64;
+        for offset in 0..size {
+            let at = if little { size - 1 - offset } else { offset };
+            value = (value << 8) | u64::from(*raw.get(at).unwrap_or(&0));
+        }
+        match kind {
+            2 => f64::from(f32::from_bits(
+                u32::try_from(value & 0xFFFF_FFFF).unwrap_or(0),
+            )),
+            3 => f64::from_bits(value),
+            1 => value as f64,
+            _ => {
+                let bits = size.saturating_mul(8);
+                let sign = 1u64 << (bits.saturating_sub(1));
+                if value & sign == 0 {
+                    value as f64
+                } else {
+                    -(((!value).wrapping_add(1) & (sign | (sign - 1))) as f64)
+                }
+            }
+        }
+    }
+
+    /// `SetValueInBuffer` of 25.1.3.12 for the same kinds.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "7.1.6 and 7.1.7 wrap on purpose, and 6.1.6.1.20 rounds to the nearer binary32"
+    )]
+    fn view_bytes(value: f64, size: usize, kind: u8, little: bool) -> [u8; 8] {
+        let bits = match kind {
+            2 => u64::from((value as f32).to_bits()),
+            3 => value.to_bits(),
+            _ => {
+                let wrapped = crate::value::number_uint32(value);
+                if size == 8 {
+                    u64::from(wrapped)
+                } else {
+                    u64::from(wrapped) & ((1u64 << (size.saturating_mul(8))) - 1)
+                }
+            }
+        };
+        let mut out = [0u8; 8];
+        for offset in 0..size {
+            let shift = if little { offset } else { size - 1 - offset };
+            if let Some(slot) = out.get_mut(offset) {
+                *slot = ((bits >> (shift.saturating_mul(8))) & 0xFF) as u8;
+            }
+        }
+        out
+    }
+
+    /// `DataView` of 25.3.3.1.
+    fn construct_data_view(
+        &self,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        // Step 1 refuses a call without `new`.
+        if call.construct.is_none() {
+            return Err(type_error(heap, realm, "a constructor called without new"));
+        }
+        let buffer = self.call_argument(call, 0, heap)?;
+        let block = buffer
+            .as_object()
+            .filter(|object| {
+                matches!(
+                    heap.get_object(*object).map(|entry| &entry.kind),
+                    Some(&ObjectKind::ArrayBuffer(_))
+                )
+            })
+            .ok_or_else(|| type_error(heap, realm, "the argument carries no ArrayBuffer"))?;
+        let offset = Self::byte_index(self.call_argument(call, 1, heap)?, heap, realm)?;
+        let Some(bytes) = Self::array_buffer_bytes(block, heap).map(<[u8]>::len) else {
+            return Err(type_error(heap, realm, "the ArrayBuffer is detached"));
+        };
+        let whole = Self::whole(bytes);
+        // Step 6 refuses an offset past the block.
+        if offset > whole {
+            return Err(raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::RangeError,
+                "the offset reaches past the ArrayBuffer",
+            ));
+        }
+        let given = self.call_argument(call, 2, heap)?;
+        let length = if given.is_undefined() {
+            whole - offset
+        } else {
+            let asked = Self::byte_index(given, heap, realm)?;
+            // Step 8.b.ii refuses a view that would reach past the block.
+            if offset + asked > whole {
+                return Err(raise(
+                    heap,
+                    realm,
+                    super::realm::NativeErrorKind::RangeError,
+                    "the DataView reaches past the ArrayBuffer",
+                ));
+            }
+            asked
+        };
+        let prototype = realm.data_view_prototype(heap)?;
+        let shape = heap.shapes.root_shape();
+        let object = heap.allocate_object(shape, prototype)?;
+        heap.set_object_kind(
+            object,
+            ObjectKind::DataView {
+                buffer,
+                offset: u32::try_from(Self::integral(offset)).unwrap_or(0),
+                length: u32::try_from(Self::integral(length)).unwrap_or(0),
+            },
+        )?;
+        Ok(Value::from_object(object))
+    }
+
     /// The clauses of 25.1, which hold the block of bytes 25.1.3.1 created.
     ///
     /// 25.1.4.1 with a `maxByteLength` makes the resizable block of 25.1.3.1
@@ -13300,9 +13600,15 @@ impl RegisterVM {
             }
             return Self::allocate_array_buffer(length, heap, realm);
         }
-        // 25.1.5.1: no view of a block exists in this Realm yet.
+        // 25.1.5.1 answers whether the value is a view of a block, which in
+        // this Realm is the DataView of 25.3.
         if intrinsic == Intrinsic::ArrayBufferIsView {
-            return Ok(VALUE_FALSE);
+            return Ok(Value::from_bool(
+                self.call_argument(call, 0, heap)?
+                    .as_object()
+                    .and_then(|object| heap.get_object(object))
+                    .is_some_and(|entry| matches!(entry.kind, ObjectKind::DataView { .. })),
+            ));
         }
         let object = call
             .receiver
