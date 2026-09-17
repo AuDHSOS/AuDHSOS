@@ -488,6 +488,17 @@ pub enum Resume {
         /// value of the callback and the position of the next entry.
         state: Root,
     },
+    /// 7.4.2 or 7.4.4 called a method of the iterable, or 23.1.2.1 step 6.c
+    /// the mapper.
+    ///
+    /// The clause has no frame of its own, so the walk waits in a record of
+    /// the heap the collector traces, and each return takes it to its next
+    /// step.
+    IteratorWalk {
+        /// Root holding the record: the output, the iterator, its `next`, the
+        /// mapper and where the walk stands.
+        state: Root,
+    },
     /// 24.1.3.8 and 24.3.3.5 called the callback that computes the value.
     ///
     /// The clause has no frame of its own, so it waits in a record of the heap
@@ -558,6 +569,24 @@ pub enum Resume {
         value: Root,
     },
 }
+
+/// What 23.1.2.1 step 2 found: an `@@iterator` the walk of 7.4.2 is now in,
+/// or none, which leaves the array-like walk of step 7.
+enum IterableStart {
+    /// The walk has begun, and carries the code id of the frame it opened.
+    Walking(Option<u32>),
+    /// The object names no `@@iterator`.
+    ArrayLike,
+}
+
+/// The walk of 7.4.2 has not called the `@@iterator` yet.
+const ITERATOR_WALK_STARTING: i32 = 0;
+/// It is waiting for the `@@iterator` it called.
+const ITERATOR_WALK_OPENED: i32 = 1;
+/// It is waiting for a `next` of 7.4.4.
+const ITERATOR_WALK_STEPPING: i32 = 2;
+/// It is waiting for the mapper of 23.1.2.1 step 6.c.vii.
+const ITERATOR_WALK_MAPPING: i32 = 3;
 
 impl Resume {
     /// The conversion of 7.1.1 this is waiting for, if it is one.
@@ -1756,6 +1785,22 @@ impl RegisterVM {
                     .stack
                     .get_mut(next_frame.saturating_add(index as usize))
                     .ok_or(VMError::StackOverflow)? = argument;
+            }
+        } else if let Some(Resume::IteratorWalk { state }) = call.resume {
+            // 23.1.2.1 step 6.c.vii passes the element and its index; the two
+            // other calls of the walk pass nothing.
+            let record = heap
+                .root_value(state)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            if promise::slot(heap, record, 6).as_smi() == Some(ITERATOR_WALK_MAPPING) {
+                self.place_arguments(
+                    next_frame,
+                    callee,
+                    &[
+                        promise::slot(heap, record, 7),
+                        promise::slot(heap, record, 8),
+                    ],
+                )?;
             }
         } else if let Some((state, walk)) = call.resume.and_then(Resume::collection_record) {
             // 24.1.3.5 step 4.b.i passes the value, the key and the
@@ -6381,6 +6426,312 @@ impl RegisterVM {
         Ok(collection)
     }
 
+    /// 23.1.2.1 step 2: an `@@iterator` decides the whole clause, and the walk
+    /// of 7.4.2 is what reaches one.
+    ///
+    /// Answers none where the object has no `@@iterator`, which leaves the
+    /// array-like walk of step 7 to the caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a mapper that is not
+    /// callable.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a walk of 7.4.2 runs where a call does, with what a call has"
+    )]
+    fn walk_the_iterable_of_23_1_2_1(
+        &mut self,
+        source: Value,
+        target: ObjectRef,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<IterableStart, VMError> {
+        let mapper = self.call_argument(&call, 1, heap)?;
+        if !mapper.is_undefined() && !Self::is_callable(mapper, heap) {
+            return Err(type_error(heap, realm, "the mapper is not callable"));
+        }
+        // 22.1.3.36 gives a String an iterator that yields code points, which
+        // this Realm has not built and which no index walk stands in for.
+        if Self::string_data(target, heap).is_some() {
+            return Err(VMError::Unsupported("an @@iterator of a String"));
+        }
+        let method =
+            match heap.lookup_named(target, super::realm::WellKnownSymbol::Iterator.key())? {
+                Some(found) => Self::plain_value(found)?,
+                None => VALUE_UNDEFINED,
+            };
+        if method.is_undefined() || method.is_null() {
+            return Ok(IterableStart::ArrayLike);
+        }
+        let receiver = self.call_argument(&call, 2, heap)?;
+        self.begin_iterator_walk(
+            source,
+            method,
+            mapper,
+            receiver,
+            call,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )
+        .map(IterableStart::Walking)
+    }
+
+    /// 7.4.2 step 1 for a clause that walks an iterable of the Script.
+    ///
+    /// The walk waits in a record the collector traces: the Array it fills,
+    /// the iterable and then the iterator, the `@@iterator` and then the
+    /// `next`, the mapper, the `this` of the mapper, how many elements it has
+    /// taken, where it stands and the two arguments of the mapper.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for an `@@iterator`
+    /// that is not callable.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a walk of 7.4.2 runs where a call does, with what a call has"
+    )]
+    fn begin_iterator_walk(
+        &mut self,
+        iterable: Value,
+        method: Value,
+        mapper: Value,
+        receiver: Value,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        if !Self::is_callable(method, heap) {
+            return Err(type_error(heap, realm, "the @@iterator is not callable"));
+        }
+        let output = Value::from_object(realm.array(heap, 0)?);
+        let record = promise::record(
+            heap,
+            realm,
+            &[
+                output,
+                iterable,
+                method,
+                mapper,
+                receiver,
+                Value::from_smi(0),
+                Value::from_smi(ITERATOR_WALK_STARTING),
+                VALUE_UNDEFINED,
+                VALUE_UNDEFINED,
+            ],
+        )?;
+        // The record outlives every frame the walk opens, so it is a root of a
+        // scope of its own, which the last step leaves.
+        heap.enter_scope();
+        let state = heap.push_root(record)?;
+        self.step_iterator_walk(state, call, units, active_feedback, heap, realm)
+    }
+
+    /// The walk of 7.4.2, which runs until a call of the Script opens a frame.
+    ///
+    /// A native answers at once, so the loop carries on rather than waiting
+    /// for a return that never comes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for an iterator that is
+    /// no Object, for a `next` that is not callable and for a result of `next`
+    /// that is no Object.
+    fn step_iterator_walk(
+        &mut self,
+        state: Root,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        loop {
+            let record = heap
+                .root_value(state)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let phase = promise::slot(heap, record, 6).as_smi().unwrap_or(0);
+            let answered = self.acc;
+            let called = match phase {
+                // 7.4.2 step 1 calls the `@@iterator` of the iterable.
+                ITERATOR_WALK_STARTING => {
+                    promise::set_slot(heap, record, 6, Value::from_smi(ITERATOR_WALK_OPENED))?;
+                    (
+                        promise::slot(heap, record, 2),
+                        promise::slot(heap, record, 1),
+                    )
+                }
+                // 7.4.2 step 2: the iterator is an Object whose `next` 7.4.4
+                // reads once.
+                ITERATOR_WALK_OPENED => {
+                    let Some(iterator) = answered.as_object() else {
+                        let error = type_error(heap, realm, "the @@iterator answered no object");
+                        return Err(Self::leave_iterator_walk(heap, error));
+                    };
+                    let key = PropertyKey::String(heap.strings.intern("next")?);
+                    let next = match heap
+                        .lookup_named(iterator, key)
+                        .map_err(VMError::Heap)
+                        .and_then(|found| found.map_or(Ok(VALUE_UNDEFINED), Self::plain_value))
+                    {
+                        Ok(next) => next,
+                        Err(error) => return Err(Self::leave_iterator_walk(heap, error)),
+                    };
+                    promise::set_slot(heap, record, 1, answered)?;
+                    promise::set_slot(heap, record, 2, next)?;
+                    match Self::request_iterator_step(record, heap, realm) {
+                        Ok(called) => called,
+                        Err(error) => return Err(Self::leave_iterator_walk(heap, error)),
+                    }
+                }
+                // 7.4.4 step 3 reads the result, and a `done` that is true
+                // ends the walk with the Array it filled.
+                ITERATOR_WALK_STEPPING => {
+                    match self.continue_iterator_step(record, answered, heap, realm) {
+                        Ok(Some(called)) => called,
+                        Ok(None) => {
+                            let output = promise::slot(heap, record, 0);
+                            heap.exit_scope();
+                            self.acc = output;
+                            return Ok(None);
+                        }
+                        Err(error) => return Err(Self::leave_iterator_walk(heap, error)),
+                    }
+                }
+                // 23.1.2.1 step 6.c.viii keeps what the mapper answered.
+                _ => {
+                    let taken = self
+                        .take_iterator_element(record, answered, heap)
+                        .and_then(|()| Self::request_iterator_step(record, heap, realm));
+                    match taken {
+                        Ok(called) => called,
+                        Err(error) => return Err(Self::leave_iterator_walk(heap, error)),
+                    }
+                }
+            };
+            let (func, receiver) = called;
+            let call = Call {
+                receiver,
+                arg_count: 0,
+                arg_start: Reg(0),
+                resume: Some(Resume::IteratorWalk { state }),
+                construct: None,
+                ..call
+            };
+            match self.enter_call_value(func, units, active_feedback, heap, realm, call) {
+                // The Script answers through the frame it opened, which takes
+                // the walk on; a native has answered into the accumulator.
+                Ok(Some(code_id)) => return Ok(Some(code_id)),
+                Ok(None) => {}
+                Err(error) => return Err(Self::leave_iterator_walk(heap, error)),
+            }
+        }
+    }
+
+    /// One result of 7.4.4, which either ends the walk or names the call that
+    /// takes it on: the mapper of 23.1.2.1 step 6.c.vii, or `next` again.
+    fn continue_iterator_step(
+        &self,
+        record: Value,
+        answered: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<(Value, Value)>, VMError> {
+        let Some(result) = answered.as_object() else {
+            return Err(type_error(
+                heap,
+                realm,
+                "the next of an iterator answered no object",
+            ));
+        };
+        let (done, value) = Self::iterator_step_parts(result, heap)?;
+        if Self::to_boolean(done, heap)? {
+            return Ok(None);
+        }
+        let mapper = promise::slot(heap, record, 3);
+        if mapper.is_undefined() {
+            self.take_iterator_element(record, value, heap)?;
+            return Self::request_iterator_step(record, heap, realm).map(Some);
+        }
+        // The frame of the mapper reads the two arguments out of the record.
+        promise::set_slot(heap, record, 7, value)?;
+        promise::set_slot(heap, record, 8, promise::slot(heap, record, 5))?;
+        promise::set_slot(heap, record, 6, Value::from_smi(ITERATOR_WALK_MAPPING))?;
+        Ok(Some((mapper, promise::slot(heap, record, 4))))
+    }
+
+    /// 7.4.4 step 1: the walk calls `next` again.
+    fn request_iterator_step(
+        record: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(Value, Value), VMError> {
+        let next = promise::slot(heap, record, 2);
+        if !Self::is_callable(next, heap) {
+            return Err(type_error(
+                heap,
+                realm,
+                "the next of an iterator is not callable",
+            ));
+        }
+        promise::set_slot(heap, record, 6, Value::from_smi(ITERATOR_WALK_STEPPING))?;
+        Ok((next, promise::slot(heap, record, 1)))
+    }
+
+    /// Appends one element to the Array the walk fills.
+    fn take_iterator_element(
+        &self,
+        record: Value,
+        value: Value,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        let index = promise::slot(heap, record, 5).as_smi().unwrap_or(0);
+        let array = promise::slot(heap, record, 0)
+            .as_object()
+            .ok_or(VMError::TypeError)?;
+        let at = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+        if usize::try_from(at).unwrap_or(usize::MAX) >= self.property_limit {
+            return Err(VMError::PropertyLimit);
+        }
+        heap.set_array_element(array, at, value)?;
+        promise::set_slot(heap, record, 5, Value::from_smi(index.saturating_add(1)))?;
+        Ok(())
+    }
+
+    /// The `done` and the `value` of 7.4.4 step 4.
+    fn iterator_step_parts(
+        result: ObjectRef,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(Value, Value), VMError> {
+        let mut parts = [VALUE_UNDEFINED, VALUE_UNDEFINED];
+        for (slot, name) in ["done", "value"].into_iter().enumerate() {
+            let key = PropertyKey::String(heap.strings.intern(name)?);
+            if let Some(found) = heap.lookup_named(result, key)?
+                && let Some(part) = parts.get_mut(slot)
+            {
+                *part = Self::plain_value(found)?;
+            }
+        }
+        Ok((
+            *parts.first().unwrap_or(&VALUE_UNDEFINED),
+            *parts.get(1).unwrap_or(&VALUE_UNDEFINED),
+        ))
+    }
+
+    /// Leaves the scope the walk held before its error reaches the caller.
+    fn leave_iterator_walk(heap: &mut GenerationalHeap, error: VMError) -> VMError {
+        heap.exit_scope();
+        error
+    }
+
     /// 24.1.3.8 and 24.3.3.5, which ask the Script for the value of a key
     /// that has no entry yet.
     ///
@@ -7164,22 +7515,18 @@ impl RegisterVM {
             call.receiver
         };
         let target = Self::coerce_object(source, heap, realm)?;
-        if from {
-            let mapper = self.call_argument(&call, 1, heap)?;
-            if !mapper.is_undefined() && !Self::is_callable(mapper, heap) {
-                return Err(type_error(heap, realm, "the mapper is not callable"));
-            }
-            // Step 2: an `@@iterator` decides the whole clause, and this Realm
-            // reaches one only through a frame. 22.1.3.36 gives a String one
-            // that yields code points, which this Realm has not built and
-            // which no index walk stands in for.
-            if heap
-                .lookup_named(target, super::realm::WellKnownSymbol::Iterator.key())?
-                .is_some()
-                || Self::string_data(target, heap).is_some()
-            {
-                return Err(VMError::Unsupported("an @@iterator in Array.from"));
-            }
+        if from
+            && let IterableStart::Walking(entered) = self.walk_the_iterable_of_23_1_2_1(
+                source,
+                target,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            )?
+        {
+            return Ok(entered);
         }
         let callback = self.call_argument(&call, u16::from(from), heap)?;
         // 23.1.3.24 takes its second argument as the accumulator; every other
@@ -17034,6 +17381,7 @@ impl RegisterVM {
                                 Resume::Iteration { .. }
                                 | Resume::CollectionWalk { .. }
                                 | Resume::CollectionInsert { .. }
+                                | Resume::IteratorWalk { .. }
                                 | Resume::Length { .. }
                                 | Resume::Descriptor { .. }
                                 | Resume::Getter
@@ -17076,6 +17424,9 @@ impl RegisterVM {
                                 Resume::CollectionInsert { state } => {
                                     self.finish_collection_insert(state, heap, realm)?
                                 }
+                                Resume::IteratorWalk { state } => self.step_iterator_walk(
+                                    state, call, units, feedback, heap, realm,
+                                )?,
                                 Resume::Length { .. } => self.finish_array_like_length(
                                     resume,
                                     pc,

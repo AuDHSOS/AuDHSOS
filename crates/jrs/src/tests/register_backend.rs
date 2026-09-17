@@ -9225,3 +9225,23 @@ fn the_rest_parameter_of_8_6_3_takes_what_the_call_passed_beyond_it() -> Result<
         "function f(a,...r){return r.join('-')} ''+f(1,2,3,4)",
     ])
 }
+
+#[test]
+fn the_walk_of_7_4_2_reaches_an_iterable_of_the_script() -> Result<(), Error> {
+    differential_scripts(&[
+        "''+Array.from([1,2,3])",
+        "''+Array.from({length:2,0:'a',1:'b'})",
+        // 7.4.2 calls the `@@iterator` and 7.4.4 the `next` it answered.
+        "var it={};it[Symbol.iterator]=function(){var i=0;return{next:function(){i=i+1;return {done:i>3,value:i*2}}}};''+Array.from(it)",
+        // 23.1.2.1 step 6.c.vii passes the element and its index.
+        "var it={};it[Symbol.iterator]=function(){var i=0;return{next:function(){i=i+1;return {done:i>3,value:i}}}};''+Array.from(it,function(v,k){return v*10+k})",
+        // An `@@iterator` that answers no Object and a `next` that is not
+        // callable are the TypeErrors of 7.4.2 step 2 and 7.4.4.
+        "var r;try{Array.from({[Symbol.iterator]:function(){return 1}})}catch(e){r=e instanceof TypeError};''+r",
+        "var r;try{Array.from({[Symbol.iterator]:function(){return {}}})}catch(e){r=e instanceof TypeError};''+r",
+        // A throw of the `next` leaves the clause.
+        "var it={};it[Symbol.iterator]=function(){return{next:function(){throw 'x'}}};var r;try{Array.from(it)}catch(e){r=e};''+r",
+        // The walk survives the collections five hundred elements make.
+        "var it={};it[Symbol.iterator]=function(){var i=0;return{next:function(){i=i+1;return{done:i>500,value:i}}}};var a=Array.from(it);''+a.length+':'+a[499]",
+    ])
+}
