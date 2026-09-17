@@ -429,7 +429,7 @@ fn a_schema_larger_than_one_page_grows_a_tree_under_page_one() {
 }
 
 #[test]
-fn what_the_two_halves_of_the_balance_refuse() {
+fn what_the_two_halves_of_the_balance_refuse_and_leave() {
     use crate::error::Error;
     use crate::page::{Cell, Payload, write_cell};
     use crate::tree::{deepen, quick};
@@ -482,8 +482,8 @@ fn what_the_two_halves_of_the_balance_refuse() {
         },
     });
     assert_eq!(quick(&mut pages, parent, leaf, &big), Err(Error::Balance));
-    // A parent with no room for the divider is one the tree cannot grow
-    // under either.
+    // A parent with no room for the divider leaves the leaf to the
+    // balance proper, which the caller reaches by reading `false`.
     let full = pages.add(Kind::InteriorTable, 0).unwrap();
     let mut at = 0;
     while pages
@@ -500,7 +500,7 @@ fn what_the_two_halves_of_the_balance_refuse() {
     {
         at += 1;
     }
-    assert_eq!(quick(&mut pages, full, leaf, &cell), Err(Error::Balance));
+    assert_eq!(quick(&mut pages, full, leaf, &cell), Ok(false));
 }
 
 #[test]
@@ -1110,25 +1110,34 @@ fn a_key_given_by_name_is_the_key_the_row_is_put_in_under() {
 }
 
 #[test]
-fn a_schema_that_outgrows_page_one_is_refused_by_the_statement() {
+fn a_schema_that_outgrows_page_one_grows_a_tree_under_it() {
     use crate::change::Writer;
-    use crate::db::Error;
+    use crate::db::Database;
+    use crate::value::Value;
     // The schema table begins on the page the database header is on, so
-    // a root that outgrows it is the balance this crate does not write.
+    // a schema of more rows than that page holds grows a tree under it,
+    // which is `balance_deeper` on the root of `sqlite_schema`.
     let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
-    let mut at = 0;
-    loop {
-        let name = alloc::format!("t{at}");
-        let sql = alloc::format!("CREATE TABLE {name}(a, b, c, d, e, f, g, h, i, j, k, l)");
-        match writer.run(sql.as_bytes()) {
-            Ok(_) => at += 1,
-            Err(error) => {
-                assert!(matches!(error, Error::Image(_)), "{error:?}");
-                assert!(at > 1, "the first statement was refused");
-                return;
-            }
-        }
+    let held = 200;
+    for at in 0..held {
+        let sql = alloc::format!("CREATE TABLE t{at}(a, b, c, d, e, f, g, h, i, j, k, l)");
+        writer
+            .run(sql.as_bytes())
+            .unwrap_or_else(|error| panic!("t{at}: {}", error.message()));
     }
+    let image = writer.written();
+    let database = Database::open(&image).expect("a database");
+    assert_eq!(
+        database
+            .query(b"SELECT count(*) FROM sqlite_master")
+            .unwrap()
+            .rows,
+        alloc::vec![alloc::vec![Value::Int(held)]]
+    );
+    assert_eq!(
+        database.query(b"PRAGMA integrity_check").unwrap().rows,
+        alloc::vec![alloc::vec![Value::Text(b"ok".to_vec())]]
+    );
 }
 
 #[test]

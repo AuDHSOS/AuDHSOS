@@ -281,3 +281,39 @@ fn what_the_integrity_check_answers_under_every_encoding() {
         );
     }
 }
+
+/// A table tree over 512-byte pages grows past the page where the
+/// parent of its right-most leaf fills, which `balance_quick` leaves to
+/// the balance proper.
+///
+/// `in2.test` writes this shape: whole numbers, then a text of no
+/// bytes, then short texts, each row at the end of the tree.
+#[test]
+fn a_tree_over_short_pages_grows_past_a_full_parent() {
+    let held = 2000;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE a(i INTEGER PRIMARY KEY, a)")
+        .unwrap();
+    for at in 0..held {
+        let sql = alloc::format!("INSERT INTO a VALUES({at},{at})");
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    writer.run(b"INSERT INTO a VALUES(4000, '')").unwrap();
+    for at in 0..held {
+        let sql = alloc::format!("INSERT INTO a VALUES(NULL,'x{at:04}')");
+        writer
+            .run(sql.as_bytes())
+            .unwrap_or_else(|error| panic!("row {at}: {}", error.message()));
+    }
+    let image = writer.written();
+    let database = Database::open(&image).expect("a database");
+    assert_eq!(
+        rows(&database, b"SELECT count(*) FROM a"),
+        alloc::vec![alloc::vec![Value::Int(held * 2 + 1)]]
+    );
+    assert_eq!(
+        rows(&database, b"PRAGMA integrity_check"),
+        alloc::vec![alloc::vec![Value::Text(b"ok".to_vec())]]
+    );
+}

@@ -1822,7 +1822,9 @@ fn balance(
             && pages.page(parent)?.cells() == at_above
         {
             let (_, bytes) = spill.first().ok_or(Error::Balance)?;
-            return quick(pages, parent, page, bytes).map(|()| stack.len());
+            if quick(pages, parent, page, bytes)? {
+                return Ok(stack.len());
+            }
         }
         pages.open(parent);
         // The cell the parent has no room for is one of the dividers
@@ -1887,7 +1889,14 @@ pub(crate) fn deepen(pages: &mut Pages, root: u32) -> Result<u32, Error> {
 /// `balance_quick`: the cell that did not fit is the whole of the new
 /// page, and the parent gains a divider naming the page that was full
 /// and the largest key on it.
-pub(crate) fn quick(pages: &mut Pages, parent: u32, page: u32, cell: &[u8]) -> Result<(), Error> {
+///
+/// Answers whether the sibling was written. The parent gains the
+/// divider, so a parent that will not hold one leaves the leaf to the
+/// balance proper, which the C library reaches by letting the parent
+/// overflow and balancing it in the next turn of its own loop. The room
+/// is counted before a page is taken, so a leaf this answers `false`
+/// for leaves the file as it found it.
+pub(crate) fn quick(pages: &mut Pages, parent: u32, page: u32, cell: &[u8]) -> Result<bool, Error> {
     let last = pages
         .page(page)?
         .cells()
@@ -1896,18 +1905,23 @@ pub(crate) fn quick(pages: &mut Pages, parent: u32, page: u32, cell: &[u8]) -> R
     let Cell::TableLeaf { rowid, .. } = pages.page(page)?.cell(last)? else {
         return Err(Error::Balance);
     };
+    let divider = write_cell(&Cell::TableInterior { child: page, rowid });
+    let room = crate::page::cell_room(divider.len()).saturating_add(2);
+    if pages.page(parent)?.free()? < room {
+        return Ok(false);
+    }
     let sibling = pages.add(Kind::LeafTable, 0)?;
     if !pages.put_cell(sibling, 0, cell)? {
         return Err(Error::Balance);
     }
-    let divider = write_cell(&Cell::TableInterior { child: page, rowid });
     let cells = pages.page(parent)?.cells();
-    if !pages.put_cell(parent, cells, &divider)? {
-        return Err(Error::Balance);
-    }
+    // The room the divider takes was counted above, so the parent holds
+    // it and the answer says so.
+    pages.put_cell(parent, cells, &divider)?;
     pages.writer(parent)?.point(sibling)?;
     pages.point(sibling, Point::Branch, parent)?;
-    pages.point_cells(sibling)
+    pages.point_cells(sibling)?;
+    Ok(true)
 }
 
 /// Whether the table tree at `root` holds a row under `rowid`, which is

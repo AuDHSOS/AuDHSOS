@@ -5735,6 +5735,10 @@ Document 16 step Q8.
 - `PRAGMA integrity_check` holds the entries of an index against the
   rows of the table under every encoding, so a file the engine wrote
   answers `ok`.
+- A schema of more rows than the page the header is on holds grows a
+  tree under that page, so two hundred `CREATE TABLE` statements over
+  512-byte pages leave a schema of two hundred rows that
+  `PRAGMA integrity_check` answers `ok` for.
 
 ## 6.7 CI pipeline
 

@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` counts the room in the parent before it chooses
+  `balance_quick` and leaves the leaf to the balance proper where the
+  parent has none, so a tree over 512-byte pages grows past nine hundred
+  rows and the schema of such a database grows past the page the header
+  is on. D-278 records it. Catalog 6.6.199.
+
 - `db-sqlite` holds every value of the write path in UTF-8 and writes
   it into the encoding the file names in one place, `record::write_in`,
   so an affinity reads the text a statement wrote rather than the bytes

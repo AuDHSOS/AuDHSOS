@@ -813,6 +813,9 @@ Size: L.
     journal mode a connection opens under. Built, which D-275 records.
 56. One place that writes text into the encoding the file names, which
     is `record::write_in`. Built, which D-277 records.
+57. The room the parent of a `balance_quick` has, counted before the
+    routine is chosen. Built, which D-278 records. Four files that
+    refused the balance early now do the work and reach the deadline.
 
 ### Done when
 
