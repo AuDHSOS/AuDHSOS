@@ -876,6 +876,10 @@ pub enum Intrinsic {
     DecodeUri,
     /// `decodeURIComponent`, 19.2.6.3.
     DecodeUriComponent,
+    /// `escape`, B.2.1.1.
+    Escape,
+    /// `unescape`, B.2.1.2.
+    Unescape,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -943,7 +947,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 286] = [
+    pub const ALL: [Self; 288] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1230,6 +1234,8 @@ impl Intrinsic {
         Self::EncodeUriComponent,
         Self::DecodeUri,
         Self::DecodeUriComponent,
+        Self::Escape,
+        Self::Unescape,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -1491,6 +1497,8 @@ impl Intrinsic {
             | Self::EncodeUriComponent
             | Self::DecodeUri
             | Self::DecodeUriComponent
+            | Self::Escape
+            | Self::Unescape
             // 27.2.1.3 stands on no object, so the Global holder never
             // installs either resolving function.
             | Self::PromiseConstructor
@@ -1840,6 +1848,8 @@ impl Intrinsic {
             Self::EncodeUriComponent => 283,
             Self::DecodeUri => 284,
             Self::DecodeUriComponent => 285,
+            Self::Escape => 286,
+            Self::Unescape => 287,
         }
     }
 
@@ -2136,6 +2146,8 @@ impl Intrinsic {
             Self::EncodeUriComponent => 283,
             Self::DecodeUri => 284,
             Self::DecodeUriComponent => 285,
+            Self::Escape => 286,
+            Self::Unescape => 287,
         }
     }
 
@@ -2433,6 +2445,8 @@ impl Intrinsic {
             283 => Some(Self::EncodeUriComponent),
             284 => Some(Self::DecodeUri),
             285 => Some(Self::DecodeUriComponent),
+            286 => Some(Self::Escape),
+            287 => Some(Self::Unescape),
             _ => None,
         }
     }
@@ -2523,6 +2537,8 @@ impl Intrinsic {
             Self::EncodeUriComponent => "encodeURIComponent",
             Self::DecodeUri => "decodeURI",
             Self::DecodeUriComponent => "decodeURIComponent",
+            Self::Escape => "escape",
+            Self::Unescape => "unescape",
             Self::MapPrototypeGetOrInsert | Self::WeakMapPrototypeGetOrInsert => "getOrInsert",
             Self::MapPrototypeGetOrInsertComputed | Self::WeakMapPrototypeGetOrInsertComputed => {
                 "getOrInsertComputed"
@@ -2867,7 +2883,10 @@ impl Intrinsic {
             Self::EncodeUri
             | Self::EncodeUriComponent
             | Self::DecodeUri
-            | Self::DecodeUriComponent => &[(0, PrimitiveHint::String)],
+            | Self::DecodeUriComponent
+            // B.2.1 does the same.
+            | Self::Escape
+            | Self::Unescape => &[(0, PrimitiveHint::String)],
             // 23.1.3.17, 23.1.3.20 and 23.1.3.14: the element is compared as
             // it is, and only the index is converted.
             Self::ArrayPrototypeIndexOf
@@ -3320,6 +3339,8 @@ impl Intrinsic {
             | Self::EncodeUriComponent
             | Self::DecodeUri
             | Self::DecodeUriComponent
+            | Self::Escape
+            | Self::Unescape
             | Self::WeakMapPrototypeGet
             | Self::WeakMapPrototypeHas
             | Self::WeakMapPrototypeDelete

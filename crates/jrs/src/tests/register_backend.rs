@@ -9559,3 +9559,27 @@ fn the_uri_functions_of_19_2_6_encode_and_decode_their_sets() -> Result<(), Erro
     }
     Ok(())
 }
+
+#[test]
+fn the_escape_of_b_2_1_writes_and_reads_its_own_form() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend carries neither, so only the engine answers.
+    for (source, answer) in [
+        ("''+escape('a b~')", "a%20b%7E"),
+        ("''+escape('@*_+-./')", "@*_+-./"),
+        // A code unit below 256 takes two digits and one above it takes four.
+        ("''+escape('\u{e9}')", "%E9"),
+        ("''+escape('\u{4e00}')", "%u4E00"),
+        ("''+unescape('a%20b')", "a b"),
+        ("''+unescape('%u4E00')", "\u{4e00}"),
+        // Every other `%` is the code unit it is.
+        ("''+unescape('%zz')", "%zz"),
+        ("''+unescape('%')", "%"),
+        ("''+unescape('%u00')", "%u00"),
+        ("''+escape.length+unescape.name", "1unescape"),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}

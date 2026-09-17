@@ -2434,7 +2434,9 @@ impl RegisterVM {
             Intrinsic::EncodeUri
             | Intrinsic::EncodeUriComponent
             | Intrinsic::DecodeUri
-            | Intrinsic::DecodeUriComponent => {
+            | Intrinsic::DecodeUriComponent
+            | Intrinsic::Escape
+            | Intrinsic::Unescape => {
                 let text = property_name_units(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 let units = Self::uri_transcode(intrinsic, &text, heap, realm)?;
                 if units.len() > self.string_units_limit {
@@ -12638,8 +12640,77 @@ impl RegisterVM {
             Intrinsic::EncodeUri => Self::uri_encode(text, true, heap, realm),
             Intrinsic::EncodeUriComponent => Self::uri_encode(text, false, heap, realm),
             Intrinsic::DecodeUri => Self::uri_decode(text, true, heap, realm),
+            Intrinsic::Escape => Ok(Self::escape_text(text)),
+            Intrinsic::Unescape => Ok(Self::unescape_text(text)),
             _ => Self::uri_decode(text, false, heap, realm),
         }
+    }
+
+    /// `escape` of B.2.1.1, which writes a code unit the set does not keep as
+    /// `%XX` below 256 and as `%uXXXX` above it.
+    fn escape_text(text: &[u16]) -> Vec<u16> {
+        const DIGITS: &[u8; 16] = b"0123456789ABCDEF";
+        let digit = |value: u16| u16::from(*DIGITS.get(value as usize & 0x0F).unwrap_or(&b'0'));
+        let mut out = Vec::new();
+        for &unit in text {
+            if u8::try_from(unit).is_ok_and(|byte| {
+                let character = char::from(byte);
+                character.is_ascii_alphanumeric() || "@*_+-./".contains(character)
+            }) {
+                out.push(unit);
+            } else if unit < 256 {
+                out.push(0x25);
+                out.push(digit(unit >> 4));
+                out.push(digit(unit));
+            } else {
+                out.push(0x25);
+                out.push(0x75);
+                out.push(digit(unit >> 12));
+                out.push(digit(unit >> 8));
+                out.push(digit(unit >> 4));
+                out.push(digit(unit));
+            }
+        }
+        out
+    }
+
+    /// `unescape` of B.2.1.2, which reads `%uXXXX` and `%XX` back and keeps
+    /// every other `%` as the code unit it is.
+    fn unescape_text(text: &[u16]) -> Vec<u16> {
+        let mut out = Vec::new();
+        let mut at = 0usize;
+        while let Some(&unit) = text.get(at) {
+            at = at.saturating_add(1);
+            if unit != 0x25 {
+                out.push(unit);
+                continue;
+            }
+            if text.get(at) == Some(&0x75)
+                && let Some(value) = Self::hex_units(text, at.saturating_add(1), 4)
+            {
+                out.push(value);
+                at = at.saturating_add(5);
+                continue;
+            }
+            if let Some(value) = Self::hex_units(text, at, 2) {
+                out.push(value);
+                at = at.saturating_add(2);
+                continue;
+            }
+            out.push(unit);
+        }
+        out
+    }
+
+    /// The value of `count` hexadecimal digits, or none where the text has
+    /// fewer or carries another unit there.
+    fn hex_units(text: &[u16], at: usize, count: usize) -> Option<u16> {
+        let mut value = 0u16;
+        for offset in 0..count {
+            let digit = Self::hex_digit(*text.get(at.checked_add(offset)?)?)?;
+            value = value.checked_mul(16)?.checked_add(u16::from(digit))?;
+        }
+        Some(value)
     }
 
     /// Whether 19.2.6 leaves this code unit as it stands.

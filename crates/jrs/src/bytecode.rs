@@ -8816,6 +8816,9 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::EncodeUriComponent
         | crate::engine::realm::Intrinsic::DecodeUri
         | crate::engine::realm::Intrinsic::DecodeUriComponent
+        // B.2.1 answers a text too.
+        | crate::engine::realm::Intrinsic::Escape
+        | crate::engine::realm::Intrinsic::Unescape
         | crate::engine::realm::Intrinsic::StringFromCodePoint
         | crate::engine::realm::Intrinsic::StringRaw
         // 22.2.6.4 and 22.2.6.13 answer a String for every receiver they take.
