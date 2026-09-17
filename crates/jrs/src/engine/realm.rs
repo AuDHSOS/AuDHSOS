@@ -834,6 +834,10 @@ pub enum Intrinsic {
     SetPrototypeIsSupersetOf,
     /// `%Set.prototype.isDisjointFrom%`, 24.2.3.11.
     SetPrototypeIsDisjointFrom,
+    /// `%Map.prototype.forEach%`, 24.1.3.5.
+    MapPrototypeForEach,
+    /// `%Set.prototype.forEach%`, 24.2.3.7.
+    SetPrototypeForEach,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -897,7 +901,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 265] = [
+    pub const ALL: [Self; 267] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1163,6 +1167,8 @@ impl Intrinsic {
         Self::SetPrototypeIsSubsetOf,
         Self::SetPrototypeIsSupersetOf,
         Self::SetPrototypeIsDisjointFrom,
+        Self::MapPrototypeForEach,
+        Self::SetPrototypeForEach,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -1346,7 +1352,8 @@ impl Intrinsic {
             | Self::MapPrototypeClear
             | Self::MapPrototypeEntries
             | Self::MapPrototypeKeys
-            | Self::MapPrototypeValues => IntrinsicHolder::MapPrototype,
+            | Self::MapPrototypeValues
+            | Self::MapPrototypeForEach => IntrinsicHolder::MapPrototype,
             Self::SetPrototypeAdd
             | Self::SetPrototypeHas
             | Self::SetPrototypeDelete
@@ -1359,7 +1366,8 @@ impl Intrinsic {
             | Self::SetPrototypeSymmetricDifference
             | Self::SetPrototypeIsSubsetOf
             | Self::SetPrototypeIsSupersetOf
-            | Self::SetPrototypeIsDisjointFrom => IntrinsicHolder::SetPrototype,
+            | Self::SetPrototypeIsDisjointFrom
+            | Self::SetPrototypeForEach => IntrinsicHolder::SetPrototype,
             Self::JsonParse | Self::JsonStringify => IntrinsicHolder::Json,
             Self::PromisePrototypeThen | Self::PromisePrototypeCatch => {
                 IntrinsicHolder::PromisePrototype
@@ -1731,6 +1739,8 @@ impl Intrinsic {
             Self::SetPrototypeIsSubsetOf => 262,
             Self::SetPrototypeIsSupersetOf => 263,
             Self::SetPrototypeIsDisjointFrom => 264,
+            Self::MapPrototypeForEach => 265,
+            Self::SetPrototypeForEach => 266,
         }
     }
 
@@ -2006,6 +2016,8 @@ impl Intrinsic {
             Self::SetPrototypeIsSubsetOf => 262,
             Self::SetPrototypeIsSupersetOf => 263,
             Self::SetPrototypeIsDisjointFrom => 264,
+            Self::MapPrototypeForEach => 265,
+            Self::SetPrototypeForEach => 266,
         }
     }
 
@@ -2282,6 +2294,8 @@ impl Intrinsic {
             262 => Some(Self::SetPrototypeIsSubsetOf),
             263 => Some(Self::SetPrototypeIsSupersetOf),
             264 => Some(Self::SetPrototypeIsDisjointFrom),
+            265 => Some(Self::MapPrototypeForEach),
+            266 => Some(Self::SetPrototypeForEach),
             _ => None,
         }
     }
@@ -2465,7 +2479,9 @@ impl Intrinsic {
             Self::MathImul => "imul",
             Self::MathFround => "fround",
             Self::MathSin => "sin",
-            Self::ArrayPrototypeForEach => "forEach",
+            Self::ArrayPrototypeForEach | Self::MapPrototypeForEach | Self::SetPrototypeForEach => {
+                "forEach"
+            }
             Self::ArrayPrototypeMap => "map",
             Self::ArrayPrototypeFilter => "filter",
             Self::ArrayPrototypeEvery => "every",
@@ -2804,6 +2820,8 @@ impl Intrinsic {
             | Self::MathFround
             | Self::MathSin
             | Self::ArrayPrototypeForEach
+            | Self::MapPrototypeForEach
+            | Self::SetPrototypeForEach
             | Self::ArrayPrototypeMap
             | Self::ArrayPrototypeFilter
             | Self::ArrayPrototypeEvery
@@ -3066,6 +3084,8 @@ impl Intrinsic {
             | Self::MathFround
             | Self::MathSin
             | Self::ArrayPrototypeForEach
+            | Self::MapPrototypeForEach
+            | Self::SetPrototypeForEach
             | Self::ArrayPrototypeMap
             | Self::ArrayPrototypeFilter
             | Self::ArrayPrototypeEvery

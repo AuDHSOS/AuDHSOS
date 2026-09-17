@@ -9010,3 +9010,56 @@ fn the_set_operations_of_24_2_3_answer_over_a_set_like() -> Result<(), Error> {
     ));
     Ok(())
 }
+
+#[test]
+fn the_for_each_of_24_1_3_5_and_24_2_3_7_calls_back_per_entry() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend carries neither clause, so only the engine answers.
+    for (source, answer) in [
+        // Step 4.b.i passes the value, the key and the collection.
+        (
+            "var m=new Map([['a',1],['b',2]]);var s='';m.forEach(function(v,k,c){s+=k+v+(c===m)+'|'});s",
+            "a1true|b2true|",
+        ),
+        // 24.2.3.7 passes the value as the key as well.
+        (
+            "var t=new Set([1,2]);var s='';t.forEach(function(v,k,c){s+=v+'='+k+(c===t)});s",
+            "1=1true2=2true",
+        ),
+        ("var n=0;new Map().forEach(function(){n=n+1});''+n", "0"),
+        // Step 3 refuses a callback that is not callable.
+        (
+            "var r;try{new Map().forEach(1)}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        // The second argument is the `this` value of the callback.
+        (
+            "var got;new Map([['a',1]]).forEach(function(){got=this.z},{z:9});''+got",
+            "9",
+        ),
+        // Step 4.a reads the entries again at every step: an entry deleted
+        // during the walk is passed over and one added is still reached.
+        (
+            "var m=new Map([['a',1],['b',2]]);var s='';m.forEach(function(v,k){s+=k;if(k==='a'){m.delete('b')}});s",
+            "a",
+        ),
+        (
+            "var m=new Map([['a',1]]);var s='';m.forEach(function(v,k){s+=k;if(k==='a'){m.set('c',3)}});s",
+            "ac",
+        ),
+        // A throw of the callback leaves the clause.
+        (
+            "var r;try{new Map([['a',1]]).forEach(function(){throw 'x'})}catch(e){r=e};r",
+            "x",
+        ),
+        // The walk survives the collections a long one makes.
+        (
+            "var t=new Set();var i=0;while(i<500){t.add(i);i=i+1}var n=0;t.forEach(function(v){n=n+v});''+n",
+            "124750",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}

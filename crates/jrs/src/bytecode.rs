@@ -8821,8 +8821,10 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ArrayPrototypeFindLastIndex
         | crate::engine::realm::Intrinsic::ArrayPrototypeReduce
         | crate::engine::realm::Intrinsic::ArrayPrototypeReduceRight
-        // 23.1.3.15 answers undefined.
+        // 23.1.3.15, 24.1.3.5 and 24.2.3.7 answer undefined.
         | crate::engine::realm::Intrinsic::ArrayPrototypeForEach
+        | crate::engine::realm::Intrinsic::MapPrototypeForEach
+        | crate::engine::realm::Intrinsic::SetPrototypeForEach
         // 20.1.2.1 answers the target, 20.1.2.9 and 20.1.2.11 answer an
         // object and an Array of Symbols, and 28.1.13 answers a Boolean the
         // lowering types below.

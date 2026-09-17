@@ -478,6 +478,16 @@ pub enum Resume {
         /// Root naming the Array the arguments were collected into.
         arguments: Root,
     },
+    /// 24.1.3.5 and 24.2.3.7 called the callback for one entry.
+    ///
+    /// The clause has no frame of its own, so the walk waits in a record of
+    /// the heap the collector traces, and the return of the callback takes it
+    /// back for the next entry.
+    CollectionWalk {
+        /// Root holding the record: the collection, the callback, the `this`
+        /// value of the callback and the position of the next entry.
+        state: Root,
+    },
     /// `[[Get]]` of 10.1.8.1 called the getter of an accessor property.
     ///
     /// The getter answers into the accumulator, which is where every
@@ -1666,6 +1676,24 @@ impl RegisterVM {
 
     /// Clears the callee's register window and fills its parameter prefix, the
     /// callee's own Function object and its `this` value.
+    /// Writes the arguments a resumed native gives, which has no frame of its
+    /// own to take them from.
+    fn place_arguments(
+        &mut self,
+        next_frame: usize,
+        callee: &BytecodeFunction,
+        arguments: &[Value],
+    ) -> Result<(), VMError> {
+        let count = arguments.len().min(usize::from(callee.parameter_count));
+        for (index, argument) in arguments.iter().take(count).enumerate() {
+            *self
+                .stack
+                .get_mut(next_frame.saturating_add(index))
+                .ok_or(VMError::StackOverflow)? = *argument;
+        }
+        Ok(())
+    }
+
     fn open_frame(
         &mut self,
         active_code: &BytecodeFunction,
@@ -1721,17 +1749,23 @@ impl RegisterVM {
                     .get_mut(next_frame.saturating_add(index as usize))
                     .ok_or(VMError::StackOverflow)? = argument;
             }
+        } else if let Some(Resume::CollectionWalk { state }) = call.resume {
+            // 24.1.3.5 step 4.b.i passes the value, the key and the
+            // collection, which the record the walk waits in holds.
+            let record = heap
+                .root_value(state)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            self.place_arguments(
+                next_frame,
+                callee,
+                &[
+                    promise::slot(heap, record, 5),
+                    promise::slot(heap, record, 6),
+                    promise::slot(heap, record, 0),
+                ],
+            )?;
         } else if let Some(Resume::Iteration { state }) = call.resume {
-            let arguments = Self::iteration_arguments(state, heap)?;
-            for (index, argument) in arguments.into_iter().enumerate() {
-                if index >= usize::from(callee.parameter_count) {
-                    break;
-                }
-                *self
-                    .stack
-                    .get_mut(next_frame.saturating_add(index))
-                    .ok_or(VMError::StackOverflow)? = argument;
-            }
+            self.place_arguments(next_frame, callee, &Self::iteration_arguments(state, heap)?)?;
         } else {
             let argument_start = self
                 .fp
@@ -2068,7 +2102,9 @@ impl RegisterVM {
             }
             // Never reached: `enter_call_value` sends these to the walk of
             // 23.1.3 before an intrinsic is called at all.
-            Intrinsic::ArrayPrototypeForEach
+            Intrinsic::MapPrototypeForEach
+            | Intrinsic::SetPrototypeForEach
+            | Intrinsic::ArrayPrototypeForEach
             | Intrinsic::ArrayPrototypeMap
             | Intrinsic::ArrayPrototypeFlatMap
             | Intrinsic::ArrayPrototypeFilter
@@ -3880,6 +3916,20 @@ impl RegisterVM {
             return self.begin_receiver_coercion(
                 intrinsic,
                 PrimitiveHint::String,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
+        // 24.1.3.5 and 24.2.3.7 ask the Script about each entry the same way.
+        if matches!(
+            intrinsic,
+            Intrinsic::MapPrototypeForEach | Intrinsic::SetPrototypeForEach
+        ) {
+            return self.begin_collection_walk(
+                intrinsic,
                 call,
                 units,
                 active_feedback,
@@ -6244,6 +6294,109 @@ impl RegisterVM {
             promise::set_slot(heap, entries, at.saturating_add(1), key)?;
         }
         Ok(answer)
+    }
+
+    /// 24.1.3.5 and 24.2.3.7: the callback is called once for every entry the
+    /// walk reaches, and the clause answers undefined once none is left.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a receiver that
+    /// carries neither slot and for a callback that is not callable.
+    fn begin_collection_walk(
+        &mut self,
+        intrinsic: Intrinsic,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let set = intrinsic == Intrinsic::SetPrototypeForEach;
+        // Step 1 refuses a receiver that carries neither slot, and step 3 a
+        // callback that is not callable.
+        Self::collection_entries(call.receiver, set, heap, realm)?;
+        let callback = self.call_argument(&call, 0, heap)?;
+        if !Self::is_callable(callback, heap) {
+            return Err(type_error(heap, realm, "the callback is not callable"));
+        }
+        let receiver = self.call_argument(&call, 1, heap)?;
+        let record = promise::record(
+            heap,
+            realm,
+            &[
+                call.receiver,
+                callback,
+                receiver,
+                Value::from_smi(0),
+                Value::from_bool(set),
+                VALUE_UNDEFINED,
+                VALUE_UNDEFINED,
+            ],
+        )?;
+        // The record outlives every frame the walk opens, so it is a root of a
+        // scope of its own, which the last step leaves.
+        heap.enter_scope();
+        let state = heap.push_root(record)?;
+        let call = Call {
+            resume: Some(Resume::CollectionWalk { state }),
+            ..call
+        };
+        self.step_collection_walk(state, call, units, active_feedback, heap, realm)
+    }
+
+    /// The next entry of a walk of 24.1.3.5 or 24.2.3.7, or its end.
+    fn step_collection_walk(
+        &mut self,
+        state: Root,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let collection = promise::slot(heap, record, 0);
+        let callback = promise::slot(heap, record, 1);
+        let receiver = promise::slot(heap, record, 2);
+        let mut index = promise::slot(heap, record, 3).as_smi().unwrap_or(0);
+        let set = promise::slot(heap, record, 4) == Value::from_bool(true);
+        let entries = Self::collection_entries(collection, set, heap, realm)?;
+        // Step 4.a reads the entries again at every step, so an entry added
+        // during the walk is one the walk still reaches and a deleted one is
+        // passed over.
+        let end = promise::length_of(heap, entries);
+        let mut found = None;
+        while u32::try_from(index).unwrap_or(u32::MAX) < end {
+            let at = u32::try_from(index).unwrap_or(u32::MAX);
+            let key = promise::slot(heap, entries, at);
+            index = index.saturating_add(2);
+            if key != VALUE_UNINITIALIZED {
+                found = Some((key, promise::slot(heap, entries, at.saturating_add(1))));
+                break;
+            }
+        }
+        promise::set_slot(heap, record, 3, Value::from_smi(index))?;
+        let Some((key, value)) = found else {
+            heap.exit_scope();
+            self.acc = VALUE_UNDEFINED;
+            return Ok(None);
+        };
+        // Step 4.b.i calls the callback with the value, the key and the
+        // collection, in that order, which the frame reads out of the record.
+        promise::set_slot(heap, record, 5, value)?;
+        promise::set_slot(heap, record, 6, key)?;
+        let call = Call {
+            receiver,
+            arg_count: 3,
+            arg_start: Reg(0),
+            resume: Some(Resume::CollectionWalk { state }),
+            construct: None,
+            ..call
+        };
+        self.enter_call_value(callback, units, active_feedback, heap, realm, call)
     }
 
     /// The keys an entries List still holds, in the order they were added.
@@ -16429,6 +16582,7 @@ impl RegisterVM {
                                 Resume::Primitive { register, .. }
                                 | Resume::Coercion { register, .. } => register,
                                 Resume::Iteration { .. }
+                                | Resume::CollectionWalk { .. }
                                 | Resume::Length { .. }
                                 | Resume::Descriptor { .. }
                                 | Resume::Getter
@@ -16464,6 +16618,9 @@ impl RegisterVM {
                                     feedback,
                                     heap,
                                     realm,
+                                )?,
+                                Resume::CollectionWalk { state } => self.step_collection_walk(
+                                    state, call, units, feedback, heap, realm,
                                 )?,
                                 Resume::Length { .. } => self.finish_array_like_length(
                                     resume,
