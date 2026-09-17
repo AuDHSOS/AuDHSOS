@@ -93,3 +93,19 @@ fn a_ported_file_is_held_to_the_header_that_names_both_licences() {
     assert_eq!(header_problem(&header, "//", &PORTED_HEADER), None);
     assert!(header_problem(&header, "//", &SPDX_HEADER).is_some());
 }
+
+#[test]
+fn unicode_header_is_required_only_for_the_generated_tables() {
+    use crate::policy::{UNICODE_HEADER, UNICODE_TABLE_FILE};
+    assert_eq!(
+        expected_header(Path::new(UNICODE_TABLE_FILE)),
+        &UNICODE_HEADER
+    );
+    assert_eq!(
+        expected_header(Path::new("crates/text-core/src/unicode/mod.rs")),
+        &SPDX_HEADER
+    );
+    let header = UNICODE_HEADER.map(|line| format!("// {line}\n")).concat();
+    assert_eq!(header_problem(&header, "//", &UNICODE_HEADER), None);
+    assert!(header_problem(GOOD, "//", &UNICODE_HEADER).is_some());
+}

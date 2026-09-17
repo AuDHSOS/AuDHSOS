@@ -51,9 +51,9 @@ without defining. A specification kept without the documents it defers to
 is a specification with a hole in it at exactly the point where a CFF
 outline is read.
 
-Nothing in the workspace reads a font file yet. The notes are kept ahead
-of that work, for the reason D-59 gives: a structure a test or a comment
-cites must be readable from the repository at the wording that was read.
+`text-core` interprets CFF/CFF2 dictionaries, indices, and Type 2 charstrings
+in document 17, T5–T6. These notes define the operators used by the reader
+and its host tests under D-59.
 
 ## Terms
 

@@ -62,6 +62,23 @@ written against rather than cited by:
 | `ucd/auxiliary/WordBreakProperty.txt` | The Word_Break property, which UAX #29 defines | 2026-09-16 from `https://www.unicode.org/Public/18.0.0/ucd/auxiliary/WordBreakProperty.txt` | 116210 | `8dbfa17063e11084201f33c3e76d485d3b9166930c71db8e39ed1c9234171aec` |
 | `ucd/emoji/emoji-data.txt` | The five emoji properties, which UTS #51 defines: Emoji, Emoji_Presentation, Emoji_Modifier, Emoji_Modifier_Base, Extended_Pictographic | 2026-09-16 from `https://www.unicode.org/Public/18.0.0/ucd/emoji/emoji-data.txt` | 108719 | `80d00f8e616a0ef27fd6b8de3b758c06383b5d917e2977709578e68baf733bf1` |
 
+Additional T7 property sources, retrieved on 2026-09-17 from the same
+versioned UCD directory:
+
+| File | Bytes | SHA-256 |
+|------|------:|---------|
+| `ucd/Scripts.txt` | 196089 | `0071fd81b6aeae25f6e8bce8efec3066a6476a91b49bdb2f52dc76e817862a6a` |
+| `ucd/ScriptExtensions.txt` | 21145 | `5c9d34a922f687726f2a8bcf57d49f905987e51f1b21b58c95a00fbe255cec23` |
+| `ucd/DerivedCoreProperties.txt` | 1159889 | `09c928886a178fcafd93c29e4bd59073a058e5a100b716d425cb563ab50f68c9` |
+| `ucd/extracted/DerivedBidiClass.txt` | 176412 | `d9e23222522551348ea1ccfbb4f62efbf98982afb95840f8959c08ed992c5607` |
+| `ucd/BidiBrackets.txt` | 8992 | `4b3b62e4a14b84ee752808c810c602534921c09a4a1bf78cfbee566d66c125b3` |
+| `ucd/BidiMirroring.txt` | 27294 | `cd54810ebf52f0e61a730c8b9cb25975de6c85f6d788a559b416afd548923fd6` |
+| `ucd/ArabicShaping.txt` | 42356 | `8ccde4ebd070500a68e8bcb9d5514522fb0bebe57b9ebad3ff925b8e1e669f83` |
+| `ucd/PropertyValueAliases.txt` | 83536 | `06c4c8eaf7b0bf34abe73b113da1215bd784ac254d4c223600b90267caa4bbbd` |
+
+These files supply script runs, Indic conjunct boundaries, bidi defaults,
+brackets, mirroring, Arabic joining, and property aliases.
+
 The conformance test files, which say what a correct implementation
 answers:
 
@@ -74,8 +91,8 @@ answers:
 | `ucd/BidiCharacterTest.txt` | The same algorithm over strings of actual code points, which is the case `BidiTest.txt` cannot state | 2026-09-16 from `https://www.unicode.org/Public/18.0.0/ucd/BidiCharacterTest.txt` | 6880771 | `045b24d2c8ab066951bd32fe8c6b4de34647f72b5b1c7df0265f24ab53573e01` |
 
 The checksums are here so that a reader can tell a file has not been
-edited since. Each file is byte for byte what the server delivered; every
-one was fetched twice, by the script below, and the two fetches agreed.
+edited since. Each file is byte for byte what the server delivered; the original
+2026-09-16 files were fetched twice and the two fetches agreed.
 The seven reports are 3479, 340, 4623, 3326, 491, 2208, and 4356 lines,
 in the order of their table; the six property files 41341, 2754, 3740,
 1519, 1558, and 1305; the five test files 883, 1974, 19376, 497590, and
@@ -154,7 +171,7 @@ renderer has to treat as one glyph or fail visibly.
 
 ## Why it is here
 
-Nothing in the workspace implements any of these yet. `gfx` draws with
+`text-core` generates Unicode 18.0.0 property tables in document 17, T7. `gfx` draws with
 the project's own bitmap font of 95 glyphs, one per printable ASCII
 character, and `audhsos-encoding` and `audhsos-utf16` convert between
 encodings without asking any property of a code point. The files are kept
@@ -206,6 +223,15 @@ belong to the reports and stand with them.
 
 Unicode and the Unicode Logo are registered trademarks of Unicode, Inc.
 
-Software written from any of these is a separate matter. Nothing is
-transcribed from them yet; when something is, the document, the version
-and the rule are named at the point of transcription, as D-40 requires.
+Software written from any of these is a separate matter. `text-core` records source fingerprints in its generated property tables.
+The generator is a host tool; the library uses checked-in Rust only.
+
+`LICENSE.txt` is the Unicode License v3, retrieved from
+`https://www.unicode.org/license.txt` on 2026-09-17; the generated table directory
+retains the same notice.
+
+Auxiliary T10 reference (not a Unicode-versioned property source):
+`sbl-hebrew-manual-1.5.pdf`, SBL Hebrew font manual, retrieved 2026-09-17
+from `https://www.unicode.org/L2/L2019/19183-sbl-hebrew-man-v1-5.pdf`,
+380192 bytes, SHA-256 `9062268f5c0b8f1c3e955613043a893faa21da5a8d938d4a0965ee30edfc1858`.
+The manual documents Hebrew mark ordering and CGJ semantics.

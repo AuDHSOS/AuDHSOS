@@ -7,9 +7,19 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `text-core` T1–T12: borrowed sfnt/TTC, cmap, metrics, TrueType/CFF/CFF2
+  outlines and variations; generated Unicode 18.0.0 properties; segmentation,
+  bidi, OpenType shaping, language-sensitive fallback, fractional layout,
+  grapheme carets/selections, and deterministic numeric serialization.
+  Caller-buffer APIs allocate nothing; optional owned APIs use fallible vectors.
+  Complete Unicode conformance suites, malformed-input tests, licensed font
+  oracles, coverage gates, and `text_font` fuzzing verify the pure stack.
+  Document 17, roadmap track 8.28, and D-158–D-164 define the boundary;
+  rasterization, glyph caching, and compositor integration remain unscheduled.
+
 - `fonts/`: the fonts of the UI chain and the terminal chain, 173 font
   files, fetched byte for byte by `fonts/fetch.sh` from the commit or
-  release each line names and pinned in `fonts/SHA256SUMS` (D-158).
+  release each line names and pinned in `fonts/SHA256SUMS` (D-169).
   Atkinson Hyperlegible Next and Mono, Noto Sans and Noto Sans Mono, the
   two Noto CJK collections, one Noto font for each of 155 scripts, the
   five symbol and notation fonts, Noto Color Emoji and Last Resort
@@ -788,6 +798,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   clock.
 
 ### Fixed
+
+- PCI inspection uses read-only BAR decoding. `app-lspci` no longer disables
+  active disk MMIO decoding while probing sizes, which dropped notifications
+  and blocked system startup during E2E tests (D-165).
 
 - `audhsos-tls`: a chain that reaches an anchor and carries the wrong name
   is `bad_certificate` and no longer `unknown_ca`. RFC 8446, section 6.2

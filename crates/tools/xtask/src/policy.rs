@@ -68,6 +68,14 @@ pub(crate) struct Crate {
 /// Every workspace crate, in layer order.
 pub(crate) const CRATES: &[Crate] = &[
     Crate {
+        name: "text-core",
+        path: "crates/text-core",
+        kind: Kind::Logic,
+        deps: &[],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "audhsos-timer-queue",
         path: "crates/timer-queue",
         kind: Kind::Logic,
@@ -1147,6 +1155,15 @@ pub(crate) const PORTED_FILES: &[&str] = &[
     "crates/support/fuzz/src/sancov.rs",
 ];
 
+/// Generated UCD tables retain Unicode's data license beside the Rust source license.
+pub(crate) const UNICODE_HEADER: [&str; 4] = [
+    "SPDX-License-Identifier: AGPL-3.0-only AND Unicode-3.0",
+    "Copyright (C) 2026 Manuel Baesler and contributors",
+    "Copyright © 2026 Unicode, Inc.",
+    "Generated from Unicode data; see LICENSE.txt in this directory.",
+];
+pub(crate) const UNICODE_TABLE_FILE: &str = "crates/text-core/src/unicode/generated.rs";
+
 /// File extensions that carry the header, with their comment prefix.
 pub(crate) const HEADER_FILE_TYPES: &[(&str, &str)] = &[
     ("rs", "//"),
@@ -1184,6 +1201,7 @@ pub(crate) struct FuzzTarget {
 /// Every fuzz target. The name is the binary under `fuzz/` and the
 /// directory of its corpus under `fuzz/corpus/`.
 pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
+    FuzzTarget { name: "text_font" },
     FuzzTarget {
         name: "timer_queue",
     },

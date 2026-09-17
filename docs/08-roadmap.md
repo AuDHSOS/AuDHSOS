@@ -761,3 +761,28 @@ replay, which is the one way this track differs in kind from track C.
   server written in the tests. Every other
   step of those phases changes the kernel, the reference machine, or the
   root task and is therefore phase work throughout.
+
+## 8.28 Track T: text and fonts
+
+Design: [document 17](17-text-and-fonts.md), D-158–D-164. The crate is
+`text-core`, pure host-testable logic shared by toolkit and compositor.
+Each step ends with its acceptance report before the next step; D-163
+authorizes continuous execution through T12.
+
+| Step | Work | Depends on | Size | Acceptance / status |
+|------|------|------------|------|---------------------|
+| T1 | sfnt header, directory, TTC/OTC | document 17 decisions | M | implemented: 18 host tests, one doctest, seven fuzz seeds, 100% product line/branch coverage; checked borrowed parsing, malformed/cyclic/overlapping inputs, valid sharing, deterministic serialization |
+| T2 | cmap 0, 4, 6, 12, 13, 14 | T1 acceptance | M | implemented: mapping and UVS vectors; malformed inputs |
+| T3 | Fixed, head/hhea/hmtx/maxp/OS/2/post | T2 | M | implemented: exact metrics, signed rounding and count/range errors |
+| T4 | glyf/loca | T3 | L | implemented: simple/composite contours, transforms, cycles and depth limits |
+| T5 | CFF/CFF2 | T4 | XL | implemented: INDEX/DICT, Type 2, local/global subroutines, CJK outlines and malformed inputs |
+| T6 | fvar/avar/gvar/HVAR/MVAR, CFF2 blends | T5 | XL | implemented: literal variation metrics/outlines, malformed inputs, 62 host tests; coverage 95.00% lines / 87.34% branches |
+| T7 | Unicode 18.0.0 generator | T6 | M | implemented: 12 properties checked over every code point, source mappings, byte-identical regeneration, no runtime standards access |
+| T8 | UAX #29/#14 | T7 | L | implemented: complete gates, 853 grapheme / 1944 word / 19346 line cases; caller-buffer line boundaries |
+| T9 | UAX #9 | T8 | L | implemented: all 770241 enabled BidiTest cases and 91707 BidiCharacterTest cases; paragraph/line/depth vectors |
+| T10 | GDEF, GSUB 1–8, GPOS 1–9 | T9 | XL | implemented: all lookup formats, supported-script font oracles, language/variation features, mark/cursive chains and malformed-input limits |
+| T11 | role/script/language resolution | T10 | M | implemented: whole-cluster role fallback, explicit regional language systems, UVS, scale/baseline and weight coordinates |
+| T12 | layout and measure | T11 | L | implemented: fractional lines, bidi cluster carets/selections, reshaping, layout/measure equality, explicit deterministic serialization; 106 host tests and two doctests, 95.99% line / 89.45% branch coverage |
+| R1 | rasterizer | T12 | XL | unscheduled; outside this task |
+| R2 | glyph cache | R1 | M | unscheduled; outside this task |
+| R3 | toolkit/compositor integration | R2 | L | unscheduled; outside this task |

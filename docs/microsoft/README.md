@@ -217,11 +217,11 @@ rule that one directory holds one publishing body (D-157).
 
 ## Why it is here
 
-Nothing in the workspace reads a font file. `gfx` draws with the
-project's own bitmap font of 95 glyphs, one per printable ASCII
-character, each eight pixels by sixteen. The specification is kept ahead
-of that work, for the reason D-59 gives: an offset a test or a comment
-cites must be readable from the repository at the wording that was read.
+`text-core` reads sfnt/TTC containers, cmap, metrics, TrueType/CFF outlines,
+and variations under document 17, T1–T6.
+`gfx` still draws with the project's bitmap font of 95 printable ASCII
+glyphs, each eight pixels by sixteen. The specification supplies the
+stable field definitions cited by the parser and its tests under D-59.
 
 The pages that matter first are the ones a reader of a font file needs
 before anything else: `otff.html`, which is the file header and the table
@@ -268,6 +268,18 @@ and a copy goes if Microsoft objects.
 
 OpenType is a trademark of Microsoft Corporation.
 
-Software written from these pages is a separate matter. Nothing is
-transcribed from them yet; when something is, the page and the heading
-are named at the point of transcription, as D-40 requires.
+Software written from these pages is a separate matter. `text-core` names
+`otff.html` and its Table Directory and TTC Header sections at the parser
+and fixture definitions, as D-40 requires.
+
+T10 script guidance: `script-hebrew.html`, retrieved 2026-09-17 from
+`https://learn.microsoft.com/en-us/typography/script-development/hebrew`,
+71635 bytes, SHA-256 `e5ae4c13b1267b886acab51d28069c510a9e2417b010be1de8091883bb632990`.
+
+T10 script guidance: `script-arabic.html`, retrieved 2026-09-17 from
+`https://learn.microsoft.com/en-us/typography/script-development/arabic`,
+85598 bytes, SHA-256 `64cbc135796fa86ee95d5b7d0839ee5e9145214698fd54fa5463b87725935af1`.
+
+T10 script guidance: `script-hangul.html`, retrieved 2026-09-17 from
+`https://learn.microsoft.com/en-us/typography/script-development/hangul`,
+229064 bytes, SHA-256 `0af3e428e3c2313a25fb44bb9bb33d27d5ec2f631c197c757ac2d83b18feb6b3`.

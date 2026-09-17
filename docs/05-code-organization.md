@@ -29,6 +29,7 @@ AuDHSOS/
 │   ├── elf/                   audhsos-elf: ELF64 parser producing validated load segments
 │   ├── uefi/                  audhsos-uefi: UEFI structure layouts, GUIDs, constants, the firmware clock conversion (no calls)
 │   ├── gfx/                   gfx: framebuffer logic, bitmap font, damage tracking
+│   ├── text-core/             text-core: sans-I/O font parsing, shaping, Unicode, and layout (document 17)
 │   ├── pci/                   pci: configuration space, BARs, capabilities, MSI-X, the virtio capabilities (document 13)
 │   ├── sync/                  audhsos-sync: Global<T> and Preset<T> cells (unsafe allowed)
 │   ├── time/                  audhsos-time: UnixTime, CivilTime, Instant, Duration (document 12)
@@ -146,6 +147,7 @@ AuDHSOS/
 |-------|-------|--------|----------|------------|---------------|
 | `audhsos-abi` | 0 | all | no | yes | `test-support` behind the feature `test-strategies` |
 | `audhsos-elf` | 0 | all | no | yes, fuzz | `test-support` behind the feature `test-strategies` |
+| `text-core` | 0 | all | no | yes, fuzz | none; caller buffers or optional alloc wrappers |
 | `audhsos-uefi` | 0 | all | no | yes (layouts) | `audhsos-abi`, `audhsos-time` |
 | `audhsos-sync` | 0 | all | allowlisted | Miri | - |
 | `audhsos-time` | 0 | all | no | yes | `test-support` behind the feature `test-strategies` |

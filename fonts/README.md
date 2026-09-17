@@ -2,7 +2,7 @@
 
 The fonts of the system: two chains of fallback, fetched byte for byte by
 `fetch.sh` from the commit or release each of its lines names, and pinned
-in `SHA256SUMS`. Every file is unmodified. D-158 records the directory,
+in `SHA256SUMS`. Every file is unmodified. D-169 records the directory,
 the chains and the rules of selection.
 
 Nothing reads this directory yet. What will is the image build, the way

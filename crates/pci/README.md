@@ -16,6 +16,8 @@ Four rules the code keeps and the tests hold it to:
   register before it writes all ones and restores the register
   afterwards, including when the probe found nothing. Both halves are in
   one function, so a caller cannot do the first without the second.
+  Probing requires a quiesced function and exclusive driver access;
+  `bar::assigned` reads addresses without writes or size claims.
 - The capability walk is bounded by the number of capabilities that fit
   in the first two hundred and fifty-six bytes, so a list that points at
   itself is an error and never a hang.

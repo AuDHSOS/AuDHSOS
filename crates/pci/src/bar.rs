@@ -110,8 +110,78 @@ impl Bar {
     }
 }
 
+/// Firmware-assigned BAR address; size requires exclusive probing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AssignedBar {
+    /// Register index; a 64-bit address occupies two registers.
+    pub index: u8,
+    /// Address space and width.
+    pub space: Space,
+    /// Assigned base address.
+    pub base: u64,
+}
+
+/// Read BAR addresses without writing configuration registers.
+///
+/// Zero and reserved encodings are omitted. A zero 32-bit BAR cannot be
+/// distinguished from an unimplemented register without probing.
+/// # Errors
+/// Rejects non-endpoint headers, unreadable registers, and truncated 64-bit BARs.
+pub fn assigned(
+    space: &impl ConfigSpace,
+    address: Address,
+) -> Result<[Option<AssignedBar>; MAX_BARS], PciError> {
+    let header_type = read_u8(space, address, HEADER_TYPE)?;
+    if !matches!(Kind::of(header_type), Kind::Endpoint) {
+        return Err(PciError::HeaderType(header_type));
+    }
+    let mut bars = [None; MAX_BARS];
+    let mut index = 0_u8;
+    while usize::from(index) < MAX_BARS {
+        let original = read_word(space, address, offset_of(index)?)?;
+        let mut upper = index;
+        let value = if original == 0 {
+            None
+        } else if original & IO_SPACE != 0 {
+            Some((Space::Io, u64::from(original & !IO_FLAGS)))
+        } else {
+            let prefetchable = original & PREFETCHABLE != 0;
+            match original & MEMORY_TYPE {
+                TYPE_32 => Some((
+                    Space::Memory {
+                        width: Width::Bits32,
+                        prefetchable,
+                    },
+                    u64::from(original & !MEMORY_FLAGS),
+                )),
+                TYPE_64 => {
+                    upper = index.saturating_add(1);
+                    if usize::from(upper) >= MAX_BARS {
+                        return Err(PciError::BarTruncated(index));
+                    }
+                    let high = read_word(space, address, offset_of(upper)?)?;
+                    Some((
+                        Space::Memory {
+                            width: Width::Bits64,
+                            prefetchable,
+                        },
+                        join(high, original & !MEMORY_FLAGS),
+                    ))
+                }
+                _ => None,
+            }
+        };
+        if let Some(slot) = bars.get_mut(usize::from(index)) {
+            *slot = value.map(|(space, base)| AssignedBar { index, space, base });
+        }
+        index = upper.saturating_add(1);
+    }
+    Ok(bars)
+}
+
 /// Every base address register of `address` that decodes something.
 ///
+/// The caller must quiesce the function and exclude concurrent drivers.
 /// Probing writes, so the memory and I/O decode bits of the command
 /// register are cleared first and restored afterwards: while a register
 /// holds all ones the function would answer at an address that is not its
