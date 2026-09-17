@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- The suite's own tester writes a real a statement stands a variable for
+  with `%.17g`, which is every digit the bits of the double carry, so
+  the engine is handed the number `sqlite3_bind_double` hands the C
+  library and not the fifteen digits `tcl_precision` prints. D-280
+  records it.
+
 - `db-sqlite` keeps the bytes a constraint reads the schema out of
   beside the cookie they were taken under, so a statement that writes n
   rows reads the schema once rather than building the file per row: an

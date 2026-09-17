@@ -166,7 +166,10 @@ proc literal {name} {
   }
   if {!$found} { return "NULL" }
   if {[string is entier -strict $value]} { return $value }
-  if {[string is double -strict $value]} { return $value }
+  # A real is written with every digit its bits carry, because
+  # `tcl_precision` is 15 and the C library is handed the double
+  # itself by `sqlite3_bind_double` and not the text of it.
+  if {[string is double -strict $value]} { return [format %.17g $value] }
   return "'[string map {' ''} $value]'"
 }
 

@@ -52,8 +52,8 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-75 509 cases of 702 files: 63 641 pass, 2371 answer differently and
-9497 are refused.
+81 649 cases of 702 files: 70 257 pass, 2371 answer differently and
+9021 are refused.
 
 `--configuration` opens every connection of a run under one of nine
 page-size, encoding and journal-mode settings, which D-275 decides.
@@ -61,7 +61,7 @@ What each answers, over the same files:
 
 | Configuration | Passed | Answered differently | Refused |
 |---------------|-------:|---------------------:|--------:|
-| `utf8-4096-delete` | 63 641 | 2371 | 9497 |
+| `utf8-4096-delete` | 70 257 | 2371 | 9021 |
 | `utf16le-4096-delete` | 61 214 | 2392 | 9500 |
 | `utf16be-4096-delete` | 61 229 | 2392 | 9500 |
 | `utf8-512-delete` | 61 073 | 2452 | 9435 |
@@ -73,9 +73,8 @@ What each answers, over the same files:
 
 The counts move by tens between runs of one configuration, because the
 files the deadline ends are counted with the cases they ran. Only the
-first row is a run after D-279, which took the files that reached the
-deadline further; the other eight were measured before it and are lower
-than they would read now.
+first row is a run after D-279 and D-280; the other eight were measured
+before them and are lower than they would read now.
 
 One row is behind the others by more than that: `utf8-4096-wal` refuses
 786 more than `utf8-4096-delete`, which a connection in write-ahead
@@ -199,14 +198,18 @@ Size: M.
    its length and its bytes.
 4. An answer is `OK`, a count and that many values, or `ERR`, a length
    and a message.
-5. An answer may be preceded by `CALL`, what kind of proc is called, a
+5. A real the tester writes into a statement for a variable carries
+   every digit the bits of the double hold, because `testfixture` hands
+   the C library the double itself and never the fifteen digits
+   `tcl_precision` prints.
+6. An answer may be preceded by `CALL`, what kind of proc is called, a
    count and that many values, which the tester answers with `RET`, a
    count and that many values; the harness writes one where a collation
    or a function the tester defined is reached from inside a statement.
-6. A proc the tester runs for a `CALL` may write no request of its own,
+7. A proc the tester runs for a `CALL` may write no request of its own,
    because the answer to the call is read from that line, so the tester
    refuses one.
-7. The harness stops reading when the runner closes the line or the
+8. The harness stops reading when the runner closes the line or the
    deadline passes, and ends the interpreter either way.
 
 ### Produces
