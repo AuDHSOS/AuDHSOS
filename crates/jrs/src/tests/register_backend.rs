@@ -10153,6 +10153,10 @@ fn the_bigint_of_6_1_6_2_carries_the_mathematical_value() -> Result<(), Error> {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one table of the rows of table 71 and the methods of 23.2.3"
+)]
 fn the_three_further_rows_of_table_71_hold_a_binary16_and_a_bigint() -> Result<(), Error> {
     let mut host = SilentHost;
     let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
@@ -10209,6 +10213,69 @@ fn the_three_further_rows_of_table_71_hold_a_binary16_and_a_bigint() -> Result<(
         // that holds a Number.
         (
             "var r;try{new BigInt64Array(new Int8Array(1))}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        // The methods of 23.2.3 that read and write the block.
+        (
+            "var a=new Int8Array([1,2,3,4]);''+a.at(0)+' '+a.at(-1)+' '+a.at(9)",
+            "1 4 undefined",
+        ),
+        ("new Int8Array([1,2,3]).join('-')", "1-2-3"),
+        (
+            "var a=new Int8Array([1,2,3]);''+a.indexOf(3)+' '+a.lastIndexOf(3)+' '+a.includes(2)+' '+a.includes(9)",
+            "2 2 true false",
+        ),
+        ("new Int8Array([1,2,3]).toReversed().join(',')", "3,2,1"),
+        ("new Int8Array([1,2,3]).reverse().join(',')", "3,2,1"),
+        ("new Int8Array([1,2,3,4,5]).slice(1,3).join(',')", "2,3"),
+        (
+            "var s=new Int8Array([1,2,3,4,5]).subarray(1,3);''+s.join(',')+' '+s.byteOffset",
+            "2,3 1",
+        ),
+        ("new Int8Array([1,2,3,4]).fill(9,1,3).join(',')", "1,9,9,4"),
+        (
+            "new Int8Array([1,2,3,4,5]).copyWithin(0,3).join(',')",
+            "4,5,3,4,5",
+        ),
+        ("new Int8Array([3,1,2]).sort().join(',')", "1,2,3"),
+        ("new Int8Array([3,1,2]).toSorted().join(',')", "1,2,3"),
+        (
+            "new Float64Array([3,NaN,0,1]).sort().join(',')",
+            "0,1,3,NaN",
+        ),
+        ("new BigInt64Array([3n,1n,2n]).sort().join(',')", "1,2,3"),
+        ("new Int8Array([1,2,3]).with(1,9).join(',')", "1,9,3"),
+        (
+            "var t=new Int8Array(4);t.set([7,8],1);t.join(',')",
+            "0,7,8,0",
+        ),
+        (
+            "var u=new Int8Array(4);u.set(new Int8Array([5,6]));u.join(',')",
+            "5,6,0,0",
+        ),
+        (
+            "var r;try{new Int8Array(2).set([1,2,3])}catch(e){r=e instanceof RangeError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{new Int8Array(2).with(5,1)}catch(e){r=e instanceof RangeError};''+r",
+            "true",
+        ),
+        // 23.2.3.7, 23.2.3.17 and 23.2.3.35 answer the iterator of 23.1.5, and
+        // 23.2.3.37 is the same function object as `values`.
+        (
+            "var k=[];for(var x of new Int8Array([7,8]))k.push(x);k.join(',')",
+            "7,8",
+        ),
+        ("Array.from(new Int8Array([7,8]).keys()).join(',')", "0,1"),
+        (
+            "''+(new Int8Array(0)[Symbol.iterator]===Int8Array.prototype.values)",
+            "true",
+        ),
+        // 23.2.3.33 is the same function object as %Array.prototype.toString%.
+        ("new Int8Array([1,2]).toString()", "1,2"),
+        (
+            "''+(Int8Array.prototype.toString===Array.prototype.toString)",
             "true",
         ),
         // 25.4.2.1 takes no float row, and the two BigInt rows need the BigInt

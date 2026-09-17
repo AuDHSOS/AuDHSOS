@@ -2764,6 +2764,24 @@ impl RegisterVM {
             | Intrinsic::AtomicsNotify
             | Intrinsic::AtomicsXor => self.call_atomics_intrinsic(intrinsic, &call, heap, realm),
             Intrinsic::TypedArrayBase
+            | Intrinsic::TypedArrayPrototypeAt
+            | Intrinsic::TypedArrayPrototypeCopyWithin
+            | Intrinsic::TypedArrayPrototypeEntries
+            | Intrinsic::TypedArrayPrototypeFill
+            | Intrinsic::TypedArrayPrototypeIncludes
+            | Intrinsic::TypedArrayPrototypeIndexOf
+            | Intrinsic::TypedArrayPrototypeJoin
+            | Intrinsic::TypedArrayPrototypeKeys
+            | Intrinsic::TypedArrayPrototypeLastIndexOf
+            | Intrinsic::TypedArrayPrototypeReverse
+            | Intrinsic::TypedArrayPrototypeSet
+            | Intrinsic::TypedArrayPrototypeSlice
+            | Intrinsic::TypedArrayPrototypeSort
+            | Intrinsic::TypedArrayPrototypeSubarray
+            | Intrinsic::TypedArrayPrototypeToReversed
+            | Intrinsic::TypedArrayPrototypeToSorted
+            | Intrinsic::TypedArrayPrototypeValues
+            | Intrinsic::TypedArrayPrototypeWith
             | Intrinsic::TypedArrayPrototypeBuffer
             | Intrinsic::TypedArrayPrototypeByteLength
             | Intrinsic::TypedArrayPrototypeByteOffset
@@ -10851,6 +10869,17 @@ impl RegisterVM {
                     }
                 });
                 match native {
+                    // 23.2.3.33 reaches this clause with the `join` of 23.2.3.16
+                    // on the receiver.
+                    Some(Intrinsic::TypedArrayPrototypeJoin) => self.call_typed_array_intrinsic(
+                        Intrinsic::TypedArrayPrototypeJoin,
+                        &Call {
+                            arg_count: 0,
+                            ..call
+                        },
+                        heap,
+                        realm,
+                    ),
                     Some(Intrinsic::ArrayPrototypeJoin) => self.call_array_intrinsic(
                         Intrinsic::ArrayPrototypeJoin,
                         Call {
@@ -11830,6 +11859,13 @@ impl RegisterVM {
         // `[[StringData]]`, which no Shape of the object holds.
         if let Some(count) = Self::string_data_length(object, heap)? {
             return Ok(i64::from(count));
+        }
+        // 23.2.3.19 is an accessor over `[[ArrayLength]]`, which the array
+        // carries itself.
+        if let Some(&ObjectKind::TypedArray { length, .. }) =
+            heap.get_object(object).map(|entry| &entry.kind)
+        {
+            return Ok(i64::from(length));
         }
         let Some(name) = heap.strings.lookup_interned_units(&LENGTH_NAME) else {
             return Ok(0);
@@ -14033,11 +14069,431 @@ impl RegisterVM {
             return Ok(Value::from_smi(0));
         }
         let (size, _, _) = super::object::element_form(kind);
-        Ok(Value::from_f64(match intrinsic {
-            Intrinsic::TypedArrayPrototypeLength => f64::from(length),
-            Intrinsic::TypedArrayPrototypeByteOffset => f64::from(offset),
-            _ => f64::from(length) * Self::whole(size),
-        }))
+        if matches!(
+            intrinsic,
+            Intrinsic::TypedArrayPrototypeLength
+                | Intrinsic::TypedArrayPrototypeByteOffset
+                | Intrinsic::TypedArrayPrototypeByteLength
+        ) {
+            return Ok(Value::from_f64(match intrinsic {
+                Intrinsic::TypedArrayPrototypeLength => f64::from(length),
+                Intrinsic::TypedArrayPrototypeByteOffset => f64::from(offset),
+                _ => f64::from(length) * Self::whole(size),
+            }));
+        }
+        self.call_typed_array_method(intrinsic, array, kind, length, call, heap, realm)
+    }
+
+    /// The methods of 23.2.3 that read and write the block without calling
+    /// back into the Script.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for an argument the
+    /// clause refuses and with a `RangeError` for an index outside the array.
+    #[expect(
+        clippy::too_many_arguments,
+        clippy::too_many_lines,
+        reason = "one function keeps each method of 23.2.3 beside the next"
+    )]
+    fn call_typed_array_method(
+        &self,
+        intrinsic: Intrinsic,
+        array: ObjectRef,
+        kind: u8,
+        length: u32,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let count = i64::from(length);
+        match intrinsic {
+            // 23.2.3.7, 23.2.3.17 and 23.2.3.35 answer the iterator of 23.1.5,
+            // which reads the array like any other array-like.
+            Intrinsic::TypedArrayPrototypeValues
+            | Intrinsic::TypedArrayPrototypeKeys
+            | Intrinsic::TypedArrayPrototypeEntries => {
+                let walk = match intrinsic {
+                    Intrinsic::TypedArrayPrototypeKeys => ArrayIterationKind::Key,
+                    Intrinsic::TypedArrayPrototypeEntries => ArrayIterationKind::KeyAndValue,
+                    _ => ArrayIterationKind::Value,
+                };
+                let prototype = realm.array_iterator_prototype(heap)?;
+                let shape = heap.shapes.root_shape();
+                let iterator = heap.allocate_object(shape, prototype)?;
+                heap.set_object_kind(
+                    iterator,
+                    ObjectKind::ArrayIterator {
+                        target: Value::from_object(array),
+                        index: 0,
+                        kind: walk,
+                    },
+                )?;
+                Ok(Value::from_object(iterator))
+            }
+            // 23.2.3.1 counts a negative index from the end.
+            Intrinsic::TypedArrayPrototypeAt => {
+                let relative = Self::integral(Self::number_argument(
+                    self.call_argument(call, 0, heap)?,
+                    heap,
+                )?);
+                let at = absolute_index(relative, count);
+                if at < 0 || at >= count {
+                    return Ok(VALUE_UNDEFINED);
+                }
+                Ok(Self::element_of_row(array, at, heap)?)
+            }
+            // 23.2.3.16 writes each element out with the separator between.
+            Intrinsic::TypedArrayPrototypeJoin => {
+                let given = self.call_argument(call, 0, heap)?;
+                let separator = if given.is_undefined() {
+                    alloc::vec![0x2C]
+                } else {
+                    property_name_units(given, heap, realm)?
+                };
+                let mut units: Vec<u16> = Vec::new();
+                for index in 0..count {
+                    if index > 0 {
+                        units.extend_from_slice(&separator);
+                    }
+                    let element = Self::element_of_row(array, index, heap)?;
+                    units.extend(property_name_units(element, heap, realm)?);
+                    if units.len() > self.string_units_limit {
+                        return Err(VMError::StringLimit);
+                    }
+                }
+                self.allocate_string(heap, &units)
+            }
+            // 23.2.3.15, 23.2.3.18 and 23.2.3.14 walk the elements and compare
+            // them with 7.2.15, or with 7.2.10 where `includes` does.
+            Intrinsic::TypedArrayPrototypeIndexOf
+            | Intrinsic::TypedArrayPrototypeLastIndexOf
+            | Intrinsic::TypedArrayPrototypeIncludes => {
+                let wanted = self.call_argument(call, 0, heap)?;
+                let last = intrinsic == Intrinsic::TypedArrayPrototypeLastIndexOf;
+                let given = self.call_argument(call, 1, heap)?;
+                let from = if given.is_undefined() {
+                    if last { count - 1 } else { 0 }
+                } else {
+                    let relative = Self::integral(Self::number_argument(given, heap)?);
+                    if relative < 0 {
+                        relative.saturating_add(count)
+                    } else if last {
+                        relative.min(count - 1)
+                    } else {
+                        relative
+                    }
+                };
+                let includes = intrinsic == Intrinsic::TypedArrayPrototypeIncludes;
+                let order: Vec<i64> = if last {
+                    (0..=from.min(count - 1)).rev().collect()
+                } else {
+                    (from.max(0)..count).collect()
+                };
+                for index in order {
+                    let element = Self::element_of_row(array, index, heap)?;
+                    let same = if includes {
+                        same_value_zero(element, wanted, heap)?
+                    } else {
+                        Self::strictly_equals(element, wanted, heap)?
+                    };
+                    if same {
+                        return Ok(if includes {
+                            VALUE_TRUE
+                        } else {
+                            Value::from_f64(Self::whole_i64(index))
+                        });
+                    }
+                }
+                Ok(if includes {
+                    VALUE_FALSE
+                } else {
+                    Value::from_smi(-1)
+                })
+            }
+            // 23.2.3.21 turns the elements around in place, and 23.2.3.31
+            // answers a new array of the same row.
+            Intrinsic::TypedArrayPrototypeReverse | Intrinsic::TypedArrayPrototypeToReversed => {
+                if intrinsic == Intrinsic::TypedArrayPrototypeToReversed {
+                    let made = Self::allocate_typed_array(kind, f64::from(length), heap, realm)?;
+                    let target = made.as_object().ok_or(VMError::TypeError)?;
+                    for index in 0..count {
+                        let element = Self::element_of_row(array, count - 1 - index, heap)?;
+                        Self::write_row(target, index, element, heap, realm)?;
+                    }
+                    return Ok(made);
+                }
+                let mut lower = 0;
+                let mut upper = count - 1;
+                while lower < upper {
+                    let first = Self::element_of_row(array, lower, heap)?;
+                    let last = Self::element_of_row(array, upper, heap)?;
+                    Self::write_row(array, lower, last, heap, realm)?;
+                    Self::write_row(array, upper, first, heap, realm)?;
+                    lower += 1;
+                    upper -= 1;
+                }
+                Ok(Value::from_object(array))
+            }
+            // 23.2.3.9 writes one value over a range of the array.
+            Intrinsic::TypedArrayPrototypeFill => {
+                let value = self.call_argument(call, 0, heap)?;
+                // Step 3 coerces the value before it reads the range.
+                let held = if super::object::holds_a_bigint(kind) {
+                    Self::new_bigint(Self::to_bigint(value, heap, realm)?, heap)?
+                } else {
+                    Value::from_f64(Self::number_argument(value, heap)?)
+                };
+                let (first, last) = self.argument_range(call, 1, count, heap)?;
+                for index in first..last {
+                    Self::write_row(array, index, held, heap, realm)?;
+                }
+                Ok(Value::from_object(array))
+            }
+            // 23.2.3.6 moves a range of the array over another range of it.
+            Intrinsic::TypedArrayPrototypeCopyWithin => {
+                let relative = Self::integral(Self::number_argument(
+                    self.call_argument(call, 0, heap)?,
+                    heap,
+                )?);
+                let to = absolute_index(relative, count).clamp(0, count);
+                let (first, last) = self.argument_range(call, 1, count, heap)?;
+                let taken: Vec<Value> = (first..last)
+                    .map(|index| Self::element_of_row(array, index, heap))
+                    .collect::<Result<_, _>>()?;
+                for (step, element) in taken.into_iter().enumerate() {
+                    let at = to.saturating_add(i64::try_from(step).unwrap_or(0));
+                    if at >= count {
+                        break;
+                    }
+                    Self::write_row(array, at, element, heap, realm)?;
+                }
+                Ok(Value::from_object(array))
+            }
+            // 23.2.3.24 answers a new array of the same row, and 23.2.3.27 a
+            // view of the same block.
+            Intrinsic::TypedArrayPrototypeSlice | Intrinsic::TypedArrayPrototypeSubarray => {
+                let (first, last) = self.argument_range(call, 0, count, heap)?;
+                let taken = (last - first).max(0);
+                if intrinsic == Intrinsic::TypedArrayPrototypeSubarray {
+                    let Some(ObjectKind::TypedArray { buffer, offset, .. }) =
+                        heap.get_object(array).map(|entry| entry.kind.clone())
+                    else {
+                        return Err(VMError::TypeError);
+                    };
+                    let (size, _, _) = super::object::element_form(kind);
+                    let start = f64::from(offset) + Self::whole_i64(first) * Self::whole(size);
+                    return Self::place_typed_array(
+                        kind,
+                        buffer,
+                        start,
+                        Self::whole_i64(taken),
+                        heap,
+                        realm,
+                    );
+                }
+                let made = Self::allocate_typed_array(kind, Self::whole_i64(taken), heap, realm)?;
+                let target = made.as_object().ok_or(VMError::TypeError)?;
+                for step in 0..taken {
+                    let element = Self::element_of_row(array, first + step, heap)?;
+                    Self::write_row(target, step, element, heap, realm)?;
+                }
+                Ok(made)
+            }
+            // 23.2.3.36 answers a copy with one element replaced.
+            Intrinsic::TypedArrayPrototypeWith => {
+                let relative = Self::integral(Self::number_argument(
+                    self.call_argument(call, 0, heap)?,
+                    heap,
+                )?);
+                let at = absolute_index(relative, count);
+                let value = self.call_argument(call, 1, heap)?;
+                let held = if super::object::holds_a_bigint(kind) {
+                    Self::new_bigint(Self::to_bigint(value, heap, realm)?, heap)?
+                } else {
+                    Value::from_f64(Self::number_argument(value, heap)?)
+                };
+                // Step 5 refuses an index the array has not got.
+                if at < 0 || at >= count {
+                    return Err(raise(
+                        heap,
+                        realm,
+                        super::realm::NativeErrorKind::RangeError,
+                        "the index of 23.2.3.36 is outside the TypedArray",
+                    ));
+                }
+                let made = Self::allocate_typed_array(kind, f64::from(length), heap, realm)?;
+                let target = made.as_object().ok_or(VMError::TypeError)?;
+                for index in 0..count {
+                    let element = if index == at {
+                        held
+                    } else {
+                        Self::element_of_row(array, index, heap)?
+                    };
+                    Self::write_row(target, index, element, heap, realm)?;
+                }
+                Ok(made)
+            }
+            // 23.2.3.26 orders the elements by their numeric value, and
+            // 23.2.3.32 answers a new array in that order. A comparator of the
+            // Script is a call this native has no frame for.
+            Intrinsic::TypedArrayPrototypeSort | Intrinsic::TypedArrayPrototypeToSorted => {
+                let comparator = self.call_argument(call, 0, heap)?;
+                if !comparator.is_undefined() {
+                    if !Self::is_callable(comparator, heap) {
+                        return Err(type_error(
+                            heap,
+                            realm,
+                            "the comparator of 23.2.3.26 is not callable",
+                        ));
+                    }
+                    return Err(VMError::Unsupported("a comparator of 23.2.3.26"));
+                }
+                let mut taken: Vec<Value> = (0..count)
+                    .map(|index| Self::element_of_row(array, index, heap))
+                    .collect::<Result<_, _>>()?;
+                Self::sort_row(&mut taken, kind, heap);
+                let target = if intrinsic == Intrinsic::TypedArrayPrototypeToSorted {
+                    let made = Self::allocate_typed_array(kind, f64::from(length), heap, realm)?;
+                    made.as_object().ok_or(VMError::TypeError)?
+                } else {
+                    array
+                };
+                for (index, element) in taken.into_iter().enumerate() {
+                    let at = i64::try_from(index).unwrap_or(0);
+                    Self::write_row(target, at, element, heap, realm)?;
+                }
+                Ok(Value::from_object(target))
+            }
+            // 23.2.3.23 writes another array of 23.2 or an array-like into
+            // this one, at the offset it was given.
+            Intrinsic::TypedArrayPrototypeSet => {
+                let source = self.call_argument(call, 0, heap)?;
+                let offset = Self::integral(Self::number_argument(
+                    self.call_argument(call, 1, heap)?,
+                    heap,
+                )?);
+                if offset < 0 {
+                    return Err(raise(
+                        heap,
+                        realm,
+                        super::realm::NativeErrorKind::RangeError,
+                        "the offset of 23.2.3.23 is below zero",
+                    ));
+                }
+                let Some(object) = source.as_object() else {
+                    return Err(type_error(
+                        heap,
+                        realm,
+                        "the source of 23.2.3.23 is no Object",
+                    ));
+                };
+                let from = Self::array_like_length(heap, object, realm)?;
+                // Step 6 of 23.2.3.23.1 refuses a source that does not fit.
+                if from.saturating_add(offset) > count {
+                    return Err(raise(
+                        heap,
+                        realm,
+                        super::realm::NativeErrorKind::RangeError,
+                        "the source of 23.2.3.23 reaches past the TypedArray",
+                    ));
+                }
+                let typed = matches!(
+                    heap.get_object(object).map(|entry| &entry.kind),
+                    Some(&ObjectKind::TypedArray { .. })
+                );
+                for index in 0..from {
+                    let element = if typed {
+                        Self::element_of_row(object, index, heap)?
+                    } else {
+                        let at = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+                        Self::element_at(heap, object, at)?.unwrap_or(VALUE_UNDEFINED)
+                    };
+                    Self::write_row(array, offset + index, element, heap, realm)?;
+                }
+                Ok(VALUE_UNDEFINED)
+            }
+            _ => Err(VMError::Unsupported("a method of 23.2.3")),
+        }
+    }
+
+    /// The `start` and `end` a method of 23.2.3 takes at these two arguments,
+    /// counted from the end where they are negative and clamped to the array.
+    fn argument_range(
+        &self,
+        call: &Call,
+        first: u16,
+        count: i64,
+        heap: &GenerationalHeap,
+    ) -> Result<(i64, i64), VMError> {
+        let start = Self::integral(Self::number_argument(
+            self.call_argument(call, first, heap)?,
+            heap,
+        )?);
+        let start = absolute_index(start, count).clamp(0, count);
+        let given = self.call_argument(call, first.saturating_add(1), heap)?;
+        let end = if given.is_undefined() {
+            count
+        } else {
+            let relative = Self::integral(Self::number_argument(given, heap)?);
+            absolute_index(relative, count).clamp(0, count)
+        };
+        Ok((start, end.max(start)))
+    }
+
+    /// `SortIndexedProperties` of 23.2.3.26 with the default comparison, which
+    /// orders the Numbers of 23.2.3.26.1 and the `BigInt`s by their value.
+    fn sort_row(elements: &mut [Value], kind: u8, heap: &GenerationalHeap) {
+        if super::object::holds_a_bigint(kind) {
+            elements.sort_by(|left, right| {
+                match (Self::bigint_of(*left, heap), Self::bigint_of(*right, heap)) {
+                    (Some(left), Some(right)) => left.compare(&right),
+                    _ => core::cmp::Ordering::Equal,
+                }
+            });
+            return;
+        }
+        // 23.2.3.26.1 puts every NaN last, and -0 before +0.
+        elements.sort_by(|left, right| {
+            let left = left.as_f64().unwrap_or(f64::NAN);
+            let right = right.as_f64().unwrap_or(f64::NAN);
+            match (left.is_nan(), right.is_nan()) {
+                (true, true) => core::cmp::Ordering::Equal,
+                (true, false) => core::cmp::Ordering::Greater,
+                (false, true) => core::cmp::Ordering::Less,
+                (false, false) => left
+                    .partial_cmp(&right)
+                    .unwrap_or(core::cmp::Ordering::Equal)
+                    .then_with(|| {
+                        left.is_sign_negative()
+                            .cmp(&right.is_sign_negative())
+                            .reverse()
+                    }),
+            }
+        });
+    }
+
+    /// The element of the row at this index, as a Value.
+    fn element_of_row(
+        array: ObjectRef,
+        index: i64,
+        heap: &mut GenerationalHeap,
+    ) -> Result<Value, VMError> {
+        let key = Value::from_f64(Self::whole_i64(index));
+        Ok(Self::typed_array_read(array, key, heap)?.unwrap_or(VALUE_UNDEFINED))
+    }
+
+    /// The write 10.4.5.5 makes at this index.
+    fn write_row(
+        array: ObjectRef,
+        index: i64,
+        value: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let key = Value::from_f64(Self::whole_i64(index));
+        Self::typed_array_write(array, key, value, heap, realm)?;
+        Ok(())
     }
 
     /// `AllocateTypedArray` of 23.2.5.1 through the three forms of 23.2.5.1.1,

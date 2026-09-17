@@ -1066,6 +1066,42 @@ pub enum Intrinsic {
     TypedArrayPrototypeLength,
     /// `get [@@toStringTag]`, 23.2.3.38.
     TypedArrayPrototypeToStringTag,
+    /// `at`, 23.2.3.1.
+    TypedArrayPrototypeAt,
+    /// `copyWithin`, 23.2.3.6.
+    TypedArrayPrototypeCopyWithin,
+    /// `entries`, 23.2.3.7.
+    TypedArrayPrototypeEntries,
+    /// `fill`, 23.2.3.9.
+    TypedArrayPrototypeFill,
+    /// `includes`, 23.2.3.14.
+    TypedArrayPrototypeIncludes,
+    /// `indexOf`, 23.2.3.15.
+    TypedArrayPrototypeIndexOf,
+    /// `join`, 23.2.3.16.
+    TypedArrayPrototypeJoin,
+    /// `keys`, 23.2.3.17.
+    TypedArrayPrototypeKeys,
+    /// `lastIndexOf`, 23.2.3.18.
+    TypedArrayPrototypeLastIndexOf,
+    /// `reverse`, 23.2.3.21.
+    TypedArrayPrototypeReverse,
+    /// `set`, 23.2.3.23.
+    TypedArrayPrototypeSet,
+    /// `slice`, 23.2.3.24.
+    TypedArrayPrototypeSlice,
+    /// `sort`, 23.2.3.26.
+    TypedArrayPrototypeSort,
+    /// `subarray`, 23.2.3.27.
+    TypedArrayPrototypeSubarray,
+    /// `toReversed`, 23.2.3.31.
+    TypedArrayPrototypeToReversed,
+    /// `toSorted`, 23.2.3.32.
+    TypedArrayPrototypeToSorted,
+    /// `values`, 23.2.3.35.
+    TypedArrayPrototypeValues,
+    /// `with`, 23.2.3.36.
+    TypedArrayPrototypeWith,
     /// `BigInt`, 21.2.1.1.
     BigIntConstructor,
     /// `asIntN`, 21.2.2.1.
@@ -1203,7 +1239,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 406] = [
+    pub const ALL: [Self; 424] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1585,6 +1621,24 @@ impl Intrinsic {
         Self::TypedArrayPrototypeByteOffset,
         Self::TypedArrayPrototypeLength,
         Self::TypedArrayPrototypeToStringTag,
+        Self::TypedArrayPrototypeAt,
+        Self::TypedArrayPrototypeCopyWithin,
+        Self::TypedArrayPrototypeEntries,
+        Self::TypedArrayPrototypeFill,
+        Self::TypedArrayPrototypeIncludes,
+        Self::TypedArrayPrototypeIndexOf,
+        Self::TypedArrayPrototypeJoin,
+        Self::TypedArrayPrototypeKeys,
+        Self::TypedArrayPrototypeLastIndexOf,
+        Self::TypedArrayPrototypeReverse,
+        Self::TypedArrayPrototypeSet,
+        Self::TypedArrayPrototypeSlice,
+        Self::TypedArrayPrototypeSort,
+        Self::TypedArrayPrototypeSubarray,
+        Self::TypedArrayPrototypeToReversed,
+        Self::TypedArrayPrototypeToSorted,
+        Self::TypedArrayPrototypeValues,
+        Self::TypedArrayPrototypeWith,
         Self::BigIntConstructor,
         Self::BigIntAsIntN,
         Self::BigIntAsUintN,
@@ -1870,6 +1924,24 @@ impl Intrinsic {
             | Self::TypedArrayPrototypeByteLength
             | Self::TypedArrayPrototypeByteOffset
             | Self::TypedArrayPrototypeLength
+            | Self::TypedArrayPrototypeAt
+            | Self::TypedArrayPrototypeCopyWithin
+            | Self::TypedArrayPrototypeEntries
+            | Self::TypedArrayPrototypeFill
+            | Self::TypedArrayPrototypeIncludes
+            | Self::TypedArrayPrototypeIndexOf
+            | Self::TypedArrayPrototypeJoin
+            | Self::TypedArrayPrototypeKeys
+            | Self::TypedArrayPrototypeLastIndexOf
+            | Self::TypedArrayPrototypeReverse
+            | Self::TypedArrayPrototypeSet
+            | Self::TypedArrayPrototypeSlice
+            | Self::TypedArrayPrototypeSort
+            | Self::TypedArrayPrototypeSubarray
+            | Self::TypedArrayPrototypeToReversed
+            | Self::TypedArrayPrototypeToSorted
+            | Self::TypedArrayPrototypeValues
+            | Self::TypedArrayPrototypeWith
             | Self::TypedArrayPrototypeToStringTag => IntrinsicHolder::TypedArrayPrototype,
             Self::DatePrototypeValueOf
             | Self::DatePrototypeGetTime
@@ -2446,6 +2518,24 @@ impl Intrinsic {
             Self::TypedArrayFloat16Constructor => 403,
             Self::TypedArrayBigInt64Constructor => 404,
             Self::TypedArrayBigUint64Constructor => 405,
+            Self::TypedArrayPrototypeAt => 406,
+            Self::TypedArrayPrototypeCopyWithin => 407,
+            Self::TypedArrayPrototypeEntries => 408,
+            Self::TypedArrayPrototypeFill => 409,
+            Self::TypedArrayPrototypeIncludes => 410,
+            Self::TypedArrayPrototypeIndexOf => 411,
+            Self::TypedArrayPrototypeJoin => 412,
+            Self::TypedArrayPrototypeKeys => 413,
+            Self::TypedArrayPrototypeLastIndexOf => 414,
+            Self::TypedArrayPrototypeReverse => 415,
+            Self::TypedArrayPrototypeSet => 416,
+            Self::TypedArrayPrototypeSlice => 417,
+            Self::TypedArrayPrototypeSort => 418,
+            Self::TypedArrayPrototypeSubarray => 419,
+            Self::TypedArrayPrototypeToReversed => 420,
+            Self::TypedArrayPrototypeToSorted => 421,
+            Self::TypedArrayPrototypeValues => 422,
+            Self::TypedArrayPrototypeWith => 423,
             Self::SharedArrayBufferConstructor => 378,
             Self::SharedArrayBufferPrototypeSlice => 379,
             Self::SharedArrayBufferPrototypeGrow => 380,
@@ -2862,6 +2952,24 @@ impl Intrinsic {
             Self::TypedArrayFloat16Constructor => 403,
             Self::TypedArrayBigInt64Constructor => 404,
             Self::TypedArrayBigUint64Constructor => 405,
+            Self::TypedArrayPrototypeAt => 406,
+            Self::TypedArrayPrototypeCopyWithin => 407,
+            Self::TypedArrayPrototypeEntries => 408,
+            Self::TypedArrayPrototypeFill => 409,
+            Self::TypedArrayPrototypeIncludes => 410,
+            Self::TypedArrayPrototypeIndexOf => 411,
+            Self::TypedArrayPrototypeJoin => 412,
+            Self::TypedArrayPrototypeKeys => 413,
+            Self::TypedArrayPrototypeLastIndexOf => 414,
+            Self::TypedArrayPrototypeReverse => 415,
+            Self::TypedArrayPrototypeSet => 416,
+            Self::TypedArrayPrototypeSlice => 417,
+            Self::TypedArrayPrototypeSort => 418,
+            Self::TypedArrayPrototypeSubarray => 419,
+            Self::TypedArrayPrototypeToReversed => 420,
+            Self::TypedArrayPrototypeToSorted => 421,
+            Self::TypedArrayPrototypeValues => 422,
+            Self::TypedArrayPrototypeWith => 423,
             Self::SharedArrayBufferConstructor => 378,
             Self::SharedArrayBufferPrototypeSlice => 379,
             Self::SharedArrayBufferPrototypeGrow => 380,
@@ -3279,6 +3387,24 @@ impl Intrinsic {
             403 => Some(Self::TypedArrayFloat16Constructor),
             404 => Some(Self::TypedArrayBigInt64Constructor),
             405 => Some(Self::TypedArrayBigUint64Constructor),
+            406 => Some(Self::TypedArrayPrototypeAt),
+            407 => Some(Self::TypedArrayPrototypeCopyWithin),
+            408 => Some(Self::TypedArrayPrototypeEntries),
+            409 => Some(Self::TypedArrayPrototypeFill),
+            410 => Some(Self::TypedArrayPrototypeIncludes),
+            411 => Some(Self::TypedArrayPrototypeIndexOf),
+            412 => Some(Self::TypedArrayPrototypeJoin),
+            413 => Some(Self::TypedArrayPrototypeKeys),
+            414 => Some(Self::TypedArrayPrototypeLastIndexOf),
+            415 => Some(Self::TypedArrayPrototypeReverse),
+            416 => Some(Self::TypedArrayPrototypeSet),
+            417 => Some(Self::TypedArrayPrototypeSlice),
+            418 => Some(Self::TypedArrayPrototypeSort),
+            419 => Some(Self::TypedArrayPrototypeSubarray),
+            420 => Some(Self::TypedArrayPrototypeToReversed),
+            421 => Some(Self::TypedArrayPrototypeToSorted),
+            422 => Some(Self::TypedArrayPrototypeValues),
+            423 => Some(Self::TypedArrayPrototypeWith),
             378 => Some(Self::SharedArrayBufferConstructor),
             379 => Some(Self::SharedArrayBufferPrototypeSlice),
             380 => Some(Self::SharedArrayBufferPrototypeGrow),
@@ -3358,7 +3484,10 @@ impl Intrinsic {
             Self::ObjectGetOwnPropertySymbols => "getOwnPropertySymbols",
             Self::ObjectGetOwnPropertyDescriptors => "getOwnPropertyDescriptors",
             Self::ObjectAssign => "assign",
-            Self::ReflectSet | Self::MapPrototypeSet | Self::WeakMapPrototypeSet => "set",
+            Self::ReflectSet
+            | Self::MapPrototypeSet
+            | Self::WeakMapPrototypeSet
+            | Self::TypedArrayPrototypeSet => "set",
             Self::ArrayPrototypeFlatMap => "flatMap",
             Self::ObjectFromEntries => "fromEntries",
             Self::MathAcos => "acos",
@@ -3472,6 +3601,7 @@ impl Intrinsic {
             Self::TypedArrayBigUint64Constructor => "BigUint64Array",
             Self::TypedArrayPrototypeLength => "get length",
             Self::TypedArrayPrototypeToStringTag => "get [Symbol.toStringTag]",
+            Self::TypedArrayPrototypeSubarray => "subarray",
             Self::BigIntConstructor => "BigInt",
             Self::BigIntAsIntN => "asIntN",
             Self::BigIntAsUintN => "asUintN",
@@ -3583,7 +3713,10 @@ impl Intrinsic {
             Self::ObjectDefineProperties => "defineProperties",
             Self::ObjectGetPrototypeOf | Self::ReflectGetPrototypeOf => "getPrototypeOf",
             Self::ObjectSetPrototypeOf | Self::ReflectSetPrototypeOf => "setPrototypeOf",
-            Self::ObjectKeys | Self::ArrayPrototypeKeys | Self::MapPrototypeKeys => "keys",
+            Self::ObjectKeys
+            | Self::ArrayPrototypeKeys
+            | Self::MapPrototypeKeys
+            | Self::TypedArrayPrototypeKeys => "keys",
             Self::ObjectIs => "is",
             Self::ObjectHasOwn => "hasOwn",
             Self::ArrayPrototypeShift => "shift",
@@ -3593,13 +3726,13 @@ impl Intrinsic {
             Self::ArrayFrom => "from",
             Self::Eval => "eval",
             Self::ArrayPrototypeFlat => "flat",
-            Self::ArrayPrototypeSort => "sort",
-            Self::ArrayPrototypeToSorted => "toSorted",
+            Self::ArrayPrototypeSort | Self::TypedArrayPrototypeSort => "sort",
+            Self::ArrayPrototypeToSorted | Self::TypedArrayPrototypeToSorted => "toSorted",
             Self::ArrayPrototypeToSpliced => "toSpliced",
-            Self::ArrayPrototypeFill => "fill",
-            Self::ArrayPrototypeCopyWithin => "copyWithin",
-            Self::ArrayPrototypeWith => "with",
-            Self::ArrayPrototypeToReversed => "toReversed",
+            Self::ArrayPrototypeFill | Self::TypedArrayPrototypeFill => "fill",
+            Self::ArrayPrototypeCopyWithin | Self::TypedArrayPrototypeCopyWithin => "copyWithin",
+            Self::ArrayPrototypeWith | Self::TypedArrayPrototypeWith => "with",
+            Self::ArrayPrototypeToReversed | Self::TypedArrayPrototypeToReversed => "toReversed",
             Self::MathAbs => "abs",
             Self::MathCeil => "ceil",
             Self::MathFloor => "floor",
@@ -3635,7 +3768,8 @@ impl Intrinsic {
             Self::ObjectEntries
             | Self::ArrayPrototypeEntries
             | Self::MapPrototypeEntries
-            | Self::SetPrototypeEntries => "entries",
+            | Self::SetPrototypeEntries
+            | Self::TypedArrayPrototypeEntries => "entries",
             Self::NumberConstructor => "Number",
             Self::NumberIsFinite | Self::IsFinite => "isFinite",
             Self::NumberIsInteger => "isInteger",
@@ -3658,12 +3792,18 @@ impl Intrinsic {
             Self::ArrayIsArray => "isArray",
             Self::StringPrototypeCharAt => "charAt",
             Self::StringPrototypeCharCodeAt => "charCodeAt",
-            Self::StringPrototypeIndexOf | Self::ArrayPrototypeIndexOf => "indexOf",
-            Self::StringPrototypeAt | Self::ArrayPrototypeAt => "at",
+            Self::StringPrototypeIndexOf
+            | Self::ArrayPrototypeIndexOf
+            | Self::TypedArrayPrototypeIndexOf => "indexOf",
+            Self::StringPrototypeAt | Self::ArrayPrototypeAt | Self::TypedArrayPrototypeAt => "at",
             Self::StringPrototypeConcat | Self::ArrayPrototypeConcat => "concat",
             Self::StringPrototypeEndsWith => "endsWith",
-            Self::StringPrototypeIncludes | Self::ArrayPrototypeIncludes => "includes",
-            Self::StringPrototypeLastIndexOf | Self::ArrayPrototypeLastIndexOf => "lastIndexOf",
+            Self::StringPrototypeIncludes
+            | Self::ArrayPrototypeIncludes
+            | Self::TypedArrayPrototypeIncludes => "includes",
+            Self::StringPrototypeLastIndexOf
+            | Self::ArrayPrototypeLastIndexOf
+            | Self::TypedArrayPrototypeLastIndexOf => "lastIndexOf",
             Self::StringPrototypeRepeat => "repeat",
             Self::StringPrototypeStartsWith => "startsWith",
             Self::StringPrototypeSubstring => "substring",
@@ -3685,18 +3825,20 @@ impl Intrinsic {
             Self::ArrayPrototypeValues
             | Self::ObjectValues
             | Self::MapPrototypeValues
-            | Self::SetPrototypeValues => "values",
+            | Self::SetPrototypeValues
+            | Self::TypedArrayPrototypeValues => "values",
             Self::ArrayIteratorPrototypeNext
             | Self::MapIteratorPrototypeNext
             | Self::SetIteratorPrototypeNext => "next",
-            Self::ArrayPrototypeJoin => "join",
+            Self::ArrayPrototypeJoin | Self::TypedArrayPrototypeJoin => "join",
             Self::ArrayPrototypePop => "pop",
             Self::ArrayPrototypePush => "push",
-            Self::ArrayPrototypeReverse => "reverse",
+            Self::ArrayPrototypeReverse | Self::TypedArrayPrototypeReverse => "reverse",
             Self::StringPrototypeSlice
             | Self::ArrayPrototypeSlice
             | Self::ArrayBufferPrototypeSlice
-            | Self::SharedArrayBufferPrototypeSlice => "slice",
+            | Self::SharedArrayBufferPrototypeSlice
+            | Self::TypedArrayPrototypeSlice => "slice",
         }
     }
 
@@ -4216,6 +4358,11 @@ impl Intrinsic {
             | Self::AtomicsPause
             | Self::BigIntPrototypeToLocaleString
             | Self::BigIntPrototypeValueOf
+            | Self::TypedArrayPrototypeEntries
+            | Self::TypedArrayPrototypeKeys
+            | Self::TypedArrayPrototypeReverse
+            | Self::TypedArrayPrototypeToReversed
+            | Self::TypedArrayPrototypeValues
             | Self::TypedArrayBase
             | Self::MapIteratorPrototypeNext
             | Self::SetIteratorPrototypeNext => 0,
@@ -4417,7 +4564,16 @@ impl Intrinsic {
             | Self::SharedArrayBufferPrototypeGrow
             | Self::AtomicsIsLockFree
             | Self::BigIntConstructor
-            | Self::BigIntPrototypeToString => 1,
+            | Self::BigIntPrototypeToString
+            | Self::TypedArrayPrototypeAt
+            | Self::TypedArrayPrototypeFill
+            | Self::TypedArrayPrototypeIncludes
+            | Self::TypedArrayPrototypeIndexOf
+            | Self::TypedArrayPrototypeJoin
+            | Self::TypedArrayPrototypeLastIndexOf
+            | Self::TypedArrayPrototypeSet
+            | Self::TypedArrayPrototypeSort
+            | Self::TypedArrayPrototypeToSorted => 1,
             Self::ObjectDefineProperty
             | Self::ReflectDefineProperty
             | Self::ReflectApply
@@ -4507,7 +4663,11 @@ impl Intrinsic {
             | Self::SharedArrayBufferPrototypeSlice
             | Self::AtomicsLoad
             | Self::BigIntAsIntN
-            | Self::BigIntAsUintN => 2,
+            | Self::BigIntAsUintN
+            | Self::TypedArrayPrototypeCopyWithin
+            | Self::TypedArrayPrototypeSlice
+            | Self::TypedArrayPrototypeSubarray
+            | Self::TypedArrayPrototypeWith => 2,
             // 21.4.2.1 and 21.4.3.4 take a year, a month, a day, an hour, a
             // minute, a second and a millisecond.
             Self::DatePrototypeSetHours
@@ -5756,6 +5916,15 @@ impl Realm {
         Self::define_array_buffer_getters(heap, &intrinsics, array_buffer_prototype)?;
         Self::define_data_view_getters(heap, &intrinsics, data_view_prototype)?;
         Self::define_typed_array_getters(heap, &intrinsics, typed_array_prototype)?;
+        // 23.2.3.33: %TypedArray.prototype.toString% is the same function
+        // object as %Array.prototype.toString%.
+        Self::define_alias(
+            heap,
+            &intrinsics,
+            typed_array_prototype,
+            "toString",
+            Intrinsic::ArrayPrototypeToString,
+        )?;
         Self::define_shared_block_getters(heap, &intrinsics, shared_array_buffer_prototype)?;
         Self::define_trim_aliases(heap, &intrinsics, string_prototype, date_prototype)?;
         Self::define_unscopables(heap, array_prototype)?;
@@ -6590,6 +6759,33 @@ impl Realm {
         Ok(())
     }
 
+    /// Gives the holder a name whose value is the function object of another
+    /// intrinsic, which the clauses that share one ask for.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    fn define_alias(
+        heap: &mut GenerationalHeap,
+        intrinsics: &[Root],
+        holder: Root,
+        name: &str,
+        which: Intrinsic,
+    ) -> Result<(), HeapError> {
+        let holder = Self::rooted(heap, holder)?
+            .as_object()
+            .ok_or(HeapError::InvalidReference)?;
+        let function = Self::rooted(
+            heap,
+            *intrinsics
+                .get(which.index())
+                .ok_or(HeapError::InvalidReference)?,
+        )?;
+        let key = PropertyKey::String(heap.strings.intern(name)?);
+        heap.define_own_named(holder, key, function, builtin_data())?;
+        Ok(())
+    }
+
     /// The three accessors of 25.2.5.
     ///
     /// # Errors
@@ -7131,6 +7327,16 @@ impl Realm {
             if intrinsic == Intrinsic::NumberConstructor {
                 let constructor = function.as_object().ok_or(HeapError::InvalidReference)?;
                 Self::define_number_constants(heap, constructor)?;
+            }
+            // 23.2.3.37: %TypedArray.prototype%[@@iterator] is the same
+            // function object as `values`.
+            if intrinsic == Intrinsic::TypedArrayPrototypeValues {
+                heap.define_own_named(
+                    holder,
+                    WellKnownSymbol::Iterator.key(),
+                    function,
+                    builtin_data(),
+                )?;
             }
             // 24.1.3.14: %Map.prototype%[@@iterator] is the same function
             // object as `entries`.

@@ -9139,6 +9139,24 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // 23.2.6 answers the array it made, 23.2.3.1 the block it looks into,
         // and 23.2.1.1 refuses every call.
         | crate::engine::realm::Intrinsic::TypedArrayBase
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeAt
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeCopyWithin
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeEntries
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeFill
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeIncludes
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeIndexOf
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeJoin
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeKeys
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeLastIndexOf
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeReverse
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeSet
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeSlice
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeSort
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeSubarray
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeToReversed
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeToSorted
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeValues
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeWith
         // 21.2.1.1, 21.2.2 and 21.2.3.4 answer a BigInt, which no
         // register type of this lowering names.
         | crate::engine::realm::Intrinsic::BigIntConstructor
