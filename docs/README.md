@@ -53,6 +53,7 @@ secret — is D-146.
 | 14 | [Secure Shell as a client](14-secure-shell-as-a-client.md) | The SSH-2 client: the algorithm set and what is refused, the crate, the three layers of the protocol, trusting a host key, testing against an implementation from outside |
 | 15 | [The disk on the machine](15-the-disk-on-the-machine.md) | The file system server and what had to exist before it: the handover of a PCI device, the two adapters, the server, the file protocol, and the move of the programs onto the volume |
 | 16 | [More than one processor](16-more-than-one-processor.md) | The SMP track: the processor list, interprocessor interrupts, a borrow that waits, per-processor data, the start-up of an application processor, per-processor run queues, remote invalidation |
+| 17 | [Text and fonts](17-text-and-fonts.md) | The pure `text-core` track: borrowed font parsing, fixed-point geometry, Unicode, shaping, resolution, and layout; separate future rasterization and drawing integration |
 
 Beside the documents lie the standards they cite, verbatim and with
 their checksums, one directory per body that publishes them: [rfc/](rfc)

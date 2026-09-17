@@ -258,6 +258,9 @@ Modules:
   meaningful in the meantime, the memory decode bit of the command
   register is cleared first and restored after, which the crate does in
   one function so that a caller cannot forget the second half.
+  Size probing requires a quiesced function and exclusive driver access.
+  `app-lspci` uses `bar::assigned` to report addresses without writes or
+  size claims while drivers operate (D-165).
 - `capability.rs`: the walk of the capability list from the pointer at
   offset `0x34`, bounded by the number of capabilities that fit in
   configuration space so that a list pointing at itself is an error and

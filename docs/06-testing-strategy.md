@@ -3248,6 +3248,55 @@ alone:
   error, and takes an exit status that is not zero, so a client that
   reads one stream and one that reports no status both fail.
 
+### 6.6.81 Text and font logic (`text-core`, T1–T12)
+
+- Formats: sfnt TrueType/OTTO, TTC v1/v2, mixed outline kinds, all faces,
+  valid shared tables, unsigned TTC v2, bounded DSIG at EOF.
+- Reads: every truncated prefix; overflow in offsets/counts/lengths;
+  malformed and unaligned offsets; absent tags and out-of-range face indices.
+- Directories: zero/excessive counts, exact limit equality, valid trailing-space
+  tags, malformed tags, duplicate/unsorted tags, ignored hostile search hints.
+- Ranges: adjacent and empty tables, actual unpadded lengths, reversed payload
+  order, table/header and table/directory overlap, exact aliases within a face,
+  partial sharing across faces, shared ranges with conflicting tags/checksums.
+- Collections: self-reference, attempted nested collection cycles, directory
+  aliases/overlap, invalid later faces, malformed signature fields/ranges.
+- Host file input: project-authored envelope fixture read through `std::fs`;
+  payload offsets, lengths, recorded checksums, and contents checked literally.
+- Determinism: independently allocated font bytes and parse structures produce
+  identical explicit numeric serialization; no comparison of object padding.
+- Mutations: every single-byte replacement of sfnt/TTC seeds; accepted table
+  views equal their source ranges and tag lookup agrees with enumeration.
+- Fuzzing: `text_font` exercises every accepted face and range; checked-in
+  regression seeds include valid sharing and malformed references.
+- Payloads: cmap 0/4/6/12/13/14; exact metrics and fixed-point rounding;
+  simple/composite TrueType outlines; CFF/CFF2 operators and dictionaries;
+  variation normalization, IUP, phantom metrics, HVAR/MVAR and CFF2 blends.
+- Host fonts: licensed Noto CJK and variable Noto Sans subsets; literal
+  coordinates and advances; every byte mutated at five boundary values with
+  independently allocated copies compared for identical numeric results.
+- Malformed payloads: truncated arrays, cyclic components/subroutines, invalid
+  operands, packed point/delta runs, selectors, axes, and variation stores.
+- Unicode properties: regenerate byte-identical Rust and compare all twelve
+  properties at every Unicode code point against retained Unicode 18.0.0 UCD.
+- Segmentation gates: all 853 grapheme, 1,944 word, and 19,346 line-break cases.
+- Bidi gates: all 770,241 enabled BidiTest direction cases and 91,707
+  BidiCharacterTest cases; paragraphs, isolates, depth, and per-line resets.
+- Shaping: every GSUB/GPOS lookup format, GDEF classes/carets, feature/language
+  selection, variations, mark filters, cursive/mark chains, cycles and limits.
+  Licensed DejaVu/Noto fixtures carry literal host-oracle glyph positions.
+- Resolution: role ordering, whole clusters, Script_Extensions, regional Han,
+  variation selectors, weight coordinates, scales, and baseline alignment.
+- Layout: layout/measure equality; fractional wrapping; Arabic/ligature
+  reshaping; tabs, hard breaks, bidi carets, grapheme selections, deleted
+  and overlapping substitution clusters, GDEF coordinate/point carets,
+  gvar advances without HVAR, buffer growth/exhaustion, malformed fonts,
+  and work limits.
+- Serialization: separate bytes, fonts, strings, and workspaces produce
+  identical versioned little-endian output; debug/release share a fixed digest.
+- Configurations: default alloc, allocator-free APIs, and bare no_std target.
+  Fuzz regression exercises font bytes and UTF-8 through bounded layout buffers.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`
@@ -3379,3 +3428,10 @@ Jobs run in this order; a failure stops the pipeline.
 CI runs on Linux runners with QEMU and its UEFI firmware from the
 distribution package. A macOS runner job covers the build only. Docker is
 not used; every step runs directly on the runner.
+
+Text review regressions cover contextual actions after insertions/deletions,
+mark-skipping and ligature contraction, GDEF classes after substitution,
+feature-reference work limits, tab shaping barriers, and BCP-47 extensions.
+
+PCI inspection regressions check unchanged command/BAR registers, 32/64-bit
+and I/O addresses, upper-register consumption, truncation, and read failures.

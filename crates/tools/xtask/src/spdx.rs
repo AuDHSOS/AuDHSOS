@@ -9,6 +9,7 @@ use crate::error::Error;
 use crate::fs;
 use crate::policy::{
     HEADER_EXEMPT_FILES, HEADER_FILE_TYPES, PORTED_FILES, PORTED_HEADER, SPDX_HEADER,
+    UNICODE_HEADER, UNICODE_TABLE_FILE,
 };
 
 /// Checks every file with a known extension below `root` and returns the
@@ -50,12 +51,13 @@ pub(crate) fn comment_prefix(path: &Path) -> Option<&'static str> {
         .map(|(_, prefix)| *prefix)
 }
 
-/// The header `relative` must carry: the one that names both licences for
-/// a file that is in part a port, and the project's own for every other.
+/// Select the exact project, ported-source, or generated-data header.
 pub(crate) fn expected_header(relative: &Path) -> &'static [&'static str] {
     let path = relative.to_string_lossy().replace('\\', "/");
     if PORTED_FILES.contains(&path.as_str()) {
         &PORTED_HEADER
+    } else if path == UNICODE_TABLE_FILE {
+        &UNICODE_HEADER
     } else {
         &SPDX_HEADER
     }

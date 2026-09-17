@@ -4,6 +4,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/text-core",
     "crates/regex-bt",
     "crates/utf16",
     "crates/math",
@@ -104,6 +105,7 @@ rust-version = "1.100"
 exclude = ["fuzz"]
 
 [workspace.dependencies]
+text-core = { path = "crates/text-core" }
 audhsos-json = { path = "crates/json" }
 audhsos-math = { path = "crates/math" }
 audhsos-utf16 = { path = "crates/utf16" }

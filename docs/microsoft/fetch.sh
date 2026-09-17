@@ -37,3 +37,11 @@ done | sort -u | while read -r img; do
 	curl -sSL --fail --max-time 120 "$base/$img" -o "$dir/$img"
 	printf '%s  %s\n' "$(shasum -a 256 "$dir/$img" | cut -d' ' -f1)" "$img"
 done
+
+# Script guidance supplements the table specification.
+for script in arabic hebrew hangul; do
+    curl -sSL --fail --max-time 120 \
+        "https://learn.microsoft.com/en-us/typography/script-development/$script" \
+        -o "$dir/script-$script.html"
+    printf '%s  %s\n' "$(shasum -a 256 "$dir/script-$script.html" | cut -d' ' -f1)" "script-$script.html"
+done

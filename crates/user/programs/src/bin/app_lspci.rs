@@ -45,7 +45,7 @@ use virtio_queue as _;
 use audhsos_abi::Error;
 use audhsos_abi::startup::BusRange;
 use pci::address::{Address, BYTES_PER_BUS, Window};
-use pci::bar::{Bar, Space, Width, probe};
+use pci::bar::{AssignedBar, Space, Width, assigned};
 use pci::capability::{Capability, ID_MSIX, ID_VENDOR, MAX_CAPABILITIES, find, walk};
 use pci::enumerate::walk as enumerate;
 use pci::error::PciError;
@@ -175,7 +175,7 @@ fn report_one_bus(
     // one mebibyte of device memory of this process alone, and the value
     // built here is the only one that reaches those bytes.
     let bytes = unsafe { mapping.bytes() };
-    let mut space = MappedSpace::new(window, Mmio::of(bytes));
+    let space = MappedSpace::new(window, Mmio::of(bytes));
     let mut addresses = [None; MAX_FUNCTIONS_PER_BUS];
     let mut count = 0usize;
     enumerate(&space, window, |function| {
@@ -187,7 +187,7 @@ fn report_one_bus(
     .map_err(pci_error)?;
     let mut virtio_found = false;
     for function in addresses.iter().flatten() {
-        report_function(gate, voice, &mut space, function)?;
+        report_function(gate, voice, &space, function)?;
         if function.header.vendor == VIRTIO_VENDOR && function.header.device == NETWORK_DEVICE {
             report_virtio(gate, voice, &space, function.address)?;
             virtio_found = true;
@@ -205,7 +205,7 @@ const MAX_FUNCTIONS_PER_BUS: usize = 32;
 fn report_function(
     gate: &mut Gate,
     voice: Option<EndpointHandle>,
-    space: &mut MappedSpace<'_>,
+    space: &MappedSpace<'_>,
     function: &pci::enumerate::Function,
 ) -> Result<(), Error> {
     let address = function.address;
@@ -222,11 +222,9 @@ fn report_function(
         header.prog_if,
         kind_name(header.kind)
     ));
-    // Only a type-0 header carries six base address registers; where a
-    // bridge has four of them it has its bus numbers and its windows, and
-    // `pci` refuses to probe one for that reason.
+    // Active drivers retain BAR decoding throughout inspection.
     if header.kind == Kind::Endpoint {
-        let bars = probe(space, address).map_err(pci_error)?;
+        let bars = assigned(space, address).map_err(pci_error)?;
         for bar in bars.iter().flatten() {
             put_bar(&mut line, bar);
         }
@@ -275,7 +273,7 @@ fn report_virtio(
 }
 
 /// Puts one base address register into the line.
-fn put_bar(line: &mut Report, bar: &Bar) {
+fn put_bar(line: &mut Report, bar: &AssignedBar) {
     let kind = match bar.space {
         Space::Io => "io",
         Space::Memory {
@@ -287,13 +285,7 @@ fn put_bar(line: &mut Report, bar: &Bar) {
             ..
         } => "mem64",
     };
-    line.put(
-        Report::of(format_args!(
-            " bar{}={kind} {:#x}+{:#x}",
-            bar.index, bar.base, bar.len
-        ))
-        .as_bytes(),
-    );
+    line.put(Report::of(format_args!(" bar{}={kind} {:#x}", bar.index, bar.base)).as_bytes());
 }
 
 /// Puts the capabilities of a function into the line, by name where this

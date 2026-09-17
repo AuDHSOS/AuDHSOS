@@ -267,3 +267,106 @@ fn a_function_of_the_double_holds_the_bytes_it_was_given() {
     assert_eq!(space.peek(1, 0, 0x00), Some(0x1234_8086));
     assert_eq!(space.peek(2, 0, 0x00), None, "no function was put there");
 }
+
+struct ReadOnlySpace {
+    inner: RecordedConfigSpace,
+    missing: Option<u16>,
+}
+impl ConfigSpace for ReadOnlySpace {
+    fn read_u32(&self, address: Address, offset: u16) -> Option<u32> {
+        if self.missing == Some(offset) {
+            None
+        } else {
+            self.inner.read_u32(address, offset)
+        }
+    }
+    fn write_u32(&mut self, _: Address, _: u16, _: u32) {
+        panic!("inspection must not disable live device decoding");
+    }
+}
+
+#[test]
+fn inspecting_active_bars_preserves_decoding_and_addresses() {
+    use crate::bar::{AssignedBar, assigned};
+    let mut builder = Builder::new(0x1af4, 0x1042);
+    builder.bar(0, 0x6041, 0xffff_ffe1);
+    builder.bar(1, 0x8104_1000, 0xffff_f000);
+    builder.bar(2, 0x0000_800c, 0xffff_c00c);
+    builder.bar(3, 8, u32::MAX);
+    builder.bar(4, 2, 0);
+    let space = ReadOnlySpace {
+        inner: one(&builder),
+        missing: None,
+    };
+    let at = address(&space.inner);
+    let snapshot = || {
+        (0..RECORDED_LEN)
+            .step_by(4)
+            .map(|offset| space.read_u32(at, u16::try_from(offset).unwrap()))
+            .collect::<Vec<_>>()
+    };
+    let before = snapshot();
+    let bars = assigned(&space, at).unwrap();
+    assert_eq!(
+        bars[0],
+        Some(AssignedBar {
+            index: 0,
+            space: Space::Io,
+            base: 0x6040
+        })
+    );
+    assert_eq!(
+        bars[1],
+        Some(AssignedBar {
+            index: 1,
+            space: Space::Memory {
+                width: Width::Bits32,
+                prefetchable: false
+            },
+            base: 0x8104_1000
+        })
+    );
+    assert_eq!(
+        bars[2],
+        Some(AssignedBar {
+            index: 2,
+            space: Space::Memory {
+                width: Width::Bits64,
+                prefetchable: true
+            },
+            base: 0x8_0000_8000
+        })
+    );
+    assert_eq!(&bars[3..], &[None, None, None]);
+    assert_eq!(read_command(&space, at), Ok(DECODING));
+    assert_eq!(snapshot(), before);
+}
+
+#[test]
+fn inspection_rejects_invalid_headers_and_unreadable_or_truncated_bars() {
+    use crate::bar::assigned;
+    let mut builder = Builder::new(1, 2);
+    builder.header_type(1);
+    let space = one(&builder);
+    assert_eq!(
+        assigned(&space, address(&space)),
+        Err(PciError::HeaderType(1))
+    );
+    builder.header_type(0).bar(5, 4, 0);
+    let space = one(&builder);
+    assert_eq!(
+        assigned(&space, address(&space)),
+        Err(PciError::BarTruncated(5))
+    );
+    builder.bar(4, 4, 0);
+    for offset in [0x0c, 0x10, 0x24] {
+        let space = ReadOnlySpace {
+            inner: one(&builder),
+            missing: Some(offset),
+        };
+        assert_eq!(
+            assigned(&space, address(&space.inner)),
+            Err(PciError::Unreadable(offset))
+        );
+    }
+}
