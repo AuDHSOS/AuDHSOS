@@ -133,6 +133,9 @@ pub enum ObjectKind {
         /// value as well.
         set: bool,
     },
+    /// The `[[DateValue]]` of 21.4.4: the time value, or `NaN` for the Date
+    /// 21.4.1.1 calls invalid.
+    Date(f64),
     /// The `[[IsRawJSON]]` of the rawJSON proposal, whose `rawJSON` property
     /// holds the text 25.5.2 writes out verbatim.
     RawJson,

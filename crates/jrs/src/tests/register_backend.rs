@@ -9583,3 +9583,76 @@ fn the_escape_of_b_2_1_writes_and_reads_its_own_form() -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[test]
+fn the_time_value_of_21_4_carries_the_fields_of_a_date() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend carries no clause 21.4, so only the engine answers.
+    for (source, answer) in [
+        (
+            "var d=new Date(0);''+d.getTime()+':'+d.toISOString()",
+            "0:1970-01-01T00:00:00.000Z",
+        ),
+        (
+            "var d=new Date(2024,0,15,10,30,45,123);''+d.toISOString()",
+            "2024-01-15T10:30:45.123Z",
+        ),
+        // 21.4.1.28 counts the leap year of 21.4.1.3.
+        (
+            "''+new Date(Date.UTC(2000,1,29)).toISOString()",
+            "2000-02-29T00:00:00.000Z",
+        ),
+        (
+            "var d=new Date(0);''+d.getUTCFullYear()+' '+d.getUTCMonth()+' '+d.getUTCDate()+' '+d.getUTCDay()",
+            "1970 0 1 4",
+        ),
+        // 21.4.1.31 answers NaN beyond the range of a time value.
+        (
+            "''+new Date(8.64e15).toISOString()",
+            "+275760-09-13T00:00:00.000Z",
+        ),
+        ("''+new Date(8.64e15+1).getTime()", "NaN"),
+        (
+            "var d=new Date(NaN);''+d.getTime()+' '+d.getFullYear()",
+            "NaN NaN",
+        ),
+        // Step 4.f of 21.4.2.1 reads a year below 100 as one of the 1900s.
+        (
+            "''+new Date(Date.UTC(99,0,1)).toISOString()",
+            "1999-01-01T00:00:00.000Z",
+        ),
+        // 21.4.3.4 step 1 reads an absent year as undefined.
+        ("''+Date.UTC()", "NaN"),
+        ("''+Date.UTC(2000)", "946684800000"),
+        // A year outside the four digits of 21.4.1.15 takes the extended form.
+        (
+            "''+new Date(Date.UTC(-1,0,1)).toISOString()",
+            "-000001-01-01T00:00:00.000Z",
+        ),
+        ("''+new Date(-1).toISOString()", "1969-12-31T23:59:59.999Z"),
+        (
+            "var d=new Date(0);d.setTime(86400000);''+d.toISOString()",
+            "1970-01-02T00:00:00.000Z",
+        ),
+        // 21.4.4.42 answers null for a Date no text describes.
+        (
+            "''+new Date(0).toJSON()+' '+new Date(NaN).toJSON()",
+            "1970-01-01T00:00:00.000Z null",
+        ),
+        // 20.1.3.6 step 8 names the object a time value makes.
+        (
+            "''+Object.prototype.toString.call(new Date(0))",
+            "[object Date]",
+        ),
+        (
+            "''+Date.length+' '+Date.prototype.getTime.length+' '+Date.UTC.length",
+            "7 0 7",
+        ),
+        // `LocalTZA` is zero, so 21.4.4.11 answers no offset.
+        ("var d=new Date(0);''+d.getTimezoneOffset()", "0"),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}

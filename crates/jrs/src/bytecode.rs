@@ -8819,6 +8819,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // B.2.1 answers a text too.
         | crate::engine::realm::Intrinsic::Escape
         | crate::engine::realm::Intrinsic::Unescape
+        // 21.4.4.43 and 21.4.4.42 answer a text.
+        | crate::engine::realm::Intrinsic::DatePrototypeToIsoString
         | crate::engine::realm::Intrinsic::StringFromCodePoint
         | crate::engine::realm::Intrinsic::StringRaw
         // 22.2.6.4 and 22.2.6.13 answer a String for every receiver they take.
@@ -9022,6 +9024,10 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::WeakMapPrototypeGetOrInsertComputed
         // `rawJSON` answers the object it made.
         | crate::engine::realm::Intrinsic::JsonRawJson
+        // 21.4.2.1 answers the Date it made, and 21.4.4.42 whatever the text
+        // of it is.
+        | crate::engine::realm::Intrinsic::DateConstructor
+        | crate::engine::realm::Intrinsic::DatePrototypeToJson
         // 24.1.5.1 and 24.2.5.1 answer an iterator, and 7.4.14 an ordinary
         // object with a `value` and a `done`.
         | crate::engine::realm::Intrinsic::MapPrototypeEntries
@@ -9086,6 +9092,31 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::MathSqrt
         | crate::engine::realm::Intrinsic::MathTan
         | crate::engine::realm::Intrinsic::MathTanh
+        // 21.4.3 and 21.4.4 answer a Number, but for the text of 21.4.4.43,
+        // the object of 21.4.2.1 and the value of 21.4.4.42.
+        | crate::engine::realm::Intrinsic::DateNow
+        | crate::engine::realm::Intrinsic::DateUtc
+        | crate::engine::realm::Intrinsic::DateParse
+        | crate::engine::realm::Intrinsic::DatePrototypeValueOf
+        | crate::engine::realm::Intrinsic::DatePrototypeGetTime
+        | crate::engine::realm::Intrinsic::DatePrototypeSetTime
+        | crate::engine::realm::Intrinsic::DatePrototypeGetTimezoneOffset
+        | crate::engine::realm::Intrinsic::DatePrototypeGetFullYear
+        | crate::engine::realm::Intrinsic::DatePrototypeGetUtcFullYear
+        | crate::engine::realm::Intrinsic::DatePrototypeGetMonth
+        | crate::engine::realm::Intrinsic::DatePrototypeGetUtcMonth
+        | crate::engine::realm::Intrinsic::DatePrototypeGetDate
+        | crate::engine::realm::Intrinsic::DatePrototypeGetUtcDate
+        | crate::engine::realm::Intrinsic::DatePrototypeGetDay
+        | crate::engine::realm::Intrinsic::DatePrototypeGetUtcDay
+        | crate::engine::realm::Intrinsic::DatePrototypeGetHours
+        | crate::engine::realm::Intrinsic::DatePrototypeGetUtcHours
+        | crate::engine::realm::Intrinsic::DatePrototypeGetMinutes
+        | crate::engine::realm::Intrinsic::DatePrototypeGetUtcMinutes
+        | crate::engine::realm::Intrinsic::DatePrototypeGetSeconds
+        | crate::engine::realm::Intrinsic::DatePrototypeGetUtcSeconds
+        | crate::engine::realm::Intrinsic::DatePrototypeGetMilliseconds
+        | crate::engine::realm::Intrinsic::DatePrototypeGetUtcMilliseconds
         | crate::engine::realm::Intrinsic::MathAtan2
         | crate::engine::realm::Intrinsic::MathHypot
         | crate::engine::realm::Intrinsic::MathRandom

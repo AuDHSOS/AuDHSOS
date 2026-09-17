@@ -880,6 +880,58 @@ pub enum Intrinsic {
     Escape,
     /// `unescape`, B.2.1.2.
     Unescape,
+    /// `Date`, 21.4.2.1.
+    DateConstructor,
+    /// `Date.now`, 21.4.3.1.
+    DateNow,
+    /// `Date.UTC`, 21.4.3.4.
+    DateUtc,
+    /// `Date.parse`, 21.4.3.2.
+    DateParse,
+    /// `Date.prototype.valueOf`, 21.4.4.44.
+    DatePrototypeValueOf,
+    /// `Date.prototype.getTime`, 21.4.4.10.
+    DatePrototypeGetTime,
+    /// `Date.prototype.setTime`, 21.4.4.27.
+    DatePrototypeSetTime,
+    /// `Date.prototype.getTimezoneOffset`, 21.4.4.11.
+    DatePrototypeGetTimezoneOffset,
+    /// `Date.prototype.getFullYear`, 21.4.4.4.
+    DatePrototypeGetFullYear,
+    /// `Date.prototype.getUTCFullYear`, 21.4.4.14.
+    DatePrototypeGetUtcFullYear,
+    /// `Date.prototype.getMonth`, 21.4.4.8.
+    DatePrototypeGetMonth,
+    /// `Date.prototype.getUTCMonth`, 21.4.4.18.
+    DatePrototypeGetUtcMonth,
+    /// `Date.prototype.getDate`, 21.4.4.2.
+    DatePrototypeGetDate,
+    /// `Date.prototype.getUTCDate`, 21.4.4.12.
+    DatePrototypeGetUtcDate,
+    /// `Date.prototype.getDay`, 21.4.4.3.
+    DatePrototypeGetDay,
+    /// `Date.prototype.getUTCDay`, 21.4.4.13.
+    DatePrototypeGetUtcDay,
+    /// `Date.prototype.getHours`, 21.4.4.5.
+    DatePrototypeGetHours,
+    /// `Date.prototype.getUTCHours`, 21.4.4.15.
+    DatePrototypeGetUtcHours,
+    /// `Date.prototype.getMinutes`, 21.4.4.7.
+    DatePrototypeGetMinutes,
+    /// `Date.prototype.getUTCMinutes`, 21.4.4.17.
+    DatePrototypeGetUtcMinutes,
+    /// `Date.prototype.getSeconds`, 21.4.4.9.
+    DatePrototypeGetSeconds,
+    /// `Date.prototype.getUTCSeconds`, 21.4.4.19.
+    DatePrototypeGetUtcSeconds,
+    /// `Date.prototype.getMilliseconds`, 21.4.4.6.
+    DatePrototypeGetMilliseconds,
+    /// `Date.prototype.getUTCMilliseconds`, 21.4.4.16.
+    DatePrototypeGetUtcMilliseconds,
+    /// `Date.prototype.toISOString`, 21.4.4.43.
+    DatePrototypeToIsoString,
+    /// `Date.prototype.toJSON`, 21.4.4.42.
+    DatePrototypeToJson,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -929,6 +981,10 @@ pub enum IntrinsicHolder {
     MapPrototype,
     /// `%Set.prototype%`, which carries the methods 24.2.3 gives it.
     SetPrototype,
+    /// `%Date.prototype%`, which carries the methods 21.4.4 gives it.
+    DatePrototype,
+    /// `%Date%`, which carries the functions 21.4.3 gives the constructor.
+    DateConstructor,
     /// `%WeakMap.prototype%`, which carries the methods 24.3.3 gives it.
     WeakMapPrototype,
     /// `%WeakSet.prototype%`, which carries the methods 24.4.3 gives it.
@@ -947,7 +1003,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 288] = [
+    pub const ALL: [Self; 314] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1236,6 +1292,32 @@ impl Intrinsic {
         Self::DecodeUriComponent,
         Self::Escape,
         Self::Unescape,
+        Self::DateConstructor,
+        Self::DateNow,
+        Self::DateUtc,
+        Self::DateParse,
+        Self::DatePrototypeValueOf,
+        Self::DatePrototypeGetTime,
+        Self::DatePrototypeSetTime,
+        Self::DatePrototypeGetTimezoneOffset,
+        Self::DatePrototypeGetFullYear,
+        Self::DatePrototypeGetUtcFullYear,
+        Self::DatePrototypeGetMonth,
+        Self::DatePrototypeGetUtcMonth,
+        Self::DatePrototypeGetDate,
+        Self::DatePrototypeGetUtcDate,
+        Self::DatePrototypeGetDay,
+        Self::DatePrototypeGetUtcDay,
+        Self::DatePrototypeGetHours,
+        Self::DatePrototypeGetUtcHours,
+        Self::DatePrototypeGetMinutes,
+        Self::DatePrototypeGetUtcMinutes,
+        Self::DatePrototypeGetSeconds,
+        Self::DatePrototypeGetUtcSeconds,
+        Self::DatePrototypeGetMilliseconds,
+        Self::DatePrototypeGetUtcMilliseconds,
+        Self::DatePrototypeToIsoString,
+        Self::DatePrototypeToJson,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -1449,6 +1531,29 @@ impl Intrinsic {
             Self::JsonParse | Self::JsonStringify | Self::JsonRawJson | Self::JsonIsRawJson => {
                 IntrinsicHolder::Json
             }
+            Self::DateNow | Self::DateUtc | Self::DateParse => IntrinsicHolder::DateConstructor,
+            Self::DatePrototypeValueOf
+            | Self::DatePrototypeGetTime
+            | Self::DatePrototypeSetTime
+            | Self::DatePrototypeGetTimezoneOffset
+            | Self::DatePrototypeGetFullYear
+            | Self::DatePrototypeGetUtcFullYear
+            | Self::DatePrototypeGetMonth
+            | Self::DatePrototypeGetUtcMonth
+            | Self::DatePrototypeGetDate
+            | Self::DatePrototypeGetUtcDate
+            | Self::DatePrototypeGetDay
+            | Self::DatePrototypeGetUtcDay
+            | Self::DatePrototypeGetHours
+            | Self::DatePrototypeGetUtcHours
+            | Self::DatePrototypeGetMinutes
+            | Self::DatePrototypeGetUtcMinutes
+            | Self::DatePrototypeGetSeconds
+            | Self::DatePrototypeGetUtcSeconds
+            | Self::DatePrototypeGetMilliseconds
+            | Self::DatePrototypeGetUtcMilliseconds
+            | Self::DatePrototypeToIsoString
+            | Self::DatePrototypeToJson => IntrinsicHolder::DatePrototype,
             Self::PromisePrototypeThen | Self::PromisePrototypeCatch => {
                 IntrinsicHolder::PromisePrototype
             }
@@ -1499,6 +1604,7 @@ impl Intrinsic {
             | Self::DecodeUriComponent
             | Self::Escape
             | Self::Unescape
+            | Self::DateConstructor
             // 27.2.1.3 stands on no object, so the Global holder never
             // installs either resolving function.
             | Self::PromiseConstructor
@@ -1850,6 +1956,32 @@ impl Intrinsic {
             Self::DecodeUriComponent => 285,
             Self::Escape => 286,
             Self::Unescape => 287,
+            Self::DateConstructor => 288,
+            Self::DateNow => 289,
+            Self::DateUtc => 290,
+            Self::DateParse => 291,
+            Self::DatePrototypeValueOf => 292,
+            Self::DatePrototypeGetTime => 293,
+            Self::DatePrototypeSetTime => 294,
+            Self::DatePrototypeGetTimezoneOffset => 295,
+            Self::DatePrototypeGetFullYear => 296,
+            Self::DatePrototypeGetUtcFullYear => 297,
+            Self::DatePrototypeGetMonth => 298,
+            Self::DatePrototypeGetUtcMonth => 299,
+            Self::DatePrototypeGetDate => 300,
+            Self::DatePrototypeGetUtcDate => 301,
+            Self::DatePrototypeGetDay => 302,
+            Self::DatePrototypeGetUtcDay => 303,
+            Self::DatePrototypeGetHours => 304,
+            Self::DatePrototypeGetUtcHours => 305,
+            Self::DatePrototypeGetMinutes => 306,
+            Self::DatePrototypeGetUtcMinutes => 307,
+            Self::DatePrototypeGetSeconds => 308,
+            Self::DatePrototypeGetUtcSeconds => 309,
+            Self::DatePrototypeGetMilliseconds => 310,
+            Self::DatePrototypeGetUtcMilliseconds => 311,
+            Self::DatePrototypeToIsoString => 312,
+            Self::DatePrototypeToJson => 313,
         }
     }
 
@@ -2148,6 +2280,32 @@ impl Intrinsic {
             Self::DecodeUriComponent => 285,
             Self::Escape => 286,
             Self::Unescape => 287,
+            Self::DateConstructor => 288,
+            Self::DateNow => 289,
+            Self::DateUtc => 290,
+            Self::DateParse => 291,
+            Self::DatePrototypeValueOf => 292,
+            Self::DatePrototypeGetTime => 293,
+            Self::DatePrototypeSetTime => 294,
+            Self::DatePrototypeGetTimezoneOffset => 295,
+            Self::DatePrototypeGetFullYear => 296,
+            Self::DatePrototypeGetUtcFullYear => 297,
+            Self::DatePrototypeGetMonth => 298,
+            Self::DatePrototypeGetUtcMonth => 299,
+            Self::DatePrototypeGetDate => 300,
+            Self::DatePrototypeGetUtcDate => 301,
+            Self::DatePrototypeGetDay => 302,
+            Self::DatePrototypeGetUtcDay => 303,
+            Self::DatePrototypeGetHours => 304,
+            Self::DatePrototypeGetUtcHours => 305,
+            Self::DatePrototypeGetMinutes => 306,
+            Self::DatePrototypeGetUtcMinutes => 307,
+            Self::DatePrototypeGetSeconds => 308,
+            Self::DatePrototypeGetUtcSeconds => 309,
+            Self::DatePrototypeGetMilliseconds => 310,
+            Self::DatePrototypeGetUtcMilliseconds => 311,
+            Self::DatePrototypeToIsoString => 312,
+            Self::DatePrototypeToJson => 313,
         }
     }
 
@@ -2447,6 +2605,32 @@ impl Intrinsic {
             285 => Some(Self::DecodeUriComponent),
             286 => Some(Self::Escape),
             287 => Some(Self::Unescape),
+            288 => Some(Self::DateConstructor),
+            289 => Some(Self::DateNow),
+            290 => Some(Self::DateUtc),
+            291 => Some(Self::DateParse),
+            292 => Some(Self::DatePrototypeValueOf),
+            293 => Some(Self::DatePrototypeGetTime),
+            294 => Some(Self::DatePrototypeSetTime),
+            295 => Some(Self::DatePrototypeGetTimezoneOffset),
+            296 => Some(Self::DatePrototypeGetFullYear),
+            297 => Some(Self::DatePrototypeGetUtcFullYear),
+            298 => Some(Self::DatePrototypeGetMonth),
+            299 => Some(Self::DatePrototypeGetUtcMonth),
+            300 => Some(Self::DatePrototypeGetDate),
+            301 => Some(Self::DatePrototypeGetUtcDate),
+            302 => Some(Self::DatePrototypeGetDay),
+            303 => Some(Self::DatePrototypeGetUtcDay),
+            304 => Some(Self::DatePrototypeGetHours),
+            305 => Some(Self::DatePrototypeGetUtcHours),
+            306 => Some(Self::DatePrototypeGetMinutes),
+            307 => Some(Self::DatePrototypeGetUtcMinutes),
+            308 => Some(Self::DatePrototypeGetSeconds),
+            309 => Some(Self::DatePrototypeGetUtcSeconds),
+            310 => Some(Self::DatePrototypeGetMilliseconds),
+            311 => Some(Self::DatePrototypeGetUtcMilliseconds),
+            312 => Some(Self::DatePrototypeToIsoString),
+            313 => Some(Self::DatePrototypeToJson),
             _ => None,
         }
     }
@@ -2475,7 +2659,8 @@ impl Intrinsic {
             | Self::BooleanPrototypeValueOf
             | Self::SymbolPrototypeValueOf
             | Self::StringPrototypeValueOf
-            | Self::ObjectPrototypeValueOf => "valueOf",
+            | Self::ObjectPrototypeValueOf
+            | Self::DatePrototypeValueOf => "valueOf",
             // 27.2.1.3 makes the pair of resolving functions with no name,
             // as 10.2.4.1 and 20.2.3 carry none either.
             Self::ThrowTypeError
@@ -2539,6 +2724,30 @@ impl Intrinsic {
             Self::DecodeUriComponent => "decodeURIComponent",
             Self::Escape => "escape",
             Self::Unescape => "unescape",
+            Self::DateConstructor => "Date",
+            Self::DateNow => "now",
+            Self::DateUtc => "UTC",
+            Self::DatePrototypeGetTime => "getTime",
+            Self::DatePrototypeSetTime => "setTime",
+            Self::DatePrototypeGetTimezoneOffset => "getTimezoneOffset",
+            Self::DatePrototypeGetFullYear => "getFullYear",
+            Self::DatePrototypeGetUtcFullYear => "getUTCFullYear",
+            Self::DatePrototypeGetMonth => "getMonth",
+            Self::DatePrototypeGetUtcMonth => "getUTCMonth",
+            Self::DatePrototypeGetDate => "getDate",
+            Self::DatePrototypeGetUtcDate => "getUTCDate",
+            Self::DatePrototypeGetDay => "getDay",
+            Self::DatePrototypeGetUtcDay => "getUTCDay",
+            Self::DatePrototypeGetHours => "getHours",
+            Self::DatePrototypeGetUtcHours => "getUTCHours",
+            Self::DatePrototypeGetMinutes => "getMinutes",
+            Self::DatePrototypeGetUtcMinutes => "getUTCMinutes",
+            Self::DatePrototypeGetSeconds => "getSeconds",
+            Self::DatePrototypeGetUtcSeconds => "getUTCSeconds",
+            Self::DatePrototypeGetMilliseconds => "getMilliseconds",
+            Self::DatePrototypeGetUtcMilliseconds => "getUTCMilliseconds",
+            Self::DatePrototypeToIsoString => "toISOString",
+            Self::DatePrototypeToJson => "toJSON",
             Self::MapPrototypeGetOrInsert | Self::WeakMapPrototypeGetOrInsert => "getOrInsert",
             Self::MapPrototypeGetOrInsertComputed | Self::WeakMapPrototypeGetOrInsertComputed => {
                 "getOrInsertComputed"
@@ -2581,7 +2790,7 @@ impl Intrinsic {
 
             Self::RegExpConstructor => "RegExp",
             Self::RegExpPrototypeExec => "exec",
-            Self::JsonParse => "parse",
+            Self::JsonParse | Self::DateParse => "parse",
             Self::JsonStringify => "stringify",
             Self::PromiseConstructor => "Promise",
             Self::PromiseResolve => "resolve",
@@ -3202,6 +3411,27 @@ impl Intrinsic {
             | Self::MapPrototypeValues
             | Self::SetPrototypeValues
             | Self::SetPrototypeEntries
+            | Self::DateNow
+            | Self::DatePrototypeValueOf
+            | Self::DatePrototypeGetTime
+            | Self::DatePrototypeGetTimezoneOffset
+            | Self::DatePrototypeGetFullYear
+            | Self::DatePrototypeGetUtcFullYear
+            | Self::DatePrototypeGetMonth
+            | Self::DatePrototypeGetUtcMonth
+            | Self::DatePrototypeGetDate
+            | Self::DatePrototypeGetUtcDate
+            | Self::DatePrototypeGetDay
+            | Self::DatePrototypeGetUtcDay
+            | Self::DatePrototypeGetHours
+            | Self::DatePrototypeGetUtcHours
+            | Self::DatePrototypeGetMinutes
+            | Self::DatePrototypeGetUtcMinutes
+            | Self::DatePrototypeGetSeconds
+            | Self::DatePrototypeGetUtcSeconds
+            | Self::DatePrototypeGetMilliseconds
+            | Self::DatePrototypeGetUtcMilliseconds
+            | Self::DatePrototypeToIsoString
             | Self::MapIteratorPrototypeNext
             | Self::SetIteratorPrototypeNext => 0,
             Self::StringFromCharCode
@@ -3341,6 +3571,9 @@ impl Intrinsic {
             | Self::DecodeUriComponent
             | Self::Escape
             | Self::Unescape
+            | Self::DateParse
+            | Self::DatePrototypeSetTime
+            | Self::DatePrototypeToJson
             | Self::WeakMapPrototypeGet
             | Self::WeakMapPrototypeHas
             | Self::WeakMapPrototypeDelete
@@ -3423,6 +3656,9 @@ impl Intrinsic {
             | Self::WeakMapPrototypeGetOrInsert
             | Self::WeakMapPrototypeGetOrInsertComputed
             | Self::PromisePrototypeThen => 2,
+            // 21.4.2.1 and 21.4.3.4 take a year, a month, a day, an hour, a
+            // minute, a second and a millisecond.
+            Self::DateConstructor | Self::DateUtc => 7,
         }
     }
 }
@@ -3824,6 +4060,65 @@ pub fn weak_set_prototype_owns(name: &[u16]) -> bool {
     wrapper_prototype_owns(&WEAK_SET_PROTOTYPE_PROPERTIES, name)
 }
 
+/// The property names 21.4.4 gives `%Date.prototype%`, and B.2.3 the three
+/// of Annex B.
+pub const DATE_PROTOTYPE_PROPERTIES: [&str; 47] = [
+    "constructor",
+    "getDate",
+    "getDay",
+    "getFullYear",
+    "getHours",
+    "getMilliseconds",
+    "getMinutes",
+    "getMonth",
+    "getSeconds",
+    "getTime",
+    "getTimezoneOffset",
+    "getUTCDate",
+    "getUTCDay",
+    "getUTCFullYear",
+    "getUTCHours",
+    "getUTCMilliseconds",
+    "getUTCMinutes",
+    "getUTCMonth",
+    "getUTCSeconds",
+    "getYear",
+    "setDate",
+    "setFullYear",
+    "setHours",
+    "setMilliseconds",
+    "setMinutes",
+    "setMonth",
+    "setSeconds",
+    "setTime",
+    "setUTCDate",
+    "setUTCFullYear",
+    "setUTCHours",
+    "setUTCMilliseconds",
+    "setUTCMinutes",
+    "setUTCMonth",
+    "setUTCSeconds",
+    "setYear",
+    "toDateString",
+    "toGMTString",
+    "toISOString",
+    "toJSON",
+    "toLocaleDateString",
+    "toLocaleString",
+    "toLocaleTimeString",
+    "toString",
+    "toTimeString",
+    "toUTCString",
+    "valueOf",
+];
+
+/// Whether `%Date.prototype%` or `%Object.prototype%` owns a property of
+/// this name, which a Date resolves on its Prototype Chain.
+#[must_use]
+pub fn date_prototype_owns(name: &[u16]) -> bool {
+    wrapper_prototype_owns(&DATE_PROTOTYPE_PROPERTIES, name)
+}
+
 /// The property names 27.2.5 gives `%Promise.prototype%`.
 pub const PROMISE_PROTOTYPE_PROPERTIES: [&str; 4] = ["catch", "constructor", "finally", "then"];
 
@@ -4113,6 +4408,7 @@ pub struct Realm {
     promise_prototype: Root,
     map_prototype: Root,
     set_prototype: Root,
+    date_prototype: Root,
     weak_map_prototype: Root,
     weak_set_prototype: Root,
     map_iterator_prototype: Root,
@@ -4161,6 +4457,7 @@ struct Holders {
     promise_prototype: Root,
     map_prototype: Root,
     set_prototype: Root,
+    date_prototype: Root,
     weak_map_prototype: Root,
     weak_set_prototype: Root,
     map_iterator_prototype: Root,
@@ -4259,6 +4556,10 @@ impl Realm {
         let set_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
         let set_prototype = heap.push_root(Value::from_object(set_prototype))?;
 
+        // 21.4.4: %Date.prototype% is an ordinary object and no Date.
+        let date_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
+        let date_prototype = heap.push_root(Value::from_object(date_prototype))?;
+
         // 24.3.3 and 24.4.3: %WeakMap.prototype% and %WeakSet.prototype% are
         // ordinary objects and neither a WeakMap nor a WeakSet.
         let weak_map_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
@@ -4345,6 +4646,7 @@ impl Realm {
                 promise_prototype,
                 map_prototype,
                 set_prototype,
+                date_prototype,
                 weak_map_prototype,
                 weak_set_prototype,
                 map_iterator_prototype,
@@ -4365,6 +4667,7 @@ impl Realm {
             (Intrinsic::PromiseConstructor, promise_prototype),
             (Intrinsic::MapConstructor, map_prototype),
             (Intrinsic::SetConstructor, set_prototype),
+            (Intrinsic::DateConstructor, date_prototype),
             (Intrinsic::WeakMapConstructor, weak_map_prototype),
             (Intrinsic::WeakSetConstructor, weak_set_prototype),
         ] {
@@ -4439,6 +4742,7 @@ impl Realm {
             promise_prototype,
             map_prototype,
             set_prototype,
+            date_prototype,
             weak_map_prototype,
             weak_set_prototype,
             map_iterator_prototype,
@@ -5280,6 +5584,13 @@ impl Realm {
                 IntrinsicHolder::RegExpPrototype => Self::rooted(heap, holders.regexp_prototype)?,
                 IntrinsicHolder::PromisePrototype => Self::rooted(heap, holders.promise_prototype)?,
                 IntrinsicHolder::MapPrototype => Self::rooted(heap, holders.map_prototype)?,
+                IntrinsicHolder::DatePrototype => Self::rooted(heap, holders.date_prototype)?,
+                IntrinsicHolder::DateConstructor => Self::rooted(
+                    heap,
+                    *intrinsics
+                        .get(Intrinsic::DateConstructor.index())
+                        .ok_or(HeapError::InvalidReference)?,
+                )?,
                 IntrinsicHolder::WeakMapPrototype => {
                     Self::rooted(heap, holders.weak_map_prototype)?
                 }
@@ -5635,6 +5946,15 @@ impl Realm {
     /// Returns [`HeapError::InvalidReference`] when the root is gone.
     pub fn map_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
         Self::rooted(heap, self.map_prototype)
+    }
+
+    /// `%Date.prototype%`, 21.4.4.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale root.
+    pub fn date_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.date_prototype)
     }
 
     /// `%WeakMap.prototype%`, 24.3.3.

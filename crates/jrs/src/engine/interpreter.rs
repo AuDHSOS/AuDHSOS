@@ -2431,6 +2431,34 @@ impl RegisterVM {
             // 25.5.1 and 25.5.2, neither of which takes the function the
             // other argument may be: a reviver and a replacer are calls, and
             // a native has no frame to make one from.
+            Intrinsic::DateConstructor
+            | Intrinsic::DateNow
+            | Intrinsic::DateUtc
+            | Intrinsic::DateParse
+            | Intrinsic::DatePrototypeValueOf
+            | Intrinsic::DatePrototypeGetTime
+            | Intrinsic::DatePrototypeSetTime
+            | Intrinsic::DatePrototypeGetTimezoneOffset
+            | Intrinsic::DatePrototypeGetFullYear
+            | Intrinsic::DatePrototypeGetUtcFullYear
+            | Intrinsic::DatePrototypeGetMonth
+            | Intrinsic::DatePrototypeGetUtcMonth
+            | Intrinsic::DatePrototypeGetDate
+            | Intrinsic::DatePrototypeGetUtcDate
+            | Intrinsic::DatePrototypeGetDay
+            | Intrinsic::DatePrototypeGetUtcDay
+            | Intrinsic::DatePrototypeGetHours
+            | Intrinsic::DatePrototypeGetUtcHours
+            | Intrinsic::DatePrototypeGetMinutes
+            | Intrinsic::DatePrototypeGetUtcMinutes
+            | Intrinsic::DatePrototypeGetSeconds
+            | Intrinsic::DatePrototypeGetUtcSeconds
+            | Intrinsic::DatePrototypeGetMilliseconds
+            | Intrinsic::DatePrototypeGetUtcMilliseconds
+            | Intrinsic::DatePrototypeToIsoString
+            | Intrinsic::DatePrototypeToJson => {
+                self.call_date_intrinsic(intrinsic, &call, heap, realm)
+            }
             Intrinsic::EncodeUri
             | Intrinsic::EncodeUriComponent
             | Intrinsic::DecodeUri
@@ -3030,6 +3058,7 @@ impl RegisterVM {
                     | Intrinsic::SetConstructor
                     | Intrinsic::WeakMapConstructor
                     | Intrinsic::WeakSetConstructor
+                    | Intrinsic::DateConstructor
             )
         })
     }
@@ -10770,6 +10799,9 @@ impl RegisterVM {
     /// rather than a missing feature. Naming the gap keeps it a gap.
     const fn unimplemented_conversion(kind: &ObjectKind) -> Option<&'static str> {
         match kind {
+            // 21.4.4.41 gives a Date its own `toString` and 21.4.4.45 its own
+            // `@@toPrimitive`, which this Realm has not built.
+            ObjectKind::Date(_) => Some("a property of %Date.prototype%"),
             // 20.1.3.6 is the right answer for these, 23.1.3.37 and 20.5.3.4
             // are implemented.
             // 20.2.3.5 answers the source text of the function, which
@@ -10898,6 +10930,17 @@ impl RegisterVM {
         {
             return Err(VMError::Unsupported("a property of %RegExp.prototype%"));
         }
+        // 21.4.4.45 gives `%Date.prototype%` an `@@toPrimitive`, which this
+        // Realm has not built.
+        if symbol == Some(super::realm::WellKnownSymbol::ToPrimitive)
+            && (realm.date_prototype(heap)?.as_object() == Some(object)
+                || matches!(
+                    heap.get_object(object).map(|entry| &entry.kind),
+                    Some(&ObjectKind::Date(_))
+                ))
+        {
+            return Err(VMError::Unsupported("a property of %Date.prototype%"));
+        }
         match heap.get_object(object).map(|object| &object.kind) {
             Some(ObjectKind::StringWrapper(_)) if owed => Err(GAP),
             _ => Ok(VALUE_UNDEFINED),
@@ -11023,6 +11066,11 @@ impl RegisterVM {
                 } else {
                     "a property of %WeakMap.prototype%"
                 }))
+            }
+            // 21.4.4 gives `%Date.prototype%` more than this Realm builds: the
+            // setters, the texts and the `@@toPrimitive` of 21.4.4.45.
+            Some(ObjectKind::Date(_)) if chain && super::realm::date_prototype_owns(name) => {
+                Err(VMError::Unsupported("a property of %Date.prototype%"))
             }
             // 20.4.2 gives `%Symbol%` more than the thirteen of table 1.
             Some(ObjectKind::NativeFunction { id, .. })
@@ -11616,6 +11664,8 @@ impl RegisterVM {
             boxed = Some(object);
             match heap.get_object(object).ok_or(VMError::TypeError)?.kind {
                 ObjectKind::Array { .. } => "Array",
+                // 20.1.3.6 step 8 names the object 21.4.4 gives a time value.
+                ObjectKind::Date(_) => "Date",
                 ObjectKind::Function { .. }
                 | ObjectKind::NativeFunction { .. }
                 | ObjectKind::BoundFunction { .. } => "Function",
@@ -12644,6 +12694,445 @@ impl RegisterVM {
             Intrinsic::Unescape => Ok(Self::unescape_text(text)),
             _ => Self::uri_decode(text, false, heap, realm),
         }
+    }
+
+    /// The integral value of a Number a clause of 21.4 computed.
+    ///
+    /// Every caller has bounded the magnitude first, and a value that is not
+    /// finite reaches none of them.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the callers bound the magnitude below 2^53, which i64 holds"
+    )]
+    const fn integral(value: f64) -> i64 {
+        if value.is_finite() { value as i64 } else { 0 }
+    }
+
+    /// `TimeClip` of 21.4.1.31.
+    fn time_clip(time: f64) -> f64 {
+        if !time.is_finite() || time.abs() > 8.64e15 {
+            return f64::NAN;
+        }
+        // Step 3 takes the integral part and keeps the sign of a zero away.
+        let truncated = Self::round_toward(time, false);
+        if truncated == 0.0 { 0.0 } else { truncated }
+    }
+
+    /// The `floor(x / y)` of 21.4.1, which every field of a time value uses.
+    fn floor_div(value: f64, divisor: f64) -> f64 {
+        Self::round_toward(value / divisor, true)
+    }
+
+    /// The `x modulo y` of 5.2.5, whose answer has the sign of the divisor.
+    fn modulo(value: f64, divisor: f64) -> f64 {
+        let remainder = value % divisor;
+        if remainder == 0.0 {
+            0.0
+        } else if (remainder < 0.0) == (divisor < 0.0) {
+            remainder
+        } else {
+            remainder + divisor
+        }
+    }
+
+    /// `Day` of 21.4.1.2.
+    fn day_number(time: f64) -> f64 {
+        Self::floor_div(time, 86_400_000.0)
+    }
+
+    /// `DaysInYear` of 21.4.1.3 for the year a day falls in, stepping from
+    /// 1970 the way `YearFromTime` of 21.4.1.11 does.
+    fn year_from_time(time: f64) -> i32 {
+        let mut day = Self::day_number(time);
+        let mut year = 1970i32;
+        loop {
+            let length = f64::from(Self::days_in_year(year));
+            if day < 0.0 {
+                year = year.saturating_sub(1);
+                day += f64::from(Self::days_in_year(year));
+            } else if day >= length {
+                day -= length;
+                year = year.saturating_add(1);
+            } else {
+                return year;
+            }
+        }
+    }
+
+    /// `DaysInYear` of 21.4.1.3.
+    const fn days_in_year(year: i32) -> u16 {
+        if year % 4 != 0 || (year % 100 == 0 && year % 400 != 0) {
+            365
+        } else {
+            366
+        }
+    }
+
+    /// `DayWithinYear` of 21.4.1.4, as the day of the year a time falls on.
+    fn day_within_year(time: f64) -> u16 {
+        let year = Self::year_from_time(time);
+        let mut day = Self::day_number(time);
+        let mut walk = 1970i32;
+        while walk < year {
+            day -= f64::from(Self::days_in_year(walk));
+            walk = walk.saturating_add(1);
+        }
+        while walk > year {
+            walk = walk.saturating_sub(1);
+            day += f64::from(Self::days_in_year(walk));
+        }
+        u16::try_from(Self::integral(day)).unwrap_or(0)
+    }
+
+    /// The first day of each month, for a common year and for a leap one.
+    const MONTH_STARTS: [[u16; 12]; 2] = [
+        [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334],
+        [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335],
+    ];
+
+    /// `MonthFromTime` of 21.4.1.5.
+    fn month_from_time(time: f64) -> u8 {
+        let leap = usize::from(Self::days_in_year(Self::year_from_time(time)) == 366);
+        let day = Self::day_within_year(time);
+        let starts = Self::MONTH_STARTS
+            .get(leap)
+            .unwrap_or(&Self::MONTH_STARTS[0]);
+        let mut month = 0u8;
+        for (index, start) in starts.iter().enumerate() {
+            if day >= *start {
+                month = u8::try_from(index).unwrap_or(0);
+            }
+        }
+        month
+    }
+
+    /// `DateFromTime` of 21.4.1.6.
+    fn date_from_time(time: f64) -> u8 {
+        let leap = usize::from(Self::days_in_year(Self::year_from_time(time)) == 366);
+        let starts = Self::MONTH_STARTS
+            .get(leap)
+            .unwrap_or(&Self::MONTH_STARTS[0]);
+        let month = usize::from(Self::month_from_time(time));
+        let start = starts.get(month).copied().unwrap_or(0);
+        u8::try_from(
+            Self::day_within_year(time)
+                .saturating_sub(start)
+                .saturating_add(1),
+        )
+        .unwrap_or(1)
+    }
+
+    /// `WeekDay` of 21.4.1.7.
+    fn week_day(time: f64) -> u8 {
+        u8::try_from(Self::integral(Self::modulo(
+            Self::day_number(time) + 4.0,
+            7.0,
+        )))
+        .unwrap_or(0)
+    }
+
+    /// `MakeTime` of 21.4.1.27.
+    fn make_time(hour: f64, minute: f64, second: f64, millisecond: f64) -> f64 {
+        if !hour.is_finite()
+            || !minute.is_finite()
+            || !second.is_finite()
+            || !millisecond.is_finite()
+        {
+            return f64::NAN;
+        }
+        Self::round_toward(hour, false) * 3_600_000.0
+            + Self::round_toward(minute, false) * 60_000.0
+            + Self::round_toward(second, false) * 1000.0
+            + Self::round_toward(millisecond, false)
+    }
+
+    /// `MakeDay` of 21.4.1.28.
+    fn make_day(year: f64, month: f64, date: f64) -> f64 {
+        if !year.is_finite() || !month.is_finite() || !date.is_finite() {
+            return f64::NAN;
+        }
+        let (year, month, date) = (
+            Self::round_toward(year, false),
+            Self::round_toward(month, false),
+            Self::round_toward(date, false),
+        );
+        let years = year + Self::floor_div(month, 12.0);
+        let month = Self::modulo(month, 12.0);
+        if years.abs() > 400_000.0 {
+            return f64::NAN;
+        }
+        let Ok(years) = i32::try_from(Self::integral(years)) else {
+            return f64::NAN;
+        };
+        // The day the year begins on, walked from 1970 the same way.
+        let mut day = 0f64;
+        let mut walk = 1970i32;
+        while walk < years {
+            day += f64::from(Self::days_in_year(walk));
+            walk = walk.saturating_add(1);
+        }
+        while walk > years {
+            walk = walk.saturating_sub(1);
+            day -= f64::from(Self::days_in_year(walk));
+        }
+        let leap = usize::from(Self::days_in_year(years) == 366);
+        let starts = Self::MONTH_STARTS
+            .get(leap)
+            .unwrap_or(&Self::MONTH_STARTS[0]);
+        let start = usize::try_from(Self::integral(month))
+            .ok()
+            .and_then(|month| starts.get(month).copied())
+            .unwrap_or(0);
+        day + f64::from(start) + date - 1.0
+    }
+
+    /// `MakeDate` of 21.4.1.29.
+    fn make_date(day: f64, time: f64) -> f64 {
+        if !day.is_finite() || !time.is_finite() {
+            return f64::NAN;
+        }
+        let answer = day * 86_400_000.0 + time;
+        if answer.is_finite() { answer } else { f64::NAN }
+    }
+
+    /// The text of 21.4.1.15 a Date answers, or none where the time value is
+    /// not finite.
+    fn iso_text(time: f64) -> Option<alloc::string::String> {
+        if !time.is_finite() {
+            return None;
+        }
+        let year = Self::year_from_time(time);
+        let head = if (0..=9999).contains(&year) {
+            alloc::format!("{year:04}")
+        } else if year < 0 {
+            alloc::format!("-{:06}", -i64::from(year))
+        } else {
+            alloc::format!("+{year:06}")
+        };
+        Some(alloc::format!(
+            "{head}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+            u16::from(Self::month_from_time(time)).saturating_add(1),
+            Self::date_from_time(time),
+            Self::integral(Self::modulo(Self::floor_div(time, 3_600_000.0), 24.0)),
+            Self::integral(Self::modulo(Self::floor_div(time, 60_000.0), 60.0)),
+            Self::integral(Self::modulo(Self::floor_div(time, 1000.0), 60.0)),
+            Self::integral(Self::modulo(time, 1000.0)),
+        ))
+    }
+
+    /// The `[[DateValue]]` of the receiver, which 21.4.4 requires.
+    fn this_date(
+        receiver: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<ObjectRef, VMError> {
+        receiver
+            .as_object()
+            .filter(|object| {
+                matches!(
+                    heap.get_object(*object).map(|entry| &entry.kind),
+                    Some(&ObjectKind::Date(_))
+                )
+            })
+            .ok_or_else(|| type_error(heap, realm, "this value carries no Date of its own"))
+    }
+
+    /// The time value such an object holds.
+    fn date_value(object: ObjectRef, heap: &GenerationalHeap) -> Result<f64, VMError> {
+        match heap.get_object(object).map(|entry| &entry.kind) {
+            Some(&ObjectKind::Date(time)) => Ok(time),
+            _ => Err(VMError::TypeError),
+        }
+    }
+
+    /// The seven arguments of 21.4.2.1 step 4 and of 21.4.3.4, as one time
+    /// value; a year below 100 is the one 21.4.2.1 step 4.f names.
+    fn date_arguments(&self, call: &Call, heap: &GenerationalHeap) -> Result<f64, VMError> {
+        // 21.4.3.4 step 1 reads the year of an absent argument as undefined,
+        // whose `ToNumber` is NaN; every other field has a default.
+        let mut fields = [f64::NAN, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+        for (index, field) in fields.iter_mut().enumerate() {
+            let position = u16::try_from(index).unwrap_or(u16::MAX);
+            if position >= call.arg_count {
+                break;
+            }
+            *field = Self::number_argument(self.call_argument(call, position, heap)?, heap)?;
+        }
+        let year = *fields.first().unwrap_or(&0.0);
+        let year = if year.is_finite() && (0.0..=99.0).contains(&Self::round_toward(year, false)) {
+            1900.0 + Self::round_toward(year, false)
+        } else {
+            year
+        };
+        Ok(Self::make_date(
+            Self::make_day(
+                year,
+                *fields.get(1).unwrap_or(&0.0),
+                *fields.get(2).unwrap_or(&1.0),
+            ),
+            Self::make_time(
+                *fields.get(3).unwrap_or(&0.0),
+                *fields.get(4).unwrap_or(&0.0),
+                *fields.get(5).unwrap_or(&0.0),
+                *fields.get(6).unwrap_or(&0.0),
+            ),
+        ))
+    }
+
+    /// `ToNumber` of an argument a clause of 21.4 reads, which only a
+    /// primitive reaches here.
+    fn number_argument(value: Value, heap: &GenerationalHeap) -> Result<f64, VMError> {
+        if value.is_object() {
+            return Err(VMError::Unsupported("ToNumber of an Object in 21.4"));
+        }
+        primitive_number(value, heap)
+    }
+
+    /// `Date` of 21.4.2.1, which only `new` reaches here.
+    fn construct_date(
+        &self,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        // Step 2 of 21.4.2.1 answers the text of the current time, which needs
+        // the wall clock this Realm is not given.
+        if call.construct.is_none() {
+            return Err(VMError::Unsupported("a wall clock of 21.4.2.1"));
+        }
+        let time = match call.arg_count {
+            0 => return Err(VMError::Unsupported("a wall clock of 21.4.2.1")),
+            1 => {
+                let value = self.call_argument(call, 0, heap)?;
+                // Step 3.a: a Date answers its own time value, and every other
+                // Object would go through 7.1.1, which this clause has no
+                // frame for.
+                if let Some(object) = value.as_object() {
+                    match heap.get_object(object).map(|entry| &entry.kind) {
+                        Some(&ObjectKind::Date(held)) => held,
+                        _ => return Err(VMError::Unsupported("ToPrimitive of an Object in 21.4")),
+                    }
+                } else if value.is_string() {
+                    return Err(VMError::Unsupported("a Date text of 21.4.3.2"));
+                } else {
+                    Self::time_clip(primitive_number(value, heap)?)
+                }
+            }
+            _ => Self::time_clip(self.date_arguments(call, heap)?),
+        };
+        let prototype = realm.date_prototype(heap)?;
+        let shape = heap.shapes.root_shape();
+        let object = heap.allocate_object(shape, prototype)?;
+        heap.set_object_kind(object, ObjectKind::Date(time))?;
+        Ok(Value::from_object(object))
+    }
+
+    /// The clauses of 21.4 that are a function of the time value alone.
+    ///
+    /// The Realm has no wall clock, which 21.4.3.1 and the constructor without
+    /// an argument need, so those name their gap; `LocalTZA` is zero, which
+    /// makes the local clauses of 21.4.4 answer what their UTC ones do.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a receiver that
+    /// carries no `[[DateValue]]` and with a `RangeError` for the invalid Date
+    /// of 21.4.4.43.
+    fn call_date_intrinsic(
+        &mut self,
+        intrinsic: Intrinsic,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        match intrinsic {
+            Intrinsic::DateConstructor => self.construct_date(call, heap, realm),
+            // 21.4.3.1 reads the wall clock, which this Realm is not given.
+            Intrinsic::DateNow => Err(VMError::Unsupported("a wall clock of 21.4.3.1")),
+            // 21.4.3.2 takes the Date Time String Format of 21.4.1.15, which
+            // this Realm does not read yet.
+            Intrinsic::DateParse => Err(VMError::Unsupported("a Date text of 21.4.3.2")),
+            Intrinsic::DateUtc => {
+                let time = self.date_arguments(call, heap)?;
+                Ok(Value::from_f64(Self::time_clip(time)))
+            }
+            Intrinsic::DatePrototypeSetTime => {
+                let object = Self::this_date(call.receiver, heap, realm)?;
+                let time = Self::time_clip(Self::number_argument(
+                    self.call_argument(call, 0, heap)?,
+                    heap,
+                )?);
+                heap.set_object_kind(object, ObjectKind::Date(time))?;
+                Ok(Value::from_f64(time))
+            }
+            _ => {
+                let object = Self::this_date(call.receiver, heap, realm)?;
+                let time = Self::date_value(object, heap)?;
+                Self::read_date(intrinsic, time, self, heap, realm)
+            }
+        }
+    }
+
+    /// The clauses of 21.4.4 that read the time value the receiver holds.
+    fn read_date(
+        intrinsic: Intrinsic,
+        time: f64,
+        vm: &mut Self,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if intrinsic == Intrinsic::DatePrototypeToIsoString {
+            let Some(text) = Self::iso_text(time) else {
+                return Err(raise(
+                    heap,
+                    realm,
+                    super::realm::NativeErrorKind::RangeError,
+                    "the Date is invalid",
+                ));
+            };
+            let units: Vec<u16> = text.encode_utf16().collect();
+            return vm.allocate_string(heap, &units);
+        }
+        // 21.4.4.42 answers null for a Date no text of 21.4.1.15 describes.
+        if intrinsic == Intrinsic::DatePrototypeToJson {
+            if !time.is_finite() {
+                return Ok(VALUE_NULL);
+            }
+            return Self::read_date(Intrinsic::DatePrototypeToIsoString, time, vm, heap, realm);
+        }
+        if time.is_nan() {
+            // Every clause of 21.4.4 answers NaN for an invalid Date, and
+            // 21.4.4.11 answers NaN too.
+            return Ok(Value::from_f64(f64::NAN));
+        }
+        let answer = match intrinsic {
+            Intrinsic::DatePrototypeValueOf | Intrinsic::DatePrototypeGetTime => time,
+            // `LocalTZA` is zero, so 21.4.4.11 answers no offset at all.
+            Intrinsic::DatePrototypeGetTimezoneOffset => 0.0,
+            Intrinsic::DatePrototypeGetFullYear | Intrinsic::DatePrototypeGetUtcFullYear => {
+                f64::from(Self::year_from_time(time))
+            }
+            Intrinsic::DatePrototypeGetMonth | Intrinsic::DatePrototypeGetUtcMonth => {
+                f64::from(Self::month_from_time(time))
+            }
+            Intrinsic::DatePrototypeGetDate | Intrinsic::DatePrototypeGetUtcDate => {
+                f64::from(Self::date_from_time(time))
+            }
+            Intrinsic::DatePrototypeGetDay | Intrinsic::DatePrototypeGetUtcDay => {
+                f64::from(Self::week_day(time))
+            }
+            Intrinsic::DatePrototypeGetHours | Intrinsic::DatePrototypeGetUtcHours => {
+                Self::modulo(Self::floor_div(time, 3_600_000.0), 24.0)
+            }
+            Intrinsic::DatePrototypeGetMinutes | Intrinsic::DatePrototypeGetUtcMinutes => {
+                Self::modulo(Self::floor_div(time, 60_000.0), 60.0)
+            }
+            Intrinsic::DatePrototypeGetSeconds | Intrinsic::DatePrototypeGetUtcSeconds => {
+                Self::modulo(Self::floor_div(time, 1000.0), 60.0)
+            }
+            _ => Self::modulo(time, 1000.0),
+        };
+        Ok(Value::from_f64(answer))
     }
 
     /// `escape` of B.2.1.1, which writes a code unit the set does not keep as
