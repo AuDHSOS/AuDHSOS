@@ -662,6 +662,9 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same, before the three list forms of 23.2.5.1 (outdated) | focused | `3eebb13` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/TypedArray test/built-ins/TypedArrayConstructors --summary` | 2,184 | 4,322 | 824 (19.07%) | 1,014 (23.46%) | 2,484 (57.47%) |
 | The same, on the stack backend, which carries no clause 23.2 (focused) | focused | `3eebb13` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/TypedArray test/built-ins/TypedArrayConstructors --summary` | 2,184 | 4,322 | 0 (0.00%) | 4,262 (98.61%) | 60 (1.39%) |
 | The same, before the three further rows of table 71 (outdated) | focused | `9d12e52` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/TypedArray test/built-ins/TypedArrayConstructors --summary` | 2,184 | 4,322 | 144 (3.33%) | 3,326 (76.96%) | 852 (19.71%) |
+| Logical assignment (focused) | focused | `6deae2d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/logical-assignment --summary` | 78 | 132 | 84 (63.64%) | 0 (0.00%) | 48 (36.36%) |
+| The same, before the strict write to a property with no setter (outdated) | focused | `d9ee5b0` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/logical-assignment --summary` | 78 | 132 | 81 (61.36%) | 3 (2.27%) | 48 (36.36%) |
+| The same, on the stack backend, which has no write that happens on one path alone (focused) | focused | `6deae2d` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/logical-assignment --summary` | 78 | 132 | 18 (13.64%) | 0 (0.00%) | 114 (86.36%) |
 | `%Iterator%` (focused) | focused | `bee51e3` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Iterator --summary` | 654 | 1,308 | 170 (13.00%) | 642 (49.08%) | 496 (37.92%) |
 | The same, before the five helpers of 27.1.3.3 that answer at once (outdated) | focused | `e6fa517` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Iterator --summary` | 654 | 1,308 | 122 (9.33%) | 692 (52.91%) | 494 (37.77%) |
 | The same, before the `toArray` and the `forEach` of 27.1.3.3 (outdated) | focused | `69e48f0` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Iterator --summary` | 654 | 1,308 | 102 (7.80%) | 712 (54.43%) | 494 (37.77%) |
@@ -866,7 +869,9 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same, before the iterators of 24.1.5 and 24.2.5 (outdated) | focused | `29cc550` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Map test/built-ins/Set --summary` | 587 | 1,169 | 336 (28.74%) | 240 (20.53%) | 593 (50.73%) |
 | The same, on the stack backend (focused) | focused | `29cc550` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Map test/built-ins/Set --summary` | 587 | 1,169 | 0 (0.00%) | 1,051 (89.91%) | 118 (10.09%) |
 | Complete pinned suite, including staging and Intl | full | `bee51e3` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 32,083 (31.17%) | 35,268 (34.26%) |
-| Complete pinned suite on the register engine | full | `bee51e3` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 40,721 (39.56%) | 19,630 (19.07%) | 42,574 (41.36%) |
+| Complete pinned suite on the register engine | full | `6deae2d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 40,900 (39.74%) | 19,615 (19.06%) | 42,410 (41.20%) |
+| Complete pinned suite on the register engine, before the strict write to a property with no setter (outdated) | full | `d9ee5b0` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 40,878 (39.72%) | 19,637 (19.08%) | 42,410 (41.21%) |
+| Complete pinned suite on the register engine, before the logical assignment of 13.15.2 (outdated) | full | `bee51e3` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 40,721 (39.56%) | 19,630 (19.07%) | 42,574 (41.36%) |
 | Complete pinned suite on the register engine, before the five helpers of 27.1.3.3 that answer at once (outdated) | full | `e6fa517` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 40,613 (39.46%) | 19,740 (19.18%) | 42,572 (41.36%) |
 | Complete pinned suite on the register engine, before the `toArray` and the `forEach` of 27.1.3.3 (outdated) | full | `69e48f0` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 40,571 (39.42%) | 19,782 (19.22%) | 42,572 (41.36%) |
 | Complete pinned suite on the register engine, before the `Iterator` of 27.1.3 (outdated) | full | `0f39a55` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 40,457 (39.31%) | 19,018 (18.48%) | 43,450 (42.22%) |
@@ -1831,7 +1836,13 @@ at tree `a1cabb8b96cc4d5833124056da004d5261023560`, which is the tree of
 variants of `argument-effect-order.js` from a wrong failure to the named gap
 of an accessor. Its full stack run classified every one of the 102,925
 variants as the run beside `e6fa517` did, and its failed and unsupported
-columns carry the split that run measured.
+columns carry the split that run measured. The logical-assignment runs and
+the full run beside 13.15.2 were measured at tree
+`ad6accfb5028405655b817651c3499b3f9d12be6`, which is the tree of `d9ee5b0`;
+that step gained 157 variants and lost none. The full run beside the strict
+write to a property with no setter was measured at tree
+`e811cbd58d69cc4c7df95a4b6865c7024847bf85`, which is the tree of `6deae2d`;
+that step gained 22 variants and lost none.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
