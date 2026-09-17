@@ -54,7 +54,7 @@ Nine pieces of the SMP path exist and need no change.
 | `TlbControl` | A trait with `flush_page` and `flush_all`, which `kernel-mm` calls and never implements. | `crates/kernel/hal-api/src/paging.rs`, line 51 |
 | I/O APIC routing | A redirection entry already carries the local APIC identifier it delivers to. | `crates/kernel/x86-tables/src/ioapic.rs`, line 87 |
 | Message interrupts | An MSI address already carries the local APIC identifier it delivers to. | `crates/kernel/hal-x86_64/src/apic.rs`, line 50 |
-| `StackPool` | Allocates and releases one kernel stack of eight pages plus a guard page. | `crates/kernel/core/src/memory.rs`, line 289 |
+| `StackPool` | Allocates and releases one kernel stack of eight pages plus a guard page. | `crates/kernel/mm/src/stack.rs`, line 230 |
 | `read_msr`, `write_msr` | Model-specific register access, already within the `asm!` budget. | `crates/kernel/hal-x86_64/src/instructions.rs`, line 348 |
 | `invalidate_page` | `invlpg` on the processor that calls it. | `crates/kernel/hal-x86_64/src/instructions.rs`, line 258 |
 | The coarse critical section | Eighteen call sites outside the tests take the whole machine cell at once, which is the shape a big kernel lock needs. | `crates/kernel/core/src/machine.rs`, line 49 |
@@ -73,7 +73,7 @@ implements it rather than reopening it.
 | 2 | A machine with more than one processor. The runner pins `-smp 1`. | `crates/tools/xtask/src/qemu.rs`, line 462 | S2 |
 | 3 | A processor list. The `MADT` parser counts local APIC entries and keeps none of them, and reads no x2APIC entry. | `crates/kernel/acpi/src/madt.rs`, line 287 | S3 |
 | 4 | The interrupt command register. The local APIC module has no `0x300`, no `0x310`, and no IPI encoding. | `crates/kernel/x86-tables/src/lapic.rs` | S4 |
-| 5 | A borrow that waits. `acquire` is one compare-and-exchange that answers `AlreadyBorrowed` and returns; a second processor would read that as "the cell is not there" and skip the work. | `crates/sync/src/lib.rs`, line 113 | S5 |
+| 5 | A borrow that waits. `acquire` is one compare-and-exchange that answers `AlreadyBorrowed` and returns; a second processor would read that as "the cell is not there" and skip the work. | `crates/sync/src/lib.rs`, lines 114 and 249 | S5 |
 | 6 | Per-processor descriptor tables. One `TSS_IMAGE`, one `GDT`, one double-fault stack, all `static`. | `crates/kernel/hal-x86_64/src/descriptors.rs`, lines 29 to 38 | S6 |
 | 7 | An end-of-interrupt that takes no shared cell. `acknowledge` goes through the controller cell, which a system call holds for its whole length. | `crates/kernel/hal-x86_64/src/interrupts.rs`, line 154; `crates/kernel/bin/src/main.rs`, line 146 | S6 |
 | 8 | The start-up code of an application processor, and the frame below 1 MiB it is copied into. The bring-up removes the loader's identity mapping. | `crates/kernel/core/src/memory.rs`, line 646 | S7 |
@@ -88,20 +88,37 @@ This decision must be made before S6 starts. It decides what every trap
 handler does first.
 
 **The decision: a processor reads its local APIC identifier from register
-`0x20` and looks the processor number up in a table of sixteen entries.**
+`0x20` through a window base held in an atomic, and looks the processor
+number up in `IDENTIFIERS`, sixteen atomics the boot processor writes
+once.**
 
-Reason 1: the register window of the local APIC is mapped once and every
+Neither the base nor the table is a kernel cell. `IDENTIFIERS` is
+`[AtomicU32; CPUS]`, `u32::MAX` for a number no processor has, and
+`APIC_WINDOW` is an `AtomicU64` holding the address
+`interrupts::bring_up` maps (`crates/kernel/hal-x86_64/src/interrupts.rs`,
+line 105). The boot processor writes both before it starts any
+application processor.
+
+Reason 1: `processor()` may borrow no cell, because the token of D5 calls
+it to answer `owner` and the borrow is what that token decides. A borrow
+inside the call that says who holds the borrow does not terminate.
+Reason 2: the processor list the identifiers come from lives in `Apics`
+inside the controller cell (`crates/kernel/hal-x86_64/src/interrupts.rs`,
+line 79), which D6 orders first, so reading the list where it lies is
+that same cycle. `IDENTIFIERS` is the copy outside every cell.
+Reason 3: the register window of the local APIC is mapped once and every
 processor reading that address reaches its own unit, *Intel SDM* Vol. 3A,
 13.4.4. One mapping serves every processor.
-Reason 2: the lookup needs no new `asm!` site. The MMIO read is the one
-`LocalApic::id` already does (`crates/kernel/hal-x86_64/src/apic.rs`,
-line 141).
-Reason 3: the search is a linear scan over `CPUS` entries, which is a
-constant of sixteen, so the lookup is bounded and needs no allocation.
-Result: `processor()` answers a processor number from anywhere,
-including a trap handler, and costs one uncached read and one scan. The
-cost lands on every borrow of a kernel cell, because the token of D5
-carries the number; measurement 1 of S11 is what reads it.
+Reason 4: the search is a linear scan over `CPUS` entries, which is a
+constant of sixteen, so the lookup is O(1) and needs no allocation.
+Result: `processor()` answers a processor number from anywhere, including
+a trap handler and the inside of a borrow, and costs one uncached read
+and one scan. It reads the register through a raw pointer and not through
+`LocalApic::id` (`crates/kernel/hal-x86_64/src/apic.rs`, line 141),
+because reaching a `LocalApic` value means borrowing a cell; that read is
+the seventeenth `unsafe` site D8 names. The cost lands on every borrow of
+a kernel cell, because the token of D5 carries the number; measurement 1
+of S11 is what reads it.
 
 **The option not taken: `GS_BASE` and `swapgs`.** A per-processor pointer
 in `IA32_KERNEL_GS_BASE`, swapped at every entry from user mode, is one
@@ -140,7 +157,7 @@ from being Rust:
 About twenty instructions, run once per processor at start-up and never
 again. No assembler program enters the build: `naked_asm!` is the
 compiler's, and `kernel-hal-x86_64` holds thirty of its sites today
-(`crates/tools/xtask/src/policy.rs`, line 684). D8 makes this the
+(`crates/tools/xtask/src/policy.rs`, line 692). D8 makes this the
 thirty-first.
 
 **The decision: one `#[unsafe(naked)]` function whose body is
@@ -318,21 +335,22 @@ their budget today, so the first commit of S6 fails
 
 | Crate | Now | After | Where the budget stands |
 |-------|-----|-------|-------------------------|
-| `audhsos-sync` | 4 unsafe, 0 asm | 4 unsafe, 0 asm | `crates/tools/xtask/src/policy.rs`, line 446 |
-| `kernel-hal-x86_64` | 152 unsafe, 30 asm | 168 unsafe, 31 asm | `crates/tools/xtask/src/policy.rs`, line 683 |
-| `audhsos-kernel` | 33 unsafe, 0 asm | 37 unsafe, 0 asm | `crates/tools/xtask/src/policy.rs`, line 704 |
+| `audhsos-sync` | 4 unsafe, 0 asm | 4 unsafe, 0 asm | `crates/tools/xtask/src/policy.rs`, line 454 |
+| `kernel-hal-x86_64` | 152 unsafe, 30 asm | 169 unsafe, 31 asm | `crates/tools/xtask/src/policy.rs`, line 691 |
+| `audhsos-kernel` | 33 unsafe, 0 asm | 37 unsafe, 0 asm | `crates/tools/xtask/src/policy.rs`, line 712 |
 
 `audhsos-sync` gains nothing: the wait replaces one compare-and-exchange
 with a loop around it and reaches the value through the `slot` that is
 already there.
 
-The sixteen new `unsafe` sites of `kernel-hal-x86_64`:
+The seventeen new `unsafe` sites of `kernel-hal-x86_64`:
 
 | Sites | Step | What they do |
 |-------|------|--------------|
 | 3 | S4 | Write `0x310`, write `0x300`, read the delivery status bit. |
 | 4 | S6 | Build a per-processor task state segment, load it, load the per-processor global descriptor table, load the interrupt descriptor table on an application processor. |
 | 2 | S6 | Construct a second `LocalApic` over the window the boot processor mapped, and enable it. |
+| 1 | S6 | Read the local APIC identifier register through `APIC_WINDOW`, which is `processor()` of D1. |
 | 5 | S7 | Copy the start-up code into the page, write the parameter block, read the two section symbols, take the address of the Rust entry, enter the kernel from the start-up page. |
 | 2 | S10 | Invalidate a page named by another processor; read the request word of this processor. |
 
@@ -343,7 +361,7 @@ application processor lands on, the switch into its idle thread, and the
 two calls that turn interrupts on and off around them.
 
 **The option not taken: a budget stated as a total rather than site by
-site.** A named count is checkable: a seventeenth site in
+site.** A named count is checkable: an eighteenth site in
 `kernel-hal-x86_64` is a change to this decision and not to a number.
 
 ## 16.13 The order of the steps
@@ -355,7 +373,7 @@ site.** A named count is checkable: a seventeenth site in
 | S3 | The processor list | not built | S1 | M |
 | S4 | The interrupt command register | not built | S1 | M |
 | S5 | The borrow that waits | not built | D5 (16.9), D6 (16.10) | M |
-| S6 | Per-processor data | not built | S3, D1 (16.5), D3 (16.7), D8 (16.12) | L |
+| S6 | Per-processor data | not built | S3, S5, D1 (16.5), D3 (16.7), D8 (16.12) | L |
 | S7 | The start-up page and the first application processor | not built | S2, S4, S6, D2 (16.6) | XL |
 | S8 | The application processor idles | not built | S5, S7 | L |
 | S9 | Per-processor run queues | not built | S8, D4 (16.8), D7 (16.11) | XL |
@@ -363,8 +381,9 @@ site.** A named count is checkable: a seventeenth site in
 | S11 | Measurement, and what it decides | not built | S9, S10 | M |
 
 S1 and S2 depend on nothing. S3 and S4 depend only on S1 and may be
-built in either order. S9 and S10 are independent of each other and may
-be built at the same time.
+built in either order. S6 depends on S5 because the token S6 installs at
+the four cells is the one S5 builds. S9 and S10 are independent of each
+other and may be built at the same time.
 
 ## 16.14 S1. The manual on the disk
 
@@ -446,7 +465,10 @@ Size: S.
 
 ### Does
 
-1. `Options` gains `processors: u32`, default 1.
+1. `Options` gains `processors: u32` and loses `#[derive(Default)]` for a
+   hand-written `Default` that sets `processors` to 1 and every other
+   field to what the derive gave. The reason: the derive answers 0, and a
+   machine started with `-smp 0` does not start.
 2. The command line builder writes that number after `-smp`
    (`crates/tools/xtask/src/qemu.rs`, line 462).
 3. 3.1.1 of [document 3](03-target-platform.md) states that `-smp` is a
@@ -503,9 +525,12 @@ The walk stays O(entries) and the storage stays a fixed array.
 ### Produces
 
 `Madt::processors` changes from a count to a list
-(`crates/kernel/acpi/src/madt.rs`, line 164). The count has no caller
-outside its own tests (`crates/kernel/acpi/src/tests/madt.rs`, lines 40
-and 63), so nothing but those two lines changes with it.
+(`crates/kernel/acpi/src/madt.rs`, line 164). It has three callers, all
+of them tests: `crates/kernel/acpi/src/tests/madt.rs`, lines 40 and 63,
+which read the count, and `crates/kernel/bin/tests/interrupts.rs`, line
+209, which reads it in QEMU and asserts that the machine reports at least
+one processor. The first two compare against a length, the third against
+the length of the list.
 
 ### Done when
 
@@ -581,9 +606,9 @@ Size: M.
 
 ### Needs (already built)
 
-- `Global` and `Preset`, whose `acquire` is one compare-and-exchange and
-  whose `slot` is reached only by the holder of the flag
-  (`crates/sync/src/lib.rs`, lines 113 and 132).
+- `Global` and `Preset`, whose `acquire` is one compare-and-exchange
+  (`crates/sync/src/lib.rs`, lines 114 and 249) and whose `slot` is
+  reached only by the holder of the flag (lines 132 and 266).
 - R9 of [document 4](04-safety-policy.md), which runs `audhsos-sync`
   whole under Miri.
 
@@ -597,10 +622,10 @@ Size: M.
    owner; on failure, answer `AlreadyBorrowed` when the value read is
    this owner, and call `ExclusiveToken::wait` otherwise.
 4. `release` stores free.
-5. The kernel's own token replaces `UncontendedToken` at the four cells.
-   Its `owner` is the processor number of D1. Its `wait` is
-   `remote::poll` of S10 followed by `spin_loop`, which is why S10 may be
-   built after this step but not left out.
+5. The four cells keep `UncontendedToken`. S6 installs the kernel's own
+   token in their place, because that token's `owner` is `processor()`
+   and D1 is built in S6; its `wait` is `remote::poll` of S10 followed by
+   `spin_loop`, which is why S10 may be built after S6 but not left out.
 
 `Global::init` keeps a plain `acquire`: a cell is written once, during
 bring-up, by the boot processor.
@@ -626,15 +651,15 @@ is always `0` and which therefore can never find a second owner.
 ## 16.19 S6. Per-processor data
 
 Status: not built.
-Depends on: S3, D1 (16.5), D3 (16.7), D8 (16.12).
+Depends on: S3, S5, D1 (16.5), D3 (16.7), D8 (16.12).
 Size: L.
 
 ### Needs (already built)
 
 - `StackPool`, which hands out a kernel stack of eight pages with a guard
-  page below it.
+  page below it (`crates/kernel/mm/src/stack.rs`, line 230).
 - `build_gdt(tss_base)`, which builds a whole table around one task state
-  segment (`crates/kernel/x86-tables/src/gdt.rs`).
+  segment (`crates/kernel/x86-tables/src/gdt.rs`, line 121).
 - `TaskStateSegment::with_kernel_stack` and `with_interrupt_stack`.
 - The physical window, through which the kernel reaches any frame.
 
@@ -646,27 +671,35 @@ Size: L.
    the invalidation request word S10 fills.
 2. Add the processor table, `PROCESSORS: [Preset<Processor>; CPUS]`, in
    `.bss` for the reason D-66 gives.
-3. Add `processor() -> Option<u8>`: read register `0x20`, scan the
-   identifiers of the processor list, answer the position. The scan is
-   over `CPUS` entries and `CPUS` is a constant.
-4. Split `descriptors::install`: what is one table stays one table, the
+3. Add `APIC_WINDOW` and `IDENTIFIERS` of D1, and write both in
+   `interrupts::bring_up` (`crates/kernel/hal-x86_64/src/interrupts.rs`,
+   line 105) after the window is mapped and before any application
+   processor starts. Neither is a cell, for the reason D1 gives.
+4. Add `processor() -> Option<u8>`: read register `0x20` through
+   `APIC_WINDOW`, scan `IDENTIFIERS`, answer the position. The scan is
+   over `CPUS` entries and `CPUS` is a constant, so the call is O(1).
+5. Install the kernel's token of S5 at the four cells, in place of
+   `UncontendedToken`: its `owner` is `processor()`, its `wait` is
+   `remote::poll` of S10 followed by `spin_loop`. Until S10 exists the
+   `wait` is `spin_loop` alone, which one processor cannot deadlock on.
+6. Split `descriptors::install`: what is one table stays one table, the
    interrupt descriptor table; what is per processor moves into
    `Processor`. The boot processor takes entry 0 and keeps the boot stack
    as its `RSP0`.
-5. `set_kernel_stack` writes into the calling processor's own task state
+7. `set_kernel_stack` writes into the calling processor's own task state
    segment.
-6. Give each `Processor` its own `LocalApic` over the window the boot
+8. Give each `Processor` its own `LocalApic` over the window the boot
    processor mapped. `LocalApic::new` today requires that its value be
    the only one reaching the window; that requirement becomes: one value
    per processor, and a processor reaches only its own unit, which
    *Intel SDM* Vol. 3A, 13.4.4 is the ground for.
-7. `acknowledge` uses the calling processor's `LocalApic` and takes no
+9. `acknowledge` uses the calling processor's `LocalApic` and takes no
    shared cell. This is the fix for gap 7 of 16.4: today a system call
    holds the controller cell for its whole length
    (`crates/kernel/bin/src/main.rs`, line 146), so an end-of-interrupt on
    another processor would wait for a system call to finish, and a local
    APIC that is not acknowledged delivers nothing after that.
-8. Split `on_timer_tick` as D3 says.
+10. Split `on_timer_tick` as D3 says.
 
 ### Produces
 
@@ -676,16 +709,19 @@ an end-of-interrupt that costs one MMIO write and no wait.
 ### Done when
 
 1. A kernel test in QEMU reads the processor number on the boot processor
-   and gets 0.
-2. A kernel test reads the boot processor's `RSP0` back out of its own
+   and gets 0, called both outside a borrow and inside one, which is the
+   cycle D1 removes.
+2. A kernel test reads `IDENTIFIERS[0]` and register `0x20` of the boot
+   processor and finds the two equal.
+3. A kernel test reads the boot processor's `RSP0` back out of its own
    task state segment and gets the boot stack top, which is what
    `descriptors::kernel_stack` already checks.
-3. A kernel test raises a double fault and lands on the boot processor's
+4. A kernel test raises a double fault and lands on the boot processor's
    interrupt-stack-table stack, which is the existing
    `double_fault.rs` test and must still pass.
-4. A machine with `-smp 1` boots, runs the root task, and ends as it does
+5. A machine with `-smp 1` boots, runs the root task, and ends as it does
    today.
-5. `sh tools/xtask.sh unsafe-budget` passes at the numbers D8 names.
+6. `sh tools/xtask.sh unsafe-budget` passes at the numbers D8 names.
 
 ## 16.20 S7. The start-up page and the first application processor
 
@@ -696,8 +732,10 @@ Size: XL.
 ### Needs (already built)
 
 - `NormalizedMap::without`, which takes a range out of the usable memory
-  before the root task is granted it (`crates/kernel/mm/src/reserve.rs`,
-  line 82).
+  (`crates/kernel/mm/src/memory_map.rs`, line 302). It is `pub(crate)` to
+  `kernel-mm`, so the bring-up reaches it through `select_reserve`
+  (`crates/kernel/mm/src/reserve.rs`, line 54) and S7 adds the entry
+  point for the low frame beside it.
 - The mapper, which maps any page of the kernel address space to any
   frame, and `drop_identity`, which shows how a low identity mapping is
   removed again (`crates/kernel/core/src/memory.rs`, line 646).
