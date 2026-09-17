@@ -1970,6 +1970,7 @@ impl RegisterVM {
                 // 7.1.17 of an Object argument is a call of a method of the
                 // object, and the native has no frame to make it from: it
                 // leaves and runs again with the primitive in its place.
+                self.validate_before_coercion(intrinsic, &call, heap, realm)?;
                 if let Some((index, hint)) = self.next_coercion(intrinsic, &call, heap, realm)? {
                     return self.begin_coercion(
                         intrinsic,
@@ -14659,6 +14660,101 @@ impl RegisterVM {
         })
     }
 
+    /// The check a clause makes before it converts an argument.
+    ///
+    /// 21.4.4, 23.2.3, 25.3.4 and 25.4 each raise a `TypeError` for a receiver
+    /// of the wrong kind before they reach the `ToNumber` of an argument, and
+    /// the conversion of 7.1.1 is observable, so it may not run first.
+    fn validate_before_coercion(
+        &self,
+        intrinsic: Intrinsic,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        if intrinsic.coerced_arguments().is_empty() {
+            return Ok(());
+        }
+        let holder = intrinsic.holder();
+        // 25.4.2.1 reads the array out of the first argument rather than out
+        // of the receiver; 25.4.7 answers for a width and reads none.
+        if holder == super::realm::IntrinsicHolder::Atomics
+            && intrinsic != Intrinsic::AtomicsIsLockFree
+        {
+            let array = self.call_argument(call, 0, heap)?;
+            let waits = matches!(intrinsic, Intrinsic::AtomicsWait | Intrinsic::AtomicsNotify);
+            let (buffer, ..) = Self::integer_typed_array(array, waits, heap, realm)?;
+            // Step 2 of 25.4.13 waits on a shared block only, before it reads
+            // the index.
+            if intrinsic == Intrinsic::AtomicsWait
+                && !matches!(
+                    buffer
+                        .as_object()
+                        .and_then(|block| heap.get_object(block))
+                        .map(|entry| &entry.kind),
+                    Some(&ObjectKind::SharedArrayBuffer { .. })
+                )
+            {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "the array of 25.4.13 looks into no SharedArrayBuffer",
+                ));
+            }
+            return Ok(());
+        }
+        // Steps 1 and 2 of 25.3.3.1 refuse a call without `new` and a first
+        // argument that is no block, before the offset is read.
+        if intrinsic == Intrinsic::DataViewConstructor {
+            if call.construct.is_none() {
+                return Err(type_error(heap, realm, "a constructor called without new"));
+            }
+            let given = self.call_argument(call, 0, heap)?;
+            if !matches!(
+                given
+                    .as_object()
+                    .and_then(|block| heap.get_object(block))
+                    .map(|entry| &entry.kind),
+                Some(&ObjectKind::ArrayBuffer(_) | &ObjectKind::SharedArrayBuffer { .. })
+            ) {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "the argument of 25.3.3.1 is no ArrayBuffer",
+                ));
+            }
+            return Ok(());
+        }
+        let wanted = match holder {
+            super::realm::IntrinsicHolder::DatePrototype => "this value carries no Date of its own",
+            super::realm::IntrinsicHolder::TypedArrayPrototype => {
+                "this value carries no TypedArray of its own"
+            }
+            super::realm::IntrinsicHolder::DataViewPrototype => {
+                "this value carries no DataView of its own"
+            }
+            _ => return Ok(()),
+        };
+        let held = call
+            .receiver
+            .as_object()
+            .and_then(|object| heap.get_object(object))
+            .map(|entry| &entry.kind);
+        let carries = match holder {
+            super::realm::IntrinsicHolder::DatePrototype => {
+                matches!(held, Some(&ObjectKind::Date(_)))
+            }
+            super::realm::IntrinsicHolder::TypedArrayPrototype => {
+                matches!(held, Some(&ObjectKind::TypedArray { .. }))
+            }
+            _ => matches!(held, Some(&ObjectKind::DataView { .. })),
+        };
+        if carries {
+            return Ok(());
+        }
+        Err(type_error(heap, realm, wanted))
+    }
+
     /// `ValidateTypedArray` of 23.2.4.1, which every method of 23.2.3 asks
     /// before it reads an argument.
     fn validate_typed_array(
@@ -15526,7 +15622,13 @@ impl RegisterVM {
             return Ok(VALUE_UNDEFINED);
         }
         let array = self.call_argument(call, 0, heap)?;
-        let (buffer, offset, length, kind) = Self::integer_typed_array(array, heap, realm)?;
+        let waits = matches!(intrinsic, Intrinsic::AtomicsWait | Intrinsic::AtomicsNotify);
+        let (buffer, offset, length, kind) = Self::integer_typed_array(array, waits, heap, realm)?;
+        // The two rows a `BigInt` holds need the `BigInt` forms of 25.4, which
+        // this Realm has not built; 25.4.16 counts no agent whatever the row.
+        if super::object::holds_a_bigint(kind) && intrinsic != Intrinsic::AtomicsNotify {
+            return Err(VMError::Unsupported("an atomic of 25.4 on a BigInt row"));
+        }
         // 25.4.13 waits on a shared block only, and 25.4.16 answers zero for
         // every other one.
         let shared = matches!(
@@ -15536,13 +15638,6 @@ impl RegisterVM {
                 .map(|entry| &entry.kind),
             Some(&ObjectKind::SharedArrayBuffer { .. })
         );
-        if matches!(intrinsic, Intrinsic::AtomicsWait | Intrinsic::AtomicsNotify) && kind != 5 {
-            return Err(type_error(
-                heap,
-                realm,
-                "the array of 25.4.13 is no Int32Array",
-            ));
-        }
         if intrinsic == Intrinsic::AtomicsWait && !shared {
             return Err(type_error(
                 heap,
@@ -15651,6 +15746,7 @@ impl RegisterVM {
     /// array looks into, where, how long it is and which row it stands in.
     fn integer_typed_array(
         array: Value,
+        waitable: bool,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<(Value, u32, u32, u8), VMError> {
@@ -15670,16 +15766,19 @@ impl RegisterVM {
                 "the value of 25.4.2.1 is no TypedArray",
             ));
         };
-        // Table 71 without the clamped row and without the three floats.
-        if matches!(kind, 2 | 7 | 8 | 9) {
+        // Table 71 without the clamped row and without the three floats, and
+        // only the two rows 25.4.13 waits on where the caller waits.
+        let taken = if waitable {
+            matches!(kind, 5 | 10)
+        } else {
+            !matches!(kind, 2 | 7 | 8 | 9)
+        };
+        if !taken {
             return Err(type_error(
                 heap,
                 realm,
-                "the TypedArray of 25.4.2.1 holds no integer",
+                "the TypedArray of 25.4.2.1 holds no integer of this kind",
             ));
-        }
-        if super::object::holds_a_bigint(kind) {
-            return Err(VMError::Unsupported("an atomic of 25.4 on a BigInt row"));
         }
         Ok((buffer, offset, length, kind))
     }
@@ -21495,7 +21594,9 @@ impl RegisterVM {
                             caller_code_id: current_code_id,
                             construct: Some(target),
                         };
-                        // The same conversion a call of the native asks for.
+                        // The same conversion a call of the native asks for,
+                        // after the check the clause makes before it.
+                        self.validate_before_coercion(intrinsic, &call, heap, realm)?;
                         if let Some((index, hint)) =
                             self.next_coercion(intrinsic, &call, heap, realm)?
                         {

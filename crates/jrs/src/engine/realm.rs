@@ -3932,6 +3932,34 @@ impl Intrinsic {
         /// A text to search for, then where to start.
         const TEXT_THEN_NUMBER: &[(u16, PrimitiveHint)] =
             &[(0, PrimitiveHint::String), (1, PrimitiveHint::Number)];
+        /// Three positions, all of them numbers.
+        const THREE: &[(u16, PrimitiveHint)] = &[
+            (0, PrimitiveHint::Number),
+            (1, PrimitiveHint::Number),
+            (2, PrimitiveHint::Number),
+        ];
+        /// Four of them, which the setters of 21.4.4 take.
+        const FOUR: &[(u16, PrimitiveHint)] = &[
+            (0, PrimitiveHint::Number),
+            (1, PrimitiveHint::Number),
+            (2, PrimitiveHint::Number),
+            (3, PrimitiveHint::Number),
+        ];
+        /// Seven of them, which 21.4.3.4 takes.
+        const SEVEN: &[(u16, PrimitiveHint)] = &[
+            (0, PrimitiveHint::Number),
+            (1, PrimitiveHint::Number),
+            (2, PrimitiveHint::Number),
+            (3, PrimitiveHint::Number),
+            (4, PrimitiveHint::Number),
+            (5, PrimitiveHint::Number),
+            (6, PrimitiveHint::Number),
+        ];
+        /// The second position alone.
+        const SECOND: &[(u16, PrimitiveHint)] = &[(1, PrimitiveHint::Number)];
+        /// The second and the third.
+        const SECOND_THIRD: &[(u16, PrimitiveHint)] =
+            &[(1, PrimitiveHint::Number), (2, PrimitiveHint::Number)];
         match self {
             // 22.1.1.1 step 2, and 20.5.1.1 step 3 with 20.5.6.1.1 beside it.
             Self::StringConstructor
@@ -4012,7 +4040,41 @@ impl Intrinsic {
             | Self::MathSinh
             | Self::MathSqrt
             | Self::MathTan
-            | Self::MathTanh => NUMBER,
+            | Self::MathTanh
+            // 21.4.4 converts every field a setter of a date writes.
+            | Self::DatePrototypeSetTime
+            | Self::DatePrototypeSetMilliseconds
+            | Self::DatePrototypeSetUtcMilliseconds
+            | Self::DatePrototypeSetYear
+            | Self::BigIntConstructor
+            | Self::BigIntPrototypeToString
+            // 25.1.4.1, 25.2.3.1 and 25.2.5.2 read a length.
+            | Self::ArrayBufferConstructor
+            | Self::SharedArrayBufferConstructor
+            | Self::SharedArrayBufferPrototypeGrow
+            // 23.2.3.1 counts from the end of the array.
+            | Self::TypedArrayPrototypeAt
+            // 25.4.7 answers for a width.
+            | Self::AtomicsIsLockFree
+            // 25.3.4 reads the index and, where it writes, the value beside it.
+            | Self::DataViewPrototypeGetInt8
+            | Self::DataViewPrototypeGetUint8
+            | Self::DataViewPrototypeGetInt16
+            | Self::DataViewPrototypeGetUint16
+            | Self::DataViewPrototypeGetInt32
+            | Self::DataViewPrototypeGetUint32
+            | Self::DataViewPrototypeGetFloat32
+            | Self::DataViewPrototypeGetFloat64
+            // 25.3.1.2 step 2 refuses an index that is no index before it
+            // reads the value, so the clause converts the value itself.
+            | Self::DataViewPrototypeSetInt8
+            | Self::DataViewPrototypeSetUint8
+            | Self::DataViewPrototypeSetInt16
+            | Self::DataViewPrototypeSetUint16
+            | Self::DataViewPrototypeSetInt32
+            | Self::DataViewPrototypeSetUint32
+            | Self::DataViewPrototypeSetFloat32
+            | Self::DataViewPrototypeSetFloat64 => NUMBER,
             // 22.1.3.9, 22.1.3.11, 22.1.3.7, 22.1.3.8 and 22.1.3.24: the text
             // to search for, then where to start.
             Self::StringPrototypeIndexOf
@@ -4028,7 +4090,21 @@ impl Intrinsic {
             | Self::ArrayPrototypeSplice
             | Self::MathPow
             | Self::MathImul
-            | Self::MathAtan2 => NUMBERS,
+            | Self::MathAtan2
+            | Self::DatePrototypeSetSeconds
+            | Self::DatePrototypeSetUtcSeconds
+            | Self::DatePrototypeSetMonth
+            | Self::DatePrototypeSetUtcMonth
+            // 21.2.2 takes the width and the value.
+            | Self::BigIntAsIntN
+            | Self::BigIntAsUintN
+            // 25.1.6.7, 25.2.5.4, 23.2.3.24 and 23.2.3.27 take a range.
+            | Self::ArrayBufferPrototypeSlice
+            | Self::SharedArrayBufferPrototypeSlice
+            | Self::TypedArrayPrototypeSlice
+            | Self::TypedArrayPrototypeSubarray
+            // 23.2.3.36 takes the index and the value.
+            | Self::TypedArrayPrototypeWith => NUMBERS,
             // 23.1.3.4: the target, then the two positions it copies from.
             Self::ArrayPrototypeCopyWithin => &[
                 (0, PrimitiveHint::Number),
@@ -4071,6 +4147,42 @@ impl Intrinsic {
             // 22.1.3.23 step 6 applies `ToUint32` to the limit; the separator
             // reaches `@@split`, which is a call of its own.
             | Self::StringPrototypeSplit => &[(1, PrimitiveHint::Number)],
+            Self::DatePrototypeSetMinutes
+            | Self::DatePrototypeSetUtcMinutes
+            | Self::DatePrototypeSetDate
+            | Self::DatePrototypeSetUtcDate
+            | Self::DatePrototypeSetFullYear
+            | Self::DatePrototypeSetUtcFullYear
+            // 23.2.3.9 takes the value and the range it writes it over, and
+            // 23.2.3.6 the three positions it moves between.
+            | Self::TypedArrayPrototypeFill
+            | Self::TypedArrayPrototypeCopyWithin => THREE,
+            Self::DatePrototypeSetHours | Self::DatePrototypeSetUtcHours => FOUR,
+            Self::DateUtc => SEVEN,
+            // 23.2.3.14, 23.2.3.15 and 23.2.3.18 compare the element as it is
+            // and convert the position after it, and 23.2.3.23 takes the
+            // source as it is and converts the offset.
+            Self::TypedArrayPrototypeIncludes
+            | Self::TypedArrayPrototypeIndexOf
+            | Self::TypedArrayPrototypeLastIndexOf
+            | Self::TypedArrayPrototypeSet
+            // 25.4 reads the array as it is, converts the index and checks
+            // its range before it reads anything after it.
+            | Self::AtomicsLoad
+            | Self::AtomicsAdd
+            | Self::AtomicsAnd
+            | Self::AtomicsExchange
+            | Self::AtomicsOr
+            | Self::AtomicsStore
+            | Self::AtomicsSub
+            | Self::AtomicsXor
+            | Self::AtomicsNotify
+            | Self::AtomicsCompareExchange
+            | Self::AtomicsWait => SECOND,
+            // 25.3.3.1 takes the block as it is and converts the offset and
+            // the length beside it. 23.2.5.1 reads neither where its first
+            // argument is no block, so it converts them itself.
+            Self::DataViewConstructor => SECOND_THIRD,
             _ => &[],
         }
     }
@@ -4233,7 +4345,37 @@ impl Intrinsic {
             | Self::ObjectFromEntries
             | Self::ObjectAssign
             | Self::ReflectSet
-            | Self::SymbolKeyFor => false,
+            | Self::SymbolKeyFor
+            // 23.2.3.26 and 23.2.3.32 take a comparator, and the methods of
+            // 23.2.3 that walk take a callback and a receiver beside it.
+            | Self::TypedArrayPrototypeSort
+            | Self::TypedArrayPrototypeToSorted
+            | Self::TypedArrayPrototypeEvery
+            | Self::TypedArrayPrototypeSome
+            | Self::TypedArrayPrototypeForEach
+            | Self::TypedArrayPrototypeFind
+            | Self::TypedArrayPrototypeFindIndex
+            | Self::TypedArrayPrototypeFindLast
+            | Self::TypedArrayPrototypeFindLastIndex
+            | Self::TypedArrayPrototypeReduce
+            | Self::TypedArrayPrototypeReduceRight
+            | Self::TypedArrayPrototypeKeys
+            | Self::TypedArrayPrototypeValues
+            | Self::TypedArrayPrototypeEntries
+            | Self::TypedArrayPrototypeReverse
+            | Self::TypedArrayPrototypeToReversed
+            | Self::TypedArrayPrototypeBuffer
+            | Self::TypedArrayPrototypeByteLength
+            | Self::TypedArrayPrototypeByteOffset
+            | Self::TypedArrayPrototypeLength
+            | Self::TypedArrayPrototypeToStringTag
+            | Self::TypedArrayBase
+            | Self::SharedArrayBufferPrototypeByteLength
+            | Self::SharedArrayBufferPrototypeGrowable
+            | Self::SharedArrayBufferPrototypeMaxByteLength
+            | Self::BigIntPrototypeValueOf
+            | Self::BigIntPrototypeToLocaleString
+            | Self::AtomicsPause => false,
             // 20.1.2.4, 20.1.2.8 and 20.1.2.13 apply ToPropertyKey to the
             // second argument.
             Self::ObjectDefineProperty
@@ -4254,13 +4396,68 @@ impl Intrinsic {
             Self::ArrayPrototypeIncludes
             | Self::ArrayPrototypeIndexOf
             | Self::ArrayPrototypeLastIndexOf
-            | Self::ArrayPrototypeFill => index > 0,
+            | Self::ArrayPrototypeFill
+            // 23.2.3.14, 23.2.3.15 and 23.2.3.18 compare the element as it is.
+            | Self::TypedArrayPrototypeIncludes
+            | Self::TypedArrayPrototypeIndexOf
+            | Self::TypedArrayPrototypeLastIndexOf
+            // 23.2.5.1 and 25.3.3.1 take the block as it is, 25.4 the array,
+            // and 23.2.3.23 the source it copies from.
+            | Self::TypedArrayInt8Constructor
+            | Self::TypedArrayUint8Constructor
+            | Self::TypedArrayUint8ClampedConstructor
+            | Self::TypedArrayInt16Constructor
+            | Self::TypedArrayUint16Constructor
+            | Self::TypedArrayInt32Constructor
+            | Self::TypedArrayUint32Constructor
+            | Self::TypedArrayFloat32Constructor
+            | Self::TypedArrayFloat64Constructor
+            | Self::TypedArrayFloat16Constructor
+            | Self::TypedArrayBigInt64Constructor
+            | Self::TypedArrayBigUint64Constructor
+            | Self::DataViewConstructor
+            | Self::TypedArrayPrototypeSet
+            | Self::AtomicsAdd
+            | Self::AtomicsAnd
+            | Self::AtomicsCompareExchange
+            | Self::AtomicsExchange
+            | Self::AtomicsLoad
+            | Self::AtomicsOr
+            | Self::AtomicsStore
+            | Self::AtomicsSub
+            | Self::AtomicsWait
+            | Self::AtomicsNotify
+            | Self::AtomicsXor => index > 0,
             // 23.1.3.29 coerces the start and the count, and takes every item
             // after them as it is.
-            Self::ArrayPrototypeSplice => index < 2,
+            Self::ArrayPrototypeSplice
+            // 25.3.4 reads the index and the value and takes the byte order as
+            // the value it is.
+            | Self::DataViewPrototypeSetInt8
+            | Self::DataViewPrototypeSetUint8
+            | Self::DataViewPrototypeSetInt16
+            | Self::DataViewPrototypeSetUint16
+            | Self::DataViewPrototypeSetInt32
+            | Self::DataViewPrototypeSetUint32
+            | Self::DataViewPrototypeSetFloat32
+            | Self::DataViewPrototypeSetFloat64 => index < 2,
             // 23.1.3.39 coerces the index and stores the value as it is;
             // 21.1.1.1 reads one argument.
-            Self::ArrayPrototypeWith | Self::NumberConstructor => index == 0,
+            Self::ArrayPrototypeWith
+            | Self::NumberConstructor
+            // 25.1.4.1 and 25.2.3.1 read the length and take the options as
+            // the object they are.
+            | Self::ArrayBufferConstructor
+            | Self::SharedArrayBufferConstructor
+            // 25.3.4 reads the index and takes the byte order as it is.
+            | Self::DataViewPrototypeGetInt8
+            | Self::DataViewPrototypeGetUint8
+            | Self::DataViewPrototypeGetInt16
+            | Self::DataViewPrototypeGetUint16
+            | Self::DataViewPrototypeGetInt32
+            | Self::DataViewPrototypeGetUint32
+            | Self::DataViewPrototypeGetFloat32
+            | Self::DataViewPrototypeGetFloat64 => index == 0,
             // 22.1.3 and 23.1.3.1 coerce every argument they read.
             _ => true,
         }
