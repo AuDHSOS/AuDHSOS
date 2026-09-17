@@ -838,6 +838,24 @@ pub enum Intrinsic {
     MapPrototypeForEach,
     /// `%Set.prototype.forEach%`, 24.2.3.7.
     SetPrototypeForEach,
+    /// `%WeakMap%`, 24.3.1.1.
+    WeakMapConstructor,
+    /// `%WeakMap.prototype.get%`, 24.3.3.3.
+    WeakMapPrototypeGet,
+    /// `%WeakMap.prototype.set%`, 24.3.3.5.
+    WeakMapPrototypeSet,
+    /// `%WeakMap.prototype.has%`, 24.3.3.4.
+    WeakMapPrototypeHas,
+    /// `%WeakMap.prototype.delete%`, 24.3.3.2.
+    WeakMapPrototypeDelete,
+    /// `%WeakSet%`, 24.4.1.1.
+    WeakSetConstructor,
+    /// `%WeakSet.prototype.add%`, 24.4.3.1.
+    WeakSetPrototypeAdd,
+    /// `%WeakSet.prototype.has%`, 24.4.3.4.
+    WeakSetPrototypeHas,
+    /// `%WeakSet.prototype.delete%`, 24.4.3.3.
+    WeakSetPrototypeDelete,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -887,6 +905,10 @@ pub enum IntrinsicHolder {
     MapPrototype,
     /// `%Set.prototype%`, which carries the methods 24.2.3 gives it.
     SetPrototype,
+    /// `%WeakMap.prototype%`, which carries the methods 24.3.3 gives it.
+    WeakMapPrototype,
+    /// `%WeakSet.prototype%`, which carries the methods 24.4.3 gives it.
+    WeakSetPrototype,
     /// `%IteratorPrototype%`, 27.1.2.
     IteratorPrototype,
     /// `%MapIteratorPrototype%`, 24.1.5.2.
@@ -901,7 +923,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 267] = [
+    pub const ALL: [Self; 276] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1169,6 +1191,15 @@ impl Intrinsic {
         Self::SetPrototypeIsDisjointFrom,
         Self::MapPrototypeForEach,
         Self::SetPrototypeForEach,
+        Self::WeakMapConstructor,
+        Self::WeakMapPrototypeGet,
+        Self::WeakMapPrototypeSet,
+        Self::WeakMapPrototypeHas,
+        Self::WeakMapPrototypeDelete,
+        Self::WeakSetConstructor,
+        Self::WeakSetPrototypeAdd,
+        Self::WeakSetPrototypeHas,
+        Self::WeakSetPrototypeDelete,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -1368,6 +1399,13 @@ impl Intrinsic {
             | Self::SetPrototypeIsSupersetOf
             | Self::SetPrototypeIsDisjointFrom
             | Self::SetPrototypeForEach => IntrinsicHolder::SetPrototype,
+            Self::WeakMapPrototypeGet
+            | Self::WeakMapPrototypeSet
+            | Self::WeakMapPrototypeHas
+            | Self::WeakMapPrototypeDelete => IntrinsicHolder::WeakMapPrototype,
+            Self::WeakSetPrototypeAdd
+            | Self::WeakSetPrototypeHas
+            | Self::WeakSetPrototypeDelete => IntrinsicHolder::WeakSetPrototype,
             Self::JsonParse | Self::JsonStringify => IntrinsicHolder::Json,
             Self::PromisePrototypeThen | Self::PromisePrototypeCatch => {
                 IntrinsicHolder::PromisePrototype
@@ -1418,6 +1456,8 @@ impl Intrinsic {
             | Self::PromiseConstructor
             | Self::MapConstructor
             | Self::SetConstructor
+            | Self::WeakMapConstructor
+            | Self::WeakSetConstructor
             // 24.1.3.10 and 24.2.3.14 are accessors of their Prototype, which
             // the Global holder never installs.
             | Self::MapPrototypeSize
@@ -1741,6 +1781,15 @@ impl Intrinsic {
             Self::SetPrototypeIsDisjointFrom => 264,
             Self::MapPrototypeForEach => 265,
             Self::SetPrototypeForEach => 266,
+            Self::WeakMapConstructor => 267,
+            Self::WeakMapPrototypeGet => 268,
+            Self::WeakMapPrototypeSet => 269,
+            Self::WeakMapPrototypeHas => 270,
+            Self::WeakMapPrototypeDelete => 271,
+            Self::WeakSetConstructor => 272,
+            Self::WeakSetPrototypeAdd => 273,
+            Self::WeakSetPrototypeHas => 274,
+            Self::WeakSetPrototypeDelete => 275,
         }
     }
 
@@ -2018,6 +2067,15 @@ impl Intrinsic {
             Self::SetPrototypeIsDisjointFrom => 264,
             Self::MapPrototypeForEach => 265,
             Self::SetPrototypeForEach => 266,
+            Self::WeakMapConstructor => 267,
+            Self::WeakMapPrototypeGet => 268,
+            Self::WeakMapPrototypeSet => 269,
+            Self::WeakMapPrototypeHas => 270,
+            Self::WeakMapPrototypeDelete => 271,
+            Self::WeakSetConstructor => 272,
+            Self::WeakSetPrototypeAdd => 273,
+            Self::WeakSetPrototypeHas => 274,
+            Self::WeakSetPrototypeDelete => 275,
         }
     }
 
@@ -2296,6 +2354,15 @@ impl Intrinsic {
             264 => Some(Self::SetPrototypeIsDisjointFrom),
             265 => Some(Self::MapPrototypeForEach),
             266 => Some(Self::SetPrototypeForEach),
+            267 => Some(Self::WeakMapConstructor),
+            268 => Some(Self::WeakMapPrototypeGet),
+            269 => Some(Self::WeakMapPrototypeSet),
+            270 => Some(Self::WeakMapPrototypeHas),
+            271 => Some(Self::WeakMapPrototypeDelete),
+            272 => Some(Self::WeakSetConstructor),
+            273 => Some(Self::WeakSetPrototypeAdd),
+            274 => Some(Self::WeakSetPrototypeHas),
+            275 => Some(Self::WeakSetPrototypeDelete),
             _ => None,
         }
     }
@@ -2352,7 +2419,7 @@ impl Intrinsic {
             Self::ObjectGetOwnPropertySymbols => "getOwnPropertySymbols",
             Self::ObjectGetOwnPropertyDescriptors => "getOwnPropertyDescriptors",
             Self::ObjectAssign => "assign",
-            Self::ReflectSet | Self::MapPrototypeSet => "set",
+            Self::ReflectSet | Self::MapPrototypeSet | Self::WeakMapPrototypeSet => "set",
             Self::ArrayPrototypeFlatMap => "flatMap",
             Self::ObjectFromEntries => "fromEntries",
             Self::MathAcos => "acos",
@@ -2379,11 +2446,16 @@ impl Intrinsic {
             Self::MathTan => "tan",
             Self::MathTanh => "tanh",
             Self::MapConstructor => "Map",
-            Self::MapPrototypeDelete | Self::SetPrototypeDelete => "delete",
+            Self::WeakMapConstructor => "WeakMap",
+            Self::WeakSetConstructor => "WeakSet",
+            Self::MapPrototypeDelete
+            | Self::SetPrototypeDelete
+            | Self::WeakMapPrototypeDelete
+            | Self::WeakSetPrototypeDelete => "delete",
             Self::MapPrototypeClear | Self::SetPrototypeClear => "clear",
             Self::MapPrototypeSize | Self::SetPrototypeSize => "get size",
             Self::SetConstructor => "Set",
-            Self::SetPrototypeAdd => "add",
+            Self::SetPrototypeAdd | Self::WeakSetPrototypeAdd => "add",
             Self::SetPrototypeUnion => "union",
             Self::SetPrototypeIntersection => "intersection",
             Self::SetPrototypeDifference => "difference",
@@ -2510,8 +2582,12 @@ impl Intrinsic {
             Self::NumberIsSafeInteger => "isSafeInteger",
             Self::BooleanConstructor => "Boolean",
             Self::ReflectDeleteProperty => "deleteProperty",
-            Self::ReflectGet | Self::MapPrototypeGet => "get",
-            Self::ReflectHas | Self::MapPrototypeHas | Self::SetPrototypeHas => "has",
+            Self::ReflectGet | Self::MapPrototypeGet | Self::WeakMapPrototypeGet => "get",
+            Self::ReflectHas
+            | Self::MapPrototypeHas
+            | Self::SetPrototypeHas
+            | Self::WeakMapPrototypeHas
+            | Self::WeakSetPrototypeHas => "has",
             Self::ReflectOwnKeys => "ownKeys",
             Self::ObjectDefineProperty | Self::ReflectDefineProperty => "defineProperty",
             Self::ObjectGetOwnPropertyDescriptor | Self::ReflectGetOwnPropertyDescriptor => {
@@ -3010,6 +3086,8 @@ impl Intrinsic {
             | Self::StringPrototypeSup
             | Self::MathRandom
             | Self::MapConstructor
+            | Self::WeakMapConstructor
+            | Self::WeakSetConstructor
             | Self::MapPrototypeClear
             | Self::MapPrototypeSize
             | Self::SetConstructor
@@ -3151,6 +3229,12 @@ impl Intrinsic {
             | Self::MapPrototypeGet
             | Self::MapPrototypeHas
             | Self::MapPrototypeDelete
+            | Self::WeakMapPrototypeGet
+            | Self::WeakMapPrototypeHas
+            | Self::WeakMapPrototypeDelete
+            | Self::WeakSetPrototypeAdd
+            | Self::WeakSetPrototypeHas
+            | Self::WeakSetPrototypeDelete
             | Self::SetPrototypeAdd
             | Self::SetPrototypeHas
             | Self::SetPrototypeDelete
@@ -3221,6 +3305,7 @@ impl Intrinsic {
             | Self::MathAtan2
             | Self::MathHypot
             | Self::MapPrototypeSet
+            | Self::WeakMapPrototypeSet
             | Self::PromisePrototypeThen => 2,
         }
     }
@@ -3593,6 +3678,34 @@ pub fn set_prototype_owns(name: &[u16]) -> bool {
     wrapper_prototype_owns(&SET_PROTOTYPE_PROPERTIES, name)
 }
 
+/// The property names 24.3.3 gives `%WeakMap.prototype%`.
+pub const WEAK_MAP_PROTOTYPE_PROPERTIES: [&str; 7] = [
+    "constructor",
+    "delete",
+    "get",
+    "getOrInsert",
+    "getOrInsertComputed",
+    "has",
+    "set",
+];
+
+/// Whether `%WeakMap.prototype%` or `%Object.prototype%` owns a property of
+/// this name, which a WeakMap resolves on its Prototype Chain.
+#[must_use]
+pub fn weak_map_prototype_owns(name: &[u16]) -> bool {
+    wrapper_prototype_owns(&WEAK_MAP_PROTOTYPE_PROPERTIES, name)
+}
+
+/// The property names 24.4.3 gives `%WeakSet.prototype%`.
+pub const WEAK_SET_PROTOTYPE_PROPERTIES: [&str; 4] = ["add", "constructor", "delete", "has"];
+
+/// Whether `%WeakSet.prototype%` or `%Object.prototype%` owns a property of
+/// this name, which a WeakSet resolves on its Prototype Chain.
+#[must_use]
+pub fn weak_set_prototype_owns(name: &[u16]) -> bool {
+    wrapper_prototype_owns(&WEAK_SET_PROTOTYPE_PROPERTIES, name)
+}
+
 /// The property names 27.2.5 gives `%Promise.prototype%`.
 pub const PROMISE_PROTOTYPE_PROPERTIES: [&str; 4] = ["catch", "constructor", "finally", "then"];
 
@@ -3882,6 +3995,8 @@ pub struct Realm {
     promise_prototype: Root,
     map_prototype: Root,
     set_prototype: Root,
+    weak_map_prototype: Root,
+    weak_set_prototype: Root,
     map_iterator_prototype: Root,
     set_iterator_prototype: Root,
     array_iterator_prototype: Root,
@@ -3928,6 +4043,8 @@ struct Holders {
     promise_prototype: Root,
     map_prototype: Root,
     set_prototype: Root,
+    weak_map_prototype: Root,
+    weak_set_prototype: Root,
     map_iterator_prototype: Root,
     set_iterator_prototype: Root,
     iterator_prototype: Root,
@@ -4024,6 +4141,13 @@ impl Realm {
         let set_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
         let set_prototype = heap.push_root(Value::from_object(set_prototype))?;
 
+        // 24.3.3 and 24.4.3: %WeakMap.prototype% and %WeakSet.prototype% are
+        // ordinary objects and neither a WeakMap nor a WeakSet.
+        let weak_map_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
+        let weak_map_prototype = heap.push_root(Value::from_object(weak_map_prototype))?;
+        let weak_set_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
+        let weak_set_prototype = heap.push_root(Value::from_object(weak_set_prototype))?;
+
         // 20.4.3: %Symbol.prototype% is an ordinary object and not a Symbol.
         let symbol_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
         let symbol_prototype = heap.push_root(Value::from_object(symbol_prototype))?;
@@ -4103,6 +4227,8 @@ impl Realm {
                 promise_prototype,
                 map_prototype,
                 set_prototype,
+                weak_map_prototype,
+                weak_set_prototype,
                 map_iterator_prototype,
                 set_iterator_prototype,
                 iterator_prototype: iterator_prototype_root,
@@ -4121,6 +4247,8 @@ impl Realm {
             (Intrinsic::PromiseConstructor, promise_prototype),
             (Intrinsic::MapConstructor, map_prototype),
             (Intrinsic::SetConstructor, set_prototype),
+            (Intrinsic::WeakMapConstructor, weak_map_prototype),
+            (Intrinsic::WeakSetConstructor, weak_set_prototype),
         ] {
             Self::pair_constructor_with_prototype(heap, &intrinsics, constructor, prototype)?;
         }
@@ -4149,6 +4277,8 @@ impl Realm {
                 (set_prototype, "Set"),
                 (map_iterator_prototype, "Map Iterator"),
                 (set_iterator_prototype, "Set Iterator"),
+                (weak_map_prototype, "WeakMap"),
+                (weak_set_prototype, "WeakSet"),
             ],
         )?;
 
@@ -4191,6 +4321,8 @@ impl Realm {
             promise_prototype,
             map_prototype,
             set_prototype,
+            weak_map_prototype,
+            weak_set_prototype,
             map_iterator_prototype,
             set_iterator_prototype,
             array_iterator_prototype,
@@ -5030,6 +5162,12 @@ impl Realm {
                 IntrinsicHolder::RegExpPrototype => Self::rooted(heap, holders.regexp_prototype)?,
                 IntrinsicHolder::PromisePrototype => Self::rooted(heap, holders.promise_prototype)?,
                 IntrinsicHolder::MapPrototype => Self::rooted(heap, holders.map_prototype)?,
+                IntrinsicHolder::WeakMapPrototype => {
+                    Self::rooted(heap, holders.weak_map_prototype)?
+                }
+                IntrinsicHolder::WeakSetPrototype => {
+                    Self::rooted(heap, holders.weak_set_prototype)?
+                }
                 IntrinsicHolder::SetPrototype => Self::rooted(heap, holders.set_prototype)?,
                 IntrinsicHolder::IteratorPrototype => {
                     Self::rooted(heap, holders.iterator_prototype)?
@@ -5379,6 +5517,24 @@ impl Realm {
     /// Returns [`HeapError::InvalidReference`] when the root is gone.
     pub fn map_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
         Self::rooted(heap, self.map_prototype)
+    }
+
+    /// `%WeakMap.prototype%`, 24.3.3.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale root.
+    pub fn weak_map_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.weak_map_prototype)
+    }
+
+    /// `%WeakSet.prototype%`, 24.4.3.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale root.
+    pub fn weak_set_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.weak_set_prototype)
     }
 
     /// `%MapIteratorPrototype%`, 24.1.5.2.

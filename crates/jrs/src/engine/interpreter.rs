@@ -2429,6 +2429,17 @@ impl RegisterVM {
             | Intrinsic::SetPrototypeSize => {
                 self.call_collection_intrinsic(intrinsic, call, heap, realm)
             }
+            Intrinsic::WeakMapConstructor
+            | Intrinsic::WeakSetConstructor
+            | Intrinsic::WeakMapPrototypeGet
+            | Intrinsic::WeakMapPrototypeSet
+            | Intrinsic::WeakMapPrototypeHas
+            | Intrinsic::WeakMapPrototypeDelete
+            | Intrinsic::WeakSetPrototypeAdd
+            | Intrinsic::WeakSetPrototypeHas
+            | Intrinsic::WeakSetPrototypeDelete => {
+                self.call_weak_collection_intrinsic(intrinsic, call, heap, realm)
+            }
             Intrinsic::NumberIsFinite
             | Intrinsic::NumberIsInteger
             | Intrinsic::NumberIsNaN
@@ -2797,6 +2808,8 @@ impl RegisterVM {
                     | Intrinsic::PromiseConstructor
                     | Intrinsic::MapConstructor
                     | Intrinsic::SetConstructor
+                    | Intrinsic::WeakMapConstructor
+                    | Intrinsic::WeakSetConstructor
             )
         })
     }
@@ -6055,6 +6068,200 @@ impl RegisterVM {
                 Ok(VALUE_UNDEFINED)
             }
         }
+    }
+
+    /// Whether 9.9.4.1 lets the value be a key: an Object, or a Symbol that
+    /// 20.4.2.2 did not put in the registry.
+    fn can_be_held_weakly(key: Value, heap: &GenerationalHeap) -> bool {
+        if key.is_object() {
+            return true;
+        }
+        key.as_symbol()
+            .is_some_and(|symbol| heap.symbol_registry_key(symbol).is_none())
+    }
+
+    /// The `[[WeakMapData]]` of the receiver, or the `[[WeakSetData]]`.
+    fn weak_collection(
+        receiver: Value,
+        set: bool,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<ObjectRef, VMError> {
+        let held = receiver.as_object().filter(|object| {
+            heap.get_object(*object).is_some_and(|entry| {
+                matches!(entry.kind, ObjectKind::WeakCollection { set: holds, .. } if holds == set)
+            })
+        });
+        held.ok_or_else(|| {
+            type_error(
+                heap,
+                realm,
+                "this value carries neither a WeakMap nor a WeakSet of its own",
+            )
+        })
+    }
+
+    /// The constructors of 24.3.1.1 and 24.4.1.1 and the methods of 24.3.3
+    /// and 24.4.3.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a call without
+    /// `new`, for a receiver that carries neither slot and for a key 9.9.4.1
+    /// refuses.
+    fn call_weak_collection_intrinsic(
+        &self,
+        intrinsic: Intrinsic,
+        call: Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let set = matches!(
+            intrinsic,
+            Intrinsic::WeakSetConstructor
+                | Intrinsic::WeakSetPrototypeAdd
+                | Intrinsic::WeakSetPrototypeHas
+                | Intrinsic::WeakSetPrototypeDelete
+        );
+        if matches!(
+            intrinsic,
+            Intrinsic::WeakMapConstructor | Intrinsic::WeakSetConstructor
+        ) {
+            // 24.3.1.1 step 1 and 24.4.1.1 step 1 refuse a call without `new`.
+            if call.construct.is_none() {
+                return Err(type_error(heap, realm, "a constructor called without new"));
+            }
+            let iterable = self.call_argument(&call, 0, heap)?;
+            let collection = Self::create_weak_collection(set, heap, realm)?;
+            if iterable.is_undefined() || iterable.is_null() {
+                return Ok(collection);
+            }
+            return Self::fill_weak_collection(collection, iterable, set, heap, realm);
+        }
+        let collection = Self::weak_collection(call.receiver, set, heap, realm)?;
+        let key = self.call_argument(&call, 0, heap)?;
+        // 24.3.3.3 step 4 and 24.3.3.4 step 4 answer for a key that can hold
+        // no entry rather than raising, and 24.3.3.2 step 4 does the same.
+        if !Self::can_be_held_weakly(key, heap) {
+            return match intrinsic {
+                Intrinsic::WeakMapPrototypeGet => Ok(VALUE_UNDEFINED),
+                Intrinsic::WeakMapPrototypeHas
+                | Intrinsic::WeakSetPrototypeHas
+                | Intrinsic::WeakMapPrototypeDelete
+                | Intrinsic::WeakSetPrototypeDelete => Ok(Value::from_bool(false)),
+                // 24.3.3.5 step 4 and 24.4.3.1 step 4 raise instead.
+                _ => Err(type_error(
+                    heap,
+                    realm,
+                    "a WeakMap or WeakSet key that cannot be held weakly",
+                )),
+            };
+        }
+        match intrinsic {
+            Intrinsic::WeakMapPrototypeGet => {
+                Ok(heap.weak_entry(collection, key).unwrap_or(VALUE_UNDEFINED))
+            }
+            Intrinsic::WeakMapPrototypeHas | Intrinsic::WeakSetPrototypeHas => {
+                Ok(Value::from_bool(heap.has_weak_entry(collection, key)))
+            }
+            // 24.3.3.5 step 7 and 24.4.3.1 step 6 answer the collection, whose
+            // entry holds the key as its own value in a WeakSet.
+            Intrinsic::WeakMapPrototypeSet | Intrinsic::WeakSetPrototypeAdd => {
+                let value = if set {
+                    key
+                } else {
+                    self.call_argument(&call, 1, heap)?
+                };
+                if !heap.has_weak_entry(collection, key)
+                    && heap
+                        .get_object(collection)
+                        .and_then(|object| object.kind.weak_entries())
+                        .is_some_and(|entries| entries.len() >= self.property_limit)
+                {
+                    return Err(VMError::PropertyLimit);
+                }
+                heap.set_weak_entry(collection, key, value)?;
+                Ok(call.receiver)
+            }
+            // 24.3.3.2 and 24.4.3.3 remove the entry outright, because no
+            // iterator of this clause stands at a position.
+            _ => Ok(Value::from_bool(heap.delete_weak_entry(collection, key)?)),
+        }
+    }
+
+    /// The object 24.3.1.1 step 2 and 24.4.1.1 step 2 make.
+    fn create_weak_collection(
+        set: bool,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let prototype = if set {
+            realm.weak_set_prototype(heap)?
+        } else {
+            realm.weak_map_prototype(heap)?
+        };
+        let shape = heap.shapes.root_shape();
+        let object = heap.allocate_object(shape, prototype)?;
+        heap.set_object_kind(
+            object,
+            ObjectKind::WeakCollection {
+                entries: Vec::new(),
+                set,
+            },
+        )?;
+        Ok(Value::from_object(object))
+    }
+
+    /// Step 5 of 24.3.1.1 and of 24.4.1.1, which adds every entry of the
+    /// iterable the constructor was given.
+    fn fill_weak_collection(
+        collection: Value,
+        iterable: Value,
+        set: bool,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let adder = if set {
+            Intrinsic::WeakSetPrototypeAdd
+        } else {
+            Intrinsic::WeakMapPrototypeSet
+        };
+        let object = collection.as_object().ok_or(VMError::TypeError)?;
+        let name = PropertyKey::String(heap.strings.intern(adder.name())?);
+        let held = heap
+            .lookup_named(object, name)?
+            .map(Self::plain_value)
+            .transpose()?
+            .unwrap_or(VALUE_UNDEFINED);
+        if !Self::is_intrinsic(held, adder, heap) {
+            return Err(VMError::Unsupported(
+                "a `set` or an `add` of the Script in 24.3.1.1",
+            ));
+        }
+        for element in Self::iterable_elements(iterable, heap, realm)? {
+            let (key, value) = if set {
+                (element, element)
+            } else {
+                // Step 5.d.i: an entry of a WeakMap is an Object, whose "0"
+                // and "1" steps 5.d.ii and 5.d.iii read with 7.3.2.
+                let entry = element.as_object().ok_or_else(|| {
+                    type_error(heap, realm, "an entry of a WeakMap that is not an object")
+                })?;
+                (
+                    Self::element_at(heap, entry, 0)?.unwrap_or(VALUE_UNDEFINED),
+                    Self::element_at(heap, entry, 1)?.unwrap_or(VALUE_UNDEFINED),
+                )
+            };
+            if !Self::can_be_held_weakly(key, heap) {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "a WeakMap or WeakSet key that cannot be held weakly",
+                ));
+            }
+            heap.set_weak_entry(object, key, value)?;
+        }
+        Ok(collection)
     }
 
     /// The iterators of 24.1.5 and 24.2.5 and the `next` of 24.1.5.2.1 and
@@ -9494,6 +9701,7 @@ impl RegisterVM {
             // suspended body of 27.7.5.3 are reachable from no Script, so no
             // conversion of them is owed.
             | ObjectKind::ArrayIteration { .. }
+            | ObjectKind::WeakCollection { .. }
             | ObjectKind::Continuation { .. }
             | ObjectKind::Accessor { .. }
             | ObjectKind::RegExp { .. }
@@ -9705,6 +9913,22 @@ impl RegisterVM {
                     "a property of %Set.prototype%"
                 } else {
                     "a property of %Map.prototype%"
+                }))
+            }
+            // 24.3.3 gives `%WeakMap.prototype%` the two of the getOrInsert
+            // proposal, which this Realm does not build.
+            Some(ObjectKind::WeakCollection { set, .. })
+                if chain
+                    && (if set {
+                        super::realm::weak_set_prototype_owns(name)
+                    } else {
+                        super::realm::weak_map_prototype_owns(name)
+                    }) =>
+            {
+                Err(VMError::Unsupported(if set {
+                    "a property of %WeakSet.prototype%"
+                } else {
+                    "a property of %WeakMap.prototype%"
                 }))
             }
             // 20.4.2 gives `%Symbol%` more than the thirteen of table 1.
@@ -10318,6 +10542,9 @@ impl RegisterVM {
                 // @@toStringTag, so their builtin tag is the ordinary one, as
                 // 24.1.5.2.2 and 24.2.5.2.2 do for their iterators.
                 | ObjectKind::Collection { .. }
+                // 24.3.3.6 and 24.4.3.5 do the same for a WeakMap and a
+                // WeakSet.
+                | ObjectKind::WeakCollection { .. }
                 | ObjectKind::CollectionIterator { .. }
                 | ObjectKind::ArrayIterator { .. }
                 | ObjectKind::ArrayIteration { .. }

@@ -641,6 +641,78 @@ impl GenerationalHeap {
         }
     }
 
+    /// The value 24.3.3.3 keeps for a key, or none where the collection holds
+    /// no entry for it.
+    #[must_use]
+    pub fn weak_entry(&self, collection: ObjectRef, key: Value) -> Option<Value> {
+        self.get_object(collection)?
+            .kind
+            .weak_entries()?
+            .iter()
+            .find(|(held, _)| *held == key)
+            .map(|(_, value)| *value)
+    }
+
+    /// Whether the collection holds an entry for the key, as 24.3.3.4 and
+    /// 24.4.3.4 answer.
+    #[must_use]
+    pub fn has_weak_entry(&self, collection: ObjectRef, key: Value) -> bool {
+        self.get_object(collection)
+            .and_then(|object| object.kind.weak_entries())
+            .is_some_and(|entries| entries.iter().any(|(held, _)| *held == key))
+    }
+
+    /// Writes the entry of 24.3.3.5 step 7, replacing the value of a key the
+    /// collection already holds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] where the reference names no
+    /// weak collection.
+    pub fn set_weak_entry(
+        &mut self,
+        collection: ObjectRef,
+        key: Value,
+        value: Value,
+    ) -> Result<(), HeapError> {
+        // The entries hold both, so both make an Old-to-Young edge of their
+        // own, which a minor collection follows out of the remembered set.
+        self.remember_object_store(collection, key);
+        self.remember_object_store(collection, value);
+        let entries = self
+            .object_mut(collection)?
+            .kind
+            .weak_entries_mut()
+            .ok_or(HeapError::InvalidReference)?;
+        if let Some(entry) = entries.iter_mut().find(|(held, _)| *held == key) {
+            entry.1 = value;
+            return Ok(());
+        }
+        entries.push((key, value));
+        Ok(())
+    }
+
+    /// Removes the entry of 24.3.3.2 and answers whether one was there.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] where the reference names no
+    /// weak collection.
+    pub fn delete_weak_entry(
+        &mut self,
+        collection: ObjectRef,
+        key: Value,
+    ) -> Result<bool, HeapError> {
+        let entries = self
+            .object_mut(collection)?
+            .kind
+            .weak_entries_mut()
+            .ok_or(HeapError::InvalidReference)?;
+        let before = entries.len();
+        entries.retain(|(held, _)| *held != key);
+        Ok(entries.len() != before)
+    }
+
     /// Reads an immutable elements store from its tagged generation.
     #[must_use]
     pub fn get_elements(&self, reference: ElementsRef) -> Option<&ElementsKind> {
@@ -1628,6 +1700,7 @@ impl GenerationalHeap {
             evacuator.enqueue_old_context(index);
         }
         evacuator.drain()?;
+        evacuator.settle_weak_collections()?;
 
         let stats = evacuator.stats;
         drop(evacuator);
@@ -1660,6 +1733,7 @@ impl GenerationalHeap {
         registers: &[Value],
         accumulator: Value,
     ) -> Result<MajorCollectionStats, HeapError> {
+        let weak_collections;
         let (marked_objects, marked_elements, marked_contexts, marked_strings) = {
             let mut marker = MajorMarker::new(&self.nursery, &self.old_gen);
             for value in self.roots.iter().chain(registers) {
@@ -1667,6 +1741,8 @@ impl GenerationalHeap {
             }
             marker.mark_value(accumulator);
             marker.drain()?;
+            marker.settle_weak_collections()?;
+            weak_collections = core::mem::take(&mut marker.weak_collections);
             (
                 marker.marked_objects,
                 marker.marked_elements,
@@ -1674,6 +1750,21 @@ impl GenerationalHeap {
                 marker.marked_strings,
             )
         };
+
+        for reference in weak_collections {
+            let Some(mut entries) = self
+                .object_mut(reference)?
+                .kind
+                .weak_entries_mut()
+                .map(core::mem::take)
+            else {
+                continue;
+            };
+            entries.retain(|(key, _)| MajorMarker::weak_key_lives(&marked_objects, *key));
+            if let Some(slot) = self.object_mut(reference)?.kind.weak_entries_mut() {
+                *slot = entries;
+            }
+        }
 
         let mut stats = MajorCollectionStats {
             marked_objects: marked_objects.len(),
@@ -1857,6 +1948,7 @@ struct MajorMarker<'heap> {
     visited_young_objects: BTreeSet<u32>,
     visited_young_elements: BTreeSet<u32>,
     visited_young_contexts: BTreeSet<u32>,
+    weak_collections: Vec<ObjectRef>,
     work: Vec<Work>,
 }
 
@@ -1872,6 +1964,7 @@ impl<'heap> MajorMarker<'heap> {
             visited_young_objects: BTreeSet::new(),
             visited_young_elements: BTreeSet::new(),
             visited_young_contexts: BTreeSet::new(),
+            weak_collections: Vec::new(),
             work: Vec::new(),
         }
     }
@@ -1948,7 +2041,78 @@ impl<'heap> MajorMarker<'heap> {
                 .value
         };
         trace_object_work(object, &mut self.work);
+        if object.kind.weak_entries().is_some() {
+            self.weak_collections.push(reference);
+        }
         Ok(())
+    }
+
+    /// Whether a weak key outlives this major collection, which sweeps the Old
+    /// Generation alone: a key that is no object is held by value, a Nursery
+    /// key is not swept here, and an Old Generation key lives once marked.
+    fn weak_key_lives(marked_objects: &BTreeSet<u32>, key: Value) -> bool {
+        key.as_object().is_none_or(|reference| {
+            !reference.is_old() || marked_objects.contains(&reference.index())
+        })
+    }
+
+    /// Marks the value of every weak entry whose key is marked, until no
+    /// further key is, as the minor collection's fixpoint does.
+    fn settle_weak_collections(&mut self) -> Result<(), HeapError> {
+        loop {
+            let seen = self.weak_collections.len();
+            let mut reached: Vec<Value> = Vec::new();
+            for index in 0..seen {
+                let reference = *self
+                    .weak_collections
+                    .get(index)
+                    .ok_or(HeapError::InvalidReference)?;
+                let object = self.object(reference)?;
+                let Some(entries) = object.kind.weak_entries() else {
+                    continue;
+                };
+                for (key, value) in entries {
+                    if Self::weak_key_lives(&self.marked_objects, *key) {
+                        reached.push(*value);
+                    }
+                }
+            }
+            let before = self.marked_objects.len();
+            for value in reached {
+                self.mark_value(value);
+            }
+            self.drain()?;
+            if self.marked_objects.len() == before && self.weak_collections.len() == seen {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// The object an Old Generation or Nursery reference names, with the
+    /// lifetime of the heap the marker reads rather than of the marker.
+    fn object(&self, reference: ObjectRef) -> Result<&'heap JSObject, HeapError> {
+        let index = reference.index() as usize;
+        if reference.is_old() {
+            let entry = self
+                .old
+                .objects
+                .get(index)
+                .ok_or(HeapError::InvalidReference)?;
+            if u32::from(entry.generation) != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
+            entry.value.as_ref().ok_or(HeapError::InvalidReference)
+        } else {
+            if self.nursery.generation != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
+            self.nursery
+                .objects
+                .get(index)
+                .map(|entry| &entry.value)
+                .ok_or(HeapError::InvalidReference)
+        }
     }
 
     fn mark_elements(&mut self, reference: ElementsRef) -> Result<(), HeapError> {
@@ -2071,6 +2235,7 @@ struct Evacuator<'heap> {
     elements_forwarding: BTreeMap<ElementsRef, ElementsRef>,
     context_forwarding: BTreeMap<ContextRef, ContextRef>,
     work: Vec<Work>,
+    weak_collections: Vec<ObjectRef>,
     stats: ScavengeStats,
 }
 
@@ -2084,6 +2249,7 @@ impl<'heap> Evacuator<'heap> {
             elements_forwarding: BTreeMap::new(),
             context_forwarding: BTreeMap::new(),
             work: Vec::new(),
+            weak_collections: Vec::new(),
             stats: ScavengeStats::default(),
         }
     }
@@ -2245,6 +2411,9 @@ impl<'heap> Evacuator<'heap> {
         if let Some(elements) = &mut object.elements {
             *elements = self.evacuate_elements(*elements)?;
         }
+        if object.kind.weak_entries().is_some() {
+            self.weak_collections.push(reference);
+        }
         *self.object_mut(reference)? = object;
         Ok(())
     }
@@ -2265,6 +2434,99 @@ impl<'heap> Evacuator<'heap> {
             self.evacuate_value(value)?;
         }
         *self.context_mut(reference)? = context;
+        Ok(())
+    }
+
+    /// The key of a weak entry, once something else has kept it alive.
+    ///
+    /// A key that is no object is held by value, and an Old Generation key
+    /// outlives a minor collection, which sweeps the Nursery alone; a Nursery
+    /// key lives exactly as long as it has been copied out.
+    fn survivor(&self, key: Value) -> Option<Value> {
+        let Some(reference) = key.as_object() else {
+            return Some(key);
+        };
+        if reference.is_old() {
+            return Some(key);
+        }
+        // A key this fixpoint already rewrote names the target semispace,
+        // which the forwarding map, keyed by the source, does not hold.
+        if reference.generation() == self.to.generation {
+            return Some(key);
+        }
+        self.object_forwarding
+            .get(&reference)
+            .copied()
+            .map(Value::from_object)
+    }
+
+    /// Copies out the value of every weak entry whose key survived, until no
+    /// further key does, and then drops the entries of the keys that did not.
+    ///
+    /// The value of an entry can hold the key of another, so one pass is not
+    /// enough; the fixpoint runs in O(entries * rounds), with one round per
+    /// chain of entries that keeps the next alive.
+    fn settle_weak_collections(&mut self) -> Result<(), HeapError> {
+        loop {
+            let mut progressed = false;
+            let seen = self.weak_collections.len();
+            for index in 0..seen {
+                let reference = *self
+                    .weak_collections
+                    .get(index)
+                    .ok_or(HeapError::InvalidReference)?;
+                let Some(mut entries) = self
+                    .object_mut(reference)?
+                    .kind
+                    .weak_entries_mut()
+                    .map(core::mem::take)
+                else {
+                    continue;
+                };
+                for (key, value) in &mut entries {
+                    let Some(live) = self.survivor(*key) else {
+                        continue;
+                    };
+                    let before = (*key, *value);
+                    *key = live;
+                    // A value an earlier round already copied out names the
+                    // target semispace, which is not a source of this copy.
+                    if !value.as_object().is_some_and(|reference| {
+                        !reference.is_old() && reference.generation() == self.to.generation
+                    }) {
+                        self.evacuate_value(value)?;
+                    }
+                    if before != (*key, *value) {
+                        progressed = true;
+                    }
+                }
+                if let Some(slot) = self.object_mut(reference)?.kind.weak_entries_mut() {
+                    *slot = entries;
+                }
+            }
+            self.drain()?;
+            if !progressed && self.weak_collections.len() == seen {
+                break;
+            }
+        }
+        for index in 0..self.weak_collections.len() {
+            let reference = *self
+                .weak_collections
+                .get(index)
+                .ok_or(HeapError::InvalidReference)?;
+            let Some(mut entries) = self
+                .object_mut(reference)?
+                .kind
+                .weak_entries_mut()
+                .map(core::mem::take)
+            else {
+                continue;
+            };
+            entries.retain(|(key, _)| self.survivor(*key).is_some());
+            if let Some(slot) = self.object_mut(reference)?.kind.weak_entries_mut() {
+                *slot = entries;
+            }
+        }
         Ok(())
     }
 
@@ -2449,6 +2711,11 @@ fn object_contains_young(object: &JSObject) -> bool {
             .context()
             .is_some_and(super::context::ContextRef::is_young)
         || object.elements.is_some_and(ElementsRef::is_young)
+        || object.kind.weak_entries().is_some_and(|entries| {
+            entries
+                .iter()
+                .any(|(key, value)| value_is_young(*key) || value_is_young(*value))
+        })
 }
 
 fn elements_contain_young(elements: &ElementsKind) -> bool {
@@ -2558,6 +2825,129 @@ mod tests {
         heap.root_value(root)
             .and_then(Value::as_object)
             .expect("rooted object")
+    }
+
+    #[test]
+    fn a_weak_entry_lives_exactly_as_long_as_its_key() {
+        let mut heap = GenerationalHeap::with_nursery_capacity(8);
+        let shape = heap.shapes.root_shape();
+        heap.enter_scope();
+        let map = heap.allocate_object(shape, VALUE_NULL).unwrap();
+        heap.set_object_kind(
+            map,
+            ObjectKind::WeakCollection {
+                entries: Vec::new(),
+                set: false,
+            },
+        )
+        .unwrap();
+        let held = heap.allocate_object(shape, VALUE_NULL).unwrap();
+        let dropped = heap.allocate_object(shape, VALUE_NULL).unwrap();
+        let first = heap.allocate_object(shape, VALUE_NULL).unwrap();
+        let second = heap.allocate_object(shape, VALUE_NULL).unwrap();
+        heap.set_weak_entry(map, Value::from_object(held), Value::from_object(first))
+            .unwrap();
+        heap.set_weak_entry(map, Value::from_object(dropped), Value::from_object(second))
+            .unwrap();
+        let map_root = heap.push_root(Value::from_object(map)).unwrap();
+        let held_root = heap.push_root(Value::from_object(held)).unwrap();
+
+        heap.scavenge().unwrap();
+
+        let map = rooted_object(&heap, map_root);
+        let held = rooted_object(&heap, held_root);
+        let entries = heap
+            .get_object(map)
+            .and_then(|object| object.kind.weak_entries())
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, Value::from_object(held));
+        // The value of the entry that stayed was copied out with it.
+        assert!(heap.get_object(entries[0].1.as_object().unwrap()).is_some());
+    }
+
+    #[test]
+    fn a_weak_value_that_holds_the_key_of_another_entry_keeps_that_entry() {
+        let mut heap = GenerationalHeap::with_nursery_capacity(8);
+        let shape = heap.shapes.root_shape();
+        heap.enter_scope();
+        let map = heap.allocate_object(shape, VALUE_NULL).unwrap();
+        heap.set_object_kind(
+            map,
+            ObjectKind::WeakCollection {
+                entries: Vec::new(),
+                set: false,
+            },
+        )
+        .unwrap();
+        let held = heap.allocate_object(shape, VALUE_NULL).unwrap();
+        // The value of the first entry is the key of the second, which only a
+        // fixpoint reaches.
+        let chained = heap.allocate_object(shape, VALUE_NULL).unwrap();
+        let last = heap.allocate_object(shape, VALUE_NULL).unwrap();
+        heap.set_weak_entry(map, Value::from_object(held), Value::from_object(chained))
+            .unwrap();
+        heap.set_weak_entry(map, Value::from_object(chained), Value::from_object(last))
+            .unwrap();
+        let map_root = heap.push_root(Value::from_object(map)).unwrap();
+        heap.push_root(Value::from_object(held)).unwrap();
+
+        heap.scavenge().unwrap();
+
+        let map = rooted_object(&heap, map_root);
+        let entries = heap
+            .get_object(map)
+            .and_then(|object| object.kind.weak_entries())
+            .unwrap();
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn a_major_collection_drops_the_weak_entry_of_an_unmarked_key() {
+        let mut heap = GenerationalHeap::with_nursery_capacity(8);
+        let shape = heap.shapes.root_shape();
+        heap.enter_scope();
+        let map = heap.allocate_object(shape, VALUE_NULL).unwrap();
+        heap.set_object_kind(
+            map,
+            ObjectKind::WeakCollection {
+                entries: Vec::new(),
+                set: true,
+            },
+        )
+        .unwrap();
+        let held = heap.allocate_object(shape, VALUE_NULL).unwrap();
+        let dropped = heap.allocate_object(shape, VALUE_NULL).unwrap();
+        heap.set_weak_entry(map, Value::from_object(held), Value::from_object(held))
+            .unwrap();
+        heap.set_weak_entry(
+            map,
+            Value::from_object(dropped),
+            Value::from_object(dropped),
+        )
+        .unwrap();
+        let map_root = heap.push_root(Value::from_object(map)).unwrap();
+        let held_root = heap.push_root(Value::from_object(held)).unwrap();
+        // Two scavenges promote everything that is still reachable, so the
+        // mark-sweep of the Old Generation is what decides the entries.
+        heap.scavenge().unwrap();
+        let map = rooted_object(&heap, map_root);
+        let held = rooted_object(&heap, held_root);
+        heap.set_weak_entry(map, Value::from_object(held), Value::from_object(held))
+            .unwrap();
+
+        heap.collect_old().unwrap();
+
+        let map = rooted_object(&heap, map_root);
+        let entries = heap
+            .get_object(map)
+            .and_then(|object| object.kind.weak_entries())
+            .unwrap();
+        assert!(
+            entries
+                .iter()
+                .all(|(key, _)| *key == Value::from_object(held))
+        );
     }
 
     #[test]

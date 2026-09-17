@@ -8666,6 +8666,11 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::MapPrototypeDelete
         | crate::engine::realm::Intrinsic::SetPrototypeHas
         | crate::engine::realm::Intrinsic::SetPrototypeDelete
+        // 24.3.3.4, 24.3.3.2, 24.4.3.4 and 24.4.3.3 answer a Boolean.
+        | crate::engine::realm::Intrinsic::WeakMapPrototypeHas
+        | crate::engine::realm::Intrinsic::WeakMapPrototypeDelete
+        | crate::engine::realm::Intrinsic::WeakSetPrototypeHas
+        | crate::engine::realm::Intrinsic::WeakSetPrototypeDelete
         // 24.2.3.12, 24.2.3.13 and 24.2.3.11 answer a Boolean.
         | crate::engine::realm::Intrinsic::SetPrototypeIsSubsetOf
         | crate::engine::realm::Intrinsic::SetPrototypeIsSupersetOf
@@ -8864,6 +8869,13 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::MapPrototypeSet
         | crate::engine::realm::Intrinsic::SetConstructor
         | crate::engine::realm::Intrinsic::SetPrototypeAdd
+        // 24.3.3.3 answers the value an entry holds, and 24.3.3.5, 24.4.3.1
+        // and the two constructors answer the collection itself.
+        | crate::engine::realm::Intrinsic::WeakMapConstructor
+        | crate::engine::realm::Intrinsic::WeakMapPrototypeGet
+        | crate::engine::realm::Intrinsic::WeakMapPrototypeSet
+        | crate::engine::realm::Intrinsic::WeakSetConstructor
+        | crate::engine::realm::Intrinsic::WeakSetPrototypeAdd
         // 24.1.5.1 and 24.2.5.1 answer an iterator, and 7.4.14 an ordinary
         // object with a `value` and a `done`.
         | crate::engine::realm::Intrinsic::MapPrototypeEntries

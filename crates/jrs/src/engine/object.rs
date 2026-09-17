@@ -133,6 +133,19 @@ pub enum ObjectKind {
         /// value as well.
         set: bool,
     },
+    /// The `[[WeakMapData]]` of 24.3.4 and the `[[WeakSetData]]` of 24.4.4.
+    ///
+    /// The pairs are held here rather than in an Array, because the collector
+    /// must not follow a key: an entry lives only as long as something else
+    /// holds its key, which is what `weak_entries` and `weak_entries_mut` name
+    /// and `values` deliberately does not.
+    WeakCollection {
+        /// Each entry as its key and its value, in the order 24.3.3.3 added
+        /// them; the Set of 24.4 answers its key as its value as well.
+        entries: alloc::vec::Vec<(Value, Value)>,
+        /// Whether this is the Set of 24.4.
+        set: bool,
+    },
     /// Array Iterator instance, the slots of 23.1.5.3.
     ArrayIterator {
         /// `[[IteratedArrayLike]]`, undefined once the iteration is done.
@@ -336,6 +349,25 @@ impl ObjectKind {
             Self::Function { context, .. }
             | Self::Continuation { context, .. }
             | Self::Arguments { context, .. } => context.as_mut(),
+            _ => None,
+        }
+    }
+
+    /// The entries of a weak collection, which no collector follows without
+    /// first finding the key alive elsewhere.
+    #[must_use]
+    pub const fn weak_entries(&self) -> Option<&alloc::vec::Vec<(Value, Value)>> {
+        match self {
+            Self::WeakCollection { entries, .. } => Some(entries),
+            _ => None,
+        }
+    }
+
+    /// The entries of a weak collection, for the clause that writes one and
+    /// for the collector that prunes a dead key.
+    pub const fn weak_entries_mut(&mut self) -> Option<&mut alloc::vec::Vec<(Value, Value)>> {
+        match self {
+            Self::WeakCollection { entries, .. } => Some(entries),
             _ => None,
         }
     }

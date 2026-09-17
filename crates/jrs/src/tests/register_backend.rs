@@ -9063,3 +9063,71 @@ fn the_for_each_of_24_1_3_5_and_24_2_3_7_calls_back_per_entry() -> Result<(), Er
     }
     Ok(())
 }
+
+#[test]
+fn the_weak_collections_of_24_3_and_24_4_hold_an_entry_per_key() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend carries no WeakSet, so only the engine answers.
+    for (source, answer) in [
+        ("var m=new WeakMap();var k={};m.set(k,1);''+m.get(k)", "1"),
+        ("var m=new WeakMap();''+m.get({})", "undefined"),
+        (
+            "var s=new WeakSet();var k={};s.add(k);''+s.has(k)+s.has({})",
+            "truefalse",
+        ),
+        (
+            "var m=new WeakMap();var k={};m.set(k,1);''+m.delete(k)+m.has(k)+m.delete(k)",
+            "truefalsefalse",
+        ),
+        // Step 5 of both constructors reads the iterable.
+        ("var k={};''+new WeakMap([[k,7]]).get(k)", "7"),
+        ("var k={};''+new WeakSet([k]).has(k)", "true"),
+        // 9.9.4.1: an Object and an unregistered Symbol are keys, and 24.3.3.5
+        // step 4 refuses everything else.
+        (
+            "var y=Symbol();var m=new WeakMap();m.set(y,3);''+m.get(y)",
+            "3",
+        ),
+        (
+            "var r;try{new WeakMap().set(Symbol.for('a'),1)}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{new WeakSet().add(1)}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        // 24.3.3.3 step 4 and 24.3.3.4 step 4 answer for such a key instead.
+        (
+            "var m=new WeakMap();''+m.get(1)+m.has(1)+m.delete(1)",
+            "undefinedfalsefalse",
+        ),
+        // Step 1 of both constructors refuses a call without `new`.
+        (
+            "var r;try{WeakMap()}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        // Step 3 of each method refuses a receiver that carries no slot.
+        (
+            "var r;try{WeakMap.prototype.get.call(new WeakSet(),{})}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        (
+            "''+Object.prototype.toString.call(new WeakMap())+Object.prototype.toString.call(new WeakSet())",
+            "[object WeakMap][object WeakSet]",
+        ),
+        (
+            "''+WeakMap.length+WeakMap.prototype.set.length+WeakSet.prototype.add.length",
+            "021",
+        ),
+        // The entry of a key the Script still holds survives the collections
+        // six hundred keys make.
+        (
+            "var m=new WeakMap();var i=0;var k;while(i<600){k={};m.set(k,i);i=i+1}''+m.get(k)",
+            "599",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}
