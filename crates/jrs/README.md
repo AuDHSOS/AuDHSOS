@@ -662,7 +662,8 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same, before the three list forms of 23.2.5.1 (outdated) | focused | `3eebb13` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/TypedArray test/built-ins/TypedArrayConstructors --summary` | 2,184 | 4,322 | 824 (19.07%) | 1,014 (23.46%) | 2,484 (57.47%) |
 | The same, on the stack backend, which carries no clause 23.2 (focused) | focused | `3eebb13` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/TypedArray test/built-ins/TypedArrayConstructors --summary` | 2,184 | 4,322 | 0 (0.00%) | 4,262 (98.61%) | 60 (1.39%) |
 | The same, before the three further rows of table 71 (outdated) | focused | `9d12e52` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/TypedArray test/built-ins/TypedArrayConstructors --summary` | 2,184 | 4,322 | 144 (3.33%) | 3,326 (76.96%) | 852 (19.71%) |
-| `%Iterator%` (focused) | focused | `e6fa517` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Iterator --summary` | 654 | 1,308 | 122 (9.33%) | 692 (52.91%) | 494 (37.77%) |
+| `%Iterator%` (focused) | focused | `bee51e3` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Iterator --summary` | 654 | 1,308 | 170 (13.00%) | 642 (49.08%) | 496 (37.92%) |
+| The same, before the five helpers of 27.1.5 that answer at once (outdated) | focused | `e6fa517` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Iterator --summary` | 654 | 1,308 | 122 (9.33%) | 692 (52.91%) | 494 (37.77%) |
 | The same, before the `toArray` and the `forEach` of 27.1.5 (outdated) | focused | `69e48f0` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Iterator --summary` | 654 | 1,308 | 102 (7.80%) | 712 (54.43%) | 494 (37.77%) |
 | `%DataView%` (focused) | focused | `0f39a55` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/DataView --summary` | 561 | 1,122 | 676 (60.25%) | 184 (16.40%) | 262 (23.35%) |
 | The same, on the stack backend, which carries no clause 25.3 (focused) | focused | `0f39a55` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/DataView --summary` | 561 | 1,122 | 0 (0.00%) | 1,062 (94.65%) | 60 (5.35%) |
@@ -864,8 +865,9 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same, before the iterable of 24.1.1.1 (outdated) | focused | `48b1816` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Map test/built-ins/Set --summary` | 587 | 1,169 | 458 (39.18%) | 192 (16.42%) | 519 (44.40%) |
 | The same, before the iterators of 24.1.5 and 24.2.5 (outdated) | focused | `29cc550` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Map test/built-ins/Set --summary` | 587 | 1,169 | 336 (28.74%) | 240 (20.53%) | 593 (50.73%) |
 | The same, on the stack backend (focused) | focused | `29cc550` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Map test/built-ins/Set --summary` | 587 | 1,169 | 0 (0.00%) | 1,051 (89.91%) | 118 (10.09%) |
-| Complete pinned suite, including staging and Intl | full | `e6fa517` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `e6fa517` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 40,613 (39.46%) | 19,740 (19.18%) | 42,572 (41.36%) |
+| Complete pinned suite, including staging and Intl | full | `bee51e3` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 32,083 (31.17%) | 35,268 (34.26%) |
+| Complete pinned suite on the register engine | full | `bee51e3` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 40,721 (39.56%) | 19,630 (19.07%) | 42,574 (41.36%) |
+| Complete pinned suite on the register engine, before the five helpers of 27.1.5 that answer at once (outdated) | full | `e6fa517` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 40,613 (39.46%) | 19,740 (19.18%) | 42,572 (41.36%) |
 | Complete pinned suite on the register engine, before the `toArray` and the `forEach` of 27.1.5 (outdated) | full | `69e48f0` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 40,571 (39.42%) | 19,782 (19.22%) | 42,572 (41.36%) |
 | Complete pinned suite on the register engine, before the `Iterator` of 27.1.4 (outdated) | full | `0f39a55` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 40,457 (39.31%) | 19,018 (18.48%) | 43,450 (42.22%) |
 | Complete pinned suite on the register engine, before the host object of the conformance suite (outdated) | full | `004e277` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 40,193 (39.05%) | 19,836 (19.27%) | 42,896 (41.68%) |
@@ -1822,7 +1824,14 @@ variants and lost none, because the suite reaches the shape through harnesses
 that need other features. The `%String.prototype%` runs and both full runs
 beside 22.1.3.9, 22.1.3.12, 22.1.3.29 and B.2.2.1 were measured at tree
 `8cd027ac5c29e9541f3980f874159db63c1da509`, which is the tree of `6952e99`;
-that step gained 78 variants and lost none.
+that step gained 78 variants and lost none. The `%Iterator%` runs and both
+full runs beside the five helpers of 27.1.5 that answer at once were measured
+at tree `a1cabb8b96cc4d5833124056da004d5261023560`, which is the tree of
+`bee51e3`; that step gained 108 variants, lost none, and moved the two
+variants of `argument-effect-order.js` from a wrong failure to the named gap
+of an accessor. Its full stack run classified every one of the 102,925
+variants as the run beside `e6fa517` did, and its failed and unsupported
+columns carry the split that run measured.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
