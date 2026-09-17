@@ -878,7 +878,8 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same, before the iterators of 24.1.5 and 24.2.5 (outdated) | focused | `29cc550` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Map test/built-ins/Set --summary` | 587 | 1,169 | 336 (28.74%) | 240 (20.53%) | 593 (50.73%) |
 | The same, on the stack backend (focused) | focused | `29cc550` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Map test/built-ins/Set --summary` | 587 | 1,169 | 0 (0.00%) | 1,051 (89.91%) | 118 (10.09%) |
 | Complete pinned suite, including staging and Intl | full | `bee51e3` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 32,083 (31.17%) | 35,268 (34.26%) |
-| Complete pinned suite on the register engine | full | `ed7b0e6` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 45,799 (44.50%) | 20,100 (19.53%) | 37,026 (35.97%) |
+| Complete pinned suite on the register engine | full | `0fce6ba` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 49,342 (47.94%) | 20,153 (19.58%) | 33,430 (32.48%) |
+| Complete pinned suite on the register engine, before the generator method of 27.5 (outdated) | full | `ed7b0e6` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 45,799 (44.50%) | 20,100 (19.53%) | 37,026 (35.97%) |
 | Complete pinned suite on the register engine, before the generator of 27.5 (outdated) | full | `8bd5bc6` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 43,491 (42.25%) | 19,624 (19.07%) | 39,810 (38.68%) |
 | Complete pinned suite on the register engine, before the private method of 15.7.1 (outdated) | full | `10ecace` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 42,340 (41.14%) | 19,630 (19.07%) | 40,955 (39.79%) |
 | Complete pinned suite on the register engine, before the `this` an arrow reads beside a captured name (outdated) | full | `1fc1014` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 42,318 (41.12%) | 19,616 (19.06%) | 40,991 (39.83%) |
@@ -1892,7 +1893,10 @@ tree `a1d646ab03e5e1cb7b76d9d22408ac0d3db02957`, which is the tree of
 `ed7b0e6`; that step gained 2,308 variants and lost none, and moved 478
 variants from unsupported to failed: a test whose own gap the generator closed
 runs into the next one, which is the rest of the helpers of 27.1.3.3 for 168
-of them and the block-scoped redeclaration of 14.2.1 for 48.
+of them and the block-scoped redeclaration of 14.2.1 for 48. The full run beside the
+generator method of 27.5 was measured at tree
+`eae64ed5daf486c3c33237b22a9d90c9d798acf7`, which is the tree of `0fce6ba`;
+that step gained 3,543 variants and lost none.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
