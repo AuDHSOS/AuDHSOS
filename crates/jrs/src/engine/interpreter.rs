@@ -397,6 +397,12 @@ pub enum Resume {
         /// and the frame this opens would take that place.
         held: Option<Root>,
     },
+    /// 27.5.1.2 took the body of a Generator back, and the answer is what it
+    /// left with.
+    GeneratorStep {
+        /// Root holding the Generator whose body ran.
+        state: Root,
+    },
     /// A native operation asked the Script for a primitive argument.
     ///
     /// The native has no frame, and the caller's registers still hold the
@@ -701,6 +707,15 @@ const ITERATOR_WALK_FIND: i32 = 10;
 /// It carries the accumulator of 27.1.3.3.9 from element to element.
 const ITERATOR_WALK_REDUCE: i32 = 11;
 
+/// `[[GeneratorState]]` of 27.5.1 before the body has run.
+const GENERATOR_SUSPENDED_START: u8 = 0;
+/// The same, where the body suspended at a `yield` of 15.5.
+const GENERATOR_SUSPENDED_YIELD: u8 = 1;
+/// The same, while the body runs.
+const GENERATOR_RUNNING: u8 = 2;
+/// The same, once the body is done.
+const GENERATOR_COMPLETED: u8 = 3;
+
 /// The walk of 7.4.2 has not called the `@@iterator` yet.
 const ITERATOR_WALK_STARTING: i32 = 0;
 /// It is waiting for the `@@iterator` it called.
@@ -894,6 +909,10 @@ pub struct RegisterVM {
     /// How deep a `ToString` of 7.1.17 is nested in methods of this Realm,
     /// which bounds what a cyclic Array spends the Rust stack on.
     conversion_depth: usize,
+    /// Where a frame the run just opened carries on, which 27.5.1.2 sets to
+    /// the offset the body of a Generator suspended at. Every other call
+    /// starts at the first instruction.
+    pending_pc: Option<usize>,
     /// `[[NewTarget]]` of the call about to be entered (9.4.3).
     ///
     /// It is set where the frame is opened and read where the frame is
@@ -1046,6 +1065,7 @@ impl RegisterVM {
             current_context: None,
             context_roots: Vec::with_capacity(register_capacity.saturating_add(1)),
             conversion_depth: 0,
+            pending_pc: None,
             pending_new_target: VALUE_UNDEFINED,
             pending_source: None,
             pending_script: false,
@@ -1375,6 +1395,39 @@ impl RegisterVM {
             name,
             Value::from_object(prototype),
             PropertyFlags::constructor_data(),
+        )?;
+        Ok(())
+    }
+
+    /// 27.3.3: a generator function inherits from
+    /// `%GeneratorFunction.prototype%` and carries a `prototype` of its own,
+    /// whose Prototype is `%GeneratorPrototype%`.
+    ///
+    /// The accumulator carries the function through the allocation, because
+    /// the collector only follows what it can see.
+    fn make_generator_function(
+        &mut self,
+        code: &BytecodeFunction,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let prototype = self.allocate_object(code, heap, realm, heap.shapes.root_shape())?;
+        let generator_prototype = realm.generator_prototype(heap)?;
+        heap.set_object_prototype(prototype, generator_prototype)?;
+        let function = self.acc.as_object().ok_or(VMError::TypeError)?;
+        let inherited = realm.generator_function_prototype(heap)?;
+        heap.set_object_prototype(function, inherited)?;
+        let name = PropertyKey::String(heap.strings.intern("prototype")?);
+        heap.define_own_named(
+            function,
+            name,
+            Value::from_object(prototype),
+            PropertyFlags {
+                writable: true,
+                enumerable: false,
+                configurable: false,
+                is_accessor: false,
+            },
         )?;
         Ok(())
     }
@@ -2113,6 +2166,13 @@ impl RegisterVM {
             let capability = promise::capability(heap, realm)?;
             self.write_reg(register, capability)?;
         }
+        // 27.5.1.1 makes the Generator of the call before the body runs, with
+        // the `prototype` the function carries, and the frame keeps it in a
+        // register of its own.
+        if let Some(register) = callee.generator_register {
+            let generator = Self::allocate_generator(function_ref, heap, realm)?;
+            self.write_reg(register, generator)?;
+        }
         self.acc = VALUE_UNDEFINED;
         Ok(Some(code_id))
     }
@@ -2516,7 +2576,10 @@ impl RegisterVM {
             | Intrinsic::IteratorPrototypeSome
             | Intrinsic::IteratorPrototypeEvery
             | Intrinsic::IteratorPrototypeFind
-            | Intrinsic::IteratorPrototypeReduce => Err(VMError::InvalidFeedbackVector),
+            | Intrinsic::IteratorPrototypeReduce
+            | Intrinsic::GeneratorPrototypeNext
+            | Intrinsic::GeneratorPrototypeReturn
+            | Intrinsic::GeneratorPrototypeThrow => Err(VMError::InvalidFeedbackVector),
             // 20.5.3.4 joins the `name` and the `message` the Error holds.
             Intrinsic::ErrorPrototypeToString => self.error_text(call.receiver, heap, realm),
             // 20.2.3 accepts any argument and answers undefined.
@@ -4786,6 +4849,16 @@ impl RegisterVM {
                 heap,
                 realm,
             );
+        }
+        // 27.5.1.2 to 27.5.1.4 take the body of a Generator back where it
+        // suspended, which is a frame this call pushes.
+        if matches!(
+            intrinsic,
+            Intrinsic::GeneratorPrototypeNext
+                | Intrinsic::GeneratorPrototypeReturn
+                | Intrinsic::GeneratorPrototypeThrow
+        ) {
+            return self.begin_generator_step(intrinsic, call, units, heap, realm);
         }
         // 27.1.3.3.12 collects what the iterator answers, 27.1.3.3.7 calls its
         // procedure with each of them and the three of 27.1.3.3 that stop early
@@ -11782,6 +11855,7 @@ impl RegisterVM {
             | ObjectKind::DataView { .. }
             | ObjectKind::TypedArray { .. }
             | ObjectKind::Continuation { .. }
+            | ObjectKind::Generator { .. }
             | ObjectKind::Accessor { .. }
             | ObjectKind::RegExp { .. }
             // 27.2.5.5 tags a Promise through @@toStringTag, and 24.1.3.13 and
@@ -12694,6 +12768,8 @@ impl RegisterVM {
                 | ObjectKind::SharedArrayBuffer { .. }
                 | ObjectKind::Atomics
                 | ObjectKind::Host262
+                // 27.5.1.5 tags a Generator through @@toStringTag.
+                | ObjectKind::Generator { .. }
                 | ObjectKind::DataView { .. }
                 | ObjectKind::TypedArray { .. }
                 | ObjectKind::CollectionIterator { .. }
@@ -17266,7 +17342,7 @@ impl RegisterVM {
             }
             Conversion::Suspended(code_id) => {
                 *current_code_id = Some(code_id);
-                *pc = 0;
+                *pc = self.pending_pc.take().unwrap_or(0);
             }
         }
         Ok(true)
@@ -19044,6 +19120,280 @@ impl RegisterVM {
         Some((intrinsic, state.as_object()?))
     }
 
+    /// 27.5.1.2: takes the body of a Generator back where it suspended, with
+    /// the value the call was given.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a receiver that is
+    /// no Generator and for one whose body is running.
+    fn begin_generator_step(
+        &mut self,
+        intrinsic: Intrinsic,
+        call: Call,
+        units: CodeUnits<'_>,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let Some(generator) = call.receiver.as_object() else {
+            return Err(type_error(
+                heap,
+                realm,
+                "the receiver of 27.5.1 is no Generator",
+            ));
+        };
+        let Some(&ObjectKind::Generator {
+            continuation,
+            state,
+        }) = heap.get_object(generator).map(|entry| &entry.kind)
+        else {
+            return Err(type_error(
+                heap,
+                realm,
+                "the receiver of 27.5.1 is no Generator",
+            ));
+        };
+        // 27.5.1.2 step 4 refuses a Generator whose body is running.
+        if state == GENERATOR_RUNNING {
+            return Err(type_error(
+                heap,
+                realm,
+                "a Generator that is already running",
+            ));
+        }
+        if intrinsic != Intrinsic::GeneratorPrototypeNext {
+            // 27.5.3.2 steps 5 and 6 take the body back with an abrupt
+            // completion, which runs the handlers of 14.15 that stand between
+            // the `yield` and the end of the body. A body that carries none
+            // ends where it stands, which is what this does; every other one
+            // names the gap.
+            if state != GENERATOR_COMPLETED
+                && !continuation.is_undefined()
+                && Self::continuation_handles(continuation, units, heap)
+            {
+                return Err(VMError::Unsupported(
+                    "a return or a throw of a Generator inside a try",
+                ));
+            }
+            heap.set_object_kind(
+                generator,
+                ObjectKind::Generator {
+                    continuation: VALUE_UNDEFINED,
+                    state: GENERATOR_COMPLETED,
+                },
+            )?;
+            if intrinsic == Intrinsic::GeneratorPrototypeThrow {
+                let thrown = self.call_argument(&call, 0, heap)?;
+                return Err(VMError::Thrown(thrown, None));
+            }
+            let value = self.call_argument(&call, 0, heap)?;
+            self.acc = Self::iterator_result(None, heap, realm)?;
+            let result = self.acc.as_object().ok_or(VMError::TypeError)?;
+            let key = PropertyKey::String(heap.strings.intern("value")?);
+            heap.define_own_named(result, key, value, PropertyFlags::ordinary_data())?;
+            return Ok(None);
+        }
+        let sent = self.call_argument(&call, 0, heap)?;
+        // 27.5.1.2 step 5: a Generator that is done answers the same result
+        // every time.
+        let Some(frame) = continuation
+            .as_object()
+            .filter(|_| state != GENERATOR_COMPLETED)
+        else {
+            self.acc = Self::iterator_result(None, heap, realm)?;
+            return Ok(None);
+        };
+        heap.set_object_kind(
+            generator,
+            ObjectKind::Generator {
+                continuation,
+                state: GENERATOR_RUNNING,
+            },
+        )?;
+        // The Generator outlives every frame its body opens, so it is a root
+        // of a scope of its own, which the answer leaves.
+        heap.enter_scope();
+        let held = heap.push_root(Value::from_object(generator))?;
+        let entered = self.resume_generator_frame(frame, sent, call, held, units, heap);
+        if entered.is_err() {
+            heap.exit_scope();
+        }
+        entered
+    }
+
+    /// Whether the body a Generator suspended in carries a handler of 14.15
+    /// that an abrupt completion of 27.5.3.2 would run.
+    fn continuation_handles(
+        continuation: Value,
+        units: CodeUnits<'_>,
+        heap: &GenerationalHeap,
+    ) -> bool {
+        let Some(frame) = continuation.as_object() else {
+            return false;
+        };
+        let Some(&ObjectKind::Continuation { unit, code_id, .. }) =
+            heap.get_object(frame).map(|entry| &entry.kind)
+        else {
+            return true;
+        };
+        units
+            .table
+            .root(unit)
+            .and_then(|root| code_unit(root, (code_id != u32::MAX).then_some(code_id)))
+            .is_none_or(|code| !code.handlers.is_empty())
+    }
+
+    /// The frame a Generator suspended in, pushed on the frame the call to
+    /// 27.5.1.2 stands in so that its return reaches that call.
+    fn resume_generator_frame(
+        &mut self,
+        frame: ObjectRef,
+        sent: Value,
+        call: Call,
+        held: Root,
+        units: CodeUnits<'_>,
+        heap: &GenerationalHeap,
+    ) -> Result<Option<u32>, VMError> {
+        let Some(&ObjectKind::Continuation {
+            unit,
+            code_id,
+            pc,
+            bindings,
+            registers,
+            context,
+            ..
+        }) = heap.get_object(frame).map(|entry| &entry.kind)
+        else {
+            return Err(VMError::TypeError);
+        };
+        let list = registers.as_object().ok_or(VMError::TypeError)?;
+        let Some(&ObjectKind::Array { length: count, .. }) =
+            heap.get_object(list).map(|entry| &entry.kind)
+        else {
+            return Err(VMError::TypeError);
+        };
+        if self.frames.len() >= self.call_frame_limit {
+            return Err(VMError::CallStackOverflow);
+        }
+        let bindings = usize::from(bindings);
+        if bindings > self.binding_limit {
+            return Err(VMError::BindingStackOverflow);
+        }
+        let next_frame = self
+            .fp
+            .checked_add(units.active.register_count as usize)
+            .ok_or(VMError::StackOverflow)?;
+        let frame_end = next_frame
+            .checked_add(count as usize)
+            .ok_or(VMError::StackOverflow)?;
+        self.stack
+            .get_mut(next_frame..frame_end)
+            .ok_or(VMError::StackOverflow)?
+            .fill(VALUE_UNDEFINED);
+        self.frames.push(FrameHeader {
+            caller_fp: self.fp,
+            return_pc: call.return_pc,
+            caller_code_id: call.caller_code_id,
+            caller_unit: self.unit,
+            caller_binding_count: self.active_binding_count,
+            caller_context: self.current_context,
+            resume: Some(Resume::GeneratorStep { state: held }),
+            construct: None,
+            arguments: None,
+        });
+        self.fp = next_frame;
+        self.unit = unit;
+        self.current_context = context;
+        self.active_binding_count = bindings;
+        for index in 0..count {
+            let value = promise::slot(heap, registers, index);
+            self.write_reg(
+                Reg(u16::try_from(index).map_err(|_| VMError::StackOverflow)?),
+                value,
+            )?;
+        }
+        self.acc = sent;
+        self.pending_pc = Some(usize::try_from(pc).map_err(|_| VMError::StackOverflow)?);
+        Ok(Some(code_id))
+    }
+
+    /// 27.5.1.2 step 8: the body of a Generator left, and what it left with
+    /// is the value of the result object the call answers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Heap`] where the Generator is no longer reachable.
+    fn finish_generator_step(
+        &mut self,
+        state: Root,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let generator = heap
+            .root_value(state)
+            .and_then(Value::as_object)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        // The Generator stood in a scope of its own while its body ran.
+        heap.exit_scope();
+        let Some(&ObjectKind::Generator {
+            continuation,
+            state: held,
+        }) = heap.get_object(generator).map(|entry| &entry.kind)
+        else {
+            return Err(VMError::TypeError);
+        };
+        // The body suspended at a `yield` where it holds a continuation of its
+        // own again; every other state says it ran to its end.
+        let done = held != GENERATOR_SUSPENDED_YIELD;
+        if done {
+            heap.set_object_kind(
+                generator,
+                ObjectKind::Generator {
+                    continuation,
+                    state: GENERATOR_COMPLETED,
+                },
+            )?;
+        }
+        let value = self.acc;
+        // 7.4.1 makes the object out of the value and the flag, which the
+        // shape of `iterator_result` says by the value it was given.
+        self.acc = Self::iterator_result((!done).then_some(value), heap, realm)?;
+        if done {
+            let key = PropertyKey::String(heap.strings.intern("value")?);
+            let result = self.acc.as_object().ok_or(VMError::TypeError)?;
+            heap.define_own_named(result, key, value, PropertyFlags::ordinary_data())?;
+        }
+        Ok(())
+    }
+
+    /// 27.5.1.1: the Generator a call of a generator function answers, whose
+    /// Prototype is the `prototype` the function carries.
+    fn allocate_generator(
+        function: ObjectRef,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let key = PropertyKey::String(heap.strings.intern("prototype")?);
+        let carried = heap
+            .own_named_flags(function, key)?
+            .filter(|flags| !flags.is_accessor)
+            .and(Self::element_index_of(function, key, heap).map_or(Some(()), |_| None))
+            .and_then(|()| Self::own_property_value(function, key, None, heap).ok());
+        let prototype = match carried {
+            Some(value) if value.as_object().is_some() => value,
+            _ => realm.generator_prototype(heap)?,
+        };
+        let object = heap.allocate_object(heap.shapes.root_shape(), prototype)?;
+        heap.set_object_kind(
+            object,
+            ObjectKind::Generator {
+                continuation: VALUE_UNDEFINED,
+                state: GENERATOR_SUSPENDED_START,
+            },
+        )?;
+        Ok(Value::from_object(object))
+    }
+
     /// 27.7.5.3: copies the frame into a continuation of the heap.
     fn suspend_frame(
         &self,
@@ -19849,6 +20199,24 @@ impl RegisterVM {
             self.current_context = frame.caller_context;
             current_code_id = frame.caller_code_id;
             self.unit = frame.caller_unit;
+            // 27.5.3.2 step 5: a body that throws leaves the Generator done,
+            // and the scope its object stood in ends with it.
+            if let Some(Resume::GeneratorStep { state }) = frame.resume {
+                let generator = heap.root_value(state).and_then(Value::as_object);
+                heap.exit_scope();
+                if let Some(generator) = generator
+                    && let Some(&ObjectKind::Generator { continuation, .. }) =
+                        heap.get_object(generator).map(|entry| &entry.kind)
+                {
+                    heap.set_object_kind(
+                        generator,
+                        ObjectKind::Generator {
+                            continuation,
+                            state: GENERATOR_COMPLETED,
+                        },
+                    )?;
+                }
+            }
             // 27.2.3.1 step 7: the executor of a new Promise rejects it with
             // what it throws, and the constructor answers as it does for an
             // executor that returned.
@@ -20460,7 +20828,7 @@ impl RegisterVM {
                             }
                             Conversion::Suspended(code_id) => {
                                 current_code_id = Some(code_id);
-                                pc = 0;
+                                pc = self.pending_pc.take().unwrap_or(0);
                             }
                         }
                         return Ok(None);
@@ -20520,7 +20888,7 @@ impl RegisterVM {
                             }
                             Conversion::Suspended(code_id) => {
                                 current_code_id = Some(code_id);
-                                pc = 0;
+                                pc = self.pending_pc.take().unwrap_or(0);
                             }
                         }
                         return Ok(None);
@@ -20709,7 +21077,7 @@ impl RegisterVM {
                             }
                             Conversion::Suspended(code_id) => {
                                 current_code_id = Some(code_id);
-                                pc = 0;
+                                pc = self.pending_pc.take().unwrap_or(0);
                             }
                         }
                         return Ok(None);
@@ -20885,7 +21253,7 @@ impl RegisterVM {
                             realm,
                         )? {
                             current_code_id = Some(code_id);
-                            pc = 0;
+                            pc = self.pending_pc.take().unwrap_or(0);
                         }
                         return Ok(None);
                     }
@@ -21022,7 +21390,7 @@ impl RegisterVM {
                                 realm,
                             )? {
                                 current_code_id = Some(code_id);
-                                pc = 0;
+                                pc = self.pending_pc.take().unwrap_or(0);
                             }
                             return Ok(None);
                         }
@@ -21178,7 +21546,7 @@ impl RegisterVM {
                             realm,
                         )? {
                             current_code_id = Some(code_id);
-                            pc = 0;
+                            pc = self.pending_pc.take().unwrap_or(0);
                         }
                         return Ok(None);
                     }
@@ -21381,7 +21749,7 @@ impl RegisterVM {
                                     realm,
                                 )? {
                                     current_code_id = Some(code_id);
-                                    pc = 0;
+                                    pc = self.pending_pc.take().unwrap_or(0);
                                 }
                                 return Ok(None);
                             }
@@ -21470,7 +21838,7 @@ impl RegisterVM {
                                     realm,
                                 )? {
                                     current_code_id = Some(code_id);
-                                    pc = 0;
+                                    pc = self.pending_pc.take().unwrap_or(0);
                                 }
                                 return Ok(None);
                             }
@@ -21555,7 +21923,7 @@ impl RegisterVM {
                                     realm,
                                 )? {
                                     current_code_id = Some(code_id);
-                                    pc = 0;
+                                    pc = self.pending_pc.take().unwrap_or(0);
                                 }
                                 return Ok(None);
                             }
@@ -21691,7 +22059,7 @@ impl RegisterVM {
                                 realm,
                             )? {
                                 current_code_id = Some(code_id);
-                                pc = 0;
+                                pc = self.pending_pc.take().unwrap_or(0);
                             }
                             return Ok(None);
                         }
@@ -21823,7 +22191,7 @@ impl RegisterVM {
                         realm,
                     )? {
                         current_code_id = Some(code_id);
-                        pc = 0;
+                        pc = self.pending_pc.take().unwrap_or(0);
                     }
                 }
                 Instruction::MakeMethod { home } => {
@@ -21859,7 +22227,7 @@ impl RegisterVM {
                         realm,
                     )? {
                         current_code_id = Some(code_id);
-                        pc = 0;
+                        pc = self.pending_pc.take().unwrap_or(0);
                     }
                 }
                 Instruction::GetSuperByValue { base, key } => {
@@ -21890,7 +22258,7 @@ impl RegisterVM {
                         realm,
                     )? {
                         current_code_id = Some(code_id);
-                        pc = 0;
+                        pc = self.pending_pc.take().unwrap_or(0);
                     }
                 }
                 Instruction::DefineMethod { obj, name } => {
@@ -22161,6 +22529,7 @@ impl RegisterVM {
                             ))?;
                     let captures_context = !target.outer_context_slot_counts.is_empty();
                     let constructible = target.constructible;
+                    let generator = target.generator;
                     let expected_arguments = target.expected_arguments;
                     let function = self.allocate_function(
                         active_code,
@@ -22181,6 +22550,12 @@ impl RegisterVM {
                     // the collector only follows what it can see.
                     if constructible {
                         self.make_constructor(active_code, heap, realm)?;
+                    }
+                    // 27.3.3 gives a generator function `%GeneratorFunction
+                    // .prototype%` and a `prototype` of its own, which 27.5.1.1
+                    // gives every Generator it makes.
+                    if generator {
+                        self.make_generator_function(active_code, heap, realm)?;
                     }
                 }
                 Instruction::Construct {
@@ -22222,7 +22597,7 @@ impl RegisterVM {
                                 realm,
                             )? {
                                 current_code_id = Some(code_id);
-                                pc = 0;
+                                pc = self.pending_pc.take().unwrap_or(0);
                             }
                             return Ok(None);
                         }
@@ -22231,7 +22606,7 @@ impl RegisterVM {
                                 self.begin_promise(call, units, active_feedback, heap, realm)?
                             {
                                 current_code_id = Some(code_id);
-                                pc = 0;
+                                pc = self.pending_pc.take().unwrap_or(0);
                             }
                             return Ok(None);
                         }
@@ -22250,7 +22625,7 @@ impl RegisterVM {
                                 realm,
                             )? {
                                 current_code_id = Some(code_id);
-                                pc = 0;
+                                pc = self.pending_pc.take().unwrap_or(0);
                             } else {
                                 self.write_reg(target, self.acc)?;
                             }
@@ -22268,7 +22643,7 @@ impl RegisterVM {
                                 realm,
                             )? {
                                 current_code_id = Some(code_id);
-                                pc = 0;
+                                pc = self.pending_pc.take().unwrap_or(0);
                             } else {
                                 self.write_reg(target, self.acc)?;
                             }
@@ -22312,7 +22687,7 @@ impl RegisterVM {
                         },
                     )? {
                         current_code_id = Some(code_id);
-                        pc = 0;
+                        pc = self.pending_pc.take().unwrap_or(0);
                     }
                 }
                 Instruction::Call {
@@ -22348,7 +22723,7 @@ impl RegisterVM {
                         },
                     )? {
                         current_code_id = Some(code_id);
-                        pc = 0;
+                        pc = self.pending_pc.take().unwrap_or(0);
                     }
                 }
                 Instruction::CallMethod {
@@ -22377,7 +22752,7 @@ impl RegisterVM {
                         },
                     )? {
                         current_code_id = Some(code_id);
-                        pc = 0;
+                        pc = self.pending_pc.take().unwrap_or(0);
                     }
                 }
                 Instruction::CallSpread {
@@ -22414,7 +22789,7 @@ impl RegisterVM {
                     )? {
                         Some(code_id) => {
                             current_code_id = Some(code_id);
-                            pc = 0;
+                            pc = self.pending_pc.take().unwrap_or(0);
                         }
                         // A native answered without a frame, so nothing else
                         // reads the List.
@@ -22488,7 +22863,7 @@ impl RegisterVM {
                     )? {
                         Some(code_id) => {
                             current_code_id = Some(code_id);
-                            pc = 0;
+                            pc = self.pending_pc.take().unwrap_or(0);
                         }
                         None => heap.exit_scope(),
                     }
@@ -22511,7 +22886,7 @@ impl RegisterVM {
                         IteratorStep::Entered(code_id) => {
                             if let Some(code_id) = code_id {
                                 current_code_id = Some(code_id);
-                                pc = 0;
+                                pc = self.pending_pc.take().unwrap_or(0);
                             }
                             return Ok(None);
                         }
@@ -22522,8 +22897,44 @@ impl RegisterVM {
                 }
                 Instruction::Throw => return Err(VMError::Thrown(self.acc, None)),
 
-                Instruction::Await | Instruction::Return => {
-                    if matches!(inst, Instruction::Await) {
+                Instruction::Await
+                | Instruction::Return
+                | Instruction::GeneratorStart
+                | Instruction::Yield => {
+                    // 27.5.1.1 and 15.5: the body of a Generator leaves with
+                    // the frame it stands in, which its own object holds until
+                    // 27.5.1.2 takes it back.
+                    if matches!(inst, Instruction::GeneratorStart | Instruction::Yield) {
+                        let register = active_code
+                            .generator_register
+                            .ok_or(VMError::InvalidRegister)?;
+                        let continuation = self.suspend_frame(
+                            active_code,
+                            pc,
+                            current_code_id,
+                            VALUE_UNDEFINED,
+                            heap,
+                            realm,
+                        )?;
+                        let generator = self
+                            .read_reg(register)?
+                            .as_object()
+                            .ok_or(VMError::TypeError)?;
+                        heap.set_object_kind(
+                            generator,
+                            ObjectKind::Generator {
+                                continuation,
+                                state: if matches!(inst, Instruction::GeneratorStart) {
+                                    GENERATOR_SUSPENDED_START
+                                } else {
+                                    GENERATOR_SUSPENDED_YIELD
+                                },
+                            },
+                        )?;
+                        if matches!(inst, Instruction::GeneratorStart) {
+                            self.acc = Value::from_object(generator);
+                        }
+                    } else if matches!(inst, Instruction::Await) {
                         // 27.7.5.3: the frame leaves with the promise of the
                         // body and comes back through the pair it registered.
                         self.acc =
@@ -22629,6 +23040,7 @@ impl RegisterVM {
                                 | Resume::Spread { .. }
                                 | Resume::Executor { .. }
                                 | Resume::Job { .. }
+                                | Resume::GeneratorStep { .. }
                                 | Resume::Setter { .. } => Reg(0),
                             };
                             let call = Call {
@@ -22668,6 +23080,12 @@ impl RegisterVM {
                                 Resume::IteratorWalk { state } => self.step_iterator_walk(
                                     state, call, units, feedback, heap, realm,
                                 )?,
+                                // 27.5.1.2 step 8: the body left, and the
+                                // answer says whether it is done.
+                                Resume::GeneratorStep { state } => {
+                                    self.finish_generator_step(state, heap, realm)?;
+                                    None
+                                }
                                 Resume::IteratorElement { state } => {
                                     self.finish_iterator_element(state, heap)?;
                                     None
@@ -22722,7 +23140,7 @@ impl RegisterVM {
                             };
                             if let Some(code_id) = resumed {
                                 current_code_id = Some(code_id);
-                                pc = 0;
+                                pc = self.pending_pc.take().unwrap_or(0);
                             }
                         }
                     } else {

@@ -1326,6 +1326,70 @@ fn a_compound_assignment_reaches_a_property() -> Result<(), Error> {
 }
 
 #[test]
+fn a_generator_of_27_5_leaves_its_frame_at_a_yield_and_comes_back_to_it() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend has no frame that leaves and comes back, so only the
+    // engine answers.
+    for (source, answer) in [
+        // 27.5.1.1: the call answers the Generator and runs no step of the
+        // body, and 27.5.1.2 takes the body as far as the next `yield`.
+        (
+            "function* g(){yield 1;yield 2}var i=g();var r='';r+=i.next().value;r+=i.next().value;r+=i.next().done;r",
+            "12true",
+        ),
+        // A local of the body stands where it stood before the suspension.
+        (
+            "function* g(){var a=0;while(a<3){yield a;a=a+1}}var s=0;for(var v of g())s+=v;''+s",
+            "3",
+        ),
+        // 27.5.1.2 hands the value of its call to the `yield` that waited.
+        (
+            "function* g(){var got=yield 1;yield got*2}var i=g();i.next();''+i.next(4).value",
+            "8",
+        ),
+        // 27.5.1.1 gives the Generator the `prototype` of the function, and
+        // 27.5.1.5 tags it.
+        (
+            "function* g(){}var i=g();''+(Object.getPrototypeOf(i)===g.prototype)+Object.prototype.toString.call(i)",
+            "true[object Generator]",
+        ),
+        // 27.1.2.1 gives it the `@@iterator` every iterator of the
+        // specification answers with itself.
+        (
+            "function* g(){yield 1}var i=g();''+(i[Symbol.iterator]()===i)",
+            "true",
+        ),
+        ("function* g(){yield 1;yield 2}[...g()].join(',')", "1,2"),
+        // The value of a `return` of the body is the one the last result
+        // carries, and every step after it is done.
+        (
+            "function* g(){yield 1;return 7}var i=g();i.next();var r=i.next();''+r.value+r.done+i.next().done",
+            "7truetrue",
+        ),
+        // A body that throws leaves the Generator done.
+        (
+            "function* g(){throw new TypeError()}var i=g();var r;try{i.next()}catch(e){r=e instanceof TypeError};''+r+i.next().done",
+            "truetrue",
+        ),
+        // 27.3.1.1 gives a generator function no `[[Construct]]`, and 27.5.1
+        // refuses a receiver that is no Generator.
+        (
+            "function* g(){}var r;try{g.prototype.next.call({})}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        // 14.15 runs the Finally Block where the body ends inside a `try`.
+        (
+            "var w='';function* g(){try{yield 1}finally{w+='f'}}var i=g();i.next();i.next();w",
+            "f",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}
+
+#[test]
 fn a_private_element_of_6_2_13_is_reached_by_the_class_body_alone() -> Result<(), Error> {
     let mut host = SilentHost;
     let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;

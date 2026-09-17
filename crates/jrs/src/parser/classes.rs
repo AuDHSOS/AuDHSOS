@@ -392,6 +392,7 @@ impl Parser {
             } else {
                 ConstructorKind::BaseClass
             },
+            generator: false,
         });
         // 15.7.15 adds the private methods of an instance before it runs the
         // Initializers of its fields.

@@ -60,6 +60,9 @@ pub(crate) enum ExprKind {
     /// `PrivateIdentifier` of 12.7 as the name of a member access, which
     /// 6.2.13 resolves on the Private Environment.
     PrivateName(String),
+    /// `YieldExpression` of 15.5, which leaves the body with the value it
+    /// answers and takes it back where 27.5.1.2 resumes it.
+    Yield(Option<Box<Expr>>),
     Template(Value, Vec<(Expr, Value)>),
     Await(Box<Expr>),
     Name(String),
@@ -98,6 +101,10 @@ pub(crate) struct ObjectProperty {
 }
 
 #[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "10.2.11 instantiates a function by the kinds it carries, one flag per kind"
+)]
 pub(crate) struct Function {
     pub(crate) source: Option<Source>,
     pub(crate) name: Option<String>,
@@ -108,6 +115,9 @@ pub(crate) struct Function {
     pub(crate) constructible: bool,
     pub(crate) async_kind: AsyncKind,
     pub(crate) constructor_kind: ConstructorKind,
+    /// A generator of 27.5, whose call answers the object 27.5.1.1 makes and
+    /// whose body runs as far as each `yield`.
+    pub(crate) generator: bool,
 }
 
 /// Shared original source and exact UTF-8 range of one function grammar node.
@@ -413,6 +423,8 @@ fn parse_script(source: &str, limits: Limits, strict_caller: bool) -> Result<Vec
         new_target_context: 0,
         strict: false,
         async_context: false,
+        generator_context: false,
+        pending_generator: false,
         super_context: SuperContext::None,
         allow_in: true,
     };
@@ -463,6 +475,7 @@ pub(crate) fn dynamic_function(
         constructible: async_kind == AsyncKind::Sync,
         async_kind,
         constructor_kind: ConstructorKind::Ordinary,
+        generator: false,
     })
 }
 
@@ -477,6 +490,10 @@ fn dynamic_parameters(source: &str, limits: Limits, strict: bool) -> Result<Vec<
     Ok(parameters)
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the parser keeps one flag per grammar context it reads in"
+)]
 struct Parser {
     source: Rc<str>,
     tokens: Vec<Token>,
@@ -495,6 +512,12 @@ struct Parser {
     new_target_context: usize,
     strict: bool,
     async_context: bool,
+    /// Whether the body being read is the one of a generator of 27.5, where
+    /// 15.5 reads `yield` as an expression and no other body does.
+    generator_context: bool,
+    /// Whether the body about to be read is the one of a generator, which the
+    /// body itself takes as it is entered.
+    pending_generator: bool,
     super_context: SuperContext,
     allow_in: bool,
 }
@@ -515,6 +538,8 @@ impl Parser {
             new_target_context: 1,
             strict: false,
             async_context: false,
+            generator_context: false,
+            pending_generator: false,
             super_context: SuperContext::None,
             allow_in: true,
         })
@@ -674,10 +699,8 @@ impl Parser {
             return self.statements(true).map(Stmt::Block);
         }
         if self.eat("function") {
-            if self.is("*") {
-                return Err(Self::unsupported("generator functions"));
-            }
-            return self.function_declaration();
+            let generator = self.eat("*");
+            return self.function_declaration(generator);
         }
         if self.eat("class") {
             let offset = self
@@ -1642,6 +1665,7 @@ impl Parser {
                 constructible: false,
                 async_kind,
                 constructor_kind: ConstructorKind::Ordinary,
+                generator: false,
             }),
             1,
             offset,
@@ -1710,6 +1734,33 @@ impl Parser {
             Kind::Punct("{") => self.object(token.offset)?,
             Kind::Word(word) if word == "this" => self.make(ExprKind::This, 1, token.offset)?,
             Kind::Word(word) if word == "function" => self.function_expression(token.offset)?,
+            // 15.5: inside a generator `yield` is the expression that leaves
+            // the body; outside one it names a binding where the code is not
+            // strict.
+            Kind::Word(word) if word == "yield" && self.generator_context => {
+                if self.is("*") {
+                    return Err(Self::unsupported("a yield of an iterable"));
+                }
+                // 15.5.1: a line terminator ends the expression before its
+                // operand, and so does every token that starts none.
+                let operand = !self.token()?.newline
+                    && !matches!(
+                        &self.token()?.kind,
+                        Kind::End
+                            | Kind::Punct(
+                                ")" | "]" | "}" | "," | ";" | ":" | "=" | "?" | "+=" | "-="
+                            )
+                    );
+                let value = if operand {
+                    Some(Box::new(self.expression(0)?))
+                } else {
+                    None
+                };
+                let depth = value
+                    .as_ref()
+                    .map_or(1, |value| value.depth.saturating_add(1));
+                self.make(ExprKind::Yield(value), depth, token.offset)?
+            }
             Kind::Word(word) if word == "yield" && !self.strict => {
                 self.make(ExprKind::Name(word), 1, token.offset)?
             }
@@ -1842,15 +1893,13 @@ impl Parser {
     }
 
     fn function_expression(&mut self, offset: usize) -> Result<Expr, Error> {
-        if self.is("*") {
-            return Err(Self::unsupported("generator functions"));
-        }
+        let generator = self.eat("*");
         let name = if self.is("(") {
             None
         } else {
             Some(self.name()?)
         };
-        let mut function = self.function(name)?;
+        let mut function = self.generator_function(name, generator)?;
         function.source = Some(self.source_since(offset)?);
         self.make(ExprKind::Function(function), 1, offset)
     }
@@ -2140,6 +2189,28 @@ impl Parser {
         self.function_kind(name, AsyncKind::Sync)
     }
 
+    /// A function of 15.2 or a generator of 27.5, whose body reads `yield` as
+    /// the expression of 15.5 and whose call answers the object 27.5.1.1
+    /// makes instead of running the body.
+    fn generator_function(
+        &mut self,
+        name: Option<String>,
+        generator: bool,
+    ) -> Result<Function, Error> {
+        if !generator {
+            return self.function(name);
+        }
+        self.pending_generator = true;
+        let result = self.function_kind(name, AsyncKind::Sync);
+        self.pending_generator = false;
+        result.map(|mut function| {
+            // 27.3.1.1 gives a generator function no `[[Construct]]`.
+            function.constructible = false;
+            function.generator = true;
+            function
+        })
+    }
+
     fn function_kind(
         &mut self,
         name: Option<String>,
@@ -2173,17 +2244,17 @@ impl Parser {
             constructible: async_kind == AsyncKind::Sync,
             async_kind,
             constructor_kind: ConstructorKind::Ordinary,
+            generator: false,
         })
     }
 
-    fn function_declaration(&mut self) -> Result<Stmt, Error> {
-        let offset = self
-            .tokens
-            .get(self.at.saturating_sub(1))
-            .ok_or(Error::InvalidBytecode)?
-            .offset;
+    fn function_declaration(&mut self, generator: bool) -> Result<Stmt, Error> {
+        // 20.2.3.5 answers the source text of the whole declaration, which
+        // starts at `function` and not at the `*` of 27.3.
+        let start = self.at.saturating_sub(if generator { 2 } else { 1 });
+        let offset = self.tokens.get(start).ok_or(Error::InvalidBytecode)?.offset;
         let name = self.name()?;
-        let mut function = self.function(None)?;
+        let mut function = self.generator_function(None, generator)?;
         function.source = Some(self.source_since(offset)?);
         if function.strict && strict_binding(&name) {
             return Err(self.error("invalid strict function name"));
@@ -2262,6 +2333,10 @@ impl Parser {
         let inherited = self.strict;
         let outer_async =
             core::mem::replace(&mut self.async_context, async_kind == AsyncKind::Async);
+        // 15.5 reads `yield` as an expression in the body of a generator and
+        // in no body inside it.
+        let generator = core::mem::take(&mut self.pending_generator);
+        let outer_generator = core::mem::replace(&mut self.generator_context, generator);
         let body = if self.eat("{") {
             self.strict |= self.strict_prologue();
             self.with_in(true, |parser| parser.statements(true))
@@ -2279,6 +2354,7 @@ impl Parser {
         let strict = self.strict;
         self.strict = inherited;
         self.async_context = outer_async;
+        self.generator_context = outer_generator;
         body.map(|body| (body, strict))
     }
 

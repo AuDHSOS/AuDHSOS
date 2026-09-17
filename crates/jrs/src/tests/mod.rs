@@ -653,7 +653,7 @@ fn error_variants_render_useful_messages() {
 #[test]
 fn unsupported_syntax_is_distinct_from_syntax_errors() {
     for source in [
-        "function* g(){}",
+        "async function* g(){}",
         "async function* g(){}",
         "class C{x=1}",
         "let x={};x?.y",

@@ -650,6 +650,12 @@ pub enum Instruction {
     /// A Private Name of 6.2.13 in the accumulator, which 15.7.14 step 12
     /// makes once per evaluation of the class body.
     CreatePrivateName(u16),
+    /// 27.5.1.1: the body of a generator leaves before its first instruction
+    /// runs, and the call answers the Generator the frame holds.
+    GeneratorStart,
+    /// `YieldExpression` of 15.5: the body leaves with the accumulator, and
+    /// 27.5.1.2 takes it back here with what the call of `next` was given.
+    Yield,
     /// The private element of 6.2.13 that the key register names, which
     /// 7.3.28 reads and 7.3.29 writes, and 7.3.27 adds.
     ///
@@ -872,6 +878,12 @@ pub struct BytecodeFunction {
     /// The register the capability of 27.7.5.2 is entered in, which the body
     /// resolves when it ends and answers when it waits.
     pub promise_register: Option<Reg>,
+    /// The register a generator body of 27.5 keeps its own Generator in, which
+    /// the frame writes before the body runs.
+    pub generator_register: Option<Reg>,
+    /// Whether this unit is the body of a generator of 27.5, whose function
+    /// object 27.3.3 gives a prototype of its own.
+    pub generator: bool,
     /// The `name` 10.2.10 gives the function, as an index into this unit's
     /// own string constants. A function 8.5.2 gives no name has none.
     pub name: Option<u16>,
@@ -924,6 +936,8 @@ impl BytecodeFunction {
             class_constructor: false,
             asynchronous: false,
             promise_register: None,
+            generator_register: None,
+            generator: false,
             name: None,
             source: None,
             realm_script: false,
@@ -1338,6 +1352,8 @@ impl BytecodeFunction {
             | Instruction::CreateArray(_)
             | Instruction::Throw
             | Instruction::Await
+            | Instruction::GeneratorStart
+            | Instruction::Yield
             | Instruction::Return => None,
             Instruction::CopyDataProperties {
                 source,

@@ -595,6 +595,10 @@ const CALLEE_BINDING: &str = "*callee";
 /// the frame reserves a slot for it that no name of a Script can reach.
 const PROMISE_BINDING: &str = "*promise";
 
+/// The binding a generator body of 27.5 keeps its own Generator in. No Script
+/// can name it.
+const GENERATOR_BINDING: &str = "*generator";
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RegisterType {
     Array(u32),
@@ -2261,6 +2265,22 @@ impl RegisterLowerer {
             ExprKind::Assign(name, operator, right) => {
                 self.lower_assignment(name, *operator, right, expression.strict)?
             }
+            // 15.5: the body leaves with the value the operand answers and
+            // comes back with the one 27.5.1.2 was given.
+            ExprKind::Yield(value) => {
+                let value_type = if let Some(value) = value {
+                    self.lower(value)?
+                } else {
+                    self.code
+                        .emit(crate::engine::bytecode::Instruction::LdaUndefined);
+                    RegisterType::Undefined
+                };
+                // The caller of 27.5.1.2 reads what the body yielded, so
+                // everything it names leaves with it.
+                self.escape(&[value_type]);
+                self.code.emit(crate::engine::bytecode::Instruction::Yield);
+                RegisterType::Unknown
+            }
             // 27.7.5.3: the operand is evaluated and the body waits for it.
             ExprKind::Await(inner) => {
                 self.lower(inner)?;
@@ -3213,6 +3233,13 @@ impl RegisterLowerer {
             }
             return None;
         };
+        // 27.5.1.1: a call of a generator function answers the Generator it
+        // makes and not what the body of it returns.
+        let return_type = if function.generator {
+            RegisterType::Unknown
+        } else {
+            return_type
+        };
         let capture_effects = captures
             .iter()
             .map(|(name, captured)| {
@@ -3856,6 +3883,20 @@ impl RegisterLowerer {
             child.bindings.remove(PROMISE_BINDING);
             child.code.promise_register = Some(register);
         }
+        // 27.5.1.1 makes the Generator before the body runs and keeps it in a
+        // register of the frame, where the collector sees it and where every
+        // suspension of 15.5 reads it.
+        if function.generator {
+            child.code.generator = true;
+            child.declare(GENERATOR_BINDING, false)?;
+            let RegisterBindingStorage::Register(register) =
+                child.bindings.get(GENERATOR_BINDING)?.storage
+            else {
+                return None;
+            };
+            child.bindings.remove(GENERATOR_BINDING);
+            child.code.generator_register = Some(register);
+        }
         if derived || register_body_reads_new_target(&function.body) {
             if function.arrow {
                 return None;
@@ -4076,6 +4117,11 @@ impl RegisterLowerer {
             child.bindings.get_mut(name)?.value_type = Some(RegisterType::Unknown);
         }
         child.initialize_parameter_defaults(function)?;
+        // 27.5.1.1: 10.2.11 binds the parameters before the Generator is made,
+        // so the body leaves here and not before a pattern of 8.6.2 ran.
+        if child.code.generator_register.is_some() {
+            child.code.emit(Instruction::GeneratorStart);
+        }
         for statement in body {
             if let Stmt::Function(name, function) = statement {
                 let value_type = child.lower_function_declaration(name, function)?;
@@ -9728,6 +9774,11 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::IteratorPrototypeConstructorGet
         // 27.1.3.3.12 answers an Array this lowering did not make.
         | crate::engine::realm::Intrinsic::IteratorPrototypeToArray
+        // 27.5.1.2 to 27.5.1.4 answer what the body of the Generator left,
+        // which this lowering cannot read.
+        | crate::engine::realm::Intrinsic::GeneratorPrototypeNext
+        | crate::engine::realm::Intrinsic::GeneratorPrototypeReturn
+        | crate::engine::realm::Intrinsic::GeneratorPrototypeThrow
         // 27.1.3.3.10, 27.1.3.3.3 and 27.1.3.3.5 answer once a call of the
         // Script has answered, which this lowering cannot read.
         | crate::engine::realm::Intrinsic::IteratorPrototypeSome
@@ -10787,6 +10838,9 @@ fn register_expression_reads(expression: &Expr, what: Reads) -> bool {
         | ExprKind::PrivateName(_)
         | ExprKind::Regex(_, _)
         | ExprKind::Update(..) => false,
+        ExprKind::Yield(value) => value
+            .as_deref()
+            .is_some_and(|value| register_expression_reads(value, what)),
         ExprKind::Group(inner)
         | ExprKind::Unary(_, inner)
         | ExprKind::Await(inner)
@@ -10924,6 +10978,10 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
         | ExprKind::NewTarget
         | ExprKind::PrivateName(_)
         | ExprKind::Regex(_, _) => false,
+        ExprKind::Yield(value) => match value {
+            Some(value) => register_expression_writes_names(value, names)?,
+            None => false,
+        },
         ExprKind::Destructure(pattern, right) => {
             register_expression_writes_names(right, names)?
                 || register_assignment_pattern_writes_names(pattern, names)?
@@ -11230,6 +11288,11 @@ fn register_expression_references(
         | ExprKind::Await(inner)
         | ExprKind::Spread(inner) => {
             register_expression_references(inner, names, nested_free_names)?;
+        }
+        ExprKind::Yield(value) => {
+            if let Some(value) = value {
+                register_expression_references(value, names, nested_free_names)?;
+            }
         }
         ExprKind::Conditional(condition, yes, no) => {
             register_expression_references(condition, names, nested_free_names)?;
@@ -11774,6 +11837,7 @@ const fn expression_refusal(kind: &ExprKind) -> &'static str {
         ExprKind::BigInt(..) => "a BigInt literal",
         ExprKind::Regex(..) => "a regular-expression literal",
         ExprKind::PrivateName(..) => "a private name",
+        ExprKind::Yield(..) => "a yield expression",
         ExprKind::Template(..) => "a template literal",
         ExprKind::Await(_) => "await",
         ExprKind::Name(_) => "a name",
@@ -13329,6 +13393,8 @@ impl Compiler {
             ExprKind::Template(head, parts) => self.template(head, parts)?,
             // 6.2.13: the stack backend has no Private Environment.
             ExprKind::PrivateName(_) => return Err(Self::backend_gap("private identifiers")),
+            // 27.5: the stack backend has no frame that leaves and comes back.
+            ExprKind::Yield(_) => return Err(Self::backend_gap("generator functions")),
             ExprKind::Regex(pattern, flags) => self.regexp(pattern, flags)?,
             ExprKind::Array(items) => self.array(items)?,
             ExprKind::This => {

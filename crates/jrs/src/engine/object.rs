@@ -310,6 +310,15 @@ pub enum ObjectKind {
         /// The lexical context the frame ran in.
         context: Option<ContextRef>,
     },
+    /// A Generator of 27.5, which holds the frame its body suspended in and
+    /// what 27.5.1.2 reads as its `[[GeneratorState]]`.
+    Generator {
+        /// The continuation of the body, or undefined where it has none left.
+        continuation: Value,
+        /// `[[GeneratorState]]` of 27.5.1: 0 before the body ran, 1 where it
+        /// suspended at a `yield`, 2 while it runs and 3 once it is done.
+        state: u8,
+    },
     /// Bound function exotic object, the slots of 10.4.1.
     BoundFunction {
         /// `[[BoundTargetFunction]]`.
@@ -350,6 +359,7 @@ impl ObjectKind {
                 capability,
                 ..
             } => [Some(*registers), Some(*capability), None, None, None],
+            Self::Generator { continuation, .. } => [Some(*continuation), None, None, None, None],
             Self::BoundFunction {
                 target,
                 receiver,

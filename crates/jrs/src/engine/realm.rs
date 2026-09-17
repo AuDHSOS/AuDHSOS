@@ -1134,6 +1134,12 @@ pub enum Intrinsic {
     IteratorPrototypeFind,
     /// `reduce`, 27.1.3.3.9.
     IteratorPrototypeReduce,
+    /// `next`, 27.5.1.2.
+    GeneratorPrototypeNext,
+    /// `return`, 27.5.1.3.
+    GeneratorPrototypeReturn,
+    /// `throw`, 27.5.1.4.
+    GeneratorPrototypeThrow,
     /// `get constructor`, 27.1.3.3.1.1.
     IteratorPrototypeConstructorGet,
     /// `set constructor`, 27.1.3.3.1.2.
@@ -1211,6 +1217,8 @@ pub enum IntrinsicHolder {
     ArrayPrototype,
     /// `%ArrayIteratorPrototype%`.
     ArrayIteratorPrototype,
+    /// `%GeneratorPrototype%`, which 27.5.1 gives every Generator.
+    GeneratorPrototype,
     /// The global object, which 19.1 gives the constructors of clause 20 and
     /// after.
     Global,
@@ -1285,7 +1293,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 446] = [
+    pub const ALL: [Self; 449] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1701,6 +1709,9 @@ impl Intrinsic {
         Self::IteratorPrototypeEvery,
         Self::IteratorPrototypeFind,
         Self::IteratorPrototypeReduce,
+        Self::GeneratorPrototypeNext,
+        Self::GeneratorPrototypeReturn,
+        Self::GeneratorPrototypeThrow,
         Self::IteratorPrototypeConstructorGet,
         Self::IteratorPrototypeConstructorSet,
         Self::IteratorPrototypeToStringTagGet,
@@ -1838,6 +1849,9 @@ impl Intrinsic {
             | Self::IteratorPrototypeConstructorSet
             | Self::IteratorPrototypeToStringTagGet
             | Self::IteratorPrototypeToStringTagSet => IntrinsicHolder::IteratorPrototype,
+            Self::GeneratorPrototypeNext
+            | Self::GeneratorPrototypeReturn
+            | Self::GeneratorPrototypeThrow => IntrinsicHolder::GeneratorPrototype,
             Self::ArrayConstructor | Self::ObjectConstructor | Self::FunctionConstructor => {
                 IntrinsicHolder::Global
             }
@@ -2644,6 +2658,9 @@ impl Intrinsic {
             Self::IteratorPrototypeEvery => 443,
             Self::IteratorPrototypeFind => 444,
             Self::IteratorPrototypeReduce => 445,
+            Self::GeneratorPrototypeNext => 446,
+            Self::GeneratorPrototypeReturn => 447,
+            Self::GeneratorPrototypeThrow => 448,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3100,6 +3117,9 @@ impl Intrinsic {
             Self::IteratorPrototypeEvery => 443,
             Self::IteratorPrototypeFind => 444,
             Self::IteratorPrototypeReduce => 445,
+            Self::GeneratorPrototypeNext => 446,
+            Self::GeneratorPrototypeReturn => 447,
+            Self::GeneratorPrototypeThrow => 448,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3557,6 +3577,9 @@ impl Intrinsic {
             443 => Some(Self::IteratorPrototypeEvery),
             444 => Some(Self::IteratorPrototypeFind),
             445 => Some(Self::IteratorPrototypeReduce),
+            446 => Some(Self::GeneratorPrototypeNext),
+            447 => Some(Self::GeneratorPrototypeReturn),
+            448 => Some(Self::GeneratorPrototypeThrow),
             436 => Some(Self::IteratorPrototypeConstructorGet),
             437 => Some(Self::IteratorPrototypeConstructorSet),
             438 => Some(Self::IteratorPrototypeToStringTagGet),
@@ -4008,7 +4031,10 @@ impl Intrinsic {
             | Self::TypedArrayPrototypeValues => "values",
             Self::ArrayIteratorPrototypeNext
             | Self::MapIteratorPrototypeNext
-            | Self::SetIteratorPrototypeNext => "next",
+            | Self::SetIteratorPrototypeNext
+            | Self::GeneratorPrototypeNext => "next",
+            Self::GeneratorPrototypeReturn => "return",
+            Self::GeneratorPrototypeThrow => "throw",
             Self::ArrayPrototypeJoin | Self::TypedArrayPrototypeJoin => "join",
             Self::ArrayPrototypePop => "pop",
             Self::ArrayPrototypePush => "push",
@@ -4952,6 +4978,9 @@ impl Intrinsic {
             | Self::IteratorPrototypeEvery
             | Self::IteratorPrototypeFind
             | Self::IteratorPrototypeReduce
+            | Self::GeneratorPrototypeNext
+            | Self::GeneratorPrototypeReturn
+            | Self::GeneratorPrototypeThrow
             | Self::IteratorPrototypeToStringTagSet
             | Self::HostDetachArrayBuffer
             | Self::TypedArrayPrototypeAt
@@ -5981,6 +6010,11 @@ pub struct Realm {
     set_iterator_prototype: Root,
     array_iterator_prototype: Root,
     iterator_prototype: Root,
+    /// `%GeneratorPrototype%` of 27.5.1, which every Generator inherits.
+    generator_prototype: Root,
+    /// `%GeneratorFunction.prototype%` of 27.3.3, which every generator
+    /// function inherits and whose `prototype` is `%GeneratorPrototype%`.
+    generator_function_prototype: Root,
     error_prototype: Root,
     native_error_prototypes: [Root; NATIVE_ERROR_COUNT],
     intrinsics: [Root; Intrinsic::ALL.len()],
@@ -6055,6 +6089,7 @@ struct Holders {
     map_iterator_prototype: Root,
     set_iterator_prototype: Root,
     iterator_prototype: Root,
+    generator_prototype: Root,
 }
 
 /// Global Environment Record of 9.1.1.4.
@@ -6208,6 +6243,17 @@ impl Realm {
             heap.allocate_immortal_object(root_shape, Value::from_object(iterator_prototype))?;
         let array_iterator_prototype =
             heap.push_root(Value::from_object(array_iterator_prototype))?;
+        // 27.5.1 gives every Generator `%GeneratorPrototype%`, which inherits
+        // from `%IteratorPrototype%`, and 27.3.3 gives every generator
+        // function `%GeneratorFunction.prototype%`, whose `prototype` is that
+        // same object.
+        let generator_prototype =
+            heap.allocate_immortal_object(root_shape, Value::from_object(iterator_prototype))?;
+        let generator_prototype = heap.push_root(Value::from_object(generator_prototype))?;
+        let generator_function_prototype =
+            heap.allocate_immortal_object(root_shape, Self::rooted(heap, function_prototype)?)?;
+        let generator_function_prototype =
+            heap.push_root(Value::from_object(generator_function_prototype))?;
 
         // 20.5.3: %Error.prototype% is an ordinary object with "message" and
         // "name", not an Error instance.
@@ -6285,6 +6331,7 @@ impl Realm {
                 map_iterator_prototype,
                 set_iterator_prototype,
                 iterator_prototype: iterator_prototype_root,
+                generator_prototype,
             },
         )?;
 
@@ -6355,6 +6402,20 @@ impl Realm {
         Self::define_shared_block_getters(heap, &intrinsics, shared_array_buffer_prototype)?;
         Self::define_trim_aliases(heap, &intrinsics, string_prototype, date_prototype)?;
         Self::define_unscopables(heap, array_prototype)?;
+        // 27.3.3.3 gives `%GeneratorFunction.prototype%` the prototype every
+        // Generator inherits, and 27.5.1.1 names it back.
+        Self::define_link(
+            heap,
+            generator_function_prototype,
+            "prototype",
+            generator_prototype,
+        )?;
+        Self::define_link(
+            heap,
+            generator_prototype,
+            "constructor",
+            generator_function_prototype,
+        )?;
         Self::define_to_string_tags(
             heap,
             &[
@@ -6363,6 +6424,9 @@ impl Realm {
                 (reflect, "Reflect"),
                 (symbol_prototype, "Symbol"),
                 (array_iterator_prototype, "Array Iterator"),
+                // 27.5.1.5 and 27.3.3.2 name the two of clause 27.
+                (generator_prototype, "Generator"),
+                (generator_function_prototype, "GeneratorFunction"),
                 (promise_prototype, "Promise"),
                 (map_prototype, "Map"),
                 (set_prototype, "Set"),
@@ -6435,6 +6499,8 @@ impl Realm {
             set_iterator_prototype,
             array_iterator_prototype,
             iterator_prototype: iterator_prototype_root,
+            generator_prototype,
+            generator_function_prototype,
             error_prototype,
             native_error_prototypes,
             intrinsics,
@@ -7220,6 +7286,33 @@ impl Realm {
     /// # Errors
     ///
     /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    /// One of the two links of 27.3.3 and 27.5.1, which are data properties
+    /// that cannot be written and can be configured.
+    fn define_link(
+        heap: &mut GenerationalHeap,
+        holder: Root,
+        name: &str,
+        target: Root,
+    ) -> Result<(), HeapError> {
+        let holder = Self::rooted(heap, holder)?
+            .as_object()
+            .ok_or(HeapError::InvalidReference)?;
+        let key = intern(heap, name)?;
+        let value = Self::rooted(heap, target)?;
+        heap.define_own_named(
+            holder,
+            key,
+            value,
+            PropertyFlags {
+                writable: false,
+                enumerable: false,
+                configurable: true,
+                is_accessor: false,
+            },
+        )?;
+        Ok(())
+    }
+
     fn define_prototype_property(
         heap: &mut GenerationalHeap,
         intrinsics: &[Root],
@@ -7715,6 +7808,9 @@ impl Realm {
                 IntrinsicHolder::IteratorPrototype => {
                     Self::rooted(heap, holders.iterator_prototype)?
                 }
+                IntrinsicHolder::GeneratorPrototype => {
+                    Self::rooted(heap, holders.generator_prototype)?
+                }
                 IntrinsicHolder::MapIteratorPrototype => {
                     Self::rooted(heap, holders.map_iterator_prototype)?
                 }
@@ -8170,6 +8266,27 @@ impl Realm {
     /// Returns [`HeapError::InvalidReference`] for a stale root.
     pub fn iterator_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
         Self::rooted(heap, self.iterator_prototype)
+    }
+
+    /// `%GeneratorPrototype%`, 27.5.1.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale root.
+    pub fn generator_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.generator_prototype)
+    }
+
+    /// `%GeneratorFunction.prototype%`, 27.3.3.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale root.
+    pub fn generator_function_prototype(
+        &self,
+        heap: &GenerationalHeap,
+    ) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.generator_function_prototype)
     }
 
     /// `%BigInt.prototype%`, 21.2.3.
