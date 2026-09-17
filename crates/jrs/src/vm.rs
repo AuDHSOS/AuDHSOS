@@ -713,9 +713,9 @@ impl Execution<'_> {
                 crate::engine::interpreter::VMError::CallStackOverflow,
             ));
         }
-        let crate::engine::interpreter::Compiled::Unit(unit) = self.compile_eval_unit(source)
-        else {
-            return crate::engine::interpreter::Compiled::Refused;
+        let compiled = self.compile_eval_unit(source);
+        let crate::engine::interpreter::Compiled::Unit(unit) = compiled else {
+            return compiled;
         };
         let mut nested = crate::engine::interpreter::RegisterVM::with_limits(
             self.fuel,
@@ -737,31 +737,41 @@ impl Execution<'_> {
     /// The Script is compiled the way 16.1.7 compiles one, so a top-level
     /// `var` of it is a binding of the Global Environment Record.
     fn compile_eval_unit(&mut self, source: &[u16]) -> crate::engine::interpreter::Compiled {
-        let mut compiled = || {
-            let text = alloc::string::String::from_utf16(source).ok()?;
-            let program = crate::bytecode::compile_eval(&text, self.limits, false).ok()?;
-            let code = program.register_code.as_ref()?;
-            self.register_unit(code).ok()
+        // A text no Script accepts is the `SyntaxError` of 19.2.1.1 step 8; a
+        // Script the register lowering does not take is a gap of the migration
+        // and no error of the Script, so the two answer apart.
+        let Ok(text) = alloc::string::String::from_utf16(source) else {
+            return crate::engine::interpreter::Compiled::Refused;
         };
-        compiled().map_or(
-            crate::engine::interpreter::Compiled::Refused,
+        let Ok(program) = crate::bytecode::compile_eval(&text, self.limits, false) else {
+            return crate::engine::interpreter::Compiled::Refused;
+        };
+        let Some(code) = program.register_code.as_ref() else {
+            return crate::engine::interpreter::Compiled::Unlowered;
+        };
+        self.register_unit(code).map_or(
+            crate::engine::interpreter::Compiled::Unlowered,
             crate::engine::interpreter::Compiled::Unit,
         )
     }
 
     /// Compiles the body 20.2.1.1 built and gives it a unit of this Realm.
     ///
-    /// A text no Script accepts, and one the register lowering does not take,
-    /// both answer `None`, which 20.2.1.1 step 12 turns into a `SyntaxError`.
+    /// A text no Script accepts is the `SyntaxError` of step 12; a Script the
+    /// register lowering does not take is a gap of the migration, which the
+    /// two answer apart.
     fn compile_dynamic_unit(&mut self, source: &[u16]) -> crate::engine::interpreter::Compiled {
-        let mut compiled = || {
-            let text = alloc::string::String::from_utf16(source).ok()?;
-            let program = crate::compile(&text, self.limits).ok()?;
-            let code = program.register_code.as_ref()?;
-            self.register_unit(code).ok()
+        let Ok(text) = alloc::string::String::from_utf16(source) else {
+            return crate::engine::interpreter::Compiled::Refused;
         };
-        compiled().map_or(
-            crate::engine::interpreter::Compiled::Refused,
+        let Ok(program) = crate::compile(&text, self.limits) else {
+            return crate::engine::interpreter::Compiled::Refused;
+        };
+        let Some(code) = program.register_code.as_ref() else {
+            return crate::engine::interpreter::Compiled::Unlowered;
+        };
+        self.register_unit(code).map_or(
+            crate::engine::interpreter::Compiled::Unlowered,
             crate::engine::interpreter::Compiled::Unit,
         )
     }

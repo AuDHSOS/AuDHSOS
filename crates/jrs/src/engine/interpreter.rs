@@ -873,6 +873,9 @@ pub enum Compiled {
     /// It took the text for no Script, which 20.2.1.1 step 12 and 19.2.1.1
     /// step 8 each answer with a `SyntaxError`.
     Refused,
+    /// The text is a Script, and the register lowering does not take it, which
+    /// is a gap of the migration and no error of the Script.
+    Unlowered,
 }
 
 /// Where a job of 9.5 left the run.
@@ -12741,6 +12744,9 @@ impl RegisterVM {
                     super::realm::NativeErrorKind::SyntaxError,
                     "invalid eval source",
                 )),
+                Compiled::Unlowered => Err(VMError::Unsupported(
+                    "an eval of a Script the lowering does not take",
+                )),
                 Compiled::Unit(_) | Compiled::Printed => Err(VMError::InvalidFeedbackVector),
             };
         }
@@ -12786,7 +12792,13 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Value, VMError> {
         if let Some(compiled) = self.compiled_unit.take() {
-            // Step 12: a text no Script accepts is a `SyntaxError`.
+            // Step 12: a text no Script accepts is a `SyntaxError`; a body the
+            // lowering does not take is a gap and no error of the Script.
+            if matches!(compiled, Compiled::Unlowered) {
+                return Err(VMError::Unsupported(
+                    "a function body the lowering does not take",
+                ));
+            }
             let Compiled::Unit(unit) = compiled else {
                 return Err(raise(
                     heap,
