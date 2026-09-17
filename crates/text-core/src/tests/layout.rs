@@ -665,3 +665,155 @@ fn tabs_are_shaping_barriers() {
     assert_eq!(glyphs[2].x, Fixed::from_i32(2404));
     assert_eq!(output.info().width, Fixed::from_i32(3005));
 }
+
+fn emergency_case(
+    bytes: &[u8],
+    text: &str,
+    width: i32,
+    expected_lines: &[(usize, usize, i32)],
+    expected_glyphs: &[(usize, usize)],
+) {
+    let style = TextStyle {
+        size: Fixed::from_i32(1000),
+        ..TextStyle::default()
+    };
+    let width = Some(Fixed::from_i32(width));
+    let mut encoded = Vec::new();
+    for repeat in 0..2 {
+        let bytes = bytes.to_vec();
+        let text = text.to_owned();
+        let fonts = [Font::parse(&bytes).unwrap()];
+        let set = FontSet {
+            ui: &fonts,
+            mono: &fonts,
+            generation: 91,
+        };
+        let mut memory = Memory::new();
+        let mut workspace = memory.workspace();
+        let mut lines = [Line::default(); 16];
+        let mut glyphs = [PositionedGlyph::default(); 32];
+        let mut clusters = [ClusterBox::default(); 32];
+        let mut buffers = LayoutBuffers {
+            lines: &mut lines,
+            glyphs: &mut glyphs,
+            clusters: &mut clusters,
+        };
+        let view =
+            layout::layout_into(&set, &style, &text, width, &mut workspace, &mut buffers).unwrap();
+        assert_eq!(
+            view.lines
+                .iter()
+                .map(|line| (line.start, line.end, line.width))
+                .collect::<Vec<_>>(),
+            expected_lines
+                .iter()
+                .map(|&(start, end, width)| (start, end, Fixed::from_i32(width)))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            view.glyphs
+                .iter()
+                .map(|g| (g.start, g.end))
+                .collect::<Vec<_>>(),
+            expected_glyphs
+        );
+        let boundaries: Vec<_> = segment::grapheme_boundaries(&text).collect();
+        for line in view.lines {
+            assert!(line.start < line.end);
+            assert!(boundaries.contains(&line.start));
+            assert!(boundaries.contains(&line.end));
+            assert_eq!(line.overflow, width.is_some_and(|w| line.width > w));
+            let end = line.glyph_start.checked_add(line.glyph_count).unwrap();
+            for glyph in &view.glyphs[line.glyph_start..end] {
+                assert!(glyph.start >= line.start && glyph.end <= line.end);
+            }
+        }
+        for pair in boundaries.windows(2) {
+            assert_eq!(
+                view.clusters
+                    .iter()
+                    .filter(|c| c.start == pair[0] && c.end == pair[1])
+                    .count(),
+                1
+            );
+        }
+        let size = (view.info.width, view.info.height);
+        let mut output = vec![0; view.encoded_len().unwrap()];
+        assert_eq!(view.write_bytes(&mut output), Ok(output.len()));
+        if repeat == 0 {
+            encoded = output;
+        } else {
+            assert_eq!(output, encoded);
+        }
+        assert_eq!(
+            layout::measure_into(&set, &style, &text, width, &mut memory.workspace()),
+            Ok(size)
+        );
+        #[cfg(feature = "alloc")]
+        {
+            let owned = layout::layout(&set, &style, &text, width).unwrap();
+            let mut output = vec![0; owned.view().encoded_len().unwrap()];
+            assert_eq!(owned.view().write_bytes(&mut output), Ok(output.len()));
+            assert_eq!(output, encoded);
+            assert_eq!(layout::measure(&set, &style, &text, width), Ok(size));
+        }
+    }
+}
+
+#[test]
+fn emergency_breaks_preserve_clusters_and_measurement() {
+    let bytes = font_for(&['A', '\u{301}', 'א', 'ב', 'ג', 'ד'], 1000);
+    emergency_case(
+        &bytes,
+        "AAAAA",
+        1202,
+        &[(0, 2, 1202), (2, 4, 1202), (4, 5, 601)],
+        &[(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)],
+    );
+    for width in [0, 600] {
+        emergency_case(
+            &bytes,
+            "AAA",
+            width,
+            &[(0, 1, 601), (1, 2, 601), (2, 3, 601)],
+            &[(0, 1), (1, 2), (2, 3)],
+        );
+        emergency_case(
+            &bytes,
+            "A\u{301}A\u{301}",
+            width,
+            &[(0, 3, 601), (3, 6, 601)],
+            &[(0, 3), (0, 3), (3, 6), (3, 6)],
+        );
+    }
+    emergency_case(
+        &bytes,
+        "אבגד",
+        1202,
+        &[(0, 4, 1202), (4, 8, 1202)],
+        &[(2, 4), (0, 2), (6, 8), (4, 6)],
+    );
+}
+
+#[test]
+fn emergency_breaks_keep_all_substituted_glyphs_of_a_cluster() {
+    use super::shape::{Bin, coverage, lookup, with_features};
+    let bytes = font_for(&['A'], 1000);
+    let font = Font::parse(&bytes).unwrap();
+    let mut multiple = Bin::words(&[1, 0, 1, 0]);
+    multiple.child(2, coverage(&[1]));
+    multiple.child(6, Bin::words(&[2, 1, 1]));
+    let sub = with_features(super::shape::layout(vec![lookup(2, 0, multiple)]), 0);
+    let mut tables: Vec<_> = font.tables().map(|t| (t.tag, t.data.to_vec())).collect();
+    tables.push((*b"GSUB", sub.0));
+    let bytes = super::metrics::sfnt(tables);
+    for width in [601, 1803] {
+        emergency_case(
+            &bytes,
+            "AAA",
+            width,
+            &[(0, 1, 1202), (1, 2, 1202), (2, 3, 1202)],
+            &[(0, 1), (0, 1), (1, 2), (1, 2), (2, 3), (2, 3)],
+        );
+    }
+}

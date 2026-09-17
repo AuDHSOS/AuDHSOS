@@ -380,8 +380,16 @@ Type 2 widths, stacks, masks, and cubic paths; validate CFF2 blend structure.
 `Cff` validates INDEX arrays and all font dictionaries once; outline decoding
 reuses validated immutable arrays. Limits: 65,536 INDEX objects, 256 font
 dictionaries, 48 CFF or 513 CFF2 operands, ten subroutine calls, 65,536
-operations per glyph. Type 2 random uses xorshift32 with seed 1 per glyph;
-uninitialized transient reads are errors. Deprecated endchar composites use
+operations per glyph. Type 2 `random` uses xorshift32 with shifts 13, 17, 5,
+seed 1 per glyph invocation, and result `(state + 1) / 2^32` in Q32.32.
+Determinism takes precedence over the specified randomness in Adobe #5177,
+section 4.4, page 26 (`docs/adobe/5177.Type2.pdf`); D-166 fixes the sequence
+across address spaces. Uninitialized transient reads are errors.
+CFF2 deliberately ignores unrecognized operators and clears the operand
+stack, including escaped operators, as required by “Stack-based CFF2 decoding”
+(`docs/microsoft/cff2.html:1039`, D-167). Truncated encodings, invalid operands
+for recognized operators, and exhausted limits remain errors.
+Deprecated endchar composites use
 StandardEncoding and permit one component level. CFF2 DICT/charstring blends
 validate the variation store and evaluate the default instance in T5.
 The caller owns the cubic-command buffer; errors invalidate its contents.
@@ -602,8 +610,16 @@ input scalars. Output failure invalidates caller storage.
 
 Greedy wrapping tests legal candidates until the first overflow, selects the
 last fitting candidate, and reshapes at the chosen boundary. When no legal
-candidate fits, the same procedure tests grapheme boundaries. A single
-overlong grapheme remains intact. Soft-wrap trailing ASCII spaces and tabs
+UAX #14 candidate fits, layout unconditionally breaks at the last fitting
+grapheme cluster boundary (D-168). Each nonempty line consumes at least one
+whole cluster; an overlong first cluster remains intact, including every
+glyph produced by shaping that cluster. `overflow` is set if and only if the
+emitted line exceeds the requested width. No caller opt-out exists.
+Emergency boundaries use the same reshaping, per-line bidi reordering, and
+layout/measurement path as legal boundaries, without additional allocation.
+`LineBreakTest.txt` is unaffected: segmentation still reports UAX #14
+opportunities unchanged; only layout applies the fallback when none fits.
+Soft-wrap trailing ASCII spaces and tabs
 collapse; hard-break and final-line spaces retain advances. Tabs advance to
 four base-face space widths, using em/4 when space is absent. A final hard
 break creates an empty final line; an empty input retains a zero box.
@@ -634,15 +650,19 @@ and cluster geometry path. Limits return typed errors.
 Tabs split shaping runs and occupy hidden glyph slots, preserving tab stops
 across GSUB and GPOS.
 
-Acceptance: nine layout tests cover fractional advances, legal/emergency
+Acceptance: eleven layout tests cover fractional advances, legal/emergency
 breaks, line-end Arabic/ligature reshaping, bidi carets and selections,
 regional fallback, GDEF coordinate/point carets, deleted clusters, gvar metrics
 without HVAR, overlapping substitution clusters, buffer growth/exhaustion,
-tab shaping barriers, and input/work limits. Layout and
+tab shaping barriers, and input/work limits. Emergency-break tests cover an
+unbreakable run, an overlong first cluster, combining marks, multiple glyphs
+from GSUB, and RTL visual order; every case checks progress, exact overflow,
+measurement agreement, and deterministic serialization through caller buffers
+and owned wrappers. Layout and
 measure agree in every case. Separately allocated inputs serialize identically;
 debug/release assert FNV-1a-64 `15cce28391e7c99d` for the mixed-script fixture.
-The complete pure stack has 106 host tests and two doctests; allocator-free
-builds have 99 host tests. All Unicode gates, regeneration, Clippy, bare-target
+The complete pure stack has 108 host tests and two doctests; allocator-free
+builds have 101 host tests. All Unicode gates, regeneration, Clippy, bare-target
 builds, and fourteen fuzz regression seeds pass. Product coverage is
 95.99% of lines and 89.45% of branches after review.
 
