@@ -7,6 +7,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `fonts/`: the fonts of the UI chain and the terminal chain, 173 font
+  files, fetched byte for byte by `fonts/fetch.sh` from the commit or
+  release each line names and pinned in `fonts/SHA256SUMS` (D-158).
+  Atkinson Hyperlegible Next and Mono, Noto Sans and Noto Sans Mono, the
+  two Noto CJK collections, one Noto font for each of 155 scripts, the
+  five symbol and notation fonts, Noto Color Emoji and Last Resort
+  18.000. `fonts/README.md` carries what each layer of a chain adds,
+  measured: Atkinson maps 362 code points with no Cyrillic and four Greek
+  letters, so Noto Sans is the font of every Greek and Cyrillic letter.
+  Nothing reads the directory yet.
+
 - The programs and the anchors move onto the scratch volume (D-151,
   D-152). `cargo xtask image` writes `target/scratch.img`: the fourteen
   programs outside the boot set under `AUDHSOS/BIN/` and the trust anchor
