@@ -9144,6 +9144,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // 27.1.4.1 answers a constructor and 27.1.4.2 reads it back.
         | crate::engine::realm::Intrinsic::IteratorConstructor
         | crate::engine::realm::Intrinsic::IteratorPrototypeConstructorGet
+        // 27.1.5.1.11 answers an Array this lowering did not make.
+        | crate::engine::realm::Intrinsic::IteratorPrototypeToArray
         | crate::engine::realm::Intrinsic::TypedArrayPrototypeAt
         | crate::engine::realm::Intrinsic::TypedArrayPrototypeCopyWithin
         | crate::engine::realm::Intrinsic::TypedArrayPrototypeEntries
@@ -9223,6 +9225,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // 24.1.3.1 and 24.2.3.2 answer undefined.
         crate::engine::realm::Intrinsic::MapPrototypeClear
         | crate::engine::realm::Intrinsic::SetPrototypeClear
+        // 27.1.5.1.5 answers nothing at all.
+        | crate::engine::realm::Intrinsic::IteratorPrototypeForEach
         // 27.1.4.2 and 27.1.4.3 answer nothing where they are written to.
         | crate::engine::realm::Intrinsic::IteratorPrototypeConstructorSet
         | crate::engine::realm::Intrinsic::IteratorPrototypeToStringTagSet

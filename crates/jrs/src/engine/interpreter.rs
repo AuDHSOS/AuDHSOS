@@ -613,6 +613,8 @@ enum IteratorWalkTaker {
         /// The row of table 71 the array stands in.
         kind: u8,
     },
+    /// 27.1.5.1.5 calls its procedure with it and keeps nothing.
+    Each,
     /// Step 8 of 24.1.1.1 adds it to this Map, or to this Set.
     Collection {
         /// The Map or the Set the constructor made.
@@ -631,6 +633,7 @@ impl IteratorWalkTaker {
             Self::Array => ITERATOR_WALK_ARRAY,
             Self::Entries { .. } => ITERATOR_WALK_ENTRIES,
             Self::TypedArray { .. } => ITERATOR_WALK_TYPED_ARRAY,
+            Self::Each => ITERATOR_WALK_EACH,
             Self::Collection { set, weak, .. } => match (set, weak) {
                 (false, false) => ITERATOR_WALK_MAP,
                 (true, false) => ITERATOR_WALK_SET,
@@ -643,7 +646,7 @@ impl IteratorWalkTaker {
     /// The collection the walk fills, where it fills one.
     const fn collection(self) -> Value {
         match self {
-            Self::Array => VALUE_UNDEFINED,
+            Self::Array | Self::Each => VALUE_UNDEFINED,
             Self::Entries { object } => object,
             Self::TypedArray { kind } => Value::from_smi(kind as i32),
             Self::Collection { collection, .. } => collection,
@@ -663,6 +666,8 @@ const ITERATOR_WALK_WEAK_MAP: i32 = 3;
 const ITERATOR_WALK_WEAK_SET: i32 = 4;
 /// It makes a property of 20.1.2.7 out of each entry.
 const ITERATOR_WALK_ENTRIES: i32 = 5;
+/// It calls the procedure of 27.1.5.1.5 and keeps nothing.
+const ITERATOR_WALK_EACH: i32 = 7;
 /// It keeps each element for the array of 23.2.5.1.3, which the last step
 /// makes of the list, because the length is known only then.
 const ITERATOR_WALK_TYPED_ARRAY: i32 = 6;
@@ -2455,7 +2460,10 @@ impl RegisterVM {
             Intrinsic::ObjectPrototypeToString => self.object_to_string(call.receiver, heap, realm),
             // 28.1.2 leaves to the constructor it was given, so it never
             // answers here.
-            Intrinsic::ReflectConstruct => Err(VMError::InvalidFeedbackVector),
+            // The dispatch that can open a frame reaches these before this.
+            Intrinsic::ReflectConstruct
+            | Intrinsic::IteratorPrototypeToArray
+            | Intrinsic::IteratorPrototypeForEach => Err(VMError::InvalidFeedbackVector),
             // 20.5.3.4 joins the `name` and the `message` the Error holds.
             Intrinsic::ErrorPrototypeToString => self.error_text(call.receiver, heap, realm),
             // 20.2.3 accepts any argument and answers undefined.
@@ -4719,6 +4727,33 @@ impl RegisterVM {
                 VALUE_UNDEFINED,
                 VALUE_UNDEFINED,
                 IteratorWalkTaker::Entries { object: answer },
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
+        // 27.1.5.1.11 collects what the iterator answers and 27.1.5.1.5 calls
+        // its procedure with each of them, which a walk of 7.4.2 reaches.
+        if matches!(
+            intrinsic,
+            Intrinsic::IteratorPrototypeToArray | Intrinsic::IteratorPrototypeForEach
+        ) {
+            let each = intrinsic == Intrinsic::IteratorPrototypeForEach;
+            let procedure = if each {
+                self.call_argument(&call, 0, heap)?
+            } else {
+                VALUE_UNDEFINED
+            };
+            let taker = if each {
+                IteratorWalkTaker::Each
+            } else {
+                IteratorWalkTaker::Array
+            };
+            return self.begin_iterator_helper(
+                procedure,
+                taker,
                 call,
                 units,
                 active_feedback,
@@ -7476,6 +7511,72 @@ impl RegisterVM {
         .map(IterableStart::Walking)
     }
 
+    /// The walk a helper of 27.1.5 runs, whose receiver is the iterator
+    /// rather than an iterable of it.
+    ///
+    /// 7.4.2 step 1 is already done there, so the record starts where the
+    /// walk has the iterator and reads its `next`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a receiver that is
+    /// no Object and for a procedure that is not callable.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a walk of 7.4.2 runs where a call does, with what a call has"
+    )]
+    fn begin_iterator_helper(
+        &mut self,
+        procedure: Value,
+        taker: IteratorWalkTaker,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        // Step 1 of every helper of 27.1.5 takes an Object and no other value.
+        let Some(iterator) = call.receiver.as_object() else {
+            return Err(type_error(
+                heap,
+                realm,
+                "the receiver of a method of 27.1.5 is no Object",
+            ));
+        };
+        // 27.1.5.1.5 step 3 asks for a callable, and undefined is none of
+        // them; 27.1.5.1.11 asks for no procedure at all.
+        let wanted = matches!(taker, IteratorWalkTaker::Each);
+        if (wanted || !procedure.is_undefined()) && !Self::is_callable(procedure, heap) {
+            return Err(type_error(heap, realm, "the procedure is not callable"));
+        }
+        let output = Value::from_object(realm.array(heap, 0)?);
+        let record = promise::record(
+            heap,
+            realm,
+            &[
+                output,
+                VALUE_UNDEFINED,
+                VALUE_UNDEFINED,
+                procedure,
+                VALUE_UNDEFINED,
+                Value::from_smi(0),
+                Value::from_smi(ITERATOR_WALK_OPENED),
+                VALUE_UNDEFINED,
+                VALUE_UNDEFINED,
+                Value::from_smi(taker.tag()),
+                taker.collection(),
+            ],
+        )?;
+        // The record outlives every frame the walk opens, so it is a root of a
+        // scope of its own, which the last step leaves.
+        heap.enter_scope();
+        let state = heap.push_root(record)?;
+        // The phase the record starts in reads the iterator out of the
+        // accumulator, where 7.4.2 step 1 would have left it.
+        self.acc = Value::from_object(iterator);
+        self.step_iterator_walk(state, call, units, active_feedback, heap, realm)
+    }
+
     /// 7.4.2 step 1 for a clause that walks an iterable of the Script.
     ///
     /// The walk waits in a record the collector traces: the Array it fills,
@@ -7598,6 +7699,8 @@ impl RegisterVM {
                             let tag = promise::slot(heap, record, 9).as_smi().unwrap_or(0);
                             let output = if tag == ITERATOR_WALK_ARRAY {
                                 promise::slot(heap, record, 0)
+                            } else if tag == ITERATOR_WALK_EACH {
+                                VALUE_UNDEFINED
                             } else if tag == ITERATOR_WALK_TYPED_ARRAY {
                                 // 23.2.5.1.3 knows the length only here.
                                 let list = promise::slot(heap, record, 0);
@@ -7716,7 +7819,9 @@ impl RegisterVM {
         if usize::try_from(index).unwrap_or(usize::MAX) >= self.property_limit {
             return Err(VMError::PropertyLimit);
         }
-        if tag == ITERATOR_WALK_ARRAY || tag == ITERATOR_WALK_TYPED_ARRAY {
+        if tag == ITERATOR_WALK_EACH {
+            // 27.1.5.1.5 step 6.d.ii drops what the procedure answered.
+        } else if tag == ITERATOR_WALK_ARRAY || tag == ITERATOR_WALK_TYPED_ARRAY {
             let array = promise::slot(heap, record, 0)
                 .as_object()
                 .ok_or(VMError::TypeError)?;

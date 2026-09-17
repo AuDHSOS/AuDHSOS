@@ -1122,6 +1122,10 @@ pub enum Intrinsic {
     TypedArrayPrototypeSome,
     /// `Iterator`, 27.1.4.1.
     IteratorConstructor,
+    /// `toArray`, 27.1.5.1.11.
+    IteratorPrototypeToArray,
+    /// `forEach`, 27.1.5.1.5.
+    IteratorPrototypeForEach,
     /// `get constructor`, 27.1.4.2.
     IteratorPrototypeConstructorGet,
     /// `set constructor`, 27.1.4.2.
@@ -1273,7 +1277,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 440] = [
+    pub const ALL: [Self; 442] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1683,6 +1687,8 @@ impl Intrinsic {
         Self::TypedArrayPrototypeReduceRight,
         Self::TypedArrayPrototypeSome,
         Self::IteratorConstructor,
+        Self::IteratorPrototypeToArray,
+        Self::IteratorPrototypeForEach,
         Self::IteratorPrototypeConstructorGet,
         Self::IteratorPrototypeConstructorSet,
         Self::IteratorPrototypeToStringTagGet,
@@ -1810,6 +1816,8 @@ impl Intrinsic {
             // 27.1.2.1 stands on %IteratorPrototype%, which every iterator of
             // the specification inherits.
             Self::IteratorPrototypeIterator
+            | Self::IteratorPrototypeToArray
+            | Self::IteratorPrototypeForEach
             | Self::IteratorPrototypeConstructorGet
             | Self::IteratorPrototypeConstructorSet
             | Self::IteratorPrototypeToStringTagGet
@@ -2614,6 +2622,8 @@ impl Intrinsic {
             Self::TypedArrayPrototypeReduceRight => 431,
             Self::TypedArrayPrototypeSome => 432,
             Self::IteratorConstructor => 435,
+            Self::IteratorPrototypeToArray => 440,
+            Self::IteratorPrototypeForEach => 441,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3064,6 +3074,8 @@ impl Intrinsic {
             Self::TypedArrayPrototypeReduceRight => 431,
             Self::TypedArrayPrototypeSome => 432,
             Self::IteratorConstructor => 435,
+            Self::IteratorPrototypeToArray => 440,
+            Self::IteratorPrototypeForEach => 441,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3515,6 +3527,8 @@ impl Intrinsic {
             431 => Some(Self::TypedArrayPrototypeReduceRight),
             432 => Some(Self::TypedArrayPrototypeSome),
             435 => Some(Self::IteratorConstructor),
+            440 => Some(Self::IteratorPrototypeToArray),
+            441 => Some(Self::IteratorPrototypeForEach),
             436 => Some(Self::IteratorPrototypeConstructorGet),
             437 => Some(Self::IteratorPrototypeConstructorSet),
             438 => Some(Self::IteratorPrototypeToStringTagGet),
@@ -3721,6 +3735,7 @@ impl Intrinsic {
             }
             Self::TypedArrayPrototypeSubarray => "subarray",
             Self::IteratorConstructor => "Iterator",
+            Self::IteratorPrototypeToArray => "toArray",
             Self::IteratorPrototypeConstructorGet => "get constructor",
             Self::IteratorPrototypeConstructorSet => "set constructor",
             Self::IteratorPrototypeToStringTagSet => "set [Symbol.toStringTag]",
@@ -3872,7 +3887,8 @@ impl Intrinsic {
             Self::ArrayPrototypeForEach
             | Self::MapPrototypeForEach
             | Self::SetPrototypeForEach
-            | Self::TypedArrayPrototypeForEach => "forEach",
+            | Self::TypedArrayPrototypeForEach
+            | Self::IteratorPrototypeForEach => "forEach",
             Self::ArrayPrototypeMap => "map",
             Self::ArrayPrototypeFilter => "filter",
             Self::ArrayPrototypeEvery | Self::TypedArrayPrototypeEvery => "every",
@@ -4681,6 +4697,7 @@ impl Intrinsic {
             | Self::SharedArrayBufferPrototypeMaxByteLength
             | Self::AtomicsPause
             | Self::IteratorConstructor
+            | Self::IteratorPrototypeToArray
             | Self::IteratorPrototypeConstructorGet
             | Self::IteratorPrototypeToStringTagGet
             | Self::HostGc
@@ -4894,6 +4911,7 @@ impl Intrinsic {
             | Self::BigIntConstructor
             | Self::BigIntPrototypeToString
             | Self::IteratorPrototypeConstructorSet
+            | Self::IteratorPrototypeForEach
             | Self::IteratorPrototypeToStringTagSet
             | Self::HostDetachArrayBuffer
             | Self::TypedArrayPrototypeAt

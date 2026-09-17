@@ -10360,6 +10360,33 @@ fn the_iterator_of_27_1_4_is_abstract_and_carries_two_accessors() -> Result<(), 
             "var r;try{Iterator.prototype.constructor=5}catch(e){r=e instanceof TypeError};''+r",
             "true",
         ),
+        // 27.1.5.1.11 collects what the iterator answers, and 27.1.5.1.5 calls
+        // its procedure with each of them and answers undefined.
+        ("[1,2,3].values().toArray().join(',')", "1,2,3"),
+        ("new Set([1,2]).values().toArray().join(',')", "1,2"),
+        ("''+[].values().toArray().length", "0"),
+        (
+            "var s=0;[1,2,3].values().forEach(function(v){s+=v});''+s",
+            "6",
+        ),
+        (
+            "var k=[];['a','b'].values().forEach(function(v,i){k.push(i+v)});k.join(',')",
+            "0a,1b",
+        ),
+        ("''+[1].values().forEach(function(){return 5})", "undefined"),
+        (
+            "var r;try{[].values().forEach(5)}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        // Step 3 of 27.1.5.1.5 asks for a callable, and undefined is none.
+        (
+            "var r;try{[].values().forEach()}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{Iterator.prototype.toArray.call(1)}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
     ] {
         assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
     }
