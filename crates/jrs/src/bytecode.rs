@@ -9046,6 +9046,20 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // every write of 25.3.4 answers undefined.
         | crate::engine::realm::Intrinsic::DataViewConstructor
         | crate::engine::realm::Intrinsic::DataViewPrototypeBuffer
+        // 23.2.6 answers the array it made, 23.2.3.1 the block it looks into,
+        // and 23.2.1.1 refuses every call.
+        | crate::engine::realm::Intrinsic::TypedArrayBase
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeToStringTag
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeBuffer
+        | crate::engine::realm::Intrinsic::TypedArrayInt8Constructor
+        | crate::engine::realm::Intrinsic::TypedArrayUint8Constructor
+        | crate::engine::realm::Intrinsic::TypedArrayUint8ClampedConstructor
+        | crate::engine::realm::Intrinsic::TypedArrayInt16Constructor
+        | crate::engine::realm::Intrinsic::TypedArrayUint16Constructor
+        | crate::engine::realm::Intrinsic::TypedArrayInt32Constructor
+        | crate::engine::realm::Intrinsic::TypedArrayUint32Constructor
+        | crate::engine::realm::Intrinsic::TypedArrayFloat32Constructor
+        | crate::engine::realm::Intrinsic::TypedArrayFloat64Constructor
         | crate::engine::realm::Intrinsic::DataViewPrototypeSetInt8
         | crate::engine::realm::Intrinsic::DataViewPrototypeSetUint8
         | crate::engine::realm::Intrinsic::DataViewPrototypeSetInt16
@@ -9149,6 +9163,10 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // 25.3.4 answers a Number from every read and from two accessors.
         | crate::engine::realm::Intrinsic::DataViewPrototypeByteLength
         | crate::engine::realm::Intrinsic::DataViewPrototypeByteOffset
+        // 23.2.3.2, 23.2.3.3 and 23.2.3.19 answer a Number.
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeByteLength
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeByteOffset
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeLength
         | crate::engine::realm::Intrinsic::DataViewPrototypeGetInt8
         | crate::engine::realm::Intrinsic::DataViewPrototypeGetUint8
         | crate::engine::realm::Intrinsic::DataViewPrototypeGetInt16

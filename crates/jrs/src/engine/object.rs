@@ -3,7 +3,8 @@
 
 #![expect(
     clippy::as_conversions,
-    reason = "Object slot indexing and inline slot arrays"
+    clippy::arithmetic_side_effects,
+    reason = "Object slot indexing, inline slot arrays and the element codec of 25.1.3"
 )]
 
 //! Compact JavaScript object representation and standard internal methods.
@@ -136,6 +137,18 @@ pub enum ObjectKind {
     /// The `[[ArrayBufferData]]` of 25.1.5, whose bytes are the block 25.1.3.1
     /// created; `None` is the detached block of 25.1.3.4.
     ArrayBuffer(Option<alloc::vec::Vec<u8>>),
+    /// The `[[TypedArrayName]]` and the rest of 23.2.5: the block the array
+    /// looks into, where, and which element kind 23.2.5.1 gave it.
+    TypedArray {
+        /// `[[ViewedArrayBuffer]]`.
+        buffer: Value,
+        /// `[[ByteOffset]]`.
+        offset: u32,
+        /// `[[ArrayLength]]`, in elements and not in bytes.
+        length: u32,
+        /// The row of table 71 the array stands in.
+        kind: u8,
+    },
     /// The `[[DataView]]` of 25.3.5: the block it looks into, and where.
     DataView {
         /// `[[ViewedArrayBuffer]]`.
@@ -309,6 +322,7 @@ impl ObjectKind {
             | Self::NativeFunction { state: value, .. }
             | Self::Collection { entries: value, .. }
             | Self::DataView { buffer: value, .. }
+            | Self::TypedArray { buffer: value, .. }
             | Self::Function { home: value, .. } => [Some(*value), None, None, None, None],
             Self::Promise {
                 value,
@@ -400,6 +414,7 @@ impl ObjectKind {
             | Self::NativeFunction { state: value, .. }
             | Self::Collection { entries: value, .. }
             | Self::DataView { buffer: value, .. }
+            | Self::TypedArray { buffer: value, .. }
             | Self::Function { home: value, .. } => [Some(value), None, None, None, None],
             Self::Promise {
                 value,
@@ -527,6 +542,80 @@ impl JSObject {
                 *target = value;
             }
         }
+    }
+}
+
+/// `GetValueFromBuffer` of 25.1.3.10 for the kinds 25.3.4 names.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "every width below 2^53 is a binary64 exactly"
+)]
+pub(crate) fn read_element(raw: [u8; 8], size: usize, kind: u8, little: bool) -> f64 {
+    let mut value = 0u64;
+    for offset in 0..size {
+        let at = if little { size - 1 - offset } else { offset };
+        value = (value << 8) | u64::from(*raw.get(at).unwrap_or(&0));
+    }
+    match kind {
+        2 => f64::from(f32::from_bits(
+            u32::try_from(value & 0xFFFF_FFFF).unwrap_or(0),
+        )),
+        3 => f64::from_bits(value),
+        1 => value as f64,
+        _ => {
+            let bits = size.saturating_mul(8);
+            let sign = 1u64 << (bits.saturating_sub(1));
+            if value & sign == 0 {
+                value as f64
+            } else {
+                -(((!value).wrapping_add(1) & (sign | (sign - 1))) as f64)
+            }
+        }
+    }
+}
+
+/// `SetValueInBuffer` of 25.1.3.12 for the same kinds.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "7.1.6 and 7.1.7 wrap on purpose, and 6.1.6.1.20 rounds to the nearer binary32"
+)]
+pub(crate) fn write_element(value: f64, size: usize, kind: u8, little: bool) -> [u8; 8] {
+    let bits = match kind {
+        2 => u64::from((value as f32).to_bits()),
+        3 => value.to_bits(),
+        _ => {
+            let wrapped = crate::value::number_uint32(value);
+            if size == 8 {
+                u64::from(wrapped)
+            } else {
+                u64::from(wrapped) & ((1u64 << (size.saturating_mul(8))) - 1)
+            }
+        }
+    };
+    let mut out = [0u8; 8];
+    for offset in 0..size {
+        let shift = if little { offset } else { size - 1 - offset };
+        if let Some(slot) = out.get_mut(offset) {
+            *slot = ((bits >> (shift.saturating_mul(8))) & 0xFF) as u8;
+        }
+    }
+    out
+}
+
+/// The bytes one element of a row of table 71 takes, how 25.1.3.10 reads it
+/// back, and whether 7.1.11 clamps what a write gives it.
+pub(crate) const fn element_form(kind: u8) -> (usize, u8, bool) {
+    // The second field is the one `read_element` and `write_element` name.
+    match kind {
+        0 => (1, 0, false),
+        1 => (1, 1, false),
+        2 => (1, 1, true),
+        3 => (2, 0, false),
+        4 => (2, 1, false),
+        5 => (4, 0, false),
+        6 => (4, 1, false),
+        7 => (4, 2, false),
+        _ => (8, 3, false),
     }
 }
 

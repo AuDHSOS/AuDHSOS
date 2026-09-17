@@ -1030,6 +1030,36 @@ pub enum Intrinsic {
     DataViewPrototypeGetFloat64,
     /// `setFloat64`, 25.3.4.
     DataViewPrototypeSetFloat64,
+    /// `TypedArray`, 23.2.1.1.
+    TypedArrayBase,
+    /// `Int8Array`, 23.2.6.
+    TypedArrayInt8Constructor,
+    /// `Uint8Array`, 23.2.6.
+    TypedArrayUint8Constructor,
+    /// `Uint8ClampedArray`, 23.2.6.
+    TypedArrayUint8ClampedConstructor,
+    /// `Int16Array`, 23.2.6.
+    TypedArrayInt16Constructor,
+    /// `Uint16Array`, 23.2.6.
+    TypedArrayUint16Constructor,
+    /// `Int32Array`, 23.2.6.
+    TypedArrayInt32Constructor,
+    /// `Uint32Array`, 23.2.6.
+    TypedArrayUint32Constructor,
+    /// `Float32Array`, 23.2.6.
+    TypedArrayFloat32Constructor,
+    /// `Float64Array`, 23.2.6.
+    TypedArrayFloat64Constructor,
+    /// `get buffer`, 23.2.3.1.
+    TypedArrayPrototypeBuffer,
+    /// `get byteLength`, 23.2.3.2.
+    TypedArrayPrototypeByteLength,
+    /// `get byteOffset`, 23.2.3.3.
+    TypedArrayPrototypeByteOffset,
+    /// `get length`, 23.2.3.19.
+    TypedArrayPrototypeLength,
+    /// `get [@@toStringTag]`, 23.2.3.38.
+    TypedArrayPrototypeToStringTag,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -1089,6 +1119,8 @@ pub enum IntrinsicHolder {
     ArrayBufferConstructor,
     /// `%DataView.prototype%`, which carries what 25.3.4 gives it.
     DataViewPrototype,
+    /// `%TypedArray.prototype%`, which carries what 23.2.3 gives it.
+    TypedArrayPrototype,
     /// `%WeakMap.prototype%`, which carries the methods 24.3.3 gives it.
     WeakMapPrototype,
     /// `%WeakSet.prototype%`, which carries the methods 24.4.3 gives it.
@@ -1107,7 +1139,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 363] = [
+    pub const ALL: [Self; 378] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1471,6 +1503,21 @@ impl Intrinsic {
         Self::DataViewPrototypeSetFloat32,
         Self::DataViewPrototypeGetFloat64,
         Self::DataViewPrototypeSetFloat64,
+        Self::TypedArrayBase,
+        Self::TypedArrayInt8Constructor,
+        Self::TypedArrayUint8Constructor,
+        Self::TypedArrayUint8ClampedConstructor,
+        Self::TypedArrayInt16Constructor,
+        Self::TypedArrayUint16Constructor,
+        Self::TypedArrayInt32Constructor,
+        Self::TypedArrayUint32Constructor,
+        Self::TypedArrayFloat32Constructor,
+        Self::TypedArrayFloat64Constructor,
+        Self::TypedArrayPrototypeBuffer,
+        Self::TypedArrayPrototypeByteLength,
+        Self::TypedArrayPrototypeByteOffset,
+        Self::TypedArrayPrototypeLength,
+        Self::TypedArrayPrototypeToStringTag,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -1703,6 +1750,11 @@ impl Intrinsic {
             | Self::DataViewPrototypeSetFloat32
             | Self::DataViewPrototypeGetFloat64
             | Self::DataViewPrototypeSetFloat64 => IntrinsicHolder::DataViewPrototype,
+            Self::TypedArrayPrototypeBuffer
+            | Self::TypedArrayPrototypeByteLength
+            | Self::TypedArrayPrototypeByteOffset
+            | Self::TypedArrayPrototypeLength
+            | Self::TypedArrayPrototypeToStringTag => IntrinsicHolder::TypedArrayPrototype,
             Self::DatePrototypeValueOf
             | Self::DatePrototypeGetTime
             | Self::DatePrototypeSetTime
@@ -1800,10 +1852,22 @@ impl Intrinsic {
             | Self::DateConstructor
             | Self::ArrayBufferConstructor
             | Self::DataViewConstructor
+            // 23.2.6 gives the global object the nine of table 71.
+            | Self::TypedArrayInt8Constructor
+            | Self::TypedArrayUint8Constructor
+            | Self::TypedArrayUint8ClampedConstructor
+            | Self::TypedArrayInt16Constructor
+            | Self::TypedArrayUint16Constructor
+            | Self::TypedArrayInt32Constructor
+            | Self::TypedArrayUint32Constructor
+            | Self::TypedArrayFloat32Constructor
+            | Self::TypedArrayFloat64Constructor
             // 25.3.4 gives three of them as accessors too.
             | Self::DataViewPrototypeBuffer
             | Self::DataViewPrototypeByteLength
             | Self::DataViewPrototypeByteOffset
+            // 23.2.1 names no holder, and nothing installs it.
+            | Self::TypedArrayBase
             // 25.1.6 gives four of them as accessors, which the Realm installs
             // beside the methods, so the Global holder installs none of them.
             | Self::ArrayBufferPrototypeByteLength
@@ -2236,6 +2300,21 @@ impl Intrinsic {
             Self::DataViewPrototypeSetFloat32 => 360,
             Self::DataViewPrototypeGetFloat64 => 361,
             Self::DataViewPrototypeSetFloat64 => 362,
+            Self::TypedArrayBase => 363,
+            Self::TypedArrayInt8Constructor => 364,
+            Self::TypedArrayUint8Constructor => 365,
+            Self::TypedArrayUint8ClampedConstructor => 366,
+            Self::TypedArrayInt16Constructor => 367,
+            Self::TypedArrayUint16Constructor => 368,
+            Self::TypedArrayInt32Constructor => 369,
+            Self::TypedArrayUint32Constructor => 370,
+            Self::TypedArrayFloat32Constructor => 371,
+            Self::TypedArrayFloat64Constructor => 372,
+            Self::TypedArrayPrototypeBuffer => 373,
+            Self::TypedArrayPrototypeByteLength => 374,
+            Self::TypedArrayPrototypeByteOffset => 375,
+            Self::TypedArrayPrototypeLength => 376,
+            Self::TypedArrayPrototypeToStringTag => 377,
         }
     }
 
@@ -2609,6 +2688,21 @@ impl Intrinsic {
             Self::DataViewPrototypeSetFloat32 => 360,
             Self::DataViewPrototypeGetFloat64 => 361,
             Self::DataViewPrototypeSetFloat64 => 362,
+            Self::TypedArrayBase => 363,
+            Self::TypedArrayInt8Constructor => 364,
+            Self::TypedArrayUint8Constructor => 365,
+            Self::TypedArrayUint8ClampedConstructor => 366,
+            Self::TypedArrayInt16Constructor => 367,
+            Self::TypedArrayUint16Constructor => 368,
+            Self::TypedArrayInt32Constructor => 369,
+            Self::TypedArrayUint32Constructor => 370,
+            Self::TypedArrayFloat32Constructor => 371,
+            Self::TypedArrayFloat64Constructor => 372,
+            Self::TypedArrayPrototypeBuffer => 373,
+            Self::TypedArrayPrototypeByteLength => 374,
+            Self::TypedArrayPrototypeByteOffset => 375,
+            Self::TypedArrayPrototypeLength => 376,
+            Self::TypedArrayPrototypeToStringTag => 377,
         }
     }
 
@@ -2983,6 +3077,21 @@ impl Intrinsic {
             360 => Some(Self::DataViewPrototypeSetFloat32),
             361 => Some(Self::DataViewPrototypeGetFloat64),
             362 => Some(Self::DataViewPrototypeSetFloat64),
+            363 => Some(Self::TypedArrayBase),
+            364 => Some(Self::TypedArrayInt8Constructor),
+            365 => Some(Self::TypedArrayUint8Constructor),
+            366 => Some(Self::TypedArrayUint8ClampedConstructor),
+            367 => Some(Self::TypedArrayInt16Constructor),
+            368 => Some(Self::TypedArrayUint16Constructor),
+            369 => Some(Self::TypedArrayInt32Constructor),
+            370 => Some(Self::TypedArrayUint32Constructor),
+            371 => Some(Self::TypedArrayFloat32Constructor),
+            372 => Some(Self::TypedArrayFloat64Constructor),
+            373 => Some(Self::TypedArrayPrototypeBuffer),
+            374 => Some(Self::TypedArrayPrototypeByteLength),
+            375 => Some(Self::TypedArrayPrototypeByteOffset),
+            376 => Some(Self::TypedArrayPrototypeLength),
+            377 => Some(Self::TypedArrayPrototypeToStringTag),
             _ => None,
         }
     }
@@ -3109,15 +3218,17 @@ impl Intrinsic {
             Self::DatePrototypeToLocaleTimeString => "toLocaleTimeString",
             Self::ArrayBufferConstructor => "ArrayBuffer",
             Self::ArrayBufferIsView => "isView",
-            Self::ArrayBufferPrototypeByteLength | Self::DataViewPrototypeByteLength => {
-                "get byteLength"
-            }
+            Self::ArrayBufferPrototypeByteLength
+            | Self::DataViewPrototypeByteLength
+            | Self::TypedArrayPrototypeByteLength => "get byteLength",
             Self::ArrayBufferPrototypeDetached => "get detached",
             Self::ArrayBufferPrototypeResizable => "get resizable",
             Self::ArrayBufferPrototypeMaxByteLength => "get maxByteLength",
             Self::DataViewConstructor => "DataView",
-            Self::DataViewPrototypeBuffer => "get buffer",
-            Self::DataViewPrototypeByteOffset => "get byteOffset",
+            Self::DataViewPrototypeBuffer | Self::TypedArrayPrototypeBuffer => "get buffer",
+            Self::DataViewPrototypeByteOffset | Self::TypedArrayPrototypeByteOffset => {
+                "get byteOffset"
+            }
             Self::DataViewPrototypeGetInt8 => "getInt8",
             Self::DataViewPrototypeSetInt8 => "setInt8",
             Self::DataViewPrototypeGetUint8 => "getUint8",
@@ -3134,6 +3245,18 @@ impl Intrinsic {
             Self::DataViewPrototypeSetFloat32 => "setFloat32",
             Self::DataViewPrototypeGetFloat64 => "getFloat64",
             Self::DataViewPrototypeSetFloat64 => "setFloat64",
+            Self::TypedArrayBase => "TypedArray",
+            Self::TypedArrayInt8Constructor => "Int8Array",
+            Self::TypedArrayUint8Constructor => "Uint8Array",
+            Self::TypedArrayUint8ClampedConstructor => "Uint8ClampedArray",
+            Self::TypedArrayInt16Constructor => "Int16Array",
+            Self::TypedArrayUint16Constructor => "Uint16Array",
+            Self::TypedArrayInt32Constructor => "Int32Array",
+            Self::TypedArrayUint32Constructor => "Uint32Array",
+            Self::TypedArrayFloat32Constructor => "Float32Array",
+            Self::TypedArrayFloat64Constructor => "Float64Array",
+            Self::TypedArrayPrototypeLength => "get length",
+            Self::TypedArrayPrototypeToStringTag => "get [Symbol.toStringTag]",
             Self::DatePrototypeSetMilliseconds => "setMilliseconds",
             Self::DatePrototypeSetUtcMilliseconds => "setUTCMilliseconds",
             Self::DatePrototypeSetSeconds => "setSeconds",
@@ -3849,6 +3972,12 @@ impl Intrinsic {
             | Self::DataViewPrototypeBuffer
             | Self::DataViewPrototypeByteLength
             | Self::DataViewPrototypeByteOffset
+            | Self::TypedArrayPrototypeBuffer
+            | Self::TypedArrayPrototypeByteLength
+            | Self::TypedArrayPrototypeByteOffset
+            | Self::TypedArrayPrototypeLength
+            | Self::TypedArrayPrototypeToStringTag
+            | Self::TypedArrayBase
             | Self::MapIteratorPrototypeNext
             | Self::SetIteratorPrototypeNext => 0,
             Self::StringFromCharCode
@@ -4051,7 +4180,17 @@ impl Intrinsic {
             | Self::DatePrototypeSetMinutes
             | Self::DatePrototypeSetUtcMinutes
             | Self::DatePrototypeSetFullYear
-            | Self::DatePrototypeSetUtcFullYear => 3,
+            | Self::DatePrototypeSetUtcFullYear
+            // 23.2.6 gives each of the nine a length of three.
+            | Self::TypedArrayInt8Constructor
+            | Self::TypedArrayUint8Constructor
+            | Self::TypedArrayUint8ClampedConstructor
+            | Self::TypedArrayInt16Constructor
+            | Self::TypedArrayUint16Constructor
+            | Self::TypedArrayInt32Constructor
+            | Self::TypedArrayUint32Constructor
+            | Self::TypedArrayFloat32Constructor
+            | Self::TypedArrayFloat64Constructor => 3,
             Self::MathPow
             | Self::ObjectGetOwnPropertyDescriptor
             | Self::ObjectCreate
@@ -4626,6 +4765,53 @@ pub fn data_view_prototype_owns(name: &[u16]) -> bool {
     wrapper_prototype_owns(&DATA_VIEW_PROTOTYPE_PROPERTIES, name)
 }
 
+/// The property names 23.2.3 gives `%TypedArray.prototype%`.
+pub const TYPED_ARRAY_PROTOTYPE_PROPERTIES: [&str; 36] = [
+    "at",
+    "buffer",
+    "byteLength",
+    "byteOffset",
+    "constructor",
+    "copyWithin",
+    "entries",
+    "every",
+    "fill",
+    "filter",
+    "find",
+    "findIndex",
+    "findLast",
+    "findLastIndex",
+    "forEach",
+    "includes",
+    "indexOf",
+    "join",
+    "keys",
+    "lastIndexOf",
+    "length",
+    "map",
+    "reduce",
+    "reduceRight",
+    "reverse",
+    "set",
+    "slice",
+    "some",
+    "sort",
+    "subarray",
+    "toLocaleString",
+    "toReversed",
+    "toSorted",
+    "toString",
+    "values",
+    "with",
+];
+
+/// Whether `%TypedArray.prototype%` or `%Object.prototype%` owns a property
+/// of this name, which an array of 23.2 resolves on its Prototype Chain.
+#[must_use]
+pub fn typed_array_prototype_owns(name: &[u16]) -> bool {
+    wrapper_prototype_owns(&TYPED_ARRAY_PROTOTYPE_PROPERTIES, name)
+}
+
 /// The property names 27.2.5 gives `%Promise.prototype%`.
 pub const PROMISE_PROTOTYPE_PROPERTIES: [&str; 4] = ["catch", "constructor", "finally", "then"];
 
@@ -4918,6 +5104,8 @@ pub struct Realm {
     date_prototype: Root,
     array_buffer_prototype: Root,
     data_view_prototype: Root,
+    typed_array_prototype: Root,
+    typed_array_prototypes: [Root; TYPED_ARRAY_KINDS],
     weak_map_prototype: Root,
     weak_set_prototype: Root,
     map_iterator_prototype: Root,
@@ -4947,6 +5135,22 @@ pub enum BindingOutcome {
     Accessor,
 }
 
+/// The rows of table 71.
+pub const TYPED_ARRAY_KINDS: usize = 9;
+
+/// Each row of table 71: the constructor and the bytes one element takes.
+const TYPED_ARRAY_ROWS: [(Intrinsic, u8); TYPED_ARRAY_KINDS] = [
+    (Intrinsic::TypedArrayInt8Constructor, 1),
+    (Intrinsic::TypedArrayUint8Constructor, 1),
+    (Intrinsic::TypedArrayUint8ClampedConstructor, 1),
+    (Intrinsic::TypedArrayInt16Constructor, 2),
+    (Intrinsic::TypedArrayUint16Constructor, 2),
+    (Intrinsic::TypedArrayInt32Constructor, 4),
+    (Intrinsic::TypedArrayUint32Constructor, 4),
+    (Intrinsic::TypedArrayFloat32Constructor, 4),
+    (Intrinsic::TypedArrayFloat64Constructor, 8),
+];
+
 /// The objects the intrinsic functions of a new Realm are installed on.
 struct Holders {
     object_prototype: Root,
@@ -4969,6 +5173,7 @@ struct Holders {
     date_prototype: Root,
     array_buffer_prototype: Root,
     data_view_prototype: Root,
+    typed_array_prototype: Root,
     weak_map_prototype: Root,
     weak_set_prototype: Root,
     map_iterator_prototype: Root,
@@ -5080,6 +5285,17 @@ impl Realm {
         let data_view_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
         let data_view_prototype = heap.push_root(Value::from_object(data_view_prototype))?;
 
+        // 23.2.3: %TypedArray.prototype% is an ordinary object, and 23.2.7
+        // gives each row of table 71 a prototype that inherits from it.
+        let typed_array_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
+        let typed_array_prototype = heap.push_root(Value::from_object(typed_array_prototype))?;
+        let shared = Self::rooted(heap, typed_array_prototype)?;
+        let mut typed_array_prototypes = [typed_array_prototype; TYPED_ARRAY_KINDS];
+        for slot in &mut typed_array_prototypes {
+            let object = heap.allocate_immortal_object(root_shape, shared)?;
+            *slot = heap.push_root(Value::from_object(object))?;
+        }
+
         // 24.3.3 and 24.4.3: %WeakMap.prototype% and %WeakSet.prototype% are
         // ordinary objects and neither a WeakMap nor a WeakSet.
         let weak_map_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
@@ -5169,6 +5385,7 @@ impl Realm {
                 date_prototype,
                 array_buffer_prototype,
                 data_view_prototype,
+                typed_array_prototype,
                 weak_map_prototype,
                 weak_set_prototype,
                 map_iterator_prototype,
@@ -5192,11 +5409,18 @@ impl Realm {
             (Intrinsic::DateConstructor, date_prototype),
             (Intrinsic::ArrayBufferConstructor, array_buffer_prototype),
             (Intrinsic::DataViewConstructor, data_view_prototype),
+            (Intrinsic::TypedArrayBase, typed_array_prototype),
             (Intrinsic::WeakMapConstructor, weak_map_prototype),
             (Intrinsic::WeakSetConstructor, weak_set_prototype),
         ] {
             Self::pair_constructor_with_prototype(heap, &intrinsics, constructor, prototype)?;
         }
+        Self::pair_typed_arrays(
+            heap,
+            &intrinsics,
+            typed_array_prototype,
+            &typed_array_prototypes,
+        )?;
         Self::pair_errors_with_their_prototypes(
             heap,
             &intrinsics,
@@ -5209,6 +5433,7 @@ impl Realm {
         Self::define_collection_size_getters(heap, &intrinsics, map_prototype, set_prototype)?;
         Self::define_array_buffer_getters(heap, &intrinsics, array_buffer_prototype)?;
         Self::define_data_view_getters(heap, &intrinsics, data_view_prototype)?;
+        Self::define_typed_array_getters(heap, &intrinsics, typed_array_prototype)?;
         Self::define_trim_aliases(heap, &intrinsics, string_prototype, date_prototype)?;
         Self::define_unscopables(heap, array_prototype)?;
         Self::define_to_string_tags(
@@ -5273,6 +5498,8 @@ impl Realm {
             date_prototype,
             array_buffer_prototype,
             data_view_prototype,
+            typed_array_prototype,
+            typed_array_prototypes,
             weak_map_prototype,
             weak_set_prototype,
             map_iterator_prototype,
@@ -5965,6 +6192,121 @@ impl Realm {
         Ok(())
     }
 
+    /// The four accessors of 23.2.3 and the tag of 23.2.3.38.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    fn define_typed_array_getters(
+        heap: &mut GenerationalHeap,
+        intrinsics: &[Root],
+        typed_array_prototype: Root,
+    ) -> Result<(), HeapError> {
+        let holder = Self::rooted(heap, typed_array_prototype)?
+            .as_object()
+            .ok_or(HeapError::InvalidReference)?;
+        for (intrinsic, key) in [
+            (
+                Intrinsic::TypedArrayPrototypeBuffer,
+                PropertyKey::String(heap.strings.intern("buffer")?),
+            ),
+            (
+                Intrinsic::TypedArrayPrototypeByteLength,
+                PropertyKey::String(heap.strings.intern("byteLength")?),
+            ),
+            (
+                Intrinsic::TypedArrayPrototypeByteOffset,
+                PropertyKey::String(heap.strings.intern("byteOffset")?),
+            ),
+            (
+                Intrinsic::TypedArrayPrototypeLength,
+                PropertyKey::String(heap.strings.intern("length")?),
+            ),
+            (
+                Intrinsic::TypedArrayPrototypeToStringTag,
+                WellKnownSymbol::ToStringTag.key(),
+            ),
+        ] {
+            let getter = Self::rooted(
+                heap,
+                *intrinsics
+                    .get(intrinsic.index())
+                    .ok_or(HeapError::InvalidReference)?,
+            )?;
+            let shape = heap.shapes.root_shape();
+            let pair = heap.allocate_immortal_object(shape, super::value::VALUE_NULL)?;
+            heap.set_object_kind(
+                pair,
+                super::object::ObjectKind::Accessor {
+                    get: getter,
+                    set: super::value::VALUE_UNDEFINED,
+                },
+            )?;
+            heap.define_own_named(
+                holder,
+                key,
+                Value::from_object(pair),
+                PropertyFlags {
+                    writable: false,
+                    enumerable: false,
+                    configurable: true,
+                    is_accessor: true,
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    /// 23.2.6 and 23.2.7: each row of table 71 gets its prototype, inherits
+    /// from `%TypedArray%` and carries `BYTES_PER_ELEMENT` on both objects.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    fn pair_typed_arrays(
+        heap: &mut GenerationalHeap,
+        intrinsics: &[Root],
+        typed_array_prototype: Root,
+        prototypes: &[Root; TYPED_ARRAY_KINDS],
+    ) -> Result<(), HeapError> {
+        let base = Self::rooted(
+            heap,
+            *intrinsics
+                .get(Intrinsic::TypedArrayBase.index())
+                .ok_or(HeapError::InvalidReference)?,
+        )?;
+        let shared = Self::rooted(heap, typed_array_prototype)?;
+        let frozen = PropertyFlags {
+            writable: false,
+            enumerable: false,
+            configurable: false,
+            is_accessor: false,
+        };
+        for (index, (which, size)) in TYPED_ARRAY_ROWS.iter().enumerate() {
+            let prototype = *prototypes.get(index).ok_or(HeapError::InvalidReference)?;
+            Self::pair_constructor_with_prototype(heap, intrinsics, *which, prototype)?;
+            let constructor = Self::rooted(
+                heap,
+                *intrinsics
+                    .get(which.index())
+                    .ok_or(HeapError::InvalidReference)?,
+            )?
+            .as_object()
+            .ok_or(HeapError::InvalidReference)?;
+            // 23.2.6.2 step 1: each of the nine inherits from `%TypedArray%`.
+            heap.set_object_prototype(constructor, base)?;
+            let holder = Self::rooted(heap, prototype)?
+                .as_object()
+                .ok_or(HeapError::InvalidReference)?;
+            heap.set_object_prototype(holder, shared)?;
+            let key = PropertyKey::String(heap.strings.intern("BYTES_PER_ELEMENT")?);
+            let bytes = Value::from_smi(i32::from(*size));
+            heap.define_own_named(constructor, key, bytes, frozen)?;
+            heap.define_own_named(holder, key, bytes, frozen)?;
+        }
+        Ok(())
+    }
+
     /// The `size` 24.1.3.10 and 24.2.3.14 give their Prototype.
     ///
     /// # Errors
@@ -6231,6 +6573,9 @@ impl Realm {
                 IntrinsicHolder::DataViewPrototype => {
                     Self::rooted(heap, holders.data_view_prototype)?
                 }
+                IntrinsicHolder::TypedArrayPrototype => {
+                    Self::rooted(heap, holders.typed_array_prototype)?
+                }
                 IntrinsicHolder::ArrayBufferConstructor => Self::rooted(
                     heap,
                     *intrinsics
@@ -6325,6 +6670,23 @@ impl Realm {
                     | Intrinsic::RegExpPrototypeUnicode
                     | Intrinsic::RegExpPrototypeUnicodeSets
                     | Intrinsic::RegExpPrototypeSticky
+                    | Intrinsic::TypedArrayBase
+                    | Intrinsic::TypedArrayPrototypeBuffer
+                    | Intrinsic::TypedArrayPrototypeByteLength
+                    | Intrinsic::TypedArrayPrototypeByteOffset
+                    | Intrinsic::TypedArrayPrototypeLength
+                    | Intrinsic::TypedArrayPrototypeToStringTag
+                    // 24.1.3.10, 24.2.3.14, 25.1.6 and 25.3.4 give accessors,
+                    // which the Realm installs beside the methods.
+                    | Intrinsic::MapPrototypeSize
+                    | Intrinsic::SetPrototypeSize
+                    | Intrinsic::ArrayBufferPrototypeByteLength
+                    | Intrinsic::ArrayBufferPrototypeDetached
+                    | Intrinsic::ArrayBufferPrototypeResizable
+                    | Intrinsic::ArrayBufferPrototypeMaxByteLength
+                    | Intrinsic::DataViewPrototypeBuffer
+                    | Intrinsic::DataViewPrototypeByteLength
+                    | Intrinsic::DataViewPrototypeByteOffset
             ) {
                 continue;
             }
@@ -6625,6 +6987,33 @@ impl Realm {
     /// Returns [`HeapError::InvalidReference`] for a stale root.
     pub fn data_view_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
         Self::rooted(heap, self.data_view_prototype)
+    }
+
+    /// `%TypedArray.prototype%`, 23.2.3.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale root.
+    pub fn typed_array_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.typed_array_prototype)
+    }
+
+    /// The prototype 23.2.7 gives the row of table 71 the index names.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale root or for an
+    /// index outside table 71.
+    pub fn typed_array_prototype_of(
+        &self,
+        kind: u8,
+        heap: &GenerationalHeap,
+    ) -> Result<Value, HeapError> {
+        let root = *self
+            .typed_array_prototypes
+            .get(usize::from(kind))
+            .ok_or(HeapError::InvalidReference)?;
+        Self::rooted(heap, root)
     }
 
     /// `%WeakMap.prototype%`, 24.3.3.

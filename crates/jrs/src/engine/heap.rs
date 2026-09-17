@@ -1007,6 +1007,58 @@ impl GenerationalHeap {
 
     /// Own property keys in the order of 10.1.11.1 `OrdinaryOwnPropertyKeys`:
     /// array indices in ascending numeric order, then the remaining String keys
+    /// The element 10.4.5.1 keeps in the block of an array of 23.2.
+    ///
+    /// `None` is every other receiver, every key that is no canonical numeric
+    /// index of 7.1.21, and every index the array has not got.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale reference.
+    pub fn typed_array_element(
+        &self,
+        reference: ObjectRef,
+        name: PropertyKey,
+    ) -> Result<Option<Value>, HeapError> {
+        let Some(&ObjectKind::TypedArray {
+            buffer,
+            offset,
+            length,
+            kind,
+        }) = self.get_object(reference).map(|entry| &entry.kind)
+        else {
+            return Ok(None);
+        };
+        let Some(name) = name.as_string() else {
+            return Ok(None);
+        };
+        let units = self
+            .strings
+            .to_utf16(Value::from_string(name))
+            .ok_or(HeapError::InvalidReference)?;
+        let Some(slot) = canonical_index(&units, length) else {
+            return Ok(None);
+        };
+        let block = buffer.as_object().ok_or(HeapError::InvalidReference)?;
+        let (size, form, _) = super::object::element_form(kind);
+        let start = (offset as usize).saturating_add((slot as usize).saturating_mul(size));
+        let Some(ObjectKind::ArrayBuffer(Some(bytes))) =
+            self.get_object(block).map(|entry| &entry.kind)
+        else {
+            return Ok(None);
+        };
+        let Some(read) = bytes.get(start..start.saturating_add(size)) else {
+            return Ok(None);
+        };
+        let mut raw = [0u8; 8];
+        raw.get_mut(..size)
+            .ok_or(HeapError::InvalidReference)?
+            .copy_from_slice(read);
+        Ok(Some(Value::from_f64(super::object::read_element(
+            raw, size, form, true,
+        ))))
+    }
+
     /// in property creation order. Each key carries whether it is enumerable.
     ///
     /// # Errors
@@ -1050,6 +1102,15 @@ impl GenerationalHeap {
                 None => symbols.push((name, flags.enumerable)),
             }
         }
+        // 10.4.5.6 lists every index of an array of 23.2 first.
+        if let Some(ObjectKind::TypedArray { length, .. }) =
+            self.get_object(reference).map(|entry| &entry.kind)
+        {
+            let count = *length;
+            for index in 0..count {
+                indices.push((index, true));
+            }
+        }
         // 10.4.3.3 lists every index of the `[[StringData]]` first.
         if let Some(count) = self.string_data_length(reference)? {
             for index in 0..count {
@@ -1086,6 +1147,11 @@ impl GenerationalHeap {
         reference: ObjectRef,
         name: PropertyKey,
     ) -> Result<Option<PropertyFlags>, HeapError> {
+        // 10.4.5.1 gives an index of an array of 23.2 the attributes of an
+        // ordinary data property.
+        if self.typed_array_element(reference, name)?.is_some() {
+            return Ok(Some(PropertyFlags::ordinary_data()));
+        }
         let object = self
             .get_object(reference)
             .ok_or(HeapError::InvalidReference)?;
@@ -1212,6 +1278,21 @@ impl GenerationalHeap {
             .get_object(receiver)
             .ok_or(HeapError::InvalidReference)?
             .shape_id;
+        // 10.4.5.1: an array of 23.2 keeps its indices in the block, which no
+        // Shape carries. The answer names no slot, so no inline cache records
+        // it.
+        if let Some(element) = self.typed_array_element(receiver, name)? {
+            return Ok(Some(NamedProperty {
+                receiver_shape,
+                holder_depth: 0,
+                holder_shape: receiver_shape,
+                slot: 0,
+                value: element,
+                flags: PropertyFlags::ordinary_data(),
+                prototype_epoch: None,
+                mapped: true,
+            }));
+        }
         let mut current = receiver;
         let mut depth = 0u16;
         let mut visited = BTreeSet::new();
@@ -2836,6 +2917,25 @@ fn push_value_work(work: &mut Vec<Work>, value: Value) {
     if let Some(reference) = value.as_heap_string() {
         work.push(Work::String(reference));
     }
+}
+
+/// The index of an array of 23.2 a property name denotes, per 10.4.5.1.
+///
+/// Only a canonical numeric index string of 7.1.21 names one, and only when
+/// the length carries it.
+fn canonical_index(units: &[u16], length: u32) -> Option<u32> {
+    let (first, rest) = units.split_first()?;
+    if *first == 0x30 {
+        return (rest.is_empty() && length > 0).then_some(0);
+    }
+    let mut index: u32 = 0;
+    for unit in units {
+        let digit = u32::from(*unit)
+            .checked_sub(0x30)
+            .filter(|digit| *digit < 10)?;
+        index = index.checked_mul(10)?.checked_add(digit)?;
+    }
+    (index < length).then_some(index)
 }
 
 #[cfg(test)]

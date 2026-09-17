@@ -2512,6 +2512,23 @@ impl RegisterVM {
             | Intrinsic::DataViewPrototypeSetFloat64 => {
                 self.call_data_view_intrinsic(intrinsic, &call, heap, realm)
             }
+            Intrinsic::TypedArrayBase
+            | Intrinsic::TypedArrayPrototypeBuffer
+            | Intrinsic::TypedArrayPrototypeByteLength
+            | Intrinsic::TypedArrayPrototypeByteOffset
+            | Intrinsic::TypedArrayPrototypeLength
+            | Intrinsic::TypedArrayPrototypeToStringTag
+            | Intrinsic::TypedArrayInt8Constructor
+            | Intrinsic::TypedArrayUint8Constructor
+            | Intrinsic::TypedArrayUint8ClampedConstructor
+            | Intrinsic::TypedArrayInt16Constructor
+            | Intrinsic::TypedArrayUint16Constructor
+            | Intrinsic::TypedArrayInt32Constructor
+            | Intrinsic::TypedArrayUint32Constructor
+            | Intrinsic::TypedArrayFloat32Constructor
+            | Intrinsic::TypedArrayFloat64Constructor => {
+                self.call_typed_array_intrinsic(intrinsic, &call, heap, realm)
+            }
             Intrinsic::EncodeUri
             | Intrinsic::EncodeUriComponent
             | Intrinsic::DecodeUri
@@ -3114,6 +3131,15 @@ impl RegisterVM {
                     | Intrinsic::DateConstructor
                     | Intrinsic::ArrayBufferConstructor
                     | Intrinsic::DataViewConstructor
+                    | Intrinsic::TypedArrayInt8Constructor
+                    | Intrinsic::TypedArrayUint8Constructor
+                    | Intrinsic::TypedArrayUint8ClampedConstructor
+                    | Intrinsic::TypedArrayInt16Constructor
+                    | Intrinsic::TypedArrayUint16Constructor
+                    | Intrinsic::TypedArrayInt32Constructor
+                    | Intrinsic::TypedArrayUint32Constructor
+                    | Intrinsic::TypedArrayFloat32Constructor
+                    | Intrinsic::TypedArrayFloat64Constructor
             )
         })
     }
@@ -3905,6 +3931,28 @@ impl RegisterVM {
             Intrinsic::ObjectGetOwnPropertyDescriptor => {
                 let object = Self::coerce_object(target, heap, realm)?;
                 let name = property_key(key, heap, realm)?;
+                // 10.4.5.1 gives an index of an array of 23.2 a descriptor
+                // that is writable, enumerable and configurable.
+                if let Some(string) = name.as_string()
+                    && matches!(
+                        heap.get_object(object).map(|entry| &entry.kind),
+                        Some(&ObjectKind::TypedArray { .. })
+                    )
+                    && canonical_numeric_index(Value::from_string(string), heap)?.is_some()
+                {
+                    let held = Value::from_string(string);
+                    if !Self::typed_array_owns(object, held, heap)? {
+                        return Ok(VALUE_UNDEFINED);
+                    }
+                    let element =
+                        Self::typed_array_read(object, held, heap)?.unwrap_or(VALUE_UNDEFINED);
+                    return Self::from_property_descriptor(
+                        element,
+                        PropertyFlags::ordinary_data(),
+                        heap,
+                        realm,
+                    );
+                }
                 let Some(flags) = heap.own_named_flags(object, name)? else {
                     // A name this Realm owes the object has no descriptor to
                     // answer, and undefined would say the object has none.
@@ -5769,6 +5817,42 @@ impl RegisterVM {
     ///
     /// A field the descriptor does not name keeps what the property had, and
     /// is the default of 6.2.6.6 on a property that did not exist.
+    /// `[[DefineOwnProperty]]` of 10.4.5.1 for a canonical numeric index of an
+    /// array of 23.2, which takes only a writable, enumerable and configurable
+    /// data descriptor, and only for an index the array has.
+    fn define_typed_array_index(
+        object: ObjectRef,
+        name: PropertyKey,
+        descriptor: &PartialDescriptor,
+        heap: &mut GenerationalHeap,
+    ) -> Result<Option<bool>, VMError> {
+        let Some(string) = name.as_string() else {
+            return Ok(None);
+        };
+        if !matches!(
+            heap.get_object(object).map(|entry| &entry.kind),
+            Some(&ObjectKind::TypedArray { .. })
+        ) {
+            return Ok(None);
+        }
+        let held = Value::from_string(string);
+        if canonical_numeric_index(held, heap)?.is_none() {
+            return Ok(None);
+        }
+        if !Self::typed_array_owns(object, held, heap)?
+            || descriptor.is_accessor()
+            || descriptor.configurable == Some(false)
+            || descriptor.enumerable == Some(false)
+            || descriptor.writable == Some(false)
+        {
+            return Ok(Some(false));
+        }
+        if let Some(value) = descriptor.value {
+            Self::typed_array_write(object, held, value, heap)?;
+        }
+        Ok(Some(true))
+    }
+
     fn define_property_from(
         object: ObjectRef,
         name: PropertyKey,
@@ -5778,6 +5862,9 @@ impl RegisterVM {
     ) -> Result<bool, VMError> {
         if Self::names_array_length(object, name, heap) {
             return Self::define_array_length(object, descriptor, heap, realm);
+        }
+        if let Some(defined) = Self::define_typed_array_index(object, name, descriptor, heap)? {
+            return Ok(defined);
         }
         let indexed = Self::element_index_of(object, name, heap);
         let Some(current) = heap.own_named_flags(object, name)? else {
@@ -5886,6 +5973,17 @@ impl RegisterVM {
         indexed: Option<(ElementsRef, u32)>,
         heap: &mut GenerationalHeap,
     ) -> Result<Value, VMError> {
+        // 10.4.5.1 keeps an index of an array of 23.2 in the block, which no
+        // Shape and no element store carries.
+        if let Some(string) = name.as_string()
+            && matches!(
+                heap.get_object(object).map(|entry| &entry.kind),
+                Some(&ObjectKind::TypedArray { .. })
+            )
+            && let Some(element) = Self::typed_array_read(object, Value::from_string(string), heap)?
+        {
+            return Ok(element);
+        }
         if let Some(data) = Self::string_data(object, heap) {
             let units = name
                 .as_string()
@@ -8308,6 +8406,13 @@ impl RegisterVM {
         if let Some(count) = Self::string_data_length(object, heap)? {
             return Ok(index_value(i64::from(count)));
         }
+        // 23.2.3.19 is an accessor over `[[ArrayLength]]`, which the array
+        // carries itself.
+        if let Some(&ObjectKind::TypedArray { length, .. }) =
+            heap.get_object(object).map(|entry| &entry.kind)
+        {
+            return Ok(index_value(i64::from(length)));
+        }
         let Some(name) = heap.strings.lookup_interned_units(&LENGTH_NAME) else {
             return Ok(VALUE_UNDEFINED);
         };
@@ -8353,6 +8458,14 @@ impl RegisterVM {
         object: ObjectRef,
     ) -> Result<Option<Value>, VMError> {
         if heap.array_length(object).is_some() {
+            return Ok(None);
+        }
+        // 23.2.3.19 is an accessor `array_like_length_value` answers from
+        // `[[ArrayLength]]`, so it opens no frame either.
+        if matches!(
+            heap.get_object(object).map(|entry| &entry.kind),
+            Some(&ObjectKind::TypedArray { .. })
+        ) {
             return Ok(None);
         }
         let Some(name) = heap.strings.lookup_interned_units(&LENGTH_NAME) else {
@@ -10886,6 +10999,7 @@ impl RegisterVM {
             // gives a view of one the same.
             | ObjectKind::ArrayBuffer(_)
             | ObjectKind::DataView { .. }
+            | ObjectKind::TypedArray { .. }
             | ObjectKind::Continuation { .. }
             | ObjectKind::Accessor { .. }
             | ObjectKind::RegExp { .. }
@@ -11147,6 +11261,13 @@ impl RegisterVM {
                 if chain && super::realm::data_view_prototype_owns(name) =>
             {
                 Err(VMError::Unsupported("a property of %DataView.prototype%"))
+            }
+            // 23.2.3 gives `%TypedArray.prototype%` the methods of the clause,
+            // which this Realm has not built.
+            Some(ObjectKind::TypedArray { .. })
+                if chain && super::realm::typed_array_prototype_owns(name) =>
+            {
+                Err(VMError::Unsupported("a property of %TypedArray.prototype%"))
             }
             // 20.4.2 gives `%Symbol%` more than the thirteen of table 1.
             Some(ObjectKind::NativeFunction { id, .. })
@@ -11770,6 +11891,7 @@ impl RegisterVM {
                 // one for both.
                 | ObjectKind::ArrayBuffer(_)
                 | ObjectKind::DataView { .. }
+                | ObjectKind::TypedArray { .. }
                 | ObjectKind::CollectionIterator { .. }
                 | ObjectKind::ArrayIterator { .. }
                 | ObjectKind::ArrayIteration { .. }
@@ -11784,17 +11906,24 @@ impl RegisterVM {
             }
         };
         let mut units: Vec<u16> = "[object ".encode_utf16().collect();
-        match boxed
+        let found = boxed
             .map(|object| {
                 heap.lookup_named(object, super::realm::WellKnownSymbol::ToStringTag.key())
             })
             .transpose()?
-            .flatten()
-            .map(Self::plain_value)
-            .transpose()?
-            .filter(|value| value.is_string())
-            .and_then(|value| heap.strings.to_utf16(value))
-        {
+            .flatten();
+        let own = match found {
+            // 23.2.3.38 is an accessor whose answer is the row of table 71 the
+            // receiver stands in, which step 14 reads without a call.
+            Some(property) if Self::is_typed_array_tag(property, heap) => boxed
+                .and_then(|object| Self::typed_array_row(object, heap))
+                .map(|kind| Self::typed_array_name(kind).encode_utf16().collect()),
+            Some(property) => Some(Self::plain_value(property)?)
+                .filter(|value| value.is_string())
+                .and_then(|value| heap.strings.to_utf16(value)),
+            None => None,
+        };
+        match own {
             Some(own) => units.extend(own),
             None => units.extend(tag.encode_utf16()),
         }
@@ -13292,6 +13421,390 @@ impl RegisterVM {
         Ok(Value::from_object(object))
     }
 
+    /// Whether the property found under `@@toStringTag` is the accessor
+    /// 23.2.3.38 installs on `%TypedArray.prototype%`.
+    fn is_typed_array_tag(found: NamedProperty, heap: &GenerationalHeap) -> bool {
+        if !found.flags.is_accessor {
+            return false;
+        }
+        let Ok((get, _)) = Self::accessor_parts(found.value, heap) else {
+            return false;
+        };
+        get.as_object()
+            .and_then(|object| heap.get_object(object))
+            .is_some_and(|entry| {
+                matches!(
+                    entry.kind,
+                    ObjectKind::NativeFunction { id, .. }
+                        if Intrinsic::from_id(id) == Some(Intrinsic::TypedArrayPrototypeToStringTag)
+                )
+            })
+    }
+
+    /// The row of table 71 an object stands in, for an object that is an array
+    /// of 23.2.
+    fn typed_array_row(object: ObjectRef, heap: &GenerationalHeap) -> Option<u8> {
+        match heap.get_object(object).map(|entry| &entry.kind) {
+            Some(&ObjectKind::TypedArray { kind, .. }) => Some(kind),
+            _ => None,
+        }
+    }
+
+    /// The name table 71 gives the row.
+    const fn typed_array_name(kind: u8) -> &'static str {
+        match kind {
+            0 => "Int8Array",
+            1 => "Uint8Array",
+            2 => "Uint8ClampedArray",
+            3 => "Int16Array",
+            4 => "Uint16Array",
+            5 => "Int32Array",
+            6 => "Uint32Array",
+            7 => "Float32Array",
+            _ => "Float64Array",
+        }
+    }
+
+    /// The row of table 71 each constructor of 23.2.6 stands in.
+    const fn typed_array_kind(intrinsic: Intrinsic) -> Option<u8> {
+        Some(match intrinsic {
+            Intrinsic::TypedArrayInt8Constructor => 0,
+            Intrinsic::TypedArrayUint8Constructor => 1,
+            Intrinsic::TypedArrayUint8ClampedConstructor => 2,
+            Intrinsic::TypedArrayInt16Constructor => 3,
+            Intrinsic::TypedArrayUint16Constructor => 4,
+            Intrinsic::TypedArrayInt32Constructor => 5,
+            Intrinsic::TypedArrayUint32Constructor => 6,
+            Intrinsic::TypedArrayFloat32Constructor => 7,
+            Intrinsic::TypedArrayFloat64Constructor => 8,
+            _ => return None,
+        })
+    }
+
+    /// The slot 10.4.5.1 names, for a key that is a canonical numeric index.
+    ///
+    /// `None` is the index outside the array, which 10.4.5.4 and 10.4.5.5
+    /// answer for rather than reading or writing a byte.
+    fn typed_array_slot(number: f64, length: u32) -> Option<u32> {
+        // 10.4.5.1 refuses `-0`, a fraction and anything outside the length.
+        if number == 0.0 && number.is_sign_negative() {
+            return None;
+        }
+        if !number.is_finite() || number < 0.0 || number >= f64::from(length) {
+            return None;
+        }
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "the value was bounded to a length that is a u32"
+        )]
+        let slot = number as u32;
+        #[expect(
+            clippy::float_cmp,
+            reason = "10.4.5.1 takes the integral value and no other"
+        )]
+        (f64::from(slot) == number).then_some(slot)
+    }
+
+    /// Whether an array of 23.2 owns the index a key names, per 10.4.5.1.
+    fn typed_array_owns(
+        object: ObjectRef,
+        key: Value,
+        heap: &GenerationalHeap,
+    ) -> Result<bool, VMError> {
+        let Some(&ObjectKind::TypedArray { length, .. }) =
+            heap.get_object(object).map(|entry| &entry.kind)
+        else {
+            return Ok(false);
+        };
+        let Some(number) = canonical_numeric_index(key, heap)? else {
+            return Ok(false);
+        };
+        Ok(Self::typed_array_slot(number, length).is_some())
+    }
+
+    /// `[[Get]]` of 10.4.5.4 for an index, `None` for every other receiver and
+    /// every key that is no canonical numeric index.
+    fn typed_array_read(
+        object: ObjectRef,
+        key: Value,
+        heap: &GenerationalHeap,
+    ) -> Result<Option<Value>, VMError> {
+        let Some(&ObjectKind::TypedArray {
+            buffer,
+            offset,
+            length,
+            kind,
+        }) = heap.get_object(object).map(|entry| &entry.kind)
+        else {
+            return Ok(None);
+        };
+        let Some(number) = canonical_numeric_index(key, heap)? else {
+            return Ok(None);
+        };
+        let Some(slot) = Self::typed_array_slot(number, length) else {
+            return Ok(Some(VALUE_UNDEFINED));
+        };
+        let block = buffer.as_object().ok_or(VMError::TypeError)?;
+        let (size, form, _) = super::object::element_form(kind);
+        let start = (offset as usize).saturating_add((slot as usize).saturating_mul(size));
+        let Some(read) = Self::array_buffer_bytes(block, heap)
+            .and_then(|bytes| bytes.get(start..start.saturating_add(size)))
+        else {
+            // 10.4.5.4 answers `undefined` for the block 25.1.3.4 detached.
+            return Ok(Some(VALUE_UNDEFINED));
+        };
+        let mut raw = [0u8; 8];
+        raw.get_mut(..size)
+            .ok_or(VMError::TypeError)?
+            .copy_from_slice(read);
+        Ok(Some(Value::from_f64(super::object::read_element(
+            raw, size, form, true,
+        ))))
+    }
+
+    /// `[[Set]]` of 10.4.5.5 for an index, `false` for every other receiver and
+    /// every key that is no canonical numeric index.
+    fn typed_array_write(
+        object: ObjectRef,
+        key: Value,
+        value: Value,
+        heap: &mut GenerationalHeap,
+    ) -> Result<bool, VMError> {
+        let Some(&ObjectKind::TypedArray {
+            buffer,
+            offset,
+            length,
+            kind,
+        }) = heap.get_object(object).map(|entry| &entry.kind)
+        else {
+            return Ok(false);
+        };
+        let Some(number) = canonical_numeric_index(key, heap)? else {
+            return Ok(false);
+        };
+        // 10.4.5.5 step 1.b.i coerces the value even for an index the array
+        // has not got, and drops the write.
+        let written = primitive_number(value, heap)?;
+        let Some(slot) = Self::typed_array_slot(number, length) else {
+            return Ok(true);
+        };
+        let block = buffer.as_object().ok_or(VMError::TypeError)?;
+        let (size, form, clamps) = super::object::element_form(kind);
+        // 7.1.11 rounds a value of the clamped row to the nearer of 0 and 255,
+        // and ties to the even one.
+        let written = if clamps {
+            Self::clamp_to_byte(written)
+        } else {
+            written
+        };
+        let bytes = super::object::write_element(written, size, form, true);
+        let start = (offset as usize).saturating_add((slot as usize).saturating_mul(size));
+        let end = start.saturating_add(size);
+        if let Some(ObjectKind::ArrayBuffer(Some(block))) =
+            heap.object_kind_mut(block).map(|entry| &mut entry.kind)
+            && let Some(target) = block.get_mut(start..end)
+        {
+            target.copy_from_slice(bytes.get(..size).unwrap_or_default());
+        }
+        Ok(true)
+    }
+
+    /// `ToUint8Clamp` of 7.1.11.
+    fn clamp_to_byte(value: f64) -> f64 {
+        if value.is_nan() || value <= 0.0 {
+            return 0.0;
+        }
+        if value >= 255.0 {
+            return 255.0;
+        }
+        let down = Self::round_toward(value, true);
+        let rest = value - down;
+        #[expect(
+            clippy::float_cmp,
+            reason = "7.1.11 names the exact half as the tie it breaks to even"
+        )]
+        if rest == 0.5 {
+            return if Self::modulo(down, 2.0) == 0.0 {
+                down
+            } else {
+                down + 1.0
+            };
+        }
+        if rest > 0.5 { down + 1.0 } else { down }
+    }
+
+    /// The clauses of 23.2 that make an array and answer what it looks into.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a call of 23.2.1.1,
+    /// for a call without `new` and for a receiver that is no array, and with
+    /// a `RangeError` for a length no block holds.
+    fn call_typed_array_intrinsic(
+        &self,
+        intrinsic: Intrinsic,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        // 23.2.1.1 is abstract: it refuses every call of its own.
+        if intrinsic == Intrinsic::TypedArrayBase {
+            return Err(type_error(heap, realm, "%TypedArray% is not callable"));
+        }
+        if let Some(kind) = Self::typed_array_kind(intrinsic) {
+            return self.construct_typed_array(kind, call, heap, realm);
+        }
+        // 23.2.3.38 steps 2 and 3 answer `undefined` rather than throwing.
+        if intrinsic == Intrinsic::TypedArrayPrototypeToStringTag {
+            let Some(kind) = call
+                .receiver
+                .as_object()
+                .and_then(|object| Self::typed_array_row(object, heap))
+            else {
+                return Ok(VALUE_UNDEFINED);
+            };
+            let units: Vec<u16> = Self::typed_array_name(kind).encode_utf16().collect();
+            return self.allocate_string(heap, &units);
+        }
+        let array = call
+            .receiver
+            .as_object()
+            .filter(|object| {
+                matches!(
+                    heap.get_object(*object).map(|entry| &entry.kind),
+                    Some(&ObjectKind::TypedArray { .. })
+                )
+            })
+            .ok_or_else(|| {
+                type_error(heap, realm, "this value carries no TypedArray of its own")
+            })?;
+        let Some(ObjectKind::TypedArray {
+            buffer,
+            offset,
+            length,
+            kind,
+        }) = heap.get_object(array).map(|entry| entry.kind.clone())
+        else {
+            return Err(VMError::TypeError);
+        };
+        if intrinsic == Intrinsic::TypedArrayPrototypeBuffer {
+            return Ok(buffer);
+        }
+        // 23.2.3.2, 23.2.3.3 and 23.2.3.19 answer zero for an array whose
+        // block 25.1.3.4 detached.
+        let block = buffer.as_object().ok_or(VMError::TypeError)?;
+        if Self::array_buffer_bytes(block, heap).is_none() {
+            return Ok(Value::from_smi(0));
+        }
+        let (size, _, _) = super::object::element_form(kind);
+        Ok(Value::from_f64(match intrinsic {
+            Intrinsic::TypedArrayPrototypeLength => f64::from(length),
+            Intrinsic::TypedArrayPrototypeByteOffset => f64::from(offset),
+            _ => f64::from(length) * Self::whole(size),
+        }))
+    }
+
+    /// `AllocateTypedArray` of 23.2.5.1 through the three forms of 23.2.5.1.1,
+    /// 23.2.5.1.2 and 23.2.5.1.5.
+    fn construct_typed_array(
+        &self,
+        kind: u8,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        // Step 1 of 23.2.6.1 refuses a call without `new`.
+        if call.construct.is_none() {
+            return Err(type_error(heap, realm, "a constructor called without new"));
+        }
+        let (size, _, _) = super::object::element_form(kind);
+        let first = self.call_argument(call, 0, heap)?;
+        let (buffer, offset, length) = if let Some(object) = first.as_object() {
+            match heap.get_object(object).map(|entry| entry.kind.clone()) {
+                // 23.2.5.1.5 looks into the block it was given.
+                Some(ObjectKind::ArrayBuffer(_)) => {
+                    let offset = Self::byte_index(self.call_argument(call, 1, heap)?, heap, realm)?;
+                    // Step 4 refuses an offset the element size does not
+                    // divide.
+                    if Self::modulo(offset, Self::whole(size)) != 0.0 {
+                        return Err(raise(
+                            heap,
+                            realm,
+                            super::realm::NativeErrorKind::RangeError,
+                            "the offset is no multiple of the element size",
+                        ));
+                    }
+                    let Some(bytes) = Self::array_buffer_bytes(object, heap).map(<[u8]>::len)
+                    else {
+                        return Err(type_error(heap, realm, "the ArrayBuffer is detached"));
+                    };
+                    let whole = Self::whole(bytes);
+                    let given = self.call_argument(call, 2, heap)?;
+                    let length = if given.is_undefined() {
+                        // Step 7.b refuses a block the element size does not
+                        // divide.
+                        if Self::modulo(whole, Self::whole(size)) != 0.0 {
+                            return Err(raise(
+                                heap,
+                                realm,
+                                super::realm::NativeErrorKind::RangeError,
+                                "the ArrayBuffer is no multiple of the element size",
+                            ));
+                        }
+                        if offset > whole {
+                            return Err(raise(
+                                heap,
+                                realm,
+                                super::realm::NativeErrorKind::RangeError,
+                                "the offset reaches past the ArrayBuffer",
+                            ));
+                        }
+                        (whole - offset) / Self::whole(size)
+                    } else {
+                        let asked = Self::byte_index(given, heap, realm)?;
+                        if offset + asked * Self::whole(size) > whole {
+                            return Err(raise(
+                                heap,
+                                realm,
+                                super::realm::NativeErrorKind::RangeError,
+                                "the TypedArray reaches past the ArrayBuffer",
+                            ));
+                        }
+                        asked
+                    };
+                    (first, offset, length)
+                }
+                // 23.2.5.1.2 copies the elements of the array it was given,
+                // and 23.2.5.1.4 an array-like or iterable, which this Realm
+                // does not walk from here.
+                Some(ObjectKind::TypedArray { .. }) => {
+                    return Err(VMError::Unsupported("a TypedArray of 23.2.5.1.2"));
+                }
+                _ => return Err(VMError::Unsupported("an object of 23.2.5.1.4")),
+            }
+        } else {
+            // 23.2.5.1.1 makes a block of its own.
+            let count = Self::byte_index(first, heap, realm)?;
+            let bytes = count * Self::whole(size);
+            let buffer = Self::allocate_array_buffer(bytes, heap, realm)?;
+            (buffer, 0.0, count)
+        };
+        let prototype = realm.typed_array_prototype_of(kind, heap)?;
+        let shape = heap.shapes.root_shape();
+        let object = heap.allocate_object(shape, prototype)?;
+        heap.set_object_kind(
+            object,
+            ObjectKind::TypedArray {
+                buffer,
+                offset: u32::try_from(Self::integral(offset)).unwrap_or(0),
+                length: u32::try_from(Self::integral(length)).unwrap_or(0),
+                kind,
+            },
+        )?;
+        Ok(Value::from_object(object))
+    }
+
     /// The kind of number one read or write of 25.3.4 names: how many bytes it
     /// takes and how they are read back.
     const fn view_element(intrinsic: Intrinsic) -> Option<(usize, u8)> {
@@ -13416,7 +13929,7 @@ impl RegisterVM {
             return Err(VMError::TypeError);
         };
         if writes {
-            let bytes = Self::view_bytes(written, size, kind, little);
+            let bytes = super::object::write_element(written, size, kind, little);
             if let Some(ObjectKind::ArrayBuffer(Some(block))) =
                 heap.object_kind_mut(block).map(|entry| &mut entry.kind)
                 && let Some(slot) = block.get_mut(start..end)
@@ -13432,64 +13945,9 @@ impl RegisterVM {
         raw.get_mut(..size)
             .ok_or(VMError::TypeError)?
             .copy_from_slice(read);
-        Ok(Value::from_f64(Self::view_number(raw, size, kind, little)))
-    }
-
-    /// `GetValueFromBuffer` of 25.1.3.10 for the kinds 25.3.4 names.
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "every width below 2^53 is a binary64 exactly"
-    )]
-    fn view_number(raw: [u8; 8], size: usize, kind: u8, little: bool) -> f64 {
-        let mut value = 0u64;
-        for offset in 0..size {
-            let at = if little { size - 1 - offset } else { offset };
-            value = (value << 8) | u64::from(*raw.get(at).unwrap_or(&0));
-        }
-        match kind {
-            2 => f64::from(f32::from_bits(
-                u32::try_from(value & 0xFFFF_FFFF).unwrap_or(0),
-            )),
-            3 => f64::from_bits(value),
-            1 => value as f64,
-            _ => {
-                let bits = size.saturating_mul(8);
-                let sign = 1u64 << (bits.saturating_sub(1));
-                if value & sign == 0 {
-                    value as f64
-                } else {
-                    -(((!value).wrapping_add(1) & (sign | (sign - 1))) as f64)
-                }
-            }
-        }
-    }
-
-    /// `SetValueInBuffer` of 25.1.3.12 for the same kinds.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "7.1.6 and 7.1.7 wrap on purpose, and 6.1.6.1.20 rounds to the nearer binary32"
-    )]
-    fn view_bytes(value: f64, size: usize, kind: u8, little: bool) -> [u8; 8] {
-        let bits = match kind {
-            2 => u64::from((value as f32).to_bits()),
-            3 => value.to_bits(),
-            _ => {
-                let wrapped = crate::value::number_uint32(value);
-                if size == 8 {
-                    u64::from(wrapped)
-                } else {
-                    u64::from(wrapped) & ((1u64 << (size.saturating_mul(8))) - 1)
-                }
-            }
-        };
-        let mut out = [0u8; 8];
-        for offset in 0..size {
-            let shift = if little { offset } else { size - 1 - offset };
-            if let Some(slot) = out.get_mut(offset) {
-                *slot = ((bits >> (shift.saturating_mul(8))) & 0xFF) as u8;
-            }
-        }
-        out
+        Ok(Value::from_f64(super::object::read_element(
+            raw, size, kind, little,
+        )))
     }
 
     /// `DataView` of 25.3.3.1.
@@ -13607,7 +14065,12 @@ impl RegisterVM {
                 self.call_argument(call, 0, heap)?
                     .as_object()
                     .and_then(|object| heap.get_object(object))
-                    .is_some_and(|entry| matches!(entry.kind, ObjectKind::DataView { .. })),
+                    .is_some_and(|entry| {
+                        matches!(
+                            entry.kind,
+                            ObjectKind::DataView { .. } | ObjectKind::TypedArray { .. }
+                        )
+                    }),
             ));
         }
         let object = call
@@ -15551,6 +16014,17 @@ impl RegisterVM {
         heap: &GenerationalHeap,
         realm: &Realm,
     ) -> Result<bool, VMError> {
+        // 10.4.5.2: an array of 23.2 has the index its length carries and no
+        // other canonical numeric index, whatever its Shape holds.
+        if let Some(string) = name.as_string()
+            && matches!(
+                heap.get_object(object).map(|entry| &entry.kind),
+                Some(&ObjectKind::TypedArray { .. })
+            )
+            && canonical_numeric_index(Value::from_string(string), heap)?.is_some()
+        {
+            return Self::typed_array_owns(object, Value::from_string(string), heap);
+        }
         let mut current = object;
         let mut depth = 0u16;
         loop {
@@ -16036,7 +16510,14 @@ impl RegisterVM {
                 if heap.shapes.lookup(visited_shape, name).is_some() {
                     continue;
                 }
-                let Some(flags) = heap.own_named_flags(object, name)? else {
+                let owned = match heap.own_named_flags(object, name)? {
+                    Some(flags) => Some(flags),
+                    // 10.4.5.6 lists the indices of an array of 23.2, which
+                    // are enumerable data properties no Shape carries.
+                    None => Self::typed_array_owns(object, key, heap)?
+                        .then(PropertyFlags::ordinary_data),
+                };
+                let Some(flags) = owned else {
                     continue;
                 };
                 if heap.own_property_count(visited).unwrap_or(usize::MAX) >= self.property_limit {
@@ -18267,6 +18748,15 @@ impl RegisterVM {
                     let Some(oref) = target.as_object() else {
                         return Err(property_base_error(target, heap, realm));
                     };
+                    // 10.4.5.4: an index of an array of 23.2 is read out of the
+                    // block and never off the Shape.
+                    if let Some(string) = name.as_string()
+                        && let Some(element) =
+                            Self::typed_array_read(oref, Value::from_string(string), heap)?
+                    {
+                        self.acc = element;
+                        return Ok(None);
+                    }
                     // 10.4.2: an Array keeps its indices in an element store
                     // and its length in a field of its own, so a name that
                     // asks for one of them is answered there whichever
@@ -18403,8 +18893,20 @@ impl RegisterVM {
                         Self::set_array_length(oref, wanted, heap, realm)?;
                         return Ok(None);
                     }
-                    let elements = heap.get_object(oref).ok_or(VMError::TypeError)?.elements;
                     let name = PropertyKey::String(heap.strings.intern_units(units)?);
+                    // 10.4.5.5: an index of an array of 23.2 is written into the
+                    // block, and one outside it is dropped.
+                    if let Some(string) = name.as_string()
+                        && Self::typed_array_write(
+                            oref,
+                            Value::from_string(string),
+                            self.acc,
+                            heap,
+                        )?
+                    {
+                        return Ok(None);
+                    }
+                    let elements = heap.get_object(oref).ok_or(VMError::TypeError)?.elements;
                     if let Some(eref) = elements
                         && let Some(index) = array_index_units(units)
                         && !Self::shape_holds(oref, name, heap)?
@@ -18559,6 +19061,12 @@ impl RegisterVM {
                     let Some(oref) = target.as_object() else {
                         return Err(property_base_error(target, heap, realm));
                     };
+                    // 10.4.5.4: an index of an array of 23.2 is read out of the
+                    // block and never off the Shape.
+                    if let Some(element) = Self::typed_array_read(oref, key_val, heap)? {
+                        self.acc = element;
+                        return Ok(None);
+                    }
                     let js_obj = heap.get_object(oref).ok_or(VMError::TypeError)?;
 
                     let element = match (array_index(key_val, heap)?, js_obj.elements) {
@@ -18724,8 +19232,13 @@ impl RegisterVM {
                     let Some(oref) = target.as_object() else {
                         return Err(property_store_error(target, heap, realm));
                     };
-                    let elements = heap.get_object(oref).ok_or(VMError::TypeError)?.elements;
                     let val = self.acc;
+                    // 10.4.5.5: an index of an array of 23.2 is written into the
+                    // block, and one outside it is dropped.
+                    if Self::typed_array_write(oref, key_val, val, heap)? {
+                        return Ok(None);
+                    }
+                    let elements = heap.get_object(oref).ok_or(VMError::TypeError)?.elements;
 
                     // 7.1.19 keeps a Symbol as the key it is, and no Symbol
                     // is an index or a name of the element store.
@@ -20080,6 +20593,21 @@ fn delete_property(
     {
         return Ok(false);
     }
+    // 10.4.5.3 answers false for an index an array of 23.2 has, and true for
+    // every canonical numeric index it has not.
+    if let Some(string) = name.as_string()
+        && matches!(
+            heap.get_object(object).map(|entry| &entry.kind),
+            Some(&ObjectKind::TypedArray { .. })
+        )
+        && canonical_numeric_index(Value::from_string(string), heap)?.is_some()
+    {
+        return Ok(!RegisterVM::typed_array_owns(
+            object,
+            Value::from_string(string),
+            heap,
+        )?);
+    }
     // 10.4.3.1 gives a String exotic object own names that are never
     // configurable, and 10.1.10 answers false for one of those.
     if RegisterVM::owns_string_exotic(object, name, heap)? {
@@ -20155,6 +20683,31 @@ fn array_index_units(units: &[u16]) -> Option<u32> {
         index = index.checked_mul(10)?.checked_add(digit)?;
     }
     Some(index)
+}
+
+/// The Number a canonical numeric index string of 7.1.21 names.
+///
+/// A key that is a Number is one. A key that is a String is one only when
+/// 6.1.6.1.20 writes it back the same way, with `-0` as the one exception the
+/// clause names.
+fn canonical_numeric_index(key: Value, heap: &GenerationalHeap) -> Result<Option<f64>, VMError> {
+    if let Some(number) = key.as_f64() {
+        return Ok(Some(number));
+    }
+    if !key.is_string() {
+        return Ok(None);
+    }
+    let Some(units) = heap.strings.to_utf16(key) else {
+        return Ok(None);
+    };
+    if units == [0x2D, 0x30] {
+        return Ok(Some(-0.0));
+    }
+    let number = primitive_number(key, heap)?;
+    let text: Vec<u16> = crate::number::decimal_string(number)
+        .encode_utf16()
+        .collect();
+    Ok((text == units).then_some(number))
 }
 
 fn array_index(value: Value, heap: &GenerationalHeap) -> Result<Option<u32>, VMError> {

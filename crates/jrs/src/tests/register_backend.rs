@@ -9861,3 +9861,96 @@ fn the_view_of_25_3_reads_the_block_it_looks_into() -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[test]
+fn the_array_of_23_2_keeps_its_elements_in_the_block() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend carries no clause 23.2, so only the engine answers.
+    for (source, answer) in [
+        // 23.2.5.1.1 makes a block of `length` times the element size.
+        (
+            "var a=new Int16Array(4);''+a.length+' '+a.byteLength+' '+a.byteOffset",
+            "4 8 0",
+        ),
+        // 23.2.5.1.5 looks into the block it was given.
+        (
+            "var b=new ArrayBuffer(16);var a=new Float64Array(b,8);''+a.length+' '+a.byteOffset+' '+(a.buffer===b)",
+            "1 8 true",
+        ),
+        // 23.2.6.1 refuses an offset the element size does not divide, and a
+        // length that reaches past the block.
+        (
+            "var r;try{new Int32Array(new ArrayBuffer(8),2)}catch(e){r=e instanceof RangeError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{new Int32Array(new ArrayBuffer(8),0,3)}catch(e){r=e instanceof RangeError};''+r",
+            "true",
+        ),
+        // 10.4.5.5 writes through 25.1.3.12, which wraps each row of table 71.
+        ("var a=new Int8Array(1);a[0]=130;''+a[0]", "-126"),
+        ("var a=new Uint32Array(1);a[0]=-1;''+a[0]", "4294967295"),
+        ("var a=new Float32Array(1);a[0]=1.5;''+a[0]", "1.5"),
+        // 7.1.11 clamps the row of table 71 that says so, and ties to even.
+        (
+            "var a=new Uint8ClampedArray(3);a[0]=300;a[1]=-5;a[2]=1.5;''+a[0]+' '+a[1]+' '+a[2]",
+            "255 0 2",
+        ),
+        // 10.4.5.4 answers undefined for an index the array has not got, and
+        // 10.4.5.5 drops the write.
+        ("var a=new Int8Array(1);a[4]=1;''+a[4]", "undefined"),
+        // 7.1.21: a canonical numeric index the array has not got takes no
+        // write, and a name that is none is an ordinary property.
+        ("var a=new Int8Array(1);a['1.5']=7;''+a['1.5']", "undefined"),
+        ("var a=new Int8Array(1);a['01']=7;''+a['01']", "7"),
+        ("var a=new Int8Array(1);''+a['-0']", "undefined"),
+        // 10.4.5.2, 10.4.5.3 and 10.4.5.6.
+        (
+            "var a=new Int8Array(2);''+(0 in a)+' '+(2 in a)",
+            "true false",
+        ),
+        (
+            "var a=new Int8Array(2);''+(delete a[0])+' '+(delete a[9])",
+            "false true",
+        ),
+        (
+            "var a=new Int8Array(3);Object.getOwnPropertyNames(a).join(',')",
+            "0,1,2",
+        ),
+        // 10.4.5.1 gives an index an ordinary data descriptor.
+        (
+            "var a=new Int8Array(1);a[0]=2;var d=Object.getOwnPropertyDescriptor(a,'0');''+d.value+' '+d.writable+' '+d.configurable",
+            "2 true true",
+        ),
+        // 23.2.6 and 23.2.7 pair each row of table 71 with its prototype, and
+        // both carry `BYTES_PER_ELEMENT`.
+        (
+            "''+Int8Array.BYTES_PER_ELEMENT+' '+Float64Array.BYTES_PER_ELEMENT+' '+Int16Array.prototype.BYTES_PER_ELEMENT",
+            "1 8 2",
+        ),
+        (
+            "''+(Object.getPrototypeOf(Int8Array)===Object.getPrototypeOf(Uint8Array))",
+            "true",
+        ),
+        (
+            "''+(Object.getPrototypeOf(new Int8Array(0))===Int8Array.prototype)",
+            "true",
+        ),
+        // 23.2.1.1 is abstract and refuses every call of its own.
+        (
+            "var T=Object.getPrototypeOf(Int8Array);var r;try{new T(1)}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        // 23.2.3.38 names the row rather than leaving the ordinary tag.
+        (
+            "''+Object.prototype.toString.call(new Uint16Array(1))",
+            "[object Uint16Array]",
+        ),
+        // 25.1.5.1 answers true for an array of 23.2 too.
+        ("''+ArrayBuffer.isView(new Int8Array(1))", "true"),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}
