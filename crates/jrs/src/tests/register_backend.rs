@@ -9340,3 +9340,19 @@ fn the_from_entries_of_20_1_2_7_walks_what_it_was_given() -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[test]
+fn the_construct_of_10_4_1_2_reaches_the_target_of_the_bind() -> Result<(), Error> {
+    differential_scripts(&[
+        "function F(a){this.a=a};var B=F.bind(null);var o=new B(5);''+o.a+(o instanceof F)",
+        // Step 4 makes the bound function its own `newTarget`, so the object
+        // comes from the target and 7.3.21 answers through it.
+        "function F(a){this.a=a};var B=F.bind(null);''+(new B(1) instanceof B)",
+        // Step 3 puts the arguments the bind kept in front.
+        "function F(a,b){this.a=a;this.b=b};var B=F.bind(null,1);var o=new B(2);''+o.a+o.b",
+        "function F(a){this.a=a};var B=F.bind(null,7).bind(null);''+new B().a",
+        // The `this` value the bind kept is only for 10.4.1.1.
+        "function F(a){this.a=a};var B=F.bind({q:9});var o=new B(3);''+o.a+(o.q===undefined)",
+        "function F(a,b){this.s=a+b};var B=F.bind({q:1},'x');''+new B('y').s",
+    ])
+}

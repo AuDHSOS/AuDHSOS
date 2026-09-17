@@ -1147,6 +1147,11 @@ impl RegisterVM {
         let Some(mut current) = value.as_object() else {
             return Ok(false);
         };
+        // 7.3.21 step 1: a bound function carries the `[[HasInstance]]` of
+        // the target it was bound from.
+        let function = Self::bound_target(constructor, heap)
+            .as_object()
+            .unwrap_or(function);
         let name = PropertyKey::String(heap.strings.intern("prototype")?);
         let prototype = heap
             .lookup_named(function, name)?
@@ -1192,21 +1197,36 @@ impl RegisterVM {
         let Some(function) = self.read_reg(func)?.as_object() else {
             return Err(type_error(heap, realm, "value is not a constructor"));
         };
-        let kind = &heap.get_object(function).ok_or(VMError::TypeError)?.kind;
-        // 10.4.1.2 constructs the target with the arguments the bind kept and
-        // the `newTarget` the call site gave, which this engine has not built.
-        if matches!(kind, ObjectKind::BoundFunction { .. }) {
-            return Err(VMError::Unsupported("new of a bound function"));
-        }
+        // 10.4.1.2 step 4: `new` of a bound function makes the object from
+        // the target, because the bound function is its own `newTarget`.
+        let bound = matches!(
+            heap.get_object(function).map(|entry| &entry.kind),
+            Some(&ObjectKind::BoundFunction { .. })
+        );
+        let constructor = Self::bound_target(Value::from_object(function), heap);
+        let held = constructor.as_object().ok_or(VMError::TypeError)?;
+        let kind = &heap.get_object(held).ok_or(VMError::TypeError)?.kind;
         if !matches!(kind, ObjectKind::Function { .. }) {
+            if bound {
+                return Err(VMError::Unsupported(
+                    "new of a bound function whose target is written in Rust",
+                ));
+            }
             return Err(type_error(heap, realm, "value is not a constructor"));
         }
         let shape = heap.shapes.root_shape();
-        let object = self.allocate_object(code, heap, realm, shape)?;
         // A register is a root the collector forwards, so after an allocation
-        // that may scavenge this names the same function, and 10.1.13 reads
-        // the `prototype` it gives the object from there.
-        let function = self.read_reg(func)?.as_object().ok_or(VMError::TypeError)?;
+        // that may scavenge it names the same function; the target of a bind
+        // is held in a scope of its own for the same reason.
+        heap.enter_scope();
+        let target = heap.push_root(constructor)?;
+        let object = self.allocate_object(code, heap, realm, shape);
+        let function = object
+            .and_then(|_| heap.root_value(target).ok_or(VMError::TypeError))
+            .and_then(|value| value.as_object().ok_or(VMError::TypeError));
+        heap.exit_scope();
+        let object = object?;
+        let function = function?;
         let name = PropertyKey::String(heap.strings.intern("prototype")?);
         let Some(property) = heap.lookup_named(function, name)? else {
             return Err(type_error(heap, realm, "value is not a constructor"));
@@ -2813,6 +2833,20 @@ impl RegisterVM {
         Ok(())
     }
 
+    /// The function a chain of binds finally names, which 10.4.1.2 constructs.
+    fn bound_target(function: Value, heap: &GenerationalHeap) -> Value {
+        let mut current = function;
+        while let Some(object) = current.as_object() {
+            let Some(ObjectKind::BoundFunction { target, .. }) =
+                heap.get_object(object).map(|entry| &entry.kind)
+            else {
+                return current;
+            };
+            current = *target;
+        }
+        current
+    }
+
     /// Whether a bound function of the chain carries arguments of its own,
     /// which 10.4.1.1 puts in front of the ones the call site passes.
     fn bound_with_arguments(function: Value, heap: &GenerationalHeap) -> bool {
@@ -2870,7 +2904,11 @@ impl RegisterVM {
                 .kind
             {
                 function = target;
-                call.receiver = receiver;
+                // 10.4.1.2 passes the object 10.1.13 made, not the `this`
+                // value the bind kept, which only 10.4.1.1 uses.
+                if call.construct.is_none() {
+                    call.receiver = receiver;
+                }
                 continue;
             }
             if !forwards {
@@ -5057,6 +5095,69 @@ impl RegisterVM {
         self.enter_call_value(target, units, active_feedback, heap, realm, call)
     }
 
+    /// The object 10.1.13 makes for a `new` that reached a bound function.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a target that is no
+    /// constructor of the Script.
+    fn receiver_of_bound_construct(
+        &mut self,
+        target: Value,
+        units: CodeUnits<'_>,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let Some(function) = target.as_object() else {
+            return Err(type_error(heap, realm, "value is not a constructor"));
+        };
+        if !matches!(
+            heap.get_object(function).map(|entry| &entry.kind),
+            Some(&ObjectKind::Function { .. })
+        ) {
+            return Err(VMError::Unsupported(
+                "new of a bound function whose target is written in Rust",
+            ));
+        }
+        // 13.3.7.1 makes the object of a derived constructor, not 10.1.13.
+        if Self::derives(target, units, heap) {
+            return Err(VMError::Unsupported(
+                "new of a bound function whose target is a derived constructor",
+            ));
+        }
+        heap.enter_scope();
+        let held = heap.push_root(target)?;
+        let made = self.object_from_prototype_of(units.active, held, heap, realm);
+        heap.exit_scope();
+        made
+    }
+
+    /// 10.1.13: an ordinary object whose Prototype is the `prototype` of the
+    /// constructor the root names.
+    fn object_from_prototype_of(
+        &mut self,
+        code: &BytecodeFunction,
+        constructor: Root,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let shape = heap.shapes.root_shape();
+        let object = self.allocate_object(code, heap, realm, shape)?;
+        let function = heap
+            .root_value(constructor)
+            .and_then(Value::as_object)
+            .ok_or(VMError::TypeError)?;
+        let name = PropertyKey::String(heap.strings.intern("prototype")?);
+        let Some(property) = heap.lookup_named(function, name)? else {
+            return Err(type_error(heap, realm, "value is not a constructor"));
+        };
+        let prototype = Self::plain_value(property)?;
+        if prototype.as_object().is_some() {
+            heap.set_object_prototype(object, prototype)?;
+        }
+        Ok(Value::from_object(object))
+    }
+
     /// `[[Call]]` of 10.4.1.1 for a bound function that kept arguments.
     ///
     /// The List the target is called with is every bound argument of the
@@ -5072,11 +5173,6 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Option<u32>, VMError> {
-        if call.construct.is_some() {
-            return Err(VMError::Unsupported(
-                "new of a bound function that kept arguments",
-            ));
-        }
         let mut arguments = Vec::new();
         for index in 0..call.arg_count {
             arguments.push(self.call_argument(&call, index, heap)?);
@@ -5111,6 +5207,27 @@ impl RegisterVM {
         // scope of its own, which the return leaves.
         heap.enter_scope();
         let arguments = heap.push_root(list)?;
+        // 10.4.1.2 constructs the target with the same List, and the object
+        // 10.1.13 made is its receiver.
+        if let Some(target) = call.construct {
+            let made = self.receiver_of_bound_construct(current, units, heap, realm);
+            let receiver = match made {
+                Ok(receiver) => receiver,
+                Err(error) => {
+                    heap.exit_scope();
+                    return Err(error);
+                }
+            };
+            self.write_reg(target, receiver)?;
+            self.pending_new_target = current;
+            let call = Call {
+                receiver,
+                arg_count,
+                resume: Some(Resume::Spread { arguments }),
+                ..call
+            };
+            return self.enter_call_value(current, units, active_feedback, heap, realm, call);
+        }
         let call = Call {
             receiver,
             arg_count,
