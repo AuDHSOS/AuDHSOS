@@ -9146,6 +9146,12 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::IteratorPrototypeConstructorGet
         // 27.1.5.1.11 answers an Array this lowering did not make.
         | crate::engine::realm::Intrinsic::IteratorPrototypeToArray
+        // 27.1.5.1.10, 27.1.5.1.4 and 27.1.5.1.6 answer once a call of the
+        // Script has answered, which this lowering cannot read.
+        | crate::engine::realm::Intrinsic::IteratorPrototypeSome
+        | crate::engine::realm::Intrinsic::IteratorPrototypeEvery
+        | crate::engine::realm::Intrinsic::IteratorPrototypeFind
+        | crate::engine::realm::Intrinsic::IteratorPrototypeReduce
         | crate::engine::realm::Intrinsic::TypedArrayPrototypeAt
         | crate::engine::realm::Intrinsic::TypedArrayPrototypeCopyWithin
         | crate::engine::realm::Intrinsic::TypedArrayPrototypeEntries

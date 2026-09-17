@@ -1126,6 +1126,14 @@ pub enum Intrinsic {
     IteratorPrototypeToArray,
     /// `forEach`, 27.1.5.1.5.
     IteratorPrototypeForEach,
+    /// `some`, 27.1.5.1.10.
+    IteratorPrototypeSome,
+    /// `every`, 27.1.5.1.4.
+    IteratorPrototypeEvery,
+    /// `find`, 27.1.5.1.6.
+    IteratorPrototypeFind,
+    /// `reduce`, 27.1.5.1.9.
+    IteratorPrototypeReduce,
     /// `get constructor`, 27.1.4.2.
     IteratorPrototypeConstructorGet,
     /// `set constructor`, 27.1.4.2.
@@ -1277,7 +1285,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 442] = [
+    pub const ALL: [Self; 446] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1689,6 +1697,10 @@ impl Intrinsic {
         Self::IteratorConstructor,
         Self::IteratorPrototypeToArray,
         Self::IteratorPrototypeForEach,
+        Self::IteratorPrototypeSome,
+        Self::IteratorPrototypeEvery,
+        Self::IteratorPrototypeFind,
+        Self::IteratorPrototypeReduce,
         Self::IteratorPrototypeConstructorGet,
         Self::IteratorPrototypeConstructorSet,
         Self::IteratorPrototypeToStringTagGet,
@@ -1818,6 +1830,10 @@ impl Intrinsic {
             Self::IteratorPrototypeIterator
             | Self::IteratorPrototypeToArray
             | Self::IteratorPrototypeForEach
+            | Self::IteratorPrototypeSome
+            | Self::IteratorPrototypeEvery
+            | Self::IteratorPrototypeFind
+            | Self::IteratorPrototypeReduce
             | Self::IteratorPrototypeConstructorGet
             | Self::IteratorPrototypeConstructorSet
             | Self::IteratorPrototypeToStringTagGet
@@ -2624,6 +2640,10 @@ impl Intrinsic {
             Self::IteratorConstructor => 435,
             Self::IteratorPrototypeToArray => 440,
             Self::IteratorPrototypeForEach => 441,
+            Self::IteratorPrototypeSome => 442,
+            Self::IteratorPrototypeEvery => 443,
+            Self::IteratorPrototypeFind => 444,
+            Self::IteratorPrototypeReduce => 445,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3076,6 +3096,10 @@ impl Intrinsic {
             Self::IteratorConstructor => 435,
             Self::IteratorPrototypeToArray => 440,
             Self::IteratorPrototypeForEach => 441,
+            Self::IteratorPrototypeSome => 442,
+            Self::IteratorPrototypeEvery => 443,
+            Self::IteratorPrototypeFind => 444,
+            Self::IteratorPrototypeReduce => 445,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3529,6 +3553,10 @@ impl Intrinsic {
             435 => Some(Self::IteratorConstructor),
             440 => Some(Self::IteratorPrototypeToArray),
             441 => Some(Self::IteratorPrototypeForEach),
+            442 => Some(Self::IteratorPrototypeSome),
+            443 => Some(Self::IteratorPrototypeEvery),
+            444 => Some(Self::IteratorPrototypeFind),
+            445 => Some(Self::IteratorPrototypeReduce),
             436 => Some(Self::IteratorPrototypeConstructorGet),
             437 => Some(Self::IteratorPrototypeConstructorSet),
             438 => Some(Self::IteratorPrototypeToStringTagGet),
@@ -3891,15 +3919,23 @@ impl Intrinsic {
             | Self::IteratorPrototypeForEach => "forEach",
             Self::ArrayPrototypeMap => "map",
             Self::ArrayPrototypeFilter => "filter",
-            Self::ArrayPrototypeEvery | Self::TypedArrayPrototypeEvery => "every",
-            Self::ArrayPrototypeSome | Self::TypedArrayPrototypeSome => "some",
-            Self::ArrayPrototypeFind | Self::TypedArrayPrototypeFind => "find",
+            Self::ArrayPrototypeEvery
+            | Self::TypedArrayPrototypeEvery
+            | Self::IteratorPrototypeEvery => "every",
+            Self::ArrayPrototypeSome
+            | Self::TypedArrayPrototypeSome
+            | Self::IteratorPrototypeSome => "some",
+            Self::ArrayPrototypeFind
+            | Self::TypedArrayPrototypeFind
+            | Self::IteratorPrototypeFind => "find",
             Self::ArrayPrototypeFindLast | Self::TypedArrayPrototypeFindLast => "findLast",
             Self::ArrayPrototypeFindLastIndex | Self::TypedArrayPrototypeFindLastIndex => {
                 "findLastIndex"
             }
             Self::ArrayPrototypeFindIndex | Self::TypedArrayPrototypeFindIndex => "findIndex",
-            Self::ArrayPrototypeReduce | Self::TypedArrayPrototypeReduce => "reduce",
+            Self::ArrayPrototypeReduce
+            | Self::TypedArrayPrototypeReduce
+            | Self::IteratorPrototypeReduce => "reduce",
             Self::ArrayPrototypeReduceRight | Self::TypedArrayPrototypeReduceRight => "reduceRight",
             Self::IteratorPrototypeIterator => "[Symbol.iterator]",
             Self::ObjectPreventExtensions | Self::ReflectPreventExtensions => "preventExtensions",
@@ -4912,6 +4948,10 @@ impl Intrinsic {
             | Self::BigIntPrototypeToString
             | Self::IteratorPrototypeConstructorSet
             | Self::IteratorPrototypeForEach
+            | Self::IteratorPrototypeSome
+            | Self::IteratorPrototypeEvery
+            | Self::IteratorPrototypeFind
+            | Self::IteratorPrototypeReduce
             | Self::IteratorPrototypeToStringTagSet
             | Self::HostDetachArrayBuffer
             | Self::TypedArrayPrototypeAt

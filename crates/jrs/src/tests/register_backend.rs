@@ -10392,3 +10392,119 @@ fn the_iterator_of_27_1_4_is_abstract_and_carries_two_accessors() -> Result<(), 
     }
     Ok(())
 }
+
+#[test]
+fn the_three_helpers_of_27_1_5_that_stop_early_close_the_iterator() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // A walk that ends at a verdict calls the `return` of 7.4.9; the source
+    // keeps what the iterator was asked in `w`.
+    let made = "function make(v){var i=0;var t={next:function(){w.push('n');if(i<v.length){var e=v[i];i=i+1;return {done:false,value:e}}return {done:true}}};t['return']=function(){w.push('r');return {}};Object.setPrototypeOf(t,Iterator.prototype);return t}var w=[];";
+    for (source, answer) in [
+        // 27.1.5.1.10 answers true at the first element it accepts, and false
+        // for an iterator it walked to the end.
+        (
+            "''+[1,2,3].values().some(function(v){return v===2})",
+            "true",
+        ),
+        (
+            "''+[1,2,3].values().some(function(v){return v===9})",
+            "false",
+        ),
+        ("''+[].values().some(function(){return true})", "false"),
+        // 27.1.5.1.4 answers false at the first element it refuses.
+        ("''+[1,2,3].values().every(function(v){return v<9})", "true"),
+        (
+            "''+[1,2,3].values().every(function(v){return v<3})",
+            "false",
+        ),
+        ("''+[].values().every(function(){return false})", "true"),
+        // 27.1.5.1.6 answers the element itself, and undefined where it
+        // accepted none.
+        ("''+[1,2,3].values().find(function(v){return v>1})", "2"),
+        (
+            "''+[1,2,3].values().find(function(v){return false})",
+            "undefined",
+        ),
+        // The predicate reads the element and the counter, which counts from
+        // zero and only over the elements it saw.
+        (
+            "var k=[];['a','b'].values().some(function(v,i){k.push(i+v);return false});k.join(',')",
+            "0a,1b",
+        ),
+        // Step 4.b of each of the three closes the iterator before the
+        // `TypeError` of a procedure that is not callable leaves.
+        (
+            "var r;try{[].values().some()}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{[1].values().find(5)}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        // 7.4.9 calls `return` once the walk stops, and not where the iterator
+        // is done.
+        (
+            "w=[];var a=make([1,2,3]).some(function(v){return v===2});''+a+' '+w.join(',')",
+            "true n,n,r",
+        ),
+        (
+            "w=[];var a=make([1,2]).some(function(){return false});''+a+' '+w.join(',')",
+            "false n,n,n",
+        ),
+        (
+            "w=[];var a=make([1,2,3]).find(function(v){return v>2});''+a+' '+w.join(',')",
+            "3 n,n,n,r",
+        ),
+        (
+            "w=[];var r;try{make([1]).every(1)}catch(e){r=e instanceof TypeError};''+r+' '+w.join(',')",
+            "true r",
+        ),
+        // 7.4.9 step 6 takes an Object and no other value from `return`.
+        (
+            "w=[];var t=make([1,2]);t['return']=function(){return 5};var r;try{t.some(function(){return true})}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        // 27.1.5 step 1 of each takes an Object and no other receiver.
+        (
+            "var r;try{Iterator.prototype.every.call(1,function(){})}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        // 27.1.5.1.9 passes the accumulator, the element and the counter, and
+        // step 5.a takes the first element where the call named no
+        // accumulator, which makes the counter start at one.
+        ("''+[1,2,3].values().reduce(function(a,v){return a+v})", "6"),
+        (
+            "''+[1,2,3].values().reduce(function(a,v){return a+v},10)",
+            "16",
+        ),
+        (
+            "var k=[];[1,2,3].values().reduce(function(a,v,i){k.push(i);return a});k.join(',')",
+            "1,2",
+        ),
+        (
+            "var k=[];[1,2].values().reduce(function(a,v,i){k.push(i);return a},0);k.join(',')",
+            "0,1",
+        ),
+        ("''+[].values().reduce(function(a,v){return a},7)", "7"),
+        // An explicit undefined is an accumulator of its own.
+        (
+            "''+[1].values().reduce(function(a,v){return typeof a},undefined)",
+            "undefined",
+        ),
+        // Step 5.a.ii refuses an iterator with no element where the call named
+        // no accumulator either.
+        (
+            "var r;try{[].values().reduce(function(a,v){return a})}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        (
+            "w=[];var r;try{make([1]).reduce(5)}catch(e){r=e instanceof TypeError};''+r+' '+w.join(',')",
+            "true r",
+        ),
+    ] {
+        let source = alloc::format!("{made}{source}");
+        assert_eq!(realm.evaluate(&source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}
