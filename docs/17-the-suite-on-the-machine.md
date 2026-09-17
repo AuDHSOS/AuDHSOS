@@ -63,18 +63,22 @@ What each answers, over the same files:
 |---------------|-------:|---------------------:|--------:|
 | `utf8-4096-delete` | 61 750 | 2372 | 9508 |
 | `utf16le-4096-delete` | 61 214 | 2392 | 9500 |
-| `utf16be-4096-delete` | 59 812 | 3428 | 9641 |
-| `utf8-512-delete` | 60 073 | 4399 | 9964 |
-| `utf8-1024-delete` | 61 256 | 2653 | 9718 |
-| `utf8-65536-delete` | 61 091 | 2358 | 9450 |
-| `utf8-4096-persist` | 61 572 | 2372 | 9505 |
-| `utf8-4096-truncate` | 61 571 | 2370 | 9503 |
-| `utf8-4096-wal` | 59 695 | 2490 | 10 302 |
+| `utf16be-4096-delete` | 61 229 | 2392 | 9500 |
+| `utf8-512-delete` | 60 186 | 4399 | 9964 |
+| `utf8-1024-delete` | 61 292 | 2637 | 9702 |
+| `utf8-65536-delete` | 61 042 | 2358 | 9446 |
+| `utf8-4096-persist` | 61 574 | 2372 | 9504 |
+| `utf8-4096-truncate` | 61 311 | 2370 | 9501 |
+| `utf8-4096-wal` | 59 759 | 2490 | 10 294 |
 
 The counts move by tens between runs of one configuration, because the
-files the deadline ends are counted with the cases they ran. The first
-two rows are a run after D-277; the other seven were measured before it
-and the encoding rows among them are now higher than they read here.
+files the deadline ends are counted with the cases they ran.
+
+Two rows are behind the others by more than that. `utf8-512-delete`
+answers 2027 cases differently from `utf8-4096-delete`, which is a page
+size the engine fills and spills at more often than any other, and
+`utf8-4096-wal` refuses 786 more, which a connection in write-ahead
+logging reads its newest pages out of the log for.
 
 ## 17.4 What is missing
 
