@@ -1326,6 +1326,50 @@ fn a_compound_assignment_reaches_a_property() -> Result<(), Error> {
 }
 
 #[test]
+fn a_logical_assignment_of_13_15_2_writes_only_where_it_does_not_short_circuit() -> Result<(), Error>
+{
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend has no form of a write that happens on one path
+    // alone, so only the engine answers.
+    for (source, answer) in [
+        ("var a=1;a||=5;''+a", "1"),
+        ("var a=0;a||=7;''+a", "7"),
+        ("var a=1;a&&=9;''+a", "9"),
+        ("var a=0;a&&=9;''+a", "0"),
+        ("var a=null;a??=3;''+a", "3"),
+        ("var a=0;a??=3;''+a", "0"),
+        ("var u;u??=3;''+u", "3"),
+        // The right side is evaluated on the writing path alone.
+        ("var n=0;var a=1;a||=(n=1);''+a+','+n", "1,0"),
+        ("var n=0;var a=0;a||=(n=1);''+a+','+n", "1,1"),
+        ("var n=0;var a=0;a&&=(n=1);''+a+','+n", "0,0"),
+        // 13.15.2 names an anonymous function after the binding.
+        ("var f;f||=function(){};f.name", "f"),
+        // A property reference evaluates its base and its key once.
+        ("var o={a:1};o.a||=8;''+o.a", "1"),
+        ("var o={a:0};o.a||=8;''+o.a", "8"),
+        ("var o={a:1};o.a&&=2;''+o.a", "2"),
+        ("var o={};o.a??=6;''+o.a", "6"),
+        ("var o={a:0};o.a??=6;''+o.a", "0"),
+        (
+            "var n=0;function b(){n=n+1;return {a:1}}b().a||=4;''+n",
+            "1",
+        ),
+        ("var n=0;var o={a:1};o[(n=n+1,'a')]||=4;''+n+','+o.a", "1,1"),
+        // The write of a short-circuit never happens, so a property that is
+        // not writable takes no value and answers no error either.
+        (
+            "var o={};Object.defineProperty(o,'a',{value:1,writable:false});o.a||=9;''+o.a",
+            "1",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}
+
+#[test]
 fn a_property_descriptor_crosses_between_the_object_and_the_engine() -> Result<(), Error> {
     // 20.1.2.10 answers the own String keys in the order 10.1.11 gives them,
     // 20.1.2.8 answers the descriptor 6.2.6.4 makes of an own property, and

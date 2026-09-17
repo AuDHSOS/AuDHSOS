@@ -1413,11 +1413,14 @@ impl Parser {
                 Kind::Punct("<<=") => Some(Some(Binary::Shl)),
                 Kind::Punct(">>=") => Some(Some(Binary::Shr)),
                 Kind::Punct(">>>=") => Some(Some(Binary::Ushr)),
+                // 13.15.2 carries the three of 13.15.1 that short-circuit in
+                // the same node: their operator says that the write happens
+                // only where the operator does not answer the left side.
+                Kind::Punct("&&=") => Some(Some(Binary::And)),
+                Kind::Punct("||=") => Some(Some(Binary::Or)),
+                Kind::Punct("??=") => Some(Some(Binary::Nullish)),
                 _ => None,
             };
-            if min == 0 && (self.is("&&=") || self.is("||=") || self.is("??=")) {
-                return Err(Self::unsupported("logical assignment operators"));
-            }
             if min == 0
                 && let Some(op) = assignment
             {

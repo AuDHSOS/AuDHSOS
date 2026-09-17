@@ -5484,6 +5484,9 @@ impl RegisterLowerer {
             self.finish_member_assignment(prepared, value_type)?;
             return Some(value_type);
         };
+        if matches!(operator, Binary::And | Binary::Or | Binary::Nullish) {
+            return self.lower_logical_member_assignment(prepared, operator, value);
+        }
         // 13.15.2 evaluates the Reference once and reads through it before the
         // right side is evaluated: the base and the key are in registers
         // already, so the read and the write below reach the same property
@@ -8408,6 +8411,9 @@ impl RegisterLowerer {
         strict: bool,
     ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
+        if let Some(operator @ (Binary::And | Binary::Or | Binary::Nullish)) = operator {
+            return self.lower_logical_assignment(name, operator, right, strict);
+        }
         let Some(binding) = self.bindings.get(name).copied() else {
             // 9.1.1.4.5 writes a name no binding of this Script covers on the
             // Global Environment Record. Outside a Realm there is no such
@@ -8459,6 +8465,125 @@ impl RegisterLowerer {
         self.store_binding(binding);
         self.bindings.get_mut(name)?.value_type = Some(result_type);
         Some(result_type)
+    }
+
+    /// The jump of 13.15.2 that leaves the write out, which is the jump the
+    /// expression form of 13.15.1 makes.
+    const fn logical_branch(operator: Binary) -> Option<crate::engine::bytecode::Instruction> {
+        use crate::engine::bytecode::Instruction;
+        match operator {
+            Binary::And => Some(Instruction::JumpIfFalse(0)),
+            Binary::Or => Some(Instruction::JumpIfTrue(0)),
+            Binary::Nullish => Some(Instruction::JumpIfNotNullish(0)),
+            _ => None,
+        }
+    }
+
+    /// 13.15.2 on a name: the binding is read, and the right side is evaluated
+    /// and written only where the operator does not answer that read.
+    fn lower_logical_assignment(
+        &mut self,
+        name: &str,
+        operator: Binary,
+        right: &Expr,
+        strict: bool,
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let binding = self.bindings.get(name).copied();
+        let units: Vec<u16> = name.encode_utf16().collect();
+        // 9.1.1.4.6 resolves a name no binding of this Script covers on the
+        // Global Environment Record, where a later Script may have put
+        // anything, so the read has no type of its own.
+        let constant = if let Some(binding) = binding {
+            if !binding.mutable || binding.value_type.is_none() || binding.stable_function_identity
+            {
+                return None;
+            }
+            self.load_binding(binding);
+            None
+        } else {
+            if !self.realm {
+                return None;
+            }
+            let constant = self.string_constant(&units)?;
+            self.code.emit(Instruction::LdaGlobal(constant));
+            Some(constant)
+        };
+        let left_type = binding
+            .and_then(|binding| binding.value_type)
+            .unwrap_or(RegisterType::Unknown);
+        let branch = self.code.emit(Self::logical_branch(operator)?);
+        let bindings_after_left = self.bindings.clone();
+        let object_layouts_after_left = self.object_layouts.clone();
+        // 13.15.2 names an anonymous function after the binding it is
+        // written to.
+        let right_type = self.lower_named(right, &units)?;
+        if let Some(constant) = constant {
+            self.code.emit(Instruction::StaGlobal {
+                name: constant,
+                strict,
+            });
+            // Every later call can read the name from the Global Environment
+            // Record, so the value is no longer only this Script's.
+            self.escape(&[right_type]);
+        } else {
+            self.store_binding(binding?);
+            self.bindings.get_mut(name)?.value_type = Some(right_type);
+        }
+        let bindings_after_right = self.bindings.clone();
+        if object_layouts_after_left
+            .iter()
+            .any(|(id, layout)| self.object_layouts.get(id) != Some(layout))
+        {
+            return None;
+        }
+        self.bindings = merge_register_bindings(&bindings_after_left, &bindings_after_right)?;
+        let end = self.code.instructions.len();
+        self.patch_jump(branch, end)?;
+        let result = left_type.merge(right_type);
+        Some(if result.object_id().is_some() && constant.is_some() {
+            RegisterType::Unknown
+        } else {
+            result
+        })
+    }
+
+    /// 13.15.2 on a property reference: the base and the key are evaluated
+    /// once, the property is read through them, and the write happens only
+    /// where the operator does not answer that read.
+    fn lower_logical_member_assignment(
+        &mut self,
+        prepared: RegisterMemberAssignment,
+        operator: Binary,
+        value: &Expr,
+    ) -> Option<RegisterType> {
+        // The layout of an Array carries a length, and a write this expression
+        // leaves out would claim an element the Array need not have.
+        if matches!(prepared.base_type, RegisterType::Array(_)) {
+            return None;
+        }
+        let left_type = self.read_prepared_member(&prepared)?;
+        let branch = self.code.emit(Self::logical_branch(operator)?);
+        let bindings_after_left = self.bindings.clone();
+        let object_layouts_after_left = self.object_layouts.clone();
+        let right_type = self.lower(value)?;
+        // A layout the right side changes belongs to an object the other path
+        // leaves as it was, which the lowering refuses; the write below is the
+        // one change both paths account for.
+        if object_layouts_after_left
+            .iter()
+            .any(|(id, layout)| self.object_layouts.get(id) != Some(layout))
+        {
+            return None;
+        }
+        // The layout carries what the property holds on either path, because
+        // the write of 13.15.2 happens on one of them alone.
+        self.finish_member_assignment(prepared, left_type.merge(right_type))?;
+        let bindings_after_right = self.bindings.clone();
+        self.bindings = merge_register_bindings(&bindings_after_left, &bindings_after_right)?;
+        let end = self.code.instructions.len();
+        self.patch_jump(branch, end)?;
+        Some(left_type.merge(right_type))
     }
 
     /// Applies the operator of a compound assignment (13.15.3) to the value in
@@ -12670,6 +12795,13 @@ impl Compiler {
                 }
             }
             ExprKind::SetMember(target, op, value, strict) => {
+                // 13.15.2 writes only where its operator does not answer the
+                // left side; the stack backend has no form of that.
+                if matches!(op, Some(Binary::And | Binary::Or | Binary::Nullish)) {
+                    return Err(Error::Unsupported {
+                        feature: "logical assignment operators",
+                    });
+                }
                 let (base, key) = target.member().ok_or(Error::InvalidBytecode)?;
                 if matches!(base.kind, ExprKind::Super) {
                     self.super_reference(key)?;
@@ -12737,6 +12869,13 @@ impl Compiler {
                 self.emit(Op::Binary(*op))?;
             }
             ExprKind::Assign(name, op, right) => {
+                // 13.15.2 writes only where its operator does not answer the
+                // left side; the stack backend has no form of that.
+                if matches!(op, Some(Binary::And | Binary::Or | Binary::Nullish)) {
+                    return Err(Error::Unsupported {
+                        feature: "logical assignment operators",
+                    });
+                }
                 if op.is_some() {
                     self.load(name, false)?;
                 }
