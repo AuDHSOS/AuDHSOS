@@ -6756,6 +6756,38 @@ impl RegisterLowerer {
         }
     }
 
+    /// Lowers the condition a loop reaches on every iteration, widening the
+    /// types its head starts from until the condition leaves them as it found
+    /// them.
+    ///
+    /// An assignment in the condition writes a binding, and the second
+    /// iteration starts from what the first one left, so the head carries the
+    /// merge of the two rather than refusing the loop. Answers where the
+    /// condition begins.
+    fn lower_loop_condition(
+        &mut self,
+        condition: &Expr,
+        bindings_at_head: &mut BTreeMap<String, RegisterBinding>,
+    ) -> Option<usize> {
+        // The type lattice is three steps deep, so a head that has not settled
+        // by then carries a binding whose storage the merge cannot reconcile.
+        for _ in 0..4u8 {
+            let snapshot = self.snapshot();
+            self.bindings = bindings_at_head.clone();
+            let head = self.code.instructions.len();
+            self.lower(condition)?;
+            let merged = merge_register_bindings(&self.bindings, bindings_at_head)?;
+            // The head carries what every iteration may start from, and the
+            // body starts from the narrower types the condition just left.
+            if merged == *bindings_at_head {
+                return Some(head);
+            }
+            self.restore(snapshot);
+            *bindings_at_head = merged;
+        }
+        None
+    }
+
     fn lower_while(&mut self, condition: &Expr, body: &Stmt) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         self.code.emit(Instruction::LdaUndefined);
@@ -6767,12 +6799,7 @@ impl RegisterLowerer {
             &mut bindings_at_head,
             self.loop_head_types != RegisterLoopHead::Declared,
         )?;
-        self.bindings = bindings_at_head.clone();
-        let head = self.code.instructions.len();
-        self.lower(condition)?;
-        if self.bindings != bindings_at_head {
-            return None;
-        }
+        let head = self.lower_loop_condition(condition, &mut bindings_at_head)?;
         let branch = self.code.emit(Instruction::JumpIfFalse(0));
         self.code.emit(Instruction::Ldar(result_register));
         self.loops.push(RegisterLoop {
@@ -6961,12 +6988,9 @@ impl RegisterLowerer {
             self.loop_head_types != RegisterLoopHead::Declared,
         )?;
         self.bindings = bindings_at_head.clone();
-        let head = self.code.instructions.len();
+        let mut head = self.code.instructions.len();
         let branch = if let Some(condition) = condition {
-            self.lower(condition)?;
-            if self.bindings != bindings_at_head {
-                return None;
-            }
+            head = self.lower_loop_condition(condition, &mut bindings_at_head)?;
             Some(self.code.emit(Instruction::JumpIfFalse(0)))
         } else {
             None

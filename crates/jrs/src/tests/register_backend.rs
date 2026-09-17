@@ -3982,8 +3982,9 @@ fn register_while_checks_fuel_at_back_edges() -> Result<(), Error> {
 
 #[test]
 fn register_loop_lowering_rejects_unstable_or_abrupt_bodies() -> Result<(), Error> {
-    // The condition of this one assigns, so the loop never leaves the head.
-    let source = "let x=1;while(x=true)x";
+    // The condition of a do-while stands after the body, so a binding it
+    // writes has no head the lowering can widen before the body is lowered.
+    let source = "let x=1;do{x}while(x=true)";
     assert!(
         !compile(source, Limits::default())?.uses_register_backend(),
         "{source}"
@@ -4004,6 +4005,10 @@ fn a_loop_whose_body_changes_the_type_of_a_binding_lowers() -> Result<(), Error>
         // A loop whose bindings do hold their types keeps them.
         "let x=1;for(let i=0;i<3;i++){x=x+1}x",
         "let s=0;for(let i=0;i<3;i++){s+=i}s",
+        // The condition writes a binding, so the head carries the merge of
+        // what it started from and what the condition leaves.
+        "let x=1;let n=0;while(x=n<3){n++}n",
+        "let r;let i=0;for(;(r=i)<3;i++){}''+i+r",
     ] {
         differential(source)?;
     }
