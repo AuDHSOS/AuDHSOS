@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` counts how many columns a statement an `IN` looks in
+  answers where the statement is read, so `a IN (SELECT a, b FROM t3)`
+  is refused `sub-select returns 2 columns - expected 1` although the
+  statement reaches no row. D-271 records it. Catalog 6.6.195.
+
 - `db-sqlite` locates a foreign key where the statement is read and not
   where a row is written, so a statement that reaches no row is refused
   `foreign key mismatch` all the same. The columns a key points at are
@@ -134,6 +139,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   highest of the four is the pool's.
 
 ### Fixed
+
+- The journal mode in `db-sqlite` belongs to the connection, which
+  answers the mode it was last set to whether the pragma names a schema
+  or not, where the engine answered `delete` for every mode. A
+  connection with a transaction open is left in the mode it had.
+  D-271 records it. Catalog 6.6.195.
 
 - An index entry in `db-sqlite` holds the value the row holds and not
   the one the statement wrote, so a row written into a column that

@@ -685,7 +685,12 @@ impl Session {
         }
         let bytes = writer.written();
         let database = Database::open(&bytes)
-            .map(|database| database.naming(writer.naming()).defining(DEFINED))
+            .map(|database| {
+                database
+                    .naming(writer.naming())
+                    .defining(DEFINED)
+                    .journalling(writer.journalled())
+            })
             .map_err(|error| error.message())?;
         let answered = database
             .query(last.as_bytes())
@@ -795,8 +800,15 @@ fn run_one(writer: &mut Writer, text: &str) -> Result<Vec<Value>, String> {
         };
         let counted = writer.counts();
         let naming = writer.naming();
+        let journalled = writer.journalled();
         let answered = opened
-            .map(|database| database.counting(counted).naming(naming).defining(DEFINED))
+            .map(|database| {
+                database
+                    .counting(counted)
+                    .naming(naming)
+                    .defining(DEFINED)
+                    .journalling(journalled)
+            })
             .and_then(|database| database.query(text.as_bytes()))
             .map_err(|error| shape(text, error.message()))?;
         for row in &answered.rows {

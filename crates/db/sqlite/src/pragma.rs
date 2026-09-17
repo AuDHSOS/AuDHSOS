@@ -412,10 +412,9 @@ impl Setting {
     /// What a file whose header is `header` answers for this pragma, or
     /// nothing where the pragma answers no row.
     ///
-    /// `PRAGMA journal_mode` answers `wal` for a file whose write
-    /// version says so and `delete` for every other, because the file
-    /// holds no other mode: the four that write the file itself leave
-    /// the same write version.
+    /// `PRAGMA journal_mode` is not among them: the file says only
+    /// whether it is in write-ahead logging, and the four modes that
+    /// write the file itself belong to the connection.
     #[must_use]
     pub fn read(self, header: &Header) -> Option<Value> {
         let number = |value: u32| Value::Int(i64::from(value));
@@ -434,14 +433,6 @@ impl Setting {
                 let full = u32::from(header.largest_root != 0);
                 number(full.saturating_add(header.incremental_vacuum.min(1)))
             }
-            Setting::JournalMode => Value::Text(
-                if header.write_version == 2 {
-                    b"wal".as_slice()
-                } else {
-                    b"delete".as_slice()
-                }
-                .to_vec(),
-            ),
             Setting::PageCount => number(header.pages),
             Setting::FreelistCount => number(header.freelist_pages),
             Setting::SchemaVersion => number(header.schema_cookie),
@@ -451,7 +442,8 @@ impl Setting {
             // A pragma the file does not hold, the ones the connection
             // holds, and the two that walk the file rather than read
             // its header have no answer out of a header.
-            Setting::CountChanges
+            Setting::JournalMode
+            | Setting::CountChanges
             | Setting::Held(_)
             | Setting::Ignored
             | Setting::Integrity
@@ -505,6 +497,19 @@ pub fn mode_of(text: &[u8]) -> Option<crate::journal::Mode> {
         b"memory" => Some(crate::journal::Mode::Memory),
         b"off" => Some(crate::journal::Mode::Off),
         _ => None,
+    }
+}
+
+/// The word one journal mode is written as, which is what
+/// `PRAGMA journal_mode` answers.
+#[must_use]
+pub const fn mode_word(mode: crate::journal::Mode) -> &'static [u8] {
+    match mode {
+        crate::journal::Mode::Delete => b"delete",
+        crate::journal::Mode::Truncate => b"truncate",
+        crate::journal::Mode::Persist => b"persist",
+        crate::journal::Mode::Memory => b"memory",
+        crate::journal::Mode::Off => b"off",
     }
 }
 

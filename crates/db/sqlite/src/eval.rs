@@ -55,8 +55,8 @@ pub enum Error {
     /// A statement used as a value that answers a number of columns
     /// the place it stands in does not take, which
     /// `sqlite3SubselectError` refuses as `sub-select returns N
-    /// columns - expected M`.
-    Columns,
+    /// columns - expected M`, with the two counts.
+    Columns(usize, usize),
     /// A row of values written where one value belongs, which
     /// `sqlite3VectorErrorMsg` refuses as `row value misused`, and a
     /// row compared against a row of another width.
@@ -114,6 +114,9 @@ impl Error {
         let shown = |name: &[u8]| alloc::string::String::from_utf8_lossy(name).into_owned();
         match self {
             Error::NoColumn(name) => alloc::format!("no such column: {}", shown(name)),
+            Error::Columns(answered, wanted) => {
+                alloc::format!("sub-select returns {answered} columns - expected {wanted}")
+            }
             Error::Ambiguous(name) => alloc::format!("ambiguous column name: {}", shown(name)),
             Error::NoFunction(name) => alloc::format!("no such function: {}", shown(name)),
             Error::NoCollation(name) => {
@@ -578,13 +581,12 @@ fn answer(
 /// a `TK_SELECT`. A statement that answers any other number of columns
 /// is a refusal.
 fn alone(row: &dyn Row, select: SelectId) -> Result<Answer, Error> {
-    let mut held = row
-        .answered_items(select)
-        .ok_or(Error::Unsupported)?
-        .into_iter();
-    let (value, affinity, collation) = held.next().ok_or(Error::Columns)?;
+    let items = row.answered_items(select).ok_or(Error::Unsupported)?;
+    let answered = items.len();
+    let mut held = items.into_iter();
+    let (value, affinity, collation) = held.next().ok_or(Error::Columns(answered, 1))?;
     if held.next().is_some() {
-        return Err(Error::Columns);
+        return Err(Error::Columns(answered, 1));
     }
     Ok(Answer {
         value,

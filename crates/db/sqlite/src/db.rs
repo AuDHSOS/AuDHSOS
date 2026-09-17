@@ -131,8 +131,9 @@ pub enum Error {
     /// statement answers columns.
     Names,
     /// A statement used as a value, or looked in by an `IN`, that
-    /// answers more than the one column either reads.
-    Columns,
+    /// answers another number of columns than the place it stands in
+    /// takes, with the two counts.
+    Columns(usize, usize),
     /// A `BEGIN` on a connection that already has a transaction open,
     /// which `sqlite3BeginTransaction` refuses.
     Nested,
@@ -315,6 +316,9 @@ impl Error {
                 alloc::format!("misuse of aggregate function {}()", shown(name))
             }
             Error::NoTables => alloc::string::String::from("no tables specified"),
+            Error::Columns(answered, wanted) => {
+                alloc::format!("sub-select returns {answered} columns - expected {wanted}")
+            }
             Error::Image(crate::error::Error::Full) => {
                 alloc::string::String::from("database or disk is full")
             }
@@ -1182,6 +1186,9 @@ pub struct Database<'a> {
     naming: Naming,
     /// The functions the application defined on the connection.
     defined: &'static [crate::func::Defined],
+    /// The word the journal mode of the connection is written as,
+    /// which `PRAGMA journal_mode` answers.
+    journalled: &'static [u8],
 }
 
 /// One trigger of the schema: what it is on, and the statement that
@@ -1336,6 +1343,7 @@ impl<'a> Database<'a> {
             counted: crate::func::Counted::default(),
             naming: Naming::default(),
             defined: &[],
+            journalled: b"delete",
         };
         database.read_indexes()?;
         database.read_views()?;
@@ -1376,6 +1384,18 @@ impl<'a> Database<'a> {
     #[must_use]
     pub const fn defining(mut self, defined: &'static [crate::func::Defined]) -> Self {
         self.defined = defined;
+        self
+    }
+
+    /// The same database, answering `PRAGMA journal_mode` with the mode
+    /// of the connection that writes.
+    ///
+    /// The mode belongs to a connection and not to a file, unless the
+    /// file is in write-ahead logging, so a database that is not told
+    /// answers the mode a connection told nothing is in.
+    #[must_use]
+    pub const fn journalling(mut self, journalled: &'static [u8]) -> Self {
+        self.journalled = journalled;
         self
     }
 
@@ -2132,6 +2152,14 @@ impl<'a> Database<'a> {
             crate::pragma::Setting::Held(at) => crate::pragma::HELD
                 .get(at)
                 .map(|keeps| crate::pragma::kept(at, keeps.fallback)),
+            // The mode belongs to the connection that writes, which a
+            // database read here was told, unless the file itself is in
+            // write-ahead logging, which its header says.
+            crate::pragma::Setting::JournalMode => {
+                let logged = self.image.header().write_version == 2;
+                let word = if logged { b"wal" } else { self.journalled };
+                Some(Value::Text(word.to_vec()))
+            }
             other => other.read(self.image.header()),
         }
         .ok_or(Error::Unsupported)?;
@@ -2276,6 +2304,7 @@ impl<'a> Database<'a> {
         } else {
             Vec::new()
         };
+        subqueries(arena, &select)?;
         let calls = aggregates(arena, &select, sql, &sides)?;
         let overs = overs(arena, &select, sql)?;
         let mut rows: Vec<Sorted> = Vec::new();
@@ -3583,7 +3612,7 @@ fn contained(
         alloc::vec![evaluate_compared(arena, value, sql, row)?]
     };
     if left.len() != columns.len() {
-        return Err(Error::Columns);
+        return Err(Error::Columns(columns.len(), left.len()));
     }
     let mut unknown = false;
     for held in rows {
@@ -4221,6 +4250,98 @@ fn aliased(results: &[ResultColumn], sql: &[u8], name: &[u8]) -> Option<ExprId> 
         } if dequote(alias.text(sql)).eq_ignore_ascii_case(name) => Some(expr),
         _ => None,
     })
+}
+
+/// How many columns a statement answers, worked out from its result
+/// columns alone, and nothing where a `*` stands among them: that one
+/// is as wide as the tables it is over and the walk here reads no
+/// table.
+///
+/// A compound is as wide as its first core, which is the one
+/// `sqlite3SubselectError` counts.
+fn width_of(arena: &Arena, id: SelectId) -> Option<usize> {
+    let select = arena.select(id)?;
+    if !select.values.is_empty() {
+        let first = arena.children(select.values).first().copied()?;
+        // The parser builds each row of a `VALUES` as a row node, so
+        // what the node names is what the row holds.
+        let mut items: usize = 0;
+        arena.node(first).into_iter().for_each(|node| {
+            arena.under(node, |_| items = items.saturating_add(1));
+        });
+        return Some(items);
+    }
+    let mut width: usize = 0;
+    for result in arena.results(select.columns) {
+        match *result {
+            ResultColumn::Expr { .. } => width = width.saturating_add(1),
+            ResultColumn::Star | ResultColumn::TableStar(_) => return None,
+        }
+    }
+    Some(width)
+}
+
+/// Every statement written inside an expression of this one, held to
+/// the number of columns the place it stands in takes, which is
+/// `sqlite3SubselectError` counting them where the statement is read
+/// and not where a row is.
+///
+/// The walk reads every expression of the statement once, so it is
+/// O(nodes) per statement.
+fn subqueries(arena: &Arena, select: &Select) -> Result<(), Error> {
+    let mut roots: Vec<ExprId> = Vec::new();
+    for column in arena.results(select.columns) {
+        if let ResultColumn::Expr { expr, .. } = *column {
+            roots.push(expr);
+        }
+    }
+    roots.extend(select.filter);
+    roots.extend(select.having);
+    roots.extend(arena.children(select.group).iter().copied());
+    for term in arena.orders(select.order) {
+        roots.push(term.expr);
+    }
+    for source in arena.sources(select.from) {
+        roots.extend(source.on);
+    }
+    for root in roots {
+        counted_columns(arena, root)?;
+    }
+    Ok(())
+}
+
+/// The same for one expression and everything under it.
+fn counted_columns(arena: &Arena, id: ExprId) -> Result<(), Error> {
+    arena
+        .node(id)
+        .map_or(Ok(()), |node| counted_node(arena, node))
+}
+
+/// The same for one node the arena holds.
+fn counted_node(arena: &Arena, node: Node) -> Result<(), Error> {
+    // Only an `IN` says on its own how many columns the statement it
+    // looks in answers; a statement written as a value takes its width
+    // from where it stands, which the walk over one node does not see.
+    let wanted = match node {
+        Node::InSelect { value, select, .. } => match arena.node(value) {
+            Some(Node::Row(items)) => Some((select, items.len())),
+            _ => Some((select, 1)),
+        },
+        _ => None,
+    };
+    if let Some((inner, wanted)) = wanted
+        && let Some(answered) = width_of(arena, inner)
+        && answered != wanted
+    {
+        return Err(Error::Columns(answered, wanted));
+    }
+    let mut deeper = Ok(());
+    arena.under(node, |child| {
+        if deeper.is_ok() {
+            deeper = counted_columns(arena, child);
+        }
+    });
+    deeper
 }
 
 /// Every aggregate call a statement answers with, and a refusal where

@@ -35,6 +35,7 @@ mod indexexpr;
 mod indexing;
 mod insteadof;
 mod journal;
+mod journal_mode;
 mod json;
 mod key_tree;
 mod matrix;

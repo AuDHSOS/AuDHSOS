@@ -182,8 +182,8 @@ fn a_statement_used_as_a_value_answers_one_column() {
     let writer = connection();
     for sql in ["SELECT (SELECT 1,2)", "SELECT 1=(SELECT 1,2)"] {
         assert_eq!(
-            refusal(&writer, sql),
-            Error::Eval(crate::eval::Error::Columns),
+            refusal(&writer, sql).message(),
+            "sub-select returns 2 columns - expected 1",
             "{sql}"
         );
     }

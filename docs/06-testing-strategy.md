@@ -5627,6 +5627,25 @@ Document 16 step Q8.
   `src/test_func.c`, which `tkt2686.test` writes rows with until the
   file fills.
 
+### 6.6.195 The journal mode of a connection (`db-sqlite`)
+
+Document 16 step Q8.
+
+- The mode a connection is in is the one it was last set to, which it
+  answers whether the pragma names a schema or not, so `PRAGMA
+  journal_mode=persist` is answered by `PRAGMA main.journal_mode`.
+- A connection with a transaction open is left in the mode it had, so
+  `PRAGMA journal_mode=truncate` there answers `persist`.
+- A reader is told the mode of the connection that writes, and answers
+  `delete` where it is told none and `wal` for a file whose header says
+  so.
+- A statement an `IN` looks in answers one column for a bare value and
+  as many as a row of values holds, counted where the statement is read:
+  `a IN (SELECT a, b FROM t3)` is refused `sub-select returns 2 columns
+  - expected 1` although the statement reaches no row. A `*` among the
+  columns is as wide as the tables it is over, which the count reads no
+  table for.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

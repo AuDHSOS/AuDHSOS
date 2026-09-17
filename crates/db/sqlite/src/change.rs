@@ -1815,6 +1815,13 @@ impl Writer {
             if let crate::pragma::Setting::Held(at) = setting {
                 return Ok(alloc::vec![alloc::vec![self.held(at)]]);
             }
+            // The journal mode belongs to the connection, which holds
+            // it whatever the header of the file says.
+            if setting == crate::pragma::Setting::JournalMode {
+                return Ok(alloc::vec![alloc::vec![Value::Text(
+                    self.journalled().to_vec()
+                )]]);
+            }
             let read = setting.read(&self.now()).ok_or(Error::Unsupported)?;
             return Ok(alloc::vec![alloc::vec![read]]);
         };
@@ -1854,8 +1861,15 @@ impl Writer {
                 }
             }
             crate::pragma::Setting::JournalMode => {
+                // `sqlite3PragmaJournalMode` leaves the mode as it is
+                // where the connection has a transaction open, so the
+                // pragma answers the mode it did not change.
+                let held = self.began.is_some();
+                let wanted = crate::pragma::mode_of(text);
                 if crate::pragma::is_log(text) {
-                    self.log_mode();
+                    if !held {
+                        self.log_mode();
+                    }
                 } else {
                     // A file in write-ahead logging leaves that mode
                     // through a checkpoint, which this crate does not
@@ -1863,12 +1877,15 @@ impl Writer {
                     if self.log.is_some() {
                         return Err(Error::Unsupported);
                     }
-                    self.mode = crate::pragma::mode_of(text).ok_or(Error::Unsupported)?;
+                    let mode = wanted.ok_or(Error::Unsupported)?;
+                    if !held {
+                        self.mode = mode;
+                    }
                 }
                 // The mode the connection is left in is the one row
                 // this pragma answers, which no other setting does.
                 return Ok(alloc::vec![alloc::vec![Value::Text(
-                    crate::schema::dequote(text).to_ascii_lowercase()
+                    self.journalled().to_vec()
                 )]]);
             }
             _ => return Err(Error::Unsupported),
@@ -2247,6 +2264,17 @@ impl Writer {
     /// a reader built over its file is told by [`Database::defining`].
     pub const fn defines(&mut self, defined: &'static [crate::func::Defined]) {
         self.defined = defined;
+    }
+
+    /// The word the journal mode of this connection is written as,
+    /// which is `wal` for a file in write-ahead logging and one of the
+    /// five modes that write the file itself otherwise.
+    #[must_use]
+    pub const fn journalled(&self) -> &'static [u8] {
+        if self.log.is_some() {
+            return b"wal";
+        }
+        crate::pragma::mode_word(self.mode)
     }
 
     /// What this connection was told for the pragmas it keeps a value
