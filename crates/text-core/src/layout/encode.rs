@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Manuel Baesler and contributors
 
 use super::{LayoutView, engine::add};
-use crate::{Fixed, Role, TextError, unicode::Script};
+use crate::{Fixed, Role, TextError, unicode, unicode::Script};
 struct Writer<'a> {
     bytes: Option<&'a mut [u8]>,
     at: usize,
@@ -53,7 +53,7 @@ impl LayoutView<'_> {
     fn encode(self, out: Option<&mut [u8]>) -> Result<usize, TextError> {
         let mut w = Writer { bytes: out, at: 0 };
         w.put(b"TEXT\x02\0\0\0")?;
-        w.put(&18_u16.to_le_bytes())?;
+        w.put(&unicode::VERSION_MAJOR.to_le_bytes())?;
         w.put(&self.info.generation.to_le_bytes())?;
         w.put(&[match self.info.role {
             Role::Ui => 0,

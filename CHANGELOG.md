@@ -791,6 +791,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   layout: version 1 carries the per-run baseline offset, version 2 does not.
   The mixed-script fixture digest becomes `937fa8061318a96c`.
 
+- `text-core` names the `u16` the layout stream header carries after the
+  magic: it is the major Unicode version of the property tables, which the
+  generator now emits as `unicode::VERSION_MAJOR` from the same pinned
+  `VERSION` the tables are built from, so it cannot go stale when Unicode 19
+  lands (D-156). The byte stream is unchanged. The version byte selects the
+  record layout; this word reports which property data produced the result.
+
 - 10.15 states what the transport glue of Phase 15 has to do about the
   ring: `RING_CAPACITY` is 4072 bytes and a TLS record is up to 16640, so
   a record crosses in four passes at least, which is what

@@ -280,6 +280,8 @@ fn layout_fallback_regional_han_variations_and_determinism() {
     assert_eq!(second.view().write_bytes(&mut b), Ok(b.len()));
     assert_eq!(a, b);
     assert_eq!(&a[..8], b"TEXT\x02\0\0\0");
+    assert_eq!(&a[8..10], crate::unicode::VERSION_MAJOR.to_le_bytes());
+    assert_eq!(crate::unicode::VERSION_MAJOR, 18);
     let digest = a.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
         (h ^ u64::from(*b)).wrapping_mul(0x100_0000_01b3)
     });

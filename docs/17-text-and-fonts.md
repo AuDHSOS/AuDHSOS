@@ -647,7 +647,14 @@ padding. The version number denotes one record layout, and a reader selects its
 record layout by that number alone. Version 1, written as `TEXT\x01`, gives each
 run record a `Fixed` baseline offset after its scale. Version 2, written as
 `TEXT\x02`, is version 1 without that field, because a run carries no baseline
-offset (D-171); every other record is unchanged.
+offset (D-171); every other record is unchanged. The `u16` after the magic is
+the major Unicode version of the property tables, `unicode::VERSION_MAJOR`,
+which the generator emits from the same pinned `VERSION` the tables are built
+from (D-156). The two numbers answer different questions: the version byte
+selects the record layout, and this word reports which property data produced
+the result, because segmentation, bidi and line breaking are the answers of one
+Unicode version and two streams of one record layout carry different boundaries
+when their tables differ.
 
 Input is capped at 65,536 Unicode scalars. Each owned growing buffer is capped
 at 1,048,576 entries. No-width layout shapes only mandatory-break candidates.
