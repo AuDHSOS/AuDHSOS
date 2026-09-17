@@ -9157,6 +9157,15 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::TypedArrayPrototypeToSorted
         | crate::engine::realm::Intrinsic::TypedArrayPrototypeValues
         | crate::engine::realm::Intrinsic::TypedArrayPrototypeWith
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeEvery
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeFind
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeFindIndex
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeFindLast
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeFindLastIndex
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeForEach
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeReduce
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeReduceRight
+        | crate::engine::realm::Intrinsic::TypedArrayPrototypeSome
         // 21.2.1.1, 21.2.2 and 21.2.3.4 answer a BigInt, which no
         // register type of this lowering names.
         | crate::engine::realm::Intrinsic::BigIntConstructor

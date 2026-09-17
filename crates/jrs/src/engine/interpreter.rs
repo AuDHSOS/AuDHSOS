@@ -2782,6 +2782,15 @@ impl RegisterVM {
             | Intrinsic::TypedArrayPrototypeToSorted
             | Intrinsic::TypedArrayPrototypeValues
             | Intrinsic::TypedArrayPrototypeWith
+            | Intrinsic::TypedArrayPrototypeEvery
+            | Intrinsic::TypedArrayPrototypeFind
+            | Intrinsic::TypedArrayPrototypeFindIndex
+            | Intrinsic::TypedArrayPrototypeFindLast
+            | Intrinsic::TypedArrayPrototypeFindLastIndex
+            | Intrinsic::TypedArrayPrototypeForEach
+            | Intrinsic::TypedArrayPrototypeReduce
+            | Intrinsic::TypedArrayPrototypeReduceRight
+            | Intrinsic::TypedArrayPrototypeSome
             | Intrinsic::TypedArrayPrototypeBuffer
             | Intrinsic::TypedArrayPrototypeByteLength
             | Intrinsic::TypedArrayPrototypeByteOffset
@@ -4516,6 +4525,16 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Option<u32>, VMError> {
+        // 23.2.3 walks the array of 23.2 the way 23.1.3 walks an Array, once
+        // 23.2.4.1 has checked the receiver, so the walk of the Array clause
+        // answers for both.
+        let intrinsic = match Self::typed_array_walk_form(intrinsic) {
+            Some(form) => {
+                Self::validate_typed_array(call.receiver, heap, realm)?;
+                form
+            }
+            None => intrinsic,
+        };
         // 20.2.3.1 and 28.1.1 leave to call what they were given, with the
         // List 7.3.18 makes; 28.1.2 leaves with the object 10.1.13 makes for
         // the `newTarget` it was given.
@@ -14618,6 +14637,47 @@ impl RegisterVM {
             },
         )?;
         Ok(Value::from_object(object))
+    }
+
+    /// The method of 23.1.3 that runs the walk a method of 23.2.3 asks for,
+    /// which is the same one over the same elements.
+    ///
+    /// 23.2.3.20 and 23.2.3.9 answer an array of 23.2 rather than an Array, so
+    /// they take no walk of the Array clause and stay named gaps.
+    const fn typed_array_walk_form(intrinsic: Intrinsic) -> Option<Intrinsic> {
+        Some(match intrinsic {
+            Intrinsic::TypedArrayPrototypeEvery => Intrinsic::ArrayPrototypeEvery,
+            Intrinsic::TypedArrayPrototypeSome => Intrinsic::ArrayPrototypeSome,
+            Intrinsic::TypedArrayPrototypeForEach => Intrinsic::ArrayPrototypeForEach,
+            Intrinsic::TypedArrayPrototypeFind => Intrinsic::ArrayPrototypeFind,
+            Intrinsic::TypedArrayPrototypeFindIndex => Intrinsic::ArrayPrototypeFindIndex,
+            Intrinsic::TypedArrayPrototypeFindLast => Intrinsic::ArrayPrototypeFindLast,
+            Intrinsic::TypedArrayPrototypeFindLastIndex => Intrinsic::ArrayPrototypeFindLastIndex,
+            Intrinsic::TypedArrayPrototypeReduce => Intrinsic::ArrayPrototypeReduce,
+            Intrinsic::TypedArrayPrototypeReduceRight => Intrinsic::ArrayPrototypeReduceRight,
+            _ => return None,
+        })
+    }
+
+    /// `ValidateTypedArray` of 23.2.4.1, which every method of 23.2.3 asks
+    /// before it reads an argument.
+    fn validate_typed_array(
+        receiver: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        if receiver
+            .as_object()
+            .and_then(|object| Self::typed_array_row(object, heap))
+            .is_some()
+        {
+            return Ok(());
+        }
+        Err(type_error(
+            heap,
+            realm,
+            "this value carries no TypedArray of its own",
+        ))
     }
 
     /// The object 23.2.5.1 steps 6.a and 6.b read as a list, which is every

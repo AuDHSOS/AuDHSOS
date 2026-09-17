@@ -10278,6 +10278,33 @@ fn the_three_further_rows_of_table_71_hold_a_binary16_and_a_bigint() -> Result<(
             "''+(Int8Array.prototype.toString===Array.prototype.toString)",
             "true",
         ),
+        // The methods of 23.2.3 that call back into the Script run the walk of
+        // 23.1.3 over the same elements.
+        (
+            "var a=new Int8Array([1,2,3,4]);''+a.every(function(x){return x>0})+' '+a.some(function(x){return x>3})",
+            "true true",
+        ),
+        (
+            "var a=new Int8Array([1,2,3,4]);var s=0;a.forEach(function(x){s+=x});''+s",
+            "10",
+        ),
+        (
+            "var a=new Int8Array([1,2,3,4]);''+a.find(function(x){return x>2})+' '+a.findIndex(function(x){return x>2})",
+            "3 2",
+        ),
+        (
+            "var a=new Int8Array([1,2,3,4]);''+a.findLast(function(x){return x<3})+' '+a.findLastIndex(function(x){return x<3})",
+            "2 1",
+        ),
+        (
+            "var a=new Int8Array([1,2,3,4]);''+a.reduce(function(p,c){return p+c})+' '+a.reduceRight(function(p,c){return p+'-'+c})",
+            "10 4-3-2-1",
+        ),
+        // 23.2.4.1 refuses a receiver that is no array of 23.2.
+        (
+            "var r;try{Int8Array.prototype.every.call({},function(){})}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
         // 25.4.2.1 takes no float row, and the two BigInt rows need the BigInt
         // forms of 25.4, which are a named gap.
         (

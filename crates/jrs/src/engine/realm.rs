@@ -1102,6 +1102,24 @@ pub enum Intrinsic {
     TypedArrayPrototypeValues,
     /// `with`, 23.2.3.36.
     TypedArrayPrototypeWith,
+    /// `every`, 23.2.3.8.
+    TypedArrayPrototypeEvery,
+    /// `find`, 23.2.3.10.
+    TypedArrayPrototypeFind,
+    /// `findIndex`, 23.2.3.11.
+    TypedArrayPrototypeFindIndex,
+    /// `findLast`, 23.2.3.12.
+    TypedArrayPrototypeFindLast,
+    /// `findLastIndex`, 23.2.3.13.
+    TypedArrayPrototypeFindLastIndex,
+    /// `forEach`, 23.2.3.14.
+    TypedArrayPrototypeForEach,
+    /// `reduce`, 23.2.3.22.
+    TypedArrayPrototypeReduce,
+    /// `reduceRight`, 23.2.3.23.
+    TypedArrayPrototypeReduceRight,
+    /// `some`, 23.2.3.25.
+    TypedArrayPrototypeSome,
     /// `BigInt`, 21.2.1.1.
     BigIntConstructor,
     /// `asIntN`, 21.2.2.1.
@@ -1239,7 +1257,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 424] = [
+    pub const ALL: [Self; 433] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1639,6 +1657,15 @@ impl Intrinsic {
         Self::TypedArrayPrototypeToSorted,
         Self::TypedArrayPrototypeValues,
         Self::TypedArrayPrototypeWith,
+        Self::TypedArrayPrototypeEvery,
+        Self::TypedArrayPrototypeFind,
+        Self::TypedArrayPrototypeFindIndex,
+        Self::TypedArrayPrototypeFindLast,
+        Self::TypedArrayPrototypeFindLastIndex,
+        Self::TypedArrayPrototypeForEach,
+        Self::TypedArrayPrototypeReduce,
+        Self::TypedArrayPrototypeReduceRight,
+        Self::TypedArrayPrototypeSome,
         Self::BigIntConstructor,
         Self::BigIntAsIntN,
         Self::BigIntAsUintN,
@@ -1942,6 +1969,15 @@ impl Intrinsic {
             | Self::TypedArrayPrototypeToSorted
             | Self::TypedArrayPrototypeValues
             | Self::TypedArrayPrototypeWith
+            | Self::TypedArrayPrototypeEvery
+            | Self::TypedArrayPrototypeFind
+            | Self::TypedArrayPrototypeFindIndex
+            | Self::TypedArrayPrototypeFindLast
+            | Self::TypedArrayPrototypeFindLastIndex
+            | Self::TypedArrayPrototypeForEach
+            | Self::TypedArrayPrototypeReduce
+            | Self::TypedArrayPrototypeReduceRight
+            | Self::TypedArrayPrototypeSome
             | Self::TypedArrayPrototypeToStringTag => IntrinsicHolder::TypedArrayPrototype,
             Self::DatePrototypeValueOf
             | Self::DatePrototypeGetTime
@@ -2536,6 +2572,15 @@ impl Intrinsic {
             Self::TypedArrayPrototypeToSorted => 421,
             Self::TypedArrayPrototypeValues => 422,
             Self::TypedArrayPrototypeWith => 423,
+            Self::TypedArrayPrototypeEvery => 424,
+            Self::TypedArrayPrototypeFind => 425,
+            Self::TypedArrayPrototypeFindIndex => 426,
+            Self::TypedArrayPrototypeFindLast => 427,
+            Self::TypedArrayPrototypeFindLastIndex => 428,
+            Self::TypedArrayPrototypeForEach => 429,
+            Self::TypedArrayPrototypeReduce => 430,
+            Self::TypedArrayPrototypeReduceRight => 431,
+            Self::TypedArrayPrototypeSome => 432,
             Self::SharedArrayBufferConstructor => 378,
             Self::SharedArrayBufferPrototypeSlice => 379,
             Self::SharedArrayBufferPrototypeGrow => 380,
@@ -2970,6 +3015,15 @@ impl Intrinsic {
             Self::TypedArrayPrototypeToSorted => 421,
             Self::TypedArrayPrototypeValues => 422,
             Self::TypedArrayPrototypeWith => 423,
+            Self::TypedArrayPrototypeEvery => 424,
+            Self::TypedArrayPrototypeFind => 425,
+            Self::TypedArrayPrototypeFindIndex => 426,
+            Self::TypedArrayPrototypeFindLast => 427,
+            Self::TypedArrayPrototypeFindLastIndex => 428,
+            Self::TypedArrayPrototypeForEach => 429,
+            Self::TypedArrayPrototypeReduce => 430,
+            Self::TypedArrayPrototypeReduceRight => 431,
+            Self::TypedArrayPrototypeSome => 432,
             Self::SharedArrayBufferConstructor => 378,
             Self::SharedArrayBufferPrototypeSlice => 379,
             Self::SharedArrayBufferPrototypeGrow => 380,
@@ -3405,6 +3459,15 @@ impl Intrinsic {
             421 => Some(Self::TypedArrayPrototypeToSorted),
             422 => Some(Self::TypedArrayPrototypeValues),
             423 => Some(Self::TypedArrayPrototypeWith),
+            424 => Some(Self::TypedArrayPrototypeEvery),
+            425 => Some(Self::TypedArrayPrototypeFind),
+            426 => Some(Self::TypedArrayPrototypeFindIndex),
+            427 => Some(Self::TypedArrayPrototypeFindLast),
+            428 => Some(Self::TypedArrayPrototypeFindLastIndex),
+            429 => Some(Self::TypedArrayPrototypeForEach),
+            430 => Some(Self::TypedArrayPrototypeReduce),
+            431 => Some(Self::TypedArrayPrototypeReduceRight),
+            432 => Some(Self::TypedArrayPrototypeSome),
             378 => Some(Self::SharedArrayBufferConstructor),
             379 => Some(Self::SharedArrayBufferPrototypeSlice),
             380 => Some(Self::SharedArrayBufferPrototypeGrow),
@@ -3745,19 +3808,22 @@ impl Intrinsic {
             Self::MathImul => "imul",
             Self::MathFround => "fround",
             Self::MathSin => "sin",
-            Self::ArrayPrototypeForEach | Self::MapPrototypeForEach | Self::SetPrototypeForEach => {
-                "forEach"
-            }
+            Self::ArrayPrototypeForEach
+            | Self::MapPrototypeForEach
+            | Self::SetPrototypeForEach
+            | Self::TypedArrayPrototypeForEach => "forEach",
             Self::ArrayPrototypeMap => "map",
             Self::ArrayPrototypeFilter => "filter",
-            Self::ArrayPrototypeEvery => "every",
-            Self::ArrayPrototypeSome => "some",
-            Self::ArrayPrototypeFind => "find",
-            Self::ArrayPrototypeFindLast => "findLast",
-            Self::ArrayPrototypeFindLastIndex => "findLastIndex",
-            Self::ArrayPrototypeFindIndex => "findIndex",
-            Self::ArrayPrototypeReduce => "reduce",
-            Self::ArrayPrototypeReduceRight => "reduceRight",
+            Self::ArrayPrototypeEvery | Self::TypedArrayPrototypeEvery => "every",
+            Self::ArrayPrototypeSome | Self::TypedArrayPrototypeSome => "some",
+            Self::ArrayPrototypeFind | Self::TypedArrayPrototypeFind => "find",
+            Self::ArrayPrototypeFindLast | Self::TypedArrayPrototypeFindLast => "findLast",
+            Self::ArrayPrototypeFindLastIndex | Self::TypedArrayPrototypeFindLastIndex => {
+                "findLastIndex"
+            }
+            Self::ArrayPrototypeFindIndex | Self::TypedArrayPrototypeFindIndex => "findIndex",
+            Self::ArrayPrototypeReduce | Self::TypedArrayPrototypeReduce => "reduce",
+            Self::ArrayPrototypeReduceRight | Self::TypedArrayPrototypeReduceRight => "reduceRight",
             Self::IteratorPrototypeIterator => "[Symbol.iterator]",
             Self::ObjectPreventExtensions | Self::ReflectPreventExtensions => "preventExtensions",
             Self::ObjectIsExtensible | Self::ReflectIsExtensible => "isExtensible",
@@ -4573,7 +4639,16 @@ impl Intrinsic {
             | Self::TypedArrayPrototypeLastIndexOf
             | Self::TypedArrayPrototypeSet
             | Self::TypedArrayPrototypeSort
-            | Self::TypedArrayPrototypeToSorted => 1,
+            | Self::TypedArrayPrototypeToSorted
+            | Self::TypedArrayPrototypeEvery
+            | Self::TypedArrayPrototypeFind
+            | Self::TypedArrayPrototypeFindIndex
+            | Self::TypedArrayPrototypeFindLast
+            | Self::TypedArrayPrototypeFindLastIndex
+            | Self::TypedArrayPrototypeForEach
+            | Self::TypedArrayPrototypeReduce
+            | Self::TypedArrayPrototypeReduceRight
+            | Self::TypedArrayPrototypeSome => 1,
             Self::ObjectDefineProperty
             | Self::ReflectDefineProperty
             | Self::ReflectApply
