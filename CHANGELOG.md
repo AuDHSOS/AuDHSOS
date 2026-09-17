@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` locates a foreign key where the statement is read and not
+  where a row is written, so a statement that reaches no row is refused
+  `foreign key mismatch` all the same. The columns a key points at are
+  read in whatever order they were written, and a `CREATE TABLE` whose
+  key names a different number of columns from the ones it points at, or
+  a column the table does not hold, is refused where it is read.
+  D-269 records it. Catalog 6.6.193.
+
 - `db-sqlite` holds a `CREATE INDEX` to what `sqlite3CreateIndex` holds
   it to: the table is there, it is no view, and its name is not one
   SQLite keeps for itself. A `DROP INDEX` of an index a `UNIQUE` or a

@@ -59,6 +59,11 @@ pub enum Error {
     UnknownType(Vec<u8>, Vec<u8>, Vec<u8>),
     /// A primary key naming a column the table does not have.
     NoSuchColumn,
+    /// A `FOREIGN KEY` over a column the table does not hold, named.
+    ForeignColumn(Vec<u8>),
+    /// A `FOREIGN KEY` that names a different number of columns from
+    /// the ones it points at.
+    ForeignWidth,
     /// A primary key whose term is an expression rather than a name.
     KeyExpression,
     /// An index term that names a column the table it is over does not
@@ -1088,12 +1093,19 @@ fn pointing(
                 .columns
                 .iter()
                 .position(|column| column.name.eq_ignore_ascii_case(name))
-                .ok_or(Error::NoSuchColumn)?;
+                .ok_or_else(|| Error::ForeignColumn(name.clone()))?;
             columns.push(at);
         }
         let mut parent = Vec::new();
         for name in arena.names(foreign.columns) {
             parent.push(dequote(name.text(sql)));
+        }
+        // `sqlite3CreateForeignKey` reads the two lists of names
+        // against each other, so a key of one width pointing at
+        // another is refused where the statement is read and whatever
+        // the table it points at holds.
+        if !parent.is_empty() && parent.len() != columns.len() {
+            return Err(Error::ForeignWidth);
         }
         out.push(Foreign {
             columns,

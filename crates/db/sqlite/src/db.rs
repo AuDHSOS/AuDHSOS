@@ -325,6 +325,13 @@ impl Error {
             Error::Schema(schema::Error::IndexColumn(name)) => {
                 alloc::format!("no such column: {}", shown(name))
             }
+            Error::Schema(schema::Error::ForeignColumn(name)) => alloc::format!(
+                "unknown column \"{}\" in foreign key definition",
+                shown(name)
+            ),
+            Error::Schema(schema::Error::ForeignWidth) => alloc::string::String::from(
+                "number of columns in foreign key does not match the number of columns in the referenced table",
+            ),
             Error::GroupedAggregate => alloc::string::String::from(
                 "aggregate functions are not allowed in the GROUP BY clause",
             ),

@@ -2355,15 +2355,15 @@ impl Writer {
         let bytes = self.image();
         let database = Database::open(&bytes)?;
         for key in &table.foreign {
-            // `sqlite3FkLocateIndex` runs where the statement is read
-            // and not where a row is written, so a key that names no
-            // key of the parent is refused whatever the row holds.
-            // `sqlite3FkLocateIndex` names the schema the table would
-            // stand in, which is `main` for every table this crate
-            // holds.
+            // The statement was held to keys that point at a table
+            // that is there before a row was read, so the name is one
+            // the schema holds and the refusal is what this reads it
+            // with. `sqlite3FkLocateIndex` names the schema the table
+            // would stand in, which is `main` for every table this
+            // crate holds.
             let (parent, _) = database
                 .table(&key.table)
-                .ok_or_else(|| Error::NoTable(schema_named_as(&key.table)))?;
+                .ok_or(Error::NoTable(schema_named_as(&key.table)))?;
             let places = parent_places(&database, (&table.name, key), parent)?;
             let mut wanted = Vec::new();
             for at in &key.columns {
@@ -2442,6 +2442,39 @@ impl Writer {
             };
             self.acted(&points, &wanted, after.as_deref(), action)?;
         }
+        Ok(())
+    }
+
+    /// Every foreign key the statement reads, located, which is
+    /// `sqlite3FkLocateIndex` running where the statement is read: a
+    /// key that points at a table that is not there, or at columns that
+    /// are no key of it, is refused whatever rows the statement reaches
+    /// and whether it reaches any.
+    ///
+    /// It reads the keys of the table and the keys that point at it,
+    /// which is O(keys) per statement.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoTable`] for a key that points at a table that is not
+    /// there, and [`Error::ForeignMismatch`] for one that points at
+    /// columns that are no key of it.
+    fn located(&self, name: &[u8]) -> Result<(), Error> {
+        if !self.holding() {
+            return Ok(());
+        }
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        let Some((table, _)) = database.table(name) else {
+            return Ok(());
+        };
+        for key in &table.foreign {
+            let (parent, _) = database
+                .table(&key.table)
+                .ok_or_else(|| Error::NoTable(schema_named_as(&key.table)))?;
+            parent_places(&database, (&table.name, key), parent)?;
+        }
+        self.pointing(name)?;
         Ok(())
     }
 
@@ -4442,6 +4475,7 @@ impl Writer {
         outer: Option<&dyn crate::eval::Row>,
     ) -> Result<i64, Error> {
         let name = crate::schema::dequote(statement.name.text(sql));
+        self.located(&name)?;
         if self.is_view(&name)? {
             return self.insert_view(arena, statement, sql, &name, outer);
         }
@@ -5681,6 +5715,7 @@ impl Writer {
     ) -> Result<i64, Error> {
         let name = crate::schema::dequote(statement.name.text(sql));
         written_to(&name)?;
+        self.located(&name)?;
         if self.is_view(&name)? {
             return self.delete_view(arena, statement, sql, &name, outer);
         }
@@ -5894,6 +5929,7 @@ impl Writer {
         outer: Option<&dyn crate::eval::Row>,
     ) -> Result<i64, Error> {
         let name = crate::schema::dequote(statement.name.text(sql));
+        self.located(&name)?;
         if self.is_view(&name)? {
             return self.update_view(arena, statement, sql, &name, outer);
         }
@@ -6799,17 +6835,20 @@ fn parent_places(
             .ok_or_else(mismatch)?;
         places.push(at);
     }
-    if places.len() != key.columns.len() {
-        return Err(mismatch());
-    }
     // The columns pointed at must be unique, which is the primary key
-    // or a `UNIQUE` over exactly those columns.
+    // or a `UNIQUE` over exactly those columns. They are as many as the
+    // columns that point, which `sqlite3CreateForeignKey` held the
+    // `CREATE TABLE` to.
+    // `sqlite3FkLocateIndex` reads each column of the index against
+    // every column the key names, so the two hold the same names in
+    // whatever order: `UNIQUE(y, x)` is the key `REFERENCES p(x, y)`
+    // points at.
     let whole = |named: &[Vec<u8>]| {
         named.len() == places.len()
-            && named
+            && key
+                .parent
                 .iter()
-                .zip(&key.parent)
-                .all(|(one, other)| one.eq_ignore_ascii_case(other))
+                .all(|one| named.iter().any(|other| one.eq_ignore_ascii_case(other)))
     };
     let primary: Vec<Vec<u8>> = {
         let mut held: Vec<(u16, Vec<u8>)> = parent

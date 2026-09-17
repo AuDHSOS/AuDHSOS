@@ -128,8 +128,6 @@ fn a_foreign_key_that_points_at_no_unique_columns_is_a_mismatch() {
         "INSERT INTO wide VALUES(1,2)",
         // A table with no primary key at all.
         "INSERT INTO keyless VALUES(1)",
-        // More columns pointed at than columns that point.
-        "INSERT INTO uneven VALUES(1)",
         // As many columns as the primary key carries, under another
         // name, which no unique index covers.
         "INSERT INTO sideways VALUES(1)",
@@ -143,7 +141,6 @@ fn a_foreign_key_that_points_at_no_unique_columns_is_a_mismatch() {
             "CREATE TABLE wide(a, b, FOREIGN KEY(a,b) REFERENCES keyed)",
             "CREATE TABLE nowhere(a REFERENCES missing(x))",
             "CREATE TABLE keyless(a REFERENCES plain)",
-            "CREATE TABLE uneven(a, FOREIGN KEY(a) REFERENCES keyed(x, y))",
             "CREATE TABLE sideways(a REFERENCES keyed(y))",
         ])
         .unwrap();
@@ -155,6 +152,24 @@ fn a_foreign_key_that_points_at_no_unique_columns_is_a_mismatch() {
             "{sql}"
         );
     }
+    // `sqlite3CreateForeignKey` reads the two lists of names against
+    // each other, so a key of one width pointing at another is refused
+    // where the `CREATE TABLE` is read.
+    let (mut writer, _) = ran(&["CREATE TABLE keyed(x PRIMARY KEY, y)"]).unwrap();
+    assert_eq!(
+        writer
+            .run(b"CREATE TABLE uneven(a, FOREIGN KEY(a) REFERENCES keyed(x, y))")
+            .unwrap_err()
+            .message(),
+        "number of columns in foreign key does not match the number of columns in the referenced table"
+    );
+    assert_eq!(
+        writer
+            .run(b"CREATE TABLE unknown(a, b, FOREIGN KEY(a, c) REFERENCES keyed(x, y))")
+            .unwrap_err()
+            .message(),
+        "unknown column \"c\" in foreign key definition"
+    );
     // A key that points at a table the schema does not hold names that
     // table under the schema it would stand in.
     let (mut writer, _) = ran(&[
@@ -687,4 +702,75 @@ fn a_table_that_keeps_its_rows_in_the_keys_own_tree_holds_a_foreign_key() {
             .and_then(|row| row.first().and_then(crate::value::Value::text)),
         Some(b"ok".to_vec())
     );
+}
+
+/// A key that points at no key of the table it names is refused where
+/// the statement is read, so a statement that reaches no row is refused
+/// all the same.
+#[test]
+fn a_key_that_points_at_no_key_is_refused_before_a_row_is_read() {
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE p2(a, b, UNIQUE(a, b))",
+        "CREATE TABLE c2(c, d, FOREIGN KEY(c, d) REFERENCES p2(a, x))",
+    ])
+    .unwrap();
+    for sql in [
+        b"UPDATE c2 SET c = 1, d = 2".as_slice(),
+        b"DELETE FROM c2",
+        b"DELETE FROM p2",
+        b"UPDATE p2 SET a = 1, b = 2",
+        b"INSERT INTO p2 SELECT 1, 2",
+    ] {
+        assert_eq!(
+            writer.run(sql).unwrap_err().message(),
+            "foreign key mismatch - \"c2\" referencing \"p2\"",
+            "{sql:?}"
+        );
+    }
+}
+
+/// A statement over a view, and one over a table the schema does not
+/// hold, reads no key of its own and is refused by what it names.
+#[test]
+fn what_a_statement_over_no_table_reads_of_the_keys() {
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE t(a)",
+        "CREATE VIEW v AS SELECT a FROM t",
+    ])
+    .unwrap();
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO v VALUES(1)")
+            .unwrap_err()
+            .message(),
+        "cannot modify v because it is a view"
+    );
+    assert_eq!(
+        writer.run(b"DELETE FROM nosuch").unwrap_err().message(),
+        "no such table: nosuch"
+    );
+}
+
+/// The columns a key points at are a key of the table it names in
+/// whatever order they were written in, which is what a `UNIQUE` over
+/// them the other way round is.
+#[test]
+fn what_order_the_columns_a_key_points_at_stand_in() {
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE parent(x, y, UNIQUE(y, x))",
+        "CREATE TABLE c1(a, b, FOREIGN KEY(a, b) REFERENCES parent(x, y))",
+    ])
+    .unwrap();
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO c1 VALUES(1, 2)")
+            .unwrap_err()
+            .message(),
+        "FOREIGN KEY constraint failed"
+    );
+    writer.run(b"INSERT INTO parent VALUES(1, 2)").unwrap();
+    writer.run(b"INSERT INTO c1 VALUES(1, 2)").unwrap();
 }

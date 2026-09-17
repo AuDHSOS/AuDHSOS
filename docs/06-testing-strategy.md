@@ -5590,6 +5590,26 @@ Document 16 step Q8.
 - A constraint that says `ON CONFLICT ROLLBACK` undoes the transaction
   the statement runs in and ends it, where `ABORT` leaves it open.
 
+### 6.6.193 When a foreign key is located (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A key that points at no key of the table it names is refused where
+  the statement is read, so `UPDATE c2 SET c=1, d=2`, `DELETE FROM p2`
+  and `INSERT INTO p2 SELECT 1, 2` are refused `foreign key mismatch -
+  "c2" referencing "p2"` although they reach no row.
+- The columns a key points at are a key of the table it names in
+  whatever order they were written, so `UNIQUE(y, x)` is the key
+  `REFERENCES parent(x, y)` points at.
+- A `CREATE TABLE` whose key names a different number of columns from
+  the ones it points at is refused `number of columns in foreign key
+  does not match the number of columns in the referenced table`, and one
+  whose key names a column the table does not hold `unknown column "c"
+  in foreign key definition`, both where the statement is read and
+  whatever `PRAGMA foreign_keys` says.
+- A statement over a view and one over a table the schema does not hold
+  read no key of their own.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`
