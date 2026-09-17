@@ -52,8 +52,8 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-73 538 cases of 703 files: 61 659 pass, 2371 answer differently and
-9508 are refused.
+75 509 cases of 702 files: 63 641 pass, 2371 answer differently and
+9497 are refused.
 
 `--configuration` opens every connection of a run under one of nine
 page-size, encoding and journal-mode settings, which D-275 decides.
@@ -61,7 +61,7 @@ What each answers, over the same files:
 
 | Configuration | Passed | Answered differently | Refused |
 |---------------|-------:|---------------------:|--------:|
-| `utf8-4096-delete` | 61 750 | 2372 | 9508 |
+| `utf8-4096-delete` | 63 641 | 2371 | 9497 |
 | `utf16le-4096-delete` | 61 214 | 2392 | 9500 |
 | `utf16be-4096-delete` | 61 229 | 2392 | 9500 |
 | `utf8-512-delete` | 61 073 | 2452 | 9435 |
@@ -72,7 +72,10 @@ What each answers, over the same files:
 | `utf8-4096-wal` | 59 759 | 2490 | 10 294 |
 
 The counts move by tens between runs of one configuration, because the
-files the deadline ends are counted with the cases they ran.
+files the deadline ends are counted with the cases they ran. Only the
+first row is a run after D-279, which took the files that reached the
+deadline further; the other eight were measured before it and are lower
+than they would read now.
 
 One row is behind the others by more than that: `utf8-4096-wal` refuses
 786 more than `utf8-4096-delete`, which a connection in write-ahead
