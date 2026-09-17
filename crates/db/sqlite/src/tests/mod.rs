@@ -37,6 +37,7 @@ mod index;
 mod indexexpr;
 mod indexing;
 mod insteadof;
+mod joining;
 mod journal;
 mod journal_mode;
 mod json;

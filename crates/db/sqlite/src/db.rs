@@ -116,6 +116,10 @@ pub enum Error {
     /// A `NULLS FIRST` or a `NULLS LAST` written where an index takes
     /// its terms, the truth telling the two apart.
     ExplicitNulls(bool),
+    /// A combination of words no join is written with.
+    JoinType(Vec<u8>),
+    /// An `ON` of an outer join that names a table read after it.
+    Rightward,
     /// An `ORDER BY` or a `LIMIT` written on a core of a compound other
     /// than the last, with which clause it is and the word that joins
     /// that core to the one after it.
@@ -323,6 +327,12 @@ impl Error {
                 "unsupported use of NULLS {}",
                 if *first { "FIRST" } else { "LAST" }
             ),
+            Error::JoinType(words) => {
+                alloc::format!("unknown join type: {}", shown(words))
+            }
+            Error::Rightward => {
+                alloc::string::String::from("ON clause references tables to its right")
+            }
             Error::Columns(answered, wanted) => {
                 alloc::format!("sub-select returns {answered} columns - expected {wanted}")
             }
@@ -649,6 +659,9 @@ impl Error {
         }
         if let parse::Expected::ExplicitNulls(first) = error.expected {
             return Error::ExplicitNulls(first);
+        }
+        if error.expected == parse::Expected::JoinType {
+            return Error::JoinType(held.unwrap_or_default().to_vec());
         }
         if let parse::Expected::BeforeCompound(ordered, operator) = error.expected {
             return Error::BeforeCompound(ordered, operator);
@@ -2526,6 +2539,7 @@ impl<'a> Database<'a> {
                 pushed: Vec::new(),
             });
         }
+        rightward(arena, sql, &out)?;
         Ok(out)
     }
 
@@ -4295,6 +4309,88 @@ fn grouped(
 }
 
 /// Whether any of the sides answers a column of this name.
+/// Refuses an `ON` of an outer join that names a table read after it.
+///
+/// `sqlite3ProcessJoin` marks the terms of an `ON` with the side the
+/// join is on, and the walk of `select.c` refuses a column of a side
+/// read later, because such a term would be read after the rows it
+/// names were left behind. An inner join carries no such mark, its `ON`
+/// being read as a `WHERE`. Costs O(n) over the nodes of each `ON`.
+///
+/// # Errors
+///
+/// [`Error::Rightward`] names what the `ON` belongs to.
+fn rightward(arena: &Arena, sql: &[u8], sides: &[Side<'_>]) -> Result<(), Error> {
+    for (at, side) in sides.iter().enumerate() {
+        let Some(on) = side.on else { continue };
+        if matches!(
+            side.kind,
+            JoinKind::Inner | JoinKind::Cross | JoinKind::None
+        ) {
+            continue;
+        }
+        leftward(arena, on, sql, (sides, at))?;
+    }
+    Ok(())
+}
+
+/// Every column of one `ON`, held to the sides read up to `at`.
+///
+/// # Errors
+///
+/// [`Error::Rightward`] where one of them names a side read later.
+fn leftward(
+    arena: &Arena,
+    id: ExprId,
+    sql: &[u8],
+    over: (&[Side<'_>], usize),
+) -> Result<(), Error> {
+    arena.node(id).map_or(Ok(()), |node| {
+        named_leftward(node, sql, over)?;
+        let mut deeper = Ok(());
+        arena.under(node, |child| {
+            if deeper.is_ok() {
+                deeper = leftward(arena, child, sql, over);
+            }
+        });
+        deeper
+    })
+}
+
+/// The refusal where one node names a side read after `at`.
+///
+/// A name with a schema in front of it names no side a join reads, so
+/// the walk passes over it.
+///
+/// # Errors
+///
+/// [`Error::Rightward`] where the node names such a side.
+fn named_leftward(node: Node, sql: &[u8], over: (&[Side<'_>], usize)) -> Result<(), Error> {
+    let (sides, at) = over;
+    let Node::Column {
+        schema: None,
+        table,
+        column,
+    } = node
+    else {
+        return Ok(());
+    };
+    let named = dequote(column.text(sql));
+    let place = match table {
+        Some(span) => {
+            let held = dequote(span.text(sql));
+            sides
+                .iter()
+                .position(|one| one.name.eq_ignore_ascii_case(&held))
+        }
+        None => sides.iter().position(|one| one.shape.has(&named)),
+    };
+    if place.is_some_and(|held| held > at) {
+        return Err(Error::Rightward);
+    }
+    Ok(())
+}
+
 fn holds(sides: &[Side<'_>], name: &[u8]) -> bool {
     sides.iter().any(|side| side.shape.has(name))
 }

@@ -817,6 +817,10 @@ Size: L.
     routine is chosen. Built, which D-278 records.
 58. The schema a constraint reads, kept beside the cookie it was read
     under. Built, which D-279 records.
+59. The words a join is written with, and what the `ON` of an outer
+    join may name. Built, which D-281 records. An `ON` of an inner join
+    that names a table read after it is still refused `no such column`,
+    where the C library reads such an `ON` as a `WHERE`.
 
 ### Done when
 
@@ -826,8 +830,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 81 649 cases in 702 files, 70 257
-pass, 2371 answer differently, and 9021 name something the engine
+under the `tclsh` of the machine. Of 81 470 cases in 702 files, 70 091
+pass, 2358 answer differently, and 9021 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts

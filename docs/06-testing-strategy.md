@@ -5744,6 +5744,21 @@ Document 16 step Q8.
   is held to the `CHECK`, the generated column and the `DEFAULT` it
   carries now and not to the ones it carried before.
 
+### 6.6.200 The words a join is written with, and what an `ON` may name (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A combination of words no join is written with is refused naming the
+  words: `INNER OUTER`, `INNER OUTER CROSS`, `OUTER NATURAL INNER`,
+  `LEFT BOGUS` and `INNER BOGUS CROSS` each answer
+  `unknown join type: <the words>`.
+- The combinations a join is written with stand: `NATURAL LEFT OUTER`,
+  `CROSS`, `LEFT`, `FULL OUTER` and `INNER`.
+- An `ON` of an outer join that names a table read after it is refused
+  `ON clause references tables to its right`, whether the name carries
+  the table in front of it or not.
+- An `ON` that names the sides read up to it stands.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

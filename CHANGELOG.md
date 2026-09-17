@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` refuses a combination of words no join is written with,
+  naming them: `unknown join type: INNER OUTER`. An `ON` of an outer
+  join that names a table read after it is refused
+  `ON clause references tables to its right`. D-281 records it.
+  Catalog 6.6.200.
+
 - The suite's own tester writes a real a statement stands a variable for
   with `%.17g`, which is every digit the bits of the double carry, so
   the engine is handed the number `sqlite3_bind_double` hands the C

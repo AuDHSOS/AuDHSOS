@@ -85,6 +85,9 @@ pub enum Expected {
     /// Nothing: a `NULLS FIRST` or a `NULLS LAST` written where an
     /// index takes its terms, the truth telling the two apart.
     ExplicitNulls(bool),
+    /// A combination of words no join is written with, which is
+    /// `unknown join type`.
+    JoinType,
     /// Nothing: an `ORDER BY` or a `LIMIT` written on a core of a
     /// compound other than the last, which the word it carries names,
     /// the truth telling the `ORDER BY` from the `LIMIT`.
@@ -529,31 +532,43 @@ impl<'a> Parser<'a> {
             return Ok(None);
         }
         // `NATURAL LEFT OUTER JOIN` and the shorter ways of writing it:
-        // up to three words, and then `JOIN`.
+        // `sqlite3JoinType` reads up to three words before `JOIN`, each
+        // a name of its own, and holds the combination they make.
         let mut join = Join::default();
+        let mut mask = 0u32;
         let mut words = 0u32;
-        while words < 3 {
-            let Some(token) = self.peek() else { break };
-            let Kind::Keyword(word) = token.kind else {
-                break;
-            };
-            if word == Keyword::Join {
+        let mut span: Option<Span> = None;
+        while let Some(token) = self.peek().filter(|_| words < 3) {
+            if !matches!(token.kind, Kind::Keyword(_) | Kind::Id) {
                 break;
             }
-            if !is_join_word(word) {
+            if token.kind == Kind::Keyword(Keyword::Join) {
                 break;
             }
             self.bump();
             words = words.saturating_add(1);
-            match word {
-                Keyword::Natural => join.natural = true,
-                Keyword::Left => join.kind = JoinKind::Left,
-                Keyword::Right => join.kind = JoinKind::Right,
-                Keyword::Full => join.kind = JoinKind::Full,
-                Keyword::Cross => join.kind = JoinKind::Cross,
-                Keyword::Inner => join.kind = JoinKind::Inner,
+            let held = Span::of(token);
+            span = Some(span.map_or(held, |first| join_span(first, held)));
+            mask |= join_mask(token);
+            match token.kind {
+                Kind::Keyword(Keyword::Natural) => join.natural = true,
+                Kind::Keyword(Keyword::Left) => join.kind = JoinKind::Left,
+                Kind::Keyword(Keyword::Right) => join.kind = JoinKind::Right,
+                Kind::Keyword(Keyword::Full) => join.kind = JoinKind::Full,
+                Kind::Keyword(Keyword::Cross) => join.kind = JoinKind::Cross,
+                Kind::Keyword(Keyword::Inner) => join.kind = JoinKind::Inner,
                 _ => {}
             }
+        }
+        // A word no join carries, and `INNER` beside `OUTER`, are the
+        // two a combination is refused for.
+        if mask & JOIN_OTHER != 0 || mask & (JOIN_INNER | JOIN_OUTER) == (JOIN_INNER | JOIN_OUTER) {
+            let at = span.unwrap_or(Span { start: 0, len: 0 });
+            return Err(Error {
+                at: at.start,
+                len: at.len,
+                expected: Expected::JoinType,
+            });
         }
         self.expect_keyword(Keyword::Join, Expected::Join)?;
         if join.kind == JoinKind::None {
@@ -3203,6 +3218,55 @@ enum Infix {
 }
 
 /// Whether a word is one of the seven that describe a join.
+/// `JT_NATURAL` of `sqlite3JoinType`.
+const JOIN_NATURAL: u32 = 1;
+
+/// `JT_LEFT`.
+const JOIN_LEFT: u32 = 2;
+
+/// `JT_RIGHT`.
+const JOIN_RIGHT: u32 = 4;
+
+/// `JT_OUTER`.
+const JOIN_OUTER: u32 = 8;
+
+/// `JT_INNER`.
+const JOIN_INNER: u32 = 16;
+
+/// `JT_CROSS`.
+const JOIN_CROSS: u32 = 32;
+
+/// `JT_ERROR`: a word no join is written with.
+const JOIN_OTHER: u32 = 64;
+
+/// The mask one word of a join type carries, which is the row of
+/// `aKeyword` in `sqlite3JoinType` that names it.
+const fn join_mask(token: Token) -> u32 {
+    match token.kind {
+        Kind::Keyword(Keyword::Natural) => JOIN_NATURAL,
+        Kind::Keyword(Keyword::Left) => JOIN_LEFT | JOIN_OUTER,
+        Kind::Keyword(Keyword::Outer) => JOIN_OUTER,
+        Kind::Keyword(Keyword::Right) => JOIN_RIGHT | JOIN_OUTER,
+        Kind::Keyword(Keyword::Full) => JOIN_LEFT | JOIN_RIGHT | JOIN_OUTER,
+        Kind::Keyword(Keyword::Inner) => JOIN_INNER,
+        Kind::Keyword(Keyword::Cross) => JOIN_INNER | JOIN_CROSS,
+        // A word the tokenizer did not read as one of SQL's own is one
+        // no join is written with.
+        _ => JOIN_OTHER,
+    }
+}
+
+/// The span that covers both words of a join type.
+const fn join_span(first: Span, last: Span) -> Span {
+    Span {
+        start: first.start,
+        len: last
+            .start
+            .saturating_add(last.len)
+            .saturating_sub(first.start),
+    }
+}
+
 const fn is_join_word(keyword: Keyword) -> bool {
     matches!(
         keyword,
