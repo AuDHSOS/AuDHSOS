@@ -46,6 +46,7 @@ At the end of the track, three things are true that are not true now:
 | `db_sqlite::change::Writer` | A connection that writes, held across the steps of a file. | D-162 |
 | `db_sqlite::db::Database` | A connection that reads, opened over the bytes the writer holds. | D-172 |
 | `process::Cmd` | Runs a program and reads what it writes. | Phase 2 |
+| `suite::CONFIGURATIONS` | The nine page-size, encoding and journal-mode configurations `--configuration` opens a connection under. | D-275 |
 
 Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
@@ -53,6 +54,25 @@ cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
 73 538 cases of 703 files: 61 659 pass, 2371 answer differently and
 9508 are refused.
+
+`--configuration` opens every connection of a run under one of nine
+page-size, encoding and journal-mode settings, which D-275 decides.
+What each answers, over the same files:
+
+| Configuration | Passed | Answered differently | Refused |
+|---------------|-------:|---------------------:|--------:|
+| `utf8-4096-delete` | 61 418 | 2372 | 9507 |
+| `utf16le-4096-delete` | 59 909 | 3375 | 9634 |
+| `utf16be-4096-delete` | 59 812 | 3428 | 9641 |
+| `utf8-512-delete` | 60 073 | 4399 | 9964 |
+| `utf8-1024-delete` | 61 256 | 2653 | 9718 |
+| `utf8-65536-delete` | 61 091 | 2358 | 9450 |
+| `utf8-4096-persist` | 61 572 | 2372 | 9505 |
+| `utf8-4096-truncate` | 61 571 | 2370 | 9503 |
+| `utf8-4096-wal` | 59 695 | 2490 | 10 302 |
+
+The counts move by tens between runs of one configuration, because the
+files the deadline ends are counted with the cases they ran.
 
 ## 17.4 What is missing
 

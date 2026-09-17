@@ -58,11 +58,12 @@ impl Scratch {
     }
 
     /// A stand-in for the xtask binary, which `beside` starts once per
-    /// file as `<me> sqlite-suite --one <path>`. This one runs the path
-    /// as a shell script, so each test writes what its files say.
+    /// file as `<me> sqlite-suite …options… --one <path>`. This one
+    /// runs the last argument as a shell script, so each test writes
+    /// what its files say whatever options stand before the path.
     fn me(&self) -> PathBuf {
         let path = self.0.join("me");
-        std::fs::write(&path, "#!/bin/sh\nexec sh \"$3\"\n").unwrap();
+        std::fs::write(&path, "#!/bin/sh\nshift $(($# - 1))\nexec sh \"$1\"\n").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         path
     }

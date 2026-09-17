@@ -142,6 +142,113 @@ pub(crate) fn show() {
     SHOW.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// One run-time configuration a connection of this harness opens under.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Configuration {
+    /// The name the option carries.
+    pub(crate) name: &'static str,
+    /// The bytes one page holds.
+    page: u32,
+    /// The encoding the text of the file is written in.
+    encoding: Encoding,
+    /// The journal mode the connection is set to as it opens, and
+    /// nothing where it opens in the mode a new file carries.
+    journal: Option<&'static [u8]>,
+}
+
+/// The configurations `--configuration` names, the first of which is
+/// the one a run that names none opens under.
+///
+/// `permutations.test` of SQLite's own suite runs its files under a
+/// table of configurations; this is the part of that table this harness
+/// opens a connection under.
+pub(crate) const CONFIGURATIONS: [Configuration; 9] = [
+    Configuration {
+        name: "utf8-4096-delete",
+        page: 4096,
+        encoding: Encoding::Utf8,
+        journal: None,
+    },
+    Configuration {
+        name: "utf16le-4096-delete",
+        page: 4096,
+        encoding: Encoding::Utf16Le,
+        journal: None,
+    },
+    Configuration {
+        name: "utf16be-4096-delete",
+        page: 4096,
+        encoding: Encoding::Utf16Be,
+        journal: None,
+    },
+    Configuration {
+        name: "utf8-512-delete",
+        page: 512,
+        encoding: Encoding::Utf8,
+        journal: None,
+    },
+    Configuration {
+        name: "utf8-1024-delete",
+        page: 1024,
+        encoding: Encoding::Utf8,
+        journal: None,
+    },
+    Configuration {
+        name: "utf8-65536-delete",
+        page: 65536,
+        encoding: Encoding::Utf8,
+        journal: None,
+    },
+    Configuration {
+        name: "utf8-4096-persist",
+        page: 4096,
+        encoding: Encoding::Utf8,
+        journal: Some(b"persist"),
+    },
+    Configuration {
+        name: "utf8-4096-truncate",
+        page: 4096,
+        encoding: Encoding::Utf8,
+        journal: Some(b"truncate"),
+    },
+    Configuration {
+        name: "utf8-4096-wal",
+        page: 4096,
+        encoding: Encoding::Utf8,
+        journal: Some(b"wal"),
+    },
+];
+
+/// Which of [`CONFIGURATIONS`] this run opens its connections under.
+static CHOSEN: AtomicUsize = AtomicUsize::new(0);
+
+/// Opens every connection of this run under the configuration `name`.
+///
+/// # Errors
+///
+/// [`Error::Usage`] names the configurations there are where `name` is
+/// none of them.
+pub(crate) fn configure(name: &str) -> Result<(), Error> {
+    let at = CONFIGURATIONS
+        .iter()
+        .position(|one| one.name == name)
+        .ok_or_else(|| {
+            let held: Vec<&str> = CONFIGURATIONS.iter().map(|one| one.name).collect();
+            Error::Usage(format!(
+                "no configuration `{name}`; the ones there are: {}",
+                held.join(", ")
+            ))
+        })?;
+    CHOSEN.store(at, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
+}
+
+/// The configuration this run opens its connections under.
+fn configured() -> Configuration {
+    let at = CHOSEN.load(std::sync::atomic::Ordering::Relaxed);
+    CONFIGURATIONS.get(at).copied().unwrap_or(CONFIGURATIONS[0])
+}
+
 /// How long one file may run before the interpreter is ended. A file
 /// that writes more rows than the engine answers for in this long is
 /// scored with what it answered up to there.
@@ -315,6 +422,8 @@ fn started(me: &Path, path: &Path) -> Result<std::process::Child, Error> {
     loop {
         let started = Command::new(me)
             .arg("sqlite-suite")
+            .arg("--configuration")
+            .arg(configured().name)
             .arg("--one")
             .arg(path)
             .stdin(Stdio::null())
@@ -642,10 +751,16 @@ impl Session {
     /// Opens a connection over a path, making the database where no
     /// connection has opened that path yet.
     fn open(&mut self, name: &str, path: &str) {
+        let under = configured();
         if !self.held.contains_key(path)
-            && let Ok(mut writer) = Writer::new(4096, 0, Encoding::Utf8)
+            && let Ok(mut writer) = Writer::new(under.page, 0, under.encoding)
         {
             writer.defines(DEFINED);
+            if let Some(journal) = under.journal {
+                let mut sql = b"PRAGMA journal_mode=".to_vec();
+                sql.extend_from_slice(journal);
+                let _ = writer.run(&sql);
+            }
             self.held.insert(path.to_owned(), writer);
         }
         self.connections.insert(name.to_owned(), path.to_owned());
@@ -796,7 +911,15 @@ impl Session {
         let collating = self.collations.get(name).copied().unwrap_or_default();
         let defines = self.defines(name);
         let bytes = writer.written();
-        let database = Database::open_collating(&bytes, collating)
+        // A connection in write-ahead logging holds its newest pages in
+        // the log, so the schema this reads is the one the log carries.
+        let log = writer.log().map(db_sqlite::wal::Wal::open);
+        let opened = match &log {
+            Some(Ok(log)) => Database::open_log_collating(&bytes, log, collating),
+            Some(Err(error)) => return Err(format!("{error}")),
+            None => Database::open_collating(&bytes, collating),
+        };
+        let database = opened
             .map(|database| {
                 database
                     .naming(writer.naming())

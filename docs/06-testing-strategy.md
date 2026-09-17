@@ -5702,6 +5702,28 @@ Document 16 step Q8.
 - A number past the columns is refused with the `COLLATE` taken off:
   `1st ORDER BY term out of range - should be between 1 and 1`.
 
+### 6.6.199 The same statements under every page size and encoding (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A `DROP TABLE`, `DROP INDEX`, `DROP VIEW` and `DROP TRIGGER` find the
+  row of `sqlite_schema` that names the object under all three
+  encodings, because the schema holds its text in the encoding of the
+  file and the name a statement carries never is.
+- A name the schema does not hold is refused `no such table: t2` under
+  all three encodings.
+- The same rows are written, read, compared and ordered under page
+  sizes 512, 1024, 4096 and 65536 and all three encodings, and text
+  comes back in UTF-8 whatever the file holds.
+- `BINARY` compares the bytes the file holds, which
+  `sqlite3MemCompare` does without reading them into another encoding,
+  so a character above the basic plane sorts before every other under
+  UTF-16 little endian and after them under UTF-8 and UTF-16 big
+  endian.
+- An index a `CREATE INDEX` fills holds its text in the encoding the
+  file names, so a statement that reads a row through that index finds
+  it: `WHERE a = 'b'` answers the row under every encoding.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

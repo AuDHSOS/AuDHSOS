@@ -1891,6 +1891,15 @@ pub(crate) fn sqlite_suite(root: &Path, options: &[String]) -> Result<(), Error>
             }
             "--show" => suite::show(),
             "--why" => suite::why(),
+            // The configuration every connection of the run opens
+            // under, which the run of one file is given again because
+            // it runs in a process of its own.
+            "--configuration" => {
+                let name = rest
+                    .next()
+                    .ok_or_else(|| Error::Usage("--configuration wants a name".to_owned()))?;
+                suite::configure(name)?;
+            }
             // One file, run in a process of its own, which is how
             // `run` runs every file: a statement the engine answers
             // slowly cannot be stopped from inside.

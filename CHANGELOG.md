@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` reads a name a statement carries into UTF-8 before it
+  compares it against a row of `sqlite_schema`, so a `DROP TABLE`,
+  `DROP INDEX`, `DROP VIEW` and `DROP TRIGGER` find their object under
+  UTF-16; and writes a row a `CREATE INDEX` or a `REINDEX` reads out of
+  the file back into the encoding the file names, so a statement that
+  reads through that index finds its row. D-275 records it.
+  Catalog 6.6.199.
+
 - `db-sqlite` takes a `COLLATE` off a whole number of an `ORDER BY` or
   a `GROUP BY` before it reads the number, so `ORDER BY 1 COLLATE
   numeric` counts to the first answered column and sorts it under
@@ -229,6 +237,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   cases passing to 214 with none failing. Catalog 6.6.165.
 
 ### Added
+
+- `cargo xtask sqlite-suite --configuration <name>` runs SQLite's own
+  test files under one of nine run-time configurations: the three
+  encodings, page sizes 512, 1024, 4096 and 65536, and the journal
+  modes `persist`, `truncate` and `wal`. D-275 records it.
+  Catalog 6.6.199.
 
 - A function an application defines on a `db-sqlite` connection takes
   any number of arguments where `func::Defined::count` is nothing, and

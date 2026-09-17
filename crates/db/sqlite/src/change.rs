@@ -51,8 +51,16 @@ fn refused_column(arena: &Arena, asked: &crate::ast::AddColumn) -> Result<(), Er
 }
 
 /// Whether a column of a `sqlite_schema` row is the text `wanted`.
-const fn is_text(value: Option<crate::record::Value<'_>>, wanted: &[u8]) -> bool {
-    matches!(value, Some(crate::record::Value::Text(bytes)) if bytes.eq_ignore_ascii_case(wanted))
+fn is_text(
+    value: Option<crate::record::Value<'_>>,
+    wanted: &[u8],
+    encoding: crate::header::Encoding,
+) -> bool {
+    // The schema holds its text in the encoding of the file, which the
+    // name a statement carries is never in, so the stored bytes are
+    // read into UTF-8 before the two are compared.
+    matches!(value, Some(crate::record::Value::Text(bytes))
+        if crate::value::decoded(bytes, encoding).eq_ignore_ascii_case(wanted))
 }
 
 /// The table `ANALYZE` writes its counts into.
@@ -729,13 +737,16 @@ impl Writer {
     fn row_of(&self, name: &[u8]) -> Result<i64, Error> {
         let bytes = self.image();
         let image = crate::image::Image::open(&bytes)?;
+        let encoding = image.header().encoding;
         let mut payload = Vec::new();
         for row in image.schema() {
             let row = row?;
             payload.resize(row.payload.total, 0);
             image.read_payload(&row.payload, &mut payload)?;
             let record = crate::record::Record::parse(&payload)?;
-            if is_text(record.value(0)?, b"table") && is_text(record.value(1)?, name) {
+            if is_text(record.value(0)?, b"table", encoding)
+                && is_text(record.value(1)?, name, encoding)
+            {
                 return Ok(row.rowid);
             }
         }
@@ -1273,6 +1284,7 @@ impl Writer {
         // `sqlite3DropTriggerPtr` runs before that. An index's and a
         // trigger's is the one row of its own name and its own kind.
         let image = crate::image::Image::open(&bytes)?;
+        let encoding = image.header().encoding;
         let over = matches!(kind, crate::ast::Dropped::Table | crate::ast::Dropped::View);
         let mut triggers = Vec::new();
         let mut rowids = Vec::new();
@@ -1282,11 +1294,11 @@ impl Writer {
             payload.resize(row.payload.total, 0);
             image.read_payload(&row.payload, &mut payload)?;
             let record = crate::record::Record::parse(&payload)?;
-            let trigger = is_text(record.value(0)?, b"trigger");
+            let trigger = is_text(record.value(0)?, b"trigger", encoding);
             let named = if over {
-                is_text(record.value(2)?, name)
+                is_text(record.value(2)?, name, encoding)
             } else {
-                is_text(record.value(1)?, name)
+                is_text(record.value(1)?, name, encoding)
                     && trigger == matches!(kind, crate::ast::Dropped::Trigger)
             };
             if !named {
@@ -3264,6 +3276,10 @@ impl Writer {
             };
             let mut entries = Vec::new();
             for (key, values) in database.held_rows_of(&read.table)? {
+                // A row read out of the file carries its text in UTF-8,
+                // and an entry holds what the file holds, so the text
+                // goes back into the encoding the file names.
+                let values = written_as(&values, self.header.encoding);
                 if !indexes_row(&read, &over, &values)? {
                     continue;
                 }
@@ -4489,6 +4505,7 @@ impl Writer {
                 };
                 let mut entries = Vec::new();
                 for (key, values) in database.held_rows_of(&table)? {
+                    let values = written_as(&values, self.header.encoding);
                     if !indexes_row(&index, &over, &values)? {
                         continue;
                     }
@@ -6895,6 +6912,12 @@ fn written_statement(prefix: &[u8], name: Span, sql: &[u8]) -> Vec<u8> {
     let mut out = prefix.to_vec();
     out.extend_from_slice(trimmed(sql.get(name.start..).unwrap_or_default()));
     out
+}
+
+/// A row as the database stores it, which turns every text of it into
+/// the encoding the file names. Costs O(n) over the bytes of the row.
+fn written_as(values: &[Value], encoding: Encoding) -> Vec<Value> {
+    values.iter().map(|value| stored(value, encoding)).collect()
 }
 
 /// A value as the database stores it, which turns text into the

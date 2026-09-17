@@ -17,6 +17,7 @@ mod collating;
 mod colnames;
 mod complete;
 mod compound;
+mod configured;
 mod constraint;
 mod counted;
 mod date;
