@@ -584,6 +584,11 @@ enum IterableStart {
 enum IteratorWalkTaker {
     /// 23.1.2.1 keeps it in an Array of its own.
     Array,
+    /// 20.1.2.7 makes a property of this object out of it.
+    Entries {
+        /// The object `Object.fromEntries` answers.
+        object: Value,
+    },
     /// Step 8 of 24.1.1.1 adds it to this Map, or to this Set.
     Collection {
         /// The Map or the Set the constructor made.
@@ -600,6 +605,7 @@ impl IteratorWalkTaker {
     const fn tag(self) -> i32 {
         match self {
             Self::Array => ITERATOR_WALK_ARRAY,
+            Self::Entries { .. } => ITERATOR_WALK_ENTRIES,
             Self::Collection { set, weak, .. } => match (set, weak) {
                 (false, false) => ITERATOR_WALK_MAP,
                 (true, false) => ITERATOR_WALK_SET,
@@ -613,6 +619,7 @@ impl IteratorWalkTaker {
     const fn collection(self) -> Value {
         match self {
             Self::Array => VALUE_UNDEFINED,
+            Self::Entries { object } => object,
             Self::Collection { collection, .. } => collection,
         }
     }
@@ -628,6 +635,8 @@ const ITERATOR_WALK_SET: i32 = 2;
 const ITERATOR_WALK_WEAK_MAP: i32 = 3;
 /// It adds each value to a `WeakSet`.
 const ITERATOR_WALK_WEAK_SET: i32 = 4;
+/// It makes a property of 20.1.2.7 out of each entry.
+const ITERATOR_WALK_ENTRIES: i32 = 5;
 
 /// The walk of 7.4.2 has not called the `@@iterator` yet.
 const ITERATOR_WALK_STARTING: i32 = 0;
@@ -1999,28 +2008,6 @@ impl RegisterVM {
             // 20.1.2.1 copies the own enumerable properties of every source
             // onto the target, and 28.1.13 writes one property.
             // 20.1.2.7 makes an object of the pairs the iterable answers.
-            Intrinsic::ObjectFromEntries => {
-                let entries = self.call_argument(&call, 0, heap)?;
-                if entries.is_undefined() || entries.is_null() {
-                    return Err(type_error(
-                        heap,
-                        realm,
-                        "Object.fromEntries called on undefined or null",
-                    ));
-                }
-                let pairs = Self::iterable_elements(entries, heap, realm)?;
-                let answer = realm.ordinary_object(heap)?;
-                for pair in pairs {
-                    let Some(pair) = pair.as_object() else {
-                        return Err(type_error(heap, realm, "an entry that is no Object"));
-                    };
-                    let key = Self::element_at(heap, pair, 0)?.unwrap_or(VALUE_UNDEFINED);
-                    let value = Self::element_at(heap, pair, 1)?.unwrap_or(VALUE_UNDEFINED);
-                    let key = property_key(key, heap, realm)?;
-                    heap.define_own_named(answer, key, value, PropertyFlags::ordinary_data())?;
-                }
-                Ok(Value::from_object(answer))
-            }
             Intrinsic::ObjectAssign => {
                 let target = self.call_argument(&call, 0, heap)?;
                 let object = Self::coerce_object(target, heap, realm)?;
@@ -2234,7 +2221,8 @@ impl RegisterVM {
             }
             // Never reached: `enter_call_value` sends these to the walk of
             // 23.1.3 before an intrinsic is called at all.
-            Intrinsic::MapPrototypeForEach
+            Intrinsic::ObjectFromEntries
+            | Intrinsic::MapPrototypeForEach
             | Intrinsic::SetPrototypeForEach
             | Intrinsic::MapPrototypeGetOrInsertComputed
             | Intrinsic::WeakMapPrototypeGetOrInsertComputed
@@ -4065,6 +4053,44 @@ impl RegisterVM {
             return self.begin_receiver_coercion(
                 intrinsic,
                 PrimitiveHint::String,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
+        // 20.1.2.7 step 4 walks the iterable it was given.
+        if intrinsic == Intrinsic::ObjectFromEntries {
+            let entries = self.call_argument(&call, 0, heap)?;
+            if entries.is_undefined() || entries.is_null() {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "Object.fromEntries called on undefined or null",
+                ));
+            }
+            if entries.is_string() {
+                return Err(VMError::Unsupported("an @@iterator of a String"));
+            }
+            let object = entries
+                .as_object()
+                .ok_or_else(|| type_error(heap, realm, "the argument is not iterable"))?;
+            let method =
+                match heap.lookup_named(object, super::realm::WellKnownSymbol::Iterator.key())? {
+                    Some(found) => Self::plain_value(found)?,
+                    None => VALUE_UNDEFINED,
+                };
+            if method.is_undefined() || method.is_null() {
+                return Err(type_error(heap, realm, "the argument is not iterable"));
+            }
+            let answer = Value::from_object(realm.ordinary_object(heap)?);
+            return self.begin_iterator_walk(
+                entries,
+                method,
+                VALUE_UNDEFINED,
+                VALUE_UNDEFINED,
+                IteratorWalkTaker::Entries { object: answer },
                 call,
                 units,
                 active_feedback,
@@ -6893,6 +6919,19 @@ impl RegisterVM {
                 .ok_or(VMError::TypeError)?;
             let at = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
             heap.set_array_element(array, at, value)?;
+        } else if tag == ITERATOR_WALK_ENTRIES {
+            // 20.1.2.7 step 5: each entry is an Object whose `"0"` is a
+            // property key and whose `"1"` is its value.
+            let object = promise::slot(heap, record, 10)
+                .as_object()
+                .ok_or(VMError::TypeError)?;
+            let Some(pair) = value.as_object() else {
+                return Err(type_error(heap, realm, "an entry that is no Object"));
+            };
+            let key = Self::element_at(heap, pair, 0)?.unwrap_or(VALUE_UNDEFINED);
+            let held = Self::element_at(heap, pair, 1)?.unwrap_or(VALUE_UNDEFINED);
+            let key = property_key(key, heap, realm)?;
+            heap.define_own_named(object, key, held, PropertyFlags::ordinary_data())?;
         } else {
             let collection = promise::slot(heap, record, 10);
             let set = tag == ITERATOR_WALK_SET || tag == ITERATOR_WALK_WEAK_SET;

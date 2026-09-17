@@ -9304,3 +9304,39 @@ fn the_constructors_of_24_1_1_1_walk_an_iterable_of_the_script() -> Result<(), E
     }
     Ok(())
 }
+
+#[test]
+fn the_from_entries_of_20_1_2_7_walks_what_it_was_given() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend carries no 20.1.2.7, so only the engine answers.
+    for (source, answer) in [
+        (
+            "var o=Object.fromEntries([['a',1],['b',2]]);''+o.a+o.b",
+            "12",
+        ),
+        // The walk of 7.4.2 reaches an iterable of the Script.
+        (
+            "var it={};it[Symbol.iterator]=function(){var i=0;return{next:function(){i=i+1;return{done:i>2,value:['k'+i,i]}}}};var o=Object.fromEntries(it);''+o.k1+o.k2",
+            "12",
+        ),
+        ("var o=Object.fromEntries(new Map([['x',9]]));''+o.x", "9"),
+        // Step 5 refuses an entry that is no Object, and step 2 an argument
+        // that is null or names no `@@iterator`.
+        (
+            "var r;try{Object.fromEntries([1])}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{Object.fromEntries(null)}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{Object.fromEntries({})}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}
