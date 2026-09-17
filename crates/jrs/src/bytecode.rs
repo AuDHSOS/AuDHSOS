@@ -8666,6 +8666,10 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::MapPrototypeDelete
         | crate::engine::realm::Intrinsic::SetPrototypeHas
         | crate::engine::realm::Intrinsic::SetPrototypeDelete
+        // 24.2.3.12, 24.2.3.13 and 24.2.3.11 answer a Boolean.
+        | crate::engine::realm::Intrinsic::SetPrototypeIsSubsetOf
+        | crate::engine::realm::Intrinsic::SetPrototypeIsSupersetOf
+        | crate::engine::realm::Intrinsic::SetPrototypeIsDisjointFrom
         | crate::engine::realm::Intrinsic::ArrayIsArray => RegisterType::Boolean,
         // 22.1.1.1 answers a String whichever argument it took; `new` answers
         // no value at all, because the exotic object it would make is a gap.
@@ -8866,7 +8870,14 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::SetPrototypeValues
         | crate::engine::realm::Intrinsic::SetPrototypeEntries
         | crate::engine::realm::Intrinsic::MapIteratorPrototypeNext
-        | crate::engine::realm::Intrinsic::SetIteratorPrototypeNext => RegisterType::Unknown,
+        | crate::engine::realm::Intrinsic::SetIteratorPrototypeNext
+        // 24.2.3.18, 24.2.3.9, 24.2.3.6 and 24.2.3.15 answer a Set.
+        | crate::engine::realm::Intrinsic::SetPrototypeUnion
+        | crate::engine::realm::Intrinsic::SetPrototypeIntersection
+        | crate::engine::realm::Intrinsic::SetPrototypeDifference
+        | crate::engine::realm::Intrinsic::SetPrototypeSymmetricDifference => {
+            RegisterType::Unknown
+        }
         // 24.1.3.1 and 24.2.3.2 answer undefined.
         crate::engine::realm::Intrinsic::MapPrototypeClear
         | crate::engine::realm::Intrinsic::SetPrototypeClear => RegisterType::Undefined,

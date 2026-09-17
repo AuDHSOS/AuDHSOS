@@ -820,6 +820,20 @@ pub enum Intrinsic {
     MapIteratorPrototypeNext,
     /// `%SetIteratorPrototype%.next`, 24.2.5.2.1.
     SetIteratorPrototypeNext,
+    /// `%Set.prototype.union%`, 24.2.3.18.
+    SetPrototypeUnion,
+    /// `%Set.prototype.intersection%`, 24.2.3.9.
+    SetPrototypeIntersection,
+    /// `%Set.prototype.difference%`, 24.2.3.6.
+    SetPrototypeDifference,
+    /// `%Set.prototype.symmetricDifference%`, 24.2.3.15.
+    SetPrototypeSymmetricDifference,
+    /// `%Set.prototype.isSubsetOf%`, 24.2.3.12.
+    SetPrototypeIsSubsetOf,
+    /// `%Set.prototype.isSupersetOf%`, 24.2.3.13.
+    SetPrototypeIsSupersetOf,
+    /// `%Set.prototype.isDisjointFrom%`, 24.2.3.11.
+    SetPrototypeIsDisjointFrom,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -883,7 +897,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 258] = [
+    pub const ALL: [Self; 265] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1142,6 +1156,13 @@ impl Intrinsic {
         Self::SetPrototypeEntries,
         Self::MapIteratorPrototypeNext,
         Self::SetIteratorPrototypeNext,
+        Self::SetPrototypeUnion,
+        Self::SetPrototypeIntersection,
+        Self::SetPrototypeDifference,
+        Self::SetPrototypeSymmetricDifference,
+        Self::SetPrototypeIsSubsetOf,
+        Self::SetPrototypeIsSupersetOf,
+        Self::SetPrototypeIsDisjointFrom,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -1331,7 +1352,14 @@ impl Intrinsic {
             | Self::SetPrototypeDelete
             | Self::SetPrototypeClear
             | Self::SetPrototypeValues
-            | Self::SetPrototypeEntries => IntrinsicHolder::SetPrototype,
+            | Self::SetPrototypeEntries
+            | Self::SetPrototypeUnion
+            | Self::SetPrototypeIntersection
+            | Self::SetPrototypeDifference
+            | Self::SetPrototypeSymmetricDifference
+            | Self::SetPrototypeIsSubsetOf
+            | Self::SetPrototypeIsSupersetOf
+            | Self::SetPrototypeIsDisjointFrom => IntrinsicHolder::SetPrototype,
             Self::JsonParse | Self::JsonStringify => IntrinsicHolder::Json,
             Self::PromisePrototypeThen | Self::PromisePrototypeCatch => {
                 IntrinsicHolder::PromisePrototype
@@ -1696,6 +1724,13 @@ impl Intrinsic {
             Self::SetPrototypeEntries => 255,
             Self::MapIteratorPrototypeNext => 256,
             Self::SetIteratorPrototypeNext => 257,
+            Self::SetPrototypeUnion => 258,
+            Self::SetPrototypeIntersection => 259,
+            Self::SetPrototypeDifference => 260,
+            Self::SetPrototypeSymmetricDifference => 261,
+            Self::SetPrototypeIsSubsetOf => 262,
+            Self::SetPrototypeIsSupersetOf => 263,
+            Self::SetPrototypeIsDisjointFrom => 264,
         }
     }
 
@@ -1964,6 +1999,13 @@ impl Intrinsic {
             Self::SetPrototypeEntries => 255,
             Self::MapIteratorPrototypeNext => 256,
             Self::SetIteratorPrototypeNext => 257,
+            Self::SetPrototypeUnion => 258,
+            Self::SetPrototypeIntersection => 259,
+            Self::SetPrototypeDifference => 260,
+            Self::SetPrototypeSymmetricDifference => 261,
+            Self::SetPrototypeIsSubsetOf => 262,
+            Self::SetPrototypeIsSupersetOf => 263,
+            Self::SetPrototypeIsDisjointFrom => 264,
         }
     }
 
@@ -2233,6 +2275,13 @@ impl Intrinsic {
             255 => Some(Self::SetPrototypeEntries),
             256 => Some(Self::MapIteratorPrototypeNext),
             257 => Some(Self::SetIteratorPrototypeNext),
+            258 => Some(Self::SetPrototypeUnion),
+            259 => Some(Self::SetPrototypeIntersection),
+            260 => Some(Self::SetPrototypeDifference),
+            261 => Some(Self::SetPrototypeSymmetricDifference),
+            262 => Some(Self::SetPrototypeIsSubsetOf),
+            263 => Some(Self::SetPrototypeIsSupersetOf),
+            264 => Some(Self::SetPrototypeIsDisjointFrom),
             _ => None,
         }
     }
@@ -2321,6 +2370,13 @@ impl Intrinsic {
             Self::MapPrototypeSize | Self::SetPrototypeSize => "get size",
             Self::SetConstructor => "Set",
             Self::SetPrototypeAdd => "add",
+            Self::SetPrototypeUnion => "union",
+            Self::SetPrototypeIntersection => "intersection",
+            Self::SetPrototypeDifference => "difference",
+            Self::SetPrototypeSymmetricDifference => "symmetricDifference",
+            Self::SetPrototypeIsSubsetOf => "isSubsetOf",
+            Self::SetPrototypeIsSupersetOf => "isSupersetOf",
+            Self::SetPrototypeIsDisjointFrom => "isDisjointFrom",
             Self::SpeciesGetter => "get [Symbol.species]",
             Self::RegExpPrototypeFlags => "get flags",
             Self::RegExpPrototypeSource => "get source",
@@ -3078,6 +3134,13 @@ impl Intrinsic {
             | Self::SetPrototypeAdd
             | Self::SetPrototypeHas
             | Self::SetPrototypeDelete
+            | Self::SetPrototypeUnion
+            | Self::SetPrototypeIntersection
+            | Self::SetPrototypeDifference
+            | Self::SetPrototypeSymmetricDifference
+            | Self::SetPrototypeIsSubsetOf
+            | Self::SetPrototypeIsSupersetOf
+            | Self::SetPrototypeIsDisjointFrom
             | Self::PromiseConstructor
             | Self::PromiseResolve
             | Self::PromiseReject

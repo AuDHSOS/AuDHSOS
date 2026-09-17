@@ -8945,3 +8945,68 @@ fn the_iterators_of_24_1_5_and_24_2_5_walk_the_entries() -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[test]
+fn the_set_operations_of_24_2_3_answer_over_a_set_like() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend carries none of these clauses, so only the engine
+    // answers here.
+    for (source, answer) in [
+        (
+            "var a=new Set([1,2,3]),b=new Set([2,3,4]);[...a.union(b)].join(',')",
+            "1,2,3,4",
+        ),
+        (
+            "var a=new Set([1,2,3]),b=new Set([2,3,4]);[...a.intersection(b)].join(',')",
+            "2,3",
+        ),
+        (
+            "var a=new Set([1,2,3]),b=new Set([2,3,4]);[...a.difference(b)].join(',')",
+            "1",
+        ),
+        (
+            "var a=new Set([1,2,3]),b=new Set([2,3,4]);[...a.symmetricDifference(b)].join(',')",
+            "1,4",
+        ),
+        (
+            "var a=new Set([1,2,3]);''+a.isSubsetOf(new Set([2,3,4]))+new Set([2]).isSubsetOf(a)",
+            "falsetrue",
+        ),
+        (
+            "var a=new Set([1,2,3]);''+a.isSupersetOf(new Set([2,3,4]))+a.isSupersetOf(new Set([1,2]))",
+            "falsetrue",
+        ),
+        (
+            "var a=new Set([1,2,3]);''+a.isDisjointFrom(new Set([2]))+a.isDisjointFrom(new Set([9]))",
+            "falsetrue",
+        ),
+        // 24.2.1.2 step 1 refuses an argument that is no Object, step 3 one
+        // with no `size`, and step 6 a negative one.
+        (
+            "var r;try{new Set().union(1)}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{new Set().union({})}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{new Set().union({size:-1,has:function(){},keys:function(){}})}catch(e){r=e instanceof RangeError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{new Set().union({size:NaN,has:function(){},keys:function(){}})}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    // A `has` or a `keys` of the Script decides what the set-like holds, which
+    // these clauses have no frame to ask.
+    assert!(matches!(
+        realm.evaluate("new Set().union({size:1,has:function(){return true},keys:function(){}})"),
+        Err(Error::Unsupported { .. })
+    ));
+    Ok(())
+}

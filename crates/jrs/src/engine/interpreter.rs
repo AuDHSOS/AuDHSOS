@@ -2359,6 +2359,16 @@ impl RegisterVM {
                         )
                     })
             }
+            Intrinsic::SetPrototypeUnion
+            | Intrinsic::SetPrototypeIntersection
+            | Intrinsic::SetPrototypeDifference
+            | Intrinsic::SetPrototypeSymmetricDifference
+            | Intrinsic::SetPrototypeIsSubsetOf
+            | Intrinsic::SetPrototypeIsSupersetOf
+            | Intrinsic::SetPrototypeIsDisjointFrom => {
+                let other = self.call_argument(&call, 0, heap)?;
+                Self::call_set_operation(intrinsic, call.receiver, other, heap, realm)
+            }
             Intrinsic::MapPrototypeEntries
             | Intrinsic::MapPrototypeKeys
             | Intrinsic::MapPrototypeValues
@@ -6125,6 +6135,214 @@ impl RegisterVM {
         let object = heap.allocate_object(shape, prototype)?;
         heap.set_object_kind(object, ObjectKind::Collection { entries, set })?;
         Ok(Value::from_object(object))
+    }
+
+    /// The operations 24.2.3 gives a Set over a set-like of 24.2.1.2.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] for the receiver and the argument 24.2.1.2
+    /// refuses, and [`VMError::Unsupported`] for a `has` or a `keys` of the
+    /// Script, which these clauses have no frame to call.
+    fn call_set_operation(
+        intrinsic: Intrinsic,
+        receiver: Value,
+        other: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let own = Self::collection_entries(receiver, true, heap, realm)?;
+        let theirs = Self::set_record(other, heap, realm)?;
+        let mine = Self::collection_keys(heap, own);
+        let others = Self::collection_keys(heap, theirs);
+        let holds =
+            |keys: &[Value], key: Value, heap: &GenerationalHeap| -> Result<bool, VMError> {
+                for held in keys {
+                    if same_value_zero(*held, key, heap)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            };
+        // 24.2.3.12, 24.2.3.13 and 24.2.3.11 answer whether the two overlap.
+        match intrinsic {
+            Intrinsic::SetPrototypeIsSubsetOf => {
+                for key in &mine {
+                    if !holds(&others, *key, heap)? {
+                        return Ok(Value::from_bool(false));
+                    }
+                }
+                return Ok(Value::from_bool(true));
+            }
+            Intrinsic::SetPrototypeIsSupersetOf => {
+                for key in &others {
+                    if !holds(&mine, *key, heap)? {
+                        return Ok(Value::from_bool(false));
+                    }
+                }
+                return Ok(Value::from_bool(true));
+            }
+            Intrinsic::SetPrototypeIsDisjointFrom => {
+                for key in &mine {
+                    if holds(&others, *key, heap)? {
+                        return Ok(Value::from_bool(false));
+                    }
+                }
+                return Ok(Value::from_bool(true));
+            }
+            _ => {}
+        }
+        let mut wanted: Vec<Value> = Vec::new();
+        match intrinsic {
+            // 24.2.3.18 keeps the order of this Set and then of the other.
+            Intrinsic::SetPrototypeUnion => {
+                wanted.extend_from_slice(&mine);
+                for key in &others {
+                    if !holds(&wanted, *key, heap)? {
+                        wanted.push(*key);
+                    }
+                }
+            }
+            // 24.2.3.9 keeps what both hold, in the order of this Set.
+            Intrinsic::SetPrototypeIntersection => {
+                for key in &mine {
+                    if holds(&others, *key, heap)? {
+                        wanted.push(*key);
+                    }
+                }
+            }
+            // 24.2.3.6 keeps what only this Set holds.
+            Intrinsic::SetPrototypeDifference => {
+                for key in &mine {
+                    if !holds(&others, *key, heap)? {
+                        wanted.push(*key);
+                    }
+                }
+            }
+            // 24.2.3.15 keeps what exactly one of the two holds.
+            _ => {
+                for key in &mine {
+                    if !holds(&others, *key, heap)? {
+                        wanted.push(*key);
+                    }
+                }
+                for key in &others {
+                    if !holds(&mine, *key, heap)? && !holds(&wanted, *key, heap)? {
+                        wanted.push(*key);
+                    }
+                }
+            }
+        }
+        let answer = Self::create_collection(true, heap, realm)?;
+        let entries = Self::collection_entries(answer, true, heap, realm)?;
+        for (index, key) in wanted.into_iter().enumerate() {
+            let at = u32::try_from(index)
+                .ok()
+                .and_then(|index| index.checked_mul(2))
+                .ok_or(VMError::PropertyLimit)?;
+            promise::set_slot(heap, entries, at, key)?;
+            promise::set_slot(heap, entries, at.saturating_add(1), key)?;
+        }
+        Ok(answer)
+    }
+
+    /// The keys an entries List still holds, in the order they were added.
+    fn collection_keys(heap: &GenerationalHeap, entries: Value) -> Vec<Value> {
+        let mut keys = Vec::new();
+        for index in Self::collection_positions(heap, entries) {
+            let key = promise::slot(heap, entries, index);
+            if key != VALUE_UNINITIALIZED {
+                keys.push(key);
+            }
+        }
+        keys
+    }
+
+    /// `GetSetRecord` of 24.2.1.2, as the entries of the set-like.
+    ///
+    /// The clause reads `size`, `has` and `keys` off the object. A `has` or a
+    /// `keys` of the Script decides what the set-like holds, which these
+    /// clauses have no frame to ask, so only the ones of this Realm answer and
+    /// every other is a named gap.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with the `TypeError` of steps 1, 3, 5 and 7
+    /// and the `RangeError` of step 6.
+    fn set_record(
+        other: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        // Step 1: a set-like is an Object.
+        let Some(object) = other.as_object() else {
+            return Err(type_error(heap, realm, "the argument is not an object"));
+        };
+        let size = Self::set_like_size(object, heap, realm)?;
+        // Step 3: an absent `size` is a TypeError, and so is one that is NaN.
+        if size.is_undefined() {
+            return Err(type_error(heap, realm, "the argument has no size"));
+        }
+        let number = primitive_number(size, heap)?;
+        if number.is_nan() {
+            return Err(type_error(heap, realm, "the size of the argument is NaN"));
+        }
+        // Step 6: a negative size is a RangeError.
+        if number < 0.0 {
+            return Err(raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::RangeError,
+                "the size of the argument is negative",
+            ));
+        }
+        for (name, intrinsic) in [
+            ("has", Intrinsic::SetPrototypeHas),
+            ("keys", Intrinsic::SetPrototypeValues),
+        ] {
+            let key = PropertyKey::String(heap.strings.intern(name)?);
+            let held = heap
+                .lookup_named(object, key)?
+                .map(Self::plain_value)
+                .transpose()?
+                .unwrap_or(VALUE_UNDEFINED);
+            if !Self::is_callable(held, heap) {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "the argument has no callable has or keys",
+                ));
+            }
+            if !Self::is_intrinsic(held, intrinsic, heap) {
+                return Err(VMError::Unsupported(
+                    "a `has` or a `keys` of the Script in 24.2.1.2",
+                ));
+            }
+        }
+        Self::collection_entries(other, true, heap, realm)
+    }
+
+    /// The `size` of a set-like, which 24.2.3.14 gives a Set as an accessor.
+    fn set_like_size(
+        object: super::value::ObjectRef,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let key = PropertyKey::String(heap.strings.intern("size")?);
+        let Some(found) = heap.lookup_named(object, key)? else {
+            return Ok(VALUE_UNDEFINED);
+        };
+        if !found.flags.is_accessor {
+            return Ok(found.value);
+        }
+        let (get, _) = Self::accessor_parts(found.value, heap)?;
+        if !Self::is_intrinsic(get, Intrinsic::SetPrototypeSize, heap) {
+            return Err(VMError::Unsupported("a property that is an accessor"));
+        }
+        let entries = Self::collection_entries(Value::from_object(object), true, heap, realm)?;
+        let count = i32::try_from(Self::collection_keys(heap, entries).len())
+            .map_err(|_| VMError::PropertyLimit)?;
+        Ok(Value::from_smi(count))
     }
 
     /// 24.1.1.1 step 8 and 24.2.1.1 step 8: every value of the iterable goes
