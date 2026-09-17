@@ -2471,7 +2471,14 @@ impl RegisterVM {
             | Intrinsic::DatePrototypeSetUtcMonth
             | Intrinsic::DatePrototypeSetFullYear
             | Intrinsic::DatePrototypeSetUtcFullYear
-            | Intrinsic::DatePrototypeSetYear => {
+            | Intrinsic::DatePrototypeSetYear
+            | Intrinsic::DatePrototypeToString
+            | Intrinsic::DatePrototypeToDateString
+            | Intrinsic::DatePrototypeToTimeString
+            | Intrinsic::DatePrototypeToUtcString
+            | Intrinsic::DatePrototypeToLocaleString
+            | Intrinsic::DatePrototypeToLocaleDateString
+            | Intrinsic::DatePrototypeToLocaleTimeString => {
                 self.call_date_intrinsic(intrinsic, &call, heap, realm)
             }
             Intrinsic::EncodeUri
@@ -12711,6 +12718,190 @@ impl RegisterVM {
         }
     }
 
+    /// The three-letter names `DateString` and `TimeString` of 21.4.4.41 use.
+    const WEEK_DAY_NAMES: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    /// The months, in the same form.
+    const MONTH_NAMES: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+
+    /// `ToDateString` of 21.4.4.41 and the texts of 21.4.4.35, 21.4.4.42 and
+    /// 21.4.4.43, or none where the intrinsic writes no text of this shape.
+    ///
+    /// `LocalTZA` is zero, so the zone of 21.4.4.41 is always UTC, and
+    /// 21.4.4.38 to 21.4.4.40 answer what the three they default to answer.
+    fn date_text(intrinsic: Intrinsic, time: f64) -> Option<alloc::string::String> {
+        let (date, clock, utc) =
+            match intrinsic {
+                Intrinsic::DatePrototypeToString | Intrinsic::DatePrototypeToLocaleString => {
+                    (true, true, false)
+                }
+                Intrinsic::DatePrototypeToDateString
+                | Intrinsic::DatePrototypeToLocaleDateString => (true, false, false),
+                Intrinsic::DatePrototypeToTimeString
+                | Intrinsic::DatePrototypeToLocaleTimeString => (false, true, false),
+                Intrinsic::DatePrototypeToUtcString => (true, true, true),
+                _ => return None,
+            };
+        // Step 1 of 21.4.4.41.2: a Date no time value describes has one text.
+        if !time.is_finite() {
+            return Some(alloc::string::String::from("Invalid Date"));
+        }
+        let year = Self::year_from_time(time);
+        let week = Self::WEEK_DAY_NAMES
+            .get(usize::from(Self::week_day(time)))
+            .copied()
+            .unwrap_or("Sun");
+        let month = Self::MONTH_NAMES
+            .get(usize::from(Self::month_from_time(time)))
+            .copied()
+            .unwrap_or("Jan");
+        let day = Self::date_from_time(time);
+        let (hour, minute, second) = (
+            Self::integral(Self::modulo(Self::floor_div(time, 3_600_000.0), 24.0)),
+            Self::integral(Self::modulo(Self::floor_div(time, 60_000.0), 60.0)),
+            Self::integral(Self::modulo(Self::floor_div(time, 1000.0), 60.0)),
+        );
+        // 21.4.4.43 writes the year of a Date before the epoch with its sign.
+        let paddedded_year = if year < 0 {
+            alloc::format!("-{:06}", -i64::from(year))
+        } else {
+            alloc::format!("{year:04}")
+        };
+        if utc {
+            return Some(alloc::format!(
+                "{week}, {day:02} {month} {paddedded_year} {hour:02}:{minute:02}:{second:02} GMT"
+            ));
+        }
+        let clock_text = alloc::format!(
+            "{hour:02}:{minute:02}:{second:02} GMT+0000 (Coordinated Universal Time)"
+        );
+        let date_text = alloc::format!("{week} {month} {day:02} {paddedded_year}");
+        Some(match (date, clock) {
+            (true, true) => alloc::format!("{date_text} {clock_text}"),
+            (true, false) => date_text,
+            _ => clock_text,
+        })
+    }
+
+    /// `Date.parse` of 21.4.3.2, which reads the Date Time String Format of
+    /// 21.4.1.15 and answers NaN for every other text.
+    fn parse_date_text(text: &[u16]) -> f64 {
+        let Some(plain) = text
+            .iter()
+            .map(|unit| u8::try_from(*unit).ok().map(char::from))
+            .collect::<Option<alloc::string::String>>()
+        else {
+            return f64::NAN;
+        };
+        let bytes = plain.as_bytes();
+        let mut at = 0usize;
+        // A year is six digits with a sign, or four without one.
+        let signed = matches!(bytes.first(), Some(b'+' | b'-'));
+        let negative = bytes.first() == Some(&b'-');
+        if signed {
+            at = 1;
+        }
+        let width = if signed { 6 } else { 4 };
+        let Some(year) = Self::decimal_at(bytes, at, width) else {
+            return f64::NAN;
+        };
+        // 21.4.1.15 has no year that is minus zero.
+        if negative && year == 0.0 {
+            return f64::NAN;
+        }
+        at = at.saturating_add(width);
+        let year = if negative { -year } else { year };
+        let mut fields = [year, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+        let mut date_only = true;
+        for (index, separator) in [(1usize, b'-'), (2, b'-')] {
+            if bytes.get(at) != Some(&separator) {
+                break;
+            }
+            let Some(value) = Self::decimal_at(bytes, at.saturating_add(1), 2) else {
+                return f64::NAN;
+            };
+            if let Some(field) = fields.get_mut(index) {
+                *field = if index == 1 { value - 1.0 } else { value };
+            }
+            at = at.saturating_add(3);
+        }
+        let mut offset = 0f64;
+        if bytes.get(at) == Some(&b'T') {
+            date_only = false;
+            at = at.saturating_add(1);
+            let Some(hour) = Self::decimal_at(bytes, at, 2) else {
+                return f64::NAN;
+            };
+            if bytes.get(at.saturating_add(2)) != Some(&b':') {
+                return f64::NAN;
+            }
+            let Some(minute) = Self::decimal_at(bytes, at.saturating_add(3), 2) else {
+                return f64::NAN;
+            };
+            fields[3] = hour;
+            fields[4] = minute;
+            at = at.saturating_add(5);
+            if bytes.get(at) == Some(&b':') {
+                let Some(second) = Self::decimal_at(bytes, at.saturating_add(1), 2) else {
+                    return f64::NAN;
+                };
+                fields[5] = second;
+                at = at.saturating_add(3);
+                if bytes.get(at) == Some(&b'.') {
+                    let Some(milli) = Self::decimal_at(bytes, at.saturating_add(1), 3) else {
+                        return f64::NAN;
+                    };
+                    fields[6] = milli;
+                    at = at.saturating_add(4);
+                }
+            }
+            match bytes.get(at) {
+                Some(b'Z') => at = at.saturating_add(1),
+                Some(sign @ (b'+' | b'-')) => {
+                    let Some(hours) = Self::decimal_at(bytes, at.saturating_add(1), 2) else {
+                        return f64::NAN;
+                    };
+                    if bytes.get(at.saturating_add(3)) != Some(&b':') {
+                        return f64::NAN;
+                    }
+                    let Some(minutes) = Self::decimal_at(bytes, at.saturating_add(4), 2) else {
+                        return f64::NAN;
+                    };
+                    offset = hours * 3_600_000.0 + minutes * 60_000.0;
+                    if *sign == b'-' {
+                        offset = -offset;
+                    }
+                    at = at.saturating_add(6);
+                }
+                // 21.4.1.15: a time with no offset is local, which is UTC
+                // here, and a date alone is UTC as well.
+                _ => {}
+            }
+        }
+        let _ = date_only;
+        if at != bytes.len() {
+            return f64::NAN;
+        }
+        Self::time_clip(
+            Self::make_date(
+                Self::make_day(fields[0], fields[1], fields[2]),
+                Self::make_time(fields[3], fields[4], fields[5], fields[6]),
+            ) - offset,
+        )
+    }
+
+    /// `count` decimal digits at a position, or none where the text has other
+    /// units there.
+    fn decimal_at(bytes: &[u8], at: usize, count: usize) -> Option<f64> {
+        let mut value = 0f64;
+        for offset in 0..count {
+            let digit = char::from(*bytes.get(at.checked_add(offset)?)?).to_digit(10)?;
+            value = value * 10.0 + f64::from(digit);
+        }
+        Some(value)
+    }
+
     /// The integral value of a Number a clause of 21.4 computed.
     ///
     /// Every caller has bounded the magnitude first, and a value that is not
@@ -13064,9 +13255,10 @@ impl RegisterVM {
             Intrinsic::DateConstructor => self.construct_date(call, heap, realm),
             // 21.4.3.1 reads the wall clock, which this Realm is not given.
             Intrinsic::DateNow => Err(VMError::Unsupported("a wall clock of 21.4.3.1")),
-            // 21.4.3.2 takes the Date Time String Format of 21.4.1.15, which
-            // this Realm does not read yet.
-            Intrinsic::DateParse => Err(VMError::Unsupported("a Date text of 21.4.3.2")),
+            Intrinsic::DateParse => {
+                let text = property_name_units(self.call_argument(call, 0, heap)?, heap, realm)?;
+                Ok(Value::from_f64(Self::parse_date_text(&text)))
+            }
             Intrinsic::DateUtc => {
                 let time = self.date_arguments(call, heap)?;
                 Ok(Value::from_f64(Self::time_clip(time)))
@@ -13188,6 +13380,10 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
+        if let Some(text) = Self::date_text(intrinsic, time) {
+            let units: Vec<u16> = text.encode_utf16().collect();
+            return vm.allocate_string(heap, &units);
+        }
         if intrinsic == Intrinsic::DatePrototypeToIsoString {
             let Some(text) = Self::iso_text(time) else {
                 return Err(raise(

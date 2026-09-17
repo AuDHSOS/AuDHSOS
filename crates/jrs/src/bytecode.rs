@@ -8821,6 +8821,13 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::Unescape
         // 21.4.4.43 and 21.4.4.42 answer a text.
         | crate::engine::realm::Intrinsic::DatePrototypeToIsoString
+        | crate::engine::realm::Intrinsic::DatePrototypeToString
+        | crate::engine::realm::Intrinsic::DatePrototypeToDateString
+        | crate::engine::realm::Intrinsic::DatePrototypeToTimeString
+        | crate::engine::realm::Intrinsic::DatePrototypeToUtcString
+        | crate::engine::realm::Intrinsic::DatePrototypeToLocaleString
+        | crate::engine::realm::Intrinsic::DatePrototypeToLocaleDateString
+        | crate::engine::realm::Intrinsic::DatePrototypeToLocaleTimeString
         | crate::engine::realm::Intrinsic::StringFromCodePoint
         | crate::engine::realm::Intrinsic::StringRaw
         // 22.2.6.4 and 22.2.6.13 answer a String for every receiver they take.

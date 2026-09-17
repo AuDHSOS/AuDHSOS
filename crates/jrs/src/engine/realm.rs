@@ -962,6 +962,20 @@ pub enum Intrinsic {
     DatePrototypeSetUtcFullYear,
     /// `Date.prototype.setYear`, B.2.3.2.
     DatePrototypeSetYear,
+    /// `Date.prototype.toString`, 21.4.4.41.
+    DatePrototypeToString,
+    /// `Date.prototype.toDateString`, 21.4.4.35.
+    DatePrototypeToDateString,
+    /// `Date.prototype.toTimeString`, 21.4.4.42.
+    DatePrototypeToTimeString,
+    /// `Date.prototype.toUTCString`, 21.4.4.43.
+    DatePrototypeToUtcString,
+    /// `Date.prototype.toLocaleString`, 21.4.4.39.
+    DatePrototypeToLocaleString,
+    /// `Date.prototype.toLocaleDateString`, 21.4.4.38.
+    DatePrototypeToLocaleDateString,
+    /// `Date.prototype.toLocaleTimeString`, 21.4.4.40.
+    DatePrototypeToLocaleTimeString,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -1033,7 +1047,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 329] = [
+    pub const ALL: [Self; 336] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1363,6 +1377,13 @@ impl Intrinsic {
         Self::DatePrototypeSetFullYear,
         Self::DatePrototypeSetUtcFullYear,
         Self::DatePrototypeSetYear,
+        Self::DatePrototypeToString,
+        Self::DatePrototypeToDateString,
+        Self::DatePrototypeToTimeString,
+        Self::DatePrototypeToUtcString,
+        Self::DatePrototypeToLocaleString,
+        Self::DatePrototypeToLocaleDateString,
+        Self::DatePrototypeToLocaleTimeString,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -1613,7 +1634,14 @@ impl Intrinsic {
             | Self::DatePrototypeSetUtcMonth
             | Self::DatePrototypeSetFullYear
             | Self::DatePrototypeSetUtcFullYear
-            | Self::DatePrototypeSetYear => IntrinsicHolder::DatePrototype,
+            | Self::DatePrototypeSetYear
+            | Self::DatePrototypeToString
+            | Self::DatePrototypeToDateString
+            | Self::DatePrototypeToTimeString
+            | Self::DatePrototypeToUtcString
+            | Self::DatePrototypeToLocaleString
+            | Self::DatePrototypeToLocaleDateString
+            | Self::DatePrototypeToLocaleTimeString => IntrinsicHolder::DatePrototype,
             Self::PromisePrototypeThen | Self::PromisePrototypeCatch => {
                 IntrinsicHolder::PromisePrototype
             }
@@ -2057,6 +2085,13 @@ impl Intrinsic {
             Self::DatePrototypeSetFullYear => 326,
             Self::DatePrototypeSetUtcFullYear => 327,
             Self::DatePrototypeSetYear => 328,
+            Self::DatePrototypeToString => 329,
+            Self::DatePrototypeToDateString => 330,
+            Self::DatePrototypeToTimeString => 331,
+            Self::DatePrototypeToUtcString => 332,
+            Self::DatePrototypeToLocaleString => 333,
+            Self::DatePrototypeToLocaleDateString => 334,
+            Self::DatePrototypeToLocaleTimeString => 335,
         }
     }
 
@@ -2396,6 +2431,13 @@ impl Intrinsic {
             Self::DatePrototypeSetFullYear => 326,
             Self::DatePrototypeSetUtcFullYear => 327,
             Self::DatePrototypeSetYear => 328,
+            Self::DatePrototypeToString => 329,
+            Self::DatePrototypeToDateString => 330,
+            Self::DatePrototypeToTimeString => 331,
+            Self::DatePrototypeToUtcString => 332,
+            Self::DatePrototypeToLocaleString => 333,
+            Self::DatePrototypeToLocaleDateString => 334,
+            Self::DatePrototypeToLocaleTimeString => 335,
         }
     }
 
@@ -2736,6 +2778,13 @@ impl Intrinsic {
             326 => Some(Self::DatePrototypeSetFullYear),
             327 => Some(Self::DatePrototypeSetUtcFullYear),
             328 => Some(Self::DatePrototypeSetYear),
+            329 => Some(Self::DatePrototypeToString),
+            330 => Some(Self::DatePrototypeToDateString),
+            331 => Some(Self::DatePrototypeToTimeString),
+            332 => Some(Self::DatePrototypeToUtcString),
+            333 => Some(Self::DatePrototypeToLocaleString),
+            334 => Some(Self::DatePrototypeToLocaleDateString),
+            335 => Some(Self::DatePrototypeToLocaleTimeString),
             _ => None,
         }
     }
@@ -2759,7 +2808,8 @@ impl Intrinsic {
             | Self::SymbolPrototypeToString
             | Self::FunctionPrototypeToString
             | Self::ErrorPrototypeToString
-            | Self::StringPrototypeToString => "toString",
+            | Self::StringPrototypeToString
+            | Self::DatePrototypeToString => "toString",
             Self::NumberPrototypeValueOf
             | Self::BooleanPrototypeValueOf
             | Self::SymbolPrototypeValueOf
@@ -2853,6 +2903,12 @@ impl Intrinsic {
             Self::DatePrototypeGetUtcMilliseconds => "getUTCMilliseconds",
             Self::DatePrototypeToIsoString => "toISOString",
             Self::DatePrototypeToJson => "toJSON",
+            Self::DatePrototypeToDateString => "toDateString",
+            Self::DatePrototypeToTimeString => "toTimeString",
+            Self::DatePrototypeToUtcString => "toUTCString",
+            Self::DatePrototypeToLocaleString => "toLocaleString",
+            Self::DatePrototypeToLocaleDateString => "toLocaleDateString",
+            Self::DatePrototypeToLocaleTimeString => "toLocaleTimeString",
             Self::DatePrototypeSetMilliseconds => "setMilliseconds",
             Self::DatePrototypeSetUtcMilliseconds => "setUTCMilliseconds",
             Self::DatePrototypeSetSeconds => "setSeconds",
@@ -3552,6 +3608,13 @@ impl Intrinsic {
             | Self::DatePrototypeGetMilliseconds
             | Self::DatePrototypeGetUtcMilliseconds
             | Self::DatePrototypeToIsoString
+            | Self::DatePrototypeToString
+            | Self::DatePrototypeToDateString
+            | Self::DatePrototypeToTimeString
+            | Self::DatePrototypeToUtcString
+            | Self::DatePrototypeToLocaleString
+            | Self::DatePrototypeToLocaleDateString
+            | Self::DatePrototypeToLocaleTimeString
             | Self::MapIteratorPrototypeNext
             | Self::SetIteratorPrototypeNext => 0,
             Self::StringFromCharCode
@@ -4817,7 +4880,7 @@ impl Realm {
         Self::define_restricted_properties(heap, &intrinsics, function_prototype)?;
         Self::define_regexp_accessors(heap, &intrinsics, regexp_prototype)?;
         Self::define_collection_size_getters(heap, &intrinsics, map_prototype, set_prototype)?;
-        Self::define_trim_aliases(heap, &intrinsics, string_prototype)?;
+        Self::define_trim_aliases(heap, &intrinsics, string_prototype, date_prototype)?;
         Self::define_unscopables(heap, array_prototype)?;
         Self::define_to_string_tags(
             heap,
@@ -5441,13 +5504,19 @@ impl Realm {
         heap: &mut GenerationalHeap,
         intrinsics: &[Root],
         string_prototype: Root,
+        date_prototype: Root,
     ) -> Result<(), HeapError> {
         let holder = Self::rooted(heap, string_prototype)?
             .as_object()
             .ok_or(HeapError::InvalidReference)?;
-        for (intrinsic, alias) in [
-            (Intrinsic::StringPrototypeTrimStart, "trimLeft"),
-            (Intrinsic::StringPrototypeTrimEnd, "trimRight"),
+        // B.2.3.3 names the same function object 21.4.4.43 already is.
+        let dates = Self::rooted(heap, date_prototype)?
+            .as_object()
+            .ok_or(HeapError::InvalidReference)?;
+        for (intrinsic, alias, holder) in [
+            (Intrinsic::StringPrototypeTrimStart, "trimLeft", holder),
+            (Intrinsic::StringPrototypeTrimEnd, "trimRight", holder),
+            (Intrinsic::DatePrototypeToUtcString, "toGMTString", dates),
         ] {
             let function = Self::rooted(
                 heap,

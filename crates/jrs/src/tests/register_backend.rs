@@ -9707,3 +9707,44 @@ fn the_setters_of_21_4_4_write_the_fields_they_name() -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[test]
+fn the_texts_of_21_4_4_41_and_the_parse_of_21_4_3_2_agree() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend carries no clause 21.4, so only the engine answers.
+    for (source, answer) in [
+        (
+            "''+new Date(0).toString()",
+            "Thu Jan 01 1970 00:00:00 GMT+0000 (Coordinated Universal Time)",
+        ),
+        ("''+new Date(0).toDateString()", "Thu Jan 01 1970"),
+        (
+            "''+new Date(0).toTimeString()",
+            "00:00:00 GMT+0000 (Coordinated Universal Time)",
+        ),
+        (
+            "''+new Date(0).toUTCString()",
+            "Thu, 01 Jan 1970 00:00:00 GMT",
+        ),
+        // 21.4.4.41.2 step 1 gives a Date no time value describes one text.
+        ("''+new Date(NaN).toString()", "Invalid Date"),
+        // 21.4.4.38 to 21.4.4.40 answer what the three they default to do.
+        (
+            "''+new Date(0).toLocaleString()",
+            "Thu Jan 01 1970 00:00:00 GMT+0000 (Coordinated Universal Time)",
+        ),
+        // 21.4.3.2 reads the Date Time String Format of 21.4.1.15 back.
+        ("''+Date.parse('1970-01-01T00:00:00.000Z')", "0"),
+        ("''+Date.parse(new Date(12345).toISOString())", "12345"),
+        ("''+Date.parse('2024-01-15')", "1705276800000"),
+        (
+            "''+Date.parse('2024-01-15T10:30:45.123+02:00')",
+            "1705307445123",
+        ),
+        ("''+Date.parse('not a date')", "NaN"),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}
