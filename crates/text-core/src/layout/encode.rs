@@ -79,7 +79,6 @@ impl LayoutView<'_> {
             w.put(&run.language.tag())?;
             w.put(&[run.level, u8::from(run.simple), u8::from(run.missing)])?;
             w.fixed(run.scale)?;
-            w.fixed(run.baseline)?;
             w.index(run.coordinates().len())?;
             for coord in run.coordinates() {
                 w.fixed(*coord)?;

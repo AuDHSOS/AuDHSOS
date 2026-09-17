@@ -10,6 +10,7 @@ use super::metrics::{put16, put32, sfnt, tables};
 use crate::{
     Fixed, Font, FontError,
     glyf::{Glyf, MAX_DEPTH, Point},
+    variation::VariationPoint,
 };
 
 pub(super) fn simple() -> Vec<u8> {
@@ -250,4 +251,30 @@ fn outline_separate_buffers_are_identical() {
         out
     };
     assert_eq!(serialize(&a), serialize(&b));
+}
+
+#[test]
+fn static_face_instances_an_empty_coordinate_slice() {
+    let bytes = font(&[Vec::new(), simple()], false);
+    let face = Font::parse(&bytes).expect("font");
+    assert!(face.table(*b"fvar").is_none());
+    let glyf = Glyf::parse(&face).expect("glyf");
+    let mut ps = [Point::default(); 64];
+    let mut cs = [0; 64];
+    let plain = glyf.outline(1, &mut ps, &mut cs).expect("outline");
+    let mut qs = [Point::default(); 64];
+    let mut ds = [0; 64];
+    let mut work = [VariationPoint::default(); 64];
+    let instance = glyf
+        .outline_instance(1, &[], &mut qs, &mut ds, &mut work)
+        .expect("static instance");
+    assert_eq!(instance, plain);
+    assert_eq!(xy(&qs[..instance.points]), xy(&ps[..plain.points]));
+    assert_eq!(ds[..instance.contours], cs[..plain.contours]);
+    for coords in [&[Fixed::ZERO][..], &[Fixed::ONE, Fixed::ZERO][..]] {
+        assert_eq!(
+            glyf.outline_instance(1, coords, &mut qs, &mut ds, &mut work),
+            Err(FontError::InvalidTable)
+        );
+    }
 }

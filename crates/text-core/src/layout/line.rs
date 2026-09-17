@@ -613,19 +613,15 @@ impl Context<'_, '_, '_> {
             .get_mut(..n)
             .ok_or(TextError::BufferTooSmall)?;
         let points = if carets.iter().any(|c| matches!(c, Caret::Point(_))) {
-            let glyf = Glyf::parse(font)?;
-            let outline = if run.coordinates().is_empty() {
-                glyf.outline(glyph.id, workspace.points, workspace.contours)?
-            } else {
-                glyf.outline_instance(
+            Glyf::parse(font)?
+                .outline_instance(
                     glyph.id,
                     run.coordinates(),
                     workspace.points,
                     workspace.contours,
                     workspace.variation,
                 )?
-            };
-            outline.points
+                .points
         } else {
             0
         };

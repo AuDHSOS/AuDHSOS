@@ -154,6 +154,8 @@ impl<'a> Glyf<'a> {
     ///
     /// Scratch holds the current glyph's points and four phantoms, plus the
     /// component counts and four phantoms of each active composite ancestor.
+    /// A face without `fvar` has zero axes and accepts an empty coordinate
+    /// slice, decoding the same outline as `outline`.
     /// # Errors
     /// Rejects malformed variation data, coordinates, or insufficient buffers.
     pub fn outline_instance(
@@ -164,10 +166,14 @@ impl<'a> Glyf<'a> {
         contours: &mut [usize],
         workspace: &mut [VariationPoint],
     ) -> Result<Outline, FontError> {
-        let axes = Axes::parse(
-            self.font.required(*b"fvar")?,
-            self.font.table(*b"avar").map(|t| t.data),
-        )?;
+        let Some(fvar) = self.font.table(*b"fvar") else {
+            return if coords.is_empty() {
+                self.outline(glyph, points, contours)
+            } else {
+                Err(FontError::InvalidTable)
+            };
+        };
+        let axes = Axes::parse(fvar.data, self.font.table(*b"avar").map(|t| t.data))?;
         if coords.len() != axes.len()
             || coords
                 .iter()

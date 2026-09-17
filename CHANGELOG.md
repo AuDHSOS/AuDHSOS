@@ -782,6 +782,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `text-core` drops `Run::baseline` (D-171). The field was `Fixed::ZERO` in
+  `Default`, assigned nowhere, and serialized by `layout::encode`, so every
+  consumer read a constant. This track places every run on one alphabetic
+  baseline and reads no `BASE` table; `Line::baseline` remains the computed
+  alphabetic coordinate of a line. The serialized layout stream loses the
+  field and the mixed-script fixture digest becomes `52b0a4c5021b625d`.
+
 - 10.15 states what the transport glue of Phase 15 has to do about the
   ring: `RING_CAPACITY` is 4072 bytes and a TLS record is up to 16640, so
   a record crosses in four passes at least, which is what
@@ -798,6 +805,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   clock.
 
 ### Fixed
+
+- `text-core`: `Glyf::outline_instance` accepts a static face (D-170). It
+  parsed `fvar` as its first statement and returned `MissingTable` for every
+  face without one, so the documented calling pattern — take
+  `Run::coordinates()` from the resolver and pass it on — could not render
+  Noto Sans Regular or any other static glyf face. An absent `fvar` now means
+  zero axes: an empty coordinate slice decodes the same outline as `outline`,
+  a nonempty one returns `InvalidTable`. `layout::line` drops the static-face
+  branch it carried to work around this.
 
 - PCI inspection uses read-only BAR decoding. `app-lspci` no longer disables
   active disk MMIO decoding while probing sizes, which dropped notifications
