@@ -10055,3 +10055,99 @@ fn the_shared_block_of_25_2_and_the_atomics_of_25_4_read_one_element() -> Result
     }
     Ok(())
 }
+
+#[test]
+fn the_bigint_of_6_1_6_2_carries_the_mathematical_value() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // 6.1.6.2 is a type of the engine; the stack backend has no value of it.
+    for (source, answer) in [
+        ("typeof 1n", "bigint"),
+        // 12.9.3 takes the four radices of a numeric literal.
+        ("''+1n+' '+0x10n+' '+0b101n+' '+0o17n", "1 16 5 15"),
+        // 6.1.6.2 runs on the mathematical value and not on a width.
+        ("''+(2n**64n)", "18446744073709551616"),
+        (
+            "''+(123456789012345678901234567890n*987654321n)",
+            "121932631124828532112482853211126352690",
+        ),
+        ("''+(7n/2n)+' '+(-7n/2n)+' '+(-7n%2n)", "3 -3 -1"),
+        (
+            "''+(-12n&10n)+' '+(-12n|10n)+' '+(-12n^-10n)+' '+(~5n)",
+            "0 -2 2 -6",
+        ),
+        ("''+(1n<<10n)+' '+(-7n>>1n)", "1024 -4"),
+        // 7.2.12 and 7.2.14 compare a BigInt and a Number by the value.
+        (
+            "''+(1n==1)+' '+(1n===1)+' '+(1n=='1')+' '+(1n<1.5)+' '+(2n>1.5)",
+            "true false true true true",
+        ),
+        ("''+(0n?'t':'f')+' '+(1n?'t':'f')", "f t"),
+        // 13.15.3 refuses a BigInt beside a Number under an arithmetic
+        // operator, and 13.5.4 has no Number for one.
+        (
+            "var r;try{1n+1}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{+1n}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{1n>>>1n}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{1n/0n}catch(e){r=e instanceof RangeError};''+r",
+            "true",
+        ),
+        // 13.4.4.1 adds the one of the type the operand became.
+        ("var x=5n;x++;''+x", "6"),
+        ("var y=5n;''+(y--)+' '+y", "5 4"),
+        // 21.2.1.1 and 7.1.13.
+        (
+            "''+BigInt(5)+' '+BigInt('0x10')+' '+BigInt(true)+' '+BigInt('')",
+            "5 16 1 0",
+        ),
+        (
+            "var r;try{BigInt(1.5)}catch(e){r=e instanceof RangeError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{BigInt('x')}catch(e){r=e instanceof SyntaxError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{new BigInt(1)}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        // 21.2.2 keeps the low bits, signed and unsigned.
+        (
+            "''+BigInt.asIntN(8,255n)+' '+BigInt.asUintN(8,-1n)+' '+BigInt.asUintN(64,-1n)",
+            "-1 255 18446744073709551615",
+        ),
+        // 21.2.3.3 writes the value in a radix of 2 to 36.
+        (
+            "''+(255n).toString(16)+' '+(255n).toString()+' '+(255n).valueOf()",
+            "ff 255 255",
+        ),
+        (
+            "var r;try{(1n).toString(1)}catch(e){r=e instanceof RangeError};''+r",
+            "true",
+        ),
+        // 7.1.18 boxes a BigInt, and 21.2.3.5 tags the wrapper.
+        ("''+Object.prototype.toString.call(1n)", "[object BigInt]"),
+        // 6.1.6.2.24 through 7.1.17, and the refusal of 25.5.2.4 step 12.
+        (
+            "''+String(10n)+' '+[1n,2n].join(',')+' '+`${10n}`",
+            "10 1,2 10",
+        ),
+        (
+            "var r;try{JSON.stringify({a:1n})}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}

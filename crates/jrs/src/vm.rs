@@ -419,6 +419,12 @@ impl Runtime {
                     .unwrap_or("a Script the register lowering does not take"),
             });
         }
+        // A Script the stack backend has no value for runs on the engine only.
+        if self.backend == Backend::Stack
+            && let Some(feature) = program.stack_refusal
+        {
+            return Err(Error::Unsupported { feature });
+        }
         let mut execution = Execution::new(host, self.limits);
         execution.backend = self.backend;
         execution.stack = core::mem::take(&mut self.stack);

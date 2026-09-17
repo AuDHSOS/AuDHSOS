@@ -118,6 +118,12 @@ impl<'host> Realm<'host> {
                     .unwrap_or("a Script the register lowering does not take"),
             });
         }
+        // A Script the stack backend has no value for runs on the engine only.
+        if self.execution.backend == crate::Backend::Stack
+            && let Some(feature) = program.stack_refusal
+        {
+            return Err(Error::Unsupported { feature });
+        }
         Ok(())
     }
     /// Executes a precompiled global Script and performs its job checkpoint.

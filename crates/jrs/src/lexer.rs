@@ -14,6 +14,8 @@ use alloc::{string::String, vec::Vec};
 pub(crate) enum Kind {
     Word(String),
     Literal(Value),
+    /// The digits of a `BigInt` literal of 12.9.3, with the radix they stand in.
+    BigInt(String, u32),
     Regex(String, String),
     Template {
         value: Value,
@@ -119,7 +121,10 @@ pub(crate) fn lex(source: &str, limits: Limits) -> Result<Vec<Token>, Error> {
             }
             Kind::Punct(")") => expression = parentheses.pop().unwrap_or(false),
             Kind::Template { tail, .. } => expression = !tail,
-            Kind::Literal(_) | Kind::Regex(_, _) | Kind::Punct("]" | "++" | "--" | "}" | ".") => {
+            Kind::Literal(_)
+            | Kind::BigInt(_, _)
+            | Kind::Regex(_, _)
+            | Kind::Punct("]" | "++" | "--" | "}" | ".") => {
                 expression = false;
             }
             _ => expression = true,
@@ -320,7 +325,7 @@ impl Lexer<'_> {
                 if self.peek() == Some('n') {
                     self.bump();
                     self.number_end()?;
-                    return Err(Self::unsupported("BigInt literals"));
+                    return Ok(Kind::BigInt(digits.replace('_', ""), radix));
                 }
                 self.number_end()?;
                 return Ok(Kind::Literal(Value::Number(value)));
@@ -361,7 +366,7 @@ impl Lexer<'_> {
         if integer && self.peek() == Some('n') {
             self.bump();
             self.number_end()?;
-            return Err(Self::unsupported("BigInt literals"));
+            return Ok(Kind::BigInt(text.replace('_', ""), 10));
         }
         self.number_end()?;
         text.parse::<f64>()

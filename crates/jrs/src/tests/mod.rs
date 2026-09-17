@@ -363,7 +363,6 @@ fn malformed_source_is_rejected_before_execution() {
         "1e",
         "1e+",
         "1foo",
-        "1n",
         "let",
         "const x",
         "let true",
@@ -663,7 +662,6 @@ fn unsupported_syntax_is_distinct_from_syntax_errors() {
         "let x={*g(){}}",
         "let x={async *g(){}}",
         "label: 0",
-        "123n",
         "let café=1",
     ] {
         assert!(

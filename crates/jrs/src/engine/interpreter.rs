@@ -15,6 +15,7 @@
 //! without heap allocations per function call. Implements fast paths for
 //! Smi arithmetic and inline cache property access.
 
+use super::bigint::BigIntValue;
 use super::{
     bytecode::{BinaryOp, BytecodeFunction, Instruction, Reg, VerificationError},
     context::ContextRef,
@@ -1468,6 +1469,158 @@ impl RegisterVM {
         Ok(())
     }
 
+    /// The value a `BigInt` operand holds.
+    fn bigint_of(value: Value, heap: &GenerationalHeap) -> Option<BigIntValue> {
+        value
+            .as_bigint()
+            .and_then(|reference| heap.bigint(reference))
+            .cloned()
+    }
+
+    /// Holds a `BigInt` of 6.1.6.2 and answers the value that names it.
+    fn new_bigint(value: BigIntValue, heap: &mut GenerationalHeap) -> Result<Value, VMError> {
+        Ok(Value::from_bigint(heap.create_bigint(value)?))
+    }
+
+    /// The operator of 13.15.3 for an operand of 6.1.6.2.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a `BigInt` beside a
+    /// Number under an arithmetic operator, for the unsigned shift of 13.9.3
+    /// and for a divisor of zero, which is a `RangeError`.
+    fn bigint_binary(
+        op: BinaryOp,
+        left: Value,
+        right: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let relational = matches!(
+            op,
+            BinaryOp::LessThan
+                | BinaryOp::LessThanOrEqual
+                | BinaryOp::GreaterThan
+                | BinaryOp::GreaterThanOrEqual
+        );
+        if relational {
+            // 7.2.12 compares the mathematical values, so a Number beside a
+            // BigInt is no error.
+            let Some(order) = Self::compare_across_types(left, right, heap)? else {
+                return Ok(VALUE_FALSE);
+            };
+            return Ok(Value::from_bool(match op {
+                BinaryOp::LessThan => order.is_lt(),
+                BinaryOp::LessThanOrEqual => order.is_le(),
+                BinaryOp::GreaterThan => order.is_gt(),
+                _ => order.is_ge(),
+            }));
+        }
+        let (Some(left), Some(right)) = (Self::bigint_of(left, heap), Self::bigint_of(right, heap))
+        else {
+            return Err(type_error(
+                heap,
+                realm,
+                "an operand of 13.15.3 is a BigInt and the other one is not",
+            ));
+        };
+        let answer = match op {
+            BinaryOp::Add => left.add(&right),
+            BinaryOp::Sub => left.sub(&right),
+            BinaryOp::Mul => left.mul(&right),
+            BinaryOp::Div | BinaryOp::Mod => {
+                let (quotient, remainder) = left.divide(&right).map_err(|_| {
+                    raise(
+                        heap,
+                        realm,
+                        super::realm::NativeErrorKind::RangeError,
+                        "a division of 6.1.6.2.5 by zero",
+                    )
+                })?;
+                if op == BinaryOp::Div {
+                    quotient
+                } else {
+                    remainder
+                }
+            }
+            BinaryOp::Pow => left.power(&right).map_err(|error| match error {
+                super::bigint::BigIntError::NegativeExponent => raise(
+                    heap,
+                    realm,
+                    super::realm::NativeErrorKind::RangeError,
+                    "an exponent of 6.1.6.2.3 below zero",
+                ),
+                _ => VMError::Unsupported("a BigInt this embedding cannot hold"),
+            })?,
+            BinaryOp::BitAnd => left.bitwise(&right, super::bigint::BitOp::And),
+            BinaryOp::BitOr => left.bitwise(&right, super::bigint::BitOp::Or),
+            BinaryOp::BitXor => left.bitwise(&right, super::bigint::BitOp::Xor),
+            BinaryOp::ShiftLeft => left
+                .shift(&right)
+                .map_err(|_| VMError::Unsupported("a BigInt this embedding cannot hold"))?,
+            BinaryOp::ShiftRight => left
+                .shift(&right.negate())
+                .map_err(|_| VMError::Unsupported("a BigInt this embedding cannot hold"))?,
+            // 13.9.3 has no BigInt form at all.
+            BinaryOp::UnsignedShiftRight => {
+                return Err(type_error(heap, realm, "the >>> of 13.9.3 takes no BigInt"));
+            }
+            BinaryOp::Equals => {
+                return Ok(Value::from_bool(left.compare(&right).is_eq()));
+            }
+            _ => return Err(VMError::TypeError),
+        };
+        Self::new_bigint(answer, heap)
+    }
+
+    /// The order of 7.2.12 between a `BigInt` and a Number, or between two
+    /// `BigInt`s, and `None` for a comparison a NaN leaves undefined.
+    fn compare_across_types(
+        left: Value,
+        right: Value,
+        heap: &GenerationalHeap,
+    ) -> Result<Option<core::cmp::Ordering>, VMError> {
+        use core::cmp::Ordering;
+        match (Self::bigint_of(left, heap), Self::bigint_of(right, heap)) {
+            (Some(left), Some(right)) => Ok(Some(left.compare(&right))),
+            (Some(left), None) => {
+                let number = primitive_number(right, heap)?;
+                Ok(Self::compare_with_number(&left, number))
+            }
+            (None, Some(right)) => {
+                let number = primitive_number(left, heap)?;
+                Ok(Self::compare_with_number(&right, number).map(Ordering::reverse))
+            }
+            (None, None) => Err(VMError::TypeError),
+        }
+    }
+
+    /// The order between a `BigInt` and a Number, on the mathematical values.
+    fn compare_with_number(left: &BigIntValue, right: f64) -> Option<core::cmp::Ordering> {
+        use core::cmp::Ordering;
+        if right.is_nan() {
+            return None;
+        }
+        if right == f64::INFINITY {
+            return Some(Ordering::Less);
+        }
+        if right == f64::NEG_INFINITY {
+            return Some(Ordering::Greater);
+        }
+        let truncated = Self::round_toward(right, true);
+        let whole = BigIntValue::from_f64(truncated)?;
+        Some(match left.compare(&whole) {
+            // The fraction the floor removed puts the Number above its whole
+            // part, so an equal whole part makes the BigInt the smaller one.
+            #[expect(
+                clippy::float_cmp,
+                reason = "7.2.12 compares the mathematical values, and a Number that is its own floor carries no fraction"
+            )]
+            Ordering::Equal if truncated != right => Ordering::Less,
+            order => order,
+        })
+    }
+
     fn primitive_binary(
         &mut self,
         op: BinaryOp,
@@ -1519,6 +1672,13 @@ impl RegisterVM {
         // number it made of a String against another String.
         if op == BinaryOp::Equals {
             self.acc = Value::from_bool(Self::loosely_equals(self.acc, rhs, heap)?);
+            return Ok(observed);
+        }
+        // 13.15.3 step 3: two BigInt operands take the operation 6.1.6.2
+        // names, and a BigInt beside a Number is a `TypeError` for every
+        // operator but the relational ones of 7.2.12.
+        if self.acc.is_bigint() || rhs.is_bigint() {
+            self.acc = Self::bigint_binary(op, self.acc, rhs, heap, realm)?;
             return Ok(observed);
         }
         let left = primitive_number(self.acc, heap)?;
@@ -1591,6 +1751,9 @@ impl RegisterVM {
             alloc::string::String::from("null")
         } else if value.is_undefined() {
             alloc::string::String::from("undefined")
+        } else if let Some(held) = Self::bigint_of(value, heap) {
+            // 6.1.6.2.24 writes the BigInt in base ten.
+            held.to_text(10)
         } else if value.is_symbol() {
             // 7.1.17 step 2: a Symbol has no String of its own.
             return Err(type_error(heap, realm, "cannot convert Symbol operand"));
@@ -1607,6 +1770,16 @@ impl RegisterVM {
     ) -> Result<bool, VMError> {
         if left.is_string() && right.is_string() {
             return Ok(heap.strings.equals(left, right)?);
+        }
+        // 7.2.15 compares two BigInts by the mathematical value, which the
+        // arena shares between two references only when it interned them.
+        if left.is_bigint() && right.is_bigint() {
+            let (Some(left), Some(right)) =
+                (Self::bigint_of(left, heap), Self::bigint_of(right, heap))
+            else {
+                return Err(VMError::TypeError);
+            };
+            return Ok(left.compare(&right).is_eq());
         }
         Ok(left.strictly_equals(right))
     }
@@ -1630,8 +1803,42 @@ impl RegisterVM {
             // frame to run one in.
             return Err(NUMERIC_CONVERSION_GAP);
         }
+        // 7.2.14 steps 6 to 11: a BigInt is equal to the Number, the String
+        // and the Boolean that name the same mathematical value.
         if left.is_bigint() || right.is_bigint() {
-            return Err(VMError::TypeError);
+            if left.is_null() || left.is_undefined() || right.is_null() || right.is_undefined() {
+                return Ok(false);
+            }
+            let (held, other) = if left.is_bigint() {
+                (left, right)
+            } else {
+                (right, left)
+            };
+            let Some(held) = Self::bigint_of(held, heap) else {
+                return Err(VMError::TypeError);
+            };
+            if other.is_bigint() {
+                let Some(other) = Self::bigint_of(other, heap) else {
+                    return Err(VMError::TypeError);
+                };
+                return Ok(held.compare(&other).is_eq());
+            }
+            if other.is_string() {
+                let units = heap
+                    .strings
+                    .to_utf16(other)
+                    .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+                // 7.1.14 answers undefined for a text that is no BigInt, and
+                // step 7.b makes that comparison false.
+                return Ok(
+                    bigint_from_text(&units).is_some_and(|other| held.compare(&other).is_eq())
+                );
+            }
+            if other.is_symbol() {
+                return Ok(false);
+            }
+            let number = primitive_number(other, heap)?;
+            return Ok(Self::compare_with_number(&held, number) == Some(core::cmp::Ordering::Equal));
         }
         if left.is_boolean() {
             left = Value::from_f64(primitive_number(left, heap)?);
@@ -1651,6 +1858,10 @@ impl RegisterVM {
     }
 
     fn to_boolean(value: Value, heap: &GenerationalHeap) -> Result<bool, VMError> {
+        // 7.1.2: the BigInt zero is the only one that is false.
+        if let Some(held) = Self::bigint_of(value, heap) {
+            return Ok(!held.is_zero());
+        }
         if value.is_heap_string() {
             return heap
                 .strings
@@ -2511,6 +2722,14 @@ impl RegisterVM {
             | Intrinsic::DataViewPrototypeGetFloat64
             | Intrinsic::DataViewPrototypeSetFloat64 => {
                 self.call_data_view_intrinsic(intrinsic, &call, heap, realm)
+            }
+            Intrinsic::BigIntConstructor
+            | Intrinsic::BigIntAsIntN
+            | Intrinsic::BigIntAsUintN
+            | Intrinsic::BigIntPrototypeToString
+            | Intrinsic::BigIntPrototypeToLocaleString
+            | Intrinsic::BigIntPrototypeValueOf => {
+                self.call_bigint_intrinsic(intrinsic, &call, heap, realm)
             }
             Intrinsic::SharedArrayBufferConstructor
             | Intrinsic::SharedArrayBufferPrototypeSlice
@@ -10358,6 +10577,9 @@ impl RegisterVM {
             alloc::string::String::from(if boolean { "true" } else { "false" })
         } else if value.is_null() {
             alloc::string::String::from("null")
+        } else if let Some(held) = Self::bigint_of(value, heap) {
+            // 6.1.6.2.24 writes the BigInt in base ten.
+            held.to_text(10)
         } else {
             return Err(VMError::TypeError);
         };
@@ -10996,6 +11218,8 @@ impl RegisterVM {
             // are implemented.
             // 20.2.3.5 answers the source text of the function, which
             // %Function.prototype% carries.
+            // 21.2.3 gives `%BigInt.prototype%` the `toString` 21.2.3.3 is.
+            ObjectKind::BigIntWrapper(_) => Some("a property of %BigInt.prototype%"),
             ObjectKind::Error
             | ObjectKind::Function { .. }
             | ObjectKind::NativeFunction { .. }
@@ -11905,6 +12129,8 @@ impl RegisterVM {
                 // of 21.3, 25.5 and 28.1 and the iterator of 23.1.5.2.2.
                 ObjectKind::Ordinary
                 | ObjectKind::SymbolWrapper(_)
+                // 21.2.3.5 tags a BigInt wrapper through @@toStringTag.
+                | ObjectKind::BigIntWrapper(_)
                 | ObjectKind::Promise { .. }
                 // 24.1.3.13 and 24.2.3.15 tag a Map and a Set through
                 // @@toStringTag, so their builtin tag is the ordinary one, as
@@ -12735,6 +12961,8 @@ impl RegisterVM {
             realm.boolean_prototype(heap)?
         } else if value.as_f64().is_some() {
             realm.number_prototype(heap)?
+        } else if value.is_bigint() {
+            realm.bigint_prototype(heap)?
         } else {
             return Ok(None);
         };
@@ -14191,6 +14419,144 @@ impl RegisterVM {
         }
     }
 
+    /// The clauses of 21.2, which make a `BigInt` and write one out.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for `new BigInt`, for a
+    /// receiver that carries no `BigInt` and for a value 7.1.14 has no `BigInt`
+    /// for, and with a `RangeError` for a radix outside 2 to 36.
+    fn call_bigint_intrinsic(
+        &self,
+        intrinsic: Intrinsic,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        match intrinsic {
+            // 21.2.1.1 step 1 refuses `new`.
+            Intrinsic::BigIntConstructor => {
+                if call.construct.is_some() {
+                    return Err(type_error(heap, realm, "BigInt is no constructor"));
+                }
+                let value = self.call_argument(call, 0, heap)?;
+                let held = Self::to_bigint(value, heap, realm)?;
+                Self::new_bigint(held, heap)
+            }
+            // 21.2.2.1 and 21.2.2.2 keep the low bits of the value.
+            Intrinsic::BigIntAsIntN | Intrinsic::BigIntAsUintN => {
+                let bits = Self::byte_index(self.call_argument(call, 0, heap)?, heap, realm)?;
+                let value = self.call_argument(call, 1, heap)?;
+                let held = Self::to_bigint(value, heap, realm)?;
+                let Ok(bits) = u64::try_from(Self::integral(bits)) else {
+                    return Err(raise(
+                        heap,
+                        realm,
+                        super::realm::NativeErrorKind::RangeError,
+                        "the width of 21.2.2 is no index",
+                    ));
+                };
+                Self::new_bigint(held.as_n(bits, intrinsic == Intrinsic::BigIntAsIntN), heap)
+            }
+            _ => {
+                // 21.2.3.4 `thisBigIntValue` takes a BigInt and the wrapper of
+                // one, and nothing else.
+                let held = Self::this_bigint(call.receiver, heap, realm)?;
+                if intrinsic == Intrinsic::BigIntPrototypeValueOf {
+                    return Self::new_bigint(held, heap);
+                }
+                // 21.2.3.3 step 3 takes a radix of 2 to 36, and 21.2.3.2 the
+                // ten of the default.
+                let radix = if intrinsic == Intrinsic::BigIntPrototypeToString {
+                    let given = self.call_argument(call, 0, heap)?;
+                    if given.is_undefined() {
+                        10
+                    } else {
+                        let asked = Self::integral(Self::number_argument(given, heap)?);
+                        if !(2..=36).contains(&asked) {
+                            return Err(raise(
+                                heap,
+                                realm,
+                                super::realm::NativeErrorKind::RangeError,
+                                "the radix of 21.2.3.3 is outside 2 to 36",
+                            ));
+                        }
+                        u32::try_from(asked).unwrap_or(10)
+                    }
+                } else {
+                    10
+                };
+                let units: Vec<u16> = held.to_text(radix).encode_utf16().collect();
+                self.allocate_string(heap, &units)
+            }
+        }
+    }
+
+    /// `ToBigInt` of 7.1.13, which takes a Boolean, a String and a `BigInt` and
+    /// refuses every other value.
+    fn to_bigint(
+        value: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<BigIntValue, VMError> {
+        if let Some(held) = Self::bigint_of(value, heap) {
+            return Ok(held);
+        }
+        if let Some(boolean) = value.as_boolean() {
+            return Ok(BigIntValue::from_i64(i64::from(boolean)));
+        }
+        if value.is_string() {
+            let units = heap
+                .strings
+                .to_utf16(value)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            // 7.1.14 step 2 is a SyntaxError for a text that names no BigInt.
+            return bigint_from_text(&units).ok_or_else(|| {
+                raise(
+                    heap,
+                    realm,
+                    super::realm::NativeErrorKind::SyntaxError,
+                    "the text of 7.1.14 names no BigInt",
+                )
+            });
+        }
+        if let Some(number) = value.as_f64() {
+            // 7.1.13 step 3 takes an integral Number and no other.
+            return BigIntValue::from_f64(number).ok_or_else(|| {
+                raise(
+                    heap,
+                    realm,
+                    super::realm::NativeErrorKind::RangeError,
+                    "the Number of 7.1.13 is no integer",
+                )
+            });
+        }
+        if value.is_object() {
+            return Err(NUMERIC_CONVERSION_GAP);
+        }
+        Err(type_error(heap, realm, "the value of 7.1.13 is no BigInt"))
+    }
+
+    /// `thisBigIntValue` of 21.2.3, which takes a `BigInt` and the wrapper 7.1.18
+    /// made of one.
+    fn this_bigint(
+        receiver: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<BigIntValue, VMError> {
+        if let Some(held) = Self::bigint_of(receiver, heap) {
+            return Ok(held);
+        }
+        let boxed = receiver
+            .as_object()
+            .and_then(|object| heap.get_object(object))
+            .and_then(|entry| match entry.kind {
+                ObjectKind::BigIntWrapper(reference) => heap.bigint(reference).cloned(),
+                _ => None,
+            });
+        boxed.ok_or_else(|| type_error(heap, realm, "this value carries no BigInt of its own"))
+    }
+
     /// The clauses of 25.2, which make a block no clause detaches.
     ///
     /// # Errors
@@ -15293,8 +15659,11 @@ impl RegisterVM {
             }
             self.fuel = work;
             return self.json_quote_object(object, out, depth, heap, realm);
+        } else if value.is_bigint() {
+            // 25.5.2.4 step 12: a BigInt has no text at all.
+            return Err(type_error(heap, realm, "a BigInt has no JSON text"));
         } else {
-            // A Symbol and undefined have no text (25.5.2.4 steps 11 and 12).
+            // A Symbol and undefined have no text (25.5.2.4 steps 11 and 13).
             return Ok(false);
         }
         self.fuel = work;
@@ -16520,6 +16889,11 @@ impl RegisterVM {
             (
                 ObjectKind::SymbolWrapper(symbol),
                 realm.symbol_prototype(heap)?,
+            )
+        } else if let Some(reference) = value.as_bigint() {
+            (
+                ObjectKind::BigIntWrapper(reference),
+                realm.bigint_prototype(heap)?,
             )
         } else {
             return Err(type_error(heap, realm, "cannot box null or undefined"));
@@ -18523,6 +18897,14 @@ impl RegisterVM {
                         .copied()
                         .ok_or(VMError::InvalidRegister)?;
                 }
+                Instruction::LdaBigInt(index) => {
+                    let value = active_code
+                        .bigint_constants
+                        .get(index as usize)
+                        .ok_or(VMError::InvalidRegister)?
+                        .clone();
+                    self.acc = Value::from_bigint(heap.create_bigint(value)?);
+                }
                 Instruction::LdaString(index) => {
                     let units = active_code
                         .string_constants
@@ -18700,14 +19082,17 @@ impl RegisterVM {
                     self.acc = VALUE_FALSE;
                 }
                 Instruction::Negate => {
-                    // 6.1.6.1.1 negates a Number. Anything else reached this
-                    // instruction without the conversion 7.1.4 asks for.
-                    let number = numeric_value(self.acc).ok_or(if self.acc.is_object() {
-                        NUMERIC_CONVERSION_GAP
+                    // 6.1.6.2.1 negates a BigInt, and 6.1.6.1.1 a Number.
+                    if let Some(held) = Self::bigint_of(self.acc, heap) {
+                        self.acc = Self::new_bigint(held.negate(), heap)?;
                     } else {
-                        VMError::TypeError
-                    })?;
-                    self.acc = Value::from_f64(-number);
+                        let number = numeric_value(self.acc).ok_or(if self.acc.is_object() {
+                            NUMERIC_CONVERSION_GAP
+                        } else {
+                            VMError::TypeError
+                        })?;
+                        self.acc = Value::from_f64(-number);
+                    }
                 }
                 Instruction::LogicalNot => {
                     self.acc = Value::from_bool(!Self::to_boolean(self.acc, heap)?);
@@ -18715,7 +19100,7 @@ impl RegisterVM {
                 Instruction::ToNumber => {
                     self.acc = Value::from_f64(primitive_number(self.acc, heap)?);
                 }
-                Instruction::ToNumeric(register) => {
+                Instruction::ToNumeric(register) | Instruction::NumberOnly(register) => {
                     let value = self.read_reg(register)?;
                     // 7.1.4 of an Object is 7.1.1 with the hint `number`,
                     // which runs a method of the Script; the instruction runs
@@ -18759,7 +19144,21 @@ impl RegisterVM {
                         // 7.1.4 step 2: a Symbol has no Number of its own.
                         return Err(type_error(heap, realm, "cannot convert Symbol to Number"));
                     }
-                    self.acc = Value::from_f64(primitive_number(value, heap)?);
+                    // 7.1.3 answers a BigInt as it is, and 13.5.4 to 13.5.6
+                    // run the operation of 6.1.6.2 on it. 7.1.4 has no Number
+                    // for one, which is what the unary plus of 13.5.4 asks.
+                    if value.is_bigint() {
+                        if inst == Instruction::NumberOnly(register) {
+                            return Err(type_error(
+                                heap,
+                                realm,
+                                "the unary + of 13.5.4 takes no BigInt",
+                            ));
+                        }
+                        self.acc = value;
+                    } else {
+                        self.acc = Value::from_f64(primitive_number(value, heap)?);
+                    }
                 }
                 Instruction::ToText(register) => {
                     let value = self.read_reg(register)?;
@@ -18809,8 +19208,27 @@ impl RegisterVM {
                     self.acc = text;
                 }
                 Instruction::BitNot => {
-                    let number = self.acc.as_f64().ok_or(VMError::TypeError)?;
-                    self.acc = Value::from_smi(!number_to_i32(number));
+                    // 6.1.6.2.2 complements a BigInt, and 6.1.6.1.2 a Number.
+                    if let Some(held) = Self::bigint_of(self.acc, heap) {
+                        self.acc = Self::new_bigint(held.not(), heap)?;
+                    } else {
+                        let number = self.acc.as_f64().ok_or(VMError::TypeError)?;
+                        self.acc = Value::from_smi(!number_to_i32(number));
+                    }
+                }
+                Instruction::Increment | Instruction::Decrement => {
+                    // 13.4.4.1 step 5 adds the one of the type the operand
+                    // became: the BigInt one to a BigInt and the Number one to
+                    // a Number.
+                    let up = inst == Instruction::Increment;
+                    if let Some(held) = Self::bigint_of(self.acc, heap) {
+                        let one = BigIntValue::from_i64(1);
+                        let answer = if up { held.add(&one) } else { held.sub(&one) };
+                        self.acc = Self::new_bigint(answer, heap)?;
+                    } else {
+                        let number = numeric_value(self.acc).ok_or(VMError::TypeError)?;
+                        self.acc = Value::from_f64(if up { number + 1.0 } else { number - 1.0 });
+                    }
                 }
                 Instruction::TypeOf => {
                     self.acc = self.type_of(heap)?;
@@ -20864,6 +21282,55 @@ fn numeric_value(value: Value) -> Option<f64> {
 const NUMERIC_CONVERSION_GAP: VMError =
     VMError::Unsupported("ToPrimitive of an Object outside a call");
 
+/// `StringToBigInt` of 7.1.14: the value a text names, and none for a text
+/// that names no `BigInt`.
+///
+/// The grammar is `StringIntegerLiteral`: white space around an optional sign
+/// and decimal digits, or around a radix prefix and its digits, which takes no
+/// sign. An empty text is zero.
+fn bigint_from_text(units: &[u16]) -> Option<BigIntValue> {
+    let trimmed: &[u16] = {
+        let start = units.iter().position(|unit| !is_trimmed(*unit));
+        match start {
+            Some(start) => {
+                let end = units.iter().rposition(|unit| !is_trimmed(*unit))?;
+                units.get(start..=end)?
+            }
+            None => &[],
+        }
+    };
+    if trimmed.is_empty() {
+        return Some(BigIntValue::zero());
+    }
+    for (prefix, radix) in [
+        ([0x30u16, 0x78], 16u32),
+        ([0x30, 0x58], 16),
+        ([0x30, 0x6F], 8),
+        ([0x30, 0x4F], 8),
+        ([0x30, 0x62], 2),
+        ([0x30, 0x42], 2),
+    ] {
+        if trimmed.starts_with(&prefix) {
+            return BigIntValue::from_digits(trimmed.get(2..)?, radix, false);
+        }
+    }
+    let (negative, digits) = match trimmed.first() {
+        Some(0x2D) => (true, trimmed.get(1..)?),
+        Some(0x2B) => (false, trimmed.get(1..)?),
+        _ => (false, trimmed),
+    };
+    BigIntValue::from_digits(digits, 10, negative)
+}
+
+/// Whether the code unit is one `TrimString` of 7.1.2 removes.
+const fn is_trimmed(unit: u16) -> bool {
+    matches!(
+        unit,
+        0x09 | 0x0A | 0x0B | 0x0C | 0x0D | 0x20 | 0xA0 | 0x1680 | 0x2000
+            ..=0x200A | 0x2028 | 0x2029 | 0x202F | 0x205F | 0x3000 | 0xFEFF
+    )
+}
+
 fn primitive_number(value: Value, heap: &GenerationalHeap) -> Result<f64, VMError> {
     if let Some(number) = value.as_f64() {
         return Ok(number);
@@ -21482,6 +21949,14 @@ fn property_name_units(
     if value.is_undefined() {
         return Ok("undefined".encode_utf16().collect());
     }
+    if let Some(reference) = value.as_bigint() {
+        // 6.1.6.2.24 writes the BigInt in base ten.
+        let text = heap
+            .bigint(reference)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?
+            .to_text(10);
+        return Ok(text.encode_utf16().collect());
+    }
     if value.is_symbol() {
         // 7.1.17 step 2: a Symbol has no String of its own.
         return Err(type_error(heap, realm, "a Symbol has no string value"));
@@ -21705,7 +22180,7 @@ mod tests {
     }
 
     #[test]
-    fn primitive_loose_equality_takes_neither_an_object_nor_a_bigint() {
+    fn primitive_loose_equality_answers_a_bigint_and_refuses_an_object() {
         let mut code = BytecodeFunction::new(2, 2);
         code.emit(Instruction::Ldar(Reg(0)));
         code.emit(Instruction::TestEqual(Reg(1)));
@@ -21716,27 +22191,37 @@ mod tests {
             .allocate_object(heap.shapes.root_shape(), VALUE_NULL)
             .unwrap();
 
-        // 7.2.14 step 12 answers an Object against undefined without
-        // converting it; every other Object needs a frame this has not.
+        // 7.2.14 steps 2 and 3 answer undefined against a BigInt without
+        // converting either, and 6.1.6.2 compares the mathematical values.
+        let one = heap
+            .create_bigint(super::super::bigint::BigIntValue::from_i64(1))
+            .unwrap();
         for (left, right, expected) in [
-            (
-                VALUE_UNDEFINED,
-                Value::from_bigint(super::super::value::BigIntRef(0)),
-                VMError::TypeError,
-            ),
-            (
-                Value::from_smi(1),
-                Value::from_object(object),
-                NUMERIC_CONVERSION_GAP,
-            ),
+            (VALUE_UNDEFINED, Value::from_bigint(one), false),
+            (Value::from_smi(1), Value::from_bigint(one), true),
+            (Value::from_smi(2), Value::from_bigint(one), false),
         ] {
             let mut feedback = FeedbackVector::for_code(&code);
             let mut vm = RegisterVM::new(100);
             assert_eq!(
                 vm.run_with_arguments(&code, &[left, right], &mut feedback, &mut heap, &realm),
-                Err(expected)
+                Ok(Value::from_bool(expected))
             );
         }
+
+        // Every other Object needs a frame this comparison has not.
+        let mut feedback = FeedbackVector::for_code(&code);
+        let mut vm = RegisterVM::new(100);
+        assert_eq!(
+            vm.run_with_arguments(
+                &code,
+                &[Value::from_smi(1), Value::from_object(object)],
+                &mut feedback,
+                &mut heap,
+                &realm
+            ),
+            Err(NUMERIC_CONVERSION_GAP)
+        );
 
         let first = Value::from_symbol(super::super::value::SymbolRef(1));
         let second = Value::from_symbol(super::super::value::SymbolRef(2));

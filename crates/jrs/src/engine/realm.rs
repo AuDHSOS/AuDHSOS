@@ -1060,6 +1060,18 @@ pub enum Intrinsic {
     TypedArrayPrototypeLength,
     /// `get [@@toStringTag]`, 23.2.3.38.
     TypedArrayPrototypeToStringTag,
+    /// `BigInt`, 21.2.1.1.
+    BigIntConstructor,
+    /// `asIntN`, 21.2.2.1.
+    BigIntAsIntN,
+    /// `asUintN`, 21.2.2.2.
+    BigIntAsUintN,
+    /// `toString`, 21.2.3.3.
+    BigIntPrototypeToString,
+    /// `toLocaleString`, 21.2.3.2.
+    BigIntPrototypeToLocaleString,
+    /// `valueOf`, 21.2.3.4.
+    BigIntPrototypeValueOf,
     /// `SharedArrayBuffer`, 25.2.3.1.
     SharedArrayBufferConstructor,
     /// `slice`, 25.2.5.4.
@@ -1161,6 +1173,10 @@ pub enum IntrinsicHolder {
     TypedArrayPrototype,
     /// `%SharedArrayBuffer.prototype%`, which carries what 25.2.5 gives it.
     SharedArrayBufferPrototype,
+    /// `%BigInt.prototype%`, which carries what 21.2.3 gives it.
+    BigIntPrototype,
+    /// `%BigInt%`, which carries the two widths of 21.2.2.
+    BigIntConstructor,
     /// The namespace object of 25.4.
     Atomics,
     /// `%WeakMap.prototype%`, which carries the methods 24.3.3 gives it.
@@ -1181,7 +1197,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 397] = [
+    pub const ALL: [Self; 403] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1560,6 +1576,12 @@ impl Intrinsic {
         Self::TypedArrayPrototypeByteOffset,
         Self::TypedArrayPrototypeLength,
         Self::TypedArrayPrototypeToStringTag,
+        Self::BigIntConstructor,
+        Self::BigIntAsIntN,
+        Self::BigIntAsUintN,
+        Self::BigIntPrototypeToString,
+        Self::BigIntPrototypeToLocaleString,
+        Self::BigIntPrototypeValueOf,
         Self::SharedArrayBufferConstructor,
         Self::SharedArrayBufferPrototypeSlice,
         Self::SharedArrayBufferPrototypeGrow,
@@ -1795,6 +1817,10 @@ impl Intrinsic {
             Self::DateNow | Self::DateUtc | Self::DateParse => IntrinsicHolder::DateConstructor,
             Self::ArrayBufferIsView => IntrinsicHolder::ArrayBufferConstructor,
             Self::ArrayBufferPrototypeSlice => IntrinsicHolder::ArrayBufferPrototype,
+            Self::BigIntPrototypeToString
+            | Self::BigIntPrototypeToLocaleString
+            | Self::BigIntPrototypeValueOf => IntrinsicHolder::BigIntPrototype,
+            Self::BigIntAsIntN | Self::BigIntAsUintN => IntrinsicHolder::BigIntConstructor,
             Self::SharedArrayBufferPrototypeSlice
             | Self::SharedArrayBufferPrototypeGrow
             | Self::SharedArrayBufferPrototypeByteLength
@@ -1933,8 +1959,8 @@ impl Intrinsic {
             | Self::DateConstructor
             | Self::ArrayBufferConstructor
             | Self::DataViewConstructor
-            // 25.2.4 gives the global object the constructor of the shared
-            // block.
+            // 21.2.1 and 25.2.4 give the global object their constructors.
+            | Self::BigIntConstructor
             | Self::SharedArrayBufferConstructor
             // 23.2.6 gives the global object the nine of table 71.
             | Self::TypedArrayInt8Constructor
@@ -2399,6 +2425,12 @@ impl Intrinsic {
             Self::TypedArrayPrototypeByteOffset => 375,
             Self::TypedArrayPrototypeLength => 376,
             Self::TypedArrayPrototypeToStringTag => 377,
+            Self::BigIntConstructor => 397,
+            Self::BigIntAsIntN => 398,
+            Self::BigIntAsUintN => 399,
+            Self::BigIntPrototypeToString => 400,
+            Self::BigIntPrototypeToLocaleString => 401,
+            Self::BigIntPrototypeValueOf => 402,
             Self::SharedArrayBufferConstructor => 378,
             Self::SharedArrayBufferPrototypeSlice => 379,
             Self::SharedArrayBufferPrototypeGrow => 380,
@@ -2806,6 +2838,12 @@ impl Intrinsic {
             Self::TypedArrayPrototypeByteOffset => 375,
             Self::TypedArrayPrototypeLength => 376,
             Self::TypedArrayPrototypeToStringTag => 377,
+            Self::BigIntConstructor => 397,
+            Self::BigIntAsIntN => 398,
+            Self::BigIntAsUintN => 399,
+            Self::BigIntPrototypeToString => 400,
+            Self::BigIntPrototypeToLocaleString => 401,
+            Self::BigIntPrototypeValueOf => 402,
             Self::SharedArrayBufferConstructor => 378,
             Self::SharedArrayBufferPrototypeSlice => 379,
             Self::SharedArrayBufferPrototypeGrow => 380,
@@ -3214,6 +3252,12 @@ impl Intrinsic {
             375 => Some(Self::TypedArrayPrototypeByteOffset),
             376 => Some(Self::TypedArrayPrototypeLength),
             377 => Some(Self::TypedArrayPrototypeToStringTag),
+            397 => Some(Self::BigIntConstructor),
+            398 => Some(Self::BigIntAsIntN),
+            399 => Some(Self::BigIntAsUintN),
+            400 => Some(Self::BigIntPrototypeToString),
+            401 => Some(Self::BigIntPrototypeToLocaleString),
+            402 => Some(Self::BigIntPrototypeValueOf),
             378 => Some(Self::SharedArrayBufferConstructor),
             379 => Some(Self::SharedArrayBufferPrototypeSlice),
             380 => Some(Self::SharedArrayBufferPrototypeGrow),
@@ -3257,13 +3301,15 @@ impl Intrinsic {
             | Self::FunctionPrototypeToString
             | Self::ErrorPrototypeToString
             | Self::StringPrototypeToString
-            | Self::DatePrototypeToString => "toString",
+            | Self::DatePrototypeToString
+            | Self::BigIntPrototypeToString => "toString",
             Self::NumberPrototypeValueOf
             | Self::BooleanPrototypeValueOf
             | Self::SymbolPrototypeValueOf
             | Self::StringPrototypeValueOf
             | Self::ObjectPrototypeValueOf
-            | Self::DatePrototypeValueOf => "valueOf",
+            | Self::DatePrototypeValueOf
+            | Self::BigIntPrototypeValueOf => "valueOf",
             // 27.2.1.3 makes the pair of resolving functions with no name,
             // as 10.2.4.1 and 20.2.3 carry none either.
             Self::ThrowTypeError
@@ -3354,7 +3400,9 @@ impl Intrinsic {
             Self::DatePrototypeToDateString => "toDateString",
             Self::DatePrototypeToTimeString => "toTimeString",
             Self::DatePrototypeToUtcString => "toUTCString",
-            Self::DatePrototypeToLocaleString => "toLocaleString",
+            Self::DatePrototypeToLocaleString | Self::BigIntPrototypeToLocaleString => {
+                "toLocaleString"
+            }
             Self::DatePrototypeToLocaleDateString => "toLocaleDateString",
             Self::DatePrototypeToLocaleTimeString => "toLocaleTimeString",
             Self::ArrayBufferConstructor => "ArrayBuffer",
@@ -3400,6 +3448,9 @@ impl Intrinsic {
             Self::TypedArrayFloat64Constructor => "Float64Array",
             Self::TypedArrayPrototypeLength => "get length",
             Self::TypedArrayPrototypeToStringTag => "get [Symbol.toStringTag]",
+            Self::BigIntConstructor => "BigInt",
+            Self::BigIntAsIntN => "asIntN",
+            Self::BigIntAsUintN => "asUintN",
             Self::SharedArrayBufferConstructor => "SharedArrayBuffer",
             Self::SharedArrayBufferPrototypeGrow => "grow",
             Self::SharedArrayBufferPrototypeGrowable => "get growable",
@@ -4139,6 +4190,8 @@ impl Intrinsic {
             | Self::SharedArrayBufferPrototypeGrowable
             | Self::SharedArrayBufferPrototypeMaxByteLength
             | Self::AtomicsPause
+            | Self::BigIntPrototypeToLocaleString
+            | Self::BigIntPrototypeValueOf
             | Self::TypedArrayBase
             | Self::MapIteratorPrototypeNext
             | Self::SetIteratorPrototypeNext => 0,
@@ -4338,7 +4391,9 @@ impl Intrinsic {
             // 25.2.4 and 25.4.7 each take one argument.
             | Self::SharedArrayBufferConstructor
             | Self::SharedArrayBufferPrototypeGrow
-            | Self::AtomicsIsLockFree => 1,
+            | Self::AtomicsIsLockFree
+            | Self::BigIntConstructor
+            | Self::BigIntPrototypeToString => 1,
             Self::ObjectDefineProperty
             | Self::ReflectDefineProperty
             | Self::ReflectApply
@@ -4423,7 +4478,9 @@ impl Intrinsic {
             | Self::PromisePrototypeThen
             // 25.2.5.4 and 25.4.8 each take two.
             | Self::SharedArrayBufferPrototypeSlice
-            | Self::AtomicsLoad => 2,
+            | Self::AtomicsLoad
+            | Self::BigIntAsIntN
+            | Self::BigIntAsUintN => 2,
             // 21.4.2.1 and 21.4.3.4 take a year, a month, a day, an hour, a
             // minute, a second and a millisecond.
             Self::DatePrototypeSetHours
@@ -5314,6 +5371,7 @@ pub struct Realm {
     typed_array_prototype: Root,
     typed_array_prototypes: [Root; TYPED_ARRAY_KINDS],
     shared_array_buffer_prototype: Root,
+    bigint_prototype: Root,
     weak_map_prototype: Root,
     weak_set_prototype: Root,
     map_iterator_prototype: Root,
@@ -5383,6 +5441,7 @@ struct Holders {
     data_view_prototype: Root,
     typed_array_prototype: Root,
     shared_array_buffer_prototype: Root,
+    bigint_prototype: Root,
     atomics: Root,
     weak_map_prototype: Root,
     weak_set_prototype: Root,
@@ -5494,6 +5553,10 @@ impl Realm {
         // 25.3.4: %DataView.prototype% is an ordinary object and no view.
         let data_view_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
         let data_view_prototype = heap.push_root(Value::from_object(data_view_prototype))?;
+
+        // 21.2.3: %BigInt.prototype% is an ordinary object and no BigInt.
+        let bigint_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
+        let bigint_prototype = heap.push_root(Value::from_object(bigint_prototype))?;
 
         // 25.2.5: %SharedArrayBuffer.prototype% is an ordinary object and no
         // block.
@@ -5608,6 +5671,7 @@ impl Realm {
                 data_view_prototype,
                 typed_array_prototype,
                 shared_array_buffer_prototype,
+                bigint_prototype,
                 atomics,
                 weak_map_prototype,
                 weak_set_prototype,
@@ -5637,6 +5701,7 @@ impl Realm {
                 Intrinsic::SharedArrayBufferConstructor,
                 shared_array_buffer_prototype,
             ),
+            (Intrinsic::BigIntConstructor, bigint_prototype),
             (Intrinsic::WeakMapConstructor, weak_map_prototype),
             (Intrinsic::WeakSetConstructor, weak_set_prototype),
         ] {
@@ -5680,6 +5745,7 @@ impl Realm {
                 (array_buffer_prototype, "ArrayBuffer"),
                 (data_view_prototype, "DataView"),
                 (shared_array_buffer_prototype, "SharedArrayBuffer"),
+                (bigint_prototype, "BigInt"),
                 (atomics, "Atomics"),
                 (weak_map_prototype, "WeakMap"),
                 (weak_set_prototype, "WeakSet"),
@@ -5736,6 +5802,7 @@ impl Realm {
             typed_array_prototype,
             typed_array_prototypes,
             shared_array_buffer_prototype,
+            bigint_prototype,
             weak_map_prototype,
             weak_set_prototype,
             map_iterator_prototype,
@@ -6872,6 +6939,13 @@ impl Realm {
                     Self::rooted(heap, holders.shared_array_buffer_prototype)?
                 }
                 IntrinsicHolder::Atomics => Self::rooted(heap, holders.atomics)?,
+                IntrinsicHolder::BigIntPrototype => Self::rooted(heap, holders.bigint_prototype)?,
+                IntrinsicHolder::BigIntConstructor => Self::rooted(
+                    heap,
+                    *intrinsics
+                        .get(Intrinsic::BigIntConstructor.index())
+                        .ok_or(HeapError::InvalidReference)?,
+                )?,
                 IntrinsicHolder::ArrayBufferConstructor => Self::rooted(
                     heap,
                     *intrinsics
@@ -7295,6 +7369,15 @@ impl Realm {
     /// Returns [`HeapError::InvalidReference`] for a stale root.
     pub fn typed_array_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
         Self::rooted(heap, self.typed_array_prototype)
+    }
+
+    /// `%BigInt.prototype%`, 21.2.3.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale root.
+    pub fn bigint_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.bigint_prototype)
     }
 
     /// `%SharedArrayBuffer.prototype%`, 25.2.5.

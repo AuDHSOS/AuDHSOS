@@ -137,6 +137,8 @@ pub enum ObjectKind {
     /// The `[[ArrayBufferData]]` of 25.1.5, whose bytes are the block 25.1.3.1
     /// created; `None` is the detached block of 25.1.3.4.
     ArrayBuffer(Option<alloc::vec::Vec<u8>>),
+    /// Boxed `BigInt` of 6.1.6.2, which 7.1.18 makes of one.
+    BigIntWrapper(super::value::BigIntRef),
     /// The block of 25.2, which 25.2.3.1 allocates and no clause detaches.
     SharedArrayBuffer {
         /// `[[ArrayBufferData]]`.

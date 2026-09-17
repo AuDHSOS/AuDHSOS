@@ -14,6 +14,7 @@
 //! 7. Fast contiguous register interpreter (`interpreter`)
 
 pub mod agent;
+pub mod bigint;
 pub mod bytecode;
 pub mod context;
 pub mod elements;

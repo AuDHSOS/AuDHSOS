@@ -21,8 +21,8 @@ use super::{
     shape::{PropertyFlags, ShapeId, ShapeTable},
     string::{StringArena, StringError},
     value::{
-        ObjectRef, PropertyKey, StringRef, SymbolRef, VALUE_NULL, VALUE_UNDEFINED, Value,
-        WELL_KNOWN_SYMBOLS,
+        BigIntRef, ObjectRef, PropertyKey, StringRef, SymbolRef, VALUE_NULL, VALUE_UNDEFINED,
+        Value, WELL_KNOWN_SYMBOLS,
     },
 };
 use alloc::{collections::BTreeMap, collections::BTreeSet, vec::Vec};
@@ -291,6 +291,13 @@ pub struct GenerationalHeap {
     /// The `GlobalSymbolRegistry` of 20.4.2.2, keyed by the text `Symbol.for`
     /// was given.
     symbol_registry: BTreeMap<Vec<u16>, u32>,
+    /// Every `BigInt` of 6.1.6.2 this Realm made. A `BigInt` is a value and not an
+    /// object: it is never collected, so the fuel of the Agent is what bounds
+    /// this, as it bounds the Symbols beside it.
+    bigints: Vec<super::bigint::BigIntValue>,
+    /// Every `BigInt` the arena holds, keyed by its value, so that a value it
+    /// already holds takes no second entry.
+    bigint_registry: BTreeMap<(bool, Vec<u32>), u32>,
 }
 
 impl Default for GenerationalHeap {
@@ -323,6 +330,8 @@ impl GenerationalHeap {
             remembered_contexts: BTreeSet::new(),
             symbols: Vec::new(),
             symbol_registry: BTreeMap::new(),
+            bigints: Vec::new(),
+            bigint_registry: BTreeMap::new(),
         }
     }
 
@@ -339,6 +348,33 @@ impl GenerationalHeap {
             .ok_or(HeapError::ReferenceSpaceExhausted)?;
         self.symbols.push(description);
         Ok(SymbolRef(index))
+    }
+
+    /// Holds a `BigInt` of 6.1.6.2 and answers the reference of its value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::ReferenceSpaceExhausted`] when the reference space
+    /// of a `BigInt` is full.
+    pub fn create_bigint(
+        &mut self,
+        value: super::bigint::BigIntValue,
+    ) -> Result<BigIntRef, HeapError> {
+        let key = value.key();
+        if let Some(found) = self.bigint_registry.get(&key) {
+            return Ok(BigIntRef(*found));
+        }
+        let index =
+            u32::try_from(self.bigints.len()).map_err(|_| HeapError::ReferenceSpaceExhausted)?;
+        self.bigints.push(value);
+        self.bigint_registry.insert(key, index);
+        Ok(BigIntRef(index))
+    }
+
+    /// The value a `BigInt` reference names.
+    #[must_use]
+    pub fn bigint(&self, reference: BigIntRef) -> Option<&super::bigint::BigIntValue> {
+        self.bigints.get(usize::try_from(reference.0).ok()?)
     }
 
     /// The `[[Description]]` of a Symbol a Script made, and none for one of

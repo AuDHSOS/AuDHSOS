@@ -191,6 +191,9 @@ pub enum Instruction {
     LdaConstant(u16),
     /// `acc = strings[index]`, materialized in the current Agent's string arena.
     LdaString(u16),
+    /// `acc = bigints[index]`, materialized in the current Agent's `BigInt`
+    /// arena, which 12.9.3 names.
+    LdaBigInt(u16),
     /// `acc = [[GlobalThisValue]]` of the Realm's Global Environment Record
     /// (9.1.1.4.11), which 9.4.2 answers for `this` where no function bound
     /// one, that is at the top level of a Script.
@@ -306,6 +309,14 @@ pub enum Instruction {
     /// method of the Script: the primitive comes back into the register and the
     /// instruction runs again.
     ToNumeric(Reg),
+    /// `acc = ToNumber(register)`, which 13.5.4 asks and which refuses the
+    /// `BigInt` `ToNumeric` would answer.
+    NumberOnly(Reg),
+    /// `acc = acc + 1`, on the Number or the `BigInt` 13.4.4.1 made of it, which
+    /// answers the value of its own type and not a Number beside a `BigInt`.
+    Increment,
+    /// `acc = acc - 1`, the same way.
+    Decrement,
     /// `acc = ~ToInt32(acc)` for an already numeric primitive.
     BitNot,
     /// `acc = typeof acc`, materialized as an Agent-local String.
@@ -768,6 +779,8 @@ pub struct BytecodeFunction {
     pub constants: Vec<Value>,
     /// Heap-independent UTF-16 constants referenced by `LdaString`.
     pub string_constants: Vec<Vec<u16>>,
+    /// Heap-independent `BigInt` constants referenced by `LdaBigInt`.
+    pub bigint_constants: Vec<super::bigint::BigIntValue>,
     /// The patterns 22.2.4.1 compiled once, addressed by `CreateRegExp`.
     ///
     /// A pattern is compiled when the Script is, so a literal makes an object
@@ -854,6 +867,7 @@ impl BytecodeFunction {
             instructions: Vec::new(),
             constants: Vec::new(),
             string_constants: Vec::new(),
+            bigint_constants: Vec::new(),
             regex_constants: Vec::new(),
             functions: Vec::new(),
             register_count,
@@ -1055,6 +1069,7 @@ impl BytecodeFunction {
             | Instruction::Star(register)
             | Instruction::ToText(register)
             | Instruction::ToNumeric(register)
+            | Instruction::NumberOnly(register)
             | Instruction::Add(register)
             | Instruction::Sub(register)
             | Instruction::Mul(register)
@@ -1222,6 +1237,12 @@ impl BytecodeFunction {
                 }
                 None
             }
+            Instruction::LdaBigInt(index) => {
+                if usize::from(index) >= self.bigint_constants.len() {
+                    return Err(VerificationError::ConstantOutOfBounds { pc, index });
+                }
+                None
+            }
             Instruction::StaGlobal { name: index, .. }
             | Instruction::LdaString(index)
             | Instruction::LdaGlobal(index)
@@ -1263,6 +1284,8 @@ impl BytecodeFunction {
             | Instruction::ToNumber
             | Instruction::BitNot
             | Instruction::TypeOf
+            | Instruction::Increment
+            | Instruction::Decrement
             | Instruction::LdaGlobalThis
             | Instruction::LdaUndefined
             | Instruction::LdaNull

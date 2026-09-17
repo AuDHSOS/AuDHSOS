@@ -54,6 +54,8 @@ pub(crate) enum Binary {
 pub(crate) enum ExprKind {
     Sequence(Box<Expr>, Box<Expr>),
     Literal(Value),
+    /// A `BigInt` literal of 12.9.3: its digits and the radix they stand in.
+    BigInt(alloc::rc::Rc<str>, u32),
     Regex(String, String),
     Template(Value, Vec<(Expr, Value)>),
     Await(Box<Expr>),
@@ -1594,6 +1596,9 @@ impl Parser {
                 return Err(Self::unsupported("dynamic import and import.meta"));
             }
             Kind::Literal(value) => self.make(ExprKind::Literal(value), 1, token.offset)?,
+            Kind::BigInt(digits, radix) => {
+                self.make(ExprKind::BigInt(digits.into(), radix), 1, token.offset)?
+            }
             Kind::Word(name) if !reserved(&name) => {
                 self.make(ExprKind::Name(name), 1, token.offset)?
             }

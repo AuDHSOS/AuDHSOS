@@ -401,6 +401,9 @@ pub struct Program {
     pub(crate) register_code: Option<Rc<crate::engine::bytecode::BytecodeFunction>>,
     /// The construct the register lowering would not take, when it took none.
     pub(crate) register_refusal: Option<&'static str>,
+    /// The construct the stack backend would not take, when it took none and
+    /// the register lowering did. It goes away with the legacy backend.
+    pub(crate) stack_refusal: Option<&'static str>,
 }
 
 #[derive(Clone, Debug)]
@@ -424,6 +427,7 @@ impl Program {
             globals: Vec::new(),
             register_code: None,
             register_refusal: None,
+            stack_refusal: None,
             total_instructions: 0,
         }
     }
@@ -459,6 +463,7 @@ impl Program {
         Self {
             register_code: None,
             register_refusal: None,
+            stack_refusal: None,
             ..self.clone()
         }
     }
@@ -516,6 +521,7 @@ fn compile_parsed(body: &[Stmt], limits: Limits, realm: bool) -> Result<Program,
             globals: Vec::new(),
             register_code: None,
             register_refusal: None,
+            stack_refusal: None,
         },
         scopes: Vec::new(),
         loops: Vec::new(),
@@ -527,11 +533,20 @@ fn compile_parsed(body: &[Stmt], limits: Limits, realm: bool) -> Result<Program,
         realm,
     };
     compiler.scopes.push(BTreeMap::new());
-    if realm {
-        compiler.global_body(body)?;
+    let outcome = if realm {
+        compiler.global_body(body)
     } else {
-        compiler.root_body(body)?;
-    }
+        compiler.root_body(body)
+    };
+    // A feature of the new engine that the stack backend has no value for
+    // leaves that backend without code. The Script still runs, on the engine
+    // the migration is heading for, and the stack backend names the gap where
+    // it is asked to run.
+    let stack_refusal = match outcome {
+        Ok(()) => None,
+        Err(Error::Unsupported { feature }) => Some(feature),
+        Err(error) => return Err(error),
+    };
     compiler.finish();
     let (register_code, register_refusal) = lower_register_script(
         body,
@@ -539,8 +554,14 @@ fn compile_parsed(body: &[Stmt], limits: Limits, realm: bool) -> Result<Program,
         u64::try_from(compiler.program.total_instructions).unwrap_or(u64::MAX),
         limits.properties,
     );
+    if stack_refusal.is_some() && register_code.is_none() {
+        return Err(Error::Unsupported {
+            feature: stack_refusal.unwrap_or("a Script neither backend takes"),
+        });
+    }
     compiler.program.register_code = register_code.map(Rc::new);
     compiler.program.register_refusal = register_refusal;
+    compiler.program.stack_refusal = stack_refusal;
     Ok(compiler.program)
 }
 
@@ -1967,6 +1988,16 @@ impl RegisterLowerer {
         // call or an assignment does not pass it on to what it contains.
         let member_base = core::mem::take(&mut self.reading_member_base);
         let result = match &expression.kind {
+            // 12.9.3 makes the value of a BigInt literal where it stands, in
+            // the arena of the Agent, from the digits the lexer kept.
+            ExprKind::BigInt(digits, radix) => {
+                let units: Vec<u16> = digits.encode_utf16().collect();
+                let value = crate::engine::bigint::BigIntValue::from_digits(&units, *radix, false)?;
+                let index = u16::try_from(self.code.bigint_constants.len()).ok()?;
+                self.code.bigint_constants.push(value);
+                self.code.emit(Instruction::LdaBigInt(index));
+                RegisterType::Unknown
+            }
             ExprKind::Literal(value) => match value {
                 Value::Number(number) => {
                     if let Some(smi) = smi_literal(*number) {
@@ -2132,7 +2163,13 @@ impl RegisterLowerer {
                             // which the instruction names where it runs.
                             let held = self.allocate_register()?;
                             self.code.emit(Instruction::Star(held));
-                            self.code.emit(Instruction::ToNumeric(held));
+                            // 13.5.4 asks ToNumber, which has no Number for a
+                            // BigInt, where 13.5.5 and 13.5.6 ask ToNumeric.
+                            self.code.emit(if matches!(operator, Unary::Plus) {
+                                Instruction::NumberOnly(held)
+                            } else {
+                                Instruction::ToNumeric(held)
+                            });
                             self.release_register(held)?;
                         }
                         if matches!(operator, Unary::Minus) {
@@ -2153,7 +2190,12 @@ impl RegisterLowerer {
                     Unary::Delete => return None,
                 }
                 match operator {
-                    Unary::Plus | Unary::Minus | Unary::BitNot => RegisterType::Number,
+                    Unary::Plus => RegisterType::Number,
+                    // 6.1.6.2.1 and 6.1.6.2.2 answer a BigInt for one.
+                    Unary::Minus | Unary::BitNot if inner_type == RegisterType::Number => {
+                        RegisterType::Number
+                    }
+                    Unary::Minus | Unary::BitNot => RegisterType::Unknown,
                     Unary::Not => RegisterType::Boolean,
                     Unary::Void => RegisterType::Undefined,
                     Unary::Typeof => RegisterType::String,
@@ -5478,7 +5520,6 @@ impl RegisterLowerer {
         // The old value outlives the write, so its register is allocated
         // before the ones the assignment takes and released after them.
         let numeric = self.allocate_register()?;
-        let one = self.allocate_register()?;
         let prepared = self.prepare_member_assignment(target)?;
         self.read_prepared_member(&prepared)?;
         // 13.4.4.1 takes `ToNumeric` of the old value first, so a postfix
@@ -5487,21 +5528,18 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Star(numeric));
         self.code.emit(Instruction::ToNumeric(numeric));
         self.code.emit(Instruction::Star(numeric));
-        self.code.emit(Instruction::LdaSmi(1));
-        self.code.emit(Instruction::Star(one));
         self.code.emit(Instruction::Ldar(numeric));
         self.code.emit(if add {
-            Instruction::Add(one)
+            Instruction::Increment
         } else {
-            Instruction::Sub(one)
+            Instruction::Decrement
         });
-        self.finish_member_assignment(prepared, RegisterType::Number)?;
+        self.finish_member_assignment(prepared, RegisterType::Unknown)?;
         if !prefix {
             self.code.emit(Instruction::Ldar(numeric));
         }
-        self.release_register(one)?;
         self.release_register(numeric)?;
-        Some(RegisterType::Number)
+        Some(RegisterType::Unknown)
     }
 
     /// Reads the property a prepared assignment names, through the registers
@@ -8549,23 +8587,29 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Star(numeric));
         self.code.emit(Instruction::ToNumeric(numeric));
         self.code.emit(Instruction::Star(numeric));
-        let one = self.allocate_register()?;
-        self.code.emit(Instruction::LdaSmi(1));
-        self.code.emit(Instruction::Star(one));
         self.code.emit(Instruction::Ldar(numeric));
         self.code.emit(if add {
-            Instruction::Add(one)
+            Instruction::Increment
         } else {
-            Instruction::Sub(one)
+            Instruction::Decrement
         });
         self.store_binding(binding);
-        self.bindings.get_mut(name)?.value_type = Some(RegisterType::Number);
-        self.release_register(one)?;
+        // 13.4.4.1 answers a BigInt for a BigInt operand, so only an operand
+        // the lowering knows to be a Number leaves a Number behind.
+        let answer = if binding
+            .value_type
+            .is_some_and(RegisterType::is_numeric_primitive)
+        {
+            RegisterType::Number
+        } else {
+            RegisterType::Unknown
+        };
+        self.bindings.get_mut(name)?.value_type = Some(answer);
         if !prefix {
             self.code.emit(Instruction::Ldar(numeric));
         }
         self.release_register(numeric)?;
-        Some(RegisterType::Number)
+        Some(answer)
     }
 
     /// `13.4.4.1` on a name the Global Environment Record binds.
@@ -8578,25 +8622,21 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Star(numeric));
         self.code.emit(Instruction::ToNumeric(numeric));
         self.code.emit(Instruction::Star(numeric));
-        let one = self.allocate_register()?;
-        self.code.emit(Instruction::LdaSmi(1));
-        self.code.emit(Instruction::Star(one));
         self.code.emit(Instruction::Ldar(numeric));
         self.code.emit(if add {
-            Instruction::Add(one)
+            Instruction::Increment
         } else {
-            Instruction::Sub(one)
+            Instruction::Decrement
         });
         self.code.emit(Instruction::StaGlobal {
             name: constant,
             strict: false,
         });
-        self.release_register(one)?;
         if !prefix {
             self.code.emit(Instruction::Ldar(numeric));
         }
         self.release_register(numeric)?;
-        Some(RegisterType::Number)
+        Some(RegisterType::Unknown)
     }
 
     fn allocate_register(&mut self) -> Option<crate::engine::bytecode::Reg> {
@@ -8735,13 +8775,14 @@ fn register_expression_type(
         ExprKind::Unary(operator, inner) => {
             let inner = register_expression_type(inner, bindings)?;
             match operator {
-                Unary::Plus | Unary::Minus | Unary::BitNot if inner.is_primitive() => {
+                Unary::Plus => RegisterType::Number,
+                Unary::Minus | Unary::BitNot if inner == RegisterType::Number => {
                     RegisterType::Number
                 }
                 Unary::Not | Unary::Delete => RegisterType::Boolean,
                 Unary::Void => RegisterType::Undefined,
                 Unary::Typeof => RegisterType::String,
-                Unary::Plus | Unary::Minus | Unary::BitNot => {
+                Unary::Minus | Unary::BitNot => {
                     return None;
                 }
             }
@@ -8921,7 +8962,10 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::FunctionPrototypeToString
         | crate::engine::realm::Intrinsic::ErrorPrototypeToString
         | crate::engine::realm::Intrinsic::StringPrototypeReplace
-        | crate::engine::realm::Intrinsic::ArrayPrototypeToString => RegisterType::String,
+        | crate::engine::realm::Intrinsic::ArrayPrototypeToString
+        // 21.2.3.3 and 21.2.3.2 write the BigInt out.
+        | crate::engine::realm::Intrinsic::BigIntPrototypeToString
+        | crate::engine::realm::Intrinsic::BigIntPrototypeToLocaleString => RegisterType::String,
 
         // 23.1.3.38 answers an Array Iterator and 23.1.5.2.1 a result object,
         // neither of which has a tracked layout. 23.1.3.1 answers an element,
@@ -9095,6 +9139,12 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // 23.2.6 answers the array it made, 23.2.3.1 the block it looks into,
         // and 23.2.1.1 refuses every call.
         | crate::engine::realm::Intrinsic::TypedArrayBase
+        // 21.2.1.1, 21.2.2 and 21.2.3.4 answer a BigInt, which no
+        // register type of this lowering names.
+        | crate::engine::realm::Intrinsic::BigIntConstructor
+        | crate::engine::realm::Intrinsic::BigIntAsIntN
+        | crate::engine::realm::Intrinsic::BigIntAsUintN
+        | crate::engine::realm::Intrinsic::BigIntPrototypeValueOf
         // 25.2.4 and 25.2.5.4 answer a block, and 25.4.13 one of the
         // three texts of table 76.
         | crate::engine::realm::Intrinsic::SharedArrayBufferConstructor
@@ -10072,9 +10122,11 @@ fn register_expression_reads(expression: &Expr, what: Reads) -> bool {
         ExprKind::Super => !matches!(what, Reads::NewTarget),
         ExprKind::NewTarget => matches!(what, Reads::This | Reads::NewTarget),
         ExprKind::This => matches!(what, Reads::This),
-        ExprKind::Literal(_) | ExprKind::Name(_) | ExprKind::Regex(_, _) | ExprKind::Update(..) => {
-            false
-        }
+        ExprKind::BigInt(..)
+        | ExprKind::Literal(_)
+        | ExprKind::Name(_)
+        | ExprKind::Regex(_, _)
+        | ExprKind::Update(..) => false,
         ExprKind::Group(inner)
         | ExprKind::Unary(_, inner)
         | ExprKind::Await(inner)
@@ -10185,7 +10237,8 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
         // reaches no binding of this analysis.
         // 13.3.7.3 answers `super` out of the `[[HomeObject]]` of the running
         // function, which is no binding of the body.
-        ExprKind::Literal(_)
+        ExprKind::BigInt(..)
+        | ExprKind::Literal(_)
         | ExprKind::Name(_)
         | ExprKind::This
         | ExprKind::Super
@@ -10523,7 +10576,8 @@ fn register_expression_references(
         // of every name this analysis collects.
         // 13.3.7.3 answers `super` out of the `[[HomeObject]]` of the running
         // function, which is no binding of the body.
-        ExprKind::Literal(_)
+        ExprKind::BigInt(..)
+        | ExprKind::Literal(_)
         | ExprKind::This
         | ExprKind::Super
         | ExprKind::DefaultSuper
@@ -11004,6 +11058,7 @@ const fn expression_refusal(kind: &ExprKind) -> &'static str {
     match kind {
         ExprKind::Sequence(..) => "a sequence expression",
         ExprKind::Literal(_) => "a literal",
+        ExprKind::BigInt(..) => "a BigInt literal",
         ExprKind::Regex(..) => "a regular-expression literal",
         ExprKind::Template(..) => "a template literal",
         ExprKind::Await(_) => "await",
@@ -12519,6 +12574,13 @@ impl Compiler {
                     message: "spread outside array or argument list",
                 });
             }
+            // 6.1.6.2 is a type of the new engine; the stack backend has no
+            // value of it.
+            ExprKind::BigInt(..) => {
+                return Err(Error::Unsupported {
+                    feature: "BigInt literals",
+                });
+            }
             ExprKind::Class(class) => self.class(class, None)?,
             ExprKind::NewTarget => {
                 self.emit(Op::NewTarget)?;
@@ -13045,6 +13107,7 @@ impl Compiler {
                 globals: Vec::new(),
                 register_code: None,
                 register_refusal: None,
+                stack_refusal: None,
             },
             scopes: Vec::new(),
             loops: Vec::new(),
