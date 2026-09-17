@@ -8858,10 +8858,30 @@ fn the_map_of_24_1_and_the_set_of_24_2_hold_their_entries() -> Result<(), Error>
     ] {
         assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
     }
-    // 24.1.1.1 step 6 walks an iterable and calls 24.1.3.9 for each entry,
-    // which is a call of the Script the clause has no frame to make.
+    // 24.1.1.1 step 8 and 24.2.1.1 step 8 add every value of the iterable.
+    for (source, answer) in [
+        ("var s=new Set([1,2,2,3]);''+s.size+[...s].join('')", "3123"),
+        (
+            "var m=new Map([['a',1],['b',2]]);''+m.size+m.get('a')+m.get('b')",
+            "212",
+        ),
+        (
+            "var m=new Map([['a',1],['a',9]]);''+m.size+m.get('a')",
+            "19",
+        ),
+        ("''+new Set([]).size+new Map([]).size", "00"),
+        // Step 8.d.i throws for an entry of a Map that is no Object.
+        (
+            "var r;try{new Map([1])}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    // Step 7 reads the `set` off the object it just made, so a Script that
+    // replaced it decides what an entry is, which the clause has no frame for.
     assert!(matches!(
-        realm.evaluate("new Map([[1,2]])"),
+        realm.evaluate("var C=function(){};C.prototype=Map.prototype;Map.prototype.set=function(){};new Map([[1,2]])"),
         Err(Error::Unsupported { .. })
     ));
     Ok(())

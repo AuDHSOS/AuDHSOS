@@ -5922,13 +5922,12 @@ impl RegisterVM {
             if call.construct.is_none() {
                 return Err(type_error(heap, realm, "a constructor called without new"));
             }
-            // Step 6 walks the iterable and calls the clause for each entry,
-            // which is a call of the Script this clause has no frame to make.
             let iterable = self.call_argument(&call, 0, heap)?;
-            if !iterable.is_undefined() && !iterable.is_null() {
-                return Err(VMError::Unsupported("an iterable of 24.1.1.1"));
+            let collection = Self::create_collection(set, heap, realm)?;
+            if iterable.is_undefined() || iterable.is_null() {
+                return Ok(collection);
             }
-            return Self::create_collection(set, heap, realm);
+            return Self::fill_collection(collection, iterable, set, heap, realm);
         }
         let entries = Self::collection_entries(call.receiver, set, heap, realm)?;
         let key = self.call_argument(&call, 0, heap)?;
@@ -6126,6 +6125,69 @@ impl RegisterVM {
         let object = heap.allocate_object(shape, prototype)?;
         heap.set_object_kind(object, ObjectKind::Collection { entries, set })?;
         Ok(Value::from_object(object))
+    }
+
+    /// 24.1.1.1 step 8 and 24.2.1.1 step 8: every value of the iterable goes
+    /// through the `set` or the `add` of the collection.
+    ///
+    /// Step 7 reads that method off the object it just made, so a Script that
+    /// replaced it on the Prototype decides what an entry is. This clause has
+    /// no frame to call one of the Script with, and it names that rather than
+    /// adding the entries itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for an entry of a Map
+    /// that is no Object, which step 8.d.i throws for.
+    fn fill_collection(
+        collection: Value,
+        iterable: Value,
+        set: bool,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let adder = if set {
+            Intrinsic::SetPrototypeAdd
+        } else {
+            Intrinsic::MapPrototypeSet
+        };
+        let object = collection.as_object().ok_or(VMError::TypeError)?;
+        let name = PropertyKey::String(heap.strings.intern(adder.name())?);
+        let held = heap
+            .lookup_named(object, name)?
+            .map(Self::plain_value)
+            .transpose()?
+            .unwrap_or(VALUE_UNDEFINED);
+        if !Self::is_intrinsic(held, adder, heap) {
+            return Err(VMError::Unsupported(
+                "a `set` or an `add` of the Script in 24.1.1.1",
+            ));
+        }
+        let entries = Self::collection_entries(collection, set, heap, realm)?;
+        for element in Self::iterable_elements(iterable, heap, realm)? {
+            let (key, value) = if set {
+                (element, element)
+            } else {
+                // Step 8.d.i: an entry of a Map is an Object, whose "0" and
+                // "1" step 8.d.ii and 8.d.iii read with 7.3.2.
+                let entry = element.as_object().ok_or_else(|| {
+                    type_error(heap, realm, "an entry of a Map that is not an object")
+                })?;
+                (
+                    Self::element_at(heap, entry, 0)?.unwrap_or(VALUE_UNDEFINED),
+                    Self::element_at(heap, entry, 1)?.unwrap_or(VALUE_UNDEFINED),
+                )
+            };
+            let key = Self::collection_key(key);
+            if let Some(at) = Self::collection_find(heap, entries, key)? {
+                promise::set_slot(heap, entries, at.saturating_add(1), value)?;
+            } else {
+                let end = promise::length_of(heap, entries);
+                promise::set_slot(heap, entries, end, key)?;
+                promise::set_slot(heap, entries, end.saturating_add(1), value)?;
+            }
+        }
+        Ok(collection)
     }
 
     /// The entries of the receiver of a clause of 24.1.3 or 24.2.3.
