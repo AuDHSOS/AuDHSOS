@@ -37,6 +37,11 @@ pub enum PrivateOp {
     /// `PrivateMethodOrAccessorAdd` of 7.3.26, which adds the method in the
     /// accumulator, and no write of the Script reaches it afterwards.
     AddMethod,
+    /// The same for the getter of an accessor of 15.7.1, which stands beside
+    /// the setter of the same name in one element.
+    AddGetter,
+    /// The same for the setter of one.
+    AddSetter,
     /// The `in` of 13.10.1 with a Private Name, which answers whether the
     /// object carries the element.
     Has,

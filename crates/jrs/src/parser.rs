@@ -155,7 +155,7 @@ pub(crate) struct Class {
     /// The private methods of 15.7.1, each with whether it is `static` and the
     /// function it holds, which 7.3.26 adds to every instance and 15.7.14
     /// adds to the constructor.
-    pub(crate) private_methods: Vec<(String, bool, Expr)>,
+    pub(crate) private_methods: Vec<(String, bool, Expr, Option<bool>)>,
     /// The computed names of the fields of 15.7.1, which 15.7.5 evaluates
     /// where the class is defined and not where the Initializer runs. A field
     /// names the one it carries by its place in this list.

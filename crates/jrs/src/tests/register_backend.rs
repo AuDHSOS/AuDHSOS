@@ -1459,6 +1459,20 @@ fn a_private_element_of_6_2_13_is_reached_by_the_class_body_alone() -> Result<()
             "var C=class{static #m(){return 5}static call(){return C.#m()}};''+C.call()",
             "5",
         ),
+        // 7.3.26 puts the two halves of a private accessor in one element,
+        // and 7.3.28 and 7.3.29 reach them through it.
+        (
+            "var C=class{#v=1;get #x(){return this.#v}set #x(w){this.#v=w}run(){this.#x=5;return this.#x}};''+new C().run()",
+            "5",
+        ),
+        (
+            "var C=class{get #x(){return 1}run(){this.#x=2}};var r;try{new C().run()}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        (
+            "var C=class{static get #x(){return 8}static run(){return C.#x}};''+C.run()",
+            "8",
+        ),
         // A class inside a method declares its own names, which the body
         // around it does not read.
         (

@@ -3460,11 +3460,15 @@ impl RegisterLowerer {
             computed_keys.push((name, register, shadowed));
         }
         let mut private_values = Vec::new();
-        for (name, _, _) in &class.private_methods {
+        for (name, _, _, accessor) in &class.private_methods {
             let register = self.allocate_register()?;
             self.active_binding_count = self.active_binding_count.checked_add(1)?;
             self.max_binding_count = self.max_binding_count.max(self.active_binding_count);
-            let held = alloc::format!("{name}#");
+            let held = match accessor {
+                Some(true) => alloc::format!("{name}#s"),
+                Some(false) => alloc::format!("{name}#g"),
+                None => alloc::format!("{name}#"),
+            };
             let shadowed = self.bindings.insert(
                 held.clone(),
                 RegisterBinding {
@@ -3559,7 +3563,7 @@ impl RegisterLowerer {
         // 15.7.14 makes the function of each private method a method of the
         // prototype, or of the constructor where the body says `static`, and
         // 7.3.26 adds a static one to the constructor at once.
-        for ((name, is_static, function), (held, _, _)) in
+        for ((name, is_static, function, accessor), (held, _, _)) in
             class.private_methods.iter().zip(&private_values)
         {
             let home = if *is_static { constructor } else { prototype };
@@ -3577,7 +3581,7 @@ impl RegisterLowerer {
                 self.code.emit(Instruction::PrivateAccess {
                     obj: constructor,
                     key: key_register,
-                    op: crate::engine::bytecode::PrivateOp::AddMethod,
+                    op: Self::private_add(*accessor),
                 });
                 self.release_register(key_register)?;
             }
@@ -5864,13 +5868,30 @@ impl RegisterLowerer {
         Some(RegisterFlow::Empty)
     }
 
+    /// Which add of 7.3.26 an element of a class body needs: a method stands
+    /// on its own, and each half of an accessor stands beside the other.
+    const fn private_add(accessor: Option<bool>) -> crate::engine::bytecode::PrivateOp {
+        match accessor {
+            Some(true) => crate::engine::bytecode::PrivateOp::AddSetter,
+            Some(false) => crate::engine::bytecode::PrivateOp::AddGetter,
+            None => crate::engine::bytecode::PrivateOp::AddMethod,
+        }
+    }
+
     /// 7.3.27 on a field of 15.7.1 whose name is a Private Name, which adds
     /// the element to the instance the constructor is running for.
     fn lower_private_field(&mut self, name: &str, value: Option<&Expr>) -> Option<RegisterFlow> {
         use crate::engine::bytecode::Instruction;
-        // A name that carries a second `#` names a private method, whose
-        // function the class body made once and whose binding this reads.
-        let method = name.strip_suffix('#');
+        // A name that carries a second `#` names a private method, and one of
+        // `#g` or `#s` behind it a half of a private accessor; the class body
+        // made the function once and the binding of that name holds it.
+        let (method, accessor) = match name.strip_suffix("#g") {
+            Some(key) => (Some(key), Some(false)),
+            None => match name.strip_suffix("#s") {
+                Some(key) => (Some(key), Some(true)),
+                None => (name.strip_suffix('#'), None),
+            },
+        };
         let this = self.bindings.get(THIS_BINDING).copied()?;
         let binding = self.bindings.get(method.unwrap_or(name)).copied()?;
         let object = self.allocate_register()?;
@@ -5897,7 +5918,7 @@ impl RegisterLowerer {
             obj: object,
             key,
             op: if method.is_some() {
-                crate::engine::bytecode::PrivateOp::AddMethod
+                Self::private_add(accessor)
             } else {
                 crate::engine::bytecode::PrivateOp::Add
             },
@@ -11611,9 +11632,13 @@ fn register_statement_references(
         Stmt::Field(name, value) => {
             if name.starts_with('#') || name.starts_with('%') {
                 names.insert(name.clone());
-                // A private method reads the Private Name beside the binding
-                // that holds the function.
-                if let Some(key) = name.strip_suffix('#') {
+                // A private method and each half of a private accessor read
+                // the Private Name beside the binding that holds the function.
+                let key = name
+                    .strip_suffix("#g")
+                    .or_else(|| name.strip_suffix("#s"))
+                    .or_else(|| name.strip_suffix('#'));
+                if let Some(key) = key {
                     names.insert(String::from(key));
                 }
             }

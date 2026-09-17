@@ -10246,6 +10246,48 @@ impl RegisterVM {
     ///
     /// The other half is whatever the property already holds, so the two
     /// clauses of one name meet on the object.
+    /// 7.3.26 on the half of a private accessor, which stands in an element
+    /// no operation of the Script lists and no write of it reaches.
+    fn define_private_accessor(
+        &self,
+        obj: Reg,
+        name: PropertyKey,
+        setter: bool,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        let oref = self.read_reg(obj)?.as_object().ok_or(VMError::TypeError)?;
+        let (get, set) = match heap.own_named_flags(oref, name)? {
+            Some(flags) if flags.is_accessor => {
+                let held = heap
+                    .lookup_named(oref, name)?
+                    .map_or(VALUE_UNDEFINED, |property| property.value);
+                Self::accessor_parts(held, heap)?
+            }
+            _ => (VALUE_UNDEFINED, VALUE_UNDEFINED),
+        };
+        let function = self.acc;
+        let (get, set) = if setter {
+            (get, function)
+        } else {
+            (function, set)
+        };
+        let pair = Self::make_accessor(get, set, heap)?;
+        // The pair was allocated, which may have moved the object.
+        let oref = self.read_reg(obj)?.as_object().ok_or(VMError::TypeError)?;
+        heap.define_own_named(
+            oref,
+            name,
+            pair,
+            PropertyFlags {
+                writable: false,
+                enumerable: false,
+                configurable: false,
+                is_accessor: true,
+            },
+        )?;
+        Ok(())
+    }
+
     fn define_accessor(
         &self,
         obj: Reg,
@@ -21642,8 +21684,35 @@ impl RegisterVM {
                                     "a private element the object does not carry",
                                 ));
                             };
+                            // 7.3.28 step 5: the getter of the accessor
+                            // answers, and one that carries none is a
+                            // `TypeError`.
                             if flags.is_accessor {
-                                return Err(VMError::Unsupported("a property that is an accessor"));
+                                let pair = heap
+                                    .lookup_named(oref, name)?
+                                    .map_or(VALUE_UNDEFINED, |property| property.value);
+                                if Self::accessor_parts(pair, heap)?.0.is_undefined() {
+                                    return Err(type_error(
+                                        heap,
+                                        realm,
+                                        "a private accessor that carries no getter",
+                                    ));
+                                }
+                                if let Some(entered) = self.enter_accessor(
+                                    pair,
+                                    target,
+                                    None,
+                                    pc,
+                                    current_code_id,
+                                    units,
+                                    active_feedback,
+                                    heap,
+                                    realm,
+                                )? {
+                                    current_code_id = Some(entered);
+                                    pc = self.pending_pc.take().unwrap_or(0);
+                                }
+                                return Ok(None);
                             }
                             let indexed = Self::element_index_of(oref, name, heap);
                             self.acc = Self::own_property_value(oref, name, indexed, heap)?;
@@ -21656,8 +21725,36 @@ impl RegisterVM {
                                     "a private element the object does not carry",
                                 ));
                             };
+                            // 7.3.29 step 5: the setter of the accessor takes
+                            // the value, and one that carries none is a
+                            // `TypeError`.
                             if flags.is_accessor {
-                                return Err(VMError::Unsupported("a property that is an accessor"));
+                                let pair = heap
+                                    .lookup_named(oref, name)?
+                                    .map_or(VALUE_UNDEFINED, |property| property.value);
+                                if Self::accessor_parts(pair, heap)?.1.is_undefined() {
+                                    return Err(type_error(
+                                        heap,
+                                        realm,
+                                        "a private accessor that carries no setter",
+                                    ));
+                                }
+                                let assigned = self.acc;
+                                if let Some(entered) = self.enter_accessor(
+                                    pair,
+                                    target,
+                                    Some((assigned, true)),
+                                    pc,
+                                    current_code_id,
+                                    units,
+                                    active_feedback,
+                                    heap,
+                                    realm,
+                                )? {
+                                    current_code_id = Some(entered);
+                                    pc = self.pending_pc.take().unwrap_or(0);
+                                }
+                                return Ok(None);
                             }
                             // 7.3.29 step 4.b refuses a write to a method.
                             if !flags.writable {
@@ -21665,6 +21762,27 @@ impl RegisterVM {
                             }
                             let value = self.acc;
                             heap.define_own_named(oref, name, value, flags)?;
+                        }
+                        // 7.3.26 adds the half of the accessor to the element
+                        // the object carries, or makes the element out of it.
+                        crate::engine::bytecode::PrivateOp::AddGetter
+                        | crate::engine::bytecode::PrivateOp::AddSetter => {
+                            let setter =
+                                matches!(op, crate::engine::bytecode::PrivateOp::AddSetter);
+                            if carried.is_some_and(|flags| !flags.is_accessor) {
+                                return Err(type_error(
+                                    heap,
+                                    realm,
+                                    "a private element the object already carries",
+                                ));
+                            }
+                            if carried.is_none()
+                                && heap.own_property_count(oref).unwrap_or(usize::MAX)
+                                    >= self.property_limit
+                            {
+                                return Err(VMError::PropertyLimit);
+                            }
+                            self.define_private_accessor(obj, name, setter, heap)?;
                         }
                         crate::engine::bytecode::PrivateOp::Add
                         | crate::engine::bytecode::PrivateOp::AddMethod => {

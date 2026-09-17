@@ -357,15 +357,19 @@ impl Parser {
             if let ExprKind::PrivateName(name) = &key.kind {
                 // 15.7.14 makes one function per evaluation of the class body
                 // and 7.3.26 adds it to each instance, before the fields run.
-                if accessor.is_some() {
-                    return Err(Self::unsupported("a private accessor"));
-                }
+                // The two halves of an accessor stand in one element, which
+                // the name of each half says.
                 let name = name.clone();
+                let held = match accessor {
+                    Some(true) => alloc::format!("{name}#s"),
+                    Some(false) => alloc::format!("{name}#g"),
+                    None => alloc::format!("{name}#"),
+                };
                 let value = self.make(ExprKind::Function(function), 1, offset)?;
                 if !is_static {
-                    private_adds.push(Stmt::Field(alloc::format!("{name}#"), None));
+                    private_adds.push(Stmt::Field(held, None));
                 }
-                private_methods.push((name, is_static, value));
+                private_methods.push((name, is_static, value, accessor));
                 continue;
             }
             if is_constructor {
