@@ -779,6 +779,10 @@ pub enum PrimitiveStep {
 }
 
 /// Contiguous register-based virtual machine executor.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the run keeps one flag per thing it is in the middle of"
+)]
 pub struct RegisterVM {
     /// Flat contiguous register stack.
     stack: Vec<Value>,
@@ -823,6 +827,11 @@ pub struct RegisterVM {
     /// Whether that text is a Script 19.2.1 asked to have evaluated, rather
     /// than a unit 20.2.1.1 asked to have compiled.
     pending_script: bool,
+    /// Whether the unit this run entered is the Script of a Realm, which is
+    /// what 19.2.1.1 evaluates a nested Script against.
+    entry_is_realm_script: bool,
+    /// Whether the call now entering is the direct eval of 13.3.6.1.
+    direct_eval: bool,
     /// Whether that text is a line the embedding was asked to write.
     pending_print: bool,
     /// Where the run continues once that unit exists.
@@ -947,6 +956,8 @@ impl RegisterVM {
             pending_new_target: VALUE_UNDEFINED,
             pending_source: None,
             pending_script: false,
+            entry_is_realm_script: false,
+            direct_eval: false,
             pending_print: false,
             resume_pc: 0,
             resume_code_id: None,
@@ -2279,7 +2290,7 @@ impl RegisterVM {
                 self.create_dynamic_function(&call, units, heap, realm)
             }
             // 19.2.1 evaluates a Script, which the embedding runs.
-            Intrinsic::Eval => self.perform_eval(&call, units, heap, realm),
+            Intrinsic::Eval => self.perform_eval(&call, heap, realm),
             Intrinsic::ArrayIsArray
             | Intrinsic::FunctionPrototypeCall
             | Intrinsic::MathPow
@@ -12711,14 +12722,13 @@ impl RegisterVM {
     /// `eval` of 19.2.1, through `PerformEval` of 19.2.1.1.
     ///
     /// The text is a Script of the same Realm, which the embedding evaluates
-    /// and answers; the call instruction runs again with what it said. A
-    /// direct eval inside a function shares the variable environment of that
-    /// function, which this engine keeps in registers no Script can name, so
-    /// only the top level of a Script of a Realm takes this path.
+    /// and answers; the call instruction runs again with what it said. The
+    /// direct eval of 13.3.6.1 inside a function shares the variable
+    /// environment of that function, which this engine keeps in registers no
+    /// Script can name, and which the lowering refuses.
     fn perform_eval(
         &mut self,
         call: &Call,
-        units: CodeUnits<'_>,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
@@ -12739,10 +12749,17 @@ impl RegisterVM {
         if !source.is_string() {
             return Ok(source);
         }
-        if call.caller_code_id.is_some() || !units.active.realm_script {
+        // 19.2.1.1 step 4 evaluates in the global environment, which is what
+        // the embedding gives a nested Script. The direct eval of 13.3.6.1
+        // shares the variable environment of the function the call stands in,
+        // which this engine keeps in registers no Script can name.
+        if !self.entry_is_realm_script {
             return Err(VMError::Unsupported(
-                "an eval whose variable environment is not the global one",
+                "an eval of a Script that has no Realm",
             ));
+        }
+        if core::mem::take(&mut self.direct_eval) && call.caller_code_id.is_some() {
+            return Err(VMError::Unsupported("a direct eval inside a function"));
         }
         let text = heap
             .strings
@@ -15457,6 +15474,7 @@ impl RegisterVM {
         if code.entry_stack_requirement > self.operand_stack_limit {
             return Err(VMError::StackOverflow);
         }
+        self.entry_is_realm_script = code.realm_script;
         self.active_binding_count = usize::from(code.binding_count);
         if self.active_binding_count > self.binding_limit {
             return Err(VMError::BindingStackOverflow);
@@ -17532,7 +17550,16 @@ impl RegisterVM {
                     arg_start,
                     arg_count,
                     slot,
+                }
+                | Instruction::CallDirectEval {
+                    func,
+                    arg_start,
+                    arg_count,
+                    slot,
                 } => {
+                    // 13.3.6.1 tells the two apart, and 19.2.1.1 step 4 gives
+                    // a direct eval the variable environment of the frame.
+                    self.direct_eval = matches!(inst, Instruction::CallDirectEval { .. });
                     if let Some(code_id) = self.enter_call(
                         units,
                         active_feedback,

@@ -9442,3 +9442,31 @@ fn an_arrow_of_10_2_1_1_reads_the_arguments_of_the_function_it_stands_in() -> Re
     ])?;
     differential_scripts(&["function f(){ return (()=>(()=>arguments[0])())() } ''+f(5)"])
 }
+
+#[test]
+fn an_indirect_eval_of_19_2_1_1_answers_out_of_the_global_environment() -> Result<(), Error> {
+    // 13.3.6.1 makes a call of the name `eval` a direct eval; every other call
+    // of %eval% evaluates in the global environment, whichever frame made it.
+    differential_scripts(&["function f(){ return (0,eval)('1+1') } ''+f()"])?;
+    differential_scripts(&["var e=eval;function f(){ return e('2+3') } ''+f()"])?;
+    differential_scripts(&["var x=4;function f(){ return (0,eval)('x') } ''+f()"])?;
+    // The text sees the global bindings and not the ones of the frame.
+    differential_scripts(&["var x=1;function f(){ var x=2; return (0,eval)('x') } ''+f()"])?;
+    // A direct eval inside a function shares the variable environment of that
+    // function, which the engine keeps in registers no Script can name.
+    let mut host = SilentHost;
+    let mut refused = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    assert!(matches!(
+        refused.evaluate("function f(){ var y=5; return eval('y') } f()"),
+        Err(Error::Unsupported { .. })
+    ));
+    // The refusal stands where the call runs, so a Script that only carries
+    // one still answers.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    assert_eq!(
+        realm.evaluate("function f(){ if(0){ return eval('1') } return 6 } ''+f()")?,
+        Value::string("6")
+    );
+    Ok(())
+}

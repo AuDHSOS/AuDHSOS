@@ -3973,7 +3973,9 @@ impl RegisterLowerer {
             if callee_type != RegisterType::Unknown {
                 return None;
             }
-            return self.lower_dynamic_call(arguments);
+            // 13.3.6.1: a call of the name `eval` is a direct eval, which
+            // shares the variable environment of the function it stands in.
+            return self.lower_dynamic_call(arguments, callee.reference_name() == Some(EVAL_NAME));
         };
         if self
             .function_capture_effects
@@ -4147,7 +4149,11 @@ impl RegisterLowerer {
     ///
     /// The callee is already in the accumulator. 7.3.14 refuses a value that
     /// is not callable at run time, which the call instruction does.
-    fn lower_dynamic_call(&mut self, arguments: &[Expr]) -> Option<RegisterType> {
+    fn lower_dynamic_call(
+        &mut self,
+        arguments: &[Expr],
+        direct_eval: bool,
+    ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         let function = self.allocate_register()?;
         self.code.emit(Instruction::Star(function));
@@ -4171,11 +4177,20 @@ impl RegisterLowerer {
         let arg_start = argument_registers.first().copied().or(dummy)?;
         let arg_count = u16::try_from(arguments.len()).ok()?;
         let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
-        self.code.emit(Instruction::Call {
-            func: function,
-            arg_start,
-            arg_count,
-            slot,
+        self.code.emit(if direct_eval {
+            Instruction::CallDirectEval {
+                func: function,
+                arg_start,
+                arg_count,
+                slot,
+            }
+        } else {
+            Instruction::Call {
+                func: function,
+                arg_start,
+                arg_count,
+                slot,
+            }
         });
         if let Some(dummy) = dummy {
             self.release_register(dummy)?;
@@ -9668,6 +9683,9 @@ fn register_scoped_statement_writes_names(
 /// follows it.
 /// The name 10.4.4 binds in every ordinary function.
 const ARGUMENTS: &str = "arguments";
+
+/// The name 13.3.6.1 makes a call a direct eval.
+const EVAL_NAME: &str = "eval";
 
 /// Whether a body reads `arguments` and no function inside it does.
 ///

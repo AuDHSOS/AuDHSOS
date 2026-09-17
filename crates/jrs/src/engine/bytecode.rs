@@ -690,6 +690,19 @@ pub enum Instruction {
         /// Feedback vector slot for call target caching.
         slot: u16,
     },
+    /// The same call, written as the name `eval`, which 13.3.6.1 makes a
+    /// direct eval: 19.2.1.1 step 4 evaluates its text in the variable
+    /// environment of the function the call stands in.
+    CallDirectEval {
+        /// Callable function register.
+        func: Reg,
+        /// First argument register.
+        arg_start: Reg,
+        /// Number of arguments passed.
+        arg_count: u16,
+        /// Feedback vector slot for call target caching.
+        slot: u16,
+    },
     /// Advances a for-in enumeration (14.7.5.9).
     ///
     /// `state` names the first of four consecutive registers holding the object
@@ -1167,6 +1180,12 @@ impl BytecodeFunction {
                 Some(key)
             }
             Instruction::Call {
+                func,
+                arg_start,
+                arg_count,
+                slot,
+            }
+            | Instruction::CallDirectEval {
                 func,
                 arg_start,
                 arg_count,
