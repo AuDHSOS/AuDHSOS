@@ -864,6 +864,10 @@ pub enum Intrinsic {
     WeakMapPrototypeGetOrInsert,
     /// `%WeakMap.prototype.getOrInsertComputed%`, 24.3.3.5.
     WeakMapPrototypeGetOrInsertComputed,
+    /// `JSON.rawJSON` of the rawJSON proposal.
+    JsonRawJson,
+    /// `JSON.isRawJSON` of the same proposal.
+    JsonIsRawJson,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -931,7 +935,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 280] = [
+    pub const ALL: [Self; 282] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1212,6 +1216,8 @@ impl Intrinsic {
         Self::MapPrototypeGetOrInsertComputed,
         Self::WeakMapPrototypeGetOrInsert,
         Self::WeakMapPrototypeGetOrInsertComputed,
+        Self::JsonRawJson,
+        Self::JsonIsRawJson,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -1422,7 +1428,9 @@ impl Intrinsic {
             Self::WeakSetPrototypeAdd
             | Self::WeakSetPrototypeHas
             | Self::WeakSetPrototypeDelete => IntrinsicHolder::WeakSetPrototype,
-            Self::JsonParse | Self::JsonStringify => IntrinsicHolder::Json,
+            Self::JsonParse | Self::JsonStringify | Self::JsonRawJson | Self::JsonIsRawJson => {
+                IntrinsicHolder::Json
+            }
             Self::PromisePrototypeThen | Self::PromisePrototypeCatch => {
                 IntrinsicHolder::PromisePrototype
             }
@@ -1810,6 +1818,8 @@ impl Intrinsic {
             Self::MapPrototypeGetOrInsertComputed => 277,
             Self::WeakMapPrototypeGetOrInsert => 278,
             Self::WeakMapPrototypeGetOrInsertComputed => 279,
+            Self::JsonRawJson => 280,
+            Self::JsonIsRawJson => 281,
         }
     }
 
@@ -2100,6 +2110,8 @@ impl Intrinsic {
             Self::MapPrototypeGetOrInsertComputed => 277,
             Self::WeakMapPrototypeGetOrInsert => 278,
             Self::WeakMapPrototypeGetOrInsertComputed => 279,
+            Self::JsonRawJson => 280,
+            Self::JsonIsRawJson => 281,
         }
     }
 
@@ -2391,6 +2403,8 @@ impl Intrinsic {
             277 => Some(Self::MapPrototypeGetOrInsertComputed),
             278 => Some(Self::WeakMapPrototypeGetOrInsert),
             279 => Some(Self::WeakMapPrototypeGetOrInsertComputed),
+            280 => Some(Self::JsonRawJson),
+            281 => Some(Self::JsonIsRawJson),
             _ => None,
         }
     }
@@ -2475,6 +2489,8 @@ impl Intrinsic {
             Self::MathTanh => "tanh",
             Self::MapConstructor => "Map",
             Self::WeakMapConstructor => "WeakMap",
+            Self::JsonRawJson => "rawJSON",
+            Self::JsonIsRawJson => "isRawJSON",
             Self::MapPrototypeGetOrInsert | Self::WeakMapPrototypeGetOrInsert => "getOrInsert",
             Self::MapPrototypeGetOrInsertComputed | Self::WeakMapPrototypeGetOrInsertComputed => {
                 "getOrInsertComputed"
@@ -3261,6 +3277,8 @@ impl Intrinsic {
             | Self::MapPrototypeGet
             | Self::MapPrototypeHas
             | Self::MapPrototypeDelete
+            | Self::JsonRawJson
+            | Self::JsonIsRawJson
             | Self::WeakMapPrototypeGet
             | Self::WeakMapPrototypeHas
             | Self::WeakMapPrototypeDelete

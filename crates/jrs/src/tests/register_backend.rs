@@ -9488,3 +9488,26 @@ fn an_element_of_23_1_5_2_1_that_is_an_accessor_answers_through_its_getter() -> 
     differential_scripts(&["var a=[1,2,3];var [p,...q]=a;''+p+q.join('-')"])?;
     differential_scripts(&["var a=[1,2];var r='';for(var x of a){r+=x}r"])
 }
+
+#[test]
+fn the_raw_json_of_the_proposal_holds_its_text() -> Result<(), Error> {
+    differential_scripts(&["var r=JSON.rawJSON('1.5');''+r.rawJSON+JSON.isRawJSON(r)"])?;
+    differential_scripts(&["''+JSON.isRawJSON({})+JSON.isRawJSON(1)"])?;
+    // The text is one primitive and nothing else, not even whitespace.
+    differential_scripts(&[
+        "var r;try{JSON.rawJSON('[1]')}catch(e){r=e instanceof SyntaxError};''+r",
+    ])?;
+    differential_scripts(&[
+        "var r;try{JSON.rawJSON(' 1')}catch(e){r=e instanceof SyntaxError};''+r",
+    ])?;
+    // The object takes no more properties and has a null Prototype.
+    differential_scripts(&[
+        "''+Object.isExtensible(JSON.rawJSON('1'))+Object.getPrototypeOf(JSON.rawJSON('1'))",
+    ])?;
+    differential_scripts(&["''+JSON.rawJSON.length+JSON.isRawJSON.length+JSON.rawJSON.name"])?;
+    // 25.5.2 writes the text out as it was given, which is what carries a
+    // number no binary64 holds.
+    differential_scripts(&["''+JSON.stringify(JSON.rawJSON('1.5'))"])?;
+    differential_scripts(&["''+JSON.stringify({a:JSON.rawJSON('12345678901234567890')})"])?;
+    differential_scripts(&["''+JSON.stringify([JSON.rawJSON('true')])"])
+}

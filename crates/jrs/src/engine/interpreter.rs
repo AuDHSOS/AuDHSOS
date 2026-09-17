@@ -2431,9 +2431,10 @@ impl RegisterVM {
             // 25.5.1 and 25.5.2, neither of which takes the function the
             // other argument may be: a reviver and a replacer are calls, and
             // a native has no frame to make one from.
-            Intrinsic::JsonParse | Intrinsic::JsonStringify => {
-                self.call_json_intrinsic(intrinsic, &call, heap, realm)
-            }
+            Intrinsic::JsonParse
+            | Intrinsic::JsonStringify
+            | Intrinsic::JsonRawJson
+            | Intrinsic::JsonIsRawJson => self.call_json_intrinsic(intrinsic, &call, heap, realm),
             // 22.2.3.1 makes a RegExp of a pattern and flags 22.2.4.1
             // compiles where the call stands.
             Intrinsic::RegExpConstructor => self.construct_regexp(&call, heap, realm),
@@ -10778,6 +10779,9 @@ impl RegisterVM {
             // conversion of them is owed.
             | ObjectKind::ArrayIteration { .. }
             | ObjectKind::WeakCollection { .. }
+            // The object of the rawJSON proposal has a null Prototype, so no
+            // conversion of it is owed either.
+            | ObjectKind::RawJson
             | ObjectKind::Continuation { .. }
             | ObjectKind::Accessor { .. }
             | ObjectKind::RegExp { .. }
@@ -11621,6 +11625,7 @@ impl RegisterVM {
                 // 24.3.3.6 and 24.4.3.5 do the same for a WeakMap and a
                 // WeakSet.
                 | ObjectKind::WeakCollection { .. }
+                | ObjectKind::RawJson
                 | ObjectKind::CollectionIterator { .. }
                 | ObjectKind::ArrayIterator { .. }
                 | ObjectKind::ArrayIteration { .. }
@@ -12565,6 +12570,20 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Value, VMError> {
         let first = self.call_argument(call, 0, heap)?;
+        // The rawJSON proposal answers whether the value is the object
+        // `rawJSON` made, which carries the text 25.5.2 writes out verbatim.
+        if intrinsic == Intrinsic::JsonIsRawJson {
+            return Ok(Value::from_bool(
+                first
+                    .as_object()
+                    .and_then(|object| heap.get_object(object))
+                    .is_some_and(|entry| matches!(entry.kind, ObjectKind::RawJson)),
+            ));
+        }
+        if intrinsic == Intrinsic::JsonRawJson {
+            let text = property_name_units(first, heap, realm)?;
+            return self.json_raw(&text, heap, realm);
+        }
         let second = self.call_argument(call, 1, heap)?;
         if intrinsic == Intrinsic::JsonParse {
             // 25.5.1 step 7 calls the reviver for every name it parsed.
@@ -12588,6 +12607,71 @@ impl RegisterVM {
             return Ok(VALUE_UNDEFINED);
         }
         self.allocate_string(heap, &out)
+    }
+
+    /// `JSON.rawJSON` of the rawJSON proposal.
+    ///
+    /// The text has to be one primitive JSON value and nothing else, not even
+    /// the whitespace 25.5.1 would take, and the object it answers carries it
+    /// under `rawJSON` and takes no more properties.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `SyntaxError` for every other text.
+    fn json_raw(
+        &mut self,
+        text: &[u16],
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let limits = audhsos_json::Limits {
+            input: self.string_units_limit,
+            ..audhsos_json::Limits::default()
+        };
+        let mut work = self.fuel;
+        let refuse = |heap: &mut GenerationalHeap| {
+            raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::SyntaxError,
+                "rawJSON takes one primitive and no whitespace",
+            )
+        };
+        let Ok(document) = audhsos_json::parse(text, limits, &mut work) else {
+            self.fuel = work;
+            return Err(refuse(heap));
+        };
+        self.fuel = work;
+        let Some(node) = document.nodes.get(document.root) else {
+            return Err(refuse(heap));
+        };
+        if node.source.start != 0
+            || node.source.end != text.len()
+            || matches!(
+                node.kind,
+                audhsos_json::Kind::Array(_) | audhsos_json::Kind::Object(_)
+            )
+        {
+            return Err(refuse(heap));
+        }
+        let held = self.allocate_string(heap, text)?;
+        let shape = heap.shapes.root_shape();
+        let object = heap.allocate_object(shape, VALUE_NULL)?;
+        heap.set_object_kind(object, ObjectKind::RawJson)?;
+        let key = PropertyKey::String(heap.strings.intern("rawJSON")?);
+        heap.define_own_named(
+            object,
+            key,
+            held,
+            PropertyFlags {
+                writable: false,
+                enumerable: true,
+                configurable: false,
+                is_accessor: false,
+            },
+        )?;
+        heap.prevent_extensions(object)?;
+        Ok(Value::from_object(object))
     }
 
     /// `JSON.parse` of 25.5.1 without its reviver: the text is parsed once
@@ -12697,6 +12781,26 @@ impl RegisterVM {
                 .ok_or(VMError::Heap(HeapError::InvalidReference))?;
             audhsos_json::quote(out, &units, limit, &mut work).map_err(|_| VMError::StringLimit)?;
         } else if let Some(object) = value.as_object() {
+            // The rawJSON proposal writes the text of such an object out
+            // exactly as it was given, before anything else is read.
+            if matches!(
+                heap.get_object(object).map(|entry| &entry.kind),
+                Some(&ObjectKind::RawJson)
+            ) {
+                let key = PropertyKey::String(heap.strings.intern("rawJSON")?);
+                let held = heap
+                    .lookup_named(object, key)?
+                    .map(Self::plain_value)
+                    .transpose()?
+                    .unwrap_or(VALUE_UNDEFINED);
+                let units = heap
+                    .strings
+                    .to_utf16(held)
+                    .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+                appended(out, &units, &mut work)?;
+                self.fuel = work;
+                return Ok(true);
+            }
             // 25.5.2.4 step 5 calls `toJSON`, and step 11 a callable has no
             // text at all.
             let key = PropertyKey::String(heap.strings.intern("toJSON")?);

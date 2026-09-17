@@ -133,6 +133,9 @@ pub enum ObjectKind {
         /// value as well.
         set: bool,
     },
+    /// The `[[IsRawJSON]]` of the rawJSON proposal, whose `rawJSON` property
+    /// holds the text 25.5.2 writes out verbatim.
+    RawJson,
     /// The `[[WeakMapData]]` of 24.3.4 and the `[[WeakSetData]]` of 24.4.4.
     ///
     /// The pairs are held here rather than in an Array, because the collector

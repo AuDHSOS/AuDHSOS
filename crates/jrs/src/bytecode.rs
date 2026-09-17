@@ -8797,6 +8797,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // 24.3.3.4, 24.3.3.2, 24.4.3.4 and 24.4.3.3 answer a Boolean.
         | crate::engine::realm::Intrinsic::WeakMapPrototypeHas
         | crate::engine::realm::Intrinsic::WeakMapPrototypeDelete
+        // The rawJSON proposal answers a Boolean from `isRawJSON`.
+        | crate::engine::realm::Intrinsic::JsonIsRawJson
         | crate::engine::realm::Intrinsic::WeakSetPrototypeHas
         | crate::engine::realm::Intrinsic::WeakSetPrototypeDelete
         // 24.2.3.12, 24.2.3.13 and 24.2.3.11 answer a Boolean.
@@ -9010,6 +9012,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::MapPrototypeGetOrInsertComputed
         | crate::engine::realm::Intrinsic::WeakMapPrototypeGetOrInsert
         | crate::engine::realm::Intrinsic::WeakMapPrototypeGetOrInsertComputed
+        // `rawJSON` answers the object it made.
+        | crate::engine::realm::Intrinsic::JsonRawJson
         // 24.1.5.1 and 24.2.5.1 answer an iterator, and 7.4.14 an ordinary
         // object with a `value` and a `done`.
         | crate::engine::realm::Intrinsic::MapPrototypeEntries
