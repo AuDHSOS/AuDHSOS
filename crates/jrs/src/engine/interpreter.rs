@@ -607,6 +607,12 @@ enum IteratorWalkTaker {
         /// The object `Object.fromEntries` answers.
         object: Value,
     },
+    /// 23.2.5.1.3 keeps it in a list and makes the array of the row out of the
+    /// list once the walk is done.
+    TypedArray {
+        /// The row of table 71 the array stands in.
+        kind: u8,
+    },
     /// Step 8 of 24.1.1.1 adds it to this Map, or to this Set.
     Collection {
         /// The Map or the Set the constructor made.
@@ -624,6 +630,7 @@ impl IteratorWalkTaker {
         match self {
             Self::Array => ITERATOR_WALK_ARRAY,
             Self::Entries { .. } => ITERATOR_WALK_ENTRIES,
+            Self::TypedArray { .. } => ITERATOR_WALK_TYPED_ARRAY,
             Self::Collection { set, weak, .. } => match (set, weak) {
                 (false, false) => ITERATOR_WALK_MAP,
                 (true, false) => ITERATOR_WALK_SET,
@@ -638,6 +645,7 @@ impl IteratorWalkTaker {
         match self {
             Self::Array => VALUE_UNDEFINED,
             Self::Entries { object } => object,
+            Self::TypedArray { kind } => Value::from_smi(kind as i32),
             Self::Collection { collection, .. } => collection,
         }
     }
@@ -655,6 +663,9 @@ const ITERATOR_WALK_WEAK_MAP: i32 = 3;
 const ITERATOR_WALK_WEAK_SET: i32 = 4;
 /// It makes a property of 20.1.2.7 out of each entry.
 const ITERATOR_WALK_ENTRIES: i32 = 5;
+/// It keeps each element for the array of 23.2.5.1.3, which the last step
+/// makes of the list, because the length is known only then.
+const ITERATOR_WALK_TYPED_ARRAY: i32 = 6;
 
 /// The walk of 7.4.2 has not called the `@@iterator` yet.
 const ITERATOR_WALK_STARTING: i32 = 0;
@@ -4602,6 +4613,19 @@ impl RegisterVM {
                 realm,
             );
         }
+        // 23.2.5.1.3 makes the array out of the list the iterable answers,
+        // which a walk of 7.4.2 reaches.
+        if let Some((kind, source)) = self.typed_array_list_source(intrinsic, &call, heap)? {
+            return self.begin_typed_array_construct(
+                kind,
+                source,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
         // Step 8 of 24.1.1.1 and step 5 of 24.3.1.1 add every element the
         // iterable answers, which a walk of 7.4.2 reaches.
         if Self::constructs_a_collection(intrinsic) {
@@ -7444,6 +7468,19 @@ impl RegisterVM {
                             let tag = promise::slot(heap, record, 9).as_smi().unwrap_or(0);
                             let output = if tag == ITERATOR_WALK_ARRAY {
                                 promise::slot(heap, record, 0)
+                            } else if tag == ITERATOR_WALK_TYPED_ARRAY {
+                                // 23.2.5.1.3 knows the length only here.
+                                let list = promise::slot(heap, record, 0);
+                                let kind = promise::slot(heap, record, 10)
+                                    .as_smi()
+                                    .and_then(|kind| u8::try_from(kind).ok())
+                                    .unwrap_or(0);
+                                match Self::typed_array_of_list(list, kind, heap, realm) {
+                                    Ok(made) => made,
+                                    Err(error) => {
+                                        return Err(Self::leave_iterator_walk(heap, error));
+                                    }
+                                }
                             } else {
                                 promise::slot(heap, record, 10)
                             };
@@ -7549,7 +7586,7 @@ impl RegisterVM {
         if usize::try_from(index).unwrap_or(usize::MAX) >= self.property_limit {
             return Err(VMError::PropertyLimit);
         }
-        if tag == ITERATOR_WALK_ARRAY {
+        if tag == ITERATOR_WALK_ARRAY || tag == ITERATOR_WALK_TYPED_ARRAY {
             let array = promise::slot(heap, record, 0)
                 .as_object()
                 .ok_or(VMError::TypeError)?;
@@ -14073,12 +14110,12 @@ impl RegisterVM {
                     };
                     (first, offset, length)
                 }
-                // 23.2.5.1.2 copies the elements of the array it was given,
-                // and 23.2.5.1.4 an array-like or iterable, which this Realm
-                // does not walk from here.
+                // 23.2.5.1.2 copies the elements of the array it was given.
                 Some(ObjectKind::TypedArray { .. }) => {
-                    return Err(VMError::Unsupported("a TypedArray of 23.2.5.1.2"));
+                    return Self::typed_array_of_typed_array(object, kind, heap, realm);
                 }
+                // 23.2.5.1.3 and 23.2.5.1.4 are reached before this call, at
+                // the dispatch that can open a frame for the walk.
                 _ => return Err(VMError::Unsupported("an object of 23.2.5.1.4")),
             }
         } else {
@@ -14088,6 +14125,30 @@ impl RegisterVM {
             let buffer = Self::allocate_array_buffer(bytes, heap, realm)?;
             (buffer, 0.0, count)
         };
+        Self::place_typed_array(kind, buffer, offset, length, heap, realm)
+    }
+
+    /// `AllocateTypedArray` of 23.2.5.1 for a length, with a block of its own.
+    fn allocate_typed_array(
+        kind: u8,
+        count: f64,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let (size, _, _) = super::object::element_form(kind);
+        let buffer = Self::allocate_array_buffer(count * Self::whole(size), heap, realm)?;
+        Self::place_typed_array(kind, buffer, 0.0, count, heap, realm)
+    }
+
+    /// The object 23.2.5.1 answers, looking into this block.
+    fn place_typed_array(
+        kind: u8,
+        buffer: Value,
+        offset: f64,
+        length: f64,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
         let prototype = realm.typed_array_prototype_of(kind, heap)?;
         let shape = heap.shapes.root_shape();
         let object = heap.allocate_object(shape, prototype)?;
@@ -14101,6 +14162,158 @@ impl RegisterVM {
             },
         )?;
         Ok(Value::from_object(object))
+    }
+
+    /// The object 23.2.5.1 steps 6.a and 6.b read as a list, which is every
+    /// one that is no block and no array of 23.2.
+    fn typed_array_list_source(
+        &self,
+        intrinsic: Intrinsic,
+        call: &Call,
+        heap: &GenerationalHeap,
+    ) -> Result<Option<(u8, ObjectRef)>, VMError> {
+        let Some(kind) = Self::typed_array_kind(intrinsic) else {
+            return Ok(None);
+        };
+        if call.construct.is_none() {
+            return Ok(None);
+        }
+        let Some(source) = self.call_argument(call, 0, heap)?.as_object() else {
+            return Ok(None);
+        };
+        if matches!(
+            heap.get_object(source).map(|entry| &entry.kind),
+            Some(
+                &ObjectKind::ArrayBuffer(_)
+                    | &ObjectKind::SharedArrayBuffer { .. }
+                    | &ObjectKind::TypedArray { .. }
+            )
+        ) {
+            return Ok(None);
+        }
+        Ok(Some((kind, source)))
+    }
+
+    /// 23.2.5.1.3 for an object with an `@@iterator`, and 23.2.5.1.4 for one
+    /// without.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a walk runs where a call does, with what a call has"
+    )]
+    fn begin_typed_array_construct(
+        &mut self,
+        kind: u8,
+        source: ObjectRef,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let method =
+            match heap.lookup_named(source, super::realm::WellKnownSymbol::Iterator.key())? {
+                Some(found) => Self::plain_value(found)?,
+                None => VALUE_UNDEFINED,
+            };
+        // Step 6.b of 23.2.5.1 reads the array-like where the object has no
+        // `@@iterator`.
+        if method.is_undefined() || method.is_null() {
+            self.acc = Self::typed_array_of_array_like(source, kind, heap, realm)?;
+            return Ok(None);
+        }
+        self.begin_iterator_walk(
+            Value::from_object(source),
+            method,
+            VALUE_UNDEFINED,
+            VALUE_UNDEFINED,
+            IteratorWalkTaker::TypedArray { kind },
+            call,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )
+    }
+
+    /// `InitializeTypedArrayFromList` of 23.2.5.1.3 step 3, which makes the
+    /// array of the row and writes each element of the list into it.
+    fn typed_array_of_list(
+        list: Value,
+        kind: u8,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let source = list.as_object().ok_or(VMError::TypeError)?;
+        let length = heap.array_length(source).unwrap_or(0);
+        let made = Self::allocate_typed_array(kind, f64::from(length), heap, realm)?;
+        let target = made.as_object().ok_or(VMError::TypeError)?;
+        for index in 0..length {
+            let element = Self::element_at(heap, source, index)?.unwrap_or(VALUE_UNDEFINED);
+            let key = Value::from_f64(f64::from(index));
+            Self::typed_array_write(target, key, element, heap, realm)?;
+        }
+        Ok(made)
+    }
+
+    /// `InitializeTypedArrayFromArrayLike` of 23.2.5.1.4, which reads the
+    /// `length` of the object and then each index of it.
+    fn typed_array_of_array_like(
+        source: ObjectRef,
+        kind: u8,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let length = Self::array_like_length(heap, source, realm)?;
+        let made = Self::allocate_typed_array(kind, Self::whole_i64(length), heap, realm)?;
+        let target = made.as_object().ok_or(VMError::TypeError)?;
+        for index in Self::scan_range(0, length) {
+            let element = Self::element_at(heap, source, index)?.unwrap_or(VALUE_UNDEFINED);
+            let key = Value::from_f64(f64::from(index));
+            Self::typed_array_write(target, key, element, heap, realm)?;
+        }
+        Ok(made)
+    }
+
+    /// `InitializeTypedArrayFromTypedArray` of 23.2.5.1.2, which copies the
+    /// elements of the array it was given into a block of its own.
+    fn typed_array_of_typed_array(
+        source: ObjectRef,
+        kind: u8,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let Some(&ObjectKind::TypedArray {
+            length, kind: from, ..
+        }) = heap.get_object(source).map(|entry| &entry.kind)
+        else {
+            return Err(VMError::TypeError);
+        };
+        // Step 5 refuses a row that holds a `BigInt` beside one that holds a
+        // Number, in either direction.
+        if super::object::holds_a_bigint(from) != super::object::holds_a_bigint(kind) {
+            return Err(type_error(
+                heap,
+                realm,
+                "a row of table 71 that holds a BigInt beside one that holds a Number",
+            ));
+        }
+        let made = Self::allocate_typed_array(kind, f64::from(length), heap, realm)?;
+        let target = made.as_object().ok_or(VMError::TypeError)?;
+        for index in 0..length {
+            let key = Value::from_f64(f64::from(index));
+            let element = Self::typed_array_read(source, key, heap)?.unwrap_or(VALUE_UNDEFINED);
+            Self::typed_array_write(target, key, element, heap, realm)?;
+        }
+        Ok(made)
+    }
+
+    /// A length as the Number it is, for a count this embedding holds.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a length is bounded by the memory of the embedding, far below 2^53"
+    )]
+    const fn whole_i64(length: i64) -> f64 {
+        length as f64
     }
 
     /// The kind of number one read or write of 25.3.4 names: how many bytes it
@@ -20790,6 +21003,27 @@ impl RegisterVM {
                             {
                                 current_code_id = Some(code_id);
                                 pc = 0;
+                            }
+                            return Ok(None);
+                        }
+                        // 23.2.5.1.3 walks the iterable it was given, which
+                        // only a frame the instruction opens can do.
+                        if let Some((kind, source)) =
+                            self.typed_array_list_source(intrinsic, &call, heap)?
+                        {
+                            if let Some(code_id) = self.begin_typed_array_construct(
+                                kind,
+                                source,
+                                call,
+                                units,
+                                active_feedback,
+                                heap,
+                                realm,
+                            )? {
+                                current_code_id = Some(code_id);
+                                pc = 0;
+                            } else {
+                                self.write_reg(target, self.acc)?;
                             }
                             return Ok(None);
                         }

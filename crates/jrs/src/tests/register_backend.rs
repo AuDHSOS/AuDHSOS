@@ -10190,6 +10190,27 @@ fn the_three_further_rows_of_table_71_hold_a_binary16_and_a_bigint() -> Result<(
             "''+Object.prototype.toString.call(new BigInt64Array(1))",
             "[object BigInt64Array]",
         ),
+        // 23.2.5.1.2, 23.2.5.1.3 and 23.2.5.1.4 make the array out of another
+        // array of 23.2, out of an iterable and out of an array-like.
+        (
+            "var a=new Int8Array([1,2,3]);''+a.length+' '+a[0]+' '+a[2]",
+            "3 1 3",
+        ),
+        (
+            "var b=new Int16Array(new Int8Array([1,2,3]));''+b.length+' '+b[1]",
+            "3 2",
+        ),
+        (
+            "var c=new Uint8Array({length:2,0:7,1:8});''+c.length+' '+c[0]+' '+c[1]",
+            "2 7 8",
+        ),
+        ("''+new Int8Array(new Set([1,2,3])).length", "3"),
+        // Step 5 of 23.2.5.1.2 refuses a row that holds a BigInt beside one
+        // that holds a Number.
+        (
+            "var r;try{new BigInt64Array(new Int8Array(1))}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
         // 25.4.2.1 takes no float row, and the two BigInt rows need the BigInt
         // forms of 25.4, which are a named gap.
         (
