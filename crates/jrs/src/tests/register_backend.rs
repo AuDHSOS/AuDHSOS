@@ -9131,3 +9131,58 @@ fn the_weak_collections_of_24_3_and_24_4_hold_an_entry_per_key() -> Result<(), E
     }
     Ok(())
 }
+
+#[test]
+fn the_get_or_insert_of_24_1_3_7_and_24_3_3_4_adds_only_a_missing_key() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // Neither clause stands on the stack backend, so only the engine answers.
+    for (source, answer) in [
+        (
+            "var m=new Map();''+m.getOrInsert('a',1)+m.get('a')+m.getOrInsert('a',9)",
+            "111",
+        ),
+        (
+            "var w=new WeakMap();var k={};''+w.getOrInsert(k,3)+w.get(k)",
+            "33",
+        ),
+        // 24.1.3.8 step 5 answers without calling the callback.
+        (
+            "var m=new Map([['a',1]]);var n=0;''+m.getOrInsertComputed('a',function(){n=1;return 5})+n",
+            "10",
+        ),
+        // Step 6 passes the key alone.
+        (
+            "var m=new Map();''+m.getOrInsertComputed('a',function(k){return k+'!'})+m.get('a')",
+            "a!a!",
+        ),
+        (
+            "var w=new WeakMap();var k={};''+w.getOrInsertComputed(k,function(x){return x===k})+w.get(k)",
+            "truetrue",
+        ),
+        // Step 8 reads the entries again, so the value of the callback wins
+        // over the entry the callback wrote itself.
+        (
+            "var m=new Map();''+m.getOrInsertComputed('a',function(){m.set('a',7);return 2})+m.get('a')",
+            "22",
+        ),
+        // Step 3 refuses a callback that is not callable.
+        (
+            "var r;try{new Map().getOrInsertComputed('a',1)}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        // A throw of the callback leaves the clause and writes no entry.
+        (
+            "var m=new Map();var r;try{m.getOrInsertComputed('a',function(){throw 'x'})}catch(e){r=e};''+r+m.has('a')",
+            "xfalse",
+        ),
+        // 24.3.3.5 step 3 refuses a key 9.9.4.1 refuses.
+        (
+            "var r;try{new WeakMap().getOrInsertComputed(1,function(){})}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}

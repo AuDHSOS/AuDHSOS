@@ -8876,6 +8876,12 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::WeakMapPrototypeSet
         | crate::engine::realm::Intrinsic::WeakSetConstructor
         | crate::engine::realm::Intrinsic::WeakSetPrototypeAdd
+        // 24.1.3.7, 24.1.3.8, 24.3.3.4 and 24.3.3.5 answer the value of the
+        // entry, which is the argument or what the callback said.
+        | crate::engine::realm::Intrinsic::MapPrototypeGetOrInsert
+        | crate::engine::realm::Intrinsic::MapPrototypeGetOrInsertComputed
+        | crate::engine::realm::Intrinsic::WeakMapPrototypeGetOrInsert
+        | crate::engine::realm::Intrinsic::WeakMapPrototypeGetOrInsertComputed
         // 24.1.5.1 and 24.2.5.1 answer an iterator, and 7.4.14 an ordinary
         // object with a `value` and a `done`.
         | crate::engine::realm::Intrinsic::MapPrototypeEntries

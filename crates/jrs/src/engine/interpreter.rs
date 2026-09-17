@@ -488,6 +488,15 @@ pub enum Resume {
         /// value of the callback and the position of the next entry.
         state: Root,
     },
+    /// 24.1.3.8 and 24.3.3.5 called the callback that computes the value.
+    ///
+    /// The clause has no frame of its own, so it waits in a record of the heap
+    /// the collector traces, and the return of the callback writes the entry.
+    CollectionInsert {
+        /// Root holding the record: the collection, the key and which of the
+        /// two kinds of collection holds it.
+        state: Root,
+    },
     /// `[[Get]]` of 10.1.8.1 called the getter of an accessor property.
     ///
     /// The getter answers into the accumulator, which is where every
@@ -616,6 +625,16 @@ impl Resume {
             Self::Spread { arguments }
             | Self::Job { arguments }
             | Self::Executor { arguments, .. } => Some(arguments),
+            _ => None,
+        }
+    }
+
+    /// The record a clause of 24.1.3 or 24.3.3 waits in, and whether it is the
+    /// walk of 24.1.3.5 rather than the single call of 24.1.3.8.
+    const fn collection_record(self) -> Option<(Root, bool)> {
+        match self {
+            Self::CollectionWalk { state } => Some((state, true)),
+            Self::CollectionInsert { state } => Some((state, false)),
             _ => None,
         }
     }
@@ -1694,29 +1713,18 @@ impl RegisterVM {
         Ok(())
     }
 
-    fn open_frame(
+    /// Writes the arguments of the frame, which a resumed native takes out of
+    /// a root and every other call out of registers of the caller.
+    ///
+    /// They are read after `bind_this` has run, because that may allocate and
+    /// a value taken before it would name a moved object.
+    fn fill_frame(
         &mut self,
-        active_code: &BytecodeFunction,
+        next_frame: usize,
         callee: &BytecodeFunction,
         call: Call,
-        function: ObjectRef,
         heap: &GenerationalHeap,
-    ) -> Result<usize, VMError> {
-        let next_frame = self
-            .fp
-            .checked_add(active_code.register_count as usize)
-            .ok_or(VMError::StackOverflow)?;
-        let frame_end = next_frame
-            .checked_add(callee.register_count as usize)
-            .ok_or(VMError::StackOverflow)?;
-        self.stack
-            .get_mut(next_frame..frame_end)
-            .ok_or(VMError::StackOverflow)?
-            .fill(VALUE_UNDEFINED);
-        // A walk of 23.1.3 has no frame, so its three arguments come from the
-        // state the collector traces rather than from registers of the caller.
-        // They are read here, after `bind_this` has run, because that may
-        // allocate and a value taken before it would name a moved object.
+    ) -> Result<(), VMError> {
         if let Some(Resume::Setter { value }) = call.resume {
             // A setter has no frame to take its argument from either, so the
             // value written comes out of the root that held it across the
@@ -1749,21 +1757,27 @@ impl RegisterVM {
                     .get_mut(next_frame.saturating_add(index as usize))
                     .ok_or(VMError::StackOverflow)? = argument;
             }
-        } else if let Some(Resume::CollectionWalk { state }) = call.resume {
+        } else if let Some((state, walk)) = call.resume.and_then(Resume::collection_record) {
             // 24.1.3.5 step 4.b.i passes the value, the key and the
-            // collection, which the record the walk waits in holds.
+            // collection, and 24.1.3.8 step 6 the key alone.
             let record = heap
                 .root_value(state)
                 .ok_or(VMError::Heap(HeapError::InvalidReference))?;
-            self.place_arguments(
-                next_frame,
-                callee,
-                &[
+            let arguments = if walk {
+                [
                     promise::slot(heap, record, 5),
                     promise::slot(heap, record, 6),
                     promise::slot(heap, record, 0),
-                ],
-            )?;
+                ]
+            } else {
+                [
+                    promise::slot(heap, record, 1),
+                    VALUE_UNDEFINED,
+                    VALUE_UNDEFINED,
+                ]
+            };
+            let count = if walk { 3 } else { 1 };
+            self.place_arguments(next_frame, callee, arguments.get(..count).unwrap_or(&[]))?;
         } else if let Some(Resume::Iteration { state }) = call.resume {
             self.place_arguments(next_frame, callee, &Self::iteration_arguments(state, heap)?)?;
         } else {
@@ -1782,6 +1796,29 @@ impl RegisterVM {
                     .ok_or(VMError::StackOverflow)? = argument;
             }
         }
+        Ok(())
+    }
+
+    fn open_frame(
+        &mut self,
+        active_code: &BytecodeFunction,
+        callee: &BytecodeFunction,
+        call: Call,
+        function: ObjectRef,
+        heap: &GenerationalHeap,
+    ) -> Result<usize, VMError> {
+        let next_frame = self
+            .fp
+            .checked_add(active_code.register_count as usize)
+            .ok_or(VMError::StackOverflow)?;
+        let frame_end = next_frame
+            .checked_add(callee.register_count as usize)
+            .ok_or(VMError::StackOverflow)?;
+        self.stack
+            .get_mut(next_frame..frame_end)
+            .ok_or(VMError::StackOverflow)?
+            .fill(VALUE_UNDEFINED);
+        self.fill_frame(next_frame, callee, call, heap)?;
         if let Some(self_register) = callee.self_register {
             *self
                 .stack
@@ -2104,6 +2141,8 @@ impl RegisterVM {
             // 23.1.3 before an intrinsic is called at all.
             Intrinsic::MapPrototypeForEach
             | Intrinsic::SetPrototypeForEach
+            | Intrinsic::MapPrototypeGetOrInsertComputed
+            | Intrinsic::WeakMapPrototypeGetOrInsertComputed
             | Intrinsic::ArrayPrototypeForEach
             | Intrinsic::ArrayPrototypeMap
             | Intrinsic::ArrayPrototypeFlatMap
@@ -2426,7 +2465,8 @@ impl RegisterVM {
             | Intrinsic::SetPrototypeHas
             | Intrinsic::SetPrototypeDelete
             | Intrinsic::SetPrototypeClear
-            | Intrinsic::SetPrototypeSize => {
+            | Intrinsic::SetPrototypeSize
+            | Intrinsic::MapPrototypeGetOrInsert => {
                 self.call_collection_intrinsic(intrinsic, call, heap, realm)
             }
             Intrinsic::WeakMapConstructor
@@ -2437,7 +2477,8 @@ impl RegisterVM {
             | Intrinsic::WeakMapPrototypeDelete
             | Intrinsic::WeakSetPrototypeAdd
             | Intrinsic::WeakSetPrototypeHas
-            | Intrinsic::WeakSetPrototypeDelete => {
+            | Intrinsic::WeakSetPrototypeDelete
+            | Intrinsic::WeakMapPrototypeGetOrInsert => {
                 self.call_weak_collection_intrinsic(intrinsic, call, heap, realm)
             }
             Intrinsic::NumberIsFinite
@@ -3929,6 +3970,22 @@ impl RegisterVM {
             return self.begin_receiver_coercion(
                 intrinsic,
                 PrimitiveHint::String,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
+        // 24.1.3.8 and 24.3.3.5 ask the Script for the value of a key that
+        // has no entry yet.
+        if matches!(
+            intrinsic,
+            Intrinsic::MapPrototypeGetOrInsertComputed
+                | Intrinsic::WeakMapPrototypeGetOrInsertComputed
+        ) {
+            return self.begin_collection_insert(
+                intrinsic,
                 call,
                 units,
                 active_feedback,
@@ -6025,6 +6082,22 @@ impl RegisterVM {
             Intrinsic::MapPrototypeHas | Intrinsic::SetPrototypeHas => Ok(Value::from_bool(
                 Self::collection_find(heap, entries, key)?.is_some(),
             )),
+            // 24.1.3.7 answers the value of the entry the key has and adds
+            // one holding its argument where the key has none.
+            Intrinsic::MapPrototypeGetOrInsert => {
+                let value = self.call_argument(&call, 1, heap)?;
+                let key = Self::collection_key(key);
+                if let Some(at) = Self::collection_find(heap, entries, key)? {
+                    return Ok(promise::slot(heap, entries, at.saturating_add(1)));
+                }
+                let end = promise::length_of(heap, entries);
+                if usize::try_from(end).unwrap_or(usize::MAX) >= self.property_limit {
+                    return Err(VMError::PropertyLimit);
+                }
+                promise::set_slot(heap, entries, end, key)?;
+                promise::set_slot(heap, entries, end.saturating_add(1), value)?;
+                Ok(value)
+            }
             // 24.1.3.9 and 24.2.3.1 replace the value of the entry the key
             // has, or add one at the end, and answer the collection.
             Intrinsic::MapPrototypeSet | Intrinsic::SetPrototypeAdd => {
@@ -6164,6 +6237,23 @@ impl RegisterVM {
             Intrinsic::WeakMapPrototypeHas | Intrinsic::WeakSetPrototypeHas => {
                 Ok(Value::from_bool(heap.has_weak_entry(collection, key)))
             }
+            // 24.3.3.4 answers the value of the entry the key has and adds
+            // one holding its argument where the key has none.
+            Intrinsic::WeakMapPrototypeGetOrInsert => {
+                if let Some(value) = heap.weak_entry(collection, key) {
+                    return Ok(value);
+                }
+                let value = self.call_argument(&call, 1, heap)?;
+                if heap
+                    .get_object(collection)
+                    .and_then(|object| object.kind.weak_entries())
+                    .is_some_and(|entries| entries.len() >= self.property_limit)
+                {
+                    return Err(VMError::PropertyLimit);
+                }
+                heap.set_weak_entry(collection, key, value)?;
+                Ok(value)
+            }
             // 24.3.3.5 step 7 and 24.4.3.1 step 6 answer the collection, whose
             // entry holds the key as its own value in a WeakSet.
             Intrinsic::WeakMapPrototypeSet | Intrinsic::WeakSetPrototypeAdd => {
@@ -6262,6 +6352,113 @@ impl RegisterVM {
             heap.set_weak_entry(object, key, value)?;
         }
         Ok(collection)
+    }
+
+    /// 24.1.3.8 and 24.3.3.5, which ask the Script for the value of a key
+    /// that has no entry yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a receiver that
+    /// carries no slot, for a key 9.9.4.1 refuses and for a callback that is
+    /// not callable.
+    fn begin_collection_insert(
+        &mut self,
+        intrinsic: Intrinsic,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let weak = intrinsic == Intrinsic::WeakMapPrototypeGetOrInsertComputed;
+        let given = self.call_argument(&call, 0, heap)?;
+        let callback = self.call_argument(&call, 1, heap)?;
+        let key = if weak {
+            // 24.3.3.5 steps 2, 3 and 4, in that order.
+            let collection = Self::weak_collection(call.receiver, false, heap, realm)?;
+            if !Self::can_be_held_weakly(given, heap) {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "a WeakMap or WeakSet key that cannot be held weakly",
+                ));
+            }
+            if !Self::is_callable(callback, heap) {
+                return Err(type_error(heap, realm, "the callback is not callable"));
+            }
+            // Step 5 answers the entry the key already has.
+            if let Some(value) = heap.weak_entry(collection, given) {
+                self.acc = value;
+                return Ok(None);
+            }
+            given
+        } else {
+            // 24.1.3.8 steps 2, 3, 4 and 5, in that order.
+            let entries = Self::collection_entries(call.receiver, false, heap, realm)?;
+            if !Self::is_callable(callback, heap) {
+                return Err(type_error(heap, realm, "the callback is not callable"));
+            }
+            let key = Self::collection_key(given);
+            if let Some(at) = Self::collection_find(heap, entries, key)? {
+                self.acc = promise::slot(heap, entries, at.saturating_add(1));
+                return Ok(None);
+            }
+            key
+        };
+        let record = promise::record(heap, realm, &[call.receiver, key, Value::from_bool(weak)])?;
+        // The record outlives the frame the callback opens, so it is a root of
+        // a scope of its own, which the return leaves.
+        heap.enter_scope();
+        let state = heap.push_root(record)?;
+        // Step 6 calls the callback with the key alone and an undefined
+        // `this`.
+        let call = Call {
+            receiver: VALUE_UNDEFINED,
+            arg_count: 1,
+            arg_start: Reg(0),
+            resume: Some(Resume::CollectionInsert { state }),
+            construct: None,
+            ..call
+        };
+        self.enter_call_value(callback, units, active_feedback, heap, realm, call)
+    }
+
+    /// Steps 8 and 9 of 24.1.3.8 and of 24.3.3.5, which read the entries again
+    /// because the callback may have written one for the key.
+    fn finish_collection_insert(
+        &mut self,
+        state: Root,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let collection = promise::slot(heap, record, 0);
+        let key = promise::slot(heap, record, 1);
+        let weak = promise::slot(heap, record, 2) == Value::from_bool(true);
+        let value = self.acc;
+        if weak {
+            let object = Self::weak_collection(collection, false, heap, realm)?;
+            heap.set_weak_entry(object, key, value)?;
+        } else {
+            let entries = Self::collection_entries(collection, false, heap, realm)?;
+            if let Some(at) = Self::collection_find(heap, entries, key)? {
+                promise::set_slot(heap, entries, at.saturating_add(1), value)?;
+            } else {
+                let end = promise::length_of(heap, entries);
+                if usize::try_from(end).unwrap_or(usize::MAX) >= self.property_limit {
+                    heap.exit_scope();
+                    return Err(VMError::PropertyLimit);
+                }
+                promise::set_slot(heap, entries, end, key)?;
+                promise::set_slot(heap, entries, end.saturating_add(1), value)?;
+            }
+        }
+        heap.exit_scope();
+        self.acc = value;
+        Ok(None)
     }
 
     /// The iterators of 24.1.5 and 24.2.5 and the `next` of 24.1.5.2.1 and
@@ -16810,6 +17007,7 @@ impl RegisterVM {
                                 | Resume::Coercion { register, .. } => register,
                                 Resume::Iteration { .. }
                                 | Resume::CollectionWalk { .. }
+                                | Resume::CollectionInsert { .. }
                                 | Resume::Length { .. }
                                 | Resume::Descriptor { .. }
                                 | Resume::Getter
@@ -16849,6 +17047,9 @@ impl RegisterVM {
                                 Resume::CollectionWalk { state } => self.step_collection_walk(
                                     state, call, units, feedback, heap, realm,
                                 )?,
+                                Resume::CollectionInsert { state } => {
+                                    self.finish_collection_insert(state, heap, realm)?
+                                }
                                 Resume::Length { .. } => self.finish_array_like_length(
                                     resume,
                                     pc,

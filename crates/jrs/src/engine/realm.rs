@@ -856,6 +856,14 @@ pub enum Intrinsic {
     WeakSetPrototypeHas,
     /// `%WeakSet.prototype.delete%`, 24.4.3.3.
     WeakSetPrototypeDelete,
+    /// `%Map.prototype.getOrInsert%`, 24.1.3.7.
+    MapPrototypeGetOrInsert,
+    /// `%Map.prototype.getOrInsertComputed%`, 24.1.3.8.
+    MapPrototypeGetOrInsertComputed,
+    /// `%WeakMap.prototype.getOrInsert%`, 24.3.3.4.
+    WeakMapPrototypeGetOrInsert,
+    /// `%WeakMap.prototype.getOrInsertComputed%`, 24.3.3.5.
+    WeakMapPrototypeGetOrInsertComputed,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -923,7 +931,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 276] = [
+    pub const ALL: [Self; 280] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1200,6 +1208,10 @@ impl Intrinsic {
         Self::WeakSetPrototypeAdd,
         Self::WeakSetPrototypeHas,
         Self::WeakSetPrototypeDelete,
+        Self::MapPrototypeGetOrInsert,
+        Self::MapPrototypeGetOrInsertComputed,
+        Self::WeakMapPrototypeGetOrInsert,
+        Self::WeakMapPrototypeGetOrInsertComputed,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -1384,6 +1396,8 @@ impl Intrinsic {
             | Self::MapPrototypeEntries
             | Self::MapPrototypeKeys
             | Self::MapPrototypeValues
+            | Self::MapPrototypeGetOrInsert
+            | Self::MapPrototypeGetOrInsertComputed
             | Self::MapPrototypeForEach => IntrinsicHolder::MapPrototype,
             Self::SetPrototypeAdd
             | Self::SetPrototypeHas
@@ -1402,7 +1416,9 @@ impl Intrinsic {
             Self::WeakMapPrototypeGet
             | Self::WeakMapPrototypeSet
             | Self::WeakMapPrototypeHas
-            | Self::WeakMapPrototypeDelete => IntrinsicHolder::WeakMapPrototype,
+            | Self::WeakMapPrototypeDelete
+            | Self::WeakMapPrototypeGetOrInsert
+            | Self::WeakMapPrototypeGetOrInsertComputed => IntrinsicHolder::WeakMapPrototype,
             Self::WeakSetPrototypeAdd
             | Self::WeakSetPrototypeHas
             | Self::WeakSetPrototypeDelete => IntrinsicHolder::WeakSetPrototype,
@@ -1790,6 +1806,10 @@ impl Intrinsic {
             Self::WeakSetPrototypeAdd => 273,
             Self::WeakSetPrototypeHas => 274,
             Self::WeakSetPrototypeDelete => 275,
+            Self::MapPrototypeGetOrInsert => 276,
+            Self::MapPrototypeGetOrInsertComputed => 277,
+            Self::WeakMapPrototypeGetOrInsert => 278,
+            Self::WeakMapPrototypeGetOrInsertComputed => 279,
         }
     }
 
@@ -2076,6 +2096,10 @@ impl Intrinsic {
             Self::WeakSetPrototypeAdd => 273,
             Self::WeakSetPrototypeHas => 274,
             Self::WeakSetPrototypeDelete => 275,
+            Self::MapPrototypeGetOrInsert => 276,
+            Self::MapPrototypeGetOrInsertComputed => 277,
+            Self::WeakMapPrototypeGetOrInsert => 278,
+            Self::WeakMapPrototypeGetOrInsertComputed => 279,
         }
     }
 
@@ -2363,6 +2387,10 @@ impl Intrinsic {
             273 => Some(Self::WeakSetPrototypeAdd),
             274 => Some(Self::WeakSetPrototypeHas),
             275 => Some(Self::WeakSetPrototypeDelete),
+            276 => Some(Self::MapPrototypeGetOrInsert),
+            277 => Some(Self::MapPrototypeGetOrInsertComputed),
+            278 => Some(Self::WeakMapPrototypeGetOrInsert),
+            279 => Some(Self::WeakMapPrototypeGetOrInsertComputed),
             _ => None,
         }
     }
@@ -2447,6 +2475,10 @@ impl Intrinsic {
             Self::MathTanh => "tanh",
             Self::MapConstructor => "Map",
             Self::WeakMapConstructor => "WeakMap",
+            Self::MapPrototypeGetOrInsert | Self::WeakMapPrototypeGetOrInsert => "getOrInsert",
+            Self::MapPrototypeGetOrInsertComputed | Self::WeakMapPrototypeGetOrInsertComputed => {
+                "getOrInsertComputed"
+            }
             Self::WeakSetConstructor => "WeakSet",
             Self::MapPrototypeDelete
             | Self::SetPrototypeDelete
@@ -3306,6 +3338,10 @@ impl Intrinsic {
             | Self::MathHypot
             | Self::MapPrototypeSet
             | Self::WeakMapPrototypeSet
+            | Self::MapPrototypeGetOrInsert
+            | Self::MapPrototypeGetOrInsertComputed
+            | Self::WeakMapPrototypeGetOrInsert
+            | Self::WeakMapPrototypeGetOrInsertComputed
             | Self::PromisePrototypeThen => 2,
         }
     }
@@ -3629,13 +3665,15 @@ pub fn promise_constructor_owns(name: &[u16]) -> bool {
 }
 
 /// The property names 24.1.3 gives `%Map.prototype%`.
-pub const MAP_PROTOTYPE_PROPERTIES: [&str; 10] = [
+pub const MAP_PROTOTYPE_PROPERTIES: [&str; 12] = [
     "clear",
     "constructor",
     "delete",
     "entries",
     "forEach",
     "get",
+    "getOrInsert",
+    "getOrInsertComputed",
     "has",
     "keys",
     "set",
@@ -3690,7 +3728,7 @@ pub const WEAK_MAP_PROTOTYPE_PROPERTIES: [&str; 7] = [
 ];
 
 /// Whether `%WeakMap.prototype%` or `%Object.prototype%` owns a property of
-/// this name, which a WeakMap resolves on its Prototype Chain.
+/// this name, which a `WeakMap` resolves on its Prototype Chain.
 #[must_use]
 pub fn weak_map_prototype_owns(name: &[u16]) -> bool {
     wrapper_prototype_owns(&WEAK_MAP_PROTOTYPE_PROPERTIES, name)
@@ -3700,7 +3738,7 @@ pub fn weak_map_prototype_owns(name: &[u16]) -> bool {
 pub const WEAK_SET_PROTOTYPE_PROPERTIES: [&str; 4] = ["add", "constructor", "delete", "has"];
 
 /// Whether `%WeakSet.prototype%` or `%Object.prototype%` owns a property of
-/// this name, which a WeakSet resolves on its Prototype Chain.
+/// this name, which a `WeakSet` resolves on its Prototype Chain.
 #[must_use]
 pub fn weak_set_prototype_owns(name: &[u16]) -> bool {
     wrapper_prototype_owns(&WEAK_SET_PROTOTYPE_PROPERTIES, name)
