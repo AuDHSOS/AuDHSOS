@@ -21087,6 +21087,19 @@ impl RegisterVM {
                     {
                         return Ok(None);
                     }
+                    // 7.3.5 throws where the define answers false, which
+                    // 10.1.6.3 does for a new property of an object that is
+                    // not extensible.
+                    if define
+                        && !heap.is_extensible(oref).unwrap_or(true)
+                        && heap.own_named_flags(oref, name)?.is_none()
+                    {
+                        return Err(type_error(
+                            heap,
+                            realm,
+                            "cannot add a property to an object that is not extensible",
+                        ));
+                    }
                     let elements = heap.get_object(oref).ok_or(VMError::TypeError)?.elements;
                     if let Some(eref) = elements
                         && let Some(index) = array_index_units(units)

@@ -9,6 +9,45 @@ use super::{
 };
 
 impl Parser {
+    /// 15.7.1: an Initializer that names `arguments` is a Syntax Error, and
+    /// one that names `new.target` would read the frame of the constructor
+    /// this lowering runs it in.
+    ///
+    /// Every token of the Initializer is read, so a property of those names
+    /// is refused with them. `ContainsArguments` of 15.7.1 reaches into an
+    /// arrow and stops at a function, which the tokens do not say, so an
+    /// Initializer that carries a function names the gap instead.
+    fn refuse_frame_names(&self, start: usize) -> Result<(), Error> {
+        let nested = self.tokens.get(start..self.at).is_some_and(|tokens| {
+            tokens
+                .iter()
+                .any(|token| matches!(&token.kind, Kind::Word(word) if word == "function"))
+        });
+        for offset in start..self.at {
+            let Some(token) = self.tokens.get(offset) else {
+                break;
+            };
+            if matches!(&token.kind, Kind::Word(word) if word == "arguments") {
+                if nested {
+                    return Err(Self::unsupported("a function of a field Initializer"));
+                }
+                return Err(Error::Syntax {
+                    offset: token.offset,
+                    message: "an Initializer of a field that names arguments",
+                });
+            }
+            if matches!(&token.kind, Kind::Word(word) if word == "new")
+                && self
+                    .tokens
+                    .get(offset.saturating_add(1))
+                    .is_some_and(|token| token.kind == Kind::Punct("."))
+            {
+                return Err(Self::unsupported("a new.target of a field Initializer"));
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn method_function(
         &mut self,
         name: Option<String>,
@@ -54,6 +93,8 @@ impl Parser {
         };
         self.need("{")?;
         let mut methods = Vec::new();
+        let mut fields = Vec::new();
+        let mut static_fields = Vec::new();
         let mut constructor = None;
         while !self.eat("}") {
             if self.eat(";") {
@@ -124,8 +165,49 @@ impl Parser {
             if is_constructor && (accessor.is_some() || async_method || constructor.is_some()) {
                 return Err(self.error("invalid or duplicate constructor"));
             }
+            // 15.7.1: an element that is no method is a field, whose
+            // Initializer runs with the instance as its `this`.
             if !self.is("(") {
-                return Err(Self::unsupported("class fields"));
+                if accessor.is_some() || async_method {
+                    return Err(self.error("a field with a method modifier"));
+                }
+                // 15.7.5 evaluates a computed name where the class is
+                // defined, which is before the Initializer of an instance
+                // field runs.
+                let Some(text) = text.filter(|_| !computed) else {
+                    return Err(Self::unsupported("a computed class field name"));
+                };
+                let name = String::from_utf16_lossy(&text);
+                // 15.7.1: no field is named `constructor`, and no static field
+                // is named `prototype`.
+                if name == "constructor" || (is_static && name == "prototype") {
+                    return Err(self.error("a field of a name a class cannot carry"));
+                }
+                let initializer = if self.eat("=") {
+                    let start = self.at;
+                    // 15.7.15 runs the Initializer in a frame whose
+                    // `[[HomeObject]]` is the prototype of the class.
+                    let context = core::mem::replace(&mut self.super_context, SuperContext::Method);
+                    let value = self.expression(0);
+                    self.super_context = context;
+                    let value = value?;
+                    // 15.7.1: an Initializer names no `arguments`, and a
+                    // `new.target` would read the one of the constructor this
+                    // lowering runs the Initializer in.
+                    self.refuse_frame_names(start)?;
+                    Some(value)
+                } else {
+                    None
+                };
+                if !self.eat(";") && !self.is("}") && !self.token()?.newline {
+                    return Err(self.error("expected semicolon after a class field"));
+                }
+                if is_static {
+                    static_fields.push((name, initializer));
+                } else {
+                    fields.push(Stmt::Field(name, initializer));
+                }
+                continue;
             }
             let mut function = self.method_function(
                 None,
@@ -169,6 +251,12 @@ impl Parser {
                 ));
             }
         }
+        // 15.7.15 runs the field Initializers of an instance before the body
+        // of the constructor; a derived constructor binds its `this` only
+        // where 13.3.7.1 has run, which this lowering has no place after.
+        if !fields.is_empty() && heritage.is_some() {
+            return Err(Self::unsupported("a field of a derived class"));
+        }
         let mut constructor = constructor.unwrap_or(Function {
             source: None,
             name: None,
@@ -188,6 +276,9 @@ impl Parser {
                 ConstructorKind::BaseClass
             },
         });
+        for field in fields.into_iter().rev() {
+            constructor.body.insert(0, field);
+        }
         constructor.source = Some(self.source_since(offset)?);
         self.make(
             ExprKind::Class(Box::new(Class {
@@ -195,6 +286,7 @@ impl Parser {
                 heritage,
                 constructor,
                 methods,
+                static_fields,
             })),
             1,
             offset,

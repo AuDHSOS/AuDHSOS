@@ -1326,13 +1326,75 @@ fn a_compound_assignment_reaches_a_property() -> Result<(), Error> {
 }
 
 #[test]
+fn a_field_of_15_7_1_is_defined_on_the_instance_before_the_constructor_runs() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend has no field of a class, so only the engine answers.
+    for (source, answer) in [
+        (
+            "var A=class{x=1;y;};var a=new A();''+a.x+','+typeof a.y",
+            "1,undefined",
+        ),
+        // 15.7.15 runs the Initializers in the order the body names them,
+        // with the instance as the `this` of each.
+        ("var A=class{x=1;y=this.x+1;};''+new A().y", "2"),
+        ("var A=class{m(){return 3}v=this.m();};''+new A().v", "3"),
+        (
+            "var A=class{x=1;constructor(){this.y=this.x+1}};''+new A().y",
+            "2",
+        ),
+        (
+            "var A=class{x=1;y=2;};Object.keys(new A()).join(',')",
+            "x,y",
+        ),
+        // Each instance runs them again.
+        ("var n=0;var A=class{p=(n=n+1);};new A();new A();''+n", "2"),
+        // 15.7.15 defines the property rather than writing it, so it is an
+        // ordinary data property whatever the Prototype carries.
+        (
+            "var A=class{x=1;};var d=Object.getOwnPropertyDescriptor(new A(),'x');''+d.writable+d.enumerable+d.configurable",
+            "truetruetrue",
+        ),
+        // 8.5.2 names an anonymous function after the field.
+        ("var A=class{f=function(){};};new A().f.name", "f"),
+        // An arrow of an Initializer reads the instance as its `this`.
+        (
+            "var A=class{g=()=>this;};var a=new A();''+(a.g()===a)",
+            "true",
+        ),
+        // 15.7.14 step 32 defines the static fields on the constructor.
+        (
+            "var A=class{static x=1;static y;};''+A.x+','+typeof A.y",
+            "1,undefined",
+        ),
+        ("var A=class{static x=2+3};''+A.x", "5"),
+        // 15.7.1: no field is named `constructor`, and no static field is
+        // named `prototype`.
+        (
+            "var r;try{eval('(class{constructor=1})')}catch(e){r=e instanceof SyntaxError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{eval('(class{static prototype=1})')}catch(e){r=e instanceof SyntaxError};''+r",
+            "true",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}
+
+#[test]
 fn a_spread_of_13_2_5_copies_the_own_enumerable_properties_of_its_source() -> Result<(), Error> {
     let mut host = SilentHost;
     let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
     // The stack backend has no operation that copies the properties of
     // another object, so only the engine answers.
     for (source, answer) in [
-        ("JSON.stringify({...{x:1,y:2},z:3})", "{\"x\":1,\"y\":2,\"z\":3}"),
+        (
+            "JSON.stringify({...{x:1,y:2},z:3})",
+            "{\"x\":1,\"y\":2,\"z\":3}",
+        ),
         // A later property wins, and a spread writes over an earlier one.
         ("JSON.stringify({z:0,...{z:1}})", "{\"z\":1}"),
         ("JSON.stringify({...{z:1},z:0})", "{\"z\":0}"),

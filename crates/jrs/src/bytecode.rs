@@ -3407,6 +3407,38 @@ impl RegisterLowerer {
                 },
             });
         }
+        // 15.7.14 step 32 defines the static fields on the constructor, in
+        // the order the class body names them, with the constructor as the
+        // `this` of each Initializer.
+        for (name, value) in &class.static_fields {
+            let units: Vec<u16> = name.encode_utf16().collect();
+            let constant = self.string_constant(&units)?;
+            match value {
+                Some(value) => {
+                    // The Initializer of a static field runs in a frame whose
+                    // `this` is the constructor, which this lowering has no
+                    // place for.
+                    if register_expression_reads(value, Reads::This)
+                        || register_expression_reads(value, Reads::NewTarget)
+                    {
+                        self.refuse("a static field that reads the class");
+                        return None;
+                    }
+                    self.lower_named(value, &units)?;
+                }
+                None => {
+                    self.code.emit(Instruction::LdaUndefined);
+                }
+            }
+            let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+            self.code.emit(Instruction::SetNamed {
+                obj: constructor,
+                name: constant,
+                slot,
+                strict: true,
+                define: true,
+            });
+        }
         self.code.emit(Instruction::Ldar(constructor));
         self.release_register(prototype)?;
         self.release_register(constructor)?;
@@ -6003,6 +6035,45 @@ impl RegisterLowerer {
                 RegisterFlow::Abrupt
             }
             Stmt::Labelled(label, body) => self.lower_labelled(label, body)?,
+            // 15.7.15 defines each field on the instance, with the value the
+            // Initializer of 15.7.1 answers and undefined where it has none.
+            Stmt::Field(name, value) => {
+                let binding = self.bindings.get(THIS_BINDING).copied()?;
+                let units: Vec<u16> = name.encode_utf16().collect();
+                let constant = self.string_constant(&units)?;
+                match value {
+                    // 8.5.2 names an anonymous function after the field.
+                    Some(value) => {
+                        self.lower_named(value, &units)?;
+                    }
+                    None => {
+                        self.code
+                            .emit(crate::engine::bytecode::Instruction::LdaUndefined);
+                    }
+                }
+                let object = self.allocate_register()?;
+                let held = self.allocate_register()?;
+                self.code
+                    .emit(crate::engine::bytecode::Instruction::Star(held));
+                self.load_binding(binding);
+                self.code
+                    .emit(crate::engine::bytecode::Instruction::Star(object));
+                self.code
+                    .emit(crate::engine::bytecode::Instruction::Ldar(held));
+                let slot =
+                    self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+                self.code
+                    .emit(crate::engine::bytecode::Instruction::SetNamed {
+                        obj: object,
+                        name: constant,
+                        slot,
+                        strict: true,
+                        define: true,
+                    });
+                self.release_register(held)?;
+                self.release_register(object)?;
+                RegisterFlow::Empty
+            }
             Stmt::Return(value) if self.allow_return => {
                 let return_type = if let Some(value) = value {
                     self.lower(value)?
@@ -9811,7 +9882,8 @@ fn register_statement_var_names(
         | Stmt::Return(_)
         | Stmt::Throw(_)
         | Stmt::Break(_)
-        | Stmt::Continue(_) => {}
+        | Stmt::Continue(_)
+        | Stmt::Field(_, _) => {}
     }
     Some(())
 }
@@ -9988,6 +10060,11 @@ fn infer_register_var_types(
         Stmt::While(_, body) | Stmt::DoWhile(body, _) | Stmt::Labelled(_, body) => {
             infer_register_var_types(body, bindings, widen)?;
         }
+        Stmt::Field(_, value) => {
+            if let Some(value) = value {
+                infer_register_assignment_types(value, bindings);
+            }
+        }
         // 14.7.5.6 step 7.g and 14.7.5.7 write the head of each step, so a
         // `var` head carries the top of the lattice from the head on. The
         // declaration itself is hoisted and says only that the name exists.
@@ -10121,6 +10198,10 @@ fn register_statement_writes_names(statement: &Stmt, names: &BTreeSet<String>) -
                 || register_statement_writes_names(body, names)?
         }
         Stmt::Labelled(_, body) => register_statement_writes_names(body, names)?,
+        Stmt::Field(_, value) => match value {
+            Some(value) => register_expression_writes_names(value, names)?,
+            None => false,
+        },
         Stmt::DoWhile(body, condition) => {
             register_statement_writes_names(body, names)?
                 || register_expression_writes_names(condition, names)?
@@ -10381,6 +10462,13 @@ fn register_statement_reads(statement: &Stmt, what: Reads) -> bool {
             register_expression_reads(condition, what) || register_statement_reads(body, what)
         }
         Stmt::Labelled(_, body) => register_statement_reads(body, what),
+        // 15.7.15 runs an Initializer with the instance as its `this`.
+        Stmt::Field(_, value) => {
+            matches!(what, Reads::This)
+                || value
+                    .as_ref()
+                    .is_some_and(|value| register_expression_reads(value, what))
+        }
         Stmt::For(initializer, condition, step, body) => {
             register_statement_reads(initializer, what)
                 || condition
@@ -11063,7 +11151,7 @@ fn register_statement_references(
             }
             register_statement_references(body, names, nested_free_names, captured_names)?;
         }
-        Stmt::Return(value) => {
+        Stmt::Return(value) | Stmt::Field(_, value) => {
             if let Some(value) = value {
                 register_expression_references(value, names, nested_free_names)?;
             }
@@ -11418,6 +11506,7 @@ const fn statement_refusal(statement: &Stmt) -> &'static str {
         Stmt::If(..) => "an if statement",
         Stmt::While(..) => "a while statement",
         Stmt::Labelled(..) => "a labelled statement",
+        Stmt::Field(..) => "a class field",
         Stmt::DoWhile(..) => "a do-while statement",
         Stmt::For(..) => "a for statement",
         Stmt::Switch(..) => "a switch statement",
@@ -11651,6 +11740,7 @@ fn register_statement_has_unsupported_binding_pattern(statement: &Stmt) -> bool 
         | Stmt::Break(_)
         | Stmt::Continue(_)
         | Stmt::Return(_)
+        | Stmt::Field(_, _)
         | Stmt::Throw(_) => false,
     }
 }
@@ -12081,6 +12171,11 @@ impl Compiler {
         self.scopes.pop();
         Ok(())
     }
+    /// A feature of the engine the stack backend has no form of.
+    const fn backend_gap(feature: &'static str) -> Error {
+        Error::Unsupported { feature }
+    }
+
     fn statement(&mut self, stmt: &Stmt) -> Result<(), Error> {
         match stmt {
             Stmt::ForOf {
@@ -12117,11 +12212,9 @@ impl Compiler {
             Stmt::Block(body) => self.block(body)?,
             // 14.13 names a statement, which the stack backend has no target
             // for; the engine carries the label of a break and a continue.
-            Stmt::Labelled(..) => {
-                return Err(Error::Unsupported {
-                    feature: "labelled statements",
-                });
-            }
+            Stmt::Labelled(..) => return Err(Self::backend_gap("labelled statements")),
+            // 15.7.1: the stack backend has no field of a class.
+            Stmt::Field(..) => return Err(Self::backend_gap("class fields")),
             Stmt::Declare(bindings) => {
                 self.initialize_bindings(bindings)?;
             }

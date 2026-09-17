@@ -133,6 +133,9 @@ pub(crate) struct Class {
     pub(crate) heritage: Option<Expr>,
     pub(crate) constructor: Function,
     pub(crate) methods: Vec<(bool, ObjectProperty)>,
+    /// The `static` fields of 15.7.1, which 15.7.14 step 32 defines on the
+    /// constructor in the order the class body names them.
+    pub(crate) static_fields: Vec<(String, Option<Expr>)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -348,6 +351,9 @@ pub(crate) enum Stmt {
     Continue(Option<String>),
     /// `LabelledStatement` of 14.13.
     Labelled(String, Box<Stmt>),
+    /// `ClassFieldDefinition` of 15.7.1, which 15.7.15 defines on the
+    /// instance before the body of the constructor runs.
+    Field(String, Option<Expr>),
     Function(String, Function),
     Return(Option<Expr>),
     Throw(Expr),
@@ -1911,7 +1917,7 @@ impl Parser {
             // 13.2.5: `...` copies the own enumerable properties of what its
             // AssignmentExpression answers.
             if self.eat("...") {
-                let value = self.expression(1)?;
+                let value = self.expression(0)?;
                 depth = depth.max(value.depth.saturating_add(1));
                 properties.push(ObjectProperty {
                     key: None,
