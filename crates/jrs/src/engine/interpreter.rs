@@ -2349,6 +2349,25 @@ impl RegisterVM {
             // 21.3.2.27 answers a Number in [0, 1) that no argument decides.
             Intrinsic::MathRandom => Ok(Value::from_f64(self.next_random())),
             Intrinsic::Print => self.print_line(&call, heap, realm),
+            // 25.1.3.4 through the host object of the conformance suite; the
+            // collector runs at a Safe Point of the interpreter and not here,
+            // so the second capability answers without one.
+            Intrinsic::HostDetachArrayBuffer => {
+                let given = self.call_argument(&call, 0, heap)?;
+                let block = given
+                    .as_object()
+                    .filter(|object| {
+                        matches!(
+                            heap.get_object(*object).map(|entry| &entry.kind),
+                            Some(&ObjectKind::ArrayBuffer(_))
+                        )
+                    })
+                    .ok_or_else(|| {
+                        type_error(heap, realm, "the argument carries no ArrayBuffer")
+                    })?;
+                heap.set_object_kind(block, ObjectKind::ArrayBuffer(None))?;
+                Ok(VALUE_UNDEFINED)
+            }
             Intrinsic::PromiseAll | Intrinsic::PromiseRace | Intrinsic::PromiseAllSettled => {
                 self.promise_combinator(intrinsic, &call, heap, realm)
             }
@@ -2386,7 +2405,9 @@ impl RegisterVM {
             // 20.5.3.4 joins the `name` and the `message` the Error holds.
             Intrinsic::ErrorPrototypeToString => self.error_text(call.receiver, heap, realm),
             // 20.2.3 accepts any argument and answers undefined.
-            Intrinsic::FunctionPrototype => Ok(VALUE_UNDEFINED),
+            // The collector runs at a Safe Point of the interpreter and not
+            // here, so the hint of the suite answers without one.
+            Intrinsic::FunctionPrototype | Intrinsic::HostGc => Ok(VALUE_UNDEFINED),
             // 20.1.3.7 is `ToObject(this value)` and nothing else.
             Intrinsic::ObjectPrototypeValueOf => {
                 Self::coerce_object(call.receiver, heap, realm).map(Value::from_object)
@@ -11344,6 +11365,7 @@ impl RegisterVM {
             | ObjectKind::ArrayBuffer(_)
             | ObjectKind::SharedArrayBuffer { .. }
             | ObjectKind::Atomics
+            | ObjectKind::Host262
             | ObjectKind::DataView { .. }
             | ObjectKind::TypedArray { .. }
             | ObjectKind::Continuation { .. }
@@ -11629,6 +11651,11 @@ impl RegisterVM {
                 Err(VMError::Unsupported("a property of %RegExp.prototype%"))
             }
             // 28.1 gives `%Reflect%` more than this Realm builds.
+            // The embedding builds only a part of the host object, and a read
+            // of the rest is a gap rather than undefined.
+            Some(ObjectKind::Host262) if super::realm::host_262_owns(name) => {
+                Err(VMError::Unsupported("a property of the host object"))
+            }
             // 25.4.14 answers a Promise, which this Realm has not built.
             Some(ObjectKind::Atomics) if super::realm::atomics_owns(name) => {
                 Err(VMError::Unsupported("a property of %Atomics%"))
@@ -12250,9 +12277,10 @@ impl RegisterVM {
                 // one for both.
                 | ObjectKind::ArrayBuffer(_)
                 // 25.2.5 and 25.4.5 tag a shared block and the namespace of
-                // 25.4 the same way.
+                // 25.4 the same way; the host object carries no tag at all.
                 | ObjectKind::SharedArrayBuffer { .. }
                 | ObjectKind::Atomics
+                | ObjectKind::Host262
                 | ObjectKind::DataView { .. }
                 | ObjectKind::TypedArray { .. }
                 | ObjectKind::CollectionIterator { .. }

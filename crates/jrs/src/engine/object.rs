@@ -149,6 +149,9 @@ pub enum ObjectKind {
     },
     /// The namespace object of 25.4.
     Atomics,
+    /// The `$262` of the conformance suite, which the embedding asks for and
+    /// which no clause of the specification names.
+    Host262,
     /// The `[[TypedArrayName]]` and the rest of 23.2.5: the block the array
     /// looks into, where, and which element kind 23.2.5.1 gave it.
     TypedArray {

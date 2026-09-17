@@ -277,6 +277,31 @@ impl<'host> Realm<'host> {
         self.outcome(result)
     }
 
+    /// Installs the `$262` of the conformance suite on the register engine's
+    /// global object.
+    ///
+    /// The engine keeps a heap and a Realm of its own, and no object of the
+    /// embedding reaches it, so the host object it carries is built there. A
+    /// realm on the stack backend installs nothing here and keeps the object
+    /// the embedding builds with [`Self::object`] and [`Self::host_function`].
+    ///
+    /// # Errors
+    /// Poisoned realm or resource exhaustion.
+    pub fn install_engine_host_object(&mut self) -> Result<(), Error> {
+        if self.execution.backend != crate::Backend::Engine {
+            return Ok(());
+        }
+        let mut agent = self.execution.register_agent()?;
+        let outcome = agent
+            .realm
+            .install_host_object(&mut agent.heap)
+            .map_err(|_| Error::Unsupported {
+                feature: "the host object of the conformance suite",
+            });
+        self.execution.register_agent = Some(agent);
+        outcome
+    }
+
     /// Creates a non-constructible function dispatching to `Host::call(id, ...)`.
     /// Each creation has distinct identity and ordinary mutable properties.
     /// The returned value is retained; install it with `set_global` or `set`.

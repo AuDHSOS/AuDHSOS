@@ -1120,6 +1120,12 @@ pub enum Intrinsic {
     TypedArrayPrototypeReduceRight,
     /// `some`, 23.2.3.25.
     TypedArrayPrototypeSome,
+    /// `$262.detachArrayBuffer`, the `DetachArrayBuffer` of 25.1.3.4 the host
+    /// of the conformance suite exposes.
+    HostDetachArrayBuffer,
+    /// `$262.gc`, which the host of the conformance suite exposes and which
+    /// no clause of the specification names.
+    HostGc,
     /// `BigInt`, 21.2.1.1.
     BigIntConstructor,
     /// `asIntN`, 21.2.2.1.
@@ -1257,7 +1263,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 433] = [
+    pub const ALL: [Self; 435] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1666,6 +1672,8 @@ impl Intrinsic {
         Self::TypedArrayPrototypeReduce,
         Self::TypedArrayPrototypeReduceRight,
         Self::TypedArrayPrototypeSome,
+        Self::HostDetachArrayBuffer,
+        Self::HostGc,
         Self::BigIntConstructor,
         Self::BigIntAsIntN,
         Self::BigIntAsUintN,
@@ -2126,7 +2134,11 @@ impl Intrinsic {
             // caller of the pair it makes.
             | Self::AsyncResume
             | Self::AsyncThrow
-            | Self::Print => IntrinsicHolder::Global,
+            | Self::Print
+            // The host object of the conformance suite carries the two, which
+            // the Realm attaches where the embedding asks for it.
+            | Self::HostDetachArrayBuffer
+            | Self::HostGc => IntrinsicHolder::Global,
             Self::ArrayIsArray | Self::ArrayOf | Self::ArrayFrom => {
                 IntrinsicHolder::ArrayConstructor
             }
@@ -2581,6 +2593,8 @@ impl Intrinsic {
             Self::TypedArrayPrototypeReduce => 430,
             Self::TypedArrayPrototypeReduceRight => 431,
             Self::TypedArrayPrototypeSome => 432,
+            Self::HostDetachArrayBuffer => 433,
+            Self::HostGc => 434,
             Self::SharedArrayBufferConstructor => 378,
             Self::SharedArrayBufferPrototypeSlice => 379,
             Self::SharedArrayBufferPrototypeGrow => 380,
@@ -3024,6 +3038,8 @@ impl Intrinsic {
             Self::TypedArrayPrototypeReduce => 430,
             Self::TypedArrayPrototypeReduceRight => 431,
             Self::TypedArrayPrototypeSome => 432,
+            Self::HostDetachArrayBuffer => 433,
+            Self::HostGc => 434,
             Self::SharedArrayBufferConstructor => 378,
             Self::SharedArrayBufferPrototypeSlice => 379,
             Self::SharedArrayBufferPrototypeGrow => 380,
@@ -3468,6 +3484,8 @@ impl Intrinsic {
             430 => Some(Self::TypedArrayPrototypeReduce),
             431 => Some(Self::TypedArrayPrototypeReduceRight),
             432 => Some(Self::TypedArrayPrototypeSome),
+            433 => Some(Self::HostDetachArrayBuffer),
+            434 => Some(Self::HostGc),
             378 => Some(Self::SharedArrayBufferConstructor),
             379 => Some(Self::SharedArrayBufferPrototypeSlice),
             380 => Some(Self::SharedArrayBufferPrototypeGrow),
@@ -3665,6 +3683,8 @@ impl Intrinsic {
             Self::TypedArrayPrototypeLength => "get length",
             Self::TypedArrayPrototypeToStringTag => "get [Symbol.toStringTag]",
             Self::TypedArrayPrototypeSubarray => "subarray",
+            Self::HostDetachArrayBuffer => "detachArrayBuffer",
+            Self::HostGc => "gc",
             Self::BigIntConstructor => "BigInt",
             Self::BigIntAsIntN => "asIntN",
             Self::BigIntAsUintN => "asUintN",
@@ -4619,6 +4639,7 @@ impl Intrinsic {
             | Self::SharedArrayBufferPrototypeGrowable
             | Self::SharedArrayBufferPrototypeMaxByteLength
             | Self::AtomicsPause
+            | Self::HostGc
             | Self::BigIntPrototypeToLocaleString
             | Self::BigIntPrototypeValueOf
             | Self::TypedArrayPrototypeEntries
@@ -4828,6 +4849,7 @@ impl Intrinsic {
             | Self::AtomicsIsLockFree
             | Self::BigIntConstructor
             | Self::BigIntPrototypeToString
+            | Self::HostDetachArrayBuffer
             | Self::TypedArrayPrototypeAt
             | Self::TypedArrayPrototypeFill
             | Self::TypedArrayPrototypeIncludes
@@ -5509,6 +5531,24 @@ pub const TYPED_ARRAY_PROTOTYPE_PROPERTIES: [&str; 36] = [
 #[must_use]
 pub fn typed_array_prototype_owns(name: &[u16]) -> bool {
     wrapper_prototype_owns(&TYPED_ARRAY_PROTOTYPE_PROPERTIES, name)
+}
+
+/// The property names the host object of the conformance suite carries.
+pub const HOST_262_PROPERTIES: [&str; 7] = [
+    "AbstractModuleSource",
+    "agent",
+    "createRealm",
+    "detachArrayBuffer",
+    "evalScript",
+    "gc",
+    "global",
+];
+
+/// Whether the host object of the conformance suite owns a property of this
+/// name.
+#[must_use]
+pub fn host_262_owns(name: &[u16]) -> bool {
+    wrapper_prototype_owns(&HOST_262_PROPERTIES, name)
 }
 
 /// The property names 25.4 gives its namespace object.
@@ -7544,6 +7584,8 @@ impl Realm {
                     | Intrinsic::TypedArrayPrototypeByteOffset
                     | Intrinsic::TypedArrayPrototypeLength
                     | Intrinsic::TypedArrayPrototypeToStringTag
+                    | Intrinsic::HostDetachArrayBuffer
+                    | Intrinsic::HostGc
                     | Intrinsic::SharedArrayBufferPrototypeByteLength
                     | Intrinsic::SharedArrayBufferPrototypeGrowable
                     | Intrinsic::SharedArrayBufferPrototypeMaxByteLength
@@ -7877,6 +7919,35 @@ impl Realm {
     /// Returns [`HeapError::InvalidReference`] for a stale root.
     pub fn typed_array_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
         Self::rooted(heap, self.typed_array_prototype)
+    }
+
+    /// Installs the host object of the conformance suite on the global object.
+    ///
+    /// `$262` is no part of the specification: the embedding asks for it, and
+    /// a Realm that is not asked carries none. It holds the global object, the
+    /// `DetachArrayBuffer` of 25.1.3.4 and the collection hint of the suite;
+    /// `createRealm`, `evalScript`, `agent` and `AbstractModuleSource` are
+    /// named gaps, so a Script that reads one is told so.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    pub fn install_host_object(&self, heap: &mut GenerationalHeap) -> Result<(), HeapError> {
+        let global = self.global.global_object(heap)?;
+        let ordinary = Self::rooted(heap, self.object_prototype)?;
+        let shape = heap.shapes.root_shape();
+        let host = heap.allocate_immortal_object(shape, ordinary)?;
+        heap.set_object_kind(host, super::object::ObjectKind::Host262)?;
+        let key = PropertyKey::String(heap.strings.intern("global")?);
+        heap.define_own_named(host, key, Value::from_object(global), builtin_data())?;
+        for intrinsic in [Intrinsic::HostDetachArrayBuffer, Intrinsic::HostGc] {
+            let function = self.intrinsic(heap, intrinsic)?;
+            let key = PropertyKey::String(heap.strings.intern(intrinsic.name())?);
+            heap.define_own_named(host, key, function, builtin_data())?;
+        }
+        let key = PropertyKey::String(heap.strings.intern("$262")?);
+        heap.define_own_named(global, key, Value::from_object(host), builtin_data())?;
+        Ok(())
     }
 
     /// `%BigInt.prototype%`, 21.2.3.

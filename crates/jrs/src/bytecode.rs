@@ -9218,6 +9218,9 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // 24.1.3.1 and 24.2.3.2 answer undefined.
         crate::engine::realm::Intrinsic::MapPrototypeClear
         | crate::engine::realm::Intrinsic::SetPrototypeClear
+        // The two host capabilities of the conformance suite answer nothing.
+        | crate::engine::realm::Intrinsic::HostDetachArrayBuffer
+        | crate::engine::realm::Intrinsic::HostGc
         // 25.2.5.2 and 25.4.10 answer undefined.
         | crate::engine::realm::Intrinsic::SharedArrayBufferPrototypeGrow
         | crate::engine::realm::Intrinsic::AtomicsPause => RegisterType::Undefined,

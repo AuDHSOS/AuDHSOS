@@ -559,6 +559,9 @@ fn property(realm: &mut Realm<'_>, object: &Value, name: &str, value: &Value) ->
     realm.release(&desc)
 }
 fn install_host(realm: &mut Realm<'_>) -> Result<(), Error> {
+    // The register engine keeps a heap and a Realm of its own, which no object
+    // of this tool reaches, so it builds the host object there.
+    realm.install_engine_host_object()?;
     let global = realm.get_global("globalThis")?;
     let host = realm.object()?;
     property(realm, &global, "$262", &host)?;
