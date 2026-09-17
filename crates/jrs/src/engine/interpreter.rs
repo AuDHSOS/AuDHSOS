@@ -2359,6 +2359,21 @@ impl RegisterVM {
                         )
                     })
             }
+            Intrinsic::MapConstructor
+            | Intrinsic::SetConstructor
+            | Intrinsic::MapPrototypeGet
+            | Intrinsic::MapPrototypeSet
+            | Intrinsic::MapPrototypeHas
+            | Intrinsic::MapPrototypeDelete
+            | Intrinsic::MapPrototypeClear
+            | Intrinsic::MapPrototypeSize
+            | Intrinsic::SetPrototypeAdd
+            | Intrinsic::SetPrototypeHas
+            | Intrinsic::SetPrototypeDelete
+            | Intrinsic::SetPrototypeClear
+            | Intrinsic::SetPrototypeSize => {
+                self.call_collection_intrinsic(intrinsic, call, heap, realm)
+            }
             Intrinsic::NumberIsFinite
             | Intrinsic::NumberIsInteger
             | Intrinsic::NumberIsNaN
@@ -2725,6 +2740,8 @@ impl RegisterVM {
                     | Intrinsic::BooleanConstructor
                     | Intrinsic::FunctionConstructor
                     | Intrinsic::PromiseConstructor
+                    | Intrinsic::MapConstructor
+                    | Intrinsic::SetConstructor
             )
         })
     }
@@ -5865,6 +5882,197 @@ impl RegisterVM {
         Ok(Value::from_object(error))
     }
 
+    /// The constructors of 24.1.1.1 and 24.2.1.1 and the clauses of 24.1.3
+    /// and 24.2.3.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a call without
+    /// `new` and for a receiver that carries neither slot.
+    fn call_collection_intrinsic(
+        &self,
+        intrinsic: Intrinsic,
+        call: Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let set = matches!(
+            intrinsic,
+            Intrinsic::SetConstructor
+                | Intrinsic::SetPrototypeAdd
+                | Intrinsic::SetPrototypeHas
+                | Intrinsic::SetPrototypeDelete
+                | Intrinsic::SetPrototypeClear
+                | Intrinsic::SetPrototypeSize
+        );
+        if matches!(
+            intrinsic,
+            Intrinsic::MapConstructor | Intrinsic::SetConstructor
+        ) {
+            // 24.1.1.1 step 1 and 24.2.1.1 step 1 refuse a call without `new`.
+            if call.construct.is_none() {
+                return Err(type_error(heap, realm, "a constructor called without new"));
+            }
+            // Step 6 walks the iterable and calls the clause for each entry,
+            // which is a call of the Script this clause has no frame to make.
+            let iterable = self.call_argument(&call, 0, heap)?;
+            if !iterable.is_undefined() && !iterable.is_null() {
+                return Err(VMError::Unsupported("an iterable of 24.1.1.1"));
+            }
+            return Self::create_collection(set, heap, realm);
+        }
+        let entries = Self::collection_entries(call.receiver, set, heap, realm)?;
+        let key = self.call_argument(&call, 0, heap)?;
+        match intrinsic {
+            // 24.1.3.10 and 24.2.3.14 count the entries a delete left behind.
+            Intrinsic::MapPrototypeSize | Intrinsic::SetPrototypeSize => {
+                let mut count = 0i32;
+                for index in Self::collection_positions(heap, entries) {
+                    if promise::slot(heap, entries, index) != VALUE_UNINITIALIZED {
+                        count = count.saturating_add(1);
+                    }
+                }
+                Ok(Value::from_smi(count))
+            }
+            // 24.1.3.6 answers the value the key holds, and undefined for a
+            // key no entry has.
+            Intrinsic::MapPrototypeGet => Ok(Self::collection_find(heap, entries, key)?
+                .map_or(VALUE_UNDEFINED, |at| {
+                    promise::slot(heap, entries, at.saturating_add(1))
+                })),
+            // 24.1.3.7 and 24.2.3.8 answer whether an entry has the key.
+            Intrinsic::MapPrototypeHas | Intrinsic::SetPrototypeHas => Ok(Value::from_bool(
+                Self::collection_find(heap, entries, key)?.is_some(),
+            )),
+            // 24.1.3.9 and 24.2.3.1 replace the value of the entry the key
+            // has, or add one at the end, and answer the collection.
+            Intrinsic::MapPrototypeSet | Intrinsic::SetPrototypeAdd => {
+                let value = if set {
+                    // 24.2.3.1 step 5 keeps -0 as +0, and so does 24.1.3.9.
+                    key
+                } else {
+                    self.call_argument(&call, 1, heap)?
+                };
+                let key = Self::collection_key(key);
+                if let Some(at) = Self::collection_find(heap, entries, key)? {
+                    promise::set_slot(heap, entries, at.saturating_add(1), value)?;
+                } else {
+                    let end = promise::length_of(heap, entries);
+                    if usize::try_from(end).unwrap_or(usize::MAX) >= self.property_limit {
+                        return Err(VMError::PropertyLimit);
+                    }
+                    promise::set_slot(heap, entries, end, key)?;
+                    promise::set_slot(heap, entries, end.saturating_add(1), value)?;
+                }
+                Ok(call.receiver)
+            }
+            // 24.1.3.3 and 24.2.3.4 write the `empty` of the clause over the
+            // entry, so the position an iterator stands at does not move.
+            Intrinsic::MapPrototypeDelete | Intrinsic::SetPrototypeDelete => {
+                match Self::collection_find(heap, entries, key)? {
+                    Some(at) => {
+                        promise::set_slot(heap, entries, at, VALUE_UNINITIALIZED)?;
+                        promise::set_slot(heap, entries, at.saturating_add(1), VALUE_UNDEFINED)?;
+                        Ok(Value::from_bool(true))
+                    }
+                    None => Ok(Value::from_bool(false)),
+                }
+            }
+            // 24.1.3.1 and 24.2.3.2 empty every entry the collection has.
+            _ => {
+                for index in Self::collection_positions(heap, entries) {
+                    promise::set_slot(heap, entries, index, VALUE_UNINITIALIZED)?;
+                    promise::set_slot(heap, entries, index.saturating_add(1), VALUE_UNDEFINED)?;
+                }
+                Ok(VALUE_UNDEFINED)
+            }
+        }
+    }
+
+    /// The object 24.1.1.1 step 5 and 24.2.1.1 step 5 make, with the empty
+    /// List of entries those steps give it.
+    fn create_collection(
+        set: bool,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let entries = Value::from_object(realm.array(heap, 0)?);
+        let prototype = if set {
+            realm.set_prototype(heap)?
+        } else {
+            realm.map_prototype(heap)?
+        };
+        let shape = heap.shapes.root_shape();
+        let object = heap.allocate_object(shape, prototype)?;
+        heap.set_object_kind(object, ObjectKind::Collection { entries, set })?;
+        Ok(Value::from_object(object))
+    }
+
+    /// The entries of the receiver of a clause of 24.1.3 or 24.2.3.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a receiver that
+    /// carries the other slot or neither.
+    fn collection_entries(
+        receiver: Value,
+        set: bool,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let held = receiver
+            .as_object()
+            .and_then(|object| match heap.get_object(object)?.kind {
+                ObjectKind::Collection {
+                    entries,
+                    set: holds,
+                } if holds == set => Some(entries),
+                _ => None,
+            });
+        held.ok_or_else(|| {
+            type_error(
+                heap,
+                realm,
+                "this value carries neither a Map nor a Set of its own",
+            )
+        })
+    }
+
+    /// The position of every key slot of the entries, in the order they were
+    /// added.
+    fn collection_positions(
+        heap: &GenerationalHeap,
+        entries: Value,
+    ) -> core::iter::StepBy<core::ops::Range<u32>> {
+        (0..promise::length_of(heap, entries)).step_by(2)
+    }
+
+    /// The position of the key slot of the entry `key` has, if one has it.
+    ///
+    /// 24.1.3.6 compares with `SameValueZero` of 7.2.11, which 24.1.3.3 wrote
+    /// no `empty` for.
+    fn collection_find(
+        heap: &GenerationalHeap,
+        entries: Value,
+        key: Value,
+    ) -> Result<Option<u32>, VMError> {
+        for index in Self::collection_positions(heap, entries) {
+            let held = promise::slot(heap, entries, index);
+            if held != VALUE_UNINITIALIZED && same_value_zero(held, key, heap)? {
+                return Ok(Some(index));
+            }
+        }
+        Ok(None)
+    }
+
+    /// 24.1.3.9 step 6 and 24.2.3.1 step 4 keep -0 as +0.
+    fn collection_key(key: Value) -> Value {
+        if key.as_f64() == Some(0.0) {
+            return Value::from_smi(0);
+        }
+        key
+    }
+
     /// `Object ( value )` of 20.1.1.1.
     ///
     /// undefined and null make an ordinary object, and every other value goes
@@ -8736,8 +8944,10 @@ impl RegisterVM {
             | ObjectKind::Continuation { .. }
             | ObjectKind::Accessor { .. }
             | ObjectKind::RegExp { .. }
-            // 27.2.5.5 tags a Promise through @@toStringTag.
+            // 27.2.5.5 tags a Promise through @@toStringTag, and 24.1.3.13 and
+            // 24.2.3.15 tag a Map and a Set the same way.
             | ObjectKind::Promise { .. }
+            | ObjectKind::Collection { .. }
             | ObjectKind::Json
             | ObjectKind::Reflect => None,
         }
@@ -8925,6 +9135,23 @@ impl RegisterVM {
                 if chain && super::realm::promise_prototype_owns(name) =>
             {
                 Err(VMError::Unsupported("a property of %Promise.prototype%"))
+            }
+            // 24.1.3 and 24.2.3 give their Prototype more than this Realm
+            // builds: the iterators of 24.1.5 and 24.2.5 and the walks that
+            // call back into the Script.
+            Some(ObjectKind::Collection { set, .. })
+                if chain
+                    && (if set {
+                        super::realm::set_prototype_owns(name)
+                    } else {
+                        super::realm::map_prototype_owns(name)
+                    }) =>
+            {
+                Err(VMError::Unsupported(if set {
+                    "a property of %Set.prototype%"
+                } else {
+                    "a property of %Map.prototype%"
+                }))
             }
             // 20.4.2 gives `%Symbol%` more than the thirteen of table 1.
             Some(ObjectKind::NativeFunction { id, .. })
@@ -9533,6 +9760,9 @@ impl RegisterVM {
                 ObjectKind::Ordinary
                 | ObjectKind::SymbolWrapper(_)
                 | ObjectKind::Promise { .. }
+                // 24.1.3.13 and 24.2.3.15 tag a Map and a Set through
+                // @@toStringTag, so their builtin tag is the ordinary one.
+                | ObjectKind::Collection { .. }
                 | ObjectKind::ArrayIterator { .. }
                 | ObjectKind::ArrayIteration { .. }
                 | ObjectKind::Continuation { .. }

@@ -8661,6 +8661,11 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::RegExpPrototypeTest
         // 22.1.3.9 answers whether the text has a lone surrogate.
         | crate::engine::realm::Intrinsic::StringPrototypeIsWellFormed
+        // 24.1.3.7, 24.1.3.3, 24.2.3.8 and 24.2.3.4 answer a Boolean.
+        | crate::engine::realm::Intrinsic::MapPrototypeHas
+        | crate::engine::realm::Intrinsic::MapPrototypeDelete
+        | crate::engine::realm::Intrinsic::SetPrototypeHas
+        | crate::engine::realm::Intrinsic::SetPrototypeDelete
         | crate::engine::realm::Intrinsic::ArrayIsArray => RegisterType::Boolean,
         // 22.1.1.1 answers a String whichever argument it took; `new` answers
         // no value at all, because the exotic object it would make is a gap.
@@ -8845,7 +8850,17 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::RegExpPrototypeSplit
         // 27.7.5.3 answers nothing: the job queue is its only caller.
         | crate::engine::realm::Intrinsic::AsyncResume
-        | crate::engine::realm::Intrinsic::AsyncThrow => RegisterType::Unknown,
+        | crate::engine::realm::Intrinsic::AsyncThrow
+        // 24.1.3.6 answers the value an entry holds, and 24.1.3.9, 24.2.3.1
+        // and the two constructors answer the collection itself.
+        | crate::engine::realm::Intrinsic::MapConstructor
+        | crate::engine::realm::Intrinsic::MapPrototypeGet
+        | crate::engine::realm::Intrinsic::MapPrototypeSet
+        | crate::engine::realm::Intrinsic::SetConstructor
+        | crate::engine::realm::Intrinsic::SetPrototypeAdd => RegisterType::Unknown,
+        // 24.1.3.1 and 24.2.3.2 answer undefined.
+        crate::engine::realm::Intrinsic::MapPrototypeClear
+        | crate::engine::realm::Intrinsic::SetPrototypeClear => RegisterType::Undefined,
         // 22.2.6.12 answers the index of the match.
         crate::engine::realm::Intrinsic::RegExpPrototypeSearch
         | crate::engine::realm::Intrinsic::StringPrototypeCharCodeAt
@@ -8896,6 +8911,9 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::MathRandom
         // 21.1.1.1 answers the Number ToNumber makes of its argument.
         | crate::engine::realm::Intrinsic::NumberPrototypeValueOf
+        // 24.1.3.10 and 24.2.3.14 answer the count of entries.
+        | crate::engine::realm::Intrinsic::MapPrototypeSize
+        | crate::engine::realm::Intrinsic::SetPrototypeSize
         | crate::engine::realm::Intrinsic::NumberConstructor => RegisterType::Number,
         // 22.1.3.1 and 22.1.3.4 answer undefined for an index outside the String.
         crate::engine::realm::Intrinsic::StringPrototypeAt

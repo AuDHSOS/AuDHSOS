@@ -779,6 +779,32 @@ pub enum Intrinsic {
     MathTan,
     /// `Math.tanh`, 21.3.2.
     MathTanh,
+    /// `%Map%`, 24.1.1.1.
+    MapConstructor,
+    /// `%Map.prototype.get%`, 24.1.3.6.
+    MapPrototypeGet,
+    /// `%Map.prototype.set%`, 24.1.3.9.
+    MapPrototypeSet,
+    /// `%Map.prototype.has%`, 24.1.3.7.
+    MapPrototypeHas,
+    /// `%Map.prototype.delete%`, 24.1.3.3.
+    MapPrototypeDelete,
+    /// `%Map.prototype.clear%`, 24.1.3.1.
+    MapPrototypeClear,
+    /// `get %Map.prototype.size%`, 24.1.3.10.
+    MapPrototypeSize,
+    /// `%Set%`, 24.2.1.1.
+    SetConstructor,
+    /// `%Set.prototype.add%`, 24.2.3.1.
+    SetPrototypeAdd,
+    /// `%Set.prototype.has%`, 24.2.3.8.
+    SetPrototypeHas,
+    /// `%Set.prototype.delete%`, 24.2.3.4.
+    SetPrototypeDelete,
+    /// `%Set.prototype.clear%`, 24.2.3.2.
+    SetPrototypeClear,
+    /// `get %Set.prototype.size%`, 24.2.3.14.
+    SetPrototypeSize,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -824,6 +850,10 @@ pub enum IntrinsicHolder {
     SymbolConstructor,
     /// `%Error.prototype%`, which carries the methods 20.5.3 gives it.
     ErrorPrototype,
+    /// `%Map.prototype%`, which carries the methods 24.1.3 gives it.
+    MapPrototype,
+    /// `%Set.prototype%`, which carries the methods 24.2.3 gives it.
+    SetPrototype,
     /// `%Promise.prototype%`, which carries the methods 27.2.5 gives it.
     PromisePrototype,
     /// `%Promise%`, which carries the functions 27.2.4 gives the constructor.
@@ -832,7 +862,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 238] = [
+    pub const ALL: [Self; 251] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1071,6 +1101,19 @@ impl Intrinsic {
         Self::MathSqrt,
         Self::MathTan,
         Self::MathTanh,
+        Self::MapConstructor,
+        Self::MapPrototypeGet,
+        Self::MapPrototypeSet,
+        Self::MapPrototypeHas,
+        Self::MapPrototypeDelete,
+        Self::MapPrototypeClear,
+        Self::MapPrototypeSize,
+        Self::SetConstructor,
+        Self::SetPrototypeAdd,
+        Self::SetPrototypeHas,
+        Self::SetPrototypeDelete,
+        Self::SetPrototypeClear,
+        Self::SetPrototypeSize,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -1244,6 +1287,15 @@ impl Intrinsic {
             | Self::RegExpPrototypeSearch
             | Self::RegExpPrototypeSplit => IntrinsicHolder::RegExpPrototype,
             Self::ErrorPrototypeToString => IntrinsicHolder::ErrorPrototype,
+            Self::MapPrototypeGet
+            | Self::MapPrototypeSet
+            | Self::MapPrototypeHas
+            | Self::MapPrototypeDelete
+            | Self::MapPrototypeClear => IntrinsicHolder::MapPrototype,
+            Self::SetPrototypeAdd
+            | Self::SetPrototypeHas
+            | Self::SetPrototypeDelete
+            | Self::SetPrototypeClear => IntrinsicHolder::SetPrototype,
             Self::JsonParse | Self::JsonStringify => IntrinsicHolder::Json,
             Self::PromisePrototypeThen | Self::PromisePrototypeCatch => {
                 IntrinsicHolder::PromisePrototype
@@ -1292,6 +1344,12 @@ impl Intrinsic {
             // 27.2.1.3 stands on no object, so the Global holder never
             // installs either resolving function.
             | Self::PromiseConstructor
+            | Self::MapConstructor
+            | Self::SetConstructor
+            // 24.1.3.10 and 24.2.3.14 are accessors of their Prototype, which
+            // the Global holder never installs.
+            | Self::MapPrototypeSize
+            | Self::SetPrototypeSize
             | Self::PromiseResolveFunction
             | Self::PromiseRejectFunction
             // 27.2.4.1.3, 27.2.4.2.2 and 27.2.4.2.3 stand on no object
@@ -1582,6 +1640,19 @@ impl Intrinsic {
             Self::MathSqrt => 235,
             Self::MathTan => 236,
             Self::MathTanh => 237,
+            Self::MapConstructor => 238,
+            Self::MapPrototypeGet => 239,
+            Self::MapPrototypeSet => 240,
+            Self::MapPrototypeHas => 241,
+            Self::MapPrototypeDelete => 242,
+            Self::MapPrototypeClear => 243,
+            Self::MapPrototypeSize => 244,
+            Self::SetConstructor => 245,
+            Self::SetPrototypeAdd => 246,
+            Self::SetPrototypeHas => 247,
+            Self::SetPrototypeDelete => 248,
+            Self::SetPrototypeClear => 249,
+            Self::SetPrototypeSize => 250,
         }
     }
 
@@ -1830,6 +1901,19 @@ impl Intrinsic {
             Self::MathSqrt => 235,
             Self::MathTan => 236,
             Self::MathTanh => 237,
+            Self::MapConstructor => 238,
+            Self::MapPrototypeGet => 239,
+            Self::MapPrototypeSet => 240,
+            Self::MapPrototypeHas => 241,
+            Self::MapPrototypeDelete => 242,
+            Self::MapPrototypeClear => 243,
+            Self::MapPrototypeSize => 244,
+            Self::SetConstructor => 245,
+            Self::SetPrototypeAdd => 246,
+            Self::SetPrototypeHas => 247,
+            Self::SetPrototypeDelete => 248,
+            Self::SetPrototypeClear => 249,
+            Self::SetPrototypeSize => 250,
         }
     }
 
@@ -2079,6 +2163,19 @@ impl Intrinsic {
             235 => Some(Self::MathSqrt),
             236 => Some(Self::MathTan),
             237 => Some(Self::MathTanh),
+            238 => Some(Self::MapConstructor),
+            239 => Some(Self::MapPrototypeGet),
+            240 => Some(Self::MapPrototypeSet),
+            241 => Some(Self::MapPrototypeHas),
+            242 => Some(Self::MapPrototypeDelete),
+            243 => Some(Self::MapPrototypeClear),
+            244 => Some(Self::MapPrototypeSize),
+            245 => Some(Self::SetConstructor),
+            246 => Some(Self::SetPrototypeAdd),
+            247 => Some(Self::SetPrototypeHas),
+            248 => Some(Self::SetPrototypeDelete),
+            249 => Some(Self::SetPrototypeClear),
+            250 => Some(Self::SetPrototypeSize),
             _ => None,
         }
     }
@@ -2135,7 +2232,7 @@ impl Intrinsic {
             Self::ObjectGetOwnPropertySymbols => "getOwnPropertySymbols",
             Self::ObjectGetOwnPropertyDescriptors => "getOwnPropertyDescriptors",
             Self::ObjectAssign => "assign",
-            Self::ReflectSet => "set",
+            Self::ReflectSet | Self::MapPrototypeSet => "set",
             Self::ArrayPrototypeFlatMap => "flatMap",
             Self::ObjectFromEntries => "fromEntries",
             Self::MathAcos => "acos",
@@ -2161,6 +2258,12 @@ impl Intrinsic {
             Self::MathSqrt => "sqrt",
             Self::MathTan => "tan",
             Self::MathTanh => "tanh",
+            Self::MapConstructor => "Map",
+            Self::MapPrototypeDelete | Self::SetPrototypeDelete => "delete",
+            Self::MapPrototypeClear | Self::SetPrototypeClear => "clear",
+            Self::MapPrototypeSize | Self::SetPrototypeSize => "get size",
+            Self::SetConstructor => "Set",
+            Self::SetPrototypeAdd => "add",
             Self::SpeciesGetter => "get [Symbol.species]",
             Self::RegExpPrototypeFlags => "get flags",
             Self::RegExpPrototypeSource => "get source",
@@ -2275,8 +2378,8 @@ impl Intrinsic {
             Self::NumberIsSafeInteger => "isSafeInteger",
             Self::BooleanConstructor => "Boolean",
             Self::ReflectDeleteProperty => "deleteProperty",
-            Self::ReflectGet => "get",
-            Self::ReflectHas => "has",
+            Self::ReflectGet | Self::MapPrototypeGet => "get",
+            Self::ReflectHas | Self::MapPrototypeHas | Self::SetPrototypeHas => "has",
             Self::ReflectOwnKeys => "ownKeys",
             Self::ObjectDefineProperty | Self::ReflectDefineProperty => "defineProperty",
             Self::ObjectGetOwnPropertyDescriptor | Self::ReflectGetOwnPropertyDescriptor => {
@@ -2766,7 +2869,13 @@ impl Intrinsic {
             | Self::StringPrototypeStrike
             | Self::StringPrototypeSub
             | Self::StringPrototypeSup
-            | Self::MathRandom => 0,
+            | Self::MathRandom
+            | Self::MapConstructor
+            | Self::MapPrototypeClear
+            | Self::MapPrototypeSize
+            | Self::SetConstructor
+            | Self::SetPrototypeClear
+            | Self::SetPrototypeSize => 0,
             Self::StringFromCharCode
             | Self::StringFromCodePoint
             | Self::StringRaw
@@ -2891,6 +3000,12 @@ impl Intrinsic {
             | Self::MathSqrt
             | Self::MathTan
             | Self::MathTanh
+            | Self::MapPrototypeGet
+            | Self::MapPrototypeHas
+            | Self::MapPrototypeDelete
+            | Self::SetPrototypeAdd
+            | Self::SetPrototypeHas
+            | Self::SetPrototypeDelete
             | Self::PromiseConstructor
             | Self::PromiseResolve
             | Self::PromiseReject
@@ -2950,6 +3065,7 @@ impl Intrinsic {
             | Self::RegExpPrototypeSplit
             | Self::MathAtan2
             | Self::MathHypot
+            | Self::MapPrototypeSet
             | Self::PromisePrototypeThen => 2,
         }
     }
@@ -3272,6 +3388,56 @@ pub fn promise_constructor_owns(name: &[u16]) -> bool {
             .any(|owned| owned.encode_utf16().eq(name.iter().copied()))
 }
 
+/// The property names 24.1.3 gives `%Map.prototype%`.
+pub const MAP_PROTOTYPE_PROPERTIES: [&str; 10] = [
+    "clear",
+    "constructor",
+    "delete",
+    "entries",
+    "forEach",
+    "get",
+    "has",
+    "keys",
+    "set",
+    "values",
+];
+
+/// Whether `%Map.prototype%` or `%Object.prototype%` owns a property of this
+/// name, which a Map resolves on its Prototype Chain.
+#[must_use]
+pub fn map_prototype_owns(name: &[u16]) -> bool {
+    wrapper_prototype_owns(&MAP_PROTOTYPE_PROPERTIES, name)
+}
+
+/// The property names 24.2.3 gives `%Set.prototype%`.
+pub const SET_PROTOTYPE_PROPERTIES: [&str; 17] = [
+    "add",
+    "clear",
+    "constructor",
+    "delete",
+    "difference",
+    "entries",
+    "forEach",
+    "has",
+    "intersection",
+    "isDisjointFrom",
+    "isSubsetOf",
+    "isSupersetOf",
+    "keys",
+    "symmetricDifference",
+    "union",
+    "values",
+    // 24.2.3.14 is an accessor, which the read reaches the same way.
+    "size",
+];
+
+/// Whether `%Set.prototype%` or `%Object.prototype%` owns a property of this
+/// name, which a Set resolves on its Prototype Chain.
+#[must_use]
+pub fn set_prototype_owns(name: &[u16]) -> bool {
+    wrapper_prototype_owns(&SET_PROTOTYPE_PROPERTIES, name)
+}
+
 /// The property names 27.2.5 gives `%Promise.prototype%`.
 pub const PROMISE_PROTOTYPE_PROPERTIES: [&str; 4] = ["catch", "constructor", "finally", "then"];
 
@@ -3559,6 +3725,8 @@ pub struct Realm {
     regexp_prototype: Root,
     symbol_prototype: Root,
     promise_prototype: Root,
+    map_prototype: Root,
+    set_prototype: Root,
     array_iterator_prototype: Root,
     error_prototype: Root,
     native_error_prototypes: [Root; NATIVE_ERROR_COUNT],
@@ -3601,6 +3769,8 @@ struct Holders {
     regexp_prototype: Root,
     symbol_prototype: Root,
     promise_prototype: Root,
+    map_prototype: Root,
+    set_prototype: Root,
 }
 
 /// Global Environment Record of 9.1.1.4.
@@ -3687,6 +3857,13 @@ impl Realm {
         let promise_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
         let promise_prototype = heap.push_root(Value::from_object(promise_prototype))?;
 
+        // 24.1.3 and 24.2.3: %Map.prototype% and %Set.prototype% are ordinary
+        // objects and neither a Map nor a Set.
+        let map_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
+        let map_prototype = heap.push_root(Value::from_object(map_prototype))?;
+        let set_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
+        let set_prototype = heap.push_root(Value::from_object(set_prototype))?;
+
         // 20.4.3: %Symbol.prototype% is an ordinary object and not a Symbol.
         let symbol_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
         let symbol_prototype = heap.push_root(Value::from_object(symbol_prototype))?;
@@ -3757,6 +3934,8 @@ impl Realm {
                 regexp_prototype,
                 symbol_prototype,
                 promise_prototype,
+                map_prototype,
+                set_prototype,
             },
         )?;
 
@@ -3770,6 +3949,8 @@ impl Realm {
             (Intrinsic::RegExpConstructor, regexp_prototype),
             (Intrinsic::SymbolConstructor, symbol_prototype),
             (Intrinsic::PromiseConstructor, promise_prototype),
+            (Intrinsic::MapConstructor, map_prototype),
+            (Intrinsic::SetConstructor, set_prototype),
         ] {
             Self::pair_constructor_with_prototype(heap, &intrinsics, constructor, prototype)?;
         }
@@ -3782,6 +3963,7 @@ impl Realm {
         Self::define_species_getters(heap, &intrinsics)?;
         Self::define_restricted_properties(heap, &intrinsics, function_prototype)?;
         Self::define_regexp_accessors(heap, &intrinsics, regexp_prototype)?;
+        Self::define_collection_size_getters(heap, &intrinsics, map_prototype, set_prototype)?;
         Self::define_trim_aliases(heap, &intrinsics, string_prototype)?;
         Self::define_unscopables(heap, array_prototype)?;
         Self::define_to_string_tags(
@@ -3793,6 +3975,8 @@ impl Realm {
                 (symbol_prototype, "Symbol"),
                 (array_iterator_prototype, "Array Iterator"),
                 (promise_prototype, "Promise"),
+                (map_prototype, "Map"),
+                (set_prototype, "Set"),
             ],
         )?;
 
@@ -3833,6 +4017,8 @@ impl Realm {
             regexp_prototype,
             symbol_prototype,
             promise_prototype,
+            map_prototype,
+            set_prototype,
             array_iterator_prototype,
             error_prototype,
             native_error_prototypes,
@@ -4413,6 +4599,55 @@ impl Realm {
         Ok(())
     }
 
+    /// The `size` 24.1.3.10 and 24.2.3.14 give their Prototype.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    fn define_collection_size_getters(
+        heap: &mut GenerationalHeap,
+        intrinsics: &[Root],
+        map_prototype: Root,
+        set_prototype: Root,
+    ) -> Result<(), HeapError> {
+        for (intrinsic, prototype) in [
+            (Intrinsic::MapPrototypeSize, map_prototype),
+            (Intrinsic::SetPrototypeSize, set_prototype),
+        ] {
+            let getter = Self::rooted(
+                heap,
+                *intrinsics
+                    .get(intrinsic.index())
+                    .ok_or(HeapError::InvalidReference)?,
+            )?;
+            let holder = Self::rooted(heap, prototype)?
+                .as_object()
+                .ok_or(HeapError::InvalidReference)?;
+            let shape = heap.shapes.root_shape();
+            let pair = heap.allocate_immortal_object(shape, super::value::VALUE_NULL)?;
+            heap.set_object_kind(
+                pair,
+                super::object::ObjectKind::Accessor {
+                    get: getter,
+                    set: super::value::VALUE_UNDEFINED,
+                },
+            )?;
+            let key = PropertyKey::String(heap.strings.intern("size")?);
+            heap.define_own_named(
+                holder,
+                key,
+                Value::from_object(pair),
+                PropertyFlags {
+                    writable: false,
+                    enumerable: false,
+                    configurable: true,
+                    is_accessor: true,
+                },
+            )?;
+        }
+        Ok(())
+    }
+
     fn define_regexp_accessors(
         heap: &mut GenerationalHeap,
         intrinsics: &[Root],
@@ -4620,6 +4855,8 @@ impl Realm {
                 IntrinsicHolder::BooleanPrototype => Self::rooted(heap, holders.boolean_prototype)?,
                 IntrinsicHolder::RegExpPrototype => Self::rooted(heap, holders.regexp_prototype)?,
                 IntrinsicHolder::PromisePrototype => Self::rooted(heap, holders.promise_prototype)?,
+                IntrinsicHolder::MapPrototype => Self::rooted(heap, holders.map_prototype)?,
+                IntrinsicHolder::SetPrototype => Self::rooted(heap, holders.set_prototype)?,
                 IntrinsicHolder::PromiseConstructor => Self::rooted(
                     heap,
                     *intrinsics
@@ -4935,6 +5172,24 @@ impl Realm {
     /// # Errors
     ///
     /// Returns [`HeapError::InvalidReference`] when the root is gone.
+    pub fn map_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.map_prototype)
+    }
+
+    /// `%Set.prototype%`, 24.2.3.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when the root was discarded.
+    pub fn set_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.set_prototype)
+    }
+
+    /// `%Map.prototype%`, 24.1.3.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when the root was discarded.
     pub fn promise_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
         Self::rooted(heap, self.promise_prototype)
     }

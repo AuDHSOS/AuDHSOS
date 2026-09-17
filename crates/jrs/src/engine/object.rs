@@ -112,6 +112,17 @@ pub enum ObjectKind {
     },
     /// Error instance, the `[[ErrorData]]` slot of 20.5.4.
     Error,
+    /// The `[[MapData]]` of 24.1.4 and the `[[SetData]]` of 24.2.4.
+    Collection {
+        /// The entries in the order 24.1.1.1 added them, as the Array that
+        /// holds a key and a value for each of them. 24.1.3.3 writes the
+        /// `empty` of the clause over a deleted key, so the position an
+        /// iterator of 24.1.5 stands at does not move.
+        entries: Value,
+        /// Whether this is the Set of 24.2, whose entry answers its key as its
+        /// value as well.
+        set: bool,
+    },
     /// Array Iterator instance, the slots of 23.1.5.3.
     ArrayIterator {
         /// `[[IteratedArrayLike]]`, undefined once the iteration is done.
@@ -254,6 +265,7 @@ impl ObjectKind {
             Self::StringWrapper(value)
             | Self::ArrayIterator { target: value, .. }
             | Self::NativeFunction { state: value, .. }
+            | Self::Collection { entries: value, .. }
             | Self::Function { home: value, .. } => [Some(*value), None, None, None, None],
             Self::Promise {
                 value,
@@ -323,6 +335,7 @@ impl ObjectKind {
             Self::StringWrapper(value)
             | Self::ArrayIterator { target: value, .. }
             | Self::NativeFunction { state: value, .. }
+            | Self::Collection { entries: value, .. }
             | Self::Function { home: value, .. } => [Some(value), None, None, None, None],
             Self::Promise {
                 value,

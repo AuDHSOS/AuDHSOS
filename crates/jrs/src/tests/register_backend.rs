@@ -8792,3 +8792,77 @@ fn an_arrow_takes_the_this_of_the_function_it_was_made_in() -> Result<(), Error>
     }
     Ok(())
 }
+
+#[test]
+fn the_map_of_24_1_and_the_set_of_24_2_hold_their_entries() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend carries neither clause, so only the engine answers.
+    for (source, answer) in [
+        ("Object.prototype.toString.call(new Map())", "[object Map]"),
+        ("Object.prototype.toString.call(new Set())", "[object Set]"),
+        ("''+new Map().size+new Set().size", "00"),
+        // 24.1.3.9 replaces the value of the entry the key has, and 24.1.3.6
+        // answers undefined for a key no entry has.
+        (
+            "var m=new Map();m.set('a',1);m.set('b',2);m.set('a',3);''+m.size+m.get('a')+m.get('b')+m.get('c')",
+            "232undefined",
+        ),
+        // 24.1.3.9 answers the Map itself, so the calls chain.
+        ("var m=new Map();''+(m.set(1,2)===m)", "true"),
+        // 24.1.3.3 answers whether it removed an entry.
+        (
+            "var m=new Map();m.set('a',1);''+m.delete('a')+m.delete('a')+m.size+m.has('a')",
+            "truefalse0false",
+        ),
+        (
+            "var m=new Map();m.set('a',1);m.clear();''+m.size+m.has('a')",
+            "0false",
+        ),
+        // 7.2.11 makes NaN the same value as NaN and -0 the same as +0.
+        (
+            "var s=new Set();s.add(1);s.add(1);s.add(NaN);s.add(NaN);''+s.size+s.has(1)+s.has(NaN)",
+            "2truetrue",
+        ),
+        (
+            "var s=new Set();s.add(-0);''+s.has(0)+s.has(-0)",
+            "truetrue",
+        ),
+        (
+            "var s=new Set();''+(s.add(1)===s)+s.delete(1)+s.size",
+            "truetrue0",
+        ),
+        // 24.1.3 and 24.2.3 refuse a receiver that carries the other slot.
+        (
+            "var r;try{Map.prototype.get.call(new Set(),1)}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{Set.prototype.add.call(new Map(),1)}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        // 24.1.1.1 step 1 refuses a call without `new`.
+        (
+            "var r;try{Map()}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{Set()}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        // 24.1.3.10 is an accessor of the Prototype, not a property of the Map.
+        (
+            "var d=Object.getOwnPropertyDescriptor(Map.prototype,'size');''+(typeof d.get)+d.set+d.enumerable+d.configurable",
+            "functionundefinedfalsetrue",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    // 24.1.1.1 step 6 walks an iterable and calls 24.1.3.9 for each entry,
+    // which is a call of the Script the clause has no frame to make.
+    assert!(matches!(
+        realm.evaluate("new Map([[1,2]])"),
+        Err(Error::Unsupported { .. })
+    ));
+    Ok(())
+}
