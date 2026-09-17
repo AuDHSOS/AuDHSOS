@@ -5758,6 +5758,14 @@ Document 16 step Q8.
   `ON clause references tables to its right`, whether the name carries
   the table in front of it or not.
 - An `ON` that names the sides read up to it stands.
+- A `CREATE TRIGGER` whose text carries a variable is refused `trigger
+  cannot use variables`, whether the variable stands in the `WHEN`, the
+  body, a statement inside it, a `GROUP BY`, a `LIMIT`, an `ORDER BY`
+  or a window; a variable inside a text is the text.
+- A write of a trigger's body that names a schema is refused
+  `qualified table names are not allowed on INSERT, UPDATE, and DELETE
+  statements within triggers`, and one that names the table alone
+  stands.
 
 ## 6.7 CI pipeline
 

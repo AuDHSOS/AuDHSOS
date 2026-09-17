@@ -497,6 +497,24 @@ const MOVES: [[u8; 8]; 8] = [
     [1, 7, 5, 5, 5, 5, 5, 5],
 ];
 
+/// Whether a text carries a variable: `?`, `?1`, `:name`, `@name` or
+/// `$name`.
+///
+/// `sqlite3CreateTrigger` refuses a trigger that carries one, a trigger
+/// running with no statement of its own to bind against. Every byte is
+/// read once, so the walk is O(n) in the text.
+#[must_use]
+pub fn holds_variable(sql: &[u8]) -> bool {
+    let mut at = 0;
+    while let Some((kind, len)) = token(sql.get(at..).unwrap_or_default()) {
+        if kind == Kind::Variable {
+            return true;
+        }
+        at = at.saturating_add(len.max(1));
+    }
+    false
+}
+
 /// Whether `sql` ends a statement, which is `sqlite3_complete`: the
 /// last token that carries meaning is a semicolon, and a `CREATE
 /// TRIGGER` ends only after the `END` of its body.

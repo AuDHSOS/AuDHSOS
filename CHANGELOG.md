@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` refuses a `CREATE TRIGGER` whose text carries a variable
+  with `trigger cannot use variables`, and a write of a trigger's body
+  that names a schema with `qualified table names are not allowed on
+  INSERT, UPDATE, and DELETE statements within triggers`. D-282 records
+  it. Catalog 6.6.200.
+
 - `db-sqlite` refuses a combination of words no join is written with,
   naming them: `unknown join type: INNER OUTER`. An `ON` of an outer
   join that names a table read after it is refused

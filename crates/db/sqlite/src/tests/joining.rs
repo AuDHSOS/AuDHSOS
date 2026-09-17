@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! The words a join is written with, and what an `ON` may name.
+//! The words a join is written with, what an `ON` may name, and what
+//! a trigger may not carry.
 
 use crate::change::Writer;
 use crate::db::Database;
@@ -115,4 +116,55 @@ fn what_an_on_of_an_outer_join_may_name() {
             panic!("{sql}: {}", error.message());
         });
     }
+}
+
+/// A trigger runs with no statement of its own to bind against, so a
+/// variable anywhere in it is refused, and a write of its body takes
+/// the name of a table alone.
+#[test]
+fn what_a_trigger_may_not_carry() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t1(a,b)").unwrap();
+    writer.run(b"CREATE TABLE t2(c,d)").unwrap();
+    for body in [
+        "AFTER INSERT ON t1 WHEN new.a = ? BEGIN SELECT 1; END",
+        "BEFORE DELETE ON t1 BEGIN SELECT ?; END",
+        "BEFORE DELETE ON t1 BEGIN SELECT * FROM (SELECT * FROM (SELECT ?)); END",
+        "BEFORE DELETE ON t1 BEGIN SELECT * FROM t2 GROUP BY ?; END",
+        "BEFORE DELETE ON t1 BEGIN SELECT * FROM t2 LIMIT ?; END",
+        "BEFORE DELETE ON t1 BEGIN SELECT * FROM t2 ORDER BY ?; END",
+        "BEFORE UPDATE ON t1 BEGIN UPDATE t2 SET c = ?; END",
+        "BEFORE UPDATE ON t1 BEGIN UPDATE t2 SET c = 1 WHERE d = ?; END",
+        "BEFORE INSERT ON t1 BEGIN INSERT INTO t2 SELECT $1, 1 FROM t1; END",
+    ] {
+        let sql = alloc::format!("CREATE TRIGGER tr1 {body}");
+        assert_eq!(
+            writer.run(sql.as_bytes()).unwrap_err().message(),
+            "trigger cannot use variables",
+            "{body}"
+        );
+    }
+    // A variable inside a text is the text and not a variable.
+    writer
+        .run(b"CREATE TRIGGER tr1 AFTER INSERT ON t1 BEGIN SELECT '?'; END")
+        .expect("a trigger");
+    for body in [
+        "AFTER UPDATE ON t1 BEGIN INSERT INTO main.t2 VALUES(new.a, new.b); END",
+        "AFTER UPDATE ON t1 BEGIN UPDATE main.t2 SET c = 1; END",
+        "AFTER UPDATE ON t1 BEGIN DELETE FROM main.t2; END",
+    ] {
+        let sql = alloc::format!("CREATE TRIGGER tr2 {body}");
+        assert_eq!(
+            writer.run(sql.as_bytes()).unwrap_err().message(),
+            concat!(
+                "qualified table names are not allowed on ",
+                "INSERT, UPDATE, and DELETE statements within triggers"
+            ),
+            "{body}"
+        );
+    }
+    // A write that names the table alone stands.
+    writer
+        .run(b"CREATE TRIGGER tr2 AFTER UPDATE ON t1 BEGIN INSERT INTO t2 VALUES(1,2); END")
+        .expect("a trigger");
 }

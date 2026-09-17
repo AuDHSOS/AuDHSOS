@@ -2126,11 +2126,32 @@ impl Writer {
     /// database already holds.
     fn create_trigger(
         &mut self,
+        arena: &Arena,
         trigger: &crate::ast::CreateTrigger,
         sql: &[u8],
     ) -> Result<(), Error> {
         let name = crate::schema::dequote(trigger.name.text(sql));
         let over = crate::schema::dequote(trigger.table.text(sql));
+        // `sqlite3CreateTrigger`: a trigger runs with no statement of
+        // its own to bind against, so a variable anywhere in it stands
+        // for nothing.
+        if crate::token::holds_variable(trigger.written.text(sql)) {
+            return Err(Error::TriggerVariable);
+        }
+        // `sqlite3TriggerInsertStep` and the two beside it take the
+        // name of a table alone, so a schema in front of one is
+        // refused.
+        for step in arena.steps(trigger.body) {
+            let schema = match *step {
+                crate::ast::TriggerStep::Insert(ref statement) => statement.schema,
+                crate::ast::TriggerStep::Update(ref statement) => statement.schema,
+                crate::ast::TriggerStep::Delete(ref statement) => statement.schema,
+                crate::ast::TriggerStep::Select(_) => None,
+            };
+            if schema.is_some() {
+                return Err(Error::QualifiedInTrigger);
+            }
+        }
         // `sqlite3CreateTrigger`: a table SQLite keeps for itself
         // carries no trigger at all.
         if over
@@ -2953,7 +2974,7 @@ impl Writer {
             Definition::DropConstraint(asked) => {
                 return self.drop_constraint(arena, &asked, sql);
             }
-            Definition::Trigger(trigger) => return self.create_trigger(&trigger, sql),
+            Definition::Trigger(trigger) => return self.create_trigger(arena, &trigger, sql),
             Definition::Table(table) => {
                 if let TableBody::Select(select) = table.body {
                     return self.create_as(arena, &table, select, sql);

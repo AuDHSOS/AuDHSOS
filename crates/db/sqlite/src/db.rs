@@ -120,6 +120,10 @@ pub enum Error {
     JoinType(Vec<u8>),
     /// An `ON` of an outer join that names a table read after it.
     Rightward,
+    /// A trigger that carries a variable.
+    TriggerVariable,
+    /// A write of a trigger's body that names a schema.
+    QualifiedInTrigger,
     /// An `ORDER BY` or a `LIMIT` written on a core of a compound other
     /// than the last, with which clause it is and the word that joins
     /// that core to the one after it.
@@ -333,6 +337,11 @@ impl Error {
             Error::Rightward => {
                 alloc::string::String::from("ON clause references tables to its right")
             }
+            Error::TriggerVariable => alloc::string::String::from("trigger cannot use variables"),
+            Error::QualifiedInTrigger => alloc::string::String::from(concat!(
+                "qualified table names are not allowed on ",
+                "INSERT, UPDATE, and DELETE statements within triggers"
+            )),
             Error::Columns(answered, wanted) => {
                 alloc::format!("sub-select returns {answered} columns - expected {wanted}")
             }
