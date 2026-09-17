@@ -48,6 +48,16 @@ impl Parser {
         Ok(())
     }
 
+    /// Whether the expression is the `super` call of 13.3.7.1 itself, which
+    /// binds the `this` of a derived constructor.
+    fn calls_super(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::DefaultSuper => true,
+            ExprKind::Call(callee, _) => matches!(callee.kind, ExprKind::Super),
+            _ => false,
+        }
+    }
+
     /// The Initializer of a field of 15.7.1, and the `;` of 14.1 behind it.
     fn field_initializer(&mut self) -> Result<Option<Expr>, Error> {
         let initializer = if self.eat("=") {
@@ -362,12 +372,7 @@ impl Parser {
                 ));
             }
         }
-        // 15.7.15 runs the field Initializers of an instance before the body
-        // of the constructor; a derived constructor binds its `this` only
-        // where 13.3.7.1 has run, which this lowering has no place after.
-        if !(fields.is_empty() && private_adds.is_empty()) && heritage.is_some() {
-            return Err(Self::unsupported("a field of a derived class"));
-        }
+
         // Step 8 of 10.2.2 runs the Initializers before 10.2.11 evaluates the
         // parameter list, and a field this lowering runs as the first
         // statement of the body runs after it.
@@ -406,11 +411,32 @@ impl Parser {
         });
         // 15.7.15 adds the private methods of an instance before it runs the
         // Initializers of its fields.
+        // 15.7.15 runs the field Initializers of an instance before the body
+        // of the constructor; a derived constructor binds its `this` only
+        // where 13.3.7.1 has run, so they run behind the `super` call of the
+        // body, which this lowering finds where the body makes it a statement
+        // of its own.
+        let at = if heritage.is_some() {
+            let found = constructor.body.iter().position(
+                |statement| matches!(statement, Stmt::Expr(expr) if Self::calls_super(expr)),
+            );
+            match found {
+                Some(at) => at.saturating_add(1),
+                None if fields.is_empty() && private_adds.is_empty() => 0,
+                None => {
+                    return Err(Self::unsupported(
+                        "a field of a derived class whose super call is no statement",
+                    ));
+                }
+            }
+        } else {
+            0
+        };
         for field in fields.into_iter().rev() {
-            constructor.body.insert(0, field);
+            constructor.body.insert(at, field);
         }
         for add in private_adds.into_iter().rev() {
-            constructor.body.insert(0, add);
+            constructor.body.insert(at, add);
         }
         self.private_names.truncate(outer_private);
         constructor.source = Some(self.source_since(offset)?);
