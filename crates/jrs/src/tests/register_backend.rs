@@ -9356,3 +9356,19 @@ fn the_construct_of_10_4_1_2_reaches_the_target_of_the_bind() -> Result<(), Erro
         "function F(a,b){this.s=a+b};var B=F.bind({q:1},'x');''+new B('y').s",
     ])
 }
+
+#[test]
+fn a_member_target_of_13_15_5_2_takes_any_base_and_key() -> Result<(), Error> {
+    differential_scripts(&[
+        "var o={};[o.x]=[1];''+o.x",
+        // The base of a member target is any expression, not a name alone.
+        "var o={a:{}};[o.a.x]=[1];''+o.a.x",
+        "var a=[{}];[a[0].x]=[1];''+a[0].x",
+        "function f(){return {}};[f().x]=[1];'ok'",
+        "var o={a:{}};({p:o.a.x}={p:1});''+o.a.x",
+        // 13.15.5.2 evaluates the key where it stands, once.
+        "var o={a:{}};var n=0;function t(){n=n+1;return 'x'};[o.a[t()]]=[9];''+o.a.x+n",
+        "var o={};[o['x'+1]]=[7];''+o.x1",
+        "var o={a:{}};[o.a.x,o.a.y]=[1,2];''+o.a.x+o.a.y",
+    ])
+}

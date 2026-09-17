@@ -11094,10 +11094,13 @@ fn register_assignment_pattern_supported(pattern: &parser::AssignmentPattern) ->
     }
 }
 
+/// Whether a target of 13.15.5.2 is a member expression.
+///
+/// The base and the key are whatever the lowering takes:
+/// `prepare_member_assignment` evaluates both where the clause evaluates them
+/// and refuses what it cannot name, so this asks only for the shape.
 fn register_member_assignment_supported(target: &Expr) -> bool {
-    target.member().is_some_and(|(base, key)| {
-        base.reference_name().is_some() && register_computed_property_key_supported(key)
-    })
+    target.member().is_some()
 }
 
 fn register_computed_property_key_supported(expression: &Expr) -> bool {
