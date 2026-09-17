@@ -2456,7 +2456,22 @@ impl RegisterVM {
             | Intrinsic::DatePrototypeGetMilliseconds
             | Intrinsic::DatePrototypeGetUtcMilliseconds
             | Intrinsic::DatePrototypeToIsoString
-            | Intrinsic::DatePrototypeToJson => {
+            | Intrinsic::DatePrototypeToJson
+            | Intrinsic::DatePrototypeSetMilliseconds
+            | Intrinsic::DatePrototypeSetUtcMilliseconds
+            | Intrinsic::DatePrototypeSetSeconds
+            | Intrinsic::DatePrototypeSetUtcSeconds
+            | Intrinsic::DatePrototypeSetMinutes
+            | Intrinsic::DatePrototypeSetUtcMinutes
+            | Intrinsic::DatePrototypeSetHours
+            | Intrinsic::DatePrototypeSetUtcHours
+            | Intrinsic::DatePrototypeSetDate
+            | Intrinsic::DatePrototypeSetUtcDate
+            | Intrinsic::DatePrototypeSetMonth
+            | Intrinsic::DatePrototypeSetUtcMonth
+            | Intrinsic::DatePrototypeSetFullYear
+            | Intrinsic::DatePrototypeSetUtcFullYear
+            | Intrinsic::DatePrototypeSetYear => {
                 self.call_date_intrinsic(intrinsic, &call, heap, realm)
             }
             Intrinsic::EncodeUri
@@ -13068,9 +13083,101 @@ impl RegisterVM {
             _ => {
                 let object = Self::this_date(call.receiver, heap, realm)?;
                 let time = Self::date_value(object, heap)?;
+                if let Some((first, count)) = Self::date_fields_set(intrinsic) {
+                    let written = self.write_date(call, time, first, count, heap)?;
+                    heap.set_object_kind(object, ObjectKind::Date(written))?;
+                    return Ok(Value::from_f64(written));
+                }
                 Self::read_date(intrinsic, time, self, heap, realm)
             }
         }
+    }
+
+    /// The fields of 21.4.1 a setter of 21.4.4 writes: where it starts in the
+    /// year, month, date, hour, minute, second and millisecond of a time
+    /// value, and how many of them it takes.
+    const fn date_fields_set(intrinsic: Intrinsic) -> Option<(usize, usize)> {
+        Some(match intrinsic {
+            Intrinsic::DatePrototypeSetFullYear | Intrinsic::DatePrototypeSetUtcFullYear => (0, 3),
+            // B.2.3.2 writes the year alone, through the rule of its step 5.
+            Intrinsic::DatePrototypeSetYear => (0, 1),
+            Intrinsic::DatePrototypeSetMonth | Intrinsic::DatePrototypeSetUtcMonth => (1, 2),
+            Intrinsic::DatePrototypeSetDate | Intrinsic::DatePrototypeSetUtcDate => (2, 1),
+            Intrinsic::DatePrototypeSetHours | Intrinsic::DatePrototypeSetUtcHours => (3, 4),
+            Intrinsic::DatePrototypeSetMinutes | Intrinsic::DatePrototypeSetUtcMinutes => (4, 3),
+            Intrinsic::DatePrototypeSetSeconds | Intrinsic::DatePrototypeSetUtcSeconds => (5, 2),
+            Intrinsic::DatePrototypeSetMilliseconds
+            | Intrinsic::DatePrototypeSetUtcMilliseconds => (6, 1),
+            _ => return None,
+        })
+    }
+
+    /// A setter of 21.4.4: the arguments are converted first, then the fields
+    /// they name replace those of the time value.
+    ///
+    /// 21.4.4.21 and B.2.3.2 are the two that take a Date whose time value is
+    /// NaN and start from the epoch; every other setter answers NaN there.
+    fn write_date(
+        &self,
+        call: &Call,
+        time: f64,
+        first: usize,
+        count: usize,
+        heap: &GenerationalHeap,
+    ) -> Result<f64, VMError> {
+        let mut given = [f64::NAN; 4];
+        for (index, slot) in given.iter_mut().enumerate().take(count) {
+            let position = u16::try_from(index).unwrap_or(u16::MAX);
+            if position >= call.arg_count {
+                break;
+            }
+            *slot = Self::number_argument(self.call_argument(call, position, heap)?, heap)?;
+        }
+        let starts_at_the_year = first == 0;
+        if time.is_nan() && !starts_at_the_year {
+            return Ok(f64::NAN);
+        }
+        let time = if time.is_nan() { 0.0 } else { time };
+        let mut fields = [
+            f64::from(Self::year_from_time(time)),
+            f64::from(Self::month_from_time(time)),
+            f64::from(Self::date_from_time(time)),
+            Self::modulo(Self::floor_div(time, 3_600_000.0), 24.0),
+            Self::modulo(Self::floor_div(time, 60_000.0), 60.0),
+            Self::modulo(Self::floor_div(time, 1000.0), 60.0),
+            Self::modulo(time, 1000.0),
+        ];
+        for (offset, value) in given.iter().enumerate().take(count) {
+            if value.is_nan() && u16::try_from(offset).unwrap_or(u16::MAX) >= call.arg_count {
+                break;
+            }
+            if let Some(field) = fields.get_mut(first.saturating_add(offset)) {
+                *field = *value;
+            }
+        }
+        // B.2.3.2 step 5 reads a year below 100 as one of the 1900s.
+        if first == 0 && count == 1 {
+            let year = *fields.first().unwrap_or(&f64::NAN);
+            if year.is_finite()
+                && (0.0..=99.0).contains(&Self::round_toward(year, false))
+                && let Some(field) = fields.first_mut()
+            {
+                *field = 1900.0 + Self::round_toward(year, false);
+            }
+        }
+        Ok(Self::time_clip(Self::make_date(
+            Self::make_day(
+                *fields.first().unwrap_or(&f64::NAN),
+                *fields.get(1).unwrap_or(&f64::NAN),
+                *fields.get(2).unwrap_or(&f64::NAN),
+            ),
+            Self::make_time(
+                *fields.get(3).unwrap_or(&f64::NAN),
+                *fields.get(4).unwrap_or(&f64::NAN),
+                *fields.get(5).unwrap_or(&f64::NAN),
+                *fields.get(6).unwrap_or(&f64::NAN),
+            ),
+        )))
     }
 
     /// The clauses of 21.4.4 that read the time value the receiver holds.

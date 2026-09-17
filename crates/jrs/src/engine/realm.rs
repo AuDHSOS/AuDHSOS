@@ -932,6 +932,36 @@ pub enum Intrinsic {
     DatePrototypeToIsoString,
     /// `Date.prototype.toJSON`, 21.4.4.42.
     DatePrototypeToJson,
+    /// `Date.prototype.setMilliseconds`, 21.4.4.23.
+    DatePrototypeSetMilliseconds,
+    /// `Date.prototype.setUTCMilliseconds`, 21.4.4.31.
+    DatePrototypeSetUtcMilliseconds,
+    /// `Date.prototype.setSeconds`, 21.4.4.26.
+    DatePrototypeSetSeconds,
+    /// `Date.prototype.setUTCSeconds`, 21.4.4.34.
+    DatePrototypeSetUtcSeconds,
+    /// `Date.prototype.setMinutes`, 21.4.4.24.
+    DatePrototypeSetMinutes,
+    /// `Date.prototype.setUTCMinutes`, 21.4.4.32.
+    DatePrototypeSetUtcMinutes,
+    /// `Date.prototype.setHours`, 21.4.4.22.
+    DatePrototypeSetHours,
+    /// `Date.prototype.setUTCHours`, 21.4.4.30.
+    DatePrototypeSetUtcHours,
+    /// `Date.prototype.setDate`, 21.4.4.20.
+    DatePrototypeSetDate,
+    /// `Date.prototype.setUTCDate`, 21.4.4.28.
+    DatePrototypeSetUtcDate,
+    /// `Date.prototype.setMonth`, 21.4.4.25.
+    DatePrototypeSetMonth,
+    /// `Date.prototype.setUTCMonth`, 21.4.4.33.
+    DatePrototypeSetUtcMonth,
+    /// `Date.prototype.setFullYear`, 21.4.4.21.
+    DatePrototypeSetFullYear,
+    /// `Date.prototype.setUTCFullYear`, 21.4.4.29.
+    DatePrototypeSetUtcFullYear,
+    /// `Date.prototype.setYear`, B.2.3.2.
+    DatePrototypeSetYear,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -1003,7 +1033,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 314] = [
+    pub const ALL: [Self; 329] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1318,6 +1348,21 @@ impl Intrinsic {
         Self::DatePrototypeGetUtcMilliseconds,
         Self::DatePrototypeToIsoString,
         Self::DatePrototypeToJson,
+        Self::DatePrototypeSetMilliseconds,
+        Self::DatePrototypeSetUtcMilliseconds,
+        Self::DatePrototypeSetSeconds,
+        Self::DatePrototypeSetUtcSeconds,
+        Self::DatePrototypeSetMinutes,
+        Self::DatePrototypeSetUtcMinutes,
+        Self::DatePrototypeSetHours,
+        Self::DatePrototypeSetUtcHours,
+        Self::DatePrototypeSetDate,
+        Self::DatePrototypeSetUtcDate,
+        Self::DatePrototypeSetMonth,
+        Self::DatePrototypeSetUtcMonth,
+        Self::DatePrototypeSetFullYear,
+        Self::DatePrototypeSetUtcFullYear,
+        Self::DatePrototypeSetYear,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -1553,7 +1598,22 @@ impl Intrinsic {
             | Self::DatePrototypeGetMilliseconds
             | Self::DatePrototypeGetUtcMilliseconds
             | Self::DatePrototypeToIsoString
-            | Self::DatePrototypeToJson => IntrinsicHolder::DatePrototype,
+            | Self::DatePrototypeToJson
+            | Self::DatePrototypeSetMilliseconds
+            | Self::DatePrototypeSetUtcMilliseconds
+            | Self::DatePrototypeSetSeconds
+            | Self::DatePrototypeSetUtcSeconds
+            | Self::DatePrototypeSetMinutes
+            | Self::DatePrototypeSetUtcMinutes
+            | Self::DatePrototypeSetHours
+            | Self::DatePrototypeSetUtcHours
+            | Self::DatePrototypeSetDate
+            | Self::DatePrototypeSetUtcDate
+            | Self::DatePrototypeSetMonth
+            | Self::DatePrototypeSetUtcMonth
+            | Self::DatePrototypeSetFullYear
+            | Self::DatePrototypeSetUtcFullYear
+            | Self::DatePrototypeSetYear => IntrinsicHolder::DatePrototype,
             Self::PromisePrototypeThen | Self::PromisePrototypeCatch => {
                 IntrinsicHolder::PromisePrototype
             }
@@ -1982,6 +2042,21 @@ impl Intrinsic {
             Self::DatePrototypeGetUtcMilliseconds => 311,
             Self::DatePrototypeToIsoString => 312,
             Self::DatePrototypeToJson => 313,
+            Self::DatePrototypeSetMilliseconds => 314,
+            Self::DatePrototypeSetUtcMilliseconds => 315,
+            Self::DatePrototypeSetSeconds => 316,
+            Self::DatePrototypeSetUtcSeconds => 317,
+            Self::DatePrototypeSetMinutes => 318,
+            Self::DatePrototypeSetUtcMinutes => 319,
+            Self::DatePrototypeSetHours => 320,
+            Self::DatePrototypeSetUtcHours => 321,
+            Self::DatePrototypeSetDate => 322,
+            Self::DatePrototypeSetUtcDate => 323,
+            Self::DatePrototypeSetMonth => 324,
+            Self::DatePrototypeSetUtcMonth => 325,
+            Self::DatePrototypeSetFullYear => 326,
+            Self::DatePrototypeSetUtcFullYear => 327,
+            Self::DatePrototypeSetYear => 328,
         }
     }
 
@@ -2306,6 +2381,21 @@ impl Intrinsic {
             Self::DatePrototypeGetUtcMilliseconds => 311,
             Self::DatePrototypeToIsoString => 312,
             Self::DatePrototypeToJson => 313,
+            Self::DatePrototypeSetMilliseconds => 314,
+            Self::DatePrototypeSetUtcMilliseconds => 315,
+            Self::DatePrototypeSetSeconds => 316,
+            Self::DatePrototypeSetUtcSeconds => 317,
+            Self::DatePrototypeSetMinutes => 318,
+            Self::DatePrototypeSetUtcMinutes => 319,
+            Self::DatePrototypeSetHours => 320,
+            Self::DatePrototypeSetUtcHours => 321,
+            Self::DatePrototypeSetDate => 322,
+            Self::DatePrototypeSetUtcDate => 323,
+            Self::DatePrototypeSetMonth => 324,
+            Self::DatePrototypeSetUtcMonth => 325,
+            Self::DatePrototypeSetFullYear => 326,
+            Self::DatePrototypeSetUtcFullYear => 327,
+            Self::DatePrototypeSetYear => 328,
         }
     }
 
@@ -2631,6 +2721,21 @@ impl Intrinsic {
             311 => Some(Self::DatePrototypeGetUtcMilliseconds),
             312 => Some(Self::DatePrototypeToIsoString),
             313 => Some(Self::DatePrototypeToJson),
+            314 => Some(Self::DatePrototypeSetMilliseconds),
+            315 => Some(Self::DatePrototypeSetUtcMilliseconds),
+            316 => Some(Self::DatePrototypeSetSeconds),
+            317 => Some(Self::DatePrototypeSetUtcSeconds),
+            318 => Some(Self::DatePrototypeSetMinutes),
+            319 => Some(Self::DatePrototypeSetUtcMinutes),
+            320 => Some(Self::DatePrototypeSetHours),
+            321 => Some(Self::DatePrototypeSetUtcHours),
+            322 => Some(Self::DatePrototypeSetDate),
+            323 => Some(Self::DatePrototypeSetUtcDate),
+            324 => Some(Self::DatePrototypeSetMonth),
+            325 => Some(Self::DatePrototypeSetUtcMonth),
+            326 => Some(Self::DatePrototypeSetFullYear),
+            327 => Some(Self::DatePrototypeSetUtcFullYear),
+            328 => Some(Self::DatePrototypeSetYear),
             _ => None,
         }
     }
@@ -2748,6 +2853,21 @@ impl Intrinsic {
             Self::DatePrototypeGetUtcMilliseconds => "getUTCMilliseconds",
             Self::DatePrototypeToIsoString => "toISOString",
             Self::DatePrototypeToJson => "toJSON",
+            Self::DatePrototypeSetMilliseconds => "setMilliseconds",
+            Self::DatePrototypeSetUtcMilliseconds => "setUTCMilliseconds",
+            Self::DatePrototypeSetSeconds => "setSeconds",
+            Self::DatePrototypeSetUtcSeconds => "setUTCSeconds",
+            Self::DatePrototypeSetMinutes => "setMinutes",
+            Self::DatePrototypeSetUtcMinutes => "setUTCMinutes",
+            Self::DatePrototypeSetHours => "setHours",
+            Self::DatePrototypeSetUtcHours => "setUTCHours",
+            Self::DatePrototypeSetDate => "setDate",
+            Self::DatePrototypeSetUtcDate => "setUTCDate",
+            Self::DatePrototypeSetMonth => "setMonth",
+            Self::DatePrototypeSetUtcMonth => "setUTCMonth",
+            Self::DatePrototypeSetFullYear => "setFullYear",
+            Self::DatePrototypeSetUtcFullYear => "setUTCFullYear",
+            Self::DatePrototypeSetYear => "setYear",
             Self::MapPrototypeGetOrInsert | Self::WeakMapPrototypeGetOrInsert => "getOrInsert",
             Self::MapPrototypeGetOrInsertComputed | Self::WeakMapPrototypeGetOrInsertComputed => {
                 "getOrInsertComputed"
@@ -3574,6 +3694,11 @@ impl Intrinsic {
             | Self::DateParse
             | Self::DatePrototypeSetTime
             | Self::DatePrototypeToJson
+            | Self::DatePrototypeSetMilliseconds
+            | Self::DatePrototypeSetUtcMilliseconds
+            | Self::DatePrototypeSetDate
+            | Self::DatePrototypeSetUtcDate
+            | Self::DatePrototypeSetYear
             | Self::WeakMapPrototypeGet
             | Self::WeakMapPrototypeHas
             | Self::WeakMapPrototypeDelete
@@ -3614,7 +3739,11 @@ impl Intrinsic {
             Self::ObjectDefineProperty
             | Self::ReflectDefineProperty
             | Self::ReflectApply
-            | Self::ReflectSet => 3,
+            | Self::ReflectSet
+            | Self::DatePrototypeSetMinutes
+            | Self::DatePrototypeSetUtcMinutes
+            | Self::DatePrototypeSetFullYear
+            | Self::DatePrototypeSetUtcFullYear => 3,
             Self::MathPow
             | Self::ObjectGetOwnPropertyDescriptor
             | Self::ObjectCreate
@@ -3655,9 +3784,14 @@ impl Intrinsic {
             | Self::MapPrototypeGetOrInsertComputed
             | Self::WeakMapPrototypeGetOrInsert
             | Self::WeakMapPrototypeGetOrInsertComputed
+            | Self::DatePrototypeSetSeconds
+            | Self::DatePrototypeSetUtcSeconds
+            | Self::DatePrototypeSetMonth
+            | Self::DatePrototypeSetUtcMonth
             | Self::PromisePrototypeThen => 2,
             // 21.4.2.1 and 21.4.3.4 take a year, a month, a day, an hour, a
             // minute, a second and a millisecond.
+            Self::DatePrototypeSetHours | Self::DatePrototypeSetUtcHours => 4,
             Self::DateConstructor | Self::DateUtc => 7,
         }
     }

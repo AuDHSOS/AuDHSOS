@@ -9656,3 +9656,54 @@ fn the_time_value_of_21_4_carries_the_fields_of_a_date() -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[test]
+fn the_setters_of_21_4_4_write_the_fields_they_name() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend carries no clause 21.4, so only the engine answers.
+    for (source, answer) in [
+        (
+            "var d=new Date(0);d.setFullYear(2000);''+d.toISOString()",
+            "2000-01-01T00:00:00.000Z",
+        ),
+        (
+            "var d=new Date(0);d.setMonth(5);''+d.toISOString()",
+            "1970-06-01T00:00:00.000Z",
+        ),
+        (
+            "var d=new Date(0);d.setDate(15);''+d.toISOString()",
+            "1970-01-15T00:00:00.000Z",
+        ),
+        // A setter takes the fields it names and leaves the rest.
+        (
+            "var d=new Date(0);d.setHours(3,4,5,6);''+d.toISOString()",
+            "1970-01-01T03:04:05.006Z",
+        ),
+        (
+            "var d=new Date(0);d.setUTCFullYear(1999,11,31);''+d.toISOString()",
+            "1999-12-31T00:00:00.000Z",
+        ),
+        (
+            "var d=new Date(0);d.setMilliseconds(999);''+d.getTime()",
+            "999",
+        ),
+        // 21.4.4.21 starts from the epoch for a Date whose value is NaN, and
+        // every other setter answers NaN there.
+        (
+            "var d=new Date(NaN);d.setFullYear(2000);''+d.toISOString()",
+            "2000-01-01T00:00:00.000Z",
+        ),
+        ("var d=new Date(NaN);''+d.setMonth(5)", "NaN"),
+        // An argument that is NaN makes the whole time value one.
+        ("var d=new Date(0);''+d.setDate(NaN)+d.getTime()", "NaNNaN"),
+        // B.2.3.2 step 5 reads a year below 100 as one of the 1900s.
+        (
+            "var d=new Date(0);d.setYear(99);''+d.toISOString()",
+            "1999-01-01T00:00:00.000Z",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}

@@ -9117,6 +9117,21 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::DatePrototypeGetUtcSeconds
         | crate::engine::realm::Intrinsic::DatePrototypeGetMilliseconds
         | crate::engine::realm::Intrinsic::DatePrototypeGetUtcMilliseconds
+        | crate::engine::realm::Intrinsic::DatePrototypeSetMilliseconds
+        | crate::engine::realm::Intrinsic::DatePrototypeSetUtcMilliseconds
+        | crate::engine::realm::Intrinsic::DatePrototypeSetSeconds
+        | crate::engine::realm::Intrinsic::DatePrototypeSetUtcSeconds
+        | crate::engine::realm::Intrinsic::DatePrototypeSetMinutes
+        | crate::engine::realm::Intrinsic::DatePrototypeSetUtcMinutes
+        | crate::engine::realm::Intrinsic::DatePrototypeSetHours
+        | crate::engine::realm::Intrinsic::DatePrototypeSetUtcHours
+        | crate::engine::realm::Intrinsic::DatePrototypeSetDate
+        | crate::engine::realm::Intrinsic::DatePrototypeSetUtcDate
+        | crate::engine::realm::Intrinsic::DatePrototypeSetMonth
+        | crate::engine::realm::Intrinsic::DatePrototypeSetUtcMonth
+        | crate::engine::realm::Intrinsic::DatePrototypeSetFullYear
+        | crate::engine::realm::Intrinsic::DatePrototypeSetUtcFullYear
+        | crate::engine::realm::Intrinsic::DatePrototypeSetYear
         | crate::engine::realm::Intrinsic::MathAtan2
         | crate::engine::realm::Intrinsic::MathHypot
         | crate::engine::realm::Intrinsic::MathRandom
