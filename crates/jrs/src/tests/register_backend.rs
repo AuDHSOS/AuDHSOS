@@ -8866,3 +8866,62 @@ fn the_map_of_24_1_and_the_set_of_24_2_hold_their_entries() -> Result<(), Error>
     ));
     Ok(())
 }
+
+#[test]
+fn the_iterators_of_24_1_5_and_24_2_5_walk_the_entries() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend carries neither clause, so only the engine answers.
+    for (source, answer) in [
+        // 24.1.5.2.1 skips the `empty` a delete left behind and reaches an
+        // entry added after the iterator was made.
+        (
+            "var m=new Map();m.set('a',1);m.set('b',2);m.delete('a');m.set('c',3);var s='';for(var e of m){s+=e[0]+e[1]+'|'}s",
+            "b2|c3|",
+        ),
+        (
+            "var m=new Map();m.set('a',1);m.set('b',2);var s='';for(var k of m.keys()){s+=k}s",
+            "ab",
+        ),
+        (
+            "var m=new Map();m.set('a',1);m.set('b',2);var s='';for(var v of m.values()){s+=v}s",
+            "12",
+        ),
+        (
+            "var s=new Set();s.add(1);s.add(2);s.delete(1);s.add(3);var t='';for(var x of s){t+=x}t",
+            "23",
+        ),
+        // 24.2.5.1 answers the value as the key as well.
+        (
+            "var s=new Set();s.add(7);var t='';for(var e of s.entries()){t+=e[0]+'='+e[1]}t",
+            "7=7",
+        ),
+        // 24.1.5.2.2 and 24.2.5.2.2 tag the iterators.
+        (
+            "''+Object.prototype.toString.call(new Map().keys())+Object.prototype.toString.call(new Set().values())",
+            "[object Map Iterator][object Set Iterator]",
+        ),
+        // 24.2.3.10 and 24.2.3.17 answer the same function object as 24.2.3.16,
+        // and 24.1.3.14 the same as 24.1.3.4.
+        (
+            "''+(Set.prototype.keys===Set.prototype.values)+(Set.prototype[Symbol.iterator]===Set.prototype.values)+(Map.prototype[Symbol.iterator]===Map.prototype.entries)",
+            "truetruetrue",
+        ),
+        // 7.4.14 answers an ordinary object with a `value` and a `done`.
+        (
+            "var m=new Map();m.set('a',1);var i=m.keys();''+i.next().value+i.next().done+i.next().done",
+            "atruetrue",
+        ),
+        // 13.2.4.2 takes every value of the iterator 24.2.3.17 answers.
+        ("var s=new Set();s.add(1);s.add(2);[...s].join('-')", "1-2"),
+        // 27.1.2.1 stands on %IteratorPrototype%, which every iterator of the
+        // specification inherits.
+        (
+            "var p=Object.getPrototypeOf(Object.getPrototypeOf(new Map().keys()));''+(typeof p[Symbol.iterator])+(p===Object.getPrototypeOf(Object.getPrototypeOf([].keys())))",
+            "functiontrue",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}

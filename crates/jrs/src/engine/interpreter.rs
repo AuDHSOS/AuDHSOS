@@ -2359,6 +2359,15 @@ impl RegisterVM {
                         )
                     })
             }
+            Intrinsic::MapPrototypeEntries
+            | Intrinsic::MapPrototypeKeys
+            | Intrinsic::MapPrototypeValues
+            | Intrinsic::SetPrototypeValues
+            | Intrinsic::SetPrototypeEntries
+            | Intrinsic::MapIteratorPrototypeNext
+            | Intrinsic::SetIteratorPrototypeNext => {
+                Self::call_collection_iterator_intrinsic(intrinsic, call, heap, realm)
+            }
             Intrinsic::MapConstructor
             | Intrinsic::SetConstructor
             | Intrinsic::MapPrototypeGet
@@ -5989,6 +5998,117 @@ impl RegisterVM {
         }
     }
 
+    /// The iterators of 24.1.5 and 24.2.5 and the `next` of 24.1.5.2.1 and
+    /// 24.2.5.2.1.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a receiver that
+    /// carries neither slot.
+    fn call_collection_iterator_intrinsic(
+        intrinsic: Intrinsic,
+        call: Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let set = matches!(
+            intrinsic,
+            Intrinsic::SetPrototypeValues
+                | Intrinsic::SetPrototypeEntries
+                | Intrinsic::SetIteratorPrototypeNext
+        );
+        if matches!(
+            intrinsic,
+            Intrinsic::MapIteratorPrototypeNext | Intrinsic::SetIteratorPrototypeNext
+        ) {
+            return Self::step_collection_iterator(call.receiver, set, heap, realm);
+        }
+        // 24.1.5.1 step 1 refuses a receiver that carries neither slot before
+        // it makes an iterator of it.
+        Self::collection_entries(call.receiver, set, heap, realm)?;
+        let kind = match intrinsic {
+            Intrinsic::MapPrototypeKeys => ArrayIterationKind::Key,
+            Intrinsic::MapPrototypeEntries | Intrinsic::SetPrototypeEntries => {
+                ArrayIterationKind::KeyAndValue
+            }
+            _ => ArrayIterationKind::Value,
+        };
+        let prototype = if set {
+            realm.set_iterator_prototype(heap)?
+        } else {
+            realm.map_iterator_prototype(heap)?
+        };
+        let shape = heap.shapes.root_shape();
+        let iterator = heap.allocate_object(shape, prototype)?;
+        heap.set_object_kind(
+            iterator,
+            ObjectKind::CollectionIterator {
+                target: call.receiver,
+                index: 0,
+                kind,
+            },
+        )?;
+        Ok(Value::from_object(iterator))
+    }
+
+    /// 24.1.5.2.1 and 24.2.5.2.1: the next entry the walk has not reached,
+    /// skipping the `empty` a delete left behind.
+    ///
+    /// The entries only grow, so an entry added after the iterator was made is
+    /// one the walk still reaches, which is what the clause says.
+    fn step_collection_iterator(
+        receiver: Value,
+        set: bool,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let iterator = receiver.as_object().ok_or(VMError::TypeError)?;
+        let ObjectKind::CollectionIterator {
+            target,
+            mut index,
+            kind,
+        } = heap.get_object(iterator).ok_or(VMError::TypeError)?.kind
+        else {
+            return Err(type_error(
+                heap,
+                realm,
+                "next called on a value that is no iterator of a Map or a Set",
+            ));
+        };
+        let mut answer = None;
+        if !target.is_undefined() {
+            let entries = Self::collection_entries(target, set, heap, realm)?;
+            let end = promise::length_of(heap, entries);
+            while index < end {
+                let key = promise::slot(heap, entries, index);
+                let value = promise::slot(heap, entries, index.saturating_add(1));
+                index = index.saturating_add(2);
+                if key == VALUE_UNINITIALIZED {
+                    continue;
+                }
+                answer = Some(match kind {
+                    ArrayIterationKind::Key => key,
+                    ArrayIterationKind::Value => value,
+                    ArrayIterationKind::KeyAndValue => {
+                        Self::array_of(alloc::vec![key, value], heap, realm)?
+                    }
+                });
+                break;
+            }
+        }
+        let next = ObjectKind::CollectionIterator {
+            target: if answer.is_some() {
+                target
+            } else {
+                VALUE_UNDEFINED
+            },
+            index,
+            kind,
+        };
+        heap.set_object_kind(iterator, next)?;
+        Self::iterator_result(answer, heap, realm)
+    }
+
     /// The object 24.1.1.1 step 5 and 24.2.1.1 step 5 make, with the empty
     /// List of entries those steps give it.
     fn create_collection(
@@ -8948,6 +9068,7 @@ impl RegisterVM {
             // 24.2.3.15 tag a Map and a Set the same way.
             | ObjectKind::Promise { .. }
             | ObjectKind::Collection { .. }
+            | ObjectKind::CollectionIterator { .. }
             | ObjectKind::Json
             | ObjectKind::Reflect => None,
         }
@@ -9761,8 +9882,10 @@ impl RegisterVM {
                 | ObjectKind::SymbolWrapper(_)
                 | ObjectKind::Promise { .. }
                 // 24.1.3.13 and 24.2.3.15 tag a Map and a Set through
-                // @@toStringTag, so their builtin tag is the ordinary one.
+                // @@toStringTag, so their builtin tag is the ordinary one, as
+                // 24.1.5.2.2 and 24.2.5.2.2 do for their iterators.
                 | ObjectKind::Collection { .. }
+                | ObjectKind::CollectionIterator { .. }
                 | ObjectKind::ArrayIterator { .. }
                 | ObjectKind::ArrayIteration { .. }
                 | ObjectKind::Continuation { .. }

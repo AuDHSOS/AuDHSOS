@@ -805,6 +805,21 @@ pub enum Intrinsic {
     SetPrototypeClear,
     /// `get %Set.prototype.size%`, 24.2.3.14.
     SetPrototypeSize,
+    /// `%Map.prototype.entries%`, 24.1.3.4.
+    MapPrototypeEntries,
+    /// `%Map.prototype.keys%`, 24.1.3.8.
+    MapPrototypeKeys,
+    /// `%Map.prototype.values%`, 24.1.3.12.
+    MapPrototypeValues,
+    /// `%Set.prototype.values%`, 24.2.3.16, which 24.2.3.10 and 24.2.3.17
+    /// answer as well.
+    SetPrototypeValues,
+    /// `%Set.prototype.entries%`, 24.2.3.5.
+    SetPrototypeEntries,
+    /// `%MapIteratorPrototype%.next`, 24.1.5.2.1.
+    MapIteratorPrototypeNext,
+    /// `%SetIteratorPrototype%.next`, 24.2.5.2.1.
+    SetIteratorPrototypeNext,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -854,6 +869,12 @@ pub enum IntrinsicHolder {
     MapPrototype,
     /// `%Set.prototype%`, which carries the methods 24.2.3 gives it.
     SetPrototype,
+    /// `%IteratorPrototype%`, 27.1.2.
+    IteratorPrototype,
+    /// `%MapIteratorPrototype%`, 24.1.5.2.
+    MapIteratorPrototype,
+    /// `%SetIteratorPrototype%`, 24.2.5.2.
+    SetIteratorPrototype,
     /// `%Promise.prototype%`, which carries the methods 27.2.5 gives it.
     PromisePrototype,
     /// `%Promise%`, which carries the functions 27.2.4 gives the constructor.
@@ -862,7 +883,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 251] = [
+    pub const ALL: [Self; 258] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1114,6 +1135,13 @@ impl Intrinsic {
         Self::SetPrototypeDelete,
         Self::SetPrototypeClear,
         Self::SetPrototypeSize,
+        Self::MapPrototypeEntries,
+        Self::MapPrototypeKeys,
+        Self::MapPrototypeValues,
+        Self::SetPrototypeValues,
+        Self::SetPrototypeEntries,
+        Self::MapIteratorPrototypeNext,
+        Self::SetIteratorPrototypeNext,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -1206,9 +1234,10 @@ impl Intrinsic {
             | Self::ArrayPrototypeReduce
             | Self::ArrayPrototypeReduceRight
             | Self::ArrayPrototypeFlatMap => IntrinsicHolder::ArrayPrototype,
-            Self::ArrayIteratorPrototypeNext | Self::IteratorPrototypeIterator => {
-                IntrinsicHolder::ArrayIteratorPrototype
-            }
+            Self::ArrayIteratorPrototypeNext => IntrinsicHolder::ArrayIteratorPrototype,
+            // 27.1.2.1 stands on %IteratorPrototype%, which every iterator of
+            // the specification inherits.
+            Self::IteratorPrototypeIterator => IntrinsicHolder::IteratorPrototype,
             Self::ArrayConstructor | Self::ObjectConstructor | Self::FunctionConstructor => {
                 IntrinsicHolder::Global
             }
@@ -1287,15 +1316,22 @@ impl Intrinsic {
             | Self::RegExpPrototypeSearch
             | Self::RegExpPrototypeSplit => IntrinsicHolder::RegExpPrototype,
             Self::ErrorPrototypeToString => IntrinsicHolder::ErrorPrototype,
+            Self::MapIteratorPrototypeNext => IntrinsicHolder::MapIteratorPrototype,
+            Self::SetIteratorPrototypeNext => IntrinsicHolder::SetIteratorPrototype,
             Self::MapPrototypeGet
             | Self::MapPrototypeSet
             | Self::MapPrototypeHas
             | Self::MapPrototypeDelete
-            | Self::MapPrototypeClear => IntrinsicHolder::MapPrototype,
+            | Self::MapPrototypeClear
+            | Self::MapPrototypeEntries
+            | Self::MapPrototypeKeys
+            | Self::MapPrototypeValues => IntrinsicHolder::MapPrototype,
             Self::SetPrototypeAdd
             | Self::SetPrototypeHas
             | Self::SetPrototypeDelete
-            | Self::SetPrototypeClear => IntrinsicHolder::SetPrototype,
+            | Self::SetPrototypeClear
+            | Self::SetPrototypeValues
+            | Self::SetPrototypeEntries => IntrinsicHolder::SetPrototype,
             Self::JsonParse | Self::JsonStringify => IntrinsicHolder::Json,
             Self::PromisePrototypeThen | Self::PromisePrototypeCatch => {
                 IntrinsicHolder::PromisePrototype
@@ -1653,6 +1689,13 @@ impl Intrinsic {
             Self::SetPrototypeDelete => 248,
             Self::SetPrototypeClear => 249,
             Self::SetPrototypeSize => 250,
+            Self::MapPrototypeEntries => 251,
+            Self::MapPrototypeKeys => 252,
+            Self::MapPrototypeValues => 253,
+            Self::SetPrototypeValues => 254,
+            Self::SetPrototypeEntries => 255,
+            Self::MapIteratorPrototypeNext => 256,
+            Self::SetIteratorPrototypeNext => 257,
         }
     }
 
@@ -1914,6 +1957,13 @@ impl Intrinsic {
             Self::SetPrototypeDelete => 248,
             Self::SetPrototypeClear => 249,
             Self::SetPrototypeSize => 250,
+            Self::MapPrototypeEntries => 251,
+            Self::MapPrototypeKeys => 252,
+            Self::MapPrototypeValues => 253,
+            Self::SetPrototypeValues => 254,
+            Self::SetPrototypeEntries => 255,
+            Self::MapIteratorPrototypeNext => 256,
+            Self::SetIteratorPrototypeNext => 257,
         }
     }
 
@@ -2176,6 +2226,13 @@ impl Intrinsic {
             248 => Some(Self::SetPrototypeDelete),
             249 => Some(Self::SetPrototypeClear),
             250 => Some(Self::SetPrototypeSize),
+            251 => Some(Self::MapPrototypeEntries),
+            252 => Some(Self::MapPrototypeKeys),
+            253 => Some(Self::MapPrototypeValues),
+            254 => Some(Self::SetPrototypeValues),
+            255 => Some(Self::SetPrototypeEntries),
+            256 => Some(Self::MapIteratorPrototypeNext),
+            257 => Some(Self::SetIteratorPrototypeNext),
             _ => None,
         }
     }
@@ -2323,7 +2380,7 @@ impl Intrinsic {
             Self::ObjectDefineProperties => "defineProperties",
             Self::ObjectGetPrototypeOf | Self::ReflectGetPrototypeOf => "getPrototypeOf",
             Self::ObjectSetPrototypeOf | Self::ReflectSetPrototypeOf => "setPrototypeOf",
-            Self::ObjectKeys | Self::ArrayPrototypeKeys => "keys",
+            Self::ObjectKeys | Self::ArrayPrototypeKeys | Self::MapPrototypeKeys => "keys",
             Self::ObjectIs => "is",
             Self::ObjectHasOwn => "hasOwn",
             Self::ArrayPrototypeShift => "shift",
@@ -2370,7 +2427,10 @@ impl Intrinsic {
             Self::ObjectIsSealed => "isSealed",
             Self::ObjectFreeze => "freeze",
             Self::ObjectIsFrozen => "isFrozen",
-            Self::ObjectEntries | Self::ArrayPrototypeEntries => "entries",
+            Self::ObjectEntries
+            | Self::ArrayPrototypeEntries
+            | Self::MapPrototypeEntries
+            | Self::SetPrototypeEntries => "entries",
             Self::NumberConstructor => "Number",
             Self::NumberIsFinite | Self::IsFinite => "isFinite",
             Self::NumberIsInteger => "isInteger",
@@ -2413,8 +2473,13 @@ impl Intrinsic {
             Self::ParseFloat => "parseFloat",
             Self::SymbolFor => "for",
             Self::SymbolKeyFor => "keyFor",
-            Self::ArrayPrototypeValues | Self::ObjectValues => "values",
-            Self::ArrayIteratorPrototypeNext => "next",
+            Self::ArrayPrototypeValues
+            | Self::ObjectValues
+            | Self::MapPrototypeValues
+            | Self::SetPrototypeValues => "values",
+            Self::ArrayIteratorPrototypeNext
+            | Self::MapIteratorPrototypeNext
+            | Self::SetIteratorPrototypeNext => "next",
             Self::ArrayPrototypeJoin => "join",
             Self::ArrayPrototypePop => "pop",
             Self::ArrayPrototypePush => "push",
@@ -2875,7 +2940,14 @@ impl Intrinsic {
             | Self::MapPrototypeSize
             | Self::SetConstructor
             | Self::SetPrototypeClear
-            | Self::SetPrototypeSize => 0,
+            | Self::SetPrototypeSize
+            | Self::MapPrototypeEntries
+            | Self::MapPrototypeKeys
+            | Self::MapPrototypeValues
+            | Self::SetPrototypeValues
+            | Self::SetPrototypeEntries
+            | Self::MapIteratorPrototypeNext
+            | Self::SetIteratorPrototypeNext => 0,
             Self::StringFromCharCode
             | Self::StringFromCodePoint
             | Self::StringRaw
@@ -3727,6 +3799,8 @@ pub struct Realm {
     promise_prototype: Root,
     map_prototype: Root,
     set_prototype: Root,
+    map_iterator_prototype: Root,
+    set_iterator_prototype: Root,
     array_iterator_prototype: Root,
     error_prototype: Root,
     native_error_prototypes: [Root; NATIVE_ERROR_COUNT],
@@ -3771,6 +3845,9 @@ struct Holders {
     promise_prototype: Root,
     map_prototype: Root,
     set_prototype: Root,
+    map_iterator_prototype: Root,
+    set_iterator_prototype: Root,
+    iterator_prototype: Root,
 }
 
 /// Global Environment Record of 9.1.1.4.
@@ -3872,6 +3949,13 @@ impl Realm {
         // which is an ordinary object of %Object.prototype% until the Iterator
         // intrinsics exist.
         let iterator_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
+        let iterator_prototype_root = heap.push_root(Value::from_object(iterator_prototype))?;
+        let map_iterator_prototype =
+            heap.allocate_immortal_object(root_shape, Value::from_object(iterator_prototype))?;
+        let map_iterator_prototype = heap.push_root(Value::from_object(map_iterator_prototype))?;
+        let set_iterator_prototype =
+            heap.allocate_immortal_object(root_shape, Value::from_object(iterator_prototype))?;
+        let set_iterator_prototype = heap.push_root(Value::from_object(set_iterator_prototype))?;
         let array_iterator_prototype =
             heap.allocate_immortal_object(root_shape, Value::from_object(iterator_prototype))?;
         let array_iterator_prototype =
@@ -3936,6 +4020,9 @@ impl Realm {
                 promise_prototype,
                 map_prototype,
                 set_prototype,
+                map_iterator_prototype,
+                set_iterator_prototype,
+                iterator_prototype: iterator_prototype_root,
             },
         )?;
 
@@ -3977,6 +4064,8 @@ impl Realm {
                 (promise_prototype, "Promise"),
                 (map_prototype, "Map"),
                 (set_prototype, "Set"),
+                (map_iterator_prototype, "Map Iterator"),
+                (set_iterator_prototype, "Set Iterator"),
             ],
         )?;
 
@@ -4019,6 +4108,8 @@ impl Realm {
             promise_prototype,
             map_prototype,
             set_prototype,
+            map_iterator_prototype,
+            set_iterator_prototype,
             array_iterator_prototype,
             error_prototype,
             native_error_prototypes,
@@ -4857,6 +4948,15 @@ impl Realm {
                 IntrinsicHolder::PromisePrototype => Self::rooted(heap, holders.promise_prototype)?,
                 IntrinsicHolder::MapPrototype => Self::rooted(heap, holders.map_prototype)?,
                 IntrinsicHolder::SetPrototype => Self::rooted(heap, holders.set_prototype)?,
+                IntrinsicHolder::IteratorPrototype => {
+                    Self::rooted(heap, holders.iterator_prototype)?
+                }
+                IntrinsicHolder::MapIteratorPrototype => {
+                    Self::rooted(heap, holders.map_iterator_prototype)?
+                }
+                IntrinsicHolder::SetIteratorPrototype => {
+                    Self::rooted(heap, holders.set_iterator_prototype)?
+                }
                 IntrinsicHolder::PromiseConstructor => Self::rooted(
                     heap,
                     *intrinsics
@@ -4964,6 +5064,28 @@ impl Realm {
             if intrinsic == Intrinsic::NumberConstructor {
                 let constructor = function.as_object().ok_or(HeapError::InvalidReference)?;
                 Self::define_number_constants(heap, constructor)?;
+            }
+            // 24.1.3.14: %Map.prototype%[@@iterator] is the same function
+            // object as `entries`.
+            if intrinsic == Intrinsic::MapPrototypeEntries {
+                heap.define_own_named(
+                    holder,
+                    WellKnownSymbol::Iterator.key(),
+                    function,
+                    builtin_data(),
+                )?;
+            }
+            // 24.2.3.17 and 24.2.3.10: %Set.prototype%[@@iterator] and
+            // `keys` are the same function object as `values`.
+            if intrinsic == Intrinsic::SetPrototypeValues {
+                heap.define_own_named(
+                    holder,
+                    WellKnownSymbol::Iterator.key(),
+                    function,
+                    builtin_data(),
+                )?;
+                let keys = PropertyKey::String(heap.strings.intern("keys")?);
+                heap.define_own_named(holder, keys, function, builtin_data())?;
             }
             // 23.1.3.40: %Array.prototype%[@@iterator] is the same function
             // object as `values`.
@@ -5174,6 +5296,24 @@ impl Realm {
     /// Returns [`HeapError::InvalidReference`] when the root is gone.
     pub fn map_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
         Self::rooted(heap, self.map_prototype)
+    }
+
+    /// `%MapIteratorPrototype%`, 24.1.5.2.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when the root was discarded.
+    pub fn map_iterator_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.map_iterator_prototype)
+    }
+
+    /// `%SetIteratorPrototype%`, 24.2.5.2.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when the root was discarded.
+    pub fn set_iterator_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.set_iterator_prototype)
     }
 
     /// `%Set.prototype%`, 24.2.3.

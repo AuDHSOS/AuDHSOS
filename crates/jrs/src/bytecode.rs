@@ -8857,7 +8857,16 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::MapPrototypeGet
         | crate::engine::realm::Intrinsic::MapPrototypeSet
         | crate::engine::realm::Intrinsic::SetConstructor
-        | crate::engine::realm::Intrinsic::SetPrototypeAdd => RegisterType::Unknown,
+        | crate::engine::realm::Intrinsic::SetPrototypeAdd
+        // 24.1.5.1 and 24.2.5.1 answer an iterator, and 7.4.14 an ordinary
+        // object with a `value` and a `done`.
+        | crate::engine::realm::Intrinsic::MapPrototypeEntries
+        | crate::engine::realm::Intrinsic::MapPrototypeKeys
+        | crate::engine::realm::Intrinsic::MapPrototypeValues
+        | crate::engine::realm::Intrinsic::SetPrototypeValues
+        | crate::engine::realm::Intrinsic::SetPrototypeEntries
+        | crate::engine::realm::Intrinsic::MapIteratorPrototypeNext
+        | crate::engine::realm::Intrinsic::SetIteratorPrototypeNext => RegisterType::Unknown,
         // 24.1.3.1 and 24.2.3.2 answer undefined.
         crate::engine::realm::Intrinsic::MapPrototypeClear
         | crate::engine::realm::Intrinsic::SetPrototypeClear => RegisterType::Undefined,

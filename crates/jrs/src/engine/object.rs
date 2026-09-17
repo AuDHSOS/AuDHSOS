@@ -112,6 +112,16 @@ pub enum ObjectKind {
     },
     /// Error instance, the `[[ErrorData]]` slot of 20.5.4.
     Error,
+    /// The iterator of 24.1.5.1 and 24.2.5.1, which walks the entries of the
+    /// collection it was made from.
+    CollectionIterator {
+        /// The collection, undefined once the walk reached the end.
+        target: Value,
+        /// The position of the key slot the next step reads.
+        index: u32,
+        /// Which of the three 24.1.5.1 answers.
+        kind: ArrayIterationKind,
+    },
     /// The `[[MapData]]` of 24.1.4 and the `[[SetData]]` of 24.2.4.
     Collection {
         /// The entries in the order 24.1.1.1 added them, as the Array that
@@ -264,6 +274,7 @@ impl ObjectKind {
         match self {
             Self::StringWrapper(value)
             | Self::ArrayIterator { target: value, .. }
+            | Self::CollectionIterator { target: value, .. }
             | Self::NativeFunction { state: value, .. }
             | Self::Collection { entries: value, .. }
             | Self::Function { home: value, .. } => [Some(*value), None, None, None, None],
@@ -334,6 +345,7 @@ impl ObjectKind {
         match self {
             Self::StringWrapper(value)
             | Self::ArrayIterator { target: value, .. }
+            | Self::CollectionIterator { target: value, .. }
             | Self::NativeFunction { state: value, .. }
             | Self::Collection { entries: value, .. }
             | Self::Function { home: value, .. } => [Some(value), None, None, None, None],
