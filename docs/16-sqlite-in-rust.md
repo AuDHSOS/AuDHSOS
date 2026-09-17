@@ -792,6 +792,10 @@ Size: L.
     D-268 records.
 49. When a foreign key is located, and what a `CREATE TABLE` that
     writes one is held to. Built, which D-269 records.
+50. The functions an application defines on a connection, and the count
+    of pages `PRAGMA max_page_count` holds the file to. Built, which
+    D-270 records. An aggregate the application defines, which
+    `md5sum` of `testfixture` is, is still open.
 
 ### Done when
 
@@ -801,8 +805,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 72 675 cases in 703 files, 59 892
-pass, 2863 answer differently, and 9920 name something the engine
+under the `tclsh` of the machine. Of 73 815 cases in 703 files, 61 523
+pass, 2448 answer differently, and 9844 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts

@@ -23,6 +23,7 @@ fn every_refusal_says_which_rule_of_the_format_was_broken() {
         (Error::Overflow(5), "overflow chain at page 5"),
         (Error::FreeBlock, "free space of a page"),
         (Error::Balance, "balance this crate does not write"),
+        (Error::Full, "database or disk is full"),
     ];
     for (error, expected) in cases {
         let said = format!("{error}");

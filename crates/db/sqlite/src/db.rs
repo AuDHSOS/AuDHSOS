@@ -315,6 +315,9 @@ impl Error {
                 alloc::format!("misuse of aggregate function {}()", shown(name))
             }
             Error::NoTables => alloc::string::String::from("no tables specified"),
+            Error::Image(crate::error::Error::Full) => {
+                alloc::string::String::from("database or disk is full")
+            }
             Error::NotIndexable(name) => {
                 alloc::format!("table {} may not be indexed", shown(name))
             }
@@ -1177,6 +1180,8 @@ pub struct Database<'a> {
     counted: crate::func::Counted,
     /// How the connection names the columns a statement answers.
     naming: Naming,
+    /// The functions the application defined on the connection.
+    defined: &'static [crate::func::Defined],
 }
 
 /// One trigger of the schema: what it is on, and the statement that
@@ -1330,6 +1335,7 @@ impl<'a> Database<'a> {
             random: crate::random::Source::default(),
             counted: crate::func::Counted::default(),
             naming: Naming::default(),
+            defined: &[],
         };
         database.read_indexes()?;
         database.read_views()?;
@@ -1359,6 +1365,17 @@ impl<'a> Database<'a> {
     #[must_use]
     pub const fn counting(mut self, counted: crate::func::Counted) -> Self {
         self.counted = counted;
+        self
+    }
+
+    /// The same database, with the functions the application defined on
+    /// the connection that writes.
+    ///
+    /// The functions belong to a connection and not to a file, so a
+    /// database that is not told holds none of them.
+    #[must_use]
+    pub const fn defining(mut self, defined: &'static [crate::func::Defined]) -> Self {
+        self.defined = defined;
         self
     }
 
@@ -5653,6 +5670,10 @@ impl eval::Row for Cursor<'_> {
 
     fn random(&self) -> Option<&crate::random::Source> {
         Some(&self.reach.database.random)
+    }
+
+    fn defined(&self, name: &[u8], count: usize) -> Option<crate::func::Defined> {
+        crate::func::defined(self.reach.database.defined, name, count)
     }
 
     fn counted(&self) -> crate::func::Counted {

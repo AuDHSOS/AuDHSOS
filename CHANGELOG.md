@@ -207,6 +207,18 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- An application defines functions on a `db-sqlite` connection:
+  `func::Defined` carries a name, a number of arguments and what the
+  function answers, `Writer::defines` and `Database::defining` hold
+  them, and a statement reads them before the functions the crate holds.
+  The suite's own harness defines `randstr(N,M)` of `src/test_func.c`
+  with it. D-270 records it. Catalog 6.6.194.
+
+- `db-sqlite` holds the file to the pages `PRAGMA max_page_count`
+  allows: a statement that would grow it past that count is refused
+  `database or disk is full` and leaves the file as it found it.
+  D-270 records it. Catalog 6.6.194.
+
 - `db-sqlite` keeps `PRAGMA short_column_names` and `PRAGMA
   full_column_names`, which say how a statement names the columns it
   answers: the column alone, the column with its table in front of it,

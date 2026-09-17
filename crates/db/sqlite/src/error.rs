@@ -44,6 +44,10 @@ pub enum Error {
     /// A balance this crate does not write: one that frees a page, which
     /// needs the free list of the file, or one over pages of two kinds.
     Balance,
+    /// A file that would grow past the pages `PRAGMA max_page_count`
+    /// allows it, which is the one rule here a connection sets rather
+    /// than the format.
+    Full,
 }
 
 impl fmt::Display for Error {
@@ -62,6 +66,7 @@ impl fmt::Display for Error {
             Error::FreeBlock => f.write_str("the free space of a page does not add up to the page"),
             Error::Balance => f.write_str("the tree needs a balance this crate does not write"),
             Error::Page(number) => write!(f, "page {number} is not in the file"),
+            Error::Full => f.write_str("database or disk is full"),
             Error::PageKind(byte) => write!(f, "{byte} is not a b-tree page type"),
             Error::Overrun => f.write_str("a cell or a record reaches past its page"),
             Error::Varint => f.write_str("a varint runs past the bytes it was read from"),

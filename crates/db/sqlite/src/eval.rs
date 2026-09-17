@@ -227,6 +227,12 @@ pub trait Row {
         column: &[u8],
     ) -> Option<(Value, Affinity, Collation)>;
 
+    /// The function the application defined under this name for this
+    /// number of arguments, or nothing where it defined none.
+    fn defined(&self, _name: &[u8], _count: usize) -> Option<crate::func::Defined> {
+        None
+    }
+
     /// Whether more than one side of this row answers to the name,
     /// which `lookupName` refuses rather than choosing between. The
     /// walk asks this only where `column` answered nothing.
@@ -634,6 +640,11 @@ fn called(
         values.push(argument.value);
     }
     let called = crate::schema::dequote(name.text(sql));
+    // `sqlite3FindFunction` reads the functions the application defined
+    // before the ones the library holds.
+    if let Some(defined) = row.defined(&called, values.len()) {
+        return Ok(Answer::plain((defined.answer)(&values, row.random())?));
+    }
     // One of the eleven window functions written under no `OVER`
     // reaches the scalars, which hold none of that name, and so does an
     // aggregate written where no group has been made. `resolveExprStep`

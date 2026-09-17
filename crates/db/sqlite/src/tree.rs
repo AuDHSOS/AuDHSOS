@@ -82,6 +82,10 @@ pub struct Pages {
     /// Whether the file keeps pointer maps, which is what a file that
     /// vacuums itself needs to say which page names each other page.
     vacuum: bool,
+    /// The most pages the file may hold, which `PRAGMA max_page_count`
+    /// sets and which a connection told nothing leaves at the most a
+    /// page number counts to.
+    most: u32,
 }
 
 /// One page as the statement found it: what it held, what the commit
@@ -180,6 +184,7 @@ impl Pages {
             list: (0, 0),
             freelist_count: 0,
             vacuum: false,
+            most: u32::MAX,
         })
     }
 
@@ -239,6 +244,7 @@ impl Pages {
             // Section 1.6: a file keeps pointer maps where the header
             // names a largest root page.
             vacuum: header.largest_root != 0,
+            most: u32::MAX,
         })
     }
 
@@ -384,6 +390,12 @@ impl Pages {
         u32::try_from(self.held.len()).unwrap_or(0)
     }
 
+    /// The most pages the file may hold from here on, which is what
+    /// `PRAGMA max_page_count` was set to.
+    pub const fn capped(&mut self, most: u32) {
+        self.most = most;
+    }
+
     /// The first page of the free list and how many pages lie on it,
     /// which is what the header of the file says.
     #[must_use]
@@ -457,6 +469,11 @@ impl Pages {
     /// does not hold.
     fn plain(&mut self, nearby: u32) -> Result<u32, Error> {
         let Some(number) = self.take(nearby)? else {
+            // `allocateBtreePage` refuses a file that would grow past
+            // the count the connection set.
+            if self.count() >= self.most {
+                return Err(Error::Full);
+            }
             // `allocateBtreePage`: page one holds how many pages the
             // database has, so growing the file writes page one, which
             // is where the journal takes it.

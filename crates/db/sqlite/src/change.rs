@@ -423,6 +423,8 @@ pub struct Writer {
     /// What the statement running now does beyond refusing the row
     /// where it breaks a constraint.
     refusing: Refusing,
+    /// The functions the application defined on this connection.
+    defined: &'static [crate::func::Defined],
     /// The savepoints open now, the outermost first, each holding the
     /// file as it stood when the `SAVEPOINT` ran.
     saved: Vec<Saved>,
@@ -477,6 +479,7 @@ impl Writer {
             deferred: 0,
             began: None,
             refusing: Refusing::Abort,
+            defined: &[],
             saved: Vec::new(),
             returned: Vec::new(),
             making_own: false,
@@ -539,6 +542,7 @@ impl Writer {
             deferred: 0,
             began: None,
             refusing: Refusing::Abort,
+            defined: &[],
             saved: Vec::new(),
             returned: Vec::new(),
             making_own: false,
@@ -1080,6 +1084,7 @@ impl Writer {
             encoding: self.header.encoding,
             random: &self.random,
             counted: self.counted,
+            defined: self.defined,
             outer: None,
             reading: None,
         };
@@ -1384,6 +1389,10 @@ impl Writer {
             self.pages.mark();
         }
         let held = self.header;
+        // `PRAGMA max_page_count` holds the file to a count of pages
+        // from the statement that sets it onward, so the pages are told
+        // it where each statement begins.
+        self.pages.capped(capped(self.told(b"max_page_count")));
         self.refusing = Refusing::Abort;
         self.writing = 0;
         self.returned.clear();
@@ -2010,6 +2019,7 @@ impl Writer {
             let bytes = self.image();
             let database = Database::open(&bytes)?
                 .seeded(self.random.word())
+                .defining(self.defined)
                 .counting(self.counted);
             database.answered(arena, select, sql)?
         };
@@ -2231,6 +2241,12 @@ impl Writer {
             .map_or(0, |keeps| keeps.fallback);
         at.and_then(|at| self.kept.get(at).copied().flatten())
             .unwrap_or(fallback)
+    }
+
+    /// The functions the application defined on this connection, which
+    /// a reader built over its file is told by [`Database::defining`].
+    pub const fn defines(&mut self, defined: &'static [crate::func::Defined]) {
+        self.defined = defined;
     }
 
     /// What this connection was told for the pragmas it keeps a value
@@ -2779,6 +2795,7 @@ impl Writer {
                     let bytes = self.image();
                     let database = Database::open(&bytes)?
                         .seeded(self.random.word())
+                        .defining(self.defined)
                         .counting(self.counted);
                     database.rows_under(arena, select, sql, Some(row))?;
                 }
@@ -3230,6 +3247,7 @@ impl Writer {
         // differently.
         let database = Database::open(&bytes)?
             .seeded(self.random.word())
+            .defining(self.defined)
             .counting(self.counted);
         let (table, root) = database
             .table(name)
@@ -3377,6 +3395,7 @@ impl Writer {
             let bytes = self.image();
             let database = Database::open(&bytes)?
                 .seeded(self.random.word())
+                .defining(self.defined)
                 .counting(self.counted);
             let (table, _) = database.viewing(name)?;
             let places = places(&table, &named)?;
@@ -3446,6 +3465,7 @@ impl Writer {
             let bytes = self.image();
             let database = Database::open(&bytes)?
                 .seeded(self.random.word())
+                .defining(self.defined)
                 .counting(self.counted);
             let (table, held) = database.viewing(name)?;
             let places = set_places(&table, &columns)?;
@@ -3473,6 +3493,7 @@ impl Writer {
                         encoding: self.header.encoding,
                         random: &self.random,
                         counted: self.counted,
+                        defined: self.defined,
                         outer: aside
                             .as_ref()
                             .map(|one| -> &dyn crate::eval::Row { one })
@@ -3539,6 +3560,7 @@ impl Writer {
             let bytes = self.image();
             let database = Database::open(&bytes)?
                 .seeded(self.random.word())
+                .defining(self.defined)
                 .counting(self.counted);
             let (table, held) = database.viewing(name)?;
             let mut taken = Vec::new();
@@ -3550,6 +3572,7 @@ impl Writer {
                     encoding: self.header.encoding,
                     random: &self.random,
                     counted: self.counted,
+                    defined: self.defined,
                     outer,
                     reading: Some(Reading {
                         database: &database,
@@ -3616,6 +3639,7 @@ impl Writer {
             encoding: self.header.encoding,
             random: &self.random,
             counted: self.counted,
+            defined: self.defined,
             outer,
             reading: Some(reading),
         };
@@ -3637,7 +3661,9 @@ impl Writer {
     ) -> Result<i64, Error> {
         let (root, rows, kept, table) = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?.counting(self.counted);
+            let database = Database::open(&bytes)?
+                .counting(self.counted)
+                .defining(self.defined);
             // The table was found before this ran, so the refusal
             // carries no name to write into a message.
             let (table, root) = database.table(name).ok_or(Error::NoTable(Vec::new()))?;
@@ -4125,7 +4151,9 @@ impl Writer {
         written_to(name)?;
         let sets = arena.sets(statement.sets);
         let bytes = self.image();
-        let database = Database::open(&bytes)?.counting(self.counted);
+        let database = Database::open(&bytes)?
+            .counting(self.counted)
+            .defining(self.defined);
         // The table was found before this ran, so the refusal carries
         // no name to write into a message.
         let (table, root) = database.table(name).ok_or(Error::NoTable(Vec::new()))?;
@@ -4169,6 +4197,7 @@ impl Writer {
                     encoding: self.header.encoding,
                     random: &self.random,
                     counted: self.counted,
+                    defined: self.defined,
                     outer: aside
                         .as_ref()
                         .map(|one| -> &dyn crate::eval::Row { one })
@@ -5067,6 +5096,8 @@ struct Held<'a> {
     /// What the connection has written, which `changes()`,
     /// `total_changes()` and `last_insert_rowid()` answer.
     counted: crate::func::Counted,
+    /// The functions the application defined on the connection.
+    defined: &'static [crate::func::Defined],
     /// The row a trigger's body reads as `new` and `old`, where this
     /// row is one of a statement a trigger runs.
     outer: Option<&'a dyn crate::eval::Row>,
@@ -5076,6 +5107,10 @@ struct Held<'a> {
 }
 
 impl crate::eval::Row for Held<'_> {
+    fn defined(&self, name: &[u8], count: usize) -> Option<crate::func::Defined> {
+        crate::func::defined(self.defined, name, count)
+    }
+
     fn random(&self) -> Option<&crate::random::Source> {
         Some(self.random)
     }
@@ -5724,7 +5759,9 @@ impl Writer {
         }
         let (root, keys, kept, table) = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?.counting(self.counted);
+            let database = Database::open(&bytes)?
+                .counting(self.counted)
+                .defining(self.defined);
             let (table, root) = database
                 .table(&name)
                 .ok_or_else(|| Error::NoTable(name.clone()))?;
@@ -5739,6 +5776,7 @@ impl Writer {
                     encoding: self.header.encoding,
                     random: &self.random,
                     counted: self.counted,
+                    defined: self.defined,
                     outer,
                     reading: Some(Reading {
                         database: &database,
@@ -5817,7 +5855,9 @@ impl Writer {
         written_to(name)?;
         let sets = arena.sets(statement.sets);
         let bytes = self.image();
-        let database = Database::open(&bytes)?.counting(self.counted);
+        let database = Database::open(&bytes)?
+            .counting(self.counted)
+            .defining(self.defined);
         let (table, root) = database
             .table(name)
             .ok_or_else(|| Error::NoTable(name.to_vec()))?;
@@ -5868,6 +5908,7 @@ impl Writer {
                     encoding: self.header.encoding,
                     random: &self.random,
                     counted: self.counted,
+                    defined: self.defined,
                     outer: aside
                         .as_ref()
                         .map(|one| -> &dyn crate::eval::Row { one })
@@ -6264,6 +6305,7 @@ impl Writer {
             encoding: self.header.encoding,
             random: &self.random,
             counted: self.counted,
+            defined: self.defined,
             outer: None,
             reading: None,
         };
@@ -6793,6 +6835,12 @@ fn dropped_word(kind: crate::ast::Dropped) -> Vec<u8> {
         crate::ast::Dropped::View => b"view".to_vec(),
         crate::ast::Dropped::Trigger => b"trigger".to_vec(),
     }
+}
+
+/// How many pages a count the connection was told stands for, which is
+/// every page a number counts to where the count is larger than that.
+fn capped(most: i64) -> u32 {
+    u32::try_from(most).unwrap_or(u32::MAX)
 }
 
 /// The name of a table under the schema it stands in, which is `main`

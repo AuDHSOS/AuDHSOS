@@ -821,6 +821,31 @@ pub fn lookup(name: &[u8], count: usize) -> Result<Function, Error> {
     }
 }
 
+/// A function an application defined on a connection, which
+/// `sqlite3_create_function` registers.
+///
+/// It stands in front of the functions this crate holds, so a name both
+/// carry is the application's, and it is read by name and by how many
+/// arguments it takes, which is `sqlite3FindFunction`.
+#[derive(Clone, Copy, Debug)]
+pub struct Defined {
+    /// The name it is called under.
+    pub name: &'static [u8],
+    /// How many arguments it takes.
+    pub count: usize,
+    /// What it answers for them, with the source of bytes the
+    /// connection was given where it draws any.
+    pub answer: fn(&[Value], Option<&crate::random::Source>) -> Result<Value, crate::eval::Error>,
+}
+
+/// The function `defined` holds under `name` for `count` arguments.
+#[must_use]
+pub fn defined(held: &[Defined], name: &[u8], count: usize) -> Option<Defined> {
+    held.iter()
+        .find(|one| one.count == count && name.eq_ignore_ascii_case(one.name))
+        .copied()
+}
+
 /// What a connection has written, which `changes()`,
 /// `total_changes()` and `last_insert_rowid()` answer.
 ///

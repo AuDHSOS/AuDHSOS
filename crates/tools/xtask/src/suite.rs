@@ -31,8 +31,10 @@ use std::time::{Duration, Instant};
 use db_sqlite::change::Writer;
 use db_sqlite::db::Database;
 use db_sqlite::func::Counted;
+use db_sqlite::func::Defined;
 use db_sqlite::header::Encoding;
 use db_sqlite::pragma::Kept;
+use db_sqlite::random::Source;
 use db_sqlite::value::Value;
 
 use crate::error::Error;
@@ -589,8 +591,9 @@ impl Session {
     /// connection has opened that path yet.
     fn open(&mut self, name: &str, path: &str) {
         if !self.held.contains_key(path)
-            && let Ok(writer) = Writer::new(4096, 0, Encoding::Utf8)
+            && let Ok(mut writer) = Writer::new(4096, 0, Encoding::Utf8)
         {
+            writer.defines(DEFINED);
             self.held.insert(path.to_owned(), writer);
         }
         self.connections.insert(name.to_owned(), path.to_owned());
@@ -610,7 +613,8 @@ impl Session {
             return Ok(Vec::new());
         };
         let bytes = held.written();
-        let writer = Writer::opened(&bytes).map_err(|error| error.message())?;
+        let mut writer = Writer::opened(&bytes).map_err(|error| error.message())?;
+        writer.defines(DEFINED);
         self.held.insert(to.to_owned(), writer);
         Ok(Vec::new())
     }
@@ -681,7 +685,7 @@ impl Session {
         }
         let bytes = writer.written();
         let database = Database::open(&bytes)
-            .map(|database| database.naming(writer.naming()))
+            .map(|database| database.naming(writer.naming()).defining(DEFINED))
             .map_err(|error| error.message())?;
         let answered = database
             .query(last.as_bytes())
@@ -728,6 +732,53 @@ fn say(line: &str) {
     let _ = out.flush();
 }
 
+/// The functions `testfixture` defines that this harness answers,
+/// which SQLite's own files call in their statements.
+static DEFINED: &[Defined] = &[Defined {
+    name: b"randstr",
+    count: 2,
+    answer: randstr,
+}];
+
+/// The letters, digits and marks `randStr` of `src/test_func.c` draws
+/// its bytes from.
+const LETTERS: &[u8] =
+    b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-!,:*^+=_|?/<> ";
+
+/// The most bytes `randStr` answers, which is the buffer it writes
+/// into, one byte shorter than the thousand it holds.
+const LONGEST: i64 = 999;
+
+/// `randstr(N,M)` of `src/test_func.c`: a string of between N and M
+/// bytes, each drawn from [`LETTERS`], held to [`LONGEST`] bytes.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the shape every function the application defines answers in"
+)]
+fn randstr(args: &[Value], random: Option<&Source>) -> Result<Value, db_sqlite::eval::Error> {
+    let held = |value: Option<&Value>| value.map_or(0, Value::to_integer).clamp(0, LONGEST);
+    let least = held(args.first());
+    let most = held(args.get(1)).max(least);
+    let mut count = least;
+    if most > least {
+        let drawn = random.map_or(0, |source| source.word() & 0x7fff_ffff);
+        let range = u64::try_from(most.saturating_sub(least).saturating_add(1)).unwrap_or(1);
+        let within = drawn.checked_rem(range).unwrap_or(0);
+        count = count.saturating_add(i64::try_from(within).unwrap_or(0));
+    }
+    let bytes = random.map_or_else(Vec::new, |source| {
+        source.bytes(usize::try_from(count).unwrap_or(0))
+    });
+    let text = bytes
+        .iter()
+        .map(|byte| {
+            let at = usize::from(*byte).checked_rem(LETTERS.len()).unwrap_or(0);
+            LETTERS.get(at).copied().unwrap_or(b'a')
+        })
+        .collect();
+    Ok(Value::Text(text))
+}
+
 /// One statement: a reader answers one that reads and the writer
 /// answers the rest, which is what a connection does with either.
 fn run_one(writer: &mut Writer, text: &str) -> Result<Vec<Value>, String> {
@@ -745,7 +796,7 @@ fn run_one(writer: &mut Writer, text: &str) -> Result<Vec<Value>, String> {
         let counted = writer.counts();
         let naming = writer.naming();
         let answered = opened
-            .map(|database| database.counting(counted).naming(naming))
+            .map(|database| database.counting(counted).naming(naming).defining(DEFINED))
             .and_then(|database| database.query(text.as_bytes()))
             .map_err(|error| shape(text, error.message()))?;
         for row in &answered.rows {

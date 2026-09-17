@@ -20,6 +20,7 @@ mod counted;
 mod date;
 mod db;
 mod deferred;
+mod defined;
 mod definition;
 mod dropcons;
 mod error;

@@ -5610,6 +5610,23 @@ Document 16 step Q8.
 - A statement over a view and one over a table the schema does not hold
   read no key of their own.
 
+### 6.6.194 The functions an application defines (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A statement that writes and one that reads both reach the functions
+  the application defined, so `INSERT INTO t VALUES(twice(21))` and
+  `SELECT twice(a) FROM t` answer through them.
+- A name the application defined for another number of arguments is
+  refused `no such function: twice`, and a connection told of no
+  function reads every name as one the library holds.
+- `PRAGMA max_page_count` holds the file to a count of pages: a
+  statement that would grow it past that count is refused `database or
+  disk is full` and the file stands where the statement found it.
+- The suite's own harness defines `randstr(N,M)` of
+  `src/test_func.c`, which `tkt2686.test` writes rows with until the
+  file fills.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`
