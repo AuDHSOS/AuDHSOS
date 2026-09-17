@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` writes the row a `DO UPDATE` found and the values the
+  clause sets in the encoding the file names, over a table with a rowid
+  and over one without, so text an upsert wrote reads back as it was
+  written. D-276 records it. Catalog 6.6.199.
+
 - `db-sqlite` reads a name a statement carries into UTF-8 before it
   compares it against a row of `sqlite_schema`, so a `DROP TABLE`,
   `DROP INDEX`, `DROP VIEW` and `DROP TRIGGER` find their object under

@@ -3989,11 +3989,12 @@ impl Writer {
         let held = {
             let bytes = self.image();
             let database = Database::open_collating(&bytes, self.collating)?;
-            database
+            let held = database
                 .keyed_rows_of(&table.name)?
                 .into_iter()
                 .find(|values| crate::schema::key_of(table, values) == wanted.found)
-                .ok_or(Error::NoTable(Vec::new()))?
+                .ok_or(Error::NoTable(Vec::new()))?;
+            written_as(&held, self.header.encoding)
         };
         let row = Excluded {
             table,
@@ -4019,7 +4020,7 @@ impl Writer {
                 .ok_or_else(|| Error::Eval(crate::eval::Error::NoColumn(name.clone())))?;
             let value = crate::eval::evaluate_row(wanted.arena, set.value, wanted.sql, &row)?;
             for slot in values.iter_mut().skip(at).take(1) {
-                slot.clone_from(&value);
+                *slot = stored(&value, self.header.encoding);
             }
             columns.push(name);
         }
@@ -4946,11 +4947,15 @@ impl Writer {
         let (rowid, held) = {
             let bytes = self.image();
             let database = Database::open_collating(&bytes, self.collating)?;
-            database
+            let (rowid, held) = database
                 .rows_of(&table.name)?
                 .into_iter()
                 .find(|(key, _)| *key == wanted.rowid)
-                .ok_or(Error::NoTable(Vec::new()))?
+                .ok_or(Error::NoTable(Vec::new()))?;
+            // A row read out of the file carries its text in UTF-8, and
+            // this row is written again, so the text goes back into the
+            // encoding the file names.
+            (rowid, written_as(&held, self.header.encoding))
         };
         let row = Excluded {
             table,
@@ -4976,7 +4981,7 @@ impl Writer {
                 .ok_or_else(|| Error::Eval(crate::eval::Error::NoColumn(name.clone())))?;
             let value = crate::eval::evaluate_row(wanted.arena, set.value, wanted.sql, &row)?;
             for slot in values.iter_mut().skip(at).take(1) {
-                slot.clone_from(&value);
+                *slot = stored(&value, self.header.encoding);
             }
             columns.push(name);
         }

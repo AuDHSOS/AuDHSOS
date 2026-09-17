@@ -142,3 +142,49 @@ fn what_a_statement_answers_under_every_page_size_and_encoding() {
         }
     }
 }
+
+/// A `DO UPDATE` writes the row it found and the values it sets in the
+/// encoding the file names, so the text it wrote reads back as it was
+/// written, over a table with a rowid and over one without.
+#[test]
+fn what_an_upsert_writes_under_every_encoding() {
+    for encoding in ENCODINGS {
+        for keyed in ["", " WITHOUT ROWID"] {
+            let mut writer = Writer::new(1024, 0, encoding).unwrap();
+            let mut sql = b"CREATE TABLE t(a INT PRIMARY KEY, b, c UNIQUE)".to_vec();
+            sql.extend_from_slice(keyed.as_bytes());
+            writer.run(&sql).unwrap();
+            writer.run(b"INSERT INTO t VALUES(1,'old',3)").unwrap();
+            writer
+                .run(b"INSERT INTO t VALUES(1,'ignored',3) ON CONFLICT(a) DO UPDATE SET b='new'")
+                .unwrap();
+            let image = writer.written();
+            let database = Database::open(&image).expect("a database");
+            assert_eq!(
+                rows(&database, b"SELECT a,b,c FROM t"),
+                alloc::vec![alloc::vec![
+                    Value::Int(1),
+                    Value::Text(b"new".to_vec()),
+                    Value::Int(3)
+                ]],
+                "{encoding:?}{keyed}"
+            );
+            // The row the conflict found is written again whole, so a
+            // column the clause does not set keeps its text.
+            writer
+                .run(b"INSERT INTO t VALUES(1,'ignored',3) ON CONFLICT(c) DO UPDATE SET a=2")
+                .unwrap();
+            let image = writer.written();
+            let database = Database::open(&image).expect("a database");
+            assert_eq!(
+                rows(&database, b"SELECT a,b,c FROM t"),
+                alloc::vec![alloc::vec![
+                    Value::Int(2),
+                    Value::Text(b"new".to_vec()),
+                    Value::Int(3)
+                ]],
+                "{encoding:?}{keyed} kept"
+            );
+        }
+    }
+}

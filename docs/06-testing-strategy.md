@@ -5723,6 +5723,10 @@ Document 16 step Q8.
 - An index a `CREATE INDEX` fills holds its text in the encoding the
   file names, so a statement that reads a row through that index finds
   it: `WHERE a = 'b'` answers the row under every encoding.
+- A `DO UPDATE` writes the row it found and the values it sets in the
+  encoding the file names, over a table with a rowid and over one
+  without, so `SET b='new'` reads back as `new` and a column the clause
+  does not set keeps its text.
 
 ## 6.7 CI pipeline
 
