@@ -9161,6 +9161,9 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::TypedArrayUint32Constructor
         | crate::engine::realm::Intrinsic::TypedArrayFloat32Constructor
         | crate::engine::realm::Intrinsic::TypedArrayFloat64Constructor
+        | crate::engine::realm::Intrinsic::TypedArrayFloat16Constructor
+        | crate::engine::realm::Intrinsic::TypedArrayBigInt64Constructor
+        | crate::engine::realm::Intrinsic::TypedArrayBigUint64Constructor
         | crate::engine::realm::Intrinsic::DataViewPrototypeSetInt8
         | crate::engine::realm::Intrinsic::DataViewPrototypeSetUint8
         | crate::engine::realm::Intrinsic::DataViewPrototypeSetInt16

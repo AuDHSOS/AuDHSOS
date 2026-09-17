@@ -569,6 +569,7 @@ pub(crate) fn read_element(raw: [u8; 8], size: usize, kind: u8, little: bool) ->
         value = (value << 8) | u64::from(*raw.get(at).unwrap_or(&0));
     }
     match kind {
+        5 => from_binary16(u16::try_from(value & 0xFFFF).unwrap_or(0)),
         2 => f64::from(f32::from_bits(
             u32::try_from(value & 0xFFFF_FFFF).unwrap_or(0),
         )),
@@ -593,6 +594,7 @@ pub(crate) fn read_element(raw: [u8; 8], size: usize, kind: u8, little: bool) ->
 )]
 pub(crate) fn write_element(value: f64, size: usize, kind: u8, little: bool) -> [u8; 8] {
     let bits = match kind {
+        5 => u64::from(to_binary16(value)),
         2 => u64::from((value as f32).to_bits()),
         3 => value.to_bits(),
         _ => {
@@ -617,7 +619,9 @@ pub(crate) fn write_element(value: f64, size: usize, kind: u8, little: bool) -> 
 /// The bytes one element of a row of table 71 takes, how 25.1.3.10 reads it
 /// back, and whether 7.1.11 clamps what a write gives it.
 pub(crate) const fn element_form(kind: u8) -> (usize, u8, bool) {
-    // The second field is the one `read_element` and `write_element` name.
+    // The second field is the one `read_element` and `write_element` name: 0
+    // signed, 1 unsigned, 2 a binary32, 3 a binary64, 5 a binary16, and 6 and
+    // 7 the two rows a `BigInt` holds.
     match kind {
         0 => (1, 0, false),
         1 => (1, 1, false),
@@ -627,7 +631,48 @@ pub(crate) const fn element_form(kind: u8) -> (usize, u8, bool) {
         5 => (4, 0, false),
         6 => (4, 1, false),
         7 => (4, 2, false),
+        9 => (2, 5, false),
+        10 => (8, 6, false),
+        11 => (8, 7, false),
         _ => (8, 3, false),
+    }
+}
+
+/// Whether the row of table 71 holds a `BigInt` rather than a Number.
+pub(crate) const fn holds_a_bigint(kind: u8) -> bool {
+    matches!(kind, 10 | 11)
+}
+
+#[cfg(test)]
+mod binary16_tests {
+    use super::{from_binary16, to_binary16};
+
+    #[test]
+    fn the_binary16_of_table_71_rounds_to_the_nearer_value_and_ties_to_even() {
+        for (value, bits) in [
+            (0.0, 0x0000u16),
+            (-0.0, 0x8000),
+            (1.0, 0x3C00),
+            (-2.0, 0xC000),
+            (1.5, 0x3E00),
+            (65504.0, 0x7BFF),
+            (65536.0, 0x7C00),
+            (f64::INFINITY, 0x7C00),
+            (f64::NEG_INFINITY, 0xFC00),
+            // The smallest normal and the smallest subnormal.
+            (6.103_515_625e-5, 0x0400),
+            (5.960_464_477_539_063e-8, 0x0001),
+            // Halfway between two binary16 values, which ties to the even one.
+            (2049.0, 0x6800),
+            (2051.0, 0x6802),
+        ] {
+            assert_eq!(to_binary16(value), bits, "{value}");
+        }
+        for bits in [0x0000u16, 0x3C00, 0xC000, 0x7BFF, 0x0400, 0x0001, 0x6802] {
+            assert_eq!(to_binary16(from_binary16(bits)), bits, "{bits:#06x}");
+        }
+        assert!(from_binary16(0x7E00).is_nan());
+        assert_eq!(to_binary16(f64::NAN), 0x7E00);
     }
 }
 
@@ -659,4 +704,87 @@ mod tests {
         assert_eq!(obj.get_slot(5), Some(Value::from_smi(600)));
         assert_eq!(obj.get_slot(4), Some(VALUE_UNDEFINED));
     }
+}
+
+/// Two raised to this power, for an exponent a binary64 holds.
+const fn power_of_two(exponent: i32) -> f64 {
+    let biased = exponent.saturating_add(1023);
+    if biased <= 0 {
+        return 0.0;
+    }
+    f64::from_bits((biased.unsigned_abs() as u64) << 52)
+}
+
+/// The Number a binary16 of table 71 denotes.
+pub(crate) fn from_binary16(bits: u16) -> f64 {
+    let sign = if bits & 0x8000 == 0 { 1.0 } else { -1.0 };
+    let exponent = i32::from((bits >> 10) & 0x1F);
+    let fraction = f64::from(bits & 0x03FF);
+    if exponent == 0x1F {
+        return if fraction == 0.0 {
+            sign * f64::INFINITY
+        } else {
+            f64::NAN
+        };
+    }
+    if exponent == 0 {
+        return sign * fraction * power_of_two(-24);
+    }
+    sign * (1.0 + fraction / 1024.0) * power_of_two(exponent - 15)
+}
+
+/// The binary16 nearest the Number, with a tie to the even one, as 25.1.3.12
+/// rounds every other width.
+pub(crate) fn to_binary16(value: f64) -> u16 {
+    if value.is_nan() {
+        return 0x7E00;
+    }
+    let bits = value.to_bits();
+    let sign = ((bits >> 48) & 0x8000) as u16;
+    if value.is_infinite() {
+        return sign | 0x7C00;
+    }
+    let exponent = ((bits >> 52) & 0x7FF) as i32;
+    let fraction = bits & 0x000F_FFFF_FFFF_FFFF;
+    if exponent == 0 && fraction == 0 {
+        return sign;
+    }
+    // The significand carries the implicit one of a normal binary64.
+    let (significand, unbiased) = if exponent == 0 {
+        (fraction, -1022)
+    } else {
+        (fraction | (1u64 << 52), exponent - 1023)
+    };
+    let mut half_exponent = unbiased + 15;
+    // A binary16 keeps eleven significant bits, so a binary64 drops 42 of its
+    // 53, and a subnormal one drops as many more as its exponent is below one.
+    let mut shift = 42i32;
+    if half_exponent < 1 {
+        shift += 1 - half_exponent;
+        half_exponent = 0;
+        if shift > 53 {
+            return sign;
+        }
+    }
+    let shift = shift.unsigned_abs();
+    let dropped = significand & ((1u64 << shift) - 1);
+    let mut kept = significand >> shift;
+    let half = 1u64 << (shift - 1);
+    if dropped > half || (dropped == half && kept & 1 == 1) {
+        kept += 1;
+    }
+    // A subnormal that rounds up into the normal range carries its leading bit
+    // into the exponent field, which needs no step of its own.
+    if half_exponent == 0 {
+        return sign | u16::try_from(kept).unwrap_or(0);
+    }
+    if kept & (1 << 11) != 0 {
+        kept >>= 1;
+        half_exponent += 1;
+    }
+    if half_exponent >= 31 {
+        return sign | 0x7C00;
+    }
+    sign | (u16::try_from(half_exponent).unwrap_or(0) << 10)
+        | (u16::try_from(kept).unwrap_or(0) & 0x03FF)
 }

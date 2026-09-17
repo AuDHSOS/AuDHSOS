@@ -65,6 +65,27 @@ impl BigIntValue {
         self.negative
     }
 
+    /// The low 64 bits of the two's complement of the value, which 25.1.3.12
+    /// writes for the two `BigInt` rows of table 71.
+    #[must_use]
+    pub fn low_bits(&self) -> u64 {
+        let limbs = self.two_complement(2);
+        u64::from(limbs.first().copied().unwrap_or(0))
+            | (u64::from(limbs.get(1).copied().unwrap_or(0)) << 32)
+    }
+
+    /// The value 64 bits of a two's complement denote, read as 25.1.3.10 reads
+    /// the row: signed for `BigInt64` and unsigned for `BigUint64`.
+    #[must_use]
+    pub fn from_low_bits(bits: u64, signed: bool) -> Self {
+        let limbs = alloc::vec![bits as u32, (bits >> 32) as u32];
+        if signed {
+            Self::from_two_complement(limbs)
+        } else {
+            Self::normalized(false, limbs)
+        }
+    }
+
     /// The pair a registry keys a value by: its sign and its limbs.
     #[must_use]
     pub fn key(&self) -> (bool, Vec<u32>) {

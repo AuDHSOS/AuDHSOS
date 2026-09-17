@@ -10151,3 +10151,53 @@ fn the_bigint_of_6_1_6_2_carries_the_mathematical_value() -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[test]
+fn the_three_further_rows_of_table_71_hold_a_binary16_and_a_bigint() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend carries no clause 23.2, so only the engine answers.
+    for (source, answer) in [
+        (
+            "''+typeof Float16Array+' '+typeof BigInt64Array+' '+typeof BigUint64Array",
+            "function function function",
+        ),
+        (
+            "''+Float16Array.BYTES_PER_ELEMENT+' '+BigInt64Array.BYTES_PER_ELEMENT",
+            "2 8",
+        ),
+        // 25.1.3.12 rounds to the nearer binary16 and ties to the even one.
+        ("var a=new Float16Array(2);a[0]=1.5;''+a[0]", "1.5"),
+        ("var a=new Float16Array(2);a[0]=1.0001;''+a[0]", "1"),
+        ("var a=new Float16Array(2);a[0]=65536;''+a[0]", "Infinity"),
+        // The two rows a BigInt holds read their eight bytes as the two's
+        // complement of 6.1.6.2, signed and unsigned.
+        ("var a=new BigInt64Array(1);a[0]=-1n;''+a[0]", "-1"),
+        (
+            "var a=new BigUint64Array(1);a[0]=-1n;''+a[0]",
+            "18446744073709551615",
+        ),
+        (
+            "var a=new BigInt64Array(1);a[0]=18446744073709551617n;''+a[0]",
+            "1",
+        ),
+        // 7.1.13 has no BigInt for a Number, however integral it is.
+        (
+            "var a=new BigInt64Array(1);var r;try{a[0]=1}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        (
+            "''+Object.prototype.toString.call(new BigInt64Array(1))",
+            "[object BigInt64Array]",
+        ),
+        // 25.4.2.1 takes no float row, and the two BigInt rows need the BigInt
+        // forms of 25.4, which are a named gap.
+        (
+            "var a=new Float16Array(2);var r;try{Atomics.load(a,0)}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}

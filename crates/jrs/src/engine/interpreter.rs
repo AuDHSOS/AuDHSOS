@@ -2766,7 +2766,10 @@ impl RegisterVM {
             | Intrinsic::TypedArrayInt32Constructor
             | Intrinsic::TypedArrayUint32Constructor
             | Intrinsic::TypedArrayFloat32Constructor
-            | Intrinsic::TypedArrayFloat64Constructor => {
+            | Intrinsic::TypedArrayFloat64Constructor
+            | Intrinsic::TypedArrayFloat16Constructor
+            | Intrinsic::TypedArrayBigInt64Constructor
+            | Intrinsic::TypedArrayBigUint64Constructor => {
                 self.call_typed_array_intrinsic(intrinsic, &call, heap, realm)
             }
             Intrinsic::EncodeUri
@@ -3380,6 +3383,9 @@ impl RegisterVM {
                     | Intrinsic::TypedArrayUint32Constructor
                     | Intrinsic::TypedArrayFloat32Constructor
                     | Intrinsic::TypedArrayFloat64Constructor
+                    | Intrinsic::TypedArrayFloat16Constructor
+                    | Intrinsic::TypedArrayBigInt64Constructor
+                    | Intrinsic::TypedArrayBigUint64Constructor
                     | Intrinsic::SharedArrayBufferConstructor
             )
         })
@@ -3812,11 +3818,14 @@ impl RegisterVM {
             let key = Value::from_string(name);
             let answer = match intrinsic {
                 Intrinsic::ObjectValues | Intrinsic::ObjectEntries => {
-                    let held = heap
-                        .lookup_named(object, PropertyKey::String(name))?
-                        .map(Self::plain_value)
-                        .transpose()?
-                        .unwrap_or(VALUE_UNDEFINED);
+                    let held = match Self::typed_array_read(object, key, heap)? {
+                        Some(element) => element,
+                        None => heap
+                            .lookup_named(object, PropertyKey::String(name))?
+                            .map(Self::plain_value)
+                            .transpose()?
+                            .unwrap_or(VALUE_UNDEFINED),
+                    };
                     if intrinsic == Intrinsic::ObjectValues {
                         held
                     } else {
@@ -6066,6 +6075,7 @@ impl RegisterVM {
         name: PropertyKey,
         descriptor: &PartialDescriptor,
         heap: &mut GenerationalHeap,
+        realm: &Realm,
     ) -> Result<Option<bool>, VMError> {
         let Some(string) = name.as_string() else {
             return Ok(None);
@@ -6089,7 +6099,7 @@ impl RegisterVM {
             return Ok(Some(false));
         }
         if let Some(value) = descriptor.value {
-            Self::typed_array_write(object, held, value, heap)?;
+            Self::typed_array_write(object, held, value, heap, realm)?;
         }
         Ok(Some(true))
     }
@@ -6104,7 +6114,9 @@ impl RegisterVM {
         if Self::names_array_length(object, name, heap) {
             return Self::define_array_length(object, descriptor, heap, realm);
         }
-        if let Some(defined) = Self::define_typed_array_index(object, name, descriptor, heap)? {
+        if let Some(defined) =
+            Self::define_typed_array_index(object, name, descriptor, heap, realm)?
+        {
             return Ok(defined);
         }
         let indexed = Self::element_index_of(object, name, heap);
@@ -13721,7 +13733,10 @@ impl RegisterVM {
             5 => "Int32Array",
             6 => "Uint32Array",
             7 => "Float32Array",
-            _ => "Float64Array",
+            8 => "Float64Array",
+            9 => "Float16Array",
+            10 => "BigInt64Array",
+            _ => "BigUint64Array",
         }
     }
 
@@ -13737,6 +13752,9 @@ impl RegisterVM {
             Intrinsic::TypedArrayUint32Constructor => 6,
             Intrinsic::TypedArrayFloat32Constructor => 7,
             Intrinsic::TypedArrayFloat64Constructor => 8,
+            Intrinsic::TypedArrayFloat16Constructor => 9,
+            Intrinsic::TypedArrayBigInt64Constructor => 10,
+            Intrinsic::TypedArrayBigUint64Constructor => 11,
             _ => return None,
         })
     }
@@ -13788,7 +13806,7 @@ impl RegisterVM {
     fn typed_array_read(
         object: ObjectRef,
         key: Value,
-        heap: &GenerationalHeap,
+        heap: &mut GenerationalHeap,
     ) -> Result<Option<Value>, VMError> {
         let Some(&ObjectKind::TypedArray {
             buffer,
@@ -13818,6 +13836,12 @@ impl RegisterVM {
         raw.get_mut(..size)
             .ok_or(VMError::TypeError)?
             .copy_from_slice(read);
+        // The two rows of table 71 that hold a `BigInt` read their eight bytes
+        // as the two's complement 6.1.6.2 names, signed or unsigned.
+        if super::object::holds_a_bigint(kind) {
+            let held = BigIntValue::from_low_bits(u64::from_le_bytes(raw), form == 6);
+            return Self::new_bigint(held, heap).map(Some);
+        }
         Ok(Some(Value::from_f64(super::object::read_element(
             raw, size, form, true,
         ))))
@@ -13830,6 +13854,7 @@ impl RegisterVM {
         key: Value,
         value: Value,
         heap: &mut GenerationalHeap,
+        realm: &Realm,
     ) -> Result<bool, VMError> {
         let Some(&ObjectKind::TypedArray {
             buffer,
@@ -13845,12 +13870,22 @@ impl RegisterVM {
         };
         // 10.4.5.5 step 1.b.i coerces the value even for an index the array
         // has not got, and drops the write.
-        let written = primitive_number(value, heap)?;
+        let (size, form, clamps) = super::object::element_form(kind);
+        let bigint = super::object::holds_a_bigint(kind);
+        let written = if bigint {
+            0.0
+        } else {
+            primitive_number(value, heap)?
+        };
+        let held = if bigint {
+            Some(Self::to_bigint(value, heap, realm)?.as_n(64, form == 6))
+        } else {
+            None
+        };
         let Some(slot) = Self::typed_array_slot(number, length) else {
             return Ok(true);
         };
         let block = buffer.as_object().ok_or(VMError::TypeError)?;
-        let (size, form, clamps) = super::object::element_form(kind);
         // 7.1.11 rounds a value of the clamped row to the nearer of 0 and 255,
         // and ties to the even one.
         let written = if clamps {
@@ -13858,7 +13893,10 @@ impl RegisterVM {
         } else {
             written
         };
-        let bytes = super::object::write_element(written, size, form, true);
+        let bytes = match held {
+            Some(held) => held.low_bits().to_le_bytes(),
+            None => super::object::write_element(written, size, form, true),
+        };
         let start = (offset as usize).saturating_add((slot as usize).saturating_mul(size));
         let end = start.saturating_add(size);
         if let Some(ObjectKind::ArrayBuffer(Some(block))) =
@@ -14440,7 +14478,7 @@ impl RegisterVM {
                     return Err(type_error(heap, realm, "BigInt is no constructor"));
                 }
                 let value = self.call_argument(call, 0, heap)?;
-                let held = Self::to_bigint(value, heap, realm)?;
+                let held = Self::bigint_argument(value, heap, realm)?;
                 Self::new_bigint(held, heap)
             }
             // 21.2.2.1 and 21.2.2.2 keep the low bits of the value.
@@ -14520,21 +14558,32 @@ impl RegisterVM {
                 )
             });
         }
+        if value.is_object() {
+            return Err(NUMERIC_CONVERSION_GAP);
+        }
+        // 7.1.13 has no BigInt for a Number, however integral it is.
+        Err(type_error(heap, realm, "the value of 7.1.13 is no BigInt"))
+    }
+
+    /// The argument of 21.2.1.1, which takes the `NumberToBigInt` of 7.1.14
+    /// for a Number where 7.1.13 refuses one.
+    fn bigint_argument(
+        value: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<BigIntValue, VMError> {
         if let Some(number) = value.as_f64() {
-            // 7.1.13 step 3 takes an integral Number and no other.
+            // Step 2 of 7.1.14 takes an integral Number and no other.
             return BigIntValue::from_f64(number).ok_or_else(|| {
                 raise(
                     heap,
                     realm,
                     super::realm::NativeErrorKind::RangeError,
-                    "the Number of 7.1.13 is no integer",
+                    "the Number of 7.1.14 is no integer",
                 )
             });
         }
-        if value.is_object() {
-            return Err(NUMERIC_CONVERSION_GAP);
-        }
-        Err(type_error(heap, realm, "the value of 7.1.13 is no BigInt"))
+        Self::to_bigint(value, heap, realm)
     }
 
     /// `thisBigIntValue` of 21.2.3, which takes a `BigInt` and the wrapper 7.1.18
@@ -14892,13 +14941,16 @@ impl RegisterVM {
                 "the value of 25.4.2.1 is no TypedArray",
             ));
         };
-        // Table 71 without the clamped row and without the two floats.
-        if matches!(kind, 2 | 7 | 8) {
+        // Table 71 without the clamped row and without the three floats.
+        if matches!(kind, 2 | 7 | 8 | 9) {
             return Err(type_error(
                 heap,
                 realm,
                 "the TypedArray of 25.4.2.1 holds no integer",
             ));
+        }
+        if super::object::holds_a_bigint(kind) {
+            return Err(VMError::Unsupported("an atomic of 25.4 on a BigInt row"));
         }
         Ok((buffer, offset, length, kind))
     }
@@ -15709,10 +15761,13 @@ impl RegisterVM {
                 .strings
                 .to_utf16(Value::from_string(name))
                 .ok_or(VMError::Heap(HeapError::InvalidReference))?;
-            let held = Self::plain_value(
-                heap.lookup_named(object, key)?
-                    .ok_or(VMError::Heap(HeapError::InvalidReference))?,
-            )?;
+            let held = match Self::typed_array_read(object, Value::from_string(name), heap)? {
+                Some(element) => element,
+                None => Self::plain_value(
+                    heap.lookup_named(object, key)?
+                        .ok_or(VMError::Heap(HeapError::InvalidReference))?,
+                )?,
+            };
             let mut text = Vec::new();
             if !self.json_quote_value(held, &mut text, depth, heap, realm)? {
                 continue;
@@ -19757,6 +19812,7 @@ impl RegisterVM {
                             Value::from_string(string),
                             self.acc,
                             heap,
+                            realm,
                         )?
                     {
                         return Ok(None);
@@ -20090,7 +20146,7 @@ impl RegisterVM {
                     let val = self.acc;
                     // 10.4.5.5: an index of an array of 23.2 is written into the
                     // block, and one outside it is dropped.
-                    if Self::typed_array_write(oref, key_val, val, heap)? {
+                    if Self::typed_array_write(oref, key_val, val, heap, realm)? {
                         return Ok(None);
                     }
                     let elements = heap.get_object(oref).ok_or(VMError::TypeError)?.elements;

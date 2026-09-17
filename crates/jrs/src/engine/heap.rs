@@ -1043,6 +1043,31 @@ impl GenerationalHeap {
 
     /// Own property keys in the order of 10.1.11.1 `OrdinaryOwnPropertyKeys`:
     /// array indices in ascending numeric order, then the remaining String keys
+    /// Whether an array of 23.2 owns the index a name denotes, per 10.4.5.1.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale reference.
+    pub fn typed_array_owns_index(
+        &self,
+        reference: ObjectRef,
+        name: PropertyKey,
+    ) -> Result<bool, HeapError> {
+        let Some(&ObjectKind::TypedArray { length, .. }) =
+            self.get_object(reference).map(|entry| &entry.kind)
+        else {
+            return Ok(false);
+        };
+        let Some(name) = name.as_string() else {
+            return Ok(false);
+        };
+        let units = self
+            .strings
+            .to_utf16(Value::from_string(name))
+            .ok_or(HeapError::InvalidReference)?;
+        Ok(canonical_index(&units, length).is_some())
+    }
+
     /// The element 10.4.5.1 keeps in the block of an array of 23.2.
     ///
     /// `None` is every other receiver, every key that is no canonical numeric
@@ -1075,6 +1100,11 @@ impl GenerationalHeap {
         let Some(slot) = canonical_index(&units, length) else {
             return Ok(None);
         };
+        // The two rows a `BigInt` holds answer a value the arena has to make,
+        // which this read has no `&mut` for; the interpreter reads those.
+        if super::object::holds_a_bigint(kind) {
+            return Ok(None);
+        }
         let block = buffer.as_object().ok_or(HeapError::InvalidReference)?;
         let (size, form, _) = super::object::element_form(kind);
         let start = (offset as usize).saturating_add((slot as usize).saturating_mul(size));
@@ -1185,7 +1215,7 @@ impl GenerationalHeap {
     ) -> Result<Option<PropertyFlags>, HeapError> {
         // 10.4.5.1 gives an index of an array of 23.2 the attributes of an
         // ordinary data property.
-        if self.typed_array_element(reference, name)?.is_some() {
+        if self.typed_array_owns_index(reference, name)? {
             return Ok(Some(PropertyFlags::ordinary_data()));
         }
         let object = self

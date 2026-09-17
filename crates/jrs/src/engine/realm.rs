@@ -1050,6 +1050,12 @@ pub enum Intrinsic {
     TypedArrayFloat32Constructor,
     /// `Float64Array`, 23.2.6.
     TypedArrayFloat64Constructor,
+    /// `Float16Array`, 23.2.6.
+    TypedArrayFloat16Constructor,
+    /// `BigInt64Array`, 23.2.6.
+    TypedArrayBigInt64Constructor,
+    /// `BigUint64Array`, 23.2.6.
+    TypedArrayBigUint64Constructor,
     /// `get buffer`, 23.2.3.1.
     TypedArrayPrototypeBuffer,
     /// `get byteLength`, 23.2.3.2.
@@ -1197,7 +1203,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 403] = [
+    pub const ALL: [Self; 406] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1571,6 +1577,9 @@ impl Intrinsic {
         Self::TypedArrayUint32Constructor,
         Self::TypedArrayFloat32Constructor,
         Self::TypedArrayFloat64Constructor,
+        Self::TypedArrayFloat16Constructor,
+        Self::TypedArrayBigInt64Constructor,
+        Self::TypedArrayBigUint64Constructor,
         Self::TypedArrayPrototypeBuffer,
         Self::TypedArrayPrototypeByteLength,
         Self::TypedArrayPrototypeByteOffset,
@@ -1972,6 +1981,9 @@ impl Intrinsic {
             | Self::TypedArrayUint32Constructor
             | Self::TypedArrayFloat32Constructor
             | Self::TypedArrayFloat64Constructor
+            | Self::TypedArrayFloat16Constructor
+            | Self::TypedArrayBigInt64Constructor
+            | Self::TypedArrayBigUint64Constructor
             // 25.3.4 gives three of them as accessors too.
             | Self::DataViewPrototypeBuffer
             | Self::DataViewPrototypeByteLength
@@ -2431,6 +2443,9 @@ impl Intrinsic {
             Self::BigIntPrototypeToString => 400,
             Self::BigIntPrototypeToLocaleString => 401,
             Self::BigIntPrototypeValueOf => 402,
+            Self::TypedArrayFloat16Constructor => 403,
+            Self::TypedArrayBigInt64Constructor => 404,
+            Self::TypedArrayBigUint64Constructor => 405,
             Self::SharedArrayBufferConstructor => 378,
             Self::SharedArrayBufferPrototypeSlice => 379,
             Self::SharedArrayBufferPrototypeGrow => 380,
@@ -2844,6 +2859,9 @@ impl Intrinsic {
             Self::BigIntPrototypeToString => 400,
             Self::BigIntPrototypeToLocaleString => 401,
             Self::BigIntPrototypeValueOf => 402,
+            Self::TypedArrayFloat16Constructor => 403,
+            Self::TypedArrayBigInt64Constructor => 404,
+            Self::TypedArrayBigUint64Constructor => 405,
             Self::SharedArrayBufferConstructor => 378,
             Self::SharedArrayBufferPrototypeSlice => 379,
             Self::SharedArrayBufferPrototypeGrow => 380,
@@ -3258,6 +3276,9 @@ impl Intrinsic {
             400 => Some(Self::BigIntPrototypeToString),
             401 => Some(Self::BigIntPrototypeToLocaleString),
             402 => Some(Self::BigIntPrototypeValueOf),
+            403 => Some(Self::TypedArrayFloat16Constructor),
+            404 => Some(Self::TypedArrayBigInt64Constructor),
+            405 => Some(Self::TypedArrayBigUint64Constructor),
             378 => Some(Self::SharedArrayBufferConstructor),
             379 => Some(Self::SharedArrayBufferPrototypeSlice),
             380 => Some(Self::SharedArrayBufferPrototypeGrow),
@@ -3446,6 +3467,9 @@ impl Intrinsic {
             Self::TypedArrayUint32Constructor => "Uint32Array",
             Self::TypedArrayFloat32Constructor => "Float32Array",
             Self::TypedArrayFloat64Constructor => "Float64Array",
+            Self::TypedArrayFloat16Constructor => "Float16Array",
+            Self::TypedArrayBigInt64Constructor => "BigInt64Array",
+            Self::TypedArrayBigUint64Constructor => "BigUint64Array",
             Self::TypedArrayPrototypeLength => "get length",
             Self::TypedArrayPrototypeToStringTag => "get [Symbol.toStringTag]",
             Self::BigIntConstructor => "BigInt",
@@ -4412,6 +4436,9 @@ impl Intrinsic {
             | Self::TypedArrayUint32Constructor
             | Self::TypedArrayFloat32Constructor
             | Self::TypedArrayFloat64Constructor
+            | Self::TypedArrayFloat16Constructor
+            | Self::TypedArrayBigInt64Constructor
+            | Self::TypedArrayBigUint64Constructor
             // 25.4 gives the read-modify-writes three arguments and 25.4.16
             // the same.
             | Self::AtomicsAdd
@@ -5402,7 +5429,7 @@ pub enum BindingOutcome {
 }
 
 /// The rows of table 71.
-pub const TYPED_ARRAY_KINDS: usize = 9;
+pub const TYPED_ARRAY_KINDS: usize = 12;
 
 /// Each row of table 71: the constructor and the bytes one element takes.
 const TYPED_ARRAY_ROWS: [(Intrinsic, u8); TYPED_ARRAY_KINDS] = [
@@ -5415,6 +5442,9 @@ const TYPED_ARRAY_ROWS: [(Intrinsic, u8); TYPED_ARRAY_KINDS] = [
     (Intrinsic::TypedArrayUint32Constructor, 4),
     (Intrinsic::TypedArrayFloat32Constructor, 4),
     (Intrinsic::TypedArrayFloat64Constructor, 8),
+    (Intrinsic::TypedArrayFloat16Constructor, 2),
+    (Intrinsic::TypedArrayBigInt64Constructor, 8),
+    (Intrinsic::TypedArrayBigUint64Constructor, 8),
 ];
 
 /// The objects the intrinsic functions of a new Realm are installed on.
