@@ -2512,6 +2512,27 @@ impl RegisterVM {
             | Intrinsic::DataViewPrototypeSetFloat64 => {
                 self.call_data_view_intrinsic(intrinsic, &call, heap, realm)
             }
+            Intrinsic::SharedArrayBufferConstructor
+            | Intrinsic::SharedArrayBufferPrototypeSlice
+            | Intrinsic::SharedArrayBufferPrototypeGrow
+            | Intrinsic::SharedArrayBufferPrototypeByteLength
+            | Intrinsic::SharedArrayBufferPrototypeGrowable
+            | Intrinsic::SharedArrayBufferPrototypeMaxByteLength => {
+                self.call_shared_block_intrinsic(intrinsic, &call, heap, realm)
+            }
+            Intrinsic::AtomicsAdd
+            | Intrinsic::AtomicsAnd
+            | Intrinsic::AtomicsCompareExchange
+            | Intrinsic::AtomicsExchange
+            | Intrinsic::AtomicsIsLockFree
+            | Intrinsic::AtomicsLoad
+            | Intrinsic::AtomicsOr
+            | Intrinsic::AtomicsPause
+            | Intrinsic::AtomicsStore
+            | Intrinsic::AtomicsSub
+            | Intrinsic::AtomicsWait
+            | Intrinsic::AtomicsNotify
+            | Intrinsic::AtomicsXor => self.call_atomics_intrinsic(intrinsic, &call, heap, realm),
             Intrinsic::TypedArrayBase
             | Intrinsic::TypedArrayPrototypeBuffer
             | Intrinsic::TypedArrayPrototypeByteLength
@@ -3140,6 +3161,7 @@ impl RegisterVM {
                     | Intrinsic::TypedArrayUint32Constructor
                     | Intrinsic::TypedArrayFloat32Constructor
                     | Intrinsic::TypedArrayFloat64Constructor
+                    | Intrinsic::SharedArrayBufferConstructor
             )
         })
     }
@@ -10998,6 +11020,8 @@ impl RegisterVM {
             // 25.1.6 gives a block the `toString` of 20.1.3.6, and 25.3.4
             // gives a view of one the same.
             | ObjectKind::ArrayBuffer(_)
+            | ObjectKind::SharedArrayBuffer { .. }
+            | ObjectKind::Atomics
             | ObjectKind::DataView { .. }
             | ObjectKind::TypedArray { .. }
             | ObjectKind::Continuation { .. }
@@ -11283,6 +11307,10 @@ impl RegisterVM {
                 Err(VMError::Unsupported("a property of %RegExp.prototype%"))
             }
             // 28.1 gives `%Reflect%` more than this Realm builds.
+            // 25.4.14 answers a Promise, which this Realm has not built.
+            Some(ObjectKind::Atomics) if super::realm::atomics_owns(name) => {
+                Err(VMError::Unsupported("a property of %Atomics%"))
+            }
             Some(ObjectKind::Reflect) if super::realm::reflect_owns(name) => {
                 Err(VMError::Unsupported("a property of %Reflect%"))
             }
@@ -11890,6 +11918,10 @@ impl RegisterVM {
                 // through @@toStringTag, so the builtin tag is the ordinary
                 // one for both.
                 | ObjectKind::ArrayBuffer(_)
+                // 25.2.5 and 25.4.5 tag a shared block and the namespace of
+                // 25.4 the same way.
+                | ObjectKind::SharedArrayBuffer { .. }
+                | ObjectKind::Atomics
                 | ObjectKind::DataView { .. }
                 | ObjectKind::TypedArray { .. }
                 | ObjectKind::CollectionIterator { .. }
@@ -13722,8 +13754,8 @@ impl RegisterVM {
         let first = self.call_argument(call, 0, heap)?;
         let (buffer, offset, length) = if let Some(object) = first.as_object() {
             match heap.get_object(object).map(|entry| entry.kind.clone()) {
-                // 23.2.5.1.5 looks into the block it was given.
-                Some(ObjectKind::ArrayBuffer(_)) => {
+                // 23.2.5.1.5 looks into the block it was given, shared or not.
+                Some(ObjectKind::ArrayBuffer(_) | ObjectKind::SharedArrayBuffer { .. }) => {
                     let offset = Self::byte_index(self.call_argument(call, 1, heap)?, heap, realm)?;
                     // Step 4 refuses an offset the element size does not
                     // divide.
@@ -14134,11 +14166,416 @@ impl RegisterVM {
     }
 
     /// The bytes a block holds, or none where 25.1.3.4 detached it.
+    ///
+    /// A shared block of 25.2 answers its bytes as well, because 23.2 and 25.3
+    /// look into either one.
     fn array_buffer_bytes(object: ObjectRef, heap: &GenerationalHeap) -> Option<&[u8]> {
         match heap.get_object(object).map(|entry| &entry.kind) {
-            Some(ObjectKind::ArrayBuffer(Some(bytes))) => Some(bytes.as_slice()),
+            Some(
+                ObjectKind::ArrayBuffer(Some(bytes)) | ObjectKind::SharedArrayBuffer { bytes, .. },
+            ) => Some(bytes.as_slice()),
             _ => None,
         }
+    }
+
+    /// The bytes a block holds, for a write.
+    fn array_buffer_bytes_mut(
+        object: ObjectRef,
+        heap: &mut GenerationalHeap,
+    ) -> Option<&mut Vec<u8>> {
+        match heap.object_kind_mut(object).map(|entry| &mut entry.kind) {
+            Some(
+                ObjectKind::ArrayBuffer(Some(bytes)) | ObjectKind::SharedArrayBuffer { bytes, .. },
+            ) => Some(bytes),
+            _ => None,
+        }
+    }
+
+    /// The clauses of 25.2, which make a block no clause detaches.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a call without `new`
+    /// and for a receiver that is no shared block, and with a `RangeError` for
+    /// a length no block holds.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function keeps each clause of 25.2 beside the next"
+    )]
+    fn call_shared_block_intrinsic(
+        &self,
+        intrinsic: Intrinsic,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if intrinsic == Intrinsic::SharedArrayBufferConstructor {
+            // Step 1 of 25.2.3.1 refuses a call without `new`.
+            if call.construct.is_none() {
+                return Err(type_error(heap, realm, "a constructor called without new"));
+            }
+            let length = Self::byte_index(self.call_argument(call, 0, heap)?, heap, realm)?;
+            // Step 2 reads `maxByteLength` of the options, which makes the
+            // growable block of 25.2.2.1.
+            let options = self.call_argument(call, 1, heap)?;
+            let max = match options.as_object() {
+                Some(options) => {
+                    let key = PropertyKey::String(heap.strings.intern("maxByteLength")?);
+                    let held = heap
+                        .lookup_named(options, key)?
+                        .map(Self::plain_value)
+                        .transpose()?
+                        .unwrap_or(VALUE_UNDEFINED);
+                    if held.is_undefined() {
+                        None
+                    } else {
+                        Some(Self::byte_index(held, heap, realm)?)
+                    }
+                }
+                None => None,
+            };
+            // Step 7 of 25.2.2.1 refuses a length past the one it may grow to.
+            if max.is_some_and(|max| length > max) {
+                return Err(raise(
+                    heap,
+                    realm,
+                    super::realm::NativeErrorKind::RangeError,
+                    "the length is past the maxByteLength",
+                ));
+            }
+            return Self::allocate_shared_block(length, max, heap, realm);
+        }
+        let object = call
+            .receiver
+            .as_object()
+            .filter(|object| {
+                matches!(
+                    heap.get_object(*object).map(|entry| &entry.kind),
+                    Some(&ObjectKind::SharedArrayBuffer { .. })
+                )
+            })
+            .ok_or_else(|| {
+                type_error(
+                    heap,
+                    realm,
+                    "this value carries no SharedArrayBuffer of its own",
+                )
+            })?;
+        let Some(ObjectKind::SharedArrayBuffer { bytes, max }) =
+            heap.get_object(object).map(|entry| &entry.kind)
+        else {
+            return Err(VMError::TypeError);
+        };
+        let length = bytes.len();
+        let max = *max;
+        match intrinsic {
+            Intrinsic::SharedArrayBufferPrototypeByteLength => {
+                Ok(Value::from_f64(Self::whole(length)))
+            }
+            Intrinsic::SharedArrayBufferPrototypeGrowable => Ok(Value::from_bool(max.is_some())),
+            // 25.2.5.5 answers the length of a block that does not grow.
+            Intrinsic::SharedArrayBufferPrototypeMaxByteLength => Ok(Value::from_f64(
+                max.map_or_else(|| Self::whole(length), f64::from),
+            )),
+            Intrinsic::SharedArrayBufferPrototypeGrow => {
+                // Step 3 of 25.2.5.2 refuses a block that does not grow.
+                let Some(max) = max else {
+                    return Err(type_error(
+                        heap,
+                        realm,
+                        "the SharedArrayBuffer is not growable",
+                    ));
+                };
+                let wanted = Self::byte_index(self.call_argument(call, 0, heap)?, heap, realm)?;
+                // Step 7 refuses a length below the one it has and past the
+                // one it may reach.
+                if wanted < Self::whole(length) || wanted > f64::from(max) {
+                    return Err(raise(
+                        heap,
+                        realm,
+                        super::realm::NativeErrorKind::RangeError,
+                        "the length is no growth of this SharedArrayBuffer",
+                    ));
+                }
+                let wanted = usize::try_from(Self::integral(wanted)).unwrap_or(length);
+                if let Some(block) = Self::array_buffer_bytes_mut(object, heap) {
+                    block.resize(wanted, 0);
+                }
+                Ok(VALUE_UNDEFINED)
+            }
+            // 25.2.5.4 takes the same range as 25.1.6.7 and answers a block of
+            // its own.
+            _ => {
+                let relative = Self::number_argument(self.call_argument(call, 0, heap)?, heap)?;
+                let whole = Self::whole(length);
+                let first = Self::clamp_index(relative, whole);
+                let end = self.call_argument(call, 1, heap)?;
+                let last = if end.is_undefined() {
+                    whole
+                } else {
+                    Self::clamp_index(Self::number_argument(end, heap)?, whole)
+                };
+                let taken = Self::array_buffer_bytes(object, heap)
+                    .and_then(|bytes| {
+                        let first = usize::try_from(Self::integral(first)).ok()?;
+                        let last = usize::try_from(Self::integral(last)).ok()?;
+                        bytes.get(first..last.max(first)).map(<[u8]>::to_vec)
+                    })
+                    .unwrap_or_default();
+                let answer =
+                    Self::allocate_shared_block(Self::whole(taken.len()), None, heap, realm)?;
+                if let Some(target) = answer.as_object()
+                    && let Some(block) = Self::array_buffer_bytes_mut(target, heap)
+                {
+                    *block = taken;
+                }
+                Ok(answer)
+            }
+        }
+    }
+
+    /// The clauses of 25.4, which read and write one element of a row of
+    /// table 71 that holds an integer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a receiver that is
+    /// no integer array and for the wait of 25.4.13, which this agent cannot
+    /// suspend for, and with a `RangeError` for an index the array has not
+    /// got.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function keeps each clause of 25.4 beside the next"
+    )]
+    fn call_atomics_intrinsic(
+        &self,
+        intrinsic: Intrinsic,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        // 25.4.7 answers for a width and reads no array.
+        if intrinsic == Intrinsic::AtomicsIsLockFree {
+            let size = Self::number_argument(self.call_argument(call, 0, heap)?, heap)?;
+            return Ok(Value::from_bool(matches!(
+                Self::integral(size),
+                1 | 2 | 4 | 8
+            )));
+        }
+        // 25.4.10 takes an iteration count it may ignore and answers undefined.
+        if intrinsic == Intrinsic::AtomicsPause {
+            let hint = self.call_argument(call, 0, heap)?;
+            if !hint.is_undefined() {
+                let number = Self::number_argument(hint, heap)?;
+                #[expect(
+                    clippy::float_cmp,
+                    reason = "25.4.10 step 1 takes an integral Number and no other"
+                )]
+                if number.is_nan() || Self::round_toward(number, true) != number {
+                    return Err(type_error(
+                        heap,
+                        realm,
+                        "the iteration count of 25.4.10 is no integral Number",
+                    ));
+                }
+            }
+            return Ok(VALUE_UNDEFINED);
+        }
+        let array = self.call_argument(call, 0, heap)?;
+        let (buffer, offset, length, kind) = Self::integer_typed_array(array, heap, realm)?;
+        // 25.4.13 waits on a shared block only, and 25.4.16 answers zero for
+        // every other one.
+        let shared = matches!(
+            buffer
+                .as_object()
+                .and_then(|block| heap.get_object(block))
+                .map(|entry| &entry.kind),
+            Some(&ObjectKind::SharedArrayBuffer { .. })
+        );
+        if matches!(intrinsic, Intrinsic::AtomicsWait | Intrinsic::AtomicsNotify) && kind != 5 {
+            return Err(type_error(
+                heap,
+                realm,
+                "the array of 25.4.13 is no Int32Array",
+            ));
+        }
+        if intrinsic == Intrinsic::AtomicsWait && !shared {
+            return Err(type_error(
+                heap,
+                realm,
+                "the array of 25.4.13 looks into no SharedArrayBuffer",
+            ));
+        }
+        let index = Self::byte_index(self.call_argument(call, 1, heap)?, heap, realm)?;
+        if index >= f64::from(length) {
+            return Err(raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::RangeError,
+                "the index reaches past the TypedArray",
+            ));
+        }
+        if intrinsic == Intrinsic::AtomicsNotify {
+            let count = self.call_argument(call, 2, heap)?;
+            if !count.is_undefined() {
+                Self::number_argument(count, heap)?;
+            }
+            // 25.4.16 step 8: no agent of this embedding waits on a block.
+            return Ok(Value::from_smi(0));
+        }
+        if intrinsic == Intrinsic::AtomicsWait {
+            Self::number_argument(self.call_argument(call, 2, heap)?, heap)?;
+            Self::number_argument(self.call_argument(call, 3, heap)?, heap)?;
+            // 25.4.3.14 step 12: the agent of this embedding cannot suspend.
+            return Err(type_error(heap, realm, "this agent cannot suspend"));
+        }
+        let block = buffer.as_object().ok_or(VMError::TypeError)?;
+        let (size, form, _) = super::object::element_form(kind);
+        let slot = usize::try_from(Self::integral(index)).unwrap_or(0);
+        let start = (offset as usize).saturating_add(slot.saturating_mul(size));
+        let mut raw = [0u8; 8];
+        let Some(read) = Self::array_buffer_bytes(block, heap)
+            .and_then(|bytes| bytes.get(start..start.saturating_add(size)))
+        else {
+            return Err(type_error(heap, realm, "the ArrayBuffer is detached"));
+        };
+        raw.get_mut(..size)
+            .ok_or(VMError::TypeError)?
+            .copy_from_slice(read);
+        let held = super::object::read_element(raw, size, form, true);
+        if intrinsic == Intrinsic::AtomicsLoad {
+            return Ok(Value::from_f64(held));
+        }
+        // 25.4.5 reads the value it compares against before the one it writes.
+        let expected = if intrinsic == Intrinsic::AtomicsCompareExchange {
+            let wanted = Self::number_argument(self.call_argument(call, 2, heap)?, heap)?;
+            let wanted = super::object::read_element(
+                super::object::write_element(wanted, size, form, true),
+                size,
+                form,
+                true,
+            );
+            Some(wanted)
+        } else {
+            None
+        };
+        let slot = u16::from(intrinsic == Intrinsic::AtomicsCompareExchange).saturating_add(2);
+        let given = Self::number_argument(self.call_argument(call, slot, heap)?, heap)?;
+        let written = match intrinsic {
+            Intrinsic::AtomicsStore | Intrinsic::AtomicsExchange => given,
+            Intrinsic::AtomicsCompareExchange => {
+                if expected == Some(held) {
+                    given
+                } else {
+                    held
+                }
+            }
+            _ => Self::atomic_combine(intrinsic, held, given, size, form),
+        };
+        let bytes = super::object::write_element(written, size, form, true);
+        let end = start.saturating_add(size);
+        if let Some(target) = Self::array_buffer_bytes_mut(block, heap)
+            && let Some(slot) = target.get_mut(start..end)
+        {
+            slot.copy_from_slice(bytes.get(..size).unwrap_or_default());
+        }
+        // 25.4.11 answers the value it was given, and every other one the
+        // value the element held.
+        Ok(Value::from_f64(if intrinsic == Intrinsic::AtomicsStore {
+            given
+        } else {
+            held
+        }))
+    }
+
+    /// The bitwise operations of 25.4.3, 25.4.4, 25.4.9, 25.4.12 and 25.4.17,
+    /// on the width of the row rather than on the binary64.
+    fn atomic_combine(intrinsic: Intrinsic, held: f64, given: f64, size: usize, form: u8) -> f64 {
+        let left = u64::from_le_bytes(super::object::write_element(held, size, form, true));
+        let right = u64::from_le_bytes(super::object::write_element(given, size, form, true));
+        let combined = match intrinsic {
+            Intrinsic::AtomicsAnd => left & right,
+            Intrinsic::AtomicsOr => left | right,
+            Intrinsic::AtomicsXor => left ^ right,
+            Intrinsic::AtomicsSub => left.wrapping_sub(right),
+            _ => left.wrapping_add(right),
+        };
+        super::object::read_element(combined.to_le_bytes(), size, form, true)
+    }
+
+    /// `ValidateIntegerTypedArray` of 25.4.2.1, which answers the block the
+    /// array looks into, where, how long it is and which row it stands in.
+    fn integer_typed_array(
+        array: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(Value, u32, u32, u8), VMError> {
+        let Some(&ObjectKind::TypedArray {
+            buffer,
+            offset,
+            length,
+            kind,
+        }) = array
+            .as_object()
+            .and_then(|object| heap.get_object(object))
+            .map(|entry| &entry.kind)
+        else {
+            return Err(type_error(
+                heap,
+                realm,
+                "the value of 25.4.2.1 is no TypedArray",
+            ));
+        };
+        // Table 71 without the clamped row and without the two floats.
+        if matches!(kind, 2 | 7 | 8) {
+            return Err(type_error(
+                heap,
+                realm,
+                "the TypedArray of 25.4.2.1 holds no integer",
+            ));
+        }
+        Ok((buffer, offset, length, kind))
+    }
+
+    /// `AllocateSharedArrayBuffer` of 25.2.2.1.
+    fn allocate_shared_block(
+        length: f64,
+        max: Option<f64>,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let held = max.unwrap_or(length);
+        let (Ok(length), Ok(held)) = (
+            usize::try_from(Self::integral(length)),
+            usize::try_from(Self::integral(held)),
+        ) else {
+            return Err(raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::RangeError,
+                "the length is no index",
+            ));
+        };
+        // Step 5 refuses a block the embedding cannot hold.
+        if held > 1 << 28 {
+            return Err(raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::RangeError,
+                "the SharedArrayBuffer is too large",
+            ));
+        }
+        let prototype = realm.shared_array_buffer_prototype(heap)?;
+        let shape = heap.shapes.root_shape();
+        let object = heap.allocate_object(shape, prototype)?;
+        heap.set_object_kind(
+            object,
+            ObjectKind::SharedArrayBuffer {
+                bytes: alloc::vec![0u8; length],
+                max: max.map(|_| u32::try_from(held).unwrap_or(u32::MAX)),
+            },
+        )?;
+        Ok(Value::from_object(object))
     }
 
     /// A length as the Number 25.1 answers for it.

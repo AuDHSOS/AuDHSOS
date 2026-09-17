@@ -137,6 +137,16 @@ pub enum ObjectKind {
     /// The `[[ArrayBufferData]]` of 25.1.5, whose bytes are the block 25.1.3.1
     /// created; `None` is the detached block of 25.1.3.4.
     ArrayBuffer(Option<alloc::vec::Vec<u8>>),
+    /// The block of 25.2, which 25.2.3.1 allocates and no clause detaches.
+    SharedArrayBuffer {
+        /// `[[ArrayBufferData]]`.
+        bytes: Vec<u8>,
+        /// `[[ArrayBufferMaxByteLength]]`, absent for a block 25.2.3.1 made
+        /// without one, which never grows.
+        max: Option<u32>,
+    },
+    /// The namespace object of 25.4.
+    Atomics,
     /// The `[[TypedArrayName]]` and the rest of 23.2.5: the block the array
     /// looks into, where, and which element kind 23.2.5.1 gave it.
     TypedArray {

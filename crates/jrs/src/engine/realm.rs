@@ -1060,6 +1060,44 @@ pub enum Intrinsic {
     TypedArrayPrototypeLength,
     /// `get [@@toStringTag]`, 23.2.3.38.
     TypedArrayPrototypeToStringTag,
+    /// `SharedArrayBuffer`, 25.2.3.1.
+    SharedArrayBufferConstructor,
+    /// `slice`, 25.2.5.4.
+    SharedArrayBufferPrototypeSlice,
+    /// `grow`, 25.2.5.2.
+    SharedArrayBufferPrototypeGrow,
+    /// `get byteLength`, 25.2.5.1.
+    SharedArrayBufferPrototypeByteLength,
+    /// `get growable`, 25.2.5.3.
+    SharedArrayBufferPrototypeGrowable,
+    /// `get maxByteLength`, 25.2.5.5.
+    SharedArrayBufferPrototypeMaxByteLength,
+    /// `add`, 25.4.3.
+    AtomicsAdd,
+    /// `and`, 25.4.4.
+    AtomicsAnd,
+    /// `compareExchange`, 25.4.5.
+    AtomicsCompareExchange,
+    /// `exchange`, 25.4.6.
+    AtomicsExchange,
+    /// `isLockFree`, 25.4.7.
+    AtomicsIsLockFree,
+    /// `load`, 25.4.8.
+    AtomicsLoad,
+    /// `or`, 25.4.9.
+    AtomicsOr,
+    /// `pause`, 25.4.10.
+    AtomicsPause,
+    /// `store`, 25.4.11.
+    AtomicsStore,
+    /// `sub`, 25.4.12.
+    AtomicsSub,
+    /// `wait`, 25.4.13.
+    AtomicsWait,
+    /// `notify`, 25.4.16.
+    AtomicsNotify,
+    /// `xor`, 25.4.17.
+    AtomicsXor,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -1121,6 +1159,10 @@ pub enum IntrinsicHolder {
     DataViewPrototype,
     /// `%TypedArray.prototype%`, which carries what 23.2.3 gives it.
     TypedArrayPrototype,
+    /// `%SharedArrayBuffer.prototype%`, which carries what 25.2.5 gives it.
+    SharedArrayBufferPrototype,
+    /// The namespace object of 25.4.
+    Atomics,
     /// `%WeakMap.prototype%`, which carries the methods 24.3.3 gives it.
     WeakMapPrototype,
     /// `%WeakSet.prototype%`, which carries the methods 24.4.3 gives it.
@@ -1139,7 +1181,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 378] = [
+    pub const ALL: [Self; 397] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1518,6 +1560,25 @@ impl Intrinsic {
         Self::TypedArrayPrototypeByteOffset,
         Self::TypedArrayPrototypeLength,
         Self::TypedArrayPrototypeToStringTag,
+        Self::SharedArrayBufferConstructor,
+        Self::SharedArrayBufferPrototypeSlice,
+        Self::SharedArrayBufferPrototypeGrow,
+        Self::SharedArrayBufferPrototypeByteLength,
+        Self::SharedArrayBufferPrototypeGrowable,
+        Self::SharedArrayBufferPrototypeMaxByteLength,
+        Self::AtomicsAdd,
+        Self::AtomicsAnd,
+        Self::AtomicsCompareExchange,
+        Self::AtomicsExchange,
+        Self::AtomicsIsLockFree,
+        Self::AtomicsLoad,
+        Self::AtomicsOr,
+        Self::AtomicsPause,
+        Self::AtomicsStore,
+        Self::AtomicsSub,
+        Self::AtomicsWait,
+        Self::AtomicsNotify,
+        Self::AtomicsXor,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -1734,6 +1795,26 @@ impl Intrinsic {
             Self::DateNow | Self::DateUtc | Self::DateParse => IntrinsicHolder::DateConstructor,
             Self::ArrayBufferIsView => IntrinsicHolder::ArrayBufferConstructor,
             Self::ArrayBufferPrototypeSlice => IntrinsicHolder::ArrayBufferPrototype,
+            Self::SharedArrayBufferPrototypeSlice
+            | Self::SharedArrayBufferPrototypeGrow
+            | Self::SharedArrayBufferPrototypeByteLength
+            | Self::SharedArrayBufferPrototypeGrowable
+            | Self::SharedArrayBufferPrototypeMaxByteLength => {
+                IntrinsicHolder::SharedArrayBufferPrototype
+            }
+            Self::AtomicsAdd
+            | Self::AtomicsAnd
+            | Self::AtomicsCompareExchange
+            | Self::AtomicsExchange
+            | Self::AtomicsIsLockFree
+            | Self::AtomicsLoad
+            | Self::AtomicsOr
+            | Self::AtomicsPause
+            | Self::AtomicsStore
+            | Self::AtomicsSub
+            | Self::AtomicsWait
+            | Self::AtomicsNotify
+            | Self::AtomicsXor => IntrinsicHolder::Atomics,
             Self::DataViewPrototypeGetInt8
             | Self::DataViewPrototypeSetInt8
             | Self::DataViewPrototypeGetUint8
@@ -1852,6 +1933,9 @@ impl Intrinsic {
             | Self::DateConstructor
             | Self::ArrayBufferConstructor
             | Self::DataViewConstructor
+            // 25.2.4 gives the global object the constructor of the shared
+            // block.
+            | Self::SharedArrayBufferConstructor
             // 23.2.6 gives the global object the nine of table 71.
             | Self::TypedArrayInt8Constructor
             | Self::TypedArrayUint8Constructor
@@ -2315,6 +2399,25 @@ impl Intrinsic {
             Self::TypedArrayPrototypeByteOffset => 375,
             Self::TypedArrayPrototypeLength => 376,
             Self::TypedArrayPrototypeToStringTag => 377,
+            Self::SharedArrayBufferConstructor => 378,
+            Self::SharedArrayBufferPrototypeSlice => 379,
+            Self::SharedArrayBufferPrototypeGrow => 380,
+            Self::SharedArrayBufferPrototypeByteLength => 381,
+            Self::SharedArrayBufferPrototypeGrowable => 382,
+            Self::SharedArrayBufferPrototypeMaxByteLength => 383,
+            Self::AtomicsAdd => 384,
+            Self::AtomicsAnd => 385,
+            Self::AtomicsCompareExchange => 386,
+            Self::AtomicsExchange => 387,
+            Self::AtomicsIsLockFree => 388,
+            Self::AtomicsLoad => 389,
+            Self::AtomicsOr => 390,
+            Self::AtomicsPause => 391,
+            Self::AtomicsStore => 392,
+            Self::AtomicsSub => 393,
+            Self::AtomicsWait => 394,
+            Self::AtomicsNotify => 395,
+            Self::AtomicsXor => 396,
         }
     }
 
@@ -2703,6 +2806,25 @@ impl Intrinsic {
             Self::TypedArrayPrototypeByteOffset => 375,
             Self::TypedArrayPrototypeLength => 376,
             Self::TypedArrayPrototypeToStringTag => 377,
+            Self::SharedArrayBufferConstructor => 378,
+            Self::SharedArrayBufferPrototypeSlice => 379,
+            Self::SharedArrayBufferPrototypeGrow => 380,
+            Self::SharedArrayBufferPrototypeByteLength => 381,
+            Self::SharedArrayBufferPrototypeGrowable => 382,
+            Self::SharedArrayBufferPrototypeMaxByteLength => 383,
+            Self::AtomicsAdd => 384,
+            Self::AtomicsAnd => 385,
+            Self::AtomicsCompareExchange => 386,
+            Self::AtomicsExchange => 387,
+            Self::AtomicsIsLockFree => 388,
+            Self::AtomicsLoad => 389,
+            Self::AtomicsOr => 390,
+            Self::AtomicsPause => 391,
+            Self::AtomicsStore => 392,
+            Self::AtomicsSub => 393,
+            Self::AtomicsWait => 394,
+            Self::AtomicsNotify => 395,
+            Self::AtomicsXor => 396,
         }
     }
 
@@ -3092,6 +3214,25 @@ impl Intrinsic {
             375 => Some(Self::TypedArrayPrototypeByteOffset),
             376 => Some(Self::TypedArrayPrototypeLength),
             377 => Some(Self::TypedArrayPrototypeToStringTag),
+            378 => Some(Self::SharedArrayBufferConstructor),
+            379 => Some(Self::SharedArrayBufferPrototypeSlice),
+            380 => Some(Self::SharedArrayBufferPrototypeGrow),
+            381 => Some(Self::SharedArrayBufferPrototypeByteLength),
+            382 => Some(Self::SharedArrayBufferPrototypeGrowable),
+            383 => Some(Self::SharedArrayBufferPrototypeMaxByteLength),
+            384 => Some(Self::AtomicsAdd),
+            385 => Some(Self::AtomicsAnd),
+            386 => Some(Self::AtomicsCompareExchange),
+            387 => Some(Self::AtomicsExchange),
+            388 => Some(Self::AtomicsIsLockFree),
+            389 => Some(Self::AtomicsLoad),
+            390 => Some(Self::AtomicsOr),
+            391 => Some(Self::AtomicsPause),
+            392 => Some(Self::AtomicsStore),
+            393 => Some(Self::AtomicsSub),
+            394 => Some(Self::AtomicsWait),
+            395 => Some(Self::AtomicsNotify),
+            396 => Some(Self::AtomicsXor),
             _ => None,
         }
     }
@@ -3145,7 +3286,7 @@ impl Intrinsic {
             Self::StringPrototypeLink => "link",
             Self::StringPrototypeSmall => "small",
             Self::StringPrototypeStrike => "strike",
-            Self::StringPrototypeSub => "sub",
+            Self::StringPrototypeSub | Self::AtomicsSub => "sub",
             Self::StringPrototypeSup => "sup",
             Self::ObjectGetOwnPropertySymbols => "getOwnPropertySymbols",
             Self::ObjectGetOwnPropertyDescriptors => "getOwnPropertyDescriptors",
@@ -3220,10 +3361,12 @@ impl Intrinsic {
             Self::ArrayBufferIsView => "isView",
             Self::ArrayBufferPrototypeByteLength
             | Self::DataViewPrototypeByteLength
-            | Self::TypedArrayPrototypeByteLength => "get byteLength",
+            | Self::TypedArrayPrototypeByteLength
+            | Self::SharedArrayBufferPrototypeByteLength => "get byteLength",
             Self::ArrayBufferPrototypeDetached => "get detached",
             Self::ArrayBufferPrototypeResizable => "get resizable",
-            Self::ArrayBufferPrototypeMaxByteLength => "get maxByteLength",
+            Self::ArrayBufferPrototypeMaxByteLength
+            | Self::SharedArrayBufferPrototypeMaxByteLength => "get maxByteLength",
             Self::DataViewConstructor => "DataView",
             Self::DataViewPrototypeBuffer | Self::TypedArrayPrototypeBuffer => "get buffer",
             Self::DataViewPrototypeByteOffset | Self::TypedArrayPrototypeByteOffset => {
@@ -3257,6 +3400,20 @@ impl Intrinsic {
             Self::TypedArrayFloat64Constructor => "Float64Array",
             Self::TypedArrayPrototypeLength => "get length",
             Self::TypedArrayPrototypeToStringTag => "get [Symbol.toStringTag]",
+            Self::SharedArrayBufferConstructor => "SharedArrayBuffer",
+            Self::SharedArrayBufferPrototypeGrow => "grow",
+            Self::SharedArrayBufferPrototypeGrowable => "get growable",
+            Self::AtomicsAnd => "and",
+            Self::AtomicsCompareExchange => "compareExchange",
+            Self::AtomicsExchange => "exchange",
+            Self::AtomicsIsLockFree => "isLockFree",
+            Self::AtomicsLoad => "load",
+            Self::AtomicsOr => "or",
+            Self::AtomicsPause => "pause",
+            Self::AtomicsStore => "store",
+            Self::AtomicsWait => "wait",
+            Self::AtomicsNotify => "notify",
+            Self::AtomicsXor => "xor",
             Self::DatePrototypeSetMilliseconds => "setMilliseconds",
             Self::DatePrototypeSetUtcMilliseconds => "setUTCMilliseconds",
             Self::DatePrototypeSetSeconds => "setSeconds",
@@ -3284,7 +3441,7 @@ impl Intrinsic {
             Self::MapPrototypeClear | Self::SetPrototypeClear => "clear",
             Self::MapPrototypeSize | Self::SetPrototypeSize => "get size",
             Self::SetConstructor => "Set",
-            Self::SetPrototypeAdd | Self::WeakSetPrototypeAdd => "add",
+            Self::SetPrototypeAdd | Self::WeakSetPrototypeAdd | Self::AtomicsAdd => "add",
             Self::SetPrototypeUnion => "union",
             Self::SetPrototypeIntersection => "intersection",
             Self::SetPrototypeDifference => "difference",
@@ -3463,7 +3620,8 @@ impl Intrinsic {
             Self::ArrayPrototypeReverse => "reverse",
             Self::StringPrototypeSlice
             | Self::ArrayPrototypeSlice
-            | Self::ArrayBufferPrototypeSlice => "slice",
+            | Self::ArrayBufferPrototypeSlice
+            | Self::SharedArrayBufferPrototypeSlice => "slice",
         }
     }
 
@@ -3977,6 +4135,10 @@ impl Intrinsic {
             | Self::TypedArrayPrototypeByteOffset
             | Self::TypedArrayPrototypeLength
             | Self::TypedArrayPrototypeToStringTag
+            | Self::SharedArrayBufferPrototypeByteLength
+            | Self::SharedArrayBufferPrototypeGrowable
+            | Self::SharedArrayBufferPrototypeMaxByteLength
+            | Self::AtomicsPause
             | Self::TypedArrayBase
             | Self::MapIteratorPrototypeNext
             | Self::SetIteratorPrototypeNext => 0,
@@ -4172,7 +4334,11 @@ impl Intrinsic {
             | Self::StringPrototypeFontcolor
             | Self::StringPrototypeFontsize
             | Self::StringPrototypeLink
-            | Self::Print => 1,
+            | Self::Print
+            // 25.2.4 and 25.4.7 each take one argument.
+            | Self::SharedArrayBufferConstructor
+            | Self::SharedArrayBufferPrototypeGrow
+            | Self::AtomicsIsLockFree => 1,
             Self::ObjectDefineProperty
             | Self::ReflectDefineProperty
             | Self::ReflectApply
@@ -4190,7 +4356,17 @@ impl Intrinsic {
             | Self::TypedArrayInt32Constructor
             | Self::TypedArrayUint32Constructor
             | Self::TypedArrayFloat32Constructor
-            | Self::TypedArrayFloat64Constructor => 3,
+            | Self::TypedArrayFloat64Constructor
+            // 25.4 gives the read-modify-writes three arguments and 25.4.16
+            // the same.
+            | Self::AtomicsAdd
+            | Self::AtomicsAnd
+            | Self::AtomicsExchange
+            | Self::AtomicsOr
+            | Self::AtomicsStore
+            | Self::AtomicsSub
+            | Self::AtomicsXor
+            | Self::AtomicsNotify => 3,
             Self::MathPow
             | Self::ObjectGetOwnPropertyDescriptor
             | Self::ObjectCreate
@@ -4244,10 +4420,17 @@ impl Intrinsic {
             | Self::DataViewPrototypeSetUint32
             | Self::DataViewPrototypeSetFloat32
             | Self::DataViewPrototypeSetFloat64
-            | Self::PromisePrototypeThen => 2,
+            | Self::PromisePrototypeThen
+            // 25.2.5.4 and 25.4.8 each take two.
+            | Self::SharedArrayBufferPrototypeSlice
+            | Self::AtomicsLoad => 2,
             // 21.4.2.1 and 21.4.3.4 take a year, a month, a day, an hour, a
             // minute, a second and a millisecond.
-            Self::DatePrototypeSetHours | Self::DatePrototypeSetUtcHours => 4,
+            Self::DatePrototypeSetHours
+            | Self::DatePrototypeSetUtcHours
+            // 25.4.5 and 25.4.13 each take four.
+            | Self::AtomicsCompareExchange
+            | Self::AtomicsWait => 4,
             Self::DateConstructor | Self::DateUtc => 7,
         }
     }
@@ -4812,6 +4995,30 @@ pub fn typed_array_prototype_owns(name: &[u16]) -> bool {
     wrapper_prototype_owns(&TYPED_ARRAY_PROTOTYPE_PROPERTIES, name)
 }
 
+/// The property names 25.4 gives its namespace object.
+pub const ATOMICS_PROPERTIES: [&str; 14] = [
+    "add",
+    "and",
+    "compareExchange",
+    "exchange",
+    "isLockFree",
+    "load",
+    "notify",
+    "or",
+    "pause",
+    "store",
+    "sub",
+    "wait",
+    "waitAsync",
+    "xor",
+];
+
+/// Whether the namespace object of 25.4 owns a property of this name.
+#[must_use]
+pub fn atomics_owns(name: &[u16]) -> bool {
+    wrapper_prototype_owns(&ATOMICS_PROPERTIES, name)
+}
+
 /// The property names 27.2.5 gives `%Promise.prototype%`.
 pub const PROMISE_PROTOTYPE_PROPERTIES: [&str; 4] = ["catch", "constructor", "finally", "then"];
 
@@ -5106,6 +5313,7 @@ pub struct Realm {
     data_view_prototype: Root,
     typed_array_prototype: Root,
     typed_array_prototypes: [Root; TYPED_ARRAY_KINDS],
+    shared_array_buffer_prototype: Root,
     weak_map_prototype: Root,
     weak_set_prototype: Root,
     map_iterator_prototype: Root,
@@ -5174,6 +5382,8 @@ struct Holders {
     array_buffer_prototype: Root,
     data_view_prototype: Root,
     typed_array_prototype: Root,
+    shared_array_buffer_prototype: Root,
+    atomics: Root,
     weak_map_prototype: Root,
     weak_set_prototype: Root,
     map_iterator_prototype: Root,
@@ -5285,6 +5495,12 @@ impl Realm {
         let data_view_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
         let data_view_prototype = heap.push_root(Value::from_object(data_view_prototype))?;
 
+        // 25.2.5: %SharedArrayBuffer.prototype% is an ordinary object and no
+        // block.
+        let shared_array_buffer_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
+        let shared_array_buffer_prototype =
+            heap.push_root(Value::from_object(shared_array_buffer_prototype))?;
+
         // 23.2.3: %TypedArray.prototype% is an ordinary object, and 23.2.7
         // gives each row of table 71 a prototype that inherits from it.
         let typed_array_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
@@ -5357,6 +5573,11 @@ impl Realm {
         let reflect = heap.allocate_immortal_object(root_shape, ordinary)?;
         heap.set_object_kind(reflect, super::object::ObjectKind::Reflect)?;
         let reflect = heap.push_root(Value::from_object(reflect))?;
+        // 25.4 is an ordinary object like %Math%, and 25.4 gives it to the
+        // global object under its own name.
+        let atomics = heap.allocate_immortal_object(root_shape, ordinary)?;
+        heap.set_object_kind(atomics, super::object::ObjectKind::Atomics)?;
+        let atomics = heap.push_root(Value::from_object(atomics))?;
         // 25.5 is an ordinary object like %Math%, and 19.4.2 gives it to the
         // global object under its own name.
         let json = heap.allocate_immortal_object(root_shape, ordinary)?;
@@ -5386,6 +5607,8 @@ impl Realm {
                 array_buffer_prototype,
                 data_view_prototype,
                 typed_array_prototype,
+                shared_array_buffer_prototype,
+                atomics,
                 weak_map_prototype,
                 weak_set_prototype,
                 map_iterator_prototype,
@@ -5410,6 +5633,10 @@ impl Realm {
             (Intrinsic::ArrayBufferConstructor, array_buffer_prototype),
             (Intrinsic::DataViewConstructor, data_view_prototype),
             (Intrinsic::TypedArrayBase, typed_array_prototype),
+            (
+                Intrinsic::SharedArrayBufferConstructor,
+                shared_array_buffer_prototype,
+            ),
             (Intrinsic::WeakMapConstructor, weak_map_prototype),
             (Intrinsic::WeakSetConstructor, weak_set_prototype),
         ] {
@@ -5434,6 +5661,7 @@ impl Realm {
         Self::define_array_buffer_getters(heap, &intrinsics, array_buffer_prototype)?;
         Self::define_data_view_getters(heap, &intrinsics, data_view_prototype)?;
         Self::define_typed_array_getters(heap, &intrinsics, typed_array_prototype)?;
+        Self::define_shared_block_getters(heap, &intrinsics, shared_array_buffer_prototype)?;
         Self::define_trim_aliases(heap, &intrinsics, string_prototype, date_prototype)?;
         Self::define_unscopables(heap, array_prototype)?;
         Self::define_to_string_tags(
@@ -5451,6 +5679,8 @@ impl Realm {
                 (set_iterator_prototype, "Set Iterator"),
                 (array_buffer_prototype, "ArrayBuffer"),
                 (data_view_prototype, "DataView"),
+                (shared_array_buffer_prototype, "SharedArrayBuffer"),
+                (atomics, "Atomics"),
                 (weak_map_prototype, "WeakMap"),
                 (weak_set_prototype, "WeakSet"),
             ],
@@ -5461,7 +5691,12 @@ impl Realm {
         let global = Self::rooted(heap, global_object)?
             .as_object()
             .ok_or(HeapError::InvalidReference)?;
-        for (label, namespace) in [("Math", math), ("Reflect", reflect), ("JSON", json)] {
+        for (label, namespace) in [
+            ("Math", math),
+            ("Reflect", reflect),
+            ("JSON", json),
+            ("Atomics", atomics),
+        ] {
             let name = PropertyKey::String(heap.strings.intern(label)?);
             let value = Self::rooted(heap, namespace)?;
             heap.define_own_named(global, name, value, builtin_data())?;
@@ -5500,6 +5735,7 @@ impl Realm {
             data_view_prototype,
             typed_array_prototype,
             typed_array_prototypes,
+            shared_array_buffer_prototype,
             weak_map_prototype,
             weak_set_prototype,
             map_iterator_prototype,
@@ -6257,6 +6493,61 @@ impl Realm {
         Ok(())
     }
 
+    /// The three accessors of 25.2.5.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    fn define_shared_block_getters(
+        heap: &mut GenerationalHeap,
+        intrinsics: &[Root],
+        shared_array_buffer_prototype: Root,
+    ) -> Result<(), HeapError> {
+        let holder = Self::rooted(heap, shared_array_buffer_prototype)?
+            .as_object()
+            .ok_or(HeapError::InvalidReference)?;
+        for (intrinsic, name) in [
+            (
+                Intrinsic::SharedArrayBufferPrototypeByteLength,
+                "byteLength",
+            ),
+            (Intrinsic::SharedArrayBufferPrototypeGrowable, "growable"),
+            (
+                Intrinsic::SharedArrayBufferPrototypeMaxByteLength,
+                "maxByteLength",
+            ),
+        ] {
+            let getter = Self::rooted(
+                heap,
+                *intrinsics
+                    .get(intrinsic.index())
+                    .ok_or(HeapError::InvalidReference)?,
+            )?;
+            let shape = heap.shapes.root_shape();
+            let pair = heap.allocate_immortal_object(shape, super::value::VALUE_NULL)?;
+            heap.set_object_kind(
+                pair,
+                super::object::ObjectKind::Accessor {
+                    get: getter,
+                    set: super::value::VALUE_UNDEFINED,
+                },
+            )?;
+            let key = PropertyKey::String(heap.strings.intern(name)?);
+            heap.define_own_named(
+                holder,
+                key,
+                Value::from_object(pair),
+                PropertyFlags {
+                    writable: false,
+                    enumerable: false,
+                    configurable: true,
+                    is_accessor: true,
+                },
+            )?;
+        }
+        Ok(())
+    }
+
     /// 23.2.6 and 23.2.7: each row of table 71 gets its prototype, inherits
     /// from `%TypedArray%` and carries `BYTES_PER_ELEMENT` on both objects.
     ///
@@ -6422,8 +6713,9 @@ impl Realm {
             Intrinsic::ArrayConstructor,
             Intrinsic::RegExpConstructor,
             Intrinsic::PromiseConstructor,
-            // 25.1.5.2 gives `%ArrayBuffer%` the same accessor.
+            // 25.1.5.2 and 25.2.4.2 give the two blocks the same accessor.
             Intrinsic::ArrayBufferConstructor,
+            Intrinsic::SharedArrayBufferConstructor,
         ] {
             let holder = Self::rooted(
                 heap,
@@ -6576,6 +6868,10 @@ impl Realm {
                 IntrinsicHolder::TypedArrayPrototype => {
                     Self::rooted(heap, holders.typed_array_prototype)?
                 }
+                IntrinsicHolder::SharedArrayBufferPrototype => {
+                    Self::rooted(heap, holders.shared_array_buffer_prototype)?
+                }
+                IntrinsicHolder::Atomics => Self::rooted(heap, holders.atomics)?,
                 IntrinsicHolder::ArrayBufferConstructor => Self::rooted(
                     heap,
                     *intrinsics
@@ -6676,6 +6972,9 @@ impl Realm {
                     | Intrinsic::TypedArrayPrototypeByteOffset
                     | Intrinsic::TypedArrayPrototypeLength
                     | Intrinsic::TypedArrayPrototypeToStringTag
+                    | Intrinsic::SharedArrayBufferPrototypeByteLength
+                    | Intrinsic::SharedArrayBufferPrototypeGrowable
+                    | Intrinsic::SharedArrayBufferPrototypeMaxByteLength
                     // 24.1.3.10, 24.2.3.14, 25.1.6 and 25.3.4 give accessors,
                     // which the Realm installs beside the methods.
                     | Intrinsic::MapPrototypeSize
@@ -6996,6 +7295,18 @@ impl Realm {
     /// Returns [`HeapError::InvalidReference`] for a stale root.
     pub fn typed_array_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
         Self::rooted(heap, self.typed_array_prototype)
+    }
+
+    /// `%SharedArrayBuffer.prototype%`, 25.2.5.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale root.
+    pub fn shared_array_buffer_prototype(
+        &self,
+        heap: &GenerationalHeap,
+    ) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.shared_array_buffer_prototype)
     }
 
     /// The prototype 23.2.7 gives the row of table 71 the index names.

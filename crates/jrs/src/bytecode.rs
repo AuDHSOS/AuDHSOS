@@ -8852,7 +8852,10 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::SetPrototypeIsSubsetOf
         | crate::engine::realm::Intrinsic::SetPrototypeIsSupersetOf
         | crate::engine::realm::Intrinsic::SetPrototypeIsDisjointFrom
-        | crate::engine::realm::Intrinsic::ArrayIsArray => RegisterType::Boolean,
+        | crate::engine::realm::Intrinsic::ArrayIsArray
+        // 25.2.5.3 and 25.4.7 answer a Boolean.
+        | crate::engine::realm::Intrinsic::SharedArrayBufferPrototypeGrowable
+        | crate::engine::realm::Intrinsic::AtomicsIsLockFree => RegisterType::Boolean,
         // 22.1.1.1 answers a String whichever argument it took; `new` answers
         // no value at all, because the exotic object it would make is a gap.
         crate::engine::realm::Intrinsic::StringConstructor
@@ -9092,6 +9095,11 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // 23.2.6 answers the array it made, 23.2.3.1 the block it looks into,
         // and 23.2.1.1 refuses every call.
         | crate::engine::realm::Intrinsic::TypedArrayBase
+        // 25.2.4 and 25.2.5.4 answer a block, and 25.4.13 one of the
+        // three texts of table 76.
+        | crate::engine::realm::Intrinsic::SharedArrayBufferConstructor
+        | crate::engine::realm::Intrinsic::SharedArrayBufferPrototypeSlice
+        | crate::engine::realm::Intrinsic::AtomicsWait
         | crate::engine::realm::Intrinsic::TypedArrayPrototypeToStringTag
         | crate::engine::realm::Intrinsic::TypedArrayPrototypeBuffer
         | crate::engine::realm::Intrinsic::TypedArrayInt8Constructor
@@ -9129,7 +9137,10 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         }
         // 24.1.3.1 and 24.2.3.2 answer undefined.
         crate::engine::realm::Intrinsic::MapPrototypeClear
-        | crate::engine::realm::Intrinsic::SetPrototypeClear => RegisterType::Undefined,
+        | crate::engine::realm::Intrinsic::SetPrototypeClear
+        // 25.2.5.2 and 25.4.10 answer undefined.
+        | crate::engine::realm::Intrinsic::SharedArrayBufferPrototypeGrow
+        | crate::engine::realm::Intrinsic::AtomicsPause => RegisterType::Undefined,
         // 22.2.6.12 answers the index of the match.
         crate::engine::realm::Intrinsic::RegExpPrototypeSearch
         | crate::engine::realm::Intrinsic::StringPrototypeCharCodeAt
@@ -9241,7 +9252,21 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // 24.1.3.10 and 24.2.3.14 answer the count of entries.
         | crate::engine::realm::Intrinsic::MapPrototypeSize
         | crate::engine::realm::Intrinsic::SetPrototypeSize
-        | crate::engine::realm::Intrinsic::NumberConstructor => RegisterType::Number,
+        | crate::engine::realm::Intrinsic::NumberConstructor
+        // 25.2.5.1 and 25.2.5.5 answer a length, and the reads and
+        // writes of 25.4 the element of a row of table 71.
+        | crate::engine::realm::Intrinsic::SharedArrayBufferPrototypeByteLength
+        | crate::engine::realm::Intrinsic::SharedArrayBufferPrototypeMaxByteLength
+        | crate::engine::realm::Intrinsic::AtomicsAdd
+        | crate::engine::realm::Intrinsic::AtomicsAnd
+        | crate::engine::realm::Intrinsic::AtomicsCompareExchange
+        | crate::engine::realm::Intrinsic::AtomicsExchange
+        | crate::engine::realm::Intrinsic::AtomicsLoad
+        | crate::engine::realm::Intrinsic::AtomicsOr
+        | crate::engine::realm::Intrinsic::AtomicsStore
+        | crate::engine::realm::Intrinsic::AtomicsSub
+        | crate::engine::realm::Intrinsic::AtomicsXor
+        | crate::engine::realm::Intrinsic::AtomicsNotify => RegisterType::Number,
         // 22.1.3.1 and 22.1.3.4 answer undefined for an index outside the String.
         crate::engine::realm::Intrinsic::StringPrototypeAt
         | crate::engine::realm::Intrinsic::StringPrototypeCodePointAt

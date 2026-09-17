@@ -9957,3 +9957,101 @@ fn the_array_of_23_2_keeps_its_elements_in_the_block() -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[test]
+fn the_shared_block_of_25_2_and_the_atomics_of_25_4_read_one_element() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // Neither clause stands on the stack backend, so only the engine answers.
+    for (source, answer) in [
+        // 25.2.5.1, 25.2.5.3 and 25.2.5.5: a block without a maxByteLength
+        // answers its own length for that name.
+        (
+            "var b=new SharedArrayBuffer(8);''+b.byteLength+' '+b.growable+' '+b.maxByteLength",
+            "8 false 8",
+        ),
+        (
+            "var b=new SharedArrayBuffer(4,{maxByteLength:16});b.grow(8);''+b.growable+' '+b.byteLength+' '+b.maxByteLength",
+            "true 8 16",
+        ),
+        // 25.2.5.2 refuses a block that does not grow, and a length outside
+        // the one it may reach.
+        (
+            "var r;try{new SharedArrayBuffer(4).grow(8)}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        (
+            "var b=new SharedArrayBuffer(4,{maxByteLength:8});var r;try{b.grow(2)}catch(e){r=e instanceof RangeError};''+r",
+            "true",
+        ),
+        // 25.2.5.4 answers a shared block of its own.
+        (
+            "var s=new SharedArrayBuffer(8).slice(0,4);''+s.byteLength+' '+(s instanceof SharedArrayBuffer)",
+            "4 true",
+        ),
+        // 25.1.5.1 answers false for a block, shared or not.
+        ("''+ArrayBuffer.isView(new SharedArrayBuffer(1))", "false"),
+        (
+            "''+Object.prototype.toString.call(new SharedArrayBuffer(1))",
+            "[object SharedArrayBuffer]",
+        ),
+        // 23.2.5.1.5 looks into a shared block like any other.
+        (
+            "var a=new Int32Array(new SharedArrayBuffer(8));''+a.length",
+            "2",
+        ),
+        // 25.4.11 answers the value it was given, and every other one the
+        // value the element held.
+        (
+            "var a=new Int32Array(new SharedArrayBuffer(8));''+Atomics.store(a,0,5)+' '+Atomics.load(a,0)",
+            "5 5",
+        ),
+        (
+            "var a=new Int32Array(new SharedArrayBuffer(8));Atomics.store(a,0,5);''+Atomics.add(a,0,3)+' '+Atomics.load(a,0)",
+            "5 8",
+        ),
+        (
+            "var a=new Int32Array(new SharedArrayBuffer(8));Atomics.store(a,0,8);''+Atomics.compareExchange(a,0,8,12)+' '+Atomics.load(a,0)",
+            "8 12",
+        ),
+        (
+            "var a=new Int32Array(new SharedArrayBuffer(8));Atomics.store(a,0,12);''+Atomics.sub(a,0,2)+' '+Atomics.and(a,0,6)+' '+Atomics.or(a,0,1)+' '+Atomics.xor(a,0,3)+' '+Atomics.load(a,0)",
+            "12 10 2 3 0",
+        ),
+        // 25.1.3.12 wraps each row of table 71 here as it does elsewhere.
+        (
+            "var a=new Int8Array(new SharedArrayBuffer(2));''+Atomics.store(a,0,130)+' '+Atomics.load(a,0)",
+            "130 -126",
+        ),
+        (
+            "''+Atomics.isLockFree(4)+' '+Atomics.isLockFree(3)",
+            "true false",
+        ),
+        // 25.4.16 answers zero, because no agent of this embedding waits.
+        (
+            "var a=new Int32Array(new SharedArrayBuffer(8));''+Atomics.notify(a,0,1)",
+            "0",
+        ),
+        // 25.4.13 step 12: this agent cannot suspend.
+        (
+            "var a=new Int32Array(new SharedArrayBuffer(8));var r;try{Atomics.wait(a,0,0,0)}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        // 25.4.2.1 takes no float and no clamped row.
+        (
+            "var r;try{Atomics.load(new Float64Array(2),0)}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        (
+            "var a=new Int32Array(new SharedArrayBuffer(8));var r;try{Atomics.load(a,4)}catch(e){r=e instanceof RangeError};''+r",
+            "true",
+        ),
+        (
+            "''+Object.prototype.toString.call(Atomics)",
+            "[object Atomics]",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}
