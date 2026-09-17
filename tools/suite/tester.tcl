@@ -25,6 +25,23 @@ proc harness_send {verb args} {
   flush $h
   set head [gets $h]
   set n [lindex $head 1]
+  while {[lindex $head 0] eq "CALL"} {
+    set vals {}
+    for {set i 0} {$i < $n} {incr i} {
+      set len [gets $h]
+      set val [read $h $len]
+      gets $h
+      lappend vals [encoding convertfrom utf-8 $val]
+    }
+    if {[catch {harness_call $vals} out]} { set out 0 }
+    set b [encoding convertto utf-8 $out]
+    puts $h "RET 1"
+    puts $h [string length $b]
+    puts $h $b
+    flush $h
+    set head [gets $h]
+    set n [lindex $head 1]
+  }
   if {[lindex $head 0] eq "ERR"} {
     set msg [encoding convertfrom utf-8 [read $h $n]]
     gets $h
@@ -38,6 +55,16 @@ proc harness_send {verb args} {
     lappend out [encoding convertfrom utf-8 $val]
   }
   return $out
+}
+
+# The procs the collations of this file name, by collation name.
+array set ::collations {}
+
+# One call the engine wrote onto the line: the collation's name and the
+# two values, answered by the proc the file named for that collation.
+proc harness_call {vals} {
+  set held $::collations([lindex $vals 0])
+  return [uplevel #0 [concat $held [list [lindex $vals 1]] [list [lindex $vals 2]]]]
 }
 
 # What the TCL interface binds: `$name`, `$name(key)`, `:name` and
@@ -182,6 +209,10 @@ proc sqlite3 {name args} {
       nullvalue { return [harness_send null %N% [lindex $args 0]] }
       errorcode { return [lindex [harness_send errorcode %N%] 0] }
       complete { return [lindex [harness_send complete %N% [lindex $args 0]] 0] }
+      collate {
+        set ::collations([lindex $args 0]) [lindex $args 1]
+        return [harness_send collate %N% [lindex $args 0]]
+      }
       transaction {
         harness_send eval %N% BEGIN
         set rc [catch { uplevel 1 [lindex $args end] } msg]

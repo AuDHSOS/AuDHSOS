@@ -29,7 +29,7 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
         // And the table it describes, where it describes one: a schema
         // read off a file is text the file decides.
         if let Definition::Table(written) = definition
-            && let Ok(table) = db_sqlite::schema::table(&arena, &written, bytes)
+            && let Ok(table) = db_sqlite::schema::table(&arena, &written, bytes, &[])
         {
             assert!(
                 table.columns.iter().any(|column| column.key == 0)

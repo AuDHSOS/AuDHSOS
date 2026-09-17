@@ -35,7 +35,7 @@ pub enum Error {
     /// Two columns of one name.
     DuplicateColumn,
     /// A collation no engine has.
-    NoCollation,
+    NoCollation(alloc::vec::Vec<u8>),
     /// The word after a generated column's expression is neither
     /// `STORED` nor `VIRTUAL`.
     GeneratedWord,
@@ -460,12 +460,13 @@ pub fn index(
     definition: &CreateIndex,
     sql: &[u8],
     table: &Table,
+    collating: &[crate::value::Collating],
 ) -> Result<Index, Error> {
     let mut columns = Vec::new();
     for term in arena.orders(definition.columns) {
         // A term may be written with a collation of its own, which is
         // the one its entries are held in.
-        let (named, written) = collated(arena, term.expr, sql);
+        let (named, written) = collated(arena, term.expr, sql, collating);
         let (of, collation) = if let Some(named) = named {
             let name = dequote(named.text(sql));
             let at = table
@@ -521,16 +522,47 @@ fn qualified(arena: &Arena, id: ExprId) -> bool {
 /// A term written as text names a column, which is `sqlite3StringToId`
 /// turning `TK_STRING` into `TK_ID` before `sqlite3CreateIndex` reads
 /// the term.
-pub(crate) fn collated(arena: &Arena, id: ExprId, sql: &[u8]) -> (Option<Span>, Option<Collation>) {
+pub(crate) fn collated(
+    arena: &Arena,
+    id: ExprId,
+    sql: &[u8],
+    collating: &[crate::value::Collating],
+) -> (Option<Span>, Option<Collation>) {
     match arena.node(id) {
         Some(Node::Collate { value, name }) => (
-            collated(arena, value, sql).0,
-            Collation::of_name(&dequote(name.text(sql))),
+            collated(arena, value, sql, collating).0,
+            crate::value::collation_of(&dequote(name.text(sql)), collating),
         ),
         Some(Node::Column { column, .. }) => (Some(column), None),
         Some(Node::Literal(crate::ast::Literal::Text(text))) => (Some(text), None),
         _ => (None, None),
     }
+}
+
+/// Refuses a statement that names a collation the connection does not
+/// hold.
+///
+/// `sqlite3ResolveCollSeqName` looks a name up where the statement is
+/// read, so a statement over an empty table is refused as well as one
+/// whose rows a comparison reaches. Costs O(n) over the nodes of the
+/// statement.
+///
+/// # Errors
+///
+/// [`Error::NoCollation`] names the first one the connection does not
+/// hold.
+pub(crate) fn collations(
+    arena: &Arena,
+    sql: &[u8],
+    collating: &[crate::value::Collating],
+) -> Result<(), Error> {
+    for name in arena.collates() {
+        let named = dequote(name.text(sql));
+        if crate::value::collation_of(&named, collating).is_none() {
+            return Err(Error::NoCollation(named));
+        }
+    }
+    Ok(())
 }
 
 /// The six names a type may be that the schema stores as a code rather
@@ -756,7 +788,12 @@ fn type_text(text: &[u8]) -> Vec<u8> {
     clippy::too_many_lines,
     reason = "the rules of one routine of the C library, in the order it applies them"
 )]
-pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Table, Error> {
+pub fn table(
+    arena: &Arena,
+    definition: &CreateTable,
+    sql: &[u8],
+    collating: &[crate::value::Collating],
+) -> Result<Table, Error> {
     let TableBody::Columns {
         columns,
         constraints,
@@ -846,8 +883,9 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
                     });
                 }
                 ColumnConstraint::Collate(name) => {
-                    column.collation =
-                        Collation::of_name(&dequote(name.text(sql))).ok_or(Error::NoCollation)?;
+                    let named = dequote(name.text(sql));
+                    column.collation = crate::value::collation_of(&named, collating)
+                        .ok_or_else(|| Error::NoCollation(named.clone()))?;
                 }
                 ColumnConstraint::Default { value, text } => {
                     column.default = Some(text.text(sql).to_vec());

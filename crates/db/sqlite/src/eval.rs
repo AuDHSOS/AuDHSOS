@@ -230,6 +230,12 @@ pub trait Row {
         column: &[u8],
     ) -> Option<(Value, Affinity, Collation)>;
 
+    /// The collations the application defined on the connection, which
+    /// a `COLLATE` names one of.
+    fn collating(&self) -> &'static [crate::value::Collating] {
+        &[]
+    }
+
     /// The function the application defined under this name for this
     /// number of arguments, or nothing where it defined none.
     fn defined(&self, _name: &[u8], _count: usize) -> Option<crate::func::Defined> {
@@ -444,8 +450,10 @@ fn collated(
 ) -> Result<Answer, Error> {
     let mut inner = answer(arena, value, sql, row, deeper)?;
     let named = crate::schema::dequote(name.text(sql));
-    inner.collation =
-        Some(Collation::of_name(&named).ok_or_else(|| Error::NoCollation(named.clone()))?);
+    inner.collation = Some(
+        crate::value::collation_of(&named, row.collating())
+            .ok_or_else(|| Error::NoCollation(named.clone()))?,
+    );
     inner.written = true;
     Ok(inner)
 }
@@ -489,7 +497,7 @@ fn answer(
             // the tree and not off the branch a row takes, so a
             // `COLLATE` written in a branch no row takes is still the
             // collation the `CASE` compares with.
-            answered.collation = written_collation(arena, id, sql);
+            answered.collation = written_collation(arena, id, sql, row.collating());
             Ok(answered)
         }
         Node::Column {
@@ -944,10 +952,15 @@ fn rows_listed(
 /// column only along a path a `COLLATE` marked.
 ///
 /// The walk is O(n) in the nodes under `id`.
-fn written_collation(arena: &Arena, id: ExprId, sql: &[u8]) -> Option<Collation> {
+fn written_collation(
+    arena: &Arena,
+    id: ExprId,
+    sql: &[u8],
+    collating: &[crate::value::Collating],
+) -> Option<Collation> {
     let node = arena.node(id)?;
     if let Node::Collate { name, .. } = node {
-        return Collation::of_name(&crate::schema::dequote(name.text(sql)));
+        return crate::value::collation_of(&crate::schema::dequote(name.text(sql)), collating);
     }
     // A `CASE` is read in the order it was written, because the first
     // `COLLATE` written under it is the one it answers with, and
@@ -955,7 +968,7 @@ fn written_collation(arena: &Arena, id: ExprId, sql: &[u8]) -> Option<Collation>
     let mut found = None;
     let mut first = |child: ExprId| {
         if found.is_none() {
-            found = written_collation(arena, child, sql);
+            found = written_collation(arena, child, sql, collating);
         }
     };
     if let Node::Case {

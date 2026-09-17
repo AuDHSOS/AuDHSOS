@@ -1500,6 +1500,21 @@ impl Arena {
             .copied()
     }
 
+    /// The name every `COLLATE` of the statement carries, in the order
+    /// the parser wrote the nodes.
+    ///
+    /// Costs O(n) over the nodes of the statement.
+    #[must_use]
+    pub fn collates(&self) -> Vec<Span> {
+        self.nodes
+            .iter()
+            .filter_map(|node| match *node {
+                Node::Collate { name, .. } => Some(name),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The children of a run.
     #[must_use]
     pub fn children(&self, range: Range) -> &[ExprId] {

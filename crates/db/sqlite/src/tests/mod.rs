@@ -13,6 +13,7 @@
 mod ambiguous;
 mod balance;
 mod bytes;
+mod collating;
 mod colnames;
 mod complete;
 mod compound;

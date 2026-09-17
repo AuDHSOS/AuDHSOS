@@ -119,8 +119,9 @@ const fn word(letters: [u8; 4]) -> u32 {
     u32::from_be_bytes(letters)
 }
 
-/// The three collations SQLite has built in.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// The three collations SQLite has built in, and the ones an
+/// application defines.
+#[derive(Clone, Copy, Debug, Default)]
 pub enum Collation {
     /// Byte by byte, then by length.
     #[default]
@@ -140,6 +141,57 @@ pub enum Collation {
     Binary16Le,
     /// `BINARY` over text the database keeps in UTF-16, big end first.
     Binary16Be,
+    /// A collation the application defined on the connection, with the
+    /// name it defined it under and how it compares two texts.
+    Defined(&'static [u8], Comparing),
+}
+
+/// Two collations are the same collation where they are the same one
+/// of the three the library holds, or where they were defined under
+/// one name: the function behind a name is the connection's to choose
+/// and says nothing about which collation it is.
+impl PartialEq for Collation {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Collation::Defined(one, _), Collation::Defined(another, _)) => {
+                one.eq_ignore_ascii_case(another)
+            }
+            _ => core::mem::discriminant(self) == core::mem::discriminant(other),
+        }
+    }
+}
+
+impl Eq for Collation {}
+
+/// How a collation an application defined compares two texts, which is
+/// the function `sqlite3_create_collation` registers.
+///
+/// The name it was defined under is given to it as well, so that one
+/// function may answer for every collation an application defines.
+pub type Comparing = fn(&'static [u8], &[u8], &[u8]) -> core::cmp::Ordering;
+
+/// A collation an application defined on a connection.
+#[derive(Clone, Copy, Debug)]
+pub struct Collating {
+    /// The name it is known by.
+    pub name: &'static [u8],
+    /// How it compares two texts.
+    pub by: Comparing,
+}
+
+/// The collation `name` names: one of the three the library holds, or
+/// one the application defined on the connection.
+///
+/// It reads the defined ones by name, so it is O(defined).
+#[must_use]
+pub fn collation_of(name: &[u8], defined: &[Collating]) -> Option<Collation> {
+    if let Some(held) = Collation::of_name(name) {
+        return Some(held);
+    }
+    defined
+        .iter()
+        .find(|one| name.eq_ignore_ascii_case(one.name))
+        .map(|one| Collation::Defined(one.name, one.by))
 }
 
 /// The collation a name spells, where it spells one.
@@ -640,5 +692,6 @@ fn collate(left: &[u8], right: &[u8], collation: Collation) -> core::cmp::Orderi
         Collation::Rtrim => binary(trimmed(left), trimmed(right)),
         Collation::Binary16Le => utf16_order(left, right, false),
         Collation::Binary16Be => utf16_order(left, right, true),
+        Collation::Defined(name, by) => by(name, left, right),
     }
 }

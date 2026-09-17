@@ -223,6 +223,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- An application defines collations on a `db-sqlite` connection:
+  `value::Collating` carries a name and a comparison,
+  `Writer::collates`, `Database::open_collating` and
+  `Database::open_log_collating` hold them, and `value::Collation`
+  names one wherever a column or a `COLLATE` does. A name a statement
+  carries is looked up where the statement is read, so a statement over
+  an empty table is refused `no such collation sequence: NAME` as well.
+  The suite's own harness answers `db collate` by calling the tester's
+  proc back over the line. D-273 records it. Catalog 6.6.197.
+
 - `db-sqlite` answers whether a text ends a statement,
   `token::complete`, which is `sqlite3_complete`: the last token that
   carries meaning is a semicolon, and a `CREATE TRIGGER` ends only after

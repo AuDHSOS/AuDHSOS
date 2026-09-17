@@ -268,7 +268,7 @@ fn tables(image: &crate::image::Image<'_>) -> Vec<Held> {
             continue;
         };
         out.push(Held {
-            table: crate::schema::table(&arena, &written, &sql).unwrap(),
+            table: crate::schema::table(&arena, &written, &sql, &[]).unwrap(),
             root: u32::try_from(root).unwrap(),
         });
     }

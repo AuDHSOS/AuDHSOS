@@ -32,7 +32,7 @@ fn rows(sql: &str) -> Option<Vec<String>> {
     let Definition::Table(written) = parsed else {
         return None;
     };
-    let made = table(&arena, &written, sql.as_bytes()).ok()?;
+    let made = table(&arena, &written, sql.as_bytes(), &[]).ok()?;
     let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
     let mut out = alloc::vec![format!(
         "T|{}|{}|{}|{}",
@@ -127,7 +127,7 @@ fn a_type_of_three_letters_or_more_that_is_one_of_six_is_stored_as_that_one() {
         let Definition::Table(written) = parsed else {
             panic!("not a table");
         };
-        let made = table(&arena, &written, sql.as_bytes()).expect("a table");
+        let made = table(&arena, &written, sql.as_bytes(), &[]).expect("a table");
         let column = made.columns.first().expect("a column");
         assert_eq!(column.declared, declared, "the type of {sql}");
         assert_eq!(column.affinity, affinity, "the affinity of {sql}");
@@ -140,7 +140,7 @@ fn build(sql: &str) -> Result<crate::schema::Table, crate::schema::Error> {
     let Definition::Table(written) = parsed else {
         panic!("not a table");
     };
-    table(&arena, &written, sql.as_bytes())
+    table(&arena, &written, sql.as_bytes(), &[])
 }
 
 #[test]
@@ -197,7 +197,7 @@ fn what_a_statement_says_that_makes_it_no_table() {
     assert_eq!(build("CREATE TABLE t(x, X)"), Err(Error::DuplicateColumn));
     assert_eq!(
         build("CREATE TABLE t(x COLLATE nosuch)"),
-        Err(Error::NoCollation)
+        Err(Error::NoCollation(b"nosuch".to_vec()))
     );
     assert_eq!(
         build("CREATE TABLE t(x, y AS (1) NONSENSE)"),

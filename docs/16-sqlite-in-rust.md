@@ -800,6 +800,11 @@ Size: L.
     an `IN` looks in answers. Built, which D-271 records.
 52. Whether a text ends a statement, and where the place of the nulls
     may be written. Built, which D-272 records.
+53. The collations an application defines on a connection. Built, which
+    D-273 records. A schema that names a collation the connection was
+    not told of is refused where the schema is read, and not where a
+    comparison reaches that column, so `SELECT * FROM t` over such a
+    table is refused where the C library answers its rows.
 
 ### Done when
 
@@ -809,8 +814,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 73 771 cases in 703 files, 61 566
-pass, 2360 answer differently, and 9845 name something the engine
+under the `tclsh` of the machine. Of 73 576 cases in 703 files, 61 653
+pass, 2389 answer differently, and 9534 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts

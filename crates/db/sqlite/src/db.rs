@@ -339,6 +339,9 @@ impl Error {
             Error::Schema(schema::Error::IndexColumn(name)) => {
                 alloc::format!("no such column: {}", shown(name))
             }
+            Error::Schema(schema::Error::NoCollation(name)) => {
+                alloc::format!("no such collation sequence: {}", shown(name))
+            }
             Error::Schema(schema::Error::ForeignColumn(name)) => alloc::format!(
                 "unknown column \"{}\" in foreign key definition",
                 shown(name)
@@ -1199,6 +1202,9 @@ pub struct Database<'a> {
     /// The word the journal mode of the connection is written as,
     /// which `PRAGMA journal_mode` answers.
     journalled: &'static [u8],
+    /// The collations the application defined on the connection, which
+    /// the schema is read against and a `COLLATE` reaches.
+    collating: &'static [crate::value::Collating],
 }
 
 /// One trigger of the schema: what it is on, and the statement that
@@ -1278,7 +1284,24 @@ impl<'a> Database<'a> {
     ///
     /// [`Error`] names what it could not read and why.
     pub fn open(bytes: &'a [u8]) -> Result<Self, Error> {
-        Self::read(Image::open(bytes)?)
+        Self::read(Image::open(bytes)?, &[])
+    }
+
+    /// The same, with the collations the application defined on the
+    /// connection that writes.
+    ///
+    /// The schema is read against them, because a column is declared
+    /// with the collation its text compares under, so a connection that
+    /// is not told of one reads no table that names it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what it could not read and why.
+    pub fn open_collating(
+        bytes: &'a [u8],
+        collating: &'static [crate::value::Collating],
+    ) -> Result<Self, Error> {
+        Self::read(Image::open(bytes)?, collating)
     }
 
     /// The same for a database whose newest pages are in its
@@ -1288,7 +1311,21 @@ impl<'a> Database<'a> {
     ///
     /// [`Error`] names what it could not read and why.
     pub fn open_with_log(bytes: &'a [u8], log: &'a crate::wal::Wal<'a>) -> Result<Self, Error> {
-        Self::read(Image::open_with_log(bytes, log)?)
+        Self::read(Image::open_with_log(bytes, log)?, &[])
+    }
+
+    /// The same, with the collations the application defined on the
+    /// connection that writes.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what it could not read and why.
+    pub fn open_log_collating(
+        bytes: &'a [u8],
+        log: &'a crate::wal::Wal<'a>,
+        collating: &'static [crate::value::Collating],
+    ) -> Result<Self, Error> {
+        Self::read(Image::open_with_log(bytes, log)?, collating)
     }
 
     /// The same for a database whose rollback journal is hot, which a
@@ -1301,11 +1338,14 @@ impl<'a> Database<'a> {
         bytes: &'a [u8],
         journal: &'a crate::journal::Journal<'a>,
     ) -> Result<Self, Error> {
-        Self::read(Image::open_with_journal(bytes, journal)?)
+        Self::read(Image::open_with_journal(bytes, journal)?, &[])
     }
 
     /// Reads the schema of an open file.
-    fn read(image: Image<'a>) -> Result<Self, Error> {
+    fn read(
+        image: Image<'a>,
+        collating: &'static [crate::value::Collating],
+    ) -> Result<Self, Error> {
         let encoding = image.header().encoding;
         let mut tables = Vec::new();
         let mut payload = Vec::new();
@@ -1329,7 +1369,9 @@ impl<'a> Database<'a> {
             if sql.is_empty() {
                 continue;
             }
-            let Some(stored) = stored_of(sql, u32::try_from(root).unwrap_or(0), encoding)? else {
+            let Some(stored) =
+                stored_of(sql, u32::try_from(root).unwrap_or(0), encoding, collating)?
+            else {
                 continue;
             };
             tables.push(stored);
@@ -1339,9 +1381,14 @@ impl<'a> Database<'a> {
         // is written with, which `sqlite3InitOne` builds in memory
         // rather than reading out of a row.
         tables.extend(
-            stored_of(SCHEMA_CREATE.to_vec(), crate::image::SCHEMA_ROOT, encoding)
-                .ok()
-                .flatten(),
+            stored_of(
+                SCHEMA_CREATE.to_vec(),
+                crate::image::SCHEMA_ROOT,
+                encoding,
+                collating,
+            )
+            .ok()
+            .flatten(),
         );
         let mut database = Database {
             image,
@@ -1354,6 +1401,7 @@ impl<'a> Database<'a> {
             naming: Naming::default(),
             defined: &[],
             journalled: b"delete",
+            collating,
         };
         database.read_indexes()?;
         database.read_views()?;
@@ -1758,7 +1806,8 @@ impl<'a> Database<'a> {
             else {
                 continue;
             };
-            let Ok(index) = schema::index(&arena, &written, &sql, &stored.table) else {
+            let Ok(index) = schema::index(&arena, &written, &sql, &stored.table, self.collating)
+            else {
                 continue;
             };
             stored.indexes.push(Kept {
@@ -2114,6 +2163,7 @@ impl<'a> Database<'a> {
         }
         let (arena, root) = parse::statement(sql)?;
         eval::rows_placed(&arena)?;
+        crate::schema::collations(&arena, sql, self.collating)?;
         let scope = Scope {
             terms: &[],
             outer: None,
@@ -2249,7 +2299,7 @@ impl<'a> Database<'a> {
         for (operator, right) in operators.into_iter().zip(others) {
             combine(operator, &mut answer, right.answer, &collations);
         }
-        let keys = matched(arena, &first, sql, &cores, &collations)?;
+        let keys = matched(arena, &first, sql, &cores, &collations, self.collating)?;
         if !keys.is_empty() {
             sort_by_keys(&mut answer.rows, &keys);
         }
@@ -2297,7 +2347,7 @@ impl<'a> Database<'a> {
         }
         let mut sides = self.sides(arena, &select, sql, scope)?;
         planned(arena, select.filter, sql, &mut sides);
-        let shape = shape(arena, &select, sql, &sides, self.naming)?;
+        let shape = shape(arena, &select, sql, &sides, self.naming, self.collating)?;
         let collations = self.collations(&shape);
         let names: Vec<Vec<u8>> = shape
             .columns
@@ -2310,7 +2360,7 @@ impl<'a> Database<'a> {
             .map(|column| column.shown.clone())
             .collect();
         let keys = if whole {
-            keys(arena, &select, sql, &names, &collations)?
+            keys(arena, &select, sql, &names, &collations, self.collating)?
         } else {
             Vec::new()
         };
@@ -2705,7 +2755,7 @@ impl<'a> Database<'a> {
         // read the term.
         let head = arena.select(cte.select).ok_or(Error::Unsupported)?;
         let named = named_of(&answered.shape);
-        let order = matched(arena, &head, sql, &[named], &collations)?;
+        let order = matched(arena, &head, sql, &[named], &collations, self.collating)?;
         let reach = Reach {
             database: self,
             arena,
@@ -4540,6 +4590,7 @@ fn shape(
     sql: &[u8],
     sides: &[Side<'_>],
     naming: Naming,
+    collating: &[crate::value::Collating],
 ) -> Result<Shape, Error> {
     // `selectExpander` names a column a `*` stands for with the side it
     // came from in front of it where `full_column_names` is on and
@@ -4618,7 +4669,7 @@ fn shape(
                         written,
                     },
                 );
-                let (affinity, collation) = compared(arena, expr, sql, sides);
+                let (affinity, collation) = compared(arena, expr, sql, sides, collating);
                 columns.push(Column {
                     name,
                     shown,
@@ -4626,7 +4677,7 @@ fn shape(
                     hidden: false,
                     affinity,
                     collation,
-                    datatype: data_type(arena, expr, sql, sides),
+                    datatype: data_type(arena, expr, sql, sides, collating),
                 });
             }
         }
@@ -4721,6 +4772,7 @@ fn keys(
     sql: &[u8],
     names: &[Vec<u8>],
     collations: &[Collation],
+    collating: &[crate::value::Collating],
 ) -> Result<Vec<Key>, Error> {
     let mut keys = Vec::new();
     for (which, term) in arena.orders(select.order).iter().enumerate() {
@@ -4755,7 +4807,7 @@ fn keys(
             {
                 // A `COLLATE` on the term is the collation the sort
                 // uses, whatever the column was declared with.
-                let written = term_collation(arena, term.expr, sql)?;
+                let written = term_collation(arena, term.expr, sql, collating)?;
                 let collation = written.unwrap_or_else(|| collation_at(collations, at));
                 keys.push(Key {
                     of: Keyed::Place(at, collation),
@@ -5090,10 +5142,11 @@ fn matched(
     sql: &[u8],
     cores: &[Vec<Vec<u8>>],
     collations: &[Collation],
+    collating: &[crate::value::Collating],
 ) -> Result<Vec<Ordered>, Error> {
     let first = cores.first().map_or(&[][..], Vec::as_slice);
     let mut out = Vec::new();
-    for (which, key) in keys(arena, select, sql, first, collations)?
+    for (which, key) in keys(arena, select, sql, first, collations, collating)?
         .into_iter()
         .enumerate()
     {
@@ -5102,7 +5155,7 @@ fn matched(
             // which `multiSelectOrderBy` reads off the term and not off
             // the column it counts to.
             Keyed::Place(at, collation) => Some((at, collation)),
-            Keyed::Expr(_) => elsewhere(arena, select, sql, cores, collations, which)?,
+            Keyed::Expr(_) => elsewhere(arena, select, sql, cores, collations, which, collating)?,
         };
         let (at, collation) = found.ok_or(Error::OrderMatch(which.saturating_add(1)))?;
         out.push(Ordered {
@@ -5127,9 +5180,10 @@ fn elsewhere(
     cores: &[Vec<Vec<u8>>],
     collations: &[Collation],
     which: usize,
+    collating: &[crate::value::Collating],
 ) -> Result<Option<(usize, Collation)>, Error> {
     for names in cores.iter().skip(1) {
-        let keyed = keys(arena, select, sql, names, collations)?;
+        let keyed = keys(arena, select, sql, names, collations, collating)?;
         if let Some(Key {
             of: Keyed::Place(at, collation),
             ..
@@ -5145,12 +5199,17 @@ fn elsewhere(
 /// and nothing where the statement makes something else.
 ///
 /// Reading one statement costs O(n) in its bytes.
-fn stored_of(sql: Vec<u8>, root: u32, encoding: Encoding) -> Result<Option<Stored>, Error> {
+fn stored_of(
+    sql: Vec<u8>,
+    root: u32,
+    encoding: Encoding,
+    collating: &[crate::value::Collating],
+) -> Result<Option<Stored>, Error> {
     let (arena, definition) = parse::definition(&sql)?;
     let crate::ast::Definition::Table(written) = definition else {
         return Ok(None);
     };
-    let mut table = schema::table(&arena, &written, &sql)?;
+    let mut table = schema::table(&arena, &written, &sql, collating)?;
     // `BINARY` is the same collation under the same name whatever the
     // encoding, and it answers by the bytes the file holds.
     let binary = binary_of(encoding);
@@ -5205,11 +5264,12 @@ fn compared(
     id: ExprId,
     sql: &[u8],
     sides: &[Side<'_>],
+    collating: &[crate::value::Collating],
 ) -> (Affinity, Option<Collation>) {
     match arena.node(id) {
         Some(Node::Collate { value, name }) => (
-            compared(arena, value, sql, sides).0,
-            Collation::of_name(&dequote(name.text(sql))),
+            compared(arena, value, sql, sides, collating).0,
+            crate::value::collation_of(&dequote(name.text(sql)), collating),
         ),
         Some(Node::Column { column, .. }) => sides
             .iter()
@@ -5296,13 +5356,21 @@ fn whole_number(arena: &Arena, id: ExprId, sql: &[u8]) -> Option<i64> {
 /// `sqlite3ExprCollSeq` stops at the first `COLLATE` it reaches from
 /// the top, so a term written with two names sorts under the outer one,
 /// and a name no collation of this crate answers is refused there.
-fn term_collation(arena: &Arena, id: ExprId, sql: &[u8]) -> Result<Option<Collation>, Error> {
+fn term_collation(
+    arena: &Arena,
+    id: ExprId,
+    sql: &[u8],
+    collating: &[crate::value::Collating],
+) -> Result<Option<Collation>, Error> {
     let Some(Node::Collate { name, .. }) = arena.node(id) else {
         return Ok(None);
     };
     let named = crate::schema::dequote(name.text(sql));
-    let collation =
-        Collation::of_name(&named).ok_or_else(|| eval::Error::NoCollation(named.clone()))?;
+    // The refusal is built where the name is read, because
+    // `crate::schema::collations` refuses the statement before it runs
+    // and leaves this arm with no way to reach a closure.
+    let collation = crate::value::collation_of(&named, collating)
+        .ok_or(eval::Error::NoCollation(named.clone()))?;
     Ok(Some(collation))
 }
 
@@ -5805,6 +5873,10 @@ impl eval::Row for Cursor<'_> {
 
     fn defined(&self, name: &[u8], count: usize) -> Option<crate::func::Defined> {
         crate::func::defined(self.reach.database.defined, name, count)
+    }
+
+    fn collating(&self) -> &'static [crate::value::Collating] {
+        self.reach.database.collating
     }
 
     fn counted(&self) -> crate::func::Counted {
@@ -6725,20 +6797,33 @@ fn classes_of(affinity: Affinity) -> u8 {
 /// This is `sqlite3ExprDataType`, which reads the shape of the
 /// expression and not a row: a literal answers its own class, a call
 /// answers any of them, and a column answers what its affinity keeps.
-fn data_type(arena: &Arena, id: ExprId, sql: &[u8], sides: &[Side<'_>]) -> u8 {
+fn data_type(
+    arena: &Arena,
+    id: ExprId,
+    sql: &[u8],
+    sides: &[Side<'_>],
+    collating: &[crate::value::Collating],
+) -> u8 {
     arena
         .node(id)
-        .map_or(0, |node| class_of(arena, id, node, sql, sides))
+        .map_or(0, |node| class_of(arena, id, node, sql, sides, collating))
 }
 
 /// The same for one node the arena holds.
-fn class_of(arena: &Arena, id: ExprId, node: Node, sql: &[u8], sides: &[Side<'_>]) -> u8 {
+fn class_of(
+    arena: &Arena,
+    id: ExprId,
+    node: Node,
+    sql: &[u8],
+    sides: &[Side<'_>],
+    collating: &[crate::value::Collating],
+) -> u8 {
     match node {
         Node::Collate { value, .. }
         | Node::Unary {
             op: UnaryOp::Identity,
             operand: value,
-        } => data_type(arena, value, sql, sides),
+        } => data_type(arena, value, sql, sides, collating),
         Node::Literal(Literal::Null) => 0,
         Node::Literal(Literal::Text(_)) => TEXT,
         Node::Literal(Literal::Blob(_)) => BLOB,
@@ -6748,7 +6833,7 @@ fn class_of(arena: &Arena, id: ExprId, node: Node, sql: &[u8], sides: &[Side<'_>
         } => TEXT | BLOB,
         Node::Variable(_) | Node::Call { .. } | Node::Over { .. } => NUMBER | TEXT | BLOB,
         Node::Column { .. } | Node::Subquery(_) | Node::Cast { .. } | Node::Row(_) => {
-            classes_of(compared(arena, id, sql, sides).0)
+            classes_of(compared(arena, id, sql, sides, collating).0)
         }
         Node::Case {
             branches,
@@ -6760,11 +6845,11 @@ fn class_of(arena: &Arena, id: ExprId, node: Node, sql: &[u8], sides: &[Side<'_>
             let mut held = 0;
             for (at, child) in arena.children(branches).iter().enumerate() {
                 if at % 2 == 1 {
-                    held |= data_type(arena, *child, sql, sides);
+                    held |= data_type(arena, *child, sql, sides, collating);
                 }
             }
             match otherwise {
-                Some(child) => held | data_type(arena, child, sql, sides),
+                Some(child) => held | data_type(arena, child, sql, sides, collating),
                 None => held,
             }
         }

@@ -5665,6 +5665,25 @@ Document 16 step Q8.
   and an `ON CONFLICT` target are refused `unsupported use of NULLS
   LAST`.
 
+### 6.6.197 The collations an application defines (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A column declared `COLLATE BACKWARDS` orders under the collation the
+  connection defines, and a `COLLATE` in the statement names another,
+  so `ORDER BY a` answers `aa ba ab bb` where `ORDER BY a COLLATE
+  BINARY` answers `aa ab ba bb`.
+- An index over such a column holds that order, so `WHERE a > 'ba'`
+  answers the rows the collation puts after `ba`.
+- A reader is given the collations of the connection that wrote, and
+  reads no schema where it is given none: `no such collation sequence:
+  BACKWARDS`.
+- A name is looked up without its case, which `sqlite3FindCollSeq`
+  does, so `COLLATE backwards` names `BACKWARDS`.
+- A statement that names a collation the connection does not define is
+  refused where the statement is read, whether the name stands in a
+  column of a `CREATE TABLE` or in a `COLLATE` of a statement.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

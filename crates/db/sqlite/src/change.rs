@@ -274,12 +274,16 @@ enum Making {
 /// `renameTestSchema` under `after rename`.
 ///
 /// Reading one statement costs O(n) in its nodes.
-fn reads_after(text: &[u8], to: &[u8]) -> Option<alloc::string::String> {
+fn reads_after(
+    text: &[u8],
+    to: &[u8],
+    collating: &[crate::value::Collating],
+) -> Option<alloc::string::String> {
     let (arena, definition) = crate::parse::definition(text).ok()?;
     let Definition::Table(made) = definition else {
         return None;
     };
-    crate::schema::table(&arena, &made, text).err()?;
+    crate::schema::table(&arena, &made, text, collating).err()?;
     // A table the rename leaves with two columns of one name is the one
     // way a statement stops reading, because a name is all the rename
     // writes.
@@ -425,6 +429,8 @@ pub struct Writer {
     refusing: Refusing,
     /// The functions the application defined on this connection.
     defined: &'static [crate::func::Defined],
+    /// The collations the application defined on this connection.
+    collating: &'static [crate::value::Collating],
     /// The savepoints open now, the outermost first, each holding the
     /// file as it stood when the `SAVEPOINT` ran.
     saved: Vec<Saved>,
@@ -480,6 +486,7 @@ impl Writer {
             began: None,
             refusing: Refusing::Abort,
             defined: &[],
+            collating: &[],
             saved: Vec::new(),
             returned: Vec::new(),
             making_own: false,
@@ -543,6 +550,7 @@ impl Writer {
             began: None,
             refusing: Refusing::Abort,
             defined: &[],
+            collating: &[],
             saved: Vec::new(),
             returned: Vec::new(),
             making_own: false,
@@ -750,7 +758,7 @@ impl Writer {
         let from = crate::schema::dequote(asked.table.text(sql));
         let to = crate::schema::dequote(asked.name.text(sql));
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open_collating(&bytes, self.collating)?;
         alterable(&database, &from)?;
         if names(&database, &to) {
             return Err(Error::Named(to));
@@ -797,7 +805,7 @@ impl Writer {
     ) -> Result<(), Error> {
         let name = crate::schema::dequote(asked.table.text(sql));
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open_collating(&bytes, self.collating)?;
         alterable(&database, &name)?;
         // The table was located above, so this refusal carries no name
         // of its own.
@@ -877,7 +885,7 @@ impl Writer {
         let (table, name) = over;
         let (arena, value, sql) = held;
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open_collating(&bytes, self.collating)?;
         for (_, values) in database.held_rows_of(name)? {
             let row = Indexing {
                 table,
@@ -905,7 +913,7 @@ impl Writer {
     /// [`Error::Constraint`] where a row holds nothing there.
     fn holds_values(&self, name: &[u8], place: usize) -> Result<(), Error> {
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open_collating(&bytes, self.collating)?;
         for (_, values) in database.held_rows_of(name)? {
             if values.get(place).is_none_or(|value| *value == Value::Null) {
                 return Err(Error::Constraint);
@@ -939,7 +947,7 @@ impl Writer {
         // wrote it.
         let as_written = asked.name.text(sql).to_vec();
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open_collating(&bytes, self.collating)?;
         alterable(&database, &name)?;
         // The table was located above, so this refusal carries no name
         // of its own.
@@ -967,7 +975,7 @@ impl Writer {
             let text = crate::rename::written_as(&statement, &places, &as_written);
             // `renameTestSchema` under `after rename`: a statement that
             // no longer reads refuses the whole rename.
-            if let Some(refused) = reads_after(&text, &to) {
+            if let Some(refused) = reads_after(&text, &to, self.collating) {
                 return Err(Error::AfterRename(held(0), held(1), refused));
             }
             let mut values = values.clone();
@@ -1003,7 +1011,7 @@ impl Writer {
         let name = crate::schema::dequote(asked.table.text(sql));
         let column = crate::schema::dequote(asked.column.text(sql));
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open_collating(&bytes, self.collating)?;
         alterable(&database, &name)?;
         // The table was located above, so these refusals carry no name
         // of their own.
@@ -1085,6 +1093,7 @@ impl Writer {
             random: &self.random,
             counted: self.counted,
             defined: self.defined,
+            collating: self.collating,
             outer: None,
             reading: None,
         };
@@ -1114,7 +1123,7 @@ impl Writer {
     /// [`Error::AfterDrop`] names the statement that no longer reads.
     fn reads_without(&self, name: &[u8], column: &[u8]) -> Result<(), Error> {
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open_collating(&bytes, self.collating)?;
         for (_, values) in database.rows_of(SCHEMA_TABLE)? {
             let text = |at: usize| match values.get(at) {
                 Some(Value::Text(bytes)) => bytes.clone(),
@@ -1149,7 +1158,7 @@ impl Writer {
     /// Reading the rows costs O(n) in them.
     fn rename_sequence(&mut self, from: &[u8], to: &[u8]) -> Result<(), Error> {
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open_collating(&bytes, self.collating)?;
         if database.table(SEQUENCE).is_none() {
             return Ok(());
         }
@@ -1224,7 +1233,7 @@ impl Writer {
             return Err(Error::Unsupported);
         }
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open_collating(&bytes, self.collating)?;
         let mut roots: Vec<u32> = Vec::new();
         let mut held = false;
         match kind {
@@ -1483,7 +1492,7 @@ impl Writer {
             .map(|span| crate::schema::dequote(span.text(sql)));
         let (Analyzed { tables, only }, held) = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?;
+            let database = Database::open_collating(&bytes, self.collating)?;
             (
                 analyzed(&database, named.as_deref())?,
                 database.table(STAT).is_some(),
@@ -1501,7 +1510,7 @@ impl Writer {
         }
         let (root, stats) = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?;
+            let database = Database::open_collating(&bytes, self.collating)?;
             let (_, root) = database.table(STAT).ok_or(Error::NoTable(Vec::new()))?;
             let mut stats = Vec::new();
             for table in &tables {
@@ -1529,7 +1538,7 @@ impl Writer {
         let wanted = scope.map(|name| crate::value::stored(name, self.header.encoding));
         let (root, held) = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?;
+            let database = Database::open_collating(&bytes, self.collating)?;
             let (_, root) = database.table(STAT).ok_or(Error::NoTable(Vec::new()))?;
             let held: Vec<i64> = database
                 .rows_of(STAT)?
@@ -1574,6 +1583,7 @@ impl Writer {
         let mut held = None;
         match crate::parse::definition(sql) {
             Ok((arena, definition)) => {
+                crate::schema::collations(&arena, sql, self.collating)?;
                 self.define(&arena, definition, sql)?;
                 return Ok(0);
             }
@@ -1598,6 +1608,7 @@ impl Writer {
             Err(error) => return Err(Error::Parse(crate::parse::furthest(held, error))),
         };
         crate::eval::rows_placed(&arena)?;
+        crate::schema::collations(&arena, sql, self.collating)?;
         let changed = match change {
             Change::Insert(statement) => self.insert(&arena, &statement, sql, None),
             Change::Delete(statement) => self.delete(&arena, &statement, sql, None),
@@ -1797,7 +1808,7 @@ impl Writer {
         }
         if let Some(quick) = quick {
             let bytes = self.image();
-            let database = Database::open(&bytes)?;
+            let database = Database::open_collating(&bytes, self.collating)?;
             return Ok(crate::check::integrity(&database, quick)?
                 .into_iter()
                 .map(|text| alloc::vec![Value::Text(text)])
@@ -1898,7 +1909,7 @@ impl Writer {
     /// the list it built in.
     fn listed_keys(&self, name: &[u8]) -> Result<Vec<Vec<Value>>, Error> {
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open_collating(&bytes, self.collating)?;
         let Some((table, _)) = database.table(name) else {
             return Ok(Vec::new());
         };
@@ -1936,7 +1947,7 @@ impl Writer {
     /// table each key points at.
     fn checked_keys(&self, only: Option<&[u8]>) -> Result<Vec<Vec<Value>>, Error> {
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open_collating(&bytes, self.collating)?;
         let held: Vec<Table> = database
             .tables()
             .filter(|table| only.is_none_or(|only| table.name.eq_ignore_ascii_case(only)))
@@ -2034,7 +2045,7 @@ impl Writer {
         }
         let (answer, affinities) = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?
+            let database = Database::open_collating(&bytes, self.collating)?
                 .seeded(self.random.word())
                 .defining(self.defined)
                 .counting(self.counted);
@@ -2108,7 +2119,7 @@ impl Writer {
         }
         {
             let bytes = self.image();
-            let database = Database::open(&bytes)?;
+            let database = Database::open_collating(&bytes, self.collating)?;
             // `sqlite3CreateTrigger`: only a view carries an `INSTEAD
             // OF` trigger, and only a table carries the other two.
             let on_view = database.view(&over).is_some();
@@ -2178,7 +2189,7 @@ impl Writer {
         time: crate::ast::TriggerTime,
     ) -> Result<Vec<crate::db::Trigger>, Error> {
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open_collating(&bytes, self.collating)?;
         Ok(database
             .triggers_on(over, event, time)
             .into_iter()
@@ -2266,6 +2277,16 @@ impl Writer {
         self.defined = defined;
     }
 
+    /// The collations the application defined on this connection, which
+    /// a reader built over its file is told by
+    /// [`Database::open_collating`].
+    ///
+    /// The schema is read against them, so a connection is told of them
+    /// before it reads a table that names one.
+    pub const fn collates(&mut self, collating: &'static [crate::value::Collating]) {
+        self.collating = collating;
+    }
+
     /// The word the journal mode of this connection is written as,
     /// which is `wal` for a file in write-ahead logging and one of the
     /// five modes that write the file itself otherwise.
@@ -2344,7 +2365,7 @@ impl Writer {
             }
             let places = {
                 let bytes = self.image();
-                let database = Database::open(&bytes)?;
+                let database = Database::open_collating(&bytes, self.collating)?;
                 // The table is the one the statement wrote, so it is
                 // there wherever this is reached.
                 let (parent, _) = database
@@ -2397,7 +2418,7 @@ impl Writer {
             return Ok(());
         }
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open_collating(&bytes, self.collating)?;
         for key in &table.foreign {
             // The statement was held to keys that point at a table
             // that is there before a row was read, so the name is one
@@ -2455,7 +2476,7 @@ impl Writer {
         for points in self.pointing(name)? {
             let places = {
                 let bytes = self.image();
-                let database = Database::open(&bytes)?;
+                let database = Database::open_collating(&bytes, self.collating)?;
                 // The table is the one the statement changes, so it is
                 // there wherever this is reached.
                 let (parent, _) = database.table(name).ok_or(Error::NoTable(Vec::new()))?;
@@ -2508,7 +2529,7 @@ impl Writer {
             return Ok(());
         }
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open_collating(&bytes, self.collating)?;
         let Some((table, _)) = database.table(name) else {
             return Ok(());
         };
@@ -2525,7 +2546,7 @@ impl Writer {
     /// Every foreign key of every table that points at `name`.
     fn pointing(&self, name: &[u8]) -> Result<Vec<Points>, Error> {
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open_collating(&bytes, self.collating)?;
         // The table is the one the statement changes, so it is there
         // wherever this is reached.
         let (parent, _) = database.table(name).ok_or(Error::NoTable(Vec::new()))?;
@@ -2610,7 +2631,7 @@ impl Writer {
         wanted: &[Value],
     ) -> Result<Vec<crate::db::Reading>, Error> {
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open_collating(&bytes, self.collating)?;
         let (child, _) = database
             .table(&points.child)
             .ok_or(Error::NoTable(Vec::new()))?;
@@ -2684,7 +2705,7 @@ impl Writer {
         // of that statement.
         let falls_back = if fallback {
             let bytes = self.image();
-            let database = Database::open(&bytes)?;
+            let database = Database::open_collating(&bytes, self.collating)?;
             database.defaults(&points.child)?
         } else {
             Vec::new()
@@ -2747,7 +2768,7 @@ impl Writer {
         key: &[Value],
     ) -> Result<(u32, Vec<Kept>, Table, Vec<Value>), Error> {
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open_collating(&bytes, self.collating)?;
         let (table, root) = database.table(name).ok_or(Error::NoTable(Vec::new()))?;
         let kept = kept_indexes(&database, name);
         let values = database
@@ -2821,7 +2842,7 @@ impl Writer {
                 // body is for: it carries the `RAISE`.
                 crate::ast::TriggerStep::Select(select) => {
                     let bytes = self.image();
-                    let database = Database::open(&bytes)?
+                    let database = Database::open_collating(&bytes, self.collating)?
                         .seeded(self.random.word())
                         .defining(self.defined)
                         .counting(self.counted);
@@ -3020,7 +3041,9 @@ impl Writer {
     /// Whether the database holds the table `name`.
     fn holds(&self, name: &[u8]) -> Result<bool, Error> {
         let bytes = self.image();
-        Ok(Database::open(&bytes)?.table(name).is_some())
+        Ok(Database::open_collating(&bytes, self.collating)?
+            .table(name)
+            .is_some())
     }
 
     /// Whether a `CREATE` of `name` writes nothing, because the schema
@@ -3035,7 +3058,7 @@ impl Writer {
     ) -> Result<bool, Error> {
         let (name, written) = held;
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open_collating(&bytes, self.collating)?;
         let held: Option<&[u8]> = if database.table(name).is_some() {
             Some(b"table")
         } else if database.view(name).is_some() {
@@ -3114,7 +3137,7 @@ impl Writer {
     /// [`Error::NotIndexable`] name which of the three it is.
     fn indexable(&self, over: &[u8]) -> Result<(), Error> {
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open_collating(&bytes, self.collating)?;
         if database.view(over).is_some() {
             return Err(Error::IndexedView);
         }
@@ -3170,7 +3193,7 @@ impl Writer {
         let Definition::Table(written) = definition else {
             return Ok(false);
         };
-        let table = crate::schema::table(arena, &written, sql)?;
+        let table = crate::schema::table(arena, &written, sql, self.collating)?;
         for at in 0..table.keys.len() {
             self.own_index(&table, at)?;
         }
@@ -3224,14 +3247,14 @@ impl Writer {
     ) -> Result<(), Error> {
         let (entries, collations) = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?;
+            let database = Database::open_collating(&bytes, self.collating)?;
             // The statement was held to a table that is there before
             // the row was written, so the name is one the schema holds
             // and the refusal is what this reads it with.
             let (table, _) = database
                 .table(over)
                 .ok_or(Error::NoTable(schema_named_as(over)))?;
-            let read = crate::schema::index(arena, index, sql, table)?;
+            let read = crate::schema::index(arena, index, sql, table, self.collating)?;
             let collations = collations_of(&read);
             let over = Over {
                 arena,
@@ -3273,7 +3296,7 @@ impl Writer {
         // Every statement draws from where the connection stands, so
         // two statements of one connection answer `randomblob`
         // differently.
-        let database = Database::open(&bytes)?
+        let database = Database::open_collating(&bytes, self.collating)?
             .seeded(self.random.word())
             .defining(self.defined)
             .counting(self.counted);
@@ -3372,7 +3395,9 @@ impl Writer {
     /// Reading the schema costs O(n) in its rows.
     fn is_view(&self, name: &[u8]) -> Result<bool, Error> {
         let bytes = self.image();
-        Ok(Database::open(&bytes)?.view(name).is_some())
+        Ok(Database::open_collating(&bytes, self.collating)?
+            .view(name)
+            .is_some())
     }
 
     /// The `INSTEAD OF` triggers of a view for one event, which is what
@@ -3421,7 +3446,7 @@ impl Writer {
             .collect();
         let (table, rows) = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?
+            let database = Database::open_collating(&bytes, self.collating)?
                 .seeded(self.random.word())
                 .defining(self.defined)
                 .counting(self.counted);
@@ -3491,7 +3516,7 @@ impl Writer {
             .collect();
         let (table, written) = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?
+            let database = Database::open_collating(&bytes, self.collating)?
                 .seeded(self.random.word())
                 .defining(self.defined)
                 .counting(self.counted);
@@ -3522,6 +3547,7 @@ impl Writer {
                         random: &self.random,
                         counted: self.counted,
                         defined: self.defined,
+                        collating: self.collating,
                         outer: aside
                             .as_ref()
                             .map(|one| -> &dyn crate::eval::Row { one })
@@ -3586,7 +3612,7 @@ impl Writer {
         let triggers = self.instead_of(name, TriggerEvent::Delete)?;
         let (table, taken) = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?
+            let database = Database::open_collating(&bytes, self.collating)?
                 .seeded(self.random.word())
                 .defining(self.defined)
                 .counting(self.counted);
@@ -3601,6 +3627,7 @@ impl Writer {
                     random: &self.random,
                     counted: self.counted,
                     defined: self.defined,
+                    collating: self.collating,
                     outer,
                     reading: Some(Reading {
                         database: &database,
@@ -3637,7 +3664,7 @@ impl Writer {
     /// Reading the schema costs O(n) in its rows.
     fn keeps_rows(&self, name: &[u8]) -> Result<bool, Error> {
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open_collating(&bytes, self.collating)?;
         Ok(database
             .table(name)
             .is_some_and(|(table, _)| table.without_rowid))
@@ -3668,6 +3695,7 @@ impl Writer {
             random: &self.random,
             counted: self.counted,
             defined: self.defined,
+            collating: self.collating,
             outer,
             reading: Some(reading),
         };
@@ -3689,7 +3717,7 @@ impl Writer {
     ) -> Result<i64, Error> {
         let (root, rows, kept, table) = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?
+            let database = Database::open_collating(&bytes, self.collating)?
                 .counting(self.counted)
                 .defining(self.defined);
             // The table was found before this ran, so the refusal
@@ -3763,9 +3791,11 @@ impl Writer {
             table,
             ..
         } = inserting;
-        let order = Self::checked_order(upserts, (arena, sql), (&table, None, &kept))?;
+        let order =
+            Self::checked_order(upserts, (arena, sql), (&table, None, &kept), self.collating)?;
         let affinities = ordered_affinities(&table);
         let into = Insertion {
+            collating: self.collating,
             arena,
             sql,
             upserts,
@@ -3841,7 +3871,9 @@ impl Writer {
                     continue;
                 }
                 let columns = Self::key_column(into.table, None);
-                if let Some(clause) = upsert_of(into.arena, into.sql, into.upserts, &columns) {
+                if let Some(clause) =
+                    upsert_of(into.arena, into.sql, into.upserts, &columns, into.collating)
+                {
                     return Ok(Conflicted::Wrote(
                         self.upsert_keyed(into, clause, named, key)?,
                     ));
@@ -3868,7 +3900,9 @@ impl Writer {
                 continue;
             };
             let columns = Self::key_columns(into.table, into.kept, index).unwrap_or_default();
-            if let Some(clause) = upsert_of(into.arena, into.sql, into.upserts, &columns) {
+            if let Some(clause) =
+                upsert_of(into.arena, into.sql, into.upserts, &columns, into.collating)
+            {
                 // The entry the row shares a key with ends with the key
                 // of the row it belongs to.
                 return Ok(Conflicted::Wrote(
@@ -3938,7 +3972,7 @@ impl Writer {
         let table = wanted.table;
         let held = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?;
+            let database = Database::open_collating(&bytes, self.collating)?;
             database
                 .keyed_rows_of(&table.name)?
                 .into_iter()
@@ -4128,7 +4162,7 @@ impl Writer {
         collations: &[Collation],
     ) -> Result<Vec<Value>, Error> {
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open_collating(&bytes, self.collating)?;
         // The key is one the tree answered, so the walk finds the row it
         // belongs to and the refusal carries no name to write into a
         // message.
@@ -4179,7 +4213,7 @@ impl Writer {
         written_to(name)?;
         let sets = arena.sets(statement.sets);
         let bytes = self.image();
-        let database = Database::open(&bytes)?
+        let database = Database::open_collating(&bytes, self.collating)?
             .counting(self.counted)
             .defining(self.defined);
         // The table was found before this ran, so the refusal carries
@@ -4226,6 +4260,7 @@ impl Writer {
                     random: &self.random,
                     counted: self.counted,
                     defined: self.defined,
+                    collating: self.collating,
                     outer: aside
                         .as_ref()
                         .map(|one| -> &dyn crate::eval::Row { one })
@@ -4444,7 +4479,7 @@ impl Writer {
             crate::tree::clear_tree(&mut self.pages, root, Kind::LeafIndex)?;
             let entries = {
                 let bytes = self.image();
-                let database = Database::open(&bytes)?;
+                let database = Database::open_collating(&bytes, self.collating)?;
                 let (over, _) = database.table(&table).ok_or(Error::Unsupported)?;
                 let over = Over {
                     arena: &tree,
@@ -4473,8 +4508,8 @@ impl Writer {
     /// Reading the schema costs O(n) in its rows.
     fn reindexed(&self, named: Option<&[u8]>) -> Result<Vec<Rebuilt>, Error> {
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
-        let collation = named.and_then(Collation::of_name);
+        let database = Database::open_collating(&bytes, self.collating)?;
+        let collation = named.and_then(|name| crate::value::collation_of(name, self.collating));
         let over: Option<Vec<u8>> = match named {
             None => None,
             Some(_) if collation.is_some() => None,
@@ -4522,6 +4557,37 @@ impl Writer {
         Ok(held)
     }
 
+    /// The key of one row, the key the statement gave it, and the
+    /// values an index over the table reads.
+    ///
+    /// `sqlite3_column_int64`: the key of a table is a whole number
+    /// and nothing else, so a value the affinity of the column left as
+    /// another type is refused. The column the key is another name for
+    /// answers the key to an index and is stored as nothing, because
+    /// the key carries it. Costs O(n) over the columns of the row.
+    fn keying(
+        key: Value,
+        values: &mut [Value],
+        alias: Option<usize>,
+        next: i64,
+    ) -> Result<(i64, Option<i64>, Vec<Value>), Error> {
+        let held = alias.map(|at| values.get(at).cloned().unwrap_or(Value::Null));
+        let given = match (key, held) {
+            (Value::Int(given), _) | (Value::Null, Some(Value::Int(given))) => Some(given),
+            (Value::Null, None | Some(Value::Null)) => None,
+            _ => return Err(Error::Mismatch),
+        };
+        let rowid = given.unwrap_or_else(|| next.saturating_add(1));
+        let mut named = values.to_vec();
+        for slot in named.iter_mut().skip(alias.unwrap_or(usize::MAX)).take(1) {
+            *slot = Value::Int(rowid);
+        }
+        for slot in values.iter_mut().skip(alias.unwrap_or(usize::MAX)).take(1) {
+            *slot = Value::Null;
+        }
+        Ok((rowid, given, named))
+    }
+
     /// `INSERT`: the rows the statement answers, each put in the tree
     /// of the table it names and in every index over that table.
     fn insert(
@@ -4549,8 +4615,14 @@ impl Writer {
             kept,
             table,
         } = inserting;
-        let order = Self::checked_order(upserts, (arena, sql), (&table, alias, &kept))?;
+        let order = Self::checked_order(
+            upserts,
+            (arena, sql),
+            (&table, alias, &kept),
+            self.collating,
+        )?;
         let into = Insertion {
+            collating: self.collating,
             arena,
             sql,
             upserts,
@@ -4575,29 +4647,8 @@ impl Writer {
             if fires {
                 next = next.max(largest(&self.pages, root)?.unwrap_or(0));
             }
-            // The key of the table is a whole number and nothing else,
-            // which is what `sqlite3_column_int64` of that column
-            // answers for: a value the affinity of the column left as
-            // another type is refused.
-            let held = alias.map(|at| values.get(at).cloned().unwrap_or(Value::Null));
-            let given = match (key, held) {
-                (Value::Int(given), _) | (Value::Null, Some(Value::Int(given))) => Some(given),
-                (Value::Null, None | Some(Value::Null)) => None,
-                _ => return Err(Error::Mismatch),
-            };
-            let rowid = given.unwrap_or_else(|| next.saturating_add(1));
+            let (rowid, given, mut named) = Self::keying(key, &mut values, alias, next)?;
             next = next.max(rowid);
-            // The column the rowid is another name for answers the
-            // key, which is what an index over that column holds.
-            let mut named = values.clone();
-            for slot in named.iter_mut().skip(alias.unwrap_or(usize::MAX)).take(1) {
-                *slot = Value::Int(rowid);
-            }
-            // The column the rowid is another name for is stored as
-            // nothing, because the key carries it.
-            for slot in values.iter_mut().skip(alias.unwrap_or(usize::MAX)).take(1) {
-                *slot = Value::Null;
-            }
             if fires && !self.fired_early(&before, &table, &named, alias, given)? {
                 continue;
             }
@@ -4710,7 +4761,9 @@ impl Writer {
                 continue;
             };
             let columns = Self::key_columns(into.table, into.kept, index).unwrap_or_default();
-            if let Some(clause) = upsert_of(into.arena, into.sql, into.upserts, &columns) {
+            if let Some(clause) =
+                upsert_of(into.arena, into.sql, into.upserts, &columns, into.collating)
+            {
                 // The entry the row shares a key with ends with the key
                 // of the row it belongs to.
                 let other = held.first().map_or(rowid, Value::to_integer);
@@ -4755,7 +4808,7 @@ impl Writer {
             return Ok(None);
         }
         let key = Self::key_column(into.table, into.alias);
-        if let Some(clause) = upsert_of(into.arena, into.sql, into.upserts, &key) {
+        if let Some(clause) = upsert_of(into.arena, into.sql, into.upserts, &key, into.collating) {
             let wrote = self.upsert(into, clause, named, (rowid, rowid))?;
             return Ok(Some(Conflicted::Wrote(wrote)));
         }
@@ -4785,6 +4838,7 @@ impl Writer {
         upserts: &[crate::ast::Upsert],
         held: (&Arena, &[u8]),
         over: (&Table, Option<usize>, &[Kept]),
+        collating: &[crate::value::Collating],
     ) -> Result<Vec<Option<usize>>, Error> {
         let (arena, sql) = held;
         let (table, alias, kept) = over;
@@ -4796,7 +4850,7 @@ impl Writer {
             if clause.targets.is_empty() {
                 break;
             }
-            let targets = targets_of(arena, sql, clause).ok_or(Error::NoUpsertKey)?;
+            let targets = targets_of(arena, sql, clause, collating).ok_or(Error::NoUpsertKey)?;
             if names_key(&Self::key_column(table, alias), &targets) {
                 at_key.get_or_insert(named.len());
                 continue;
@@ -4874,7 +4928,7 @@ impl Writer {
         let table = wanted.table;
         let (rowid, held) = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?;
+            let database = Database::open_collating(&bytes, self.collating)?;
             database
                 .rows_of(&table.name)?
                 .into_iter()
@@ -5024,7 +5078,7 @@ impl Writer {
         let wanted = crate::value::stored(name, self.header.encoding);
         let found = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?;
+            let database = Database::open_collating(&bytes, self.collating)?;
             let Some((_, root)) = database.table(SEQUENCE) else {
                 // A database with no table that counts its keys up has
                 // no table of counts to take a row out of.
@@ -5048,7 +5102,7 @@ impl Writer {
     /// Reading it costs O(n) in the rows of that table.
     fn counted(&self, name: &[u8]) -> Result<i64, Error> {
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open_collating(&bytes, self.collating)?;
         let wanted = crate::value::stored(name, self.header.encoding);
         Ok(database
             .rows_of(SEQUENCE)?
@@ -5067,7 +5121,7 @@ impl Writer {
         let wanted = crate::value::stored(name, self.header.encoding);
         let (root, rowid) = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?;
+            let database = Database::open_collating(&bytes, self.collating)?;
             let (_, root) = database.table(SEQUENCE).ok_or(Error::NoTable(Vec::new()))?;
             let rowid = database
                 .rows_of(SEQUENCE)?
@@ -5126,6 +5180,8 @@ struct Held<'a> {
     counted: crate::func::Counted,
     /// The functions the application defined on the connection.
     defined: &'static [crate::func::Defined],
+    /// The collations the application defined on the connection.
+    collating: &'static [crate::value::Collating],
     /// The row a trigger's body reads as `new` and `old`, where this
     /// row is one of a statement a trigger runs.
     outer: Option<&'a dyn crate::eval::Row>,
@@ -5137,6 +5193,10 @@ struct Held<'a> {
 impl crate::eval::Row for Held<'_> {
     fn defined(&self, name: &[u8], count: usize) -> Option<crate::func::Defined> {
         crate::func::defined(self.defined, name, count)
+    }
+
+    fn collating(&self) -> &'static [crate::value::Collating] {
+        self.collating
     }
 
     fn random(&self) -> Option<&crate::random::Source> {
@@ -5402,6 +5462,8 @@ struct Insertion<'a> {
     returning: crate::ast::Range,
     /// The order every row is held to the keys of the table in.
     order: &'a [Option<usize>],
+    /// The collations the application defined on the connection.
+    collating: &'a [crate::value::Collating],
 }
 
 /// What a row that shares a key with one the table holds does.
@@ -5594,12 +5656,17 @@ type Target = (Vec<u8>, Option<Collation>);
 
 /// The terms an `ON CONFLICT` clause names, and nothing where a term is
 /// not a column.
-fn targets_of(arena: &Arena, sql: &[u8], clause: &crate::ast::Upsert) -> Option<Vec<Target>> {
+fn targets_of(
+    arena: &Arena,
+    sql: &[u8],
+    clause: &crate::ast::Upsert,
+    collating: &[crate::value::Collating],
+) -> Option<Vec<Target>> {
     arena
         .orders(clause.targets)
         .iter()
         .map(|term| {
-            let (named, written) = crate::schema::collated(arena, term.expr, sql);
+            let (named, written) = crate::schema::collated(arena, term.expr, sql, collating);
             Some((crate::schema::dequote(named?.text(sql)), written))
         })
         .collect()
@@ -5614,10 +5681,12 @@ fn upsert_of<'a>(
     sql: &[u8],
     upserts: &'a [crate::ast::Upsert],
     wanted: &Keys,
+    collating: &[crate::value::Collating],
 ) -> Option<&'a crate::ast::Upsert> {
     upserts.iter().find(|clause| {
         clause.targets.is_empty()
-            || targets_of(arena, sql, clause).is_some_and(|targets| names_key(wanted, &targets))
+            || targets_of(arena, sql, clause, collating)
+                .is_some_and(|targets| names_key(wanted, &targets))
     })
 }
 
@@ -5787,7 +5856,7 @@ impl Writer {
         }
         let (root, keys, kept, table) = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?
+            let database = Database::open_collating(&bytes, self.collating)?
                 .counting(self.counted)
                 .defining(self.defined);
             let (table, root) = database
@@ -5805,6 +5874,7 @@ impl Writer {
                     random: &self.random,
                     counted: self.counted,
                     defined: self.defined,
+                    collating: self.collating,
                     outer,
                     reading: Some(Reading {
                         database: &database,
@@ -5883,7 +5953,7 @@ impl Writer {
         written_to(name)?;
         let sets = arena.sets(statement.sets);
         let bytes = self.image();
-        let database = Database::open(&bytes)?
+        let database = Database::open_collating(&bytes, self.collating)?
             .counting(self.counted)
             .defining(self.defined);
         let (table, root) = database
@@ -5937,6 +6007,7 @@ impl Writer {
                     random: &self.random,
                     counted: self.counted,
                     defined: self.defined,
+                    collating: self.collating,
                     outer: aside
                         .as_ref()
                         .map(|one| -> &dyn crate::eval::Row { one })
@@ -6191,7 +6262,7 @@ impl Writer {
         // the statement writes over is the one that key finds.
         let (rowid, values) = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?;
+            let database = Database::open_collating(&bytes, self.collating)?;
             database
                 .rows_of(&table.name)?
                 .into_iter()
@@ -6290,7 +6361,7 @@ impl Writer {
         written: Conflict,
     ) -> Result<bool, Error> {
         let bytes = self.image();
-        let database = Database::open(&bytes)?;
+        let database = Database::open_collating(&bytes, self.collating)?;
         // `sqlite3ComputeGeneratedColumns` runs before the opcode that
         // holds the row to the types of the table and before the
         // constraints.
@@ -6334,6 +6405,7 @@ impl Writer {
             random: &self.random,
             counted: self.counted,
             defined: self.defined,
+            collating: self.collating,
             outer: None,
             reading: None,
         };

@@ -18,6 +18,8 @@
 //! so this is never a step of `cargo xtask check`; `sh tools/sqlite.sh`
 //! brings the checkout.
 
+use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -35,7 +37,7 @@ use db_sqlite::func::Defined;
 use db_sqlite::header::Encoding;
 use db_sqlite::pragma::Kept;
 use db_sqlite::random::Source;
-use db_sqlite::value::Value;
+use db_sqlite::value::{Collating, Value};
 
 use crate::error::Error;
 
@@ -477,6 +479,9 @@ struct Session {
     /// What each connection was told for the pragmas it keeps a value
     /// for, which belong to a connection and not to the file.
     pragmas: BTreeMap<String, Kept>,
+    /// The collations the tester defined on each connection, which a
+    /// connection that is opened again holds none of.
+    collations: BTreeMap<String, &'static [Collating]>,
     /// What the file has scored.
     score: Score,
     /// When the file began, which is what the deadline is counted from.
@@ -493,20 +498,44 @@ impl Session {
             nulls: BTreeMap::new(),
             counters: BTreeMap::new(),
             pragmas: BTreeMap::new(),
+            collations: BTreeMap::new(),
             score: Score::default(),
             started: Instant::now(),
         }
     }
 
     /// Answers the requests of the tester until the line closes.
+    ///
+    /// The line is held on the thread, because a collation the tester
+    /// defined writes a call onto it from inside the engine.
     fn serve(&mut self, stream: &TcpStream) -> Result<(), Error> {
-        let mut reader = BufReader::new(
+        let reader = BufReader::new(
             stream
                 .try_clone()
                 .map_err(|source| Error::io("reading the line", source))?,
         );
+        let writing = stream
+            .try_clone()
+            .map_err(|source| Error::io("reading the line", source))?;
+        LINE.with(|line| {
+            *line.borrow_mut() = Some(Line {
+                reader,
+                writer: writing,
+            });
+        });
+        let out = self.answering(stream);
+        LINE.with(|line| line.borrow_mut().take());
+        out
+    }
+
+    /// Reads one request at a time and answers it.
+    fn answering(&mut self, stream: &TcpStream) -> Result<(), Error> {
         let mut writer = stream;
-        while let Some((verb, args)) = request(&mut reader)? {
+        while let Some((verb, args)) = LINE.with(|line| {
+            line.borrow_mut()
+                .as_mut()
+                .map_or(Ok(None), |line| request(&mut line.reader))
+        })? {
             // The deadline is counted over the file and not over one
             // request, because a file that writes a million rows spends
             // its time inside the engine and not on the line.
@@ -538,6 +567,7 @@ impl Session {
                 self.connections.remove(first);
                 self.counters.remove(first);
                 self.pragmas.remove(first);
+                self.collations.remove(first);
                 Ok(Vec::new())
             }
             "delete" => {
@@ -551,6 +581,12 @@ impl Session {
                 usize::from(db_sqlite::token::complete(second.as_bytes())).to_string(),
             ]),
             "copy" => self.copy(first, second),
+            // `sqlite3_create_collation`: the tester names a proc, and
+            // the engine reaches that proc back over the line.
+            "collate" => {
+                self.collates(first, second);
+                Ok(Vec::new())
+            }
             "null" => {
                 self.nulls.insert(first.to_owned(), second.to_owned());
                 Ok(Vec::new())
@@ -608,6 +644,29 @@ impl Session {
         // relies on.
         self.counters.insert(name.to_owned(), Counted::default());
         self.pragmas.insert(name.to_owned(), Kept::default());
+        // `sqlite3_create_collation` holds a collation on one
+        // connection, so a connection that opens again defines none.
+        self.collations.remove(name);
+    }
+
+    /// Keeps a collation the tester defined under its name, leaking the
+    /// name and the list so that both outlive the file.
+    ///
+    /// A file defines a handful of collations, so leaking one list per
+    /// definition costs O(n^2) bytes over n definitions and nothing
+    /// that matters.
+    fn collates(&mut self, connection: &str, name: &str) {
+        let held = self.collations.entry(connection.to_owned()).or_default();
+        let mut collating: Vec<Collating> = held
+            .iter()
+            .filter(|one| one.name != name.as_bytes())
+            .copied()
+            .collect();
+        collating.push(Collating {
+            name: Box::leak(name.as_bytes().to_vec().into_boxed_slice()),
+            by: asked,
+        });
+        *held = Box::leak(collating.into_boxed_slice());
     }
 
     /// One database written again under another path, which is what a
@@ -634,6 +693,7 @@ impl Session {
             .ok_or_else(|| format!("no such connection: {name}"))?;
         let counted = self.counters.get(name).copied().unwrap_or_default();
         let kept = self.pragmas.get(name).cloned().unwrap_or_default();
+        let collating = self.collations.get(name).copied().unwrap_or_default();
         let writer = self
             .held
             .get_mut(&path)
@@ -643,6 +703,7 @@ impl Session {
         // the statements of this request and answers them back.
         writer.counts_as(counted);
         writer.kept_as(kept);
+        writer.collates(collating);
         let mut out = Vec::new();
         let mut ran = Ok(());
         for statement in statements(sql) {
@@ -653,7 +714,7 @@ impl Session {
             if text.trim().is_empty() {
                 continue;
             }
-            match run_one(writer, text) {
+            match run_one(writer, text, collating) {
                 Ok(values) => out.extend(values.iter().map(|value| listed(value, &null))),
                 Err(message) => {
                     ran = Err(message);
@@ -688,8 +749,9 @@ impl Session {
         if !reads(last) {
             return Ok(Vec::new());
         }
+        let collating = self.collations.get(name).copied().unwrap_or_default();
         let bytes = writer.written();
-        let database = Database::open(&bytes)
+        let database = Database::open_collating(&bytes, collating)
             .map(|database| {
                 database
                     .naming(writer.naming())
@@ -732,6 +794,72 @@ impl Session {
             }
         }
     }
+}
+
+/// The line to the tester while one file runs, which a collation the
+/// tester defined writes a `CALL` onto.
+struct Line {
+    /// What the requests of the tester are read from.
+    reader: BufReader<TcpStream>,
+    /// What answers and calls are written onto.
+    writer: TcpStream,
+}
+
+thread_local! {
+    /// The line of the run on this thread, which `asked` reaches
+    /// because `Comparing` is a bare function and carries nothing.
+    static LINE: RefCell<Option<Line>> = const { RefCell::new(None) };
+}
+
+/// The order of two values under a collation the tester defined, which
+/// is one `CALL` onto the line and the `RET` that answers it.
+///
+/// `sqlite3_create_collation` hands the comparison to the application,
+/// so the tester's own proc answers. Costs one round trip per pair,
+/// which makes a sort of n values cost O(n log n) round trips.
+fn asked(name: &'static [u8], left: &[u8], right: &[u8]) -> Ordering {
+    LINE.with(|line| {
+        let mut held = line.borrow_mut();
+        let Some(line) = held.as_mut() else {
+            return Ordering::Equal;
+        };
+        let values = [
+            String::from_utf8_lossy(name).into_owned(),
+            String::from_utf8_lossy(left).into_owned(),
+            String::from_utf8_lossy(right).into_owned(),
+        ];
+        if write_call(&mut line.writer, &values).is_err() {
+            return Ordering::Equal;
+        }
+        let answered = returned(&mut line.reader).unwrap_or(0);
+        answered.cmp(&0)
+    })
+}
+
+/// Asks the tester to run a proc, written as `CALL` and its values.
+fn write_call(stream: &mut TcpStream, values: &[String]) -> Result<(), Error> {
+    let mut out = format!("CALL {}\n", values.len()).into_bytes();
+    for value in values {
+        out.extend_from_slice(format!("{}\n", value.len()).as_bytes());
+        out.extend_from_slice(value.as_bytes());
+        out.push(b'\n');
+    }
+    stream
+        .write_all(&out)
+        .map_err(|source| Error::io("writing a call", source))
+}
+
+/// What the tester's proc answered, read as `RET` and one value.
+fn returned(reader: &mut BufReader<TcpStream>) -> Option<i64> {
+    let head = line(reader).ok()??;
+    if head.split_whitespace().next() != Some("RET") {
+        return None;
+    }
+    let length: usize = line(reader).ok()??.trim().parse().ok()?;
+    let mut bytes = vec![0_u8; length];
+    reader.read_exact(&mut bytes).ok()?;
+    line(reader).ok()?;
+    String::from_utf8_lossy(&bytes).trim().parse().ok()
 }
 
 /// One line to the process that started this run, written as it
@@ -791,7 +919,11 @@ fn randstr(args: &[Value], random: Option<&Source>) -> Result<Value, db_sqlite::
 
 /// One statement: a reader answers one that reads and the writer
 /// answers the rest, which is what a connection does with either.
-fn run_one(writer: &mut Writer, text: &str) -> Result<Vec<Value>, String> {
+fn run_one(
+    writer: &mut Writer,
+    text: &str,
+    collating: &'static [Collating],
+) -> Result<Vec<Value>, String> {
     let mut out = Vec::new();
     if reads(text) {
         let bytes = writer.written();
@@ -799,9 +931,9 @@ fn run_one(writer: &mut Writer, text: &str) -> Result<Vec<Value>, String> {
         // the log, so a reader follows the log beside the file.
         let log = writer.log().map(db_sqlite::wal::Wal::open);
         let opened = match &log {
-            Some(Ok(log)) => Database::open_with_log(&bytes, log),
+            Some(Ok(log)) => Database::open_log_collating(&bytes, log, collating),
             Some(Err(error)) => return Err(format!("{error}")),
-            None => Database::open(&bytes),
+            None => Database::open_collating(&bytes, collating),
         };
         let counted = writer.counts();
         let naming = writer.naming();
