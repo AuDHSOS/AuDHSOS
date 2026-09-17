@@ -22392,7 +22392,9 @@ fn array_index_units(units: &[u16]) -> Option<u32> {
             .filter(|digit| *digit < 10)?;
         index = index.checked_mul(10)?.checked_add(digit)?;
     }
-    Some(index)
+    // 10.4.2.1 names an index below 2^32-1 and no other, so the largest u32 is
+    // an ordinary property name.
+    (index != u32::MAX).then_some(index)
 }
 
 /// The Number a canonical numeric index string of 7.1.21 names.
@@ -23069,6 +23071,14 @@ mod tests {
         assert_eq!(array_index(leading_zero, &heap), Ok(None));
         assert_eq!(array_index(maximum, &heap), Ok(Some(4_294_967_294)));
         assert_eq!(array_index(too_large, &heap), Ok(None));
+        // The name a constant key of the lowering carries reads the same way,
+        // so 2^32-1 is an ordinary property name there too.
+        let units = |text: &str| text.encode_utf16().collect::<Vec<u16>>();
+        assert_eq!(array_index_units(&units("0")), Some(0));
+        assert_eq!(array_index_units(&units("01")), None);
+        assert_eq!(array_index_units(&units("4294967294")), Some(4_294_967_294));
+        assert_eq!(array_index_units(&units("4294967295")), None);
+        assert_eq!(array_index_units(&units("4294967296")), None);
     }
 
     #[test]
