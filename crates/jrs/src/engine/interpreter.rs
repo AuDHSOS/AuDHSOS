@@ -19655,8 +19655,9 @@ impl RegisterVM {
             // An instruction begins at a Safe Point: every live value is in a
             // register, the accumulator or a context. Collection is never
             // hidden inside allocation, so leaving room here is what lets an
-            // operation without a retry loop of its own allocate at all.
-            if heap.nursery_is_full() {
+            // operation without a retry loop of its own allocate at all, and
+            // the room is what a native may take before the next Safe Point.
+            if heap.nursery_free() < super::heap::NATIVE_ALLOCATION_RESERVE {
                 self.collect_young(active_code, heap)?;
             }
             let units = CodeUnits {

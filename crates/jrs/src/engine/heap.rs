@@ -30,6 +30,14 @@ use alloc::{collections::BTreeMap, collections::BTreeSet, vec::Vec};
 /// Default capacity of the Nursery in number of objects.
 pub const NURSERY_OBJECT_CAPACITY: usize = 1024;
 
+/// The entries a Safe Point leaves the Nursery for the natives that run
+/// between two of them.
+///
+/// A native takes its intermediate values in Rust locals the collector cannot
+/// reach, so collection never runs inside one: the room has to be there before
+/// it starts.
+pub const NATIVE_ALLOCATION_RESERVE: usize = NURSERY_OBJECT_CAPACITY / 4;
+
 /// Maximum number of entries representable in one Nursery semispace.
 pub const MAX_NURSERY_ENTRIES: usize = 1 << 11;
 
@@ -99,6 +107,18 @@ impl Nursery {
 
     const fn is_full(&self) -> bool {
         self.objects.len() >= self.object_capacity
+    }
+
+    /// The entries the semispace still holds, for objects and for contexts
+    /// alike, which is the smaller of the two.
+    const fn free(&self) -> usize {
+        let objects = self.object_capacity.saturating_sub(self.objects.len());
+        let contexts = self.object_capacity.saturating_sub(self.contexts.len());
+        if objects < contexts {
+            objects
+        } else {
+            contexts
+        }
     }
 
     const fn contexts_full(&self) -> bool {
@@ -415,6 +435,15 @@ impl GenerationalHeap {
     #[must_use]
     pub const fn nursery_is_full(&self) -> bool {
         self.nursery.is_full()
+    }
+
+    /// The entries the Nursery still holds.
+    ///
+    /// A native allocates without a retry loop of its own, so the Safe Point
+    /// of the interpreter leaves it this much room rather than one entry.
+    #[must_use]
+    pub const fn nursery_free(&self) -> usize {
+        self.nursery.free()
     }
 
     /// Bump-allocates a new object in the Nursery.
