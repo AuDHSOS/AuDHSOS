@@ -976,6 +976,20 @@ pub enum Intrinsic {
     DatePrototypeToLocaleDateString,
     /// `Date.prototype.toLocaleTimeString`, 21.4.4.40.
     DatePrototypeToLocaleTimeString,
+    /// `ArrayBuffer`, 25.1.4.1.
+    ArrayBufferConstructor,
+    /// `isView`, 25.1.5.1.
+    ArrayBufferIsView,
+    /// `slice`, 25.1.6.7.
+    ArrayBufferPrototypeSlice,
+    /// `get byteLength`, 25.1.6.2.
+    ArrayBufferPrototypeByteLength,
+    /// `get detached`, 25.1.6.3.
+    ArrayBufferPrototypeDetached,
+    /// `get resizable`, 25.1.6.6.
+    ArrayBufferPrototypeResizable,
+    /// `get maxByteLength`, 25.1.6.4.
+    ArrayBufferPrototypeMaxByteLength,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -1029,6 +1043,10 @@ pub enum IntrinsicHolder {
     DatePrototype,
     /// `%Date%`, which carries the functions 21.4.3 gives the constructor.
     DateConstructor,
+    /// `%ArrayBuffer.prototype%`, which carries what 25.1.6 gives it.
+    ArrayBufferPrototype,
+    /// `%ArrayBuffer%`, which carries the function 25.1.5 gives it.
+    ArrayBufferConstructor,
     /// `%WeakMap.prototype%`, which carries the methods 24.3.3 gives it.
     WeakMapPrototype,
     /// `%WeakSet.prototype%`, which carries the methods 24.4.3 gives it.
@@ -1047,7 +1065,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 336] = [
+    pub const ALL: [Self; 343] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1384,6 +1402,13 @@ impl Intrinsic {
         Self::DatePrototypeToLocaleString,
         Self::DatePrototypeToLocaleDateString,
         Self::DatePrototypeToLocaleTimeString,
+        Self::ArrayBufferConstructor,
+        Self::ArrayBufferIsView,
+        Self::ArrayBufferPrototypeSlice,
+        Self::ArrayBufferPrototypeByteLength,
+        Self::ArrayBufferPrototypeDetached,
+        Self::ArrayBufferPrototypeResizable,
+        Self::ArrayBufferPrototypeMaxByteLength,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -1598,6 +1623,8 @@ impl Intrinsic {
                 IntrinsicHolder::Json
             }
             Self::DateNow | Self::DateUtc | Self::DateParse => IntrinsicHolder::DateConstructor,
+            Self::ArrayBufferIsView => IntrinsicHolder::ArrayBufferConstructor,
+            Self::ArrayBufferPrototypeSlice => IntrinsicHolder::ArrayBufferPrototype,
             Self::DatePrototypeValueOf
             | Self::DatePrototypeGetTime
             | Self::DatePrototypeSetTime
@@ -1693,6 +1720,13 @@ impl Intrinsic {
             | Self::Escape
             | Self::Unescape
             | Self::DateConstructor
+            | Self::ArrayBufferConstructor
+            // 25.1.6 gives four of them as accessors, which the Realm installs
+            // beside the methods, so the Global holder installs none of them.
+            | Self::ArrayBufferPrototypeByteLength
+            | Self::ArrayBufferPrototypeDetached
+            | Self::ArrayBufferPrototypeResizable
+            | Self::ArrayBufferPrototypeMaxByteLength
             // 27.2.1.3 stands on no object, so the Global holder never
             // installs either resolving function.
             | Self::PromiseConstructor
@@ -2092,6 +2126,13 @@ impl Intrinsic {
             Self::DatePrototypeToLocaleString => 333,
             Self::DatePrototypeToLocaleDateString => 334,
             Self::DatePrototypeToLocaleTimeString => 335,
+            Self::ArrayBufferConstructor => 336,
+            Self::ArrayBufferIsView => 337,
+            Self::ArrayBufferPrototypeSlice => 338,
+            Self::ArrayBufferPrototypeByteLength => 339,
+            Self::ArrayBufferPrototypeDetached => 340,
+            Self::ArrayBufferPrototypeResizable => 341,
+            Self::ArrayBufferPrototypeMaxByteLength => 342,
         }
     }
 
@@ -2438,6 +2479,13 @@ impl Intrinsic {
             Self::DatePrototypeToLocaleString => 333,
             Self::DatePrototypeToLocaleDateString => 334,
             Self::DatePrototypeToLocaleTimeString => 335,
+            Self::ArrayBufferConstructor => 336,
+            Self::ArrayBufferIsView => 337,
+            Self::ArrayBufferPrototypeSlice => 338,
+            Self::ArrayBufferPrototypeByteLength => 339,
+            Self::ArrayBufferPrototypeDetached => 340,
+            Self::ArrayBufferPrototypeResizable => 341,
+            Self::ArrayBufferPrototypeMaxByteLength => 342,
         }
     }
 
@@ -2785,6 +2833,13 @@ impl Intrinsic {
             333 => Some(Self::DatePrototypeToLocaleString),
             334 => Some(Self::DatePrototypeToLocaleDateString),
             335 => Some(Self::DatePrototypeToLocaleTimeString),
+            336 => Some(Self::ArrayBufferConstructor),
+            337 => Some(Self::ArrayBufferIsView),
+            338 => Some(Self::ArrayBufferPrototypeSlice),
+            339 => Some(Self::ArrayBufferPrototypeByteLength),
+            340 => Some(Self::ArrayBufferPrototypeDetached),
+            341 => Some(Self::ArrayBufferPrototypeResizable),
+            342 => Some(Self::ArrayBufferPrototypeMaxByteLength),
             _ => None,
         }
     }
@@ -2909,6 +2964,12 @@ impl Intrinsic {
             Self::DatePrototypeToLocaleString => "toLocaleString",
             Self::DatePrototypeToLocaleDateString => "toLocaleDateString",
             Self::DatePrototypeToLocaleTimeString => "toLocaleTimeString",
+            Self::ArrayBufferConstructor => "ArrayBuffer",
+            Self::ArrayBufferIsView => "isView",
+            Self::ArrayBufferPrototypeByteLength => "get byteLength",
+            Self::ArrayBufferPrototypeDetached => "get detached",
+            Self::ArrayBufferPrototypeResizable => "get resizable",
+            Self::ArrayBufferPrototypeMaxByteLength => "get maxByteLength",
             Self::DatePrototypeSetMilliseconds => "setMilliseconds",
             Self::DatePrototypeSetUtcMilliseconds => "setUTCMilliseconds",
             Self::DatePrototypeSetSeconds => "setSeconds",
@@ -3113,7 +3174,9 @@ impl Intrinsic {
             Self::ArrayPrototypePop => "pop",
             Self::ArrayPrototypePush => "push",
             Self::ArrayPrototypeReverse => "reverse",
-            Self::StringPrototypeSlice | Self::ArrayPrototypeSlice => "slice",
+            Self::StringPrototypeSlice
+            | Self::ArrayPrototypeSlice
+            | Self::ArrayBufferPrototypeSlice => "slice",
         }
     }
 
@@ -3615,6 +3678,10 @@ impl Intrinsic {
             | Self::DatePrototypeToLocaleString
             | Self::DatePrototypeToLocaleDateString
             | Self::DatePrototypeToLocaleTimeString
+            | Self::ArrayBufferPrototypeByteLength
+            | Self::ArrayBufferPrototypeDetached
+            | Self::ArrayBufferPrototypeResizable
+            | Self::ArrayBufferPrototypeMaxByteLength
             | Self::MapIteratorPrototypeNext
             | Self::SetIteratorPrototypeNext => 0,
             Self::StringFromCharCode
@@ -3762,6 +3829,8 @@ impl Intrinsic {
             | Self::DatePrototypeSetDate
             | Self::DatePrototypeSetUtcDate
             | Self::DatePrototypeSetYear
+            | Self::ArrayBufferConstructor
+            | Self::ArrayBufferIsView
             | Self::WeakMapPrototypeGet
             | Self::WeakMapPrototypeHas
             | Self::WeakMapPrototypeDelete
@@ -3851,6 +3920,7 @@ impl Intrinsic {
             | Self::DatePrototypeSetUtcSeconds
             | Self::DatePrototypeSetMonth
             | Self::DatePrototypeSetUtcMonth
+            | Self::ArrayBufferPrototypeSlice
             | Self::PromisePrototypeThen => 2,
             // 21.4.2.1 and 21.4.3.4 take a year, a month, a day, an hour, a
             // minute, a second and a millisecond.
@@ -4316,6 +4386,26 @@ pub fn date_prototype_owns(name: &[u16]) -> bool {
     wrapper_prototype_owns(&DATE_PROTOTYPE_PROPERTIES, name)
 }
 
+/// The property names 25.1.6 gives `%ArrayBuffer.prototype%`.
+pub const ARRAY_BUFFER_PROTOTYPE_PROPERTIES: [&str; 9] = [
+    "byteLength",
+    "constructor",
+    "detached",
+    "maxByteLength",
+    "resizable",
+    "resize",
+    "slice",
+    "transfer",
+    "transferToFixedLength",
+];
+
+/// Whether `%ArrayBuffer.prototype%` or `%Object.prototype%` owns a property
+/// of this name, which a block resolves on its Prototype Chain.
+#[must_use]
+pub fn array_buffer_prototype_owns(name: &[u16]) -> bool {
+    wrapper_prototype_owns(&ARRAY_BUFFER_PROTOTYPE_PROPERTIES, name)
+}
+
 /// The property names 27.2.5 gives `%Promise.prototype%`.
 pub const PROMISE_PROTOTYPE_PROPERTIES: [&str; 4] = ["catch", "constructor", "finally", "then"];
 
@@ -4606,6 +4696,7 @@ pub struct Realm {
     map_prototype: Root,
     set_prototype: Root,
     date_prototype: Root,
+    array_buffer_prototype: Root,
     weak_map_prototype: Root,
     weak_set_prototype: Root,
     map_iterator_prototype: Root,
@@ -4655,6 +4746,7 @@ struct Holders {
     map_prototype: Root,
     set_prototype: Root,
     date_prototype: Root,
+    array_buffer_prototype: Root,
     weak_map_prototype: Root,
     weak_set_prototype: Root,
     map_iterator_prototype: Root,
@@ -4757,6 +4849,11 @@ impl Realm {
         let date_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
         let date_prototype = heap.push_root(Value::from_object(date_prototype))?;
 
+        // 25.1.6: %ArrayBuffer.prototype% is an ordinary object and carries no
+        // block of its own.
+        let array_buffer_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
+        let array_buffer_prototype = heap.push_root(Value::from_object(array_buffer_prototype))?;
+
         // 24.3.3 and 24.4.3: %WeakMap.prototype% and %WeakSet.prototype% are
         // ordinary objects and neither a WeakMap nor a WeakSet.
         let weak_map_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
@@ -4844,6 +4941,7 @@ impl Realm {
                 map_prototype,
                 set_prototype,
                 date_prototype,
+                array_buffer_prototype,
                 weak_map_prototype,
                 weak_set_prototype,
                 map_iterator_prototype,
@@ -4865,6 +4963,7 @@ impl Realm {
             (Intrinsic::MapConstructor, map_prototype),
             (Intrinsic::SetConstructor, set_prototype),
             (Intrinsic::DateConstructor, date_prototype),
+            (Intrinsic::ArrayBufferConstructor, array_buffer_prototype),
             (Intrinsic::WeakMapConstructor, weak_map_prototype),
             (Intrinsic::WeakSetConstructor, weak_set_prototype),
         ] {
@@ -4880,6 +4979,7 @@ impl Realm {
         Self::define_restricted_properties(heap, &intrinsics, function_prototype)?;
         Self::define_regexp_accessors(heap, &intrinsics, regexp_prototype)?;
         Self::define_collection_size_getters(heap, &intrinsics, map_prototype, set_prototype)?;
+        Self::define_array_buffer_getters(heap, &intrinsics, array_buffer_prototype)?;
         Self::define_trim_aliases(heap, &intrinsics, string_prototype, date_prototype)?;
         Self::define_unscopables(heap, array_prototype)?;
         Self::define_to_string_tags(
@@ -4895,6 +4995,7 @@ impl Realm {
                 (set_prototype, "Set"),
                 (map_iterator_prototype, "Map Iterator"),
                 (set_iterator_prototype, "Set Iterator"),
+                (array_buffer_prototype, "ArrayBuffer"),
                 (weak_map_prototype, "WeakMap"),
                 (weak_set_prototype, "WeakSet"),
             ],
@@ -4940,6 +5041,7 @@ impl Realm {
             map_prototype,
             set_prototype,
             date_prototype,
+            array_buffer_prototype,
             weak_map_prototype,
             weak_set_prototype,
             map_iterator_prototype,
@@ -5530,6 +5632,59 @@ impl Realm {
         Ok(())
     }
 
+    /// The four accessors 25.1.6 gives `%ArrayBuffer.prototype%`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    fn define_array_buffer_getters(
+        heap: &mut GenerationalHeap,
+        intrinsics: &[Root],
+        array_buffer_prototype: Root,
+    ) -> Result<(), HeapError> {
+        let holder = Self::rooted(heap, array_buffer_prototype)?
+            .as_object()
+            .ok_or(HeapError::InvalidReference)?;
+        for (intrinsic, name) in [
+            (Intrinsic::ArrayBufferPrototypeByteLength, "byteLength"),
+            (Intrinsic::ArrayBufferPrototypeDetached, "detached"),
+            (Intrinsic::ArrayBufferPrototypeResizable, "resizable"),
+            (
+                Intrinsic::ArrayBufferPrototypeMaxByteLength,
+                "maxByteLength",
+            ),
+        ] {
+            let getter = Self::rooted(
+                heap,
+                *intrinsics
+                    .get(intrinsic.index())
+                    .ok_or(HeapError::InvalidReference)?,
+            )?;
+            let shape = heap.shapes.root_shape();
+            let pair = heap.allocate_immortal_object(shape, super::value::VALUE_NULL)?;
+            heap.set_object_kind(
+                pair,
+                super::object::ObjectKind::Accessor {
+                    get: getter,
+                    set: super::value::VALUE_UNDEFINED,
+                },
+            )?;
+            let key = PropertyKey::String(heap.strings.intern(name)?);
+            heap.define_own_named(
+                holder,
+                key,
+                Value::from_object(pair),
+                PropertyFlags {
+                    writable: false,
+                    enumerable: false,
+                    configurable: true,
+                    is_accessor: true,
+                },
+            )?;
+        }
+        Ok(())
+    }
+
     /// The `size` 24.1.3.10 and 24.2.3.14 give their Prototype.
     ///
     /// # Errors
@@ -5645,6 +5800,8 @@ impl Realm {
             Intrinsic::ArrayConstructor,
             Intrinsic::RegExpConstructor,
             Intrinsic::PromiseConstructor,
+            // 25.1.5.2 gives `%ArrayBuffer%` the same accessor.
+            Intrinsic::ArrayBufferConstructor,
         ] {
             let holder = Self::rooted(
                 heap,
@@ -5788,6 +5945,15 @@ impl Realm {
                 IntrinsicHolder::PromisePrototype => Self::rooted(heap, holders.promise_prototype)?,
                 IntrinsicHolder::MapPrototype => Self::rooted(heap, holders.map_prototype)?,
                 IntrinsicHolder::DatePrototype => Self::rooted(heap, holders.date_prototype)?,
+                IntrinsicHolder::ArrayBufferPrototype => {
+                    Self::rooted(heap, holders.array_buffer_prototype)?
+                }
+                IntrinsicHolder::ArrayBufferConstructor => Self::rooted(
+                    heap,
+                    *intrinsics
+                        .get(Intrinsic::ArrayBufferConstructor.index())
+                        .ok_or(HeapError::InvalidReference)?,
+                )?,
                 IntrinsicHolder::DateConstructor => Self::rooted(
                     heap,
                     *intrinsics
@@ -6158,6 +6324,15 @@ impl Realm {
     /// Returns [`HeapError::InvalidReference`] for a stale root.
     pub fn date_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
         Self::rooted(heap, self.date_prototype)
+    }
+
+    /// `%ArrayBuffer.prototype%`, 25.1.6.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale root.
+    pub fn array_buffer_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.array_buffer_prototype)
     }
 
     /// `%WeakMap.prototype%`, 24.3.3.

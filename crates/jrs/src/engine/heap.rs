@@ -641,6 +641,27 @@ impl GenerationalHeap {
         }
     }
 
+    /// The specialization of an object, for a clause that writes what it
+    /// holds without going through the property machinery.
+    pub fn object_kind_mut(&mut self, reference: ObjectRef) -> Option<&mut JSObject> {
+        let index = reference.index() as usize;
+        if reference.is_old() {
+            let entry = self.old_gen.objects.get_mut(index)?;
+            if u32::from(entry.generation) != reference.generation() {
+                return None;
+            }
+            entry.value.as_mut()
+        } else {
+            if self.nursery.generation != reference.generation() {
+                return None;
+            }
+            self.nursery
+                .objects
+                .get_mut(index)
+                .map(|entry| &mut entry.value)
+        }
+    }
+
     /// The value 24.3.3.3 keeps for a key, or none where the collection holds
     /// no entry for it.
     #[must_use]

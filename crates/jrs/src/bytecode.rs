@@ -8799,6 +8799,10 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::WeakMapPrototypeDelete
         // The rawJSON proposal answers a Boolean from `isRawJSON`.
         | crate::engine::realm::Intrinsic::JsonIsRawJson
+        // 25.1.5.1, 25.1.6.3 and 25.1.6.6 answer a Boolean.
+        | crate::engine::realm::Intrinsic::ArrayBufferIsView
+        | crate::engine::realm::Intrinsic::ArrayBufferPrototypeDetached
+        | crate::engine::realm::Intrinsic::ArrayBufferPrototypeResizable
         | crate::engine::realm::Intrinsic::WeakSetPrototypeHas
         | crate::engine::realm::Intrinsic::WeakSetPrototypeDelete
         // 24.2.3.12, 24.2.3.13 and 24.2.3.11 answer a Boolean.
@@ -9035,6 +9039,9 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // of it is.
         | crate::engine::realm::Intrinsic::DateConstructor
         | crate::engine::realm::Intrinsic::DatePrototypeToJson
+        // 25.1.4.1 and 25.1.6.7 answer the block they made.
+        | crate::engine::realm::Intrinsic::ArrayBufferConstructor
+        | crate::engine::realm::Intrinsic::ArrayBufferPrototypeSlice
         // 24.1.5.1 and 24.2.5.1 answer an iterator, and 7.4.14 an ordinary
         // object with a `value` and a `done`.
         | crate::engine::realm::Intrinsic::MapPrototypeEntries
@@ -9124,6 +9131,9 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::DatePrototypeGetUtcSeconds
         | crate::engine::realm::Intrinsic::DatePrototypeGetMilliseconds
         | crate::engine::realm::Intrinsic::DatePrototypeGetUtcMilliseconds
+        // 25.1.6.2 and 25.1.6.4 answer a Number.
+        | crate::engine::realm::Intrinsic::ArrayBufferPrototypeByteLength
+        | crate::engine::realm::Intrinsic::ArrayBufferPrototypeMaxByteLength
         | crate::engine::realm::Intrinsic::DatePrototypeSetMilliseconds
         | crate::engine::realm::Intrinsic::DatePrototypeSetUtcMilliseconds
         | crate::engine::realm::Intrinsic::DatePrototypeSetSeconds

@@ -133,6 +133,9 @@ pub enum ObjectKind {
         /// value as well.
         set: bool,
     },
+    /// The `[[ArrayBufferData]]` of 25.1.5, whose bytes are the block 25.1.3.1
+    /// created; `None` is the detached block of 25.1.3.4.
+    ArrayBuffer(Option<alloc::vec::Vec<u8>>),
     /// The `[[DateValue]]` of 21.4.4: the time value, or `NaN` for the Date
     /// 21.4.1.1 calls invalid.
     Date(f64),

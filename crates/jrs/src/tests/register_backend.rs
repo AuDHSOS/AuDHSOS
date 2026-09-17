@@ -9748,3 +9748,47 @@ fn the_texts_of_21_4_4_41_and_the_parse_of_21_4_3_2_agree() -> Result<(), Error>
     }
     Ok(())
 }
+
+#[test]
+fn the_block_of_25_1_holds_the_bytes_it_was_given() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend carries no clause 25.1, so only the engine answers.
+    for (source, answer) in [
+        ("var b=new ArrayBuffer(8);''+b.byteLength", "8"),
+        ("''+new ArrayBuffer(0).byteLength", "0"),
+        // 7.1.22 refuses a length that is no index.
+        (
+            "var r;try{new ArrayBuffer(-1)}catch(e){r=e instanceof RangeError};''+r",
+            "true",
+        ),
+        // Step 1 of 25.1.4.1 refuses a call without `new`.
+        (
+            "var r;try{ArrayBuffer(1)}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        // 25.1.6.7 counts a negative index from the end and clamps to the
+        // block.
+        ("var b=new ArrayBuffer(8);''+b.slice(2,6).byteLength", "4"),
+        ("var b=new ArrayBuffer(8);''+b.slice(-2).byteLength", "2"),
+        ("''+new ArrayBuffer(4).slice(1).byteLength", "3"),
+        // 25.1.6.4 answers the length of a block no resize can grow.
+        (
+            "var b=new ArrayBuffer(4);''+b.detached+' '+b.resizable+' '+b.maxByteLength",
+            "false false 4",
+        ),
+        // 25.1.5.1: no view of a block exists in this Realm yet.
+        ("''+ArrayBuffer.isView(new ArrayBuffer(1))", "false"),
+        // 25.1.6.10 tags the Prototype, and 25.1.5.2 gives the constructor the
+        // accessor of 7.3.22.
+        (
+            "''+Object.prototype.toString.call(new ArrayBuffer(1))",
+            "[object ArrayBuffer]",
+        ),
+        ("''+(ArrayBuffer[Symbol.species]===ArrayBuffer)", "true"),
+        ("''+ArrayBuffer.length+ArrayBuffer.name", "1ArrayBuffer"),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}

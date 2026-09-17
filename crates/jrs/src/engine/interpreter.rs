@@ -2481,6 +2481,15 @@ impl RegisterVM {
             | Intrinsic::DatePrototypeToLocaleTimeString => {
                 self.call_date_intrinsic(intrinsic, &call, heap, realm)
             }
+            Intrinsic::ArrayBufferConstructor
+            | Intrinsic::ArrayBufferIsView
+            | Intrinsic::ArrayBufferPrototypeSlice
+            | Intrinsic::ArrayBufferPrototypeByteLength
+            | Intrinsic::ArrayBufferPrototypeDetached
+            | Intrinsic::ArrayBufferPrototypeResizable
+            | Intrinsic::ArrayBufferPrototypeMaxByteLength => {
+                self.call_array_buffer_intrinsic(intrinsic, &call, heap, realm)
+            }
             Intrinsic::EncodeUri
             | Intrinsic::EncodeUriComponent
             | Intrinsic::DecodeUri
@@ -3081,6 +3090,7 @@ impl RegisterVM {
                     | Intrinsic::WeakMapConstructor
                     | Intrinsic::WeakSetConstructor
                     | Intrinsic::DateConstructor
+                    | Intrinsic::ArrayBufferConstructor
             )
         })
     }
@@ -10849,6 +10859,8 @@ impl RegisterVM {
             // The object of the rawJSON proposal has a null Prototype, so no
             // conversion of it is owed either.
             | ObjectKind::RawJson
+            // 25.1.6 gives a block the `toString` of 20.1.3.6.
+            | ObjectKind::ArrayBuffer(_)
             | ObjectKind::Continuation { .. }
             | ObjectKind::Accessor { .. }
             | ObjectKind::RegExp { .. }
@@ -11093,6 +11105,15 @@ impl RegisterVM {
             // setters, the texts and the `@@toPrimitive` of 21.4.4.45.
             Some(ObjectKind::Date(_)) if chain && super::realm::date_prototype_owns(name) => {
                 Err(VMError::Unsupported("a property of %Date.prototype%"))
+            }
+            // 25.1.6 gives `%ArrayBuffer.prototype%` the three of the
+            // resizable block, which this Realm does not build.
+            Some(ObjectKind::ArrayBuffer(_))
+                if chain && super::realm::array_buffer_prototype_owns(name) =>
+            {
+                Err(VMError::Unsupported(
+                    "a property of %ArrayBuffer.prototype%",
+                ))
             }
             // 20.4.2 gives `%Symbol%` more than the thirteen of table 1.
             Some(ObjectKind::NativeFunction { id, .. })
@@ -11711,6 +11732,9 @@ impl RegisterVM {
                 // WeakSet.
                 | ObjectKind::WeakCollection { .. }
                 | ObjectKind::RawJson
+                // 25.1.6.10 tags a block through @@toStringTag, so its
+                // builtin tag is the ordinary one.
+                | ObjectKind::ArrayBuffer(_)
                 | ObjectKind::CollectionIterator { .. }
                 | ObjectKind::ArrayIterator { .. }
                 | ObjectKind::ArrayIteration { .. }
@@ -13230,6 +13254,203 @@ impl RegisterVM {
         let shape = heap.shapes.root_shape();
         let object = heap.allocate_object(shape, prototype)?;
         heap.set_object_kind(object, ObjectKind::Date(time))?;
+        Ok(Value::from_object(object))
+    }
+
+    /// The clauses of 25.1, which hold the block of bytes 25.1.3.1 created.
+    ///
+    /// 25.1.4.1 with a `maxByteLength` makes the resizable block of 25.1.3.1
+    /// step 3, which this Realm does not build, and 25.1.6.7 constructs
+    /// through the species of 25.1.6.1; both are named gaps.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a receiver that
+    /// carries no block and for a call without `new`, and with a `RangeError`
+    /// for a length 7.1.22 refuses.
+    fn call_array_buffer_intrinsic(
+        &self,
+        intrinsic: Intrinsic,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if intrinsic == Intrinsic::ArrayBufferConstructor {
+            // Step 1 of 25.1.4.1 refuses a call without `new`.
+            if call.construct.is_none() {
+                return Err(type_error(heap, realm, "a constructor called without new"));
+            }
+            let length = Self::byte_index(self.call_argument(call, 0, heap)?, heap, realm)?;
+            // Step 2 reads `maxByteLength` of the options, which makes the
+            // resizable block of 25.1.3.1 step 3.
+            let options = self.call_argument(call, 1, heap)?;
+            if let Some(options) = options.as_object() {
+                let key = PropertyKey::String(heap.strings.intern("maxByteLength")?);
+                if heap
+                    .lookup_named(options, key)?
+                    .map(Self::plain_value)
+                    .transpose()?
+                    .is_some_and(|value| !value.is_undefined())
+                {
+                    return Err(VMError::Unsupported("a resizable block of 25.1.3.1"));
+                }
+            } else if !options.is_undefined() {
+                // Step 2 of 25.1.4.1 reads no property of a primitive.
+                let _ = options;
+            }
+            return Self::allocate_array_buffer(length, heap, realm);
+        }
+        // 25.1.5.1: no view of a block exists in this Realm yet.
+        if intrinsic == Intrinsic::ArrayBufferIsView {
+            return Ok(VALUE_FALSE);
+        }
+        let object = call
+            .receiver
+            .as_object()
+            .filter(|object| {
+                matches!(
+                    heap.get_object(*object).map(|entry| &entry.kind),
+                    Some(&ObjectKind::ArrayBuffer(_))
+                )
+            })
+            .ok_or_else(|| {
+                type_error(heap, realm, "this value carries no ArrayBuffer of its own")
+            })?;
+        let detached = matches!(
+            heap.get_object(object).map(|entry| &entry.kind),
+            Some(&ObjectKind::ArrayBuffer(None))
+        );
+        let length = Self::array_buffer_bytes(object, heap).map_or(0, <[u8]>::len);
+        match intrinsic {
+            // 25.1.6.2 and 25.1.6.4 answer zero for a block 25.1.3.4 detached.
+            Intrinsic::ArrayBufferPrototypeByteLength
+            | Intrinsic::ArrayBufferPrototypeMaxByteLength => Ok(Value::from_f64(if detached {
+                0.0
+            } else {
+                Self::whole(length)
+            })),
+            Intrinsic::ArrayBufferPrototypeDetached => Ok(Value::from_bool(detached)),
+            // 25.1.6.6: this Realm builds no resizable block.
+            Intrinsic::ArrayBufferPrototypeResizable => Ok(VALUE_FALSE),
+            _ => {
+                if detached {
+                    return Err(type_error(heap, realm, "the ArrayBuffer is detached"));
+                }
+                let relative = Self::number_argument(self.call_argument(call, 0, heap)?, heap)?;
+                let whole = Self::whole(length);
+                let first = Self::clamp_index(relative, whole);
+                let end = self.call_argument(call, 1, heap)?;
+                let last = if end.is_undefined() {
+                    whole
+                } else {
+                    Self::clamp_index(Self::number_argument(end, heap)?, whole)
+                };
+                let taken = Self::array_buffer_bytes(object, heap)
+                    .and_then(|bytes| {
+                        let first = usize::try_from(Self::integral(first)).ok()?;
+                        let last = usize::try_from(Self::integral(last)).ok()?;
+                        bytes.get(first..last.max(first)).map(<[u8]>::to_vec)
+                    })
+                    .unwrap_or_default();
+                let answer = Self::allocate_array_buffer(Self::whole(taken.len()), heap, realm)?;
+                if let Some(target) = answer.as_object()
+                    && let Some(ObjectKind::ArrayBuffer(Some(block))) =
+                        heap.object_kind_mut(target).map(|entry| &mut entry.kind)
+                {
+                    *block = taken;
+                }
+                Ok(answer)
+            }
+        }
+    }
+
+    /// The bytes a block holds, or none where 25.1.3.4 detached it.
+    fn array_buffer_bytes(object: ObjectRef, heap: &GenerationalHeap) -> Option<&[u8]> {
+        match heap.get_object(object).map(|entry| &entry.kind) {
+            Some(ObjectKind::ArrayBuffer(Some(bytes))) => Some(bytes.as_slice()),
+            _ => None,
+        }
+    }
+
+    /// A length as the Number 25.1 answers for it.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a block is bounded by the memory of the embedding, far below 2^53"
+    )]
+    const fn whole(length: usize) -> f64 {
+        length as f64
+    }
+
+    /// `RelativeIndex` of 25.1.6.7 steps 5 to 9, which counts from the end for
+    /// a negative one and clamps to the block.
+    fn clamp_index(relative: f64, length: f64) -> f64 {
+        if relative.is_nan() {
+            return 0.0;
+        }
+        let relative = Self::round_toward(relative, false);
+        if relative < 0.0 {
+            (length + relative).max(0.0)
+        } else {
+            relative.min(length)
+        }
+    }
+
+    /// `ToIndex` of 7.1.22, which 25.1.4.1 step 1 reads the length with.
+    fn byte_index(
+        value: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<f64, VMError> {
+        if value.is_undefined() {
+            return Ok(0.0);
+        }
+        let number = Self::number_argument(value, heap)?;
+        let integral = if number.is_nan() {
+            0.0
+        } else {
+            Self::round_toward(number, false)
+        };
+        if integral < 0.0 || integral > 9_007_199_254_740_991.0 {
+            return Err(raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::RangeError,
+                "the length is no index",
+            ));
+        }
+        Ok(integral)
+    }
+
+    /// `AllocateArrayBuffer` of 25.1.3.1, whose block is zero from the start.
+    fn allocate_array_buffer(
+        length: f64,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let Ok(length) = usize::try_from(Self::integral(length)) else {
+            return Err(raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::RangeError,
+                "the length is no index",
+            ));
+        };
+        // Step 2 of 25.1.3.1 refuses a block the embedding cannot hold.
+        if length > 1 << 28 {
+            return Err(raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::RangeError,
+                "the ArrayBuffer is too large",
+            ));
+        }
+        let prototype = realm.array_buffer_prototype(heap)?;
+        let shape = heap.shapes.root_shape();
+        let object = heap.allocate_object(shape, prototype)?;
+        heap.set_object_kind(
+            object,
+            ObjectKind::ArrayBuffer(Some(alloc::vec![0u8; length])),
+        )?;
         Ok(Value::from_object(object))
     }
 
