@@ -9245,3 +9245,62 @@ fn the_walk_of_7_4_2_reaches_an_iterable_of_the_script() -> Result<(), Error> {
         "var it={};it[Symbol.iterator]=function(){var i=0;return{next:function(){i=i+1;return{done:i>500,value:i}}}};var a=Array.from(it);''+a.length+':'+a[499]",
     ])
 }
+
+#[test]
+fn the_constructors_of_24_1_1_1_walk_an_iterable_of_the_script() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend carries no clause 24, so only the engine answers.
+    for (source, answer) in [
+        (
+            "var m=new Map([['a',1],['b',2]]);''+m.get('a')+m.get('b')+m.size",
+            "122",
+        ),
+        ("''+new Set([1,2,2,3]).size", "3"),
+        (
+            "var it={};it[Symbol.iterator]=function(){var i=0;return{next:function(){i=i+1;return{done:i>3,value:i}}}};''+new Set(it).size",
+            "3",
+        ),
+        (
+            "var it={};it[Symbol.iterator]=function(){var i=0;return{next:function(){i=i+1;return{done:i>2,value:[i,i*10]}}}};var m=new Map(it);''+m.get(1)+':'+m.get(2)",
+            "10:20",
+        ),
+        (
+            "var k={};''+new WeakSet([k]).has(k)+new WeakMap([[k,7]]).get(k)",
+            "true7",
+        ),
+        // 7.4.2 runs before the first `next`, and every element is added as it
+        // arrives.
+        (
+            "var log='';var it={};it[Symbol.iterator]=function(){log+='i';var i=0;return{next:function(){log+='n';i=i+1;return{done:i>2,value:i}}}};new Set(it);log",
+            "innn",
+        ),
+        // Step 8.d.i refuses an entry of a Map that is no Object, and an
+        // argument that is not iterable is the TypeError of step 8.
+        (
+            "var r;try{new Map([1])}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{new Set({})}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{new Map(1)}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        // A throw of the `next` leaves the clause.
+        (
+            "var it={};it[Symbol.iterator]=function(){return{next:function(){throw 'x'}}};var r;try{new Set(it)}catch(e){r=e};''+r",
+            "x",
+        ),
+        // The walk survives the collections four hundred elements make.
+        (
+            "var it={};it[Symbol.iterator]=function(){var i=0;return{next:function(){i=i+1;return{done:i>400,value:i}}}};''+new Set(it).size",
+            "400",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}

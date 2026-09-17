@@ -579,6 +579,56 @@ enum IterableStart {
     ArrayLike,
 }
 
+/// Where the walk of 7.4.2 puts each element it takes.
+#[derive(Clone, Copy)]
+enum IteratorWalkTaker {
+    /// 23.1.2.1 keeps it in an Array of its own.
+    Array,
+    /// Step 8 of 24.1.1.1 adds it to this Map, or to this Set.
+    Collection {
+        /// The Map or the Set the constructor made.
+        collection: Value,
+        /// Whether it is the Set of 24.2.
+        set: bool,
+        /// Whether it is the `WeakMap` of 24.3 or the `WeakSet` of 24.4.
+        weak: bool,
+    },
+}
+
+impl IteratorWalkTaker {
+    /// The tag the record holds, which says where an element goes.
+    const fn tag(self) -> i32 {
+        match self {
+            Self::Array => ITERATOR_WALK_ARRAY,
+            Self::Collection { set, weak, .. } => match (set, weak) {
+                (false, false) => ITERATOR_WALK_MAP,
+                (true, false) => ITERATOR_WALK_SET,
+                (false, true) => ITERATOR_WALK_WEAK_MAP,
+                (true, true) => ITERATOR_WALK_WEAK_SET,
+            },
+        }
+    }
+
+    /// The collection the walk fills, where it fills one.
+    const fn collection(self) -> Value {
+        match self {
+            Self::Array => VALUE_UNDEFINED,
+            Self::Collection { collection, .. } => collection,
+        }
+    }
+}
+
+/// The walk keeps each element in an Array of its own.
+const ITERATOR_WALK_ARRAY: i32 = 0;
+/// It adds each entry to a Map.
+const ITERATOR_WALK_MAP: i32 = 1;
+/// It adds each value to a Set.
+const ITERATOR_WALK_SET: i32 = 2;
+/// It adds each entry to a `WeakMap`.
+const ITERATOR_WALK_WEAK_MAP: i32 = 3;
+/// It adds each value to a `WeakSet`.
+const ITERATOR_WALK_WEAK_SET: i32 = 4;
+
 /// The walk of 7.4.2 has not called the `@@iterator` yet.
 const ITERATOR_WALK_STARTING: i32 = 0;
 /// It is waiting for the `@@iterator` it called.
@@ -4022,6 +4072,18 @@ impl RegisterVM {
                 realm,
             );
         }
+        // Step 8 of 24.1.1.1 and step 5 of 24.3.1.1 add every element the
+        // iterable answers, which a walk of 7.4.2 reaches.
+        if Self::constructs_a_collection(intrinsic) {
+            return self.begin_collection_construct(
+                intrinsic,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
         // 24.1.3.8 and 24.3.3.5 ask the Script for the value of a key that
         // has no entry yet.
         if matches!(
@@ -6426,6 +6488,121 @@ impl RegisterVM {
         Ok(collection)
     }
 
+    /// Whether the constructor is one of clause 24, whose step 8 walks the
+    /// iterable it was given.
+    const fn constructs_a_collection(intrinsic: Intrinsic) -> bool {
+        matches!(
+            intrinsic,
+            Intrinsic::MapConstructor
+                | Intrinsic::SetConstructor
+                | Intrinsic::WeakMapConstructor
+                | Intrinsic::WeakSetConstructor
+        )
+    }
+
+    /// 24.1.1.1 and 24.4.1.1, whose step 8 adds every element of the iterable.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a call without
+    /// `new`, for an argument that is not iterable and for an `@@iterator`
+    /// that is not callable.
+    fn begin_collection_construct(
+        &mut self,
+        intrinsic: Intrinsic,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let weak = matches!(
+            intrinsic,
+            Intrinsic::WeakMapConstructor | Intrinsic::WeakSetConstructor
+        );
+        let set = matches!(
+            intrinsic,
+            Intrinsic::SetConstructor | Intrinsic::WeakSetConstructor
+        );
+        // Step 1 refuses a call without `new`.
+        if call.construct.is_none() {
+            return Err(type_error(heap, realm, "a constructor called without new"));
+        }
+        let iterable = self.call_argument(&call, 0, heap)?;
+        let collection = if weak {
+            Self::create_weak_collection(set, heap, realm)?
+        } else {
+            Self::create_collection(set, heap, realm)?
+        };
+        if iterable.is_undefined() || iterable.is_null() {
+            self.acc = collection;
+            return Ok(None);
+        }
+        // Step 7 reads the adder off the object it just made, so a Script that
+        // replaced the method on the Prototype decides what an entry is.
+        Self::adder_of_this_realm(collection, set, weak, heap)?;
+        if iterable.is_string() {
+            return Err(VMError::Unsupported("an @@iterator of a String"));
+        }
+        let object = iterable
+            .as_object()
+            .ok_or_else(|| type_error(heap, realm, "the argument is not iterable"))?;
+        let method =
+            match heap.lookup_named(object, super::realm::WellKnownSymbol::Iterator.key())? {
+                Some(found) => Self::plain_value(found)?,
+                None => VALUE_UNDEFINED,
+            };
+        if method.is_undefined() || method.is_null() {
+            return Err(type_error(heap, realm, "the argument is not iterable"));
+        }
+        self.begin_iterator_walk(
+            iterable,
+            method,
+            VALUE_UNDEFINED,
+            VALUE_UNDEFINED,
+            IteratorWalkTaker::Collection {
+                collection,
+                set,
+                weak,
+            },
+            call,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )
+    }
+
+    /// Step 7 of 24.1.1.1 and of 24.3.1.1: the `set` or the `add` the object
+    /// answers has to be the one of this Realm, because no frame of this
+    /// clause can call one of the Script.
+    fn adder_of_this_realm(
+        collection: Value,
+        set: bool,
+        weak: bool,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        let adder = match (set, weak) {
+            (false, false) => Intrinsic::MapPrototypeSet,
+            (true, false) => Intrinsic::SetPrototypeAdd,
+            (false, true) => Intrinsic::WeakMapPrototypeSet,
+            (true, true) => Intrinsic::WeakSetPrototypeAdd,
+        };
+        let object = collection.as_object().ok_or(VMError::TypeError)?;
+        let name = PropertyKey::String(heap.strings.intern(adder.name())?);
+        let held = heap
+            .lookup_named(object, name)?
+            .map(Self::plain_value)
+            .transpose()?
+            .unwrap_or(VALUE_UNDEFINED);
+        if Self::is_intrinsic(held, adder, heap) {
+            return Ok(());
+        }
+        Err(VMError::Unsupported(
+            "a `set` or an `add` of the Script in 24.1.1.1",
+        ))
+    }
+
     /// 23.1.2.1 step 2: an `@@iterator` decides the whole clause, and the walk
     /// of 7.4.2 is what reaches one.
     ///
@@ -6473,6 +6650,7 @@ impl RegisterVM {
             method,
             mapper,
             receiver,
+            IteratorWalkTaker::Array,
             call,
             units,
             active_feedback,
@@ -6503,6 +6681,7 @@ impl RegisterVM {
         method: Value,
         mapper: Value,
         receiver: Value,
+        taker: IteratorWalkTaker,
         call: Call,
         units: CodeUnits<'_>,
         active_feedback: &mut FeedbackVector,
@@ -6526,6 +6705,8 @@ impl RegisterVM {
                 Value::from_smi(ITERATOR_WALK_STARTING),
                 VALUE_UNDEFINED,
                 VALUE_UNDEFINED,
+                Value::from_smi(taker.tag()),
+                taker.collection(),
             ],
         )?;
         // The record outlives every frame the walk opens, so it is a root of a
@@ -6598,7 +6779,12 @@ impl RegisterVM {
                     match self.continue_iterator_step(record, answered, heap, realm) {
                         Ok(Some(called)) => called,
                         Ok(None) => {
-                            let output = promise::slot(heap, record, 0);
+                            let tag = promise::slot(heap, record, 9).as_smi().unwrap_or(0);
+                            let output = if tag == ITERATOR_WALK_ARRAY {
+                                promise::slot(heap, record, 0)
+                            } else {
+                                promise::slot(heap, record, 10)
+                            };
                             heap.exit_scope();
                             self.acc = output;
                             return Ok(None);
@@ -6609,7 +6795,7 @@ impl RegisterVM {
                 // 23.1.2.1 step 6.c.viii keeps what the mapper answered.
                 _ => {
                     let taken = self
-                        .take_iterator_element(record, answered, heap)
+                        .take_iterator_element(record, answered, heap, realm)
                         .and_then(|()| Self::request_iterator_step(record, heap, realm));
                     match taken {
                         Ok(called) => called,
@@ -6658,7 +6844,7 @@ impl RegisterVM {
         }
         let mapper = promise::slot(heap, record, 3);
         if mapper.is_undefined() {
-            self.take_iterator_element(record, value, heap)?;
+            self.take_iterator_element(record, value, heap, realm)?;
             return Self::request_iterator_step(record, heap, realm).map(Some);
         }
         // The frame of the mapper reads the two arguments out of the record.
@@ -6686,23 +6872,80 @@ impl RegisterVM {
         Ok((next, promise::slot(heap, record, 1)))
     }
 
-    /// Appends one element to the Array the walk fills.
+    /// Takes one element: 23.1.2.1 keeps it in the Array it fills, and step 8
+    /// of 24.1.1.1 and of 24.3.1.1 adds it to the collection at once, because
+    /// a `next` of the Script can read what the collection already holds.
     fn take_iterator_element(
         &self,
         record: Value,
         value: Value,
         heap: &mut GenerationalHeap,
+        realm: &Realm,
     ) -> Result<(), VMError> {
         let index = promise::slot(heap, record, 5).as_smi().unwrap_or(0);
-        let array = promise::slot(heap, record, 0)
-            .as_object()
-            .ok_or(VMError::TypeError)?;
-        let at = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
-        if usize::try_from(at).unwrap_or(usize::MAX) >= self.property_limit {
+        let tag = promise::slot(heap, record, 9).as_smi().unwrap_or(0);
+        if usize::try_from(index).unwrap_or(usize::MAX) >= self.property_limit {
             return Err(VMError::PropertyLimit);
         }
-        heap.set_array_element(array, at, value)?;
+        if tag == ITERATOR_WALK_ARRAY {
+            let array = promise::slot(heap, record, 0)
+                .as_object()
+                .ok_or(VMError::TypeError)?;
+            let at = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+            heap.set_array_element(array, at, value)?;
+        } else {
+            let collection = promise::slot(heap, record, 10);
+            let set = tag == ITERATOR_WALK_SET || tag == ITERATOR_WALK_WEAK_SET;
+            let weak = tag == ITERATOR_WALK_WEAK_MAP || tag == ITERATOR_WALK_WEAK_SET;
+            Self::add_iterated_entry(collection, value, set, weak, heap, realm)?;
+        }
         promise::set_slot(heap, record, 5, Value::from_smi(index.saturating_add(1)))?;
+        Ok(())
+    }
+
+    /// Step 8.b of 24.1.1.1 and step 5.b of 24.3.1.1, which read `"0"` and
+    /// `"1"` of the entry a Map was given and take the value of a Set as its
+    /// own key.
+    fn add_iterated_entry(
+        collection: Value,
+        element: Value,
+        set: bool,
+        weak: bool,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let (key, value) = if set {
+            (element, element)
+        } else {
+            let entry = element.as_object().ok_or_else(|| {
+                type_error(heap, realm, "an entry of a Map that is not an object")
+            })?;
+            (
+                Self::element_at(heap, entry, 0)?.unwrap_or(VALUE_UNDEFINED),
+                Self::element_at(heap, entry, 1)?.unwrap_or(VALUE_UNDEFINED),
+            )
+        };
+        if weak {
+            if !Self::can_be_held_weakly(key, heap) {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "a WeakMap or WeakSet key that cannot be held weakly",
+                ));
+            }
+            let object = collection.as_object().ok_or(VMError::TypeError)?;
+            heap.set_weak_entry(object, key, value)?;
+            return Ok(());
+        }
+        let entries = Self::collection_entries(collection, set, heap, realm)?;
+        let key = Self::collection_key(key);
+        if let Some(at) = Self::collection_find(heap, entries, key)? {
+            promise::set_slot(heap, entries, at.saturating_add(1), value)?;
+        } else {
+            let end = promise::length_of(heap, entries);
+            promise::set_slot(heap, entries, end, key)?;
+            promise::set_slot(heap, entries, end.saturating_add(1), value)?;
+        }
         Ok(())
     }
 
@@ -17069,6 +17312,24 @@ impl RegisterVM {
                             }
                             return Ok(None);
                         }
+                        // Step 8 of 24.1.1.1 calls the `next` of the iterable,
+                        // which only a frame the instruction opens can do.
+                        if Self::constructs_a_collection(intrinsic) {
+                            if let Some(code_id) = self.begin_collection_construct(
+                                intrinsic,
+                                call,
+                                units,
+                                active_feedback,
+                                heap,
+                                realm,
+                            )? {
+                                current_code_id = Some(code_id);
+                                pc = 0;
+                            } else {
+                                self.write_reg(target, self.acc)?;
+                            }
+                            return Ok(None);
+                        }
                         self.acc = self.call_intrinsic(intrinsic, call, units, heap, realm)?;
                         self.write_reg(target, self.acc)?;
                         return Ok(None);
@@ -17236,6 +17497,11 @@ impl RegisterVM {
                         if intrinsic == Intrinsic::PromiseConstructor {
                             return Err(VMError::Unsupported(
                                 "a Promise constructed with a spread element",
+                            ));
+                        }
+                        if Self::constructs_a_collection(intrinsic) {
+                            return Err(VMError::Unsupported(
+                                "a Map or a Set constructed with a spread element",
                             ));
                         }
                         self.acc = self.call_intrinsic(intrinsic, call, units, heap, realm)?;
