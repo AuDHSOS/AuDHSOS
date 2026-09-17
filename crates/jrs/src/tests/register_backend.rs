@@ -2832,15 +2832,13 @@ fn register_string_concatenation_preserves_string_unit_limit() -> Result<(), Err
 
 #[test]
 fn register_backend_is_selected_statically_without_runtime_fallback() -> Result<(), Error> {
-    for source in [
-        "let o={};false&&(o.x=1);0",
-        "let x=1;false&&(function(){return x});x",
-    ] {
-        assert!(
-            !compile(source, Limits::default())?.uses_register_backend(),
-            "{source}"
-        );
-    }
+    // A short circuit whose right side reshapes an Object the left side
+    // leaves as it was has no single shape to name after the join.
+    let source = "let o={};false&&(o.x=1);0";
+    assert!(
+        !compile(source, Limits::default())?.uses_register_backend(),
+        "{source}"
+    );
 
     let mut program = compile("1+2", Limits::default())?;
     let register = alloc::rc::Rc::get_mut(

@@ -1776,6 +1776,18 @@ impl RegisterLowerer {
         for name in &written {
             self.bindings.get_mut(name)?.value_type = Some(RegisterType::Unknown);
         }
+        // A capture moves the value out of its register where it stands, so a
+        // path that does not reach the capture would leave the slot empty, and
+        // a closure made before it declares an outer context the body does not
+        // have yet. Both go away when every var a nested function reads stands
+        // in a slot before the body runs.
+        for name in &captured_names {
+            // 10.4.4 makes the arguments object where the body starts, which
+            // is after this, so the capture of it belongs to that step.
+            if name != ARGUMENTS && self.bindings.contains_key(name) {
+                self.capture_binding(name)?;
+            }
+        }
         let mut inferred = self.bindings.clone();
         infer_register_body_var_types_to_fixed_point(body, &mut inferred)?;
         for name in initialized_names {
@@ -8110,7 +8122,14 @@ impl RegisterLowerer {
         let object_layouts_after_left = self.object_layouts.clone();
         let right_type = self.lower(right)?;
         let bindings_after_right = self.bindings.clone();
-        if self.object_layouts != object_layouts_after_left {
+        // A layout the right side only adds belongs to an object the right
+        // side makes, and no type names that object once the two sides merge.
+        // A layout the right side changes or drops belongs to an object the
+        // left side may leave as it was, which the lowering refuses.
+        if object_layouts_after_left
+            .iter()
+            .any(|(id, layout)| self.object_layouts.get(id) != Some(layout))
+        {
             return None;
         }
         self.bindings = merge_register_bindings(&bindings_after_left, &bindings_after_right)?;
