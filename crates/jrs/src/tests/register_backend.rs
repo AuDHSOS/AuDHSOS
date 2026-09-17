@@ -9186,3 +9186,19 @@ fn the_get_or_insert_of_24_1_3_7_and_24_3_3_4_adds_only_a_missing_key() -> Resul
     }
     Ok(())
 }
+
+#[test]
+fn the_length_of_10_4_2_4_deletes_in_descending_order() -> Result<(), Error> {
+    differential_scripts(&[
+        "var a=[1,2,3];a.length=1;''+a+'|'+a.length",
+        "var a=[];a[5]=1;a.length=3;''+a.length+(5 in a)",
+        // An index the Shape holds goes only while it is configurable, and the
+        // length stops one above the first that does not.
+        "var a=[0,1,2];Object.defineProperty(a,'1',{value:9,configurable:false});a.length=0;''+a.length+'|'+a[1]",
+        "var a=[0,1,2,3,4];Object.defineProperty(a,'3',{value:9,configurable:false});a.length=1;''+a.length+'|'+(4 in a)+(2 in a)",
+        "var a=[0,1,2];Object.defineProperty(a,'2',{value:9,configurable:true});a.length=0;''+a.length+'|'+(2 in a)",
+        // 10.1.6.3 answers false for the define that stopped.
+        "var a=[0,1,2];Object.defineProperty(a,'1',{value:9,configurable:false});''+Reflect.defineProperty(a,'length',{value:0})+a.length",
+        "var a=[0,1,2];''+Reflect.defineProperty(a,'length',{value:0})+a.length",
+    ])
+}

@@ -5655,14 +5655,21 @@ impl RegisterVM {
         };
         let wanted = Self::array_length_of(value, heap, realm)?;
         let current = heap.array_length(object).ok_or(VMError::TypeError)?;
-        if wanted < current {
-            Self::shorten_array(object, wanted, heap)?;
-        }
-        heap.set_array_length(object, wanted)?;
+        let stopped = if wanted < current {
+            Self::shorten_array(object, wanted, heap)?
+        } else {
+            None
+        };
+        // Step 17.b.ii: an index that would not go leaves the length one above
+        // it, and the define answers false.
+        heap.set_array_length(
+            object,
+            stopped.map_or(wanted, |index| index.saturating_add(1)),
+        )?;
         if descriptor.writable == Some(false) {
             heap.freeze_array_length(object)?;
         }
-        Ok(true)
+        Ok(stopped.is_none())
     }
 
     /// The `ToUint32` of 10.4.2.4 step 3, which has to be the Number
@@ -5692,42 +5699,62 @@ impl RegisterVM {
 
     /// Deletes every index at or above the new length, which 10.4.2.4 does in
     /// descending order.
+    ///
+    /// Answers the index the descent stopped at, which step 17.b.ii makes the
+    /// new length one above: an index the Shape holds (10.4.2.1 gave it
+    /// attributes of its own) is deleted only while it is configurable.
     fn shorten_array(
         object: ObjectRef,
         wanted: u32,
         heap: &mut GenerationalHeap,
-    ) -> Result<(), VMError> {
-        // An index the Shape took over (10.4.2.1) would have to be deleted
-        // here too, and 10.4.2.4 stops at one that is not configurable.
+    ) -> Result<Option<u32>, VMError> {
         let shape = heap
             .get_object(object)
             .ok_or(VMError::Heap(HeapError::InvalidReference))?
             .shape_id;
-        for (name, _, _) in heap.shapes.own_properties(shape) {
+        let mut named: Vec<(u32, PropertyKey, bool)> = Vec::new();
+        for (name, flags, _) in heap.shapes.own_properties(shape) {
             let units = name
                 .as_string()
                 .and_then(|name| heap.strings.to_utf16(Value::from_string(name)))
                 .unwrap_or_default();
-            if array_index_units(&units).is_some_and(|index| index >= wanted) {
-                return Err(VMError::Unsupported(
-                    "an Array length that deletes a property of the Shape",
-                ));
+            if let Some(index) = array_index_units(&units)
+                && index >= wanted
+            {
+                named.push((index, name, flags.configurable));
             }
         }
-        if let Some(elements) = heap
+        let elements = heap
             .get_object(object)
             .ok_or(VMError::Heap(HeapError::InvalidReference))?
-            .elements
-        {
-            let indices = heap
+            .elements;
+        let mut indices: Vec<u32> = match elements {
+            Some(elements) => heap
                 .get_elements(elements)
                 .ok_or(VMError::Heap(HeapError::InvalidReference))?
-                .indices();
-            for index in indices.into_iter().filter(|index| *index >= wanted) {
+                .indices()
+                .into_iter()
+                .filter(|index| *index >= wanted)
+                .collect(),
+            None => Vec::new(),
+        };
+        indices.extend(named.iter().map(|(index, _, _)| *index));
+        indices.sort_unstable_by(|left, right| right.cmp(left));
+        indices.dedup();
+        for index in indices {
+            if let Some((_, name, configurable)) = named.iter().find(|(held, _, _)| *held == index)
+            {
+                if !*configurable {
+                    return Ok(Some(index));
+                }
+                let name = *name;
+                heap.remove_own_named(object, name)?;
+            }
+            if let Some(elements) = elements {
                 heap.delete_element(elements, index)?;
             }
         }
-        Ok(())
+        Ok(None)
     }
 
     /// The intrinsics that need nothing of the call but its arguments.
@@ -9080,10 +9107,17 @@ impl RegisterVM {
             return Ok(());
         }
         let current = heap.array_length(object).ok_or(VMError::TypeError)?;
-        if wanted < current {
-            Self::shorten_array(object, wanted, heap)?;
-        }
-        heap.set_array_length(object, wanted)?;
+        let stopped = if wanted < current {
+            Self::shorten_array(object, wanted, heap)?
+        } else {
+            None
+        };
+        // Step 17.b.ii leaves the length one above the index that would not
+        // go, which 10.1.9.1 answers false for.
+        heap.set_array_length(
+            object,
+            stopped.map_or(wanted, |index| index.saturating_add(1)),
+        )?;
         Ok(())
     }
 
