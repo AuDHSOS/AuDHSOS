@@ -5766,6 +5766,16 @@ Document 16 step Q8.
   `qualified table names are not allowed on INSERT, UPDATE, and DELETE
   statements within triggers`, and one that names the table alone
   stands.
+- `likelihood(X,Y)` takes a real written as one for `Y`, between nought
+  and one: `1.000001`, `-0.000001`, `0.5+0.3`, `1`, `'0.5'` and `NULL`
+  are each refused `second argument to likelihood() must be a constant
+  between 0.0 and 1.0`, and `1.0` and `0.0` stand.
+- `#1` is refused `near "#1": syntax error`, whether it stands among
+  the columns, in a `WHERE` or in an `ORDER BY`.
+- A column added to a table that points at a row of another falls back
+  to nothing: `ADD COLUMN g REFERENCES t1 DEFAULT 4` is refused
+  `Cannot add a REFERENCES column with non-NULL default value`, and
+  `DEFAULT NULL` and a column that points at no row both stand.
 
 ## 6.7 CI pipeline
 

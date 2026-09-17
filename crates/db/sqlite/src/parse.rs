@@ -2491,6 +2491,12 @@ impl<'a> Parser<'a> {
                 self.bump();
                 self.literal(Literal::Blob(Span::of(token)))
             }
+            // `sqlite3RunParser` takes `#1` for a register of the
+            // routine it writes and no statement may carry one, so the
+            // token is read and then refused.
+            Kind::Variable if Span::of(token).text(self.sql).first() == Some(&b'#') => {
+                Err(self.error(Some(token), Expected::Expression))
+            }
             Kind::Variable => {
                 self.bump();
                 self.node(Node::Variable(Span::of(token)))

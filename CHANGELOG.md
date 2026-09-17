@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` takes a real written as one for the second argument of
+  `likelihood`, between nought and one, refuses `#1` as a syntax error
+  where it read it as a variable before, and holds a column added to a
+  table that points at a row of another to falling back to nothing.
+  D-283 records it. Catalog 6.6.200.
+
 - `db-sqlite` refuses a `CREATE TRIGGER` whose text carries a variable
   with `trigger cannot use variables`, and a write of a trigger's body
   that names a schema with `qualified table names are not allowed on

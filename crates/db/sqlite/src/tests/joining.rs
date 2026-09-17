@@ -168,3 +168,88 @@ fn what_a_trigger_may_not_carry() {
         .run(b"CREATE TRIGGER tr2 AFTER UPDATE ON t1 BEGIN INSERT INTO t2 VALUES(1,2); END")
         .expect("a trigger");
 }
+
+/// `likelihood(X,Y)` takes a real written as one for `Y`, between
+/// nought and one, and nothing else.
+#[test]
+fn what_the_second_argument_of_likelihood_may_be() {
+    let image = three();
+    let database = Database::open(&image).expect("a database");
+    for sql in [
+        "SELECT likelihood(123, 1.000001)",
+        "SELECT likelihood(123, -0.000001)",
+        "SELECT likelihood(123, 0.5+0.3)",
+        "SELECT likelihood(123, 1)",
+        "SELECT likelihood(123, '0.5')",
+        "SELECT likelihood(123, NULL)",
+    ] {
+        assert_eq!(
+            database.query(sql.as_bytes()).unwrap_err().message(),
+            "second argument to likelihood() must be a constant between 0.0 and 1.0",
+            "{sql}"
+        );
+    }
+    // A call of another number of arguments is refused for that.
+    for sql in ["SELECT likelihood(123)", "SELECT likelihood(1,2,3)"] {
+        assert_eq!(
+            database.query(sql.as_bytes()).unwrap_err().message(),
+            "wrong number of arguments to function likelihood()",
+            "{sql}"
+        );
+    }
+    for sql in [
+        "SELECT likelihood(123, 1.0)",
+        "SELECT likelihood(456, 0.0)",
+        "SELECT likelihood(NULL, 0.5)",
+        "SELECT likelihood('test-string', 0.5)",
+    ] {
+        database.query(sql.as_bytes()).unwrap_or_else(|error| {
+            panic!("{sql}: {}", error.message());
+        });
+    }
+}
+
+/// `#1` is the register of a routine the C library writes and no
+/// statement carries one, so the token is read and then refused.
+#[test]
+fn what_a_register_of_the_routine_is_refused_with() {
+    let image = three();
+    let database = Database::open(&image).expect("a database");
+    for (sql, message) in [
+        ("SELECT #1", "near \"#1\": syntax error"),
+        ("SELECT 1 WHERE #0=1", "near \"#0\": syntax error"),
+        ("SELECT a FROM aa ORDER BY #2", "near \"#2\": syntax error"),
+    ] {
+        assert_eq!(
+            database.query(sql.as_bytes()).unwrap_err().message(),
+            message,
+            "{sql}"
+        );
+    }
+}
+
+/// A column added to a table that points at a row of another falls
+/// back to nothing, the rows the table already holds gaining no value
+/// of their own.
+#[test]
+fn what_a_column_that_points_may_fall_back_to() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t1(a,b)").unwrap();
+    writer
+        .run(b"ALTER TABLE t1 ADD COLUMN f REFERENCES t1")
+        .expect("a column");
+    writer
+        .run(b"ALTER TABLE t1 ADD COLUMN h REFERENCES t1 DEFAULT NULL")
+        .expect("a column");
+    assert_eq!(
+        writer
+            .run(b"ALTER TABLE t1 ADD COLUMN g REFERENCES t1 DEFAULT 4")
+            .unwrap_err()
+            .message(),
+        "Cannot add a REFERENCES column with non-NULL default value"
+    );
+    // A column that points at no row takes the value it falls back to.
+    writer
+        .run(b"ALTER TABLE t1 ADD COLUMN i DEFAULT 4")
+        .expect("a column");
+}

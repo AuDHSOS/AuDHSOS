@@ -34,18 +34,34 @@ const SECTOR: u32 = 512;
 /// rows the table already has, and one that may not be nothing and
 /// falls back to nothing, because the rows it already has hold nothing
 /// for it.
-fn refused_column(arena: &Arena, asked: &crate::ast::AddColumn) -> Result<(), Error> {
+fn refused_column(arena: &Arena, asked: &crate::ast::AddColumn, sql: &[u8]) -> Result<(), Error> {
     let mut fallback = false;
+    let mut points = false;
+    let mut falls_back_to = None;
     for constraint in arena.column_constraints(asked.column.constraints) {
         match constraint {
             crate::ast::ColumnConstraint::PrimaryKey { .. }
             | crate::ast::ColumnConstraint::Unique(_) => return Err(Error::Unsupported),
-            crate::ast::ColumnConstraint::Default { .. } => fallback = true,
+            crate::ast::ColumnConstraint::Default { text, .. } => {
+                fallback = true;
+                falls_back_to = Some(text);
+            }
             crate::ast::ColumnConstraint::NotNull(_) if !fallback => {
                 return Err(Error::Unsupported);
             }
+            crate::ast::ColumnConstraint::References(_) => points = true,
             _ => {}
         }
+    }
+    // `sqlite3AlterFinishAddColumn`: a column that points at a row of
+    // another table falls back to nothing, the rows the table already
+    // holds gaining no value of their own and pointing at no row.
+    if points
+        && falls_back_to.is_some_and(|text| {
+            !crate::schema::dequote(text.text(sql)).eq_ignore_ascii_case(b"null")
+        })
+    {
+        return Err(Error::PointingDefault);
     }
     Ok(())
 }
@@ -680,7 +696,7 @@ impl Writer {
     ) -> Result<(), Error> {
         let name = crate::schema::dequote(asked.table.text(sql));
         let written = asked.written.text(sql).to_vec();
-        refused_column(arena, asked)?;
+        refused_column(arena, asked, sql)?;
         let rowid = self.row_of(&name)?;
         let image = self.image();
         let database = Database::open(&image)?;
@@ -1609,6 +1625,7 @@ impl Writer {
         match crate::parse::definition(sql) {
             Ok((arena, definition)) => {
                 crate::schema::collations(&arena, sql, self.collating)?;
+                crate::schema::likelihoods(&arena, sql)?;
                 self.define(&arena, definition, sql)?;
                 return Ok(0);
             }
@@ -1634,6 +1651,7 @@ impl Writer {
         };
         crate::eval::rows_placed(&arena)?;
         crate::schema::collations(&arena, sql, self.collating)?;
+        crate::schema::likelihoods(&arena, sql)?;
         let changed = match change {
             Change::Insert(statement) => self.insert(&arena, &statement, sql, None),
             Change::Delete(statement) => self.delete(&arena, &statement, sql, None),

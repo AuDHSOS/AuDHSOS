@@ -36,6 +36,9 @@ pub enum Error {
     DuplicateColumn,
     /// A collation no engine has.
     NoCollation(alloc::vec::Vec<u8>),
+    /// A `likelihood` whose second argument is not a real between
+    /// nought and one.
+    Likelihood,
     /// The word after a generated column's expression is neither
     /// `STORED` nor `VIRTUAL`.
     GeneratedWord,
@@ -560,6 +563,41 @@ pub(crate) fn collations(
         let named = dequote(name.text(sql));
         if crate::value::collation_of(&named, collating).is_none() {
             return Err(Error::NoCollation(named));
+        }
+    }
+    Ok(())
+}
+
+/// Refuses a statement whose `likelihood` carries a second argument
+/// that is not a real between nought and one.
+///
+/// `sqlite3ExprFunction` under `SQLITE_FUNC_UNLIKELY` reads the
+/// argument where the statement is read, so it takes a real written as
+/// one and nothing else: a whole number, a text and a sum are each
+/// refused. Costs O(n) over the nodes of the statement.
+///
+/// # Errors
+///
+/// [`Error::Likelihood`] where the argument is another thing.
+pub(crate) fn likelihoods(arena: &Arena, sql: &[u8]) -> Result<(), Error> {
+    for (name, args) in arena.calls() {
+        if !dequote(name.text(sql)).eq_ignore_ascii_case(b"likelihood") {
+            continue;
+        }
+        // A call of another number of arguments is refused for that,
+        // which `sqlite3ExprFunction` reads first.
+        let held = arena.children(args);
+        let (Some(second), 2) = (held.get(1).copied(), held.len()) else {
+            continue;
+        };
+        let chance = match arena.node(second) {
+            Some(Node::Literal(crate::ast::Literal::Float(span))) => {
+                crate::number::real(span.text(sql)).value
+            }
+            _ => return Err(Error::Likelihood),
+        };
+        if !(0.0..=1.0).contains(&chance) {
+            return Err(Error::Likelihood);
         }
     }
     Ok(())

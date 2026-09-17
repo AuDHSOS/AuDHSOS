@@ -124,6 +124,9 @@ pub enum Error {
     TriggerVariable,
     /// A write of a trigger's body that names a schema.
     QualifiedInTrigger,
+    /// A column added to a table that points at a row of another and
+    /// falls back to something.
+    PointingDefault,
     /// An `ORDER BY` or a `LIMIT` written on a core of a compound other
     /// than the last, with which clause it is and the word that joins
     /// that core to the one after it.
@@ -338,6 +341,9 @@ impl Error {
                 alloc::string::String::from("ON clause references tables to its right")
             }
             Error::TriggerVariable => alloc::string::String::from("trigger cannot use variables"),
+            Error::PointingDefault => alloc::string::String::from(
+                "Cannot add a REFERENCES column with non-NULL default value",
+            ),
             Error::QualifiedInTrigger => alloc::string::String::from(concat!(
                 "qualified table names are not allowed on ",
                 "INSERT, UPDATE, and DELETE statements within triggers"
@@ -358,6 +364,9 @@ impl Error {
             Error::Schema(schema::Error::IndexColumn(name)) => {
                 alloc::format!("no such column: {}", shown(name))
             }
+            Error::Schema(schema::Error::Likelihood) => alloc::string::String::from(
+                "second argument to likelihood() must be a constant between 0.0 and 1.0",
+            ),
             Error::Schema(schema::Error::NoCollation(name)) => {
                 alloc::format!("no such collation sequence: {}", shown(name))
             }
@@ -2186,6 +2195,7 @@ impl<'a> Database<'a> {
         let (arena, root) = parse::statement(sql)?;
         eval::rows_placed(&arena)?;
         crate::schema::collations(&arena, sql, self.collating)?;
+        crate::schema::likelihoods(&arena, sql)?;
         let scope = Scope {
             terms: &[],
             outer: None,

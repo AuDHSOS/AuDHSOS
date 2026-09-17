@@ -1500,6 +1500,21 @@ impl Arena {
             .copied()
     }
 
+    /// The name and the arguments of every call of the statement, in
+    /// the order the parser wrote the nodes.
+    ///
+    /// Costs O(n) over the nodes of the statement.
+    #[must_use]
+    pub fn calls(&self) -> Vec<(Span, Range)> {
+        self.nodes
+            .iter()
+            .filter_map(|node| match *node {
+                Node::Call { name, args, .. } => Some((name, args)),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The name every `COLLATE` of the statement carries, in the order
     /// the parser wrote the nodes.
     ///

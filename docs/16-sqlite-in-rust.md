@@ -823,6 +823,9 @@ Size: L.
     where the C library reads such an `ON` as a `WHERE`.
 60. What a trigger may not carry: a variable, and a schema in front of
     the table a write of its body names. Built, which D-282 records.
+61. The second argument of `likelihood`, the register `#1` names, and
+    what a column that points may fall back to. Built, which D-283
+    records.
 
 ### Done when
 
@@ -832,8 +835,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 82 272 cases in 702 files, 70 907
-pass, 2332 answer differently, and 9033 name something the engine
+under the `tclsh` of the machine. Of 82 322 cases in 702 files, 70 980
+pass, 2307 answer differently, and 9035 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts
