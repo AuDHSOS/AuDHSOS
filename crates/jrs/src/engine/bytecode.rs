@@ -25,6 +25,23 @@ pub enum FeedbackKind {
     Call,
 }
 
+/// What an access of a private element of 6.2.13 does with it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivateOp {
+    /// `PrivateGet` of 7.3.28, which answers the value.
+    Get,
+    /// `PrivateSet` of 7.3.29, which writes the value in the accumulator.
+    Set,
+    /// `PrivateFieldAdd` of 7.3.27, which adds the value in the accumulator.
+    Add,
+    /// `PrivateMethodOrAccessorAdd` of 7.3.26, which adds the method in the
+    /// accumulator, and no write of the Script reaches it afterwards.
+    AddMethod,
+    /// The `in` of 13.10.1 with a Private Name, which answers whether the
+    /// object carries the element.
+    Has,
+}
+
 /// Arithmetic operation executed through a typed feedback slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BinaryOp {
@@ -630,6 +647,22 @@ pub enum Instruction {
         /// Feedback vector slot for inline caching.
         slot: u16,
     },
+    /// A Private Name of 6.2.13 in the accumulator, which 15.7.14 step 12
+    /// makes once per evaluation of the class body.
+    CreatePrivateName(u16),
+    /// The private element of 6.2.13 that the key register names, which
+    /// 7.3.28 reads and 7.3.29 writes, and 7.3.27 adds.
+    ///
+    /// Every one of the three answers a `TypeError` where the object carries
+    /// no such element, or already carries one for an add.
+    PrivateAccess {
+        /// Object register.
+        obj: Reg,
+        /// Register holding the Private Name.
+        key: Reg,
+        /// What the access does with the element.
+        op: PrivateOp,
+    },
     /// Store indexed element: `obj_reg[key_reg] = acc` (uses feedback slot).
     SetByValue {
         /// Object register.
@@ -1144,6 +1177,7 @@ impl BytecodeFunction {
                 Some(obj)
             }
             Instruction::DeleteByValue { obj, key, .. }
+            | Instruction::PrivateAccess { obj, key, .. }
             | Instruction::DefineAccessorByValue { obj, key, .. }
             | Instruction::DefineMethodByValue { obj, key, .. } => {
                 self.verify_register(pc, obj)?;
@@ -1250,6 +1284,7 @@ impl BytecodeFunction {
                 None
             }
             Instruction::StaGlobal { name: index, .. }
+            | Instruction::CreatePrivateName(index)
             | Instruction::LdaString(index)
             | Instruction::LdaGlobal(index)
             | Instruction::LdaGlobalForTypeOf(index)

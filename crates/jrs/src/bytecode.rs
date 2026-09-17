@@ -2220,6 +2220,22 @@ impl RegisterLowerer {
                 left,
                 right,
             ) => self.lower_short_circuit(*operator, left, right)?,
+            // 13.10.1 answers whether the object carries the private element
+            // the name stands for.
+            ExprKind::Binary(Binary::In, left, right)
+                if matches!(left.kind, ExprKind::PrivateName(_)) =>
+            {
+                let ExprKind::PrivateName(name) = &left.kind else {
+                    return None;
+                };
+                self.lower_private_access(
+                    right,
+                    name,
+                    crate::engine::bytecode::PrivateOp::Has,
+                    None,
+                )?;
+                RegisterType::Boolean
+            }
             ExprKind::Binary(operator, left, right) => self.lower_binary(*operator, left, right)?,
             ExprKind::Assign(name, operator, right) => {
                 self.lower_assignment(name, *operator, right, expression.strict)?
@@ -3331,6 +3347,30 @@ impl RegisterLowerer {
             }
             None => None,
         };
+        // 15.7.14 step 12 makes a Private Name of 6.2.13 for each element the
+        // body names with a `#`, once per evaluation of the class. Every
+        // method that reads one captures the binding it stands in, as it
+        // captures every other name of the class body.
+        let mut private = Vec::new();
+        for name in &class.private_names {
+            let register = self.allocate_register()?;
+            self.active_binding_count = self.active_binding_count.checked_add(1)?;
+            self.max_binding_count = self.max_binding_count.max(self.active_binding_count);
+            let units: Vec<u16> = name.encode_utf16().collect();
+            let constant = self.string_constant(&units)?;
+            self.code.emit(Instruction::CreatePrivateName(constant));
+            self.code.emit(Instruction::Star(register));
+            let shadowed = self.bindings.insert(
+                name.clone(),
+                RegisterBinding {
+                    storage: RegisterBindingStorage::Register(register),
+                    value_type: Some(RegisterType::Unknown),
+                    mutable: false,
+                    stable_function_identity: false,
+                },
+            );
+            private.push((name.clone(), register, shadowed));
+        }
         let value_type = self.lower_callable(&class.constructor, true, name)?;
         // 15.7.14 steps 6 through 8 tie the class to its heritage while the
         // class is still in the accumulator.
@@ -3442,6 +3482,14 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Ldar(constructor));
         self.release_register(prototype)?;
         self.release_register(constructor)?;
+        for (name, register, shadowed) in private.into_iter().rev() {
+            match shadowed {
+                Some(shadowed) => self.bindings.insert(name, shadowed),
+                None => self.bindings.remove(&name),
+            };
+            self.active_binding_count = self.active_binding_count.checked_sub(1)?;
+            self.release_register(register)?;
+        }
         if let Some((name, register, shadowed)) = inner {
             match shadowed {
                 Some(shadowed) => self.bindings.insert(name, shadowed),
@@ -4844,6 +4892,12 @@ impl RegisterLowerer {
 
     fn lower_member(&mut self, base: &Expr, key: &Expr) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
+        // 6.2.13: a Private Name names an element of the object itself, which
+        // only the class body that declared the name reaches.
+        if let ExprKind::PrivateName(name) = &key.kind {
+            self.lower_private_access(base, name, crate::engine::bytecode::PrivateOp::Get, None)?;
+            return Some(RegisterType::Unknown);
+        }
         if matches!(base.kind, ExprKind::Super) {
             let register = self.super_base()?;
             let result = self.lower_super_property(register, key)?;
@@ -5521,6 +5575,104 @@ impl RegisterLowerer {
         Some(result_type)
     }
 
+    /// 15.7.15 on a field of 15.7.1 whose name is an ordinary one, which
+    /// defines the property on the instance the constructor is running for.
+    fn lower_named_field(&mut self, name: &str, value: Option<&Expr>) -> Option<RegisterFlow> {
+        use crate::engine::bytecode::Instruction;
+        let binding = self.bindings.get(THIS_BINDING).copied()?;
+        let units: Vec<u16> = name.encode_utf16().collect();
+        let constant = self.string_constant(&units)?;
+        match value {
+            // 8.5.2 names an anonymous function after the field.
+            Some(value) => {
+                self.lower_named(value, &units)?;
+            }
+            None => {
+                self.code.emit(Instruction::LdaUndefined);
+            }
+        }
+        let object = self.allocate_register()?;
+        let held = self.allocate_register()?;
+        self.code.emit(Instruction::Star(held));
+        self.load_binding(binding);
+        self.code.emit(Instruction::Star(object));
+        self.code.emit(Instruction::Ldar(held));
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::SetNamed {
+            obj: object,
+            name: constant,
+            slot,
+            strict: true,
+            define: true,
+        });
+        self.release_register(held)?;
+        self.release_register(object)?;
+        Some(RegisterFlow::Empty)
+    }
+
+    /// 7.3.27 on a field of 15.7.1 whose name is a Private Name, which adds
+    /// the element to the instance the constructor is running for.
+    fn lower_private_field(&mut self, name: &str, value: Option<&Expr>) -> Option<RegisterFlow> {
+        use crate::engine::bytecode::Instruction;
+        let this = self.bindings.get(THIS_BINDING).copied()?;
+        let binding = self.bindings.get(name).copied()?;
+        let object = self.allocate_register()?;
+        let key = self.allocate_register()?;
+        self.load_binding(this);
+        self.code.emit(Instruction::Star(object));
+        self.load_binding(binding);
+        self.code.emit(Instruction::Star(key));
+        match value {
+            // 8.5.2 names an anonymous function after the field.
+            Some(value) => {
+                let units: Vec<u16> = name.encode_utf16().collect();
+                self.lower_named(value, &units)?;
+            }
+            None => {
+                self.code.emit(Instruction::LdaUndefined);
+            }
+        }
+        self.code.emit(Instruction::PrivateAccess {
+            obj: object,
+            key,
+            op: crate::engine::bytecode::PrivateOp::Add,
+        });
+        self.release_register(key)?;
+        self.release_register(object)?;
+        Some(RegisterFlow::Empty)
+    }
+
+    /// 7.3.26 to 7.3.29 on the private element the name stands for, with the
+    /// value of `assigned` where the access writes one.
+    fn lower_private_access(
+        &mut self,
+        base: &Expr,
+        name: &str,
+        op: crate::engine::bytecode::PrivateOp,
+        assigned: Option<&Expr>,
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let binding = self.bindings.get(name).copied()?;
+        let object = self.allocate_register()?;
+        let key = self.allocate_register()?;
+        self.lower(base)?;
+        self.code.emit(Instruction::Star(object));
+        self.load_binding(binding);
+        self.code.emit(Instruction::Star(key));
+        let value_type = match assigned {
+            Some(value) => self.lower(value)?,
+            None => RegisterType::Unknown,
+        };
+        self.code.emit(Instruction::PrivateAccess {
+            obj: object,
+            key,
+            op,
+        });
+        self.release_register(key)?;
+        self.release_register(object)?;
+        Some(value_type)
+    }
+
     fn lower_member_assignment(
         &mut self,
         target: &Expr,
@@ -5529,6 +5681,19 @@ impl RegisterLowerer {
     ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         let (base, key) = target.member()?;
+        // 7.3.29 writes the private element the name stands for, and the
+        // compound forms would read it first, which this lowering does not.
+        if let ExprKind::PrivateName(name) = &key.kind {
+            if operator.is_some() {
+                return None;
+            }
+            return self.lower_private_access(
+                base,
+                name,
+                crate::engine::bytecode::PrivateOp::Set,
+                Some(value),
+            );
+        }
         if operator.is_none()
             && let Some(value_type) = self.lower_unknown_member_assignment(base, key, value)?
         {
@@ -6037,43 +6202,12 @@ impl RegisterLowerer {
             Stmt::Labelled(label, body) => self.lower_labelled(label, body)?,
             // 15.7.15 defines each field on the instance, with the value the
             // Initializer of 15.7.1 answers and undefined where it has none.
-            Stmt::Field(name, value) => {
-                let binding = self.bindings.get(THIS_BINDING).copied()?;
-                let units: Vec<u16> = name.encode_utf16().collect();
-                let constant = self.string_constant(&units)?;
-                match value {
-                    // 8.5.2 names an anonymous function after the field.
-                    Some(value) => {
-                        self.lower_named(value, &units)?;
-                    }
-                    None => {
-                        self.code
-                            .emit(crate::engine::bytecode::Instruction::LdaUndefined);
-                    }
-                }
-                let object = self.allocate_register()?;
-                let held = self.allocate_register()?;
-                self.code
-                    .emit(crate::engine::bytecode::Instruction::Star(held));
-                self.load_binding(binding);
-                self.code
-                    .emit(crate::engine::bytecode::Instruction::Star(object));
-                self.code
-                    .emit(crate::engine::bytecode::Instruction::Ldar(held));
-                let slot =
-                    self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
-                self.code
-                    .emit(crate::engine::bytecode::Instruction::SetNamed {
-                        obj: object,
-                        name: constant,
-                        slot,
-                        strict: true,
-                        define: true,
-                    });
-                self.release_register(held)?;
-                self.release_register(object)?;
-                RegisterFlow::Empty
+            // 7.3.27 adds the private element to the instance, which carries
+            // it under the Private Name the class body made.
+            Stmt::Field(name, value) if name.starts_with('#') => {
+                self.lower_private_field(name, value.as_ref())?
             }
+            Stmt::Field(name, value) => self.lower_named_field(name, value.as_ref())?,
             Stmt::Return(value) if self.allow_return => {
                 let return_type = if let Some(value) = value {
                     self.lower(value)?
@@ -10518,6 +10652,7 @@ fn register_expression_reads(expression: &Expr, what: Reads) -> bool {
         ExprKind::BigInt(..)
         | ExprKind::Literal(_)
         | ExprKind::Name(_)
+        | ExprKind::PrivateName(_)
         | ExprKind::Regex(_, _)
         | ExprKind::Update(..) => false,
         ExprKind::Group(inner)
@@ -10643,6 +10778,7 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
         | ExprKind::Super
         | ExprKind::DefaultSuper
         | ExprKind::NewTarget
+        | ExprKind::PrivateName(_)
         | ExprKind::Regex(_, _) => false,
         ExprKind::Destructure(pattern, right) => {
             register_expression_writes_names(right, names)?
@@ -10923,7 +11059,12 @@ fn register_expression_references(
     nested_free_names: &mut BTreeSet<String>,
 ) -> Option<()> {
     match &expression.kind {
-        ExprKind::Name(name) | ExprKind::Assign(name, _, _) | ExprKind::Update(name, _, _) => {
+        // 6.2.13: a Private Name stands on a binding of the class body the
+        // method reads it in, like every other name it reads.
+        ExprKind::Name(name)
+        | ExprKind::PrivateName(name)
+        | ExprKind::Assign(name, _, _)
+        | ExprKind::Update(name, _, _) => {
             names.insert(name.clone());
             if let ExprKind::Assign(_, _, value) = &expression.kind {
                 register_expression_references(value, names, nested_free_names)?;
@@ -11151,7 +11292,17 @@ fn register_statement_references(
             }
             register_statement_references(body, names, nested_free_names, captured_names)?;
         }
-        Stmt::Return(value) | Stmt::Field(_, value) => {
+        Stmt::Return(value) => {
+            if let Some(value) = value {
+                register_expression_references(value, names, nested_free_names)?;
+            }
+        }
+        // 7.3.27 reads the Private Name of 6.2.13 the class body made, which
+        // the constructor captures like every other name it reads.
+        Stmt::Field(name, value) => {
+            if name.starts_with('#') {
+                names.insert(name.clone());
+            }
             if let Some(value) = value {
                 register_expression_references(value, names, nested_free_names)?;
             }
@@ -11468,6 +11619,7 @@ const fn expression_refusal(kind: &ExprKind) -> &'static str {
         ExprKind::Literal(_) => "a literal",
         ExprKind::BigInt(..) => "a BigInt literal",
         ExprKind::Regex(..) => "a regular-expression literal",
+        ExprKind::PrivateName(..) => "a private name",
         ExprKind::Template(..) => "a template literal",
         ExprKind::Await(_) => "await",
         ExprKind::Name(_) => "a name",
@@ -13021,6 +13173,8 @@ impl Compiler {
                 self.emit(Op::Await)?;
             }
             ExprKind::Template(head, parts) => self.template(head, parts)?,
+            // 6.2.13: the stack backend has no Private Environment.
+            ExprKind::PrivateName(_) => return Err(Self::backend_gap("private identifiers")),
             ExprKind::Regex(pattern, flags) => self.regexp(pattern, flags)?,
             ExprKind::Array(items) => self.array(items)?,
             ExprKind::This => {

@@ -308,6 +308,9 @@ pub struct GenerationalHeap {
     /// table 1 of 20.4.2 names. A Symbol is an identity and not an object: it
     /// is never collected, so the fuel of the Agent is what bounds this.
     symbols: Vec<Option<Vec<u16>>>,
+    /// The Private Names of 6.2.13, which are Symbols no operation of the
+    /// Script lists or reads.
+    private_symbols: BTreeSet<u32>,
     /// The `GlobalSymbolRegistry` of 20.4.2.2, keyed by the text `Symbol.for`
     /// was given.
     symbol_registry: BTreeMap<Vec<u16>, u32>,
@@ -349,6 +352,7 @@ impl GenerationalHeap {
             remembered_elements: BTreeSet::new(),
             remembered_contexts: BTreeSet::new(),
             symbols: Vec::new(),
+            private_symbols: BTreeSet::new(),
             symbol_registry: BTreeMap::new(),
             bigints: Vec::new(),
             bigint_registry: BTreeMap::new(),
@@ -368,6 +372,28 @@ impl GenerationalHeap {
             .ok_or(HeapError::ReferenceSpaceExhausted)?;
         self.symbols.push(description);
         Ok(SymbolRef(index))
+    }
+
+    /// A Private Name of 6.2.13, which is a Symbol of its own that no
+    /// operation of the Script lists.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::ReferenceSpaceExhausted`] where no reference is
+    /// left.
+    pub fn create_private_symbol(
+        &mut self,
+        description: Option<Vec<u16>>,
+    ) -> Result<SymbolRef, HeapError> {
+        let symbol = self.create_symbol(description)?;
+        self.private_symbols.insert(symbol.0);
+        Ok(symbol)
+    }
+
+    /// Whether the Symbol is a Private Name of 6.2.13.
+    #[must_use]
+    pub fn is_private_symbol(&self, symbol: SymbolRef) -> bool {
+        self.private_symbols.contains(&symbol.0)
     }
 
     /// Holds a `BigInt` of 6.1.6.2 and answers the reference of its value.
@@ -1193,8 +1219,16 @@ impl GenerationalHeap {
                     Some(index) => indices.push((index, flags.enumerable)),
                     None => named.push((name, flags.enumerable)),
                 },
-                // 10.1.11.1 lists every Symbol key after every String key.
-                None => symbols.push((name, flags.enumerable)),
+                // 10.1.11.1 lists every Symbol key after every String key,
+                // and 6.2.13 keeps a Private Name out of every list.
+                None => {
+                    if !name
+                        .as_symbol()
+                        .is_some_and(|symbol| self.private_symbols.contains(&symbol.0))
+                    {
+                        symbols.push((name, flags.enumerable));
+                    }
+                }
             }
         }
         // 10.4.5.6 lists every index of an array of 23.2 first.

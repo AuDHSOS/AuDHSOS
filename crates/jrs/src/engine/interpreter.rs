@@ -21229,6 +21229,100 @@ impl RegisterVM {
                         }
                     }
                 }
+                // 15.7.14 step 12 makes a Private Name of 6.2.13 once per
+                // evaluation of the class body.
+                Instruction::CreatePrivateName(index) => {
+                    let units = active_code
+                        .string_constants
+                        .get(index as usize)
+                        .ok_or(VMError::InvalidRegister)?
+                        .clone();
+                    let symbol = heap.create_private_symbol(Some(units))?;
+                    self.acc = Value::from_symbol(symbol);
+                }
+                // 7.3.26 to 7.3.29 reach an element no operation of the Script
+                // lists, which the object carries under its Private Name.
+                Instruction::PrivateAccess { obj, key, op } => {
+                    let target = self.read_reg(obj)?;
+                    let Some(oref) = target.as_object() else {
+                        return Err(type_error(
+                            heap,
+                            realm,
+                            "a private element of a value that is no Object",
+                        ));
+                    };
+                    let Some(symbol) = self.read_reg(key)?.as_symbol() else {
+                        return Err(VMError::TypeError);
+                    };
+                    let name = PropertyKey::Symbol(symbol);
+                    let carried = heap.own_named_flags(oref, name)?;
+                    match op {
+                        crate::engine::bytecode::PrivateOp::Has => {
+                            self.acc = Value::from_bool(carried.is_some());
+                        }
+                        crate::engine::bytecode::PrivateOp::Get => {
+                            let Some(flags) = carried else {
+                                return Err(type_error(
+                                    heap,
+                                    realm,
+                                    "a private element the object does not carry",
+                                ));
+                            };
+                            if flags.is_accessor {
+                                return Err(VMError::Unsupported("a property that is an accessor"));
+                            }
+                            let indexed = Self::element_index_of(oref, name, heap);
+                            self.acc = Self::own_property_value(oref, name, indexed, heap)?;
+                        }
+                        crate::engine::bytecode::PrivateOp::Set => {
+                            let Some(flags) = carried else {
+                                return Err(type_error(
+                                    heap,
+                                    realm,
+                                    "a private element the object does not carry",
+                                ));
+                            };
+                            if flags.is_accessor {
+                                return Err(VMError::Unsupported("a property that is an accessor"));
+                            }
+                            // 7.3.29 step 4.b refuses a write to a method.
+                            if !flags.writable {
+                                return Err(type_error(heap, realm, "a write to a private method"));
+                            }
+                            let value = self.acc;
+                            heap.define_own_named(oref, name, value, flags)?;
+                        }
+                        crate::engine::bytecode::PrivateOp::Add
+                        | crate::engine::bytecode::PrivateOp::AddMethod => {
+                            // 7.3.27 step 2 refuses an element the object
+                            // already carries.
+                            if carried.is_some() {
+                                return Err(type_error(
+                                    heap,
+                                    realm,
+                                    "a private element the object already carries",
+                                ));
+                            }
+                            if heap.own_property_count(oref).unwrap_or(usize::MAX)
+                                >= self.property_limit
+                            {
+                                return Err(VMError::PropertyLimit);
+                            }
+                            let value = self.acc;
+                            heap.define_own_named(
+                                oref,
+                                name,
+                                value,
+                                PropertyFlags {
+                                    writable: matches!(op, crate::engine::bytecode::PrivateOp::Add),
+                                    enumerable: false,
+                                    configurable: false,
+                                    is_accessor: false,
+                                },
+                            )?;
+                        }
+                    }
+                }
                 Instruction::GetByValue { obj, key, slot } => {
                     let code_units = units;
                     // 7.1.19 step 2 sends an Object key through 7.1.1 with the

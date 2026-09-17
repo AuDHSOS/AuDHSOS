@@ -1326,6 +1326,63 @@ fn a_compound_assignment_reaches_a_property() -> Result<(), Error> {
 }
 
 #[test]
+fn a_private_element_of_6_2_13_is_reached_by_the_class_body_alone() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend has no Private Environment, so only the engine
+    // answers.
+    for (source, answer) in [
+        (
+            "var C=class{#x=1;read(){return this.#x}};''+new C().read()",
+            "1",
+        ),
+        (
+            "var C=class{#x;set(v){this.#x=v}read(){return this.#x}};var c=new C();c.set(4);''+c.read()",
+            "4",
+        ),
+        // 6.2.13 keeps a private element out of every list the Script reads.
+        (
+            "var C=class{#x=1};var c=new C();''+Object.keys(c).length+Object.getOwnPropertyNames(c).length+Object.getOwnPropertySymbols(c).length",
+            "000",
+        ),
+        ("var C=class{#x=1};JSON.stringify(new C())", "{}"),
+        // 7.3.28 refuses an object that carries no such element, and 13.10.1
+        // answers whether one does.
+        (
+            "var C=class{#x=1;peek(o){return o.#x}};var r;try{new C().peek({})}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        (
+            "var C=class{#x=1;has(o){return #x in o}};var c=new C();''+c.has(c)+c.has({})",
+            "truefalse",
+        ),
+        // 13.3.2.1: a member access names a Private Name an enclosing class
+        // body declares, and 15.7.1 declares each of them once.
+        (
+            "var r;try{eval('(class{m(){return this.#y}})')}catch(e){r=e instanceof SyntaxError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{eval('(class{#x;#x})')}catch(e){r=e instanceof SyntaxError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{eval('(class{#constructor})')}catch(e){r=e instanceof SyntaxError};''+r",
+            "true",
+        ),
+        // A class inside a method declares its own names, which the body
+        // around it does not read.
+        (
+            "var r;try{eval('(class{m(){class D{#y}return this.#y}})')}catch(e){r=e instanceof SyntaxError};''+r",
+            "true",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}
+
+#[test]
 fn a_field_of_15_7_1_is_defined_on_the_instance_before_the_constructor_runs() -> Result<(), Error> {
     let mut host = SilentHost;
     let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;

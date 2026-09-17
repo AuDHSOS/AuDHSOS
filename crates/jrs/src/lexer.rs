@@ -13,6 +13,8 @@ use alloc::{string::String, vec::Vec};
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Kind {
     Word(String),
+    /// `PrivateIdentifier` of 12.7, whose name carries the `#`.
+    Private(String),
     Literal(Value),
     /// The digits of a `BigInt` literal of 12.9.3, with the radix they stand in.
     BigInt(String, u32),
@@ -124,6 +126,7 @@ pub(crate) fn lex(source: &str, limits: Limits) -> Result<Vec<Token>, Error> {
             Kind::Literal(_)
             | Kind::BigInt(_, _)
             | Kind::Regex(_, _)
+            | Kind::Private(_)
             | Kind::Punct("]" | "++" | "--" | "}" | ".") => {
                 expression = false;
             }
@@ -257,6 +260,17 @@ impl Lexer<'_> {
         {
             return self.number();
         }
+        // 12.7: a `#` and the identifier behind it are one token.
+        if ch == '#' && self.rest().chars().nth(1).is_some_and(identifier_start) {
+            let start = self.at;
+            self.bump();
+            self.bump();
+            while self.peek().is_some_and(identifier_part) {
+                self.bump();
+            }
+            let word = self.source.get(start..self.at).unwrap_or_default();
+            return Ok(Kind::Private(String::from(word)));
+        }
         if identifier_start(ch) {
             let start = self.at;
             self.bump();
@@ -284,13 +298,47 @@ impl Lexer<'_> {
                 return Ok(Kind::Punct(punct));
             }
         }
-        if ch == '#' && self.rest().chars().nth(1).is_some_and(identifier_start) {
-            Err(Self::unsupported("private identifiers"))
-        } else if ch == '\\' || !ch.is_ascii() {
+        // 12.7: a `#` before a name this lexer does not take is the gap of
+        // that name; a `#` before anything else is no name at all.
+        let private_gap = ch == '#' && Self::names_a_gap(self.rest().get(1..).unwrap_or_default());
+        if private_gap || ch == '\\' || !ch.is_ascii() {
             Err(Self::unsupported("Unicode identifiers"))
         } else {
             Err(self.error("invalid source character"))
         }
+    }
+
+    /// Whether the text behind a `#` is a name this lexer does not take,
+    /// which 12.7 allows and the gap of Unicode identifiers covers.
+    ///
+    /// A `\u` escape names the code point it stands for, so an escape of a
+    /// character that starts no identifier is no name at all.
+    fn names_a_gap(rest: &str) -> bool {
+        let mut chars = rest.chars();
+        match chars.next() {
+            Some('\\') => {}
+            Some(ch) => return !ch.is_ascii(),
+            None => return false,
+        }
+        if chars.next() != Some('u') {
+            return false;
+        }
+        let tail: String = chars.collect();
+        let digits = if let Some(braced) = tail.strip_prefix('{') {
+            braced.split_once('}').map(|(digits, _)| digits)
+        } else {
+            tail.get(..4)
+        };
+        digits
+            .and_then(|digits| u32::from_str_radix(digits, 16).ok())
+            .and_then(char::from_u32)
+            // A zero-width joiner is a part of a name and starts none, which
+            // 12.7.1 tells apart without the tables the rest needs.
+            .is_some_and(|ch| {
+                (identifier_start(ch) || !ch.is_ascii())
+                    && ch != '\u{200c}'
+                    && ch != '\u{200d}'
+            })
     }
 
     fn digits(&mut self, radix: u32) -> Result<String, Error> {

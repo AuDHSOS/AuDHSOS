@@ -57,6 +57,9 @@ pub(crate) enum ExprKind {
     /// A `BigInt` literal of 12.9.3: its digits and the radix they stand in.
     BigInt(alloc::rc::Rc<str>, u32),
     Regex(String, String),
+    /// `PrivateIdentifier` of 12.7 as the name of a member access, which
+    /// 6.2.13 resolves on the Private Environment.
+    PrivateName(String),
     Template(Value, Vec<(Expr, Value)>),
     Await(Box<Expr>),
     Name(String),
@@ -130,6 +133,9 @@ enum SuperContext {
 #[derive(Debug)]
 pub(crate) struct Class {
     pub(crate) name: Option<String>,
+    /// The Private Names of 6.2.13 this class body declares, which 15.7.14
+    /// step 12 makes once per evaluation of it.
+    pub(crate) private_names: Vec<String>,
     pub(crate) heritage: Option<Expr>,
     pub(crate) constructor: Function,
     pub(crate) methods: Vec<(bool, ObjectProperty)>,
@@ -394,6 +400,7 @@ fn parse_script(source: &str, limits: Limits, strict_caller: bool) -> Result<Vec
         loops: 0,
         switches: 0,
         labels: Vec::new(),
+        private_names: Vec::new(),
         functions: 0,
         new_target_context: 0,
         strict: false,
@@ -473,6 +480,9 @@ struct Parser {
     /// The labels of 14.13 that enclose the statement being parsed, each with
     /// whether it names an iteration statement.
     labels: Vec<(String, bool)>,
+    /// The Private Names of 6.2.13 the enclosing class bodies declare, which
+    /// 13.3.2.1 asks every member access that names one about.
+    private_names: Vec<String>,
     functions: usize,
     new_target_context: usize,
     strict: bool,
@@ -492,6 +502,7 @@ impl Parser {
             loops: 0,
             switches: 0,
             labels: Vec::new(),
+            private_names: Vec::new(),
             functions: 1,
             new_target_context: 1,
             strict: false,
@@ -569,6 +580,18 @@ impl Parser {
             Err(self.error("expected semicolon or line terminator"))
         }
     }
+    /// 13.3.2.1: every Private Name a member access reads is one an enclosing
+    /// class body declares.
+    fn use_private_name(&self, name: &str, offset: usize) -> Result<(), Error> {
+        if self.private_names.iter().any(|declared| declared == name) {
+            return Ok(());
+        }
+        Err(Error::Syntax {
+            offset,
+            message: "a private name no class body declares",
+        })
+    }
+
     fn name(&mut self) -> Result<String, Error> {
         let Kind::Word(name) = &self.token()?.kind else {
             return Err(self.error("expected binding identifier"));
@@ -1701,6 +1724,20 @@ impl Parser {
                 let depth = expr.depth.saturating_add(1);
                 self.make(ExprKind::Group(Box::new(expr)), depth, token.offset)?
             }
+            // 13.10.1 reads whether an object carries the private element the
+            // name stands for, which is the only place a Private Name stands
+            // outside a member access.
+            Kind::Private(name) => {
+                self.use_private_name(&name, token.offset)?;
+                if !self
+                    .tokens
+                    .get(self.at)
+                    .is_some_and(|token| matches!(&token.kind, Kind::Word(word) if word == "in"))
+                {
+                    return Err(self.error("a private name outside a member access"));
+                }
+                self.make(ExprKind::PrivateName(name), 1, token.offset)?
+            }
             _ => return Err(self.unverified_error("expected expression")),
         };
         loop {
@@ -1711,6 +1748,22 @@ impl Parser {
                 return Err(Self::unsupported("tagged templates"));
             }
             if self.eat(".") {
+                // 13.3.2: a member access names a private element where the
+                // name behind the dot carries a `#`.
+                if let Kind::Private(name) = &self.token()?.kind {
+                    let name = name.clone();
+                    let offset = self.token()?.offset;
+                    self.at = self.at.saturating_add(1);
+                    self.use_private_name(&name, offset)?;
+                    let key = self.make(ExprKind::PrivateName(name), 1, offset)?;
+                    let depth = expr.depth.saturating_add(1);
+                    expr = self.make(
+                        ExprKind::Member(Box::new(expr), Box::new(key)),
+                        depth,
+                        token.offset,
+                    )?;
+                    continue;
+                }
                 if !matches!(
                     self.token()?.kind,
                     Kind::Word(_) | Kind::Literal(Value::Boolean(_) | Value::Null)

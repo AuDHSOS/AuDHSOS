@@ -153,6 +153,15 @@ impl PropertyKey {
         }
     }
 
+    /// The Symbol this key is, if it is one.
+    #[must_use]
+    pub const fn as_symbol(self) -> Option<SymbolRef> {
+        match self {
+            Self::Symbol(symbol) => Some(symbol),
+            Self::String(_) => None,
+        }
+    }
+
     /// The value this key is as an ECMAScript value.
     #[must_use]
     pub const fn to_value(self) -> Value {

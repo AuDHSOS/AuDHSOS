@@ -48,6 +48,85 @@ impl Parser {
         Ok(())
     }
 
+    /// The Initializer of a field of 15.7.1, and the `;` of 14.1 behind it.
+    fn field_initializer(&mut self) -> Result<Option<Expr>, Error> {
+        let initializer = if self.eat("=") {
+            let start = self.at;
+            // 15.7.15 runs the Initializer in a frame whose `[[HomeObject]]`
+            // is the prototype of the class.
+            let context = core::mem::replace(&mut self.super_context, SuperContext::Method);
+            let value = self.expression(0);
+            self.super_context = context;
+            let value = value?;
+            // 15.7.1: an Initializer names no `arguments`, and a `new.target`
+            // would read the one of the constructor this lowering runs the
+            // Initializer in.
+            self.refuse_frame_names(start)?;
+            Some(value)
+        } else {
+            None
+        };
+        if !self.eat(";") && !self.is("}") && !self.token()?.newline {
+            return Err(self.error("expected semicolon after a class field"));
+        }
+        Ok(initializer)
+    }
+
+    /// The Private Names of 6.2.13 the class body ahead declares, which are
+    /// the ones an element of it is named by and not the ones a member access
+    /// reads.
+    fn declared_private_names(&self) -> Result<Vec<String>, Error> {
+        let mut names: Vec<String> = Vec::new();
+        let mut depth = 0usize;
+        for offset in self.at.. {
+            let Some(token) = self.tokens.get(offset) else {
+                break;
+            };
+            match &token.kind {
+                Kind::Punct("{" | "[" | "(") => depth = depth.saturating_add(1),
+                Kind::Punct("}" | "]" | ")") => {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth = depth.saturating_sub(1);
+                }
+                Kind::Private(name) => {
+                    // An element of this body is named at its own level; every
+                    // other Private Name here is one a member access of a
+                    // method reads, or one a class inside it declares.
+                    let after_dot = offset
+                        .checked_sub(1)
+                        .and_then(|before| self.tokens.get(before))
+                        .is_some_and(|token| token.kind == Kind::Punct("."));
+                    if depth > 0 || after_dot {
+                        continue;
+                    }
+                    // 15.7.1: a class body declares each Private Name once,
+                    // beside the getter and the setter of one accessor, which
+                    // the word before the name tells apart.
+                    let accessor = offset
+                        .checked_sub(1)
+                        .and_then(|before| self.tokens.get(before))
+                        .is_some_and(|token| {
+                            matches!(&token.kind, Kind::Word(word) if word == "get" || word == "set")
+                        });
+                    if names.iter().any(|declared| declared == name) {
+                        if accessor {
+                            continue;
+                        }
+                        return Err(Error::Syntax {
+                            offset: token.offset,
+                            message: "a private name a class body declares twice",
+                        });
+                    }
+                    names.push(name.clone());
+                }
+                _ => {}
+            }
+        }
+        Ok(names)
+    }
+
     pub(super) fn method_function(
         &mut self,
         name: Option<String>,
@@ -92,6 +171,12 @@ impl Parser {
             None
         };
         self.need("{")?;
+        // 13.3.2.1 asks every member access about the Private Names of every
+        // enclosing class body, and a method reads one its own body declares
+        // after it, so the names are collected before the body is read.
+        let private_names = self.declared_private_names()?;
+        let outer_private = self.private_names.len();
+        self.private_names.extend(private_names.iter().cloned());
         let mut methods = Vec::new();
         let mut fields = Vec::new();
         let mut static_fields = Vec::new();
@@ -141,6 +226,15 @@ impl Parser {
                 let k = self.expression(0)?;
                 self.need("]")?;
                 k
+            } else if let Kind::Private(name) = &self.token()?.kind {
+                let name = name.clone();
+                let at = self.token()?.offset;
+                self.at = self.at.saturating_add(1);
+                // 15.7.1: no element is named `#constructor`.
+                if name == "#constructor" {
+                    return Err(self.error("a private element named #constructor"));
+                }
+                self.make(ExprKind::PrivateName(name), 1, at)?
             } else {
                 let k = self.property_name()?;
                 self.make(ExprKind::Literal(k), 1, offset)?
@@ -171,6 +265,15 @@ impl Parser {
                 if accessor.is_some() || async_method {
                     return Err(self.error("a field with a method modifier"));
                 }
+                if let ExprKind::PrivateName(name) = &key.kind {
+                    let name = name.clone();
+                    let initializer = self.field_initializer()?;
+                    if is_static {
+                        return Err(Self::unsupported("a static private field"));
+                    }
+                    fields.push(Stmt::Field(name, initializer));
+                    continue;
+                }
                 // 15.7.5 evaluates a computed name where the class is
                 // defined, which is before the Initializer of an instance
                 // field runs.
@@ -183,31 +286,16 @@ impl Parser {
                 if name == "constructor" || (is_static && name == "prototype") {
                     return Err(self.error("a field of a name a class cannot carry"));
                 }
-                let initializer = if self.eat("=") {
-                    let start = self.at;
-                    // 15.7.15 runs the Initializer in a frame whose
-                    // `[[HomeObject]]` is the prototype of the class.
-                    let context = core::mem::replace(&mut self.super_context, SuperContext::Method);
-                    let value = self.expression(0);
-                    self.super_context = context;
-                    let value = value?;
-                    // 15.7.1: an Initializer names no `arguments`, and a
-                    // `new.target` would read the one of the constructor this
-                    // lowering runs the Initializer in.
-                    self.refuse_frame_names(start)?;
-                    Some(value)
-                } else {
-                    None
-                };
-                if !self.eat(";") && !self.is("}") && !self.token()?.newline {
-                    return Err(self.error("expected semicolon after a class field"));
-                }
+                let initializer = self.field_initializer()?;
                 if is_static {
                     static_fields.push((name, initializer));
                 } else {
                     fields.push(Stmt::Field(name, initializer));
                 }
                 continue;
+            }
+            if matches!(key.kind, ExprKind::PrivateName(_)) {
+                return Err(Self::unsupported("a private method"));
             }
             let mut function = self.method_function(
                 None,
@@ -257,6 +345,22 @@ impl Parser {
         if !fields.is_empty() && heritage.is_some() {
             return Err(Self::unsupported("a field of a derived class"));
         }
+        // Step 8 of 10.2.2 runs the Initializers before 10.2.11 evaluates the
+        // parameter list, and a field this lowering runs as the first
+        // statement of the body runs after it.
+        if !fields.is_empty()
+            && constructor.as_ref().is_some_and(|constructor| {
+                constructor.parameters.iter().any(|parameter| {
+                    parameter.default.is_some()
+                        || parameter.rest
+                        || !matches!(parameter.pattern, crate::parser::BindingPattern::Name(_))
+                })
+            })
+        {
+            return Err(Self::unsupported(
+                "a field beside a parameter that runs code",
+            ));
+        }
         let mut constructor = constructor.unwrap_or(Function {
             source: None,
             name: None,
@@ -279,10 +383,12 @@ impl Parser {
         for field in fields.into_iter().rev() {
             constructor.body.insert(0, field);
         }
+        self.private_names.truncate(outer_private);
         constructor.source = Some(self.source_since(offset)?);
         self.make(
             ExprKind::Class(Box::new(Class {
                 name,
+                private_names,
                 heritage,
                 constructor,
                 methods,
