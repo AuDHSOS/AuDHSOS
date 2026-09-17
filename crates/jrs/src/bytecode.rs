@@ -8963,7 +8963,7 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ErrorPrototypeToString
         | crate::engine::realm::Intrinsic::StringPrototypeReplace
         | crate::engine::realm::Intrinsic::ArrayPrototypeToString
-        // 27.1.4.3 answers the name of the clause.
+        // 27.1.3.3.15 answers the name of the clause.
         | crate::engine::realm::Intrinsic::IteratorPrototypeToStringTagGet
         // 21.2.3.3 and 21.2.3.2 write the BigInt out.
         | crate::engine::realm::Intrinsic::BigIntPrototypeToString
@@ -9141,12 +9141,12 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // 23.2.6 answers the array it made, 23.2.3.1 the block it looks into,
         // and 23.2.1.1 refuses every call.
         | crate::engine::realm::Intrinsic::TypedArrayBase
-        // 27.1.4.1 answers a constructor and 27.1.4.2 reads it back.
+        // 27.1.3.1.1 answers a constructor and 27.1.3.3.1.1 reads it back.
         | crate::engine::realm::Intrinsic::IteratorConstructor
         | crate::engine::realm::Intrinsic::IteratorPrototypeConstructorGet
-        // 27.1.5.1.11 answers an Array this lowering did not make.
+        // 27.1.3.3.12 answers an Array this lowering did not make.
         | crate::engine::realm::Intrinsic::IteratorPrototypeToArray
-        // 27.1.5.1.10, 27.1.5.1.4 and 27.1.5.1.6 answer once a call of the
+        // 27.1.3.3.10, 27.1.3.3.3 and 27.1.3.3.5 answer once a call of the
         // Script has answered, which this lowering cannot read.
         | crate::engine::realm::Intrinsic::IteratorPrototypeSome
         | crate::engine::realm::Intrinsic::IteratorPrototypeEvery
@@ -9231,9 +9231,9 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // 24.1.3.1 and 24.2.3.2 answer undefined.
         crate::engine::realm::Intrinsic::MapPrototypeClear
         | crate::engine::realm::Intrinsic::SetPrototypeClear
-        // 27.1.5.1.5 answers nothing at all.
+        // 27.1.3.3.7 answers nothing at all.
         | crate::engine::realm::Intrinsic::IteratorPrototypeForEach
-        // 27.1.4.2 and 27.1.4.3 answer nothing where they are written to.
+        // 27.1.3.3.1.2 and 27.1.3.3.15.2 answer nothing where they are written to.
         | crate::engine::realm::Intrinsic::IteratorPrototypeConstructorSet
         | crate::engine::realm::Intrinsic::IteratorPrototypeToStringTagSet
         // The two host capabilities of the conformance suite answer nothing.

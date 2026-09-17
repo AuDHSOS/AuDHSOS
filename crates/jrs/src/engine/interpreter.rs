@@ -613,15 +613,15 @@ enum IteratorWalkTaker {
         /// The row of table 71 the array stands in.
         kind: u8,
     },
-    /// 27.1.5.1.5 calls its procedure with it and keeps nothing.
+    /// 27.1.3.3.7 calls its procedure with it and keeps nothing.
     Each,
-    /// 27.1.5.1.10, 27.1.5.1.4 and 27.1.5.1.6 stop the walk at the first
+    /// 27.1.3.3.10, 27.1.3.3.3 and 27.1.3.3.5 stop the walk at the first
     /// element whose verdict decides the answer.
     Verdict {
         /// Which of the three helpers walks.
         tag: i32,
     },
-    /// 27.1.5.1.9 carries what its reducer answered from element to element.
+    /// 27.1.3.3.9 carries what its reducer answered from element to element.
     Reduce {
         /// The accumulator the call named, and `VALUE_UNINITIALIZED` where it
         /// named none.
@@ -661,8 +661,8 @@ impl IteratorWalkTaker {
     const fn collection(self) -> Value {
         match self {
             Self::Array | Self::Each | Self::Reduce { .. } => VALUE_UNDEFINED,
-            // 27.1.5.1.10 step 6.b answers false, 27.1.5.1.4 step 6.b answers
-            // true and 27.1.5.1.6 step 6.b answers undefined.
+            // 27.1.3.3.10 step 7.b answers false, 27.1.3.3.3 step 7.b answers
+            // true and 27.1.3.3.5 step 7.b answers undefined.
             Self::Verdict { tag } => match tag {
                 ITERATOR_WALK_SOME => VALUE_FALSE,
                 ITERATOR_WALK_EVERY => VALUE_TRUE,
@@ -687,18 +687,18 @@ const ITERATOR_WALK_WEAK_MAP: i32 = 3;
 const ITERATOR_WALK_WEAK_SET: i32 = 4;
 /// It makes a property of 20.1.2.7 out of each entry.
 const ITERATOR_WALK_ENTRIES: i32 = 5;
-/// It calls the procedure of 27.1.5.1.5 and keeps nothing.
+/// It calls the procedure of 27.1.3.3.7 and keeps nothing.
 const ITERATOR_WALK_EACH: i32 = 7;
 /// It keeps each element for the array of 23.2.5.1.3, which the last step
 /// makes of the list, because the length is known only then.
 const ITERATOR_WALK_TYPED_ARRAY: i32 = 6;
-/// It answers true at the first element 27.1.5.1.10 accepts.
+/// It answers true at the first element 27.1.3.3.10 accepts.
 const ITERATOR_WALK_SOME: i32 = 8;
-/// It answers false at the first element 27.1.5.1.4 refuses.
+/// It answers false at the first element 27.1.3.3.3 refuses.
 const ITERATOR_WALK_EVERY: i32 = 9;
-/// It answers the first element 27.1.5.1.6 accepts.
+/// It answers the first element 27.1.3.3.5 accepts.
 const ITERATOR_WALK_FIND: i32 = 10;
-/// It carries the accumulator of 27.1.5.1.9 from element to element.
+/// It carries the accumulator of 27.1.3.3.9 from element to element.
 const ITERATOR_WALK_REDUCE: i32 = 11;
 
 /// The walk of 7.4.2 has not called the `@@iterator` yet.
@@ -711,7 +711,7 @@ const ITERATOR_WALK_STEPPING: i32 = 2;
 const ITERATOR_WALK_MAPPING: i32 = 3;
 /// It is waiting for the `return` of 7.4.9.
 const ITERATOR_WALK_CLOSING: i32 = 4;
-/// It closes the iterator of 27.1.5.1.10 step 4.b before the `TypeError` of a
+/// It closes the iterator of 27.1.3.3.10 step 4.b before the `TypeError` of a
 /// procedure that is not callable leaves.
 const ITERATOR_WALK_REFUSING: i32 = 5;
 /// It is waiting for a `return` it called with that `TypeError` in hand.
@@ -2188,7 +2188,7 @@ impl RegisterVM {
                 .root_value(state)
                 .ok_or(VMError::Heap(HeapError::InvalidReference))?;
             if promise::slot(heap, record, 6).as_smi() == Some(ITERATOR_WALK_MAPPING) {
-                // 27.1.5.1.9 step 6.b passes the accumulator ahead of the two.
+                // 27.1.3.3.9 step 8.c passes the accumulator ahead of the two.
                 let arguments = [
                     promise::slot(heap, record, 0),
                     promise::slot(heap, record, 7),
@@ -2403,7 +2403,7 @@ impl RegisterVM {
             // 21.3.2.27 answers a Number in [0, 1) that no argument decides.
             Intrinsic::MathRandom => Ok(Value::from_f64(self.next_random())),
             Intrinsic::Print => self.print_line(&call, heap, realm),
-            // 27.1.4.1 is abstract: it refuses a call and refuses to be the
+            // 27.1.3.1.1 is abstract: it refuses a call and refuses to be the
             // target of a construction of its own.
             Intrinsic::IteratorConstructor => {
                 let direct = call.construct.is_none()
@@ -2419,7 +2419,7 @@ impl RegisterVM {
                 }
                 Err(VMError::Unsupported("a subclass of %Iterator%"))
             }
-            // 27.1.4.2 answers the constructor and 27.1.4.3 the name of the
+            // 27.1.3.3.1.1 answers the constructor and 27.1.3.3.15.1 the name of the
             // clause, whichever object the accessor was read off.
             Intrinsic::IteratorPrototypeConstructorGet => realm
                 .intrinsic(heap, Intrinsic::IteratorConstructor)
@@ -2428,7 +2428,7 @@ impl RegisterVM {
                 let units: Vec<u16> = "Iterator".encode_utf16().collect();
                 self.allocate_string(heap, &units)
             }
-            // `SetterThatIgnoresPrototypeProperties` of 27.1.4.2.1: a write on
+            // `SetterThatIgnoresPrototypeProperties` of 7.3.37: a write on
             // the prototype itself is refused, and a write on anything else
             // makes a property of that object.
             Intrinsic::IteratorPrototypeConstructorSet
@@ -2438,14 +2438,14 @@ impl RegisterVM {
                     return Err(type_error(
                         heap,
                         realm,
-                        "the receiver of 27.1.4.2.1 is no Object",
+                        "the receiver of 7.3.37 is no Object",
                     ));
                 };
                 if home.as_object() == Some(receiver) {
                     return Err(type_error(
                         heap,
                         realm,
-                        "a write of 27.1.4.2.1 on %Iterator.prototype%",
+                        "a write of 7.3.37 on %Iterator.prototype%",
                     ));
                 }
                 let name = if intrinsic == Intrinsic::IteratorPrototypeConstructorSet {
@@ -4787,8 +4787,8 @@ impl RegisterVM {
                 realm,
             );
         }
-        // 27.1.5.1.11 collects what the iterator answers, 27.1.5.1.5 calls its
-        // procedure with each of them and the three of 27.1.5 that stop early
+        // 27.1.3.3.12 collects what the iterator answers, 27.1.3.3.7 calls its
+        // procedure with each of them and the three of 27.1.3.3 that stop early
         // ask their predicate about each, which a walk of 7.4.2 reaches.
         let taker = match intrinsic {
             Intrinsic::IteratorPrototypeToArray => Some(IteratorWalkTaker::Array),
@@ -4802,7 +4802,7 @@ impl RegisterVM {
             Intrinsic::IteratorPrototypeFind => Some(IteratorWalkTaker::Verdict {
                 tag: ITERATOR_WALK_FIND,
             }),
-            // 27.1.5.1.9 step 5 takes the first element as the accumulator
+            // 27.1.3.3.9 step 6 takes the first element as the accumulator
             // where the call passed one argument alone.
             Intrinsic::IteratorPrototypeReduce => Some(IteratorWalkTaker::Reduce {
                 initial: if call.arg_count > 1 {
@@ -7579,7 +7579,7 @@ impl RegisterVM {
         .map(IterableStart::Walking)
     }
 
-    /// The walk a helper of 27.1.5 runs, whose receiver is the iterator
+    /// The walk a helper of 27.1.3.3 runs, whose receiver is the iterator
     /// rather than an iterable of it.
     ///
     /// 7.4.2 step 1 is already done there, so the record starts where the
@@ -7603,19 +7603,20 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Option<u32>, VMError> {
-        // Step 1 of every helper of 27.1.5 takes an Object and no other value.
+        // Step 2 of every helper of 27.1.3.3 refuses a receiver that is no
+        // Object.
         let Some(iterator) = call.receiver.as_object() else {
             return Err(type_error(
                 heap,
                 realm,
-                "the receiver of a method of 27.1.5 is no Object",
+                "the receiver of a method of 27.1.3.3 is no Object",
             ));
         };
-        // 27.1.5.1.5 step 3 asks for a callable, and undefined is none of
-        // them; 27.1.5.1.11 asks for no procedure at all.
+        // 27.1.3.3.7 step 4 asks for a callable, and undefined is none of
+        // them; 27.1.3.3.12 asks for no procedure at all.
         let wanted = !matches!(taker, IteratorWalkTaker::Array);
         let refused = (wanted || !procedure.is_undefined()) && !Self::is_callable(procedure, heap);
-        // 27.1.5.1.5 step 3.b closes the iterator before the `TypeError`
+        // 27.1.3.3.7 step 4.b closes the iterator before the `TypeError`
         // leaves, so the walk starts even where the procedure is none.
         let phase = if refused {
             ITERATOR_WALK_REFUSING
@@ -7763,7 +7764,7 @@ impl RegisterVM {
                         Err(error) => return Err(Self::leave_iterator_walk(heap, error)),
                     }
                 }
-                // 27.1.5.1.5 step 3.b and 7.4.9 step 3 read the `return` of
+                // 27.1.3.3.7 step 4.b and 7.4.9 step 3 read the `return` of
                 // the iterator.
                 ITERATOR_WALK_REFUSING => {
                     match Self::request_iterator_close(record, ITERATOR_WALK_REFUSED, heap, realm) {
@@ -7791,7 +7792,7 @@ impl RegisterVM {
                     self.answer_iterator_verdict(record, heap);
                     None
                 }
-                // 27.1.5.1.10 step 6.e either ends the walk with a verdict or
+                // 27.1.3.3.10 step 7.e either ends the walk with a verdict or
                 // takes it on.
                 _ if stops_iterator_walk(promise::slot(heap, record, 9).as_smi().unwrap_or(0)) => {
                     match self.judge_iterator_element(record, answered, heap, realm) {
@@ -7857,7 +7858,7 @@ impl RegisterVM {
             return Ok(None);
         }
         let tag = promise::slot(heap, record, 9).as_smi().unwrap_or(0);
-        // 27.1.5.1.9 step 5.a takes the first element as the accumulator where
+        // 27.1.3.3.9 step 6.a takes the first element as the accumulator where
         // the call named none, and counts it.
         if tag == ITERATOR_WALK_REDUCE && promise::slot(heap, record, 0) == VALUE_UNINITIALIZED {
             promise::set_slot(heap, record, 0, value)?;
@@ -7927,11 +7928,11 @@ impl RegisterVM {
         let output = if tag == ITERATOR_WALK_ARRAY {
             promise::slot(heap, record, 0)
         } else if tag == ITERATOR_WALK_REDUCE {
-            // 27.1.5.1.9 step 5.a.ii refuses an iterator with no element where
+            // 27.1.3.3.9 step 6.b refuses an iterator with no element where
             // the call named no accumulator either.
             let accumulator = promise::slot(heap, record, 0);
             if accumulator == VALUE_UNINITIALIZED {
-                let error = type_error(heap, realm, "a reduce of 27.1.5 with no element at all");
+                let error = type_error(heap, realm, "a reduce of 27.1.3.3 with no element at all");
                 return Err(Self::leave_iterator_walk(heap, error));
             }
             accumulator
@@ -7956,7 +7957,7 @@ impl RegisterVM {
         Ok(())
     }
 
-    /// The answer a helper of 27.1.5 stopped the walk with, and the scope the
+    /// The answer a helper of 27.1.3.3 stopped the walk with, and the scope the
     /// record held.
     fn answer_iterator_verdict(&mut self, record: Value, heap: &mut GenerationalHeap) {
         let verdict = promise::slot(heap, record, 10);
@@ -7964,7 +7965,7 @@ impl RegisterVM {
         self.acc = verdict;
     }
 
-    /// 27.1.5.1.10 step 6.e, 27.1.5.1.4 step 6.e and 27.1.5.1.6 step 6.e,
+    /// 27.1.3.3.10 step 7.e, 27.1.3.3.3 step 7.e and 27.1.3.3.5 step 7.e,
     /// where the verdict of the predicate either ends the walk or the walk
     /// reads the next element.
     fn judge_iterator_element(
@@ -7976,7 +7977,7 @@ impl RegisterVM {
     ) -> Result<Option<(Value, Value)>, VMError> {
         let tag = promise::slot(heap, record, 9).as_smi().unwrap_or(0);
         let held = Self::to_boolean(answered, heap)?;
-        // 27.1.5.1.4 stops where the predicate refuses, the two others where
+        // 27.1.3.3.3 stops where the predicate refuses, the two others where
         // it accepts.
         if held == (tag == ITERATOR_WALK_EVERY) {
             let counter = promise::slot(heap, record, 5).as_smi().unwrap_or(0);
@@ -8043,9 +8044,9 @@ impl RegisterVM {
             return Err(VMError::PropertyLimit);
         }
         if tag == ITERATOR_WALK_EACH {
-            // 27.1.5.1.5 step 6.d.ii drops what the procedure answered.
+            // 27.1.3.3.7 step 7.c drops what the procedure answered.
         } else if tag == ITERATOR_WALK_REDUCE {
-            // 27.1.5.1.9 step 6.f keeps it as the accumulator.
+            // 27.1.3.3.9 step 8.e keeps it as the accumulator.
             promise::set_slot(heap, record, 0, value)?;
         } else if tag == ITERATOR_WALK_ARRAY || tag == ITERATOR_WALK_TYPED_ARRAY {
             let array = promise::slot(heap, record, 0)

@@ -1120,27 +1120,27 @@ pub enum Intrinsic {
     TypedArrayPrototypeReduceRight,
     /// `some`, 23.2.3.25.
     TypedArrayPrototypeSome,
-    /// `Iterator`, 27.1.4.1.
+    /// `Iterator`, 27.1.3.1.1.
     IteratorConstructor,
-    /// `toArray`, 27.1.5.1.11.
+    /// `toArray`, 27.1.3.3.12.
     IteratorPrototypeToArray,
-    /// `forEach`, 27.1.5.1.5.
+    /// `forEach`, 27.1.3.3.7.
     IteratorPrototypeForEach,
-    /// `some`, 27.1.5.1.10.
+    /// `some`, 27.1.3.3.10.
     IteratorPrototypeSome,
-    /// `every`, 27.1.5.1.4.
+    /// `every`, 27.1.3.3.3.
     IteratorPrototypeEvery,
-    /// `find`, 27.1.5.1.6.
+    /// `find`, 27.1.3.3.5.
     IteratorPrototypeFind,
-    /// `reduce`, 27.1.5.1.9.
+    /// `reduce`, 27.1.3.3.9.
     IteratorPrototypeReduce,
-    /// `get constructor`, 27.1.4.2.
+    /// `get constructor`, 27.1.3.3.1.1.
     IteratorPrototypeConstructorGet,
-    /// `set constructor`, 27.1.4.2.
+    /// `set constructor`, 27.1.3.3.1.2.
     IteratorPrototypeConstructorSet,
-    /// `get [Symbol.toStringTag]`, 27.1.4.3.
+    /// `get [Symbol.toStringTag]`, 27.1.3.3.15.1.
     IteratorPrototypeToStringTagGet,
-    /// `set [Symbol.toStringTag]`, 27.1.4.3.
+    /// `set [Symbol.toStringTag]`, 27.1.3.3.15.2.
     IteratorPrototypeToStringTagSet,
     /// `$262.detachArrayBuffer`, the `DetachArrayBuffer` of 25.1.3.4 the host
     /// of the conformance suite exposes.
@@ -6334,8 +6334,8 @@ impl Realm {
         Self::define_data_view_getters(heap, &intrinsics, data_view_prototype)?;
         Self::define_typed_array_getters(heap, &intrinsics, typed_array_prototype)?;
         Self::define_iterator_accessors(heap, &intrinsics, iterator_prototype_root)?;
-        // 27.1.4.2 gives `%Iterator%` its prototype; the prototype carries the
-        // accessor of 27.1.4.2 rather than the data `constructor` every other
+        // 27.1.3.2.3 gives `%Iterator%` its prototype; the prototype carries the
+        // accessor of 27.1.3.3.1 rather than the data `constructor` every other
         // one of the specification has, so it takes no pairing of its own.
         Self::define_prototype_property(
             heap,
@@ -7250,7 +7250,7 @@ impl Realm {
         Ok(())
     }
 
-    /// The `constructor` of 27.1.4.2 and the `@@toStringTag` of 27.1.4.3,
+    /// The `constructor` of 27.1.3.3.1 and the `@@toStringTag` of 27.1.3.3.15,
     /// which are accessor pairs rather than the data properties every other
     /// prototype of the specification carries there.
     ///

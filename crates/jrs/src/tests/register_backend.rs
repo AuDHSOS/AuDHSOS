@@ -10321,16 +10321,16 @@ fn the_three_further_rows_of_table_71_hold_a_binary16_and_a_bigint() -> Result<(
 fn the_iterator_of_27_1_4_is_abstract_and_carries_two_accessors() -> Result<(), Error> {
     let mut host = SilentHost;
     let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
-    // The stack backend carries no clause 27.1.4, so only the engine answers.
+    // The stack backend carries no clause 27.1.3, so only the engine answers.
     for (source, answer) in [
         ("typeof Iterator", "function"),
-        // 27.1.4.2 gives it the `%IteratorPrototype%` every iterator of the
+        // 27.1.3.2.3 gives it the `%IteratorPrototype%` every iterator of the
         // Realm already inherits from.
         (
             "''+(Iterator.prototype===Object.getPrototypeOf(Object.getPrototypeOf([].values())))",
             "true",
         ),
-        // 27.1.4.1 refuses a call and refuses to be the target of its own
+        // 27.1.3.1.1 refuses a call and refuses to be the target of its own
         // construction.
         (
             "var r;try{Iterator()}catch(e){r=e instanceof TypeError};''+r",
@@ -10340,7 +10340,7 @@ fn the_iterator_of_27_1_4_is_abstract_and_carries_two_accessors() -> Result<(), 
             "var r;try{new Iterator()}catch(e){r=e instanceof TypeError};''+r",
             "true",
         ),
-        // 27.1.4.2 and 27.1.4.3 are accessor pairs, not the data properties
+        // 27.1.3.3.1 and 27.1.3.3.15 are accessor pairs, not the data properties
         // every other prototype of the specification carries there.
         (
             "''+(Iterator.prototype.constructor===Iterator)+' '+Iterator.prototype[Symbol.toStringTag]",
@@ -10350,7 +10350,7 @@ fn the_iterator_of_27_1_4_is_abstract_and_carries_two_accessors() -> Result<(), 
             "''+Object.getOwnPropertyDescriptor(Iterator.prototype,'constructor').get.name",
             "get constructor",
         ),
-        // `SetterThatIgnoresPrototypeProperties` of 27.1.4.2.1 refuses a write
+        // `SetterThatIgnoresPrototypeProperties` of 7.3.37 refuses a write
         // on the prototype itself and makes a property of any other receiver.
         (
             "var o=Object.create(Iterator.prototype);o.constructor=5;''+o.constructor",
@@ -10360,7 +10360,7 @@ fn the_iterator_of_27_1_4_is_abstract_and_carries_two_accessors() -> Result<(), 
             "var r;try{Iterator.prototype.constructor=5}catch(e){r=e instanceof TypeError};''+r",
             "true",
         ),
-        // 27.1.5.1.11 collects what the iterator answers, and 27.1.5.1.5 calls
+        // 27.1.3.3.12 collects what the iterator answers, and 27.1.3.3.7 calls
         // its procedure with each of them and answers undefined.
         ("[1,2,3].values().toArray().join(',')", "1,2,3"),
         ("new Set([1,2]).values().toArray().join(',')", "1,2"),
@@ -10378,7 +10378,7 @@ fn the_iterator_of_27_1_4_is_abstract_and_carries_two_accessors() -> Result<(), 
             "var r;try{[].values().forEach(5)}catch(e){r=e instanceof TypeError};''+r",
             "true",
         ),
-        // Step 3 of 27.1.5.1.5 asks for a callable, and undefined is none.
+        // Step 4 of 27.1.3.3.7 asks for a callable, and undefined is none.
         (
             "var r;try{[].values().forEach()}catch(e){r=e instanceof TypeError};''+r",
             "true",
@@ -10401,7 +10401,7 @@ fn the_three_helpers_of_27_1_5_that_stop_early_close_the_iterator() -> Result<()
     // keeps what the iterator was asked in `w`.
     let made = "function make(v){var i=0;var t={next:function(){w.push('n');if(i<v.length){var e=v[i];i=i+1;return {done:false,value:e}}return {done:true}}};t['return']=function(){w.push('r');return {}};Object.setPrototypeOf(t,Iterator.prototype);return t}var w=[];";
     for (source, answer) in [
-        // 27.1.5.1.10 answers true at the first element it accepts, and false
+        // 27.1.3.3.10 answers true at the first element it accepts, and false
         // for an iterator it walked to the end.
         (
             "''+[1,2,3].values().some(function(v){return v===2})",
@@ -10412,14 +10412,14 @@ fn the_three_helpers_of_27_1_5_that_stop_early_close_the_iterator() -> Result<()
             "false",
         ),
         ("''+[].values().some(function(){return true})", "false"),
-        // 27.1.5.1.4 answers false at the first element it refuses.
+        // 27.1.3.3.3 answers false at the first element it refuses.
         ("''+[1,2,3].values().every(function(v){return v<9})", "true"),
         (
             "''+[1,2,3].values().every(function(v){return v<3})",
             "false",
         ),
         ("''+[].values().every(function(){return false})", "true"),
-        // 27.1.5.1.6 answers the element itself, and undefined where it
+        // 27.1.3.3.5 answers the element itself, and undefined where it
         // accepted none.
         ("''+[1,2,3].values().find(function(v){return v>1})", "2"),
         (
@@ -10465,12 +10465,12 @@ fn the_three_helpers_of_27_1_5_that_stop_early_close_the_iterator() -> Result<()
             "w=[];var t=make([1,2]);t['return']=function(){return 5};var r;try{t.some(function(){return true})}catch(e){r=e instanceof TypeError};''+r",
             "true",
         ),
-        // 27.1.5 step 1 of each takes an Object and no other receiver.
+        // Step 2 of each of them refuses a receiver that is no Object.
         (
             "var r;try{Iterator.prototype.every.call(1,function(){})}catch(e){r=e instanceof TypeError};''+r",
             "true",
         ),
-        // 27.1.5.1.9 passes the accumulator, the element and the counter, and
+        // 27.1.3.3.9 passes the accumulator, the element and the counter, and
         // step 5.a takes the first element where the call named no
         // accumulator, which makes the counter start at one.
         ("''+[1,2,3].values().reduce(function(a,v){return a+v})", "6"),
