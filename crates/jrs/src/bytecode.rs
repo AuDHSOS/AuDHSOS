@@ -3432,6 +3432,33 @@ impl RegisterLowerer {
         // captures it to add the method to the instance it is running for;
         // the function itself is made once the prototype it is a method of
         // exists.
+        // 15.7.5 evaluates the computed name of a field where the class is
+        // defined, and the binding it stands in is captured by the
+        // constructor, which defines the property on each instance.
+        let mut computed_keys = Vec::new();
+        for (slot, key) in class.computed_field_keys.iter().enumerate() {
+            let name = alloc::format!("%{slot}");
+            self.lower(key)?;
+            let register = self.allocate_register()?;
+            self.active_binding_count = self.active_binding_count.checked_add(1)?;
+            self.max_binding_count = self.max_binding_count.max(self.active_binding_count);
+            self.code.emit(Instruction::Star(register));
+            self.code.emit(Instruction::ToPropertyKey(register));
+            self.code.emit(Instruction::Star(register));
+            let shadowed = self.bindings.insert(
+                name.clone(),
+                RegisterBinding {
+                    storage: RegisterBindingStorage::Register(register),
+                    value_type: Some(RegisterType::Unknown),
+                    mutable: false,
+                    stable_function_identity: false,
+                },
+            );
+            if shadowed.is_some() {
+                return None;
+            }
+            computed_keys.push((name, register, shadowed));
+        }
         let mut private_values = Vec::new();
         for (name, _, _) in &class.private_methods {
             let register = self.allocate_register()?;
@@ -3559,6 +3586,9 @@ impl RegisterLowerer {
         // the order the class body names them, with the constructor as the
         // `this` of each Initializer.
         for (name, value) in &class.static_fields {
+            let computed = name
+                .starts_with('%')
+                .then(|| self.bindings.get(name).copied());
             let units: Vec<u16> = name.encode_utf16().collect();
             let constant = self.string_constant(&units)?;
             match value {
@@ -3579,18 +3609,43 @@ impl RegisterLowerer {
                 }
             }
             let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
-            self.code.emit(Instruction::SetNamed {
-                obj: constructor,
-                name: constant,
-                slot,
-                strict: true,
-                define: true,
-            });
+            match computed {
+                Some(binding) => {
+                    let key = self.allocate_register()?;
+                    let held = self.allocate_register()?;
+                    self.code.emit(Instruction::Star(held));
+                    self.load_binding(binding?);
+                    self.code.emit(Instruction::Star(key));
+                    self.code.emit(Instruction::Ldar(held));
+                    self.code.emit(Instruction::SetByValue {
+                        obj: constructor,
+                        key,
+                        slot,
+                        define: true,
+                        strict: true,
+                    });
+                    self.release_register(held)?;
+                    self.release_register(key)?;
+                }
+                None => {
+                    self.code.emit(Instruction::SetNamed {
+                        obj: constructor,
+                        name: constant,
+                        slot,
+                        strict: true,
+                        define: true,
+                    });
+                }
+            }
         }
         self.code.emit(Instruction::Ldar(constructor));
         self.release_register(prototype)?;
         self.release_register(constructor)?;
-        for (name, register, shadowed) in private_values.into_iter().rev() {
+        for (name, register, shadowed) in private_values
+            .into_iter()
+            .rev()
+            .chain(computed_keys.into_iter().rev())
+        {
             match shadowed {
                 Some(shadowed) => self.bindings.insert(name, shadowed),
                 None => self.bindings.remove(&name),
@@ -5772,6 +5827,43 @@ impl RegisterLowerer {
         Some(RegisterFlow::Empty)
     }
 
+    /// 15.7.15 on a field of 15.7.1 whose name the class body evaluated, which
+    /// the binding of that name holds.
+    fn lower_computed_field(&mut self, name: &str, value: Option<&Expr>) -> Option<RegisterFlow> {
+        use crate::engine::bytecode::Instruction;
+        let this = self.bindings.get(THIS_BINDING).copied()?;
+        let binding = self.bindings.get(name).copied()?;
+        let object = self.allocate_register()?;
+        let key = self.allocate_register()?;
+        let held = self.allocate_register()?;
+        self.load_binding(this);
+        self.code.emit(Instruction::Star(object));
+        self.load_binding(binding);
+        self.code.emit(Instruction::Star(key));
+        match value {
+            Some(value) => {
+                self.lower(value)?;
+            }
+            None => {
+                self.code.emit(Instruction::LdaUndefined);
+            }
+        }
+        self.code.emit(Instruction::Star(held));
+        self.code.emit(Instruction::Ldar(held));
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::SetByValue {
+            obj: object,
+            key,
+            slot,
+            define: true,
+            strict: true,
+        });
+        self.release_register(held)?;
+        self.release_register(key)?;
+        self.release_register(object)?;
+        Some(RegisterFlow::Empty)
+    }
+
     /// 7.3.27 on a field of 15.7.1 whose name is a Private Name, which adds
     /// the element to the instance the constructor is running for.
     fn lower_private_field(&mut self, name: &str, value: Option<&Expr>) -> Option<RegisterFlow> {
@@ -6379,6 +6471,11 @@ impl RegisterLowerer {
             // it under the Private Name the class body made.
             Stmt::Field(name, value) if name.starts_with('#') => {
                 self.lower_private_field(name, value.as_ref())?
+            }
+            // 15.7.5 evaluated the name where the class was defined, and the
+            // binding of the class body holds it.
+            Stmt::Field(name, value) if name.starts_with('%') => {
+                self.lower_computed_field(name, value.as_ref())?
             }
             Stmt::Field(name, value) => self.lower_named_field(name, value.as_ref())?,
             Stmt::Return(value) if self.allow_return => {
@@ -11512,7 +11609,7 @@ fn register_statement_references(
         // 7.3.27 reads the Private Name of 6.2.13 the class body made, which
         // the constructor captures like every other name it reads.
         Stmt::Field(name, value) => {
-            if name.starts_with('#') {
+            if name.starts_with('#') || name.starts_with('%') {
                 names.insert(name.clone());
                 // A private method reads the Private Name beside the binding
                 // that holds the function.

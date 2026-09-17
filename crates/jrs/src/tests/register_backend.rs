@@ -1513,6 +1513,15 @@ fn a_field_of_15_7_1_is_defined_on_the_instance_before_the_constructor_runs() ->
             "var A=class{static x=1;static y;};''+A.x+','+typeof A.y",
             "1,undefined",
         ),
+        // 15.7.5 evaluates a computed name where the class is defined, once
+        // for every instance the class makes.
+        ("var k='a';var A=class{[k]=1};''+new A().a", "1"),
+        ("var s=Symbol('s');var A=class{[s]=2};''+new A()[s]", "2"),
+        ("var A=class{static ['x']=9};''+A.x", "9"),
+        (
+            "var n=0;var k={toString:function(){n=n+1;return 'k'}};var A=class{[k]=1};new A();new A();''+n+new A().k",
+            "11",
+        ),
         ("var A=class{static x=2+3};''+A.x", "5"),
         // 15.7.1: no field is named `constructor`, and no static field is
         // named `prototype`.

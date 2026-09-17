@@ -327,6 +327,10 @@ pub enum Instruction {
     /// instruction runs again.
     ToNumeric(Reg),
 
+    /// `acc = ToPropertyKey(reg)` of 7.1.19, which keeps a Symbol and sends
+    /// every other value through 7.1.17.
+    ToPropertyKey(Reg),
+
     /// `CopyDataProperties` of 7.3.25 with no excluded name: the own
     /// enumerable properties of the accumulator are defined on the object the
     /// register holds, which 13.2.5.5 does for a `...` of an Object literal.
@@ -1121,6 +1125,7 @@ impl BytecodeFunction {
             | Instruction::Star(register)
             | Instruction::ToText(register)
             | Instruction::ToNumeric(register)
+            | Instruction::ToPropertyKey(register)
             | Instruction::SpreadDataProperties(register)
             | Instruction::NumberOnly(register)
             | Instruction::Add(register)

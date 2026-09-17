@@ -198,6 +198,8 @@ impl Parser {
         let mut methods = Vec::new();
         let mut fields = Vec::new();
         let mut private_methods = Vec::new();
+        let mut computed_field_keys: Vec<Expr> = Vec::new();
+        let mut computed_method_key = false;
         let mut private_adds = Vec::new();
         let mut static_fields = Vec::new();
         let mut constructor = None;
@@ -294,14 +296,23 @@ impl Parser {
                 }
                 // 15.7.5 evaluates a computed name where the class is
                 // defined, which is before the Initializer of an instance
-                // field runs.
-                let Some(text) = text.filter(|_| !computed) else {
-                    return Err(Self::unsupported("a computed class field name"));
+                // field runs, so the name stands in a binding of the class
+                // body and the field names it by its place there.
+                let name = if computed {
+                    let slot = computed_field_keys.len();
+                    computed_field_keys.push(key);
+                    alloc::format!("%{slot}")
+                } else {
+                    let Some(text) = text else {
+                        return Err(Self::unsupported("a class field name"));
+                    };
+                    String::from_utf16_lossy(&text)
                 };
-                let name = String::from_utf16_lossy(&text);
                 // 15.7.1: no field is named `constructor`, and no static field
                 // is named `prototype`.
-                if name == "constructor" || (is_static && name == "prototype") {
+                if !name.starts_with('%')
+                    && (name == "constructor" || (is_static && name == "prototype"))
+                {
                     return Err(self.error("a field of a name a class cannot carry"));
                 }
                 let initializer = self.field_initializer()?;
@@ -312,6 +323,7 @@ impl Parser {
                 }
                 continue;
             }
+            computed_method_key |= computed;
             if generator && (accessor.is_some() || is_constructor) {
                 return Err(self.error("a generator with a method modifier"));
             }
@@ -416,6 +428,14 @@ impl Parser {
         // where 13.3.7.1 has run, so they run behind the `super` call of the
         // body, which this lowering finds where the body makes it a statement
         // of its own.
+        // 15.7.14 evaluates the name of each element in the order the body
+        // names them, which this lowering keeps only where the methods carry
+        // no computed name of their own.
+        if computed_method_key && !computed_field_keys.is_empty() {
+            return Err(Self::unsupported(
+                "a computed field name beside a computed method name",
+            ));
+        }
         let at = if heritage.is_some() {
             let found = constructor.body.iter().position(
                 |statement| matches!(statement, Stmt::Expr(expr) if Self::calls_super(expr)),
@@ -449,6 +469,7 @@ impl Parser {
                 methods,
                 static_fields,
                 private_methods,
+                computed_field_keys,
             })),
             1,
             offset,

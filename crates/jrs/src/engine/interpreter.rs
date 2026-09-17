@@ -20853,7 +20853,13 @@ impl RegisterVM {
                         self.acc = Value::from_f64(primitive_number(value, heap)?);
                     }
                 }
-                Instruction::ToText(register) => {
+                // 7.1.19 keeps a Symbol as the key it is and sends every
+                // other value through 7.1.17, which is the same conversion
+                // the instruction below runs.
+                Instruction::ToPropertyKey(register) if self.read_reg(register)?.is_symbol() => {
+                    self.acc = self.read_reg(register)?;
+                }
+                Instruction::ToText(register) | Instruction::ToPropertyKey(register) => {
                     let value = self.read_reg(register)?;
                     // 7.1.17 of an Object is 7.1.1 with the hint `string`,
                     // which runs a method of the Script; the instruction runs

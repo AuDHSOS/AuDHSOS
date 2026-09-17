@@ -156,6 +156,10 @@ pub(crate) struct Class {
     /// function it holds, which 7.3.26 adds to every instance and 15.7.14
     /// adds to the constructor.
     pub(crate) private_methods: Vec<(String, bool, Expr)>,
+    /// The computed names of the fields of 15.7.1, which 15.7.5 evaluates
+    /// where the class is defined and not where the Initializer runs. A field
+    /// names the one it carries by its place in this list.
+    pub(crate) computed_field_keys: Vec<Expr>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
