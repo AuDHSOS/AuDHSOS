@@ -2431,6 +2431,17 @@ impl RegisterVM {
             // 25.5.1 and 25.5.2, neither of which takes the function the
             // other argument may be: a reviver and a replacer are calls, and
             // a native has no frame to make one from.
+            Intrinsic::EncodeUri
+            | Intrinsic::EncodeUriComponent
+            | Intrinsic::DecodeUri
+            | Intrinsic::DecodeUriComponent => {
+                let text = property_name_units(self.call_argument(&call, 0, heap)?, heap, realm)?;
+                let units = Self::uri_transcode(intrinsic, &text, heap, realm)?;
+                if units.len() > self.string_units_limit {
+                    return Err(VMError::StringLimit);
+                }
+                self.allocate_string(heap, &units)
+            }
             Intrinsic::JsonParse
             | Intrinsic::JsonStringify
             | Intrinsic::JsonRawJson
@@ -12607,6 +12618,186 @@ impl RegisterVM {
             return Ok(VALUE_UNDEFINED);
         }
         self.allocate_string(heap, &out)
+    }
+
+    /// `Encode` of 19.2.6.6 and `Decode` of 19.2.6.7, for the four functions
+    /// of 19.2.6 that name their own set.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `URIError` for an unpaired
+    /// surrogate, for an escape that is not two hexadecimal digits and for an
+    /// octet sequence that is no code point.
+    fn uri_transcode(
+        intrinsic: Intrinsic,
+        text: &[u16],
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Vec<u16>, VMError> {
+        match intrinsic {
+            Intrinsic::EncodeUri => Self::uri_encode(text, true, heap, realm),
+            Intrinsic::EncodeUriComponent => Self::uri_encode(text, false, heap, realm),
+            Intrinsic::DecodeUri => Self::uri_decode(text, true, heap, realm),
+            _ => Self::uri_decode(text, false, heap, realm),
+        }
+    }
+
+    /// Whether 19.2.6 leaves this code unit as it stands.
+    ///
+    /// `reserved` adds the `uriReserved` of 19.2.6 and `#`, which 19.2.6.4
+    /// keeps and 19.2.6.5 escapes.
+    fn uri_unescaped(unit: u16, reserved: bool) -> bool {
+        let Ok(byte) = u8::try_from(unit) else {
+            return false;
+        };
+        let character = char::from(byte);
+        if character.is_ascii_alphanumeric() || "-_.!~*'()".contains(character) {
+            return true;
+        }
+        reserved && ";/?:@&=+$,#".contains(character)
+    }
+
+    /// `Encode` of 19.2.6.6, which writes the UTF-8 of every code point the
+    /// set does not keep as `%XX` in upper case.
+    fn uri_encode(
+        text: &[u16],
+        reserved: bool,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Vec<u16>, VMError> {
+        const DIGITS: &[u8; 16] = b"0123456789ABCDEF";
+        let mut out = Vec::new();
+        let mut at = 0usize;
+        while let Some(&unit) = text.get(at) {
+            if Self::uri_unescaped(unit, reserved) {
+                out.push(unit);
+                at = at.saturating_add(1);
+                continue;
+            }
+            // Step 4.c.i: an unpaired surrogate is no code point.
+            let Some((point, width)) = Self::code_point_at(text, at) else {
+                return Err(Self::uri_error(heap, realm));
+            };
+            at = at.saturating_add(width);
+            let mut encoded = [0u8; 4];
+            for octet in point.encode_utf8(&mut encoded).as_bytes() {
+                out.push(0x25);
+                out.push(u16::from(
+                    *DIGITS.get(usize::from(octet >> 4)).unwrap_or(&b'0'),
+                ));
+                out.push(u16::from(
+                    *DIGITS.get(usize::from(octet & 0x0F)).unwrap_or(&b'0'),
+                ));
+            }
+        }
+        Ok(out)
+    }
+
+    /// `CodePointAt` of 11.1.4, which answers none for an unpaired surrogate.
+    fn code_point_at(text: &[u16], at: usize) -> Option<(char, usize)> {
+        let unit = *text.get(at)?;
+        if !(0xD800..0xE000).contains(&unit) {
+            return char::from_u32(u32::from(unit)).map(|point| (point, 1));
+        }
+        if unit >= 0xDC00 {
+            return None;
+        }
+        let trail = *text.get(at.checked_add(1)?)?;
+        if !(0xDC00..0xE000).contains(&trail) {
+            return None;
+        }
+        let point = 0x1_0000 + (u32::from(unit - 0xD800) << 10) + u32::from(trail - 0xDC00);
+        char::from_u32(point).map(|point| (point, 2))
+    }
+
+    /// `Decode` of 19.2.6.7, which reads every `%XX` back and keeps the escape
+    /// itself where the set of the caller preserves the code unit.
+    fn uri_decode(
+        text: &[u16],
+        reserved: bool,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Vec<u16>, VMError> {
+        let mut out = Vec::new();
+        let mut at = 0usize;
+        while let Some(&unit) = text.get(at) {
+            if unit != 0x25 {
+                out.push(unit);
+                at = at.saturating_add(1);
+                continue;
+            }
+            let start = at;
+            let Some(first) = Self::uri_octet(text, at) else {
+                return Err(Self::uri_error(heap, realm));
+            };
+            at = at.saturating_add(3);
+            // Step 4.d.iv: the count of leading one bits says how many octets
+            // the code point takes.
+            let extra = usize::try_from(first.leading_ones()).unwrap_or(usize::MAX);
+            if extra == 0 {
+                if reserved && Self::uri_unescaped(u16::from(first), true) {
+                    out.extend_from_slice(text.get(start..at).unwrap_or_default());
+                } else {
+                    out.push(u16::from(first));
+                }
+                continue;
+            }
+            if extra == 1 || extra > 4 {
+                return Err(Self::uri_error(heap, realm));
+            }
+            let mut octets = Vec::with_capacity(extra);
+            octets.push(first);
+            for _ in 1..extra {
+                let Some(next) = Self::uri_octet(text, at) else {
+                    return Err(Self::uri_error(heap, realm));
+                };
+                // Step 4.d.vii.5: every octet after the first is a
+                // continuation.
+                if next & 0xC0 != 0x80 {
+                    return Err(Self::uri_error(heap, realm));
+                }
+                at = at.saturating_add(3);
+                octets.push(next);
+            }
+            let Ok(decoded) = core::str::from_utf8(&octets) else {
+                return Err(Self::uri_error(heap, realm));
+            };
+            let Some(point) = decoded.chars().next() else {
+                return Err(Self::uri_error(heap, realm));
+            };
+            let mut buffer = [0u16; 2];
+            out.extend_from_slice(point.encode_utf16(&mut buffer));
+        }
+        Ok(out)
+    }
+
+    /// One `%XX` of 19.2.6.7, or none where the text has no two hexadecimal
+    /// digits there.
+    fn uri_octet(text: &[u16], at: usize) -> Option<u8> {
+        if *text.get(at)? != 0x25 {
+            return None;
+        }
+        let high = Self::hex_digit(*text.get(at.checked_add(1)?)?)?;
+        let low = Self::hex_digit(*text.get(at.checked_add(2)?)?)?;
+        Some((high << 4) | low)
+    }
+
+    /// The value of one hexadecimal digit, or none for every other unit.
+    fn hex_digit(unit: u16) -> Option<u8> {
+        let byte = u8::try_from(unit).ok()?;
+        char::from(byte)
+            .to_digit(16)
+            .and_then(|digit| u8::try_from(digit).ok())
+    }
+
+    /// The `URIError` of 19.2.6.
+    fn uri_error(heap: &mut GenerationalHeap, realm: &Realm) -> VMError {
+        raise(
+            heap,
+            realm,
+            super::realm::NativeErrorKind::UriError,
+            "the text is no URI",
+        )
     }
 
     /// `JSON.rawJSON` of the rawJSON proposal.

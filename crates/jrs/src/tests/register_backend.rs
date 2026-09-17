@@ -9511,3 +9511,51 @@ fn the_raw_json_of_the_proposal_holds_its_text() -> Result<(), Error> {
     differential_scripts(&["''+JSON.stringify({a:JSON.rawJSON('12345678901234567890')})"])?;
     differential_scripts(&["''+JSON.stringify([JSON.rawJSON('true')])"])
 }
+
+#[test]
+fn the_uri_functions_of_19_2_6_encode_and_decode_their_sets() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend carries none of the four, so only the engine answers.
+    for (source, answer) in [
+        ("''+encodeURIComponent('a b&c')", "a%20b%26c"),
+        // 19.2.6.4 keeps `uriReserved` and `#`, which 19.2.6.5 escapes.
+        ("''+encodeURI('a b&c#d')", "a%20b&c#d"),
+        ("''+decodeURIComponent('a%20b%26c')", "a b&c"),
+        // 19.2.6.2 leaves the escape of a reserved code unit as it stands.
+        ("''+decodeURI('a%20b%26c%23d')", "a b%26c%23d"),
+        ("''+decodeURI('%26')+decodeURIComponent('%26')", "%26&"),
+        // The `uriUnescaped` of 19.2.6 is kept by both.
+        ("''+encodeURI(\"-_.!~*'()\")", "-_.!~*'()"),
+        // A code point outside the Basic Latin block takes its UTF-8 octets.
+        ("''+encodeURIComponent('\u{e9}')", "%C3%A9"),
+        ("''+decodeURIComponent('%C3%A9')", "\u{e9}"),
+        ("''+encodeURIComponent('\u{1f600}')", "%F0%9F%98%80"),
+        ("''+decodeURIComponent('%F0%9F%98%80')", "\u{1f600}"),
+        // Step 4.c.i of 19.2.6.6 refuses an unpaired surrogate, and 19.2.6.7
+        // refuses an escape that is no octet sequence.
+        (
+            "var r;try{encodeURIComponent('\\ud800')}catch(e){r=e instanceof URIError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{decodeURIComponent('%')}catch(e){r=e instanceof URIError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{decodeURIComponent('%C3')}catch(e){r=e instanceof URIError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{decodeURIComponent('%ED%A0%80')}catch(e){r=e instanceof URIError};''+r",
+            "true",
+        ),
+        (
+            "''+encodeURI.length+decodeURIComponent.name",
+            "1decodeURIComponent",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}

@@ -8811,6 +8811,11 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         crate::engine::realm::Intrinsic::StringConstructor
         // 22.1.2.1, 22.1.2.2 and 22.1.2.4 answer a String of what they read.
         | crate::engine::realm::Intrinsic::StringFromCharCode
+        // 19.2.6 answers the text it built.
+        | crate::engine::realm::Intrinsic::EncodeUri
+        | crate::engine::realm::Intrinsic::EncodeUriComponent
+        | crate::engine::realm::Intrinsic::DecodeUri
+        | crate::engine::realm::Intrinsic::DecodeUriComponent
         | crate::engine::realm::Intrinsic::StringFromCodePoint
         | crate::engine::realm::Intrinsic::StringRaw
         // 22.2.6.4 and 22.2.6.13 answer a String for every receiver they take.

@@ -868,6 +868,14 @@ pub enum Intrinsic {
     JsonRawJson,
     /// `JSON.isRawJSON` of the same proposal.
     JsonIsRawJson,
+    /// `encodeURI`, 19.2.6.4.
+    EncodeUri,
+    /// `encodeURIComponent`, 19.2.6.5.
+    EncodeUriComponent,
+    /// `decodeURI`, 19.2.6.2.
+    DecodeUri,
+    /// `decodeURIComponent`, 19.2.6.3.
+    DecodeUriComponent,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -935,7 +943,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 282] = [
+    pub const ALL: [Self; 286] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1218,6 +1226,10 @@ impl Intrinsic {
         Self::WeakMapPrototypeGetOrInsertComputed,
         Self::JsonRawJson,
         Self::JsonIsRawJson,
+        Self::EncodeUri,
+        Self::EncodeUriComponent,
+        Self::DecodeUri,
+        Self::DecodeUriComponent,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -1475,6 +1487,10 @@ impl Intrinsic {
             | Self::IsFinite
             | Self::ParseInt
             | Self::ParseFloat
+            | Self::EncodeUri
+            | Self::EncodeUriComponent
+            | Self::DecodeUri
+            | Self::DecodeUriComponent
             // 27.2.1.3 stands on no object, so the Global holder never
             // installs either resolving function.
             | Self::PromiseConstructor
@@ -1820,6 +1836,10 @@ impl Intrinsic {
             Self::WeakMapPrototypeGetOrInsertComputed => 279,
             Self::JsonRawJson => 280,
             Self::JsonIsRawJson => 281,
+            Self::EncodeUri => 282,
+            Self::EncodeUriComponent => 283,
+            Self::DecodeUri => 284,
+            Self::DecodeUriComponent => 285,
         }
     }
 
@@ -2112,6 +2132,10 @@ impl Intrinsic {
             Self::WeakMapPrototypeGetOrInsertComputed => 279,
             Self::JsonRawJson => 280,
             Self::JsonIsRawJson => 281,
+            Self::EncodeUri => 282,
+            Self::EncodeUriComponent => 283,
+            Self::DecodeUri => 284,
+            Self::DecodeUriComponent => 285,
         }
     }
 
@@ -2405,6 +2429,10 @@ impl Intrinsic {
             279 => Some(Self::WeakMapPrototypeGetOrInsertComputed),
             280 => Some(Self::JsonRawJson),
             281 => Some(Self::JsonIsRawJson),
+            282 => Some(Self::EncodeUri),
+            283 => Some(Self::EncodeUriComponent),
+            284 => Some(Self::DecodeUri),
+            285 => Some(Self::DecodeUriComponent),
             _ => None,
         }
     }
@@ -2491,6 +2519,10 @@ impl Intrinsic {
             Self::WeakMapConstructor => "WeakMap",
             Self::JsonRawJson => "rawJSON",
             Self::JsonIsRawJson => "isRawJSON",
+            Self::EncodeUri => "encodeURI",
+            Self::EncodeUriComponent => "encodeURIComponent",
+            Self::DecodeUri => "decodeURI",
+            Self::DecodeUriComponent => "decodeURIComponent",
             Self::MapPrototypeGetOrInsert | Self::WeakMapPrototypeGetOrInsert => "getOrInsert",
             Self::MapPrototypeGetOrInsertComputed | Self::WeakMapPrototypeGetOrInsertComputed => {
                 "getOrInsertComputed"
@@ -2831,6 +2863,11 @@ impl Intrinsic {
             }
             // 19.2.5 applies `ToString` to the text and `ToInt32` to the radix.
             Self::ParseInt => &[(0, PrimitiveHint::String), (1, PrimitiveHint::Number)],
+            // 19.2.6 sends the argument through `ToString` before anything.
+            Self::EncodeUri
+            | Self::EncodeUriComponent
+            | Self::DecodeUri
+            | Self::DecodeUriComponent => &[(0, PrimitiveHint::String)],
             // 23.1.3.17, 23.1.3.20 and 23.1.3.14: the element is compared as
             // it is, and only the index is converted.
             Self::ArrayPrototypeIndexOf
@@ -3279,6 +3316,10 @@ impl Intrinsic {
             | Self::MapPrototypeDelete
             | Self::JsonRawJson
             | Self::JsonIsRawJson
+            | Self::EncodeUri
+            | Self::EncodeUriComponent
+            | Self::DecodeUri
+            | Self::DecodeUriComponent
             | Self::WeakMapPrototypeGet
             | Self::WeakMapPrototypeHas
             | Self::WeakMapPrototypeDelete
