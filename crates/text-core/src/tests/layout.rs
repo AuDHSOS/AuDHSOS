@@ -279,11 +279,13 @@ fn layout_fallback_regional_han_variations_and_determinism() {
     assert_eq!(first.view().write_bytes(&mut a), Ok(a.len()));
     assert_eq!(second.view().write_bytes(&mut b), Ok(b.len()));
     assert_eq!(a, b);
-    assert_eq!(&a[..8], b"TEXT\x01\0\0\0");
+    assert_eq!(&a[..8], b"TEXT\x02\0\0\0");
+    assert_eq!(&a[8..10], crate::unicode::VERSION_MAJOR.to_le_bytes());
+    assert_eq!(crate::unicode::VERSION_MAJOR, 18);
     let digest = a.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
         (h ^ u64::from(*b)).wrapping_mul(0x100_0000_01b3)
     });
-    assert_eq!(digest, 0x15cc_e283_91e7_c99d);
+    assert_eq!(digest, 0x937f_a806_1318_a96c);
     assert!(first.view().write_bytes(&mut []).is_err());
 }
 #[test]
@@ -815,5 +817,81 @@ fn emergency_breaks_keep_all_substituted_glyphs_of_a_cluster() {
             &[(0, 1, 1202), (1, 2, 1202), (2, 3, 1202)],
             &[(0, 1), (0, 1), (1, 2), (1, 2), (2, 3), (2, 3)],
         );
+    }
+}
+
+/// BASE v1.0 with an ideographic default baseline and a nonzero `romn`
+/// coordinate (`docs/microsoft/base.html:1`).
+fn base_table() -> Vec<u8> {
+    use super::metrics::put16;
+    let mut d = vec![0; 52];
+    put16(&mut d, 0, 1); // majorVersion
+    put16(&mut d, 4, 8); // horizAxisOffset
+    put16(&mut d, 8, 4); // baseTagListOffset, from the axis table at 8
+    put16(&mut d, 10, 14); // baseScriptListOffset
+    put16(&mut d, 12, 2); // baseTagCount
+    d[14..22].copy_from_slice(b"ideoromn");
+    put16(&mut d, 22, 1); // baseScriptCount
+    d[24..28].copy_from_slice(b"latn");
+    put16(&mut d, 28, 8); // baseScriptOffset, from the script list at 22
+    put16(&mut d, 30, 6); // baseValuesOffset, from the script table at 30
+    put16(&mut d, 36, 0); // defaultBaselineIndex: ideographic, not alphabetic
+    put16(&mut d, 38, 2); // baseCoordCount
+    put16(&mut d, 40, 8); // baseCoords[0], from the values table at 36
+    put16(&mut d, 42, 12); // baseCoords[1]
+    put16(&mut d, 44, 1); // ideo BaseCoord format 1
+    put16(&mut d, 46, 0); // ideo coordinate
+    put16(&mut d, 48, 1); // romn BaseCoord format 1
+    put16(&mut d, 50, (-120_i16).cast_unsigned()); // romn coordinate
+    d
+}
+
+#[test]
+fn a_declared_baseline_does_not_move_a_run_off_the_alphabetic_baseline() {
+    let latin = font_for(&['A'], 1000);
+    let plain = font_for(&['中'], 2000);
+    let mut tables: Vec<_> = Font::parse(&plain)
+        .unwrap()
+        .tables()
+        .map(|t| (t.tag, t.data.to_vec()))
+        .collect();
+    tables.push((*b"BASE", base_table()));
+    let declared = super::metrics::sfnt(tables);
+    let style = TextStyle {
+        size: Fixed::from_i32(100),
+        ..TextStyle::default()
+    };
+    let mut encoded = Vec::new();
+    for second in [&plain, &declared] {
+        let fonts = [Font::parse(&latin).unwrap(), Font::parse(second).unwrap()];
+        let set = FontSet {
+            ui: &fonts,
+            mono: &fonts,
+            generation: 5,
+        };
+        let mut memory = Memory::new();
+        let mut workspace = memory.workspace();
+        let mut lines = [Line::default(); 4];
+        let mut glyphs = [PositionedGlyph::default(); 8];
+        let mut clusters = [ClusterBox::default(); 8];
+        let mut buffers = LayoutBuffers {
+            lines: &mut lines,
+            glyphs: &mut glyphs,
+            clusters: &mut clusters,
+        };
+        let view =
+            layout::layout_into(&set, &style, "A中", None, &mut workspace, &mut buffers).unwrap();
+        assert_eq!(view.runs.len(), 2);
+        assert_ne!(view.runs[0].scale, view.runs[1].scale);
+        let line = view.lines[0];
+        assert_eq!(line.baseline, Fixed::from_i32(80));
+        assert!(view.glyphs.iter().all(|g| g.y == line.baseline));
+        let mut output = vec![0; view.encoded_len().unwrap()];
+        assert_eq!(view.write_bytes(&mut output), Ok(output.len()));
+        if encoded.is_empty() {
+            encoded = output;
+        } else {
+            assert_eq!(output, encoded);
+        }
     }
 }

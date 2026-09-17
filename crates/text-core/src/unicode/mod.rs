@@ -7,10 +7,10 @@
 mod generated;
 pub use generated::{
     BidiClass, DefaultIgnorable, EastAsianWidth, ExtendedPictographic, GeneralCategory,
-    GraphemeBreak, IndicConjunctBreak, JoiningType, LineBreak, Script, VERSION, WordBreak,
-    bidi_class, combining_class, default_ignorable, east_asian_width, extended_pictographic,
-    general_category, grapheme_break, indic_conjunct_break, joining_type, line_break, script,
-    word_break,
+    GraphemeBreak, IndicConjunctBreak, JoiningType, LineBreak, Script, VERSION, VERSION_MAJOR,
+    WordBreak, bidi_class, combining_class, default_ignorable, east_asian_width,
+    extended_pictographic, general_category, grapheme_break, indic_conjunct_break, joining_type,
+    line_break, script, word_break,
 };
 
 struct Range<T> {

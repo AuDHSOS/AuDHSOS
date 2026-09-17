@@ -7,6 +7,8 @@ use super::{Range, lookup};
 
 /// Unicode version of every generated property.
 pub const VERSION: &str = "18.0.0";
+/// Major component of `VERSION`, reported in the layout stream header.
+pub const VERSION_MAJOR: u16 = 18;
 
 // FNV-1a-64 7edf37cfeb52b6c9 ArabicShaping.txt
 // FNV-1a-64 63a94de7e21b45bb BidiBrackets.txt

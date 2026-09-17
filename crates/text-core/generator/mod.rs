@@ -406,9 +406,10 @@ pub(crate) fn load(root: &Path) -> Result<Model> {
 
 pub(crate) fn generate(model: &Model) -> Result<String> {
     let mut out = "// SPDX-License-Identifier: AGPL-3.0-only AND Unicode-3.0\n// Copyright (C) 2026 Manuel Baesler and contributors\n// Copyright © 2026 Unicode, Inc.\n// Generated from Unicode data; see LICENSE.txt in this directory.\n\nuse super::{Range, lookup};\n\n".to_owned();
+    let major = VERSION.split('.').next().ok_or("version major")?;
     writeln!(
         out,
-        "/// Unicode version of every generated property.\npub const VERSION: &str = \"{VERSION}\";\n"
+        "/// Unicode version of every generated property.\npub const VERSION: &str = \"{VERSION}\";\n/// Major component of `VERSION`, reported in the layout stream header.\npub const VERSION_MAJOR: u16 = {major};\n"
     )?;
     for (path, sum) in &model.checksums {
         writeln!(out, "// FNV-1a-64 {sum:016x} {path}")?;

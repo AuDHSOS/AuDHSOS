@@ -47,7 +47,9 @@ limits reject hostile structures. Both readers return unhinted font units.
 
 `variation::Axes` normalizes explicit axes through fvar/avar v1.
 `Glyf::outline_instance` applies gvar and IUP using caller-owned scratch.
-`Cff::outline_instance` applies CFF2 blends. `variation::Instance` selects HVAR
+`Cff::outline_instance` applies CFF2 blends. Both accept a static face with an
+empty coordinate slice and decode its default outline.
+`variation::Instance` selects HVAR
 or gvar phantom advances once and applies MVAR to selected typo metrics.
 The caller supplies the same normalized coordinates to outlines and metrics.
 
@@ -73,7 +75,8 @@ cmap/advance placement. Unicode segmentation and bidi still apply.
 `FontSet` supplies ordered UI/mono chains and a generation. `TextStyle` supplies
 role, positive size, explicit language, and weight. Resolution preserves whole
 graphemes, selects regional Han language systems, and returns face indices,
-normalized weight coordinates, scales, and baseline offsets.
+normalized weight coordinates, and scales. Every run sits on one alphabetic
+baseline; the crate reads no `BASE` table.
 
 `layout` and `measure` share the same shaping, greedy wrapping, and geometry
 path. Results retain fractional advances, visual glyphs, line boxes, grapheme

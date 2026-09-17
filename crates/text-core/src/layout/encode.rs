@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Manuel Baesler and contributors
 
 use super::{LayoutView, engine::add};
-use crate::{Fixed, Role, TextError, unicode::Script};
+use crate::{Fixed, Role, TextError, unicode, unicode::Script};
 struct Writer<'a> {
     bytes: Option<&'a mut [u8]>,
     at: usize,
@@ -38,7 +38,7 @@ const fn script_id(script: Script) -> u16 {
     script as u16
 }
 impl LayoutView<'_> {
-    /// Size of the version-one little-endian numeric encoding.
+    /// Size of the version-two little-endian numeric encoding.
     /// # Errors
     /// Returns a numeric size overflow.
     pub fn encoded_len(self) -> Result<usize, TextError> {
@@ -52,8 +52,8 @@ impl LayoutView<'_> {
     }
     fn encode(self, out: Option<&mut [u8]>) -> Result<usize, TextError> {
         let mut w = Writer { bytes: out, at: 0 };
-        w.put(b"TEXT\x01\0\0\0")?;
-        w.put(&18_u16.to_le_bytes())?;
+        w.put(b"TEXT\x02\0\0\0")?;
+        w.put(&unicode::VERSION_MAJOR.to_le_bytes())?;
         w.put(&self.info.generation.to_le_bytes())?;
         w.put(&[match self.info.role {
             Role::Ui => 0,
@@ -79,7 +79,6 @@ impl LayoutView<'_> {
             w.put(&run.language.tag())?;
             w.put(&[run.level, u8::from(run.simple), u8::from(run.missing)])?;
             w.fixed(run.scale)?;
-            w.fixed(run.baseline)?;
             w.index(run.coordinates().len())?;
             for coord in run.coordinates() {
                 w.fixed(*coord)?;

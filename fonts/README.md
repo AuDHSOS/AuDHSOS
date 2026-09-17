@@ -1,9 +1,10 @@
 # fonts
 
 The fonts of the system: two chains of fallback, fetched byte for byte by
-`fetch.sh` from the commit or release each of its lines names, and pinned
-in `SHA256SUMS`. Every file is unmodified. D-169 records the directory,
-the chains and the rules of selection.
+`fetch.sh` from the commit, release or dated archive each of its lines
+names, and pinned in `SHA256SUMS`. Every file is unmodified. D-169 records
+the directory, the chains and the rules of selection; D-172 records Jigmo,
+the one font here that is not under the OFL.
 
 Nothing reads this directory yet. What will is the image build, the way
 `cargo xtask image` reads [`anchors/`](../anchors/README.md) (D-148).
@@ -29,7 +30,8 @@ Nothing reads this directory yet. What will is the image build, the way
 | 4 | one Noto font per script, 155 scripts | `noto/scripts/`, 157 files | 27279 | 26628 |
 | 5 | Noto Sans Symbols, Symbols 2, Math, Music, Znamenny | `noto/symbols/`, 5 files | 6910 | 5675 |
 | 6 | Noto Color Emoji | `noto/emoji/NotoColorEmoji.ttf` | 1501 | 1030 |
-| 7 | Last Resort | `last-resort/LastResort-Regular.ttf` | 1114112 | 1033403 |
+| 7 | Jigmo, Jigmo2, Jigmo3 | `jigmo/`, 3 files | 125786 | 82486 |
+| 8 | Last Resort | `last-resort/LastResort-Regular.ttf` | 1114112 | 950917 |
 
 Layer 1 maps four Greek letters (U+0394, U+03A9, U+03BC, U+03C0) and no
 Cyrillic. Layer 2 maps 121 code points of the Greek block and 304 of
@@ -41,8 +43,26 @@ and not the build's. Layer 1 maps 14 code points layer 2 does not:
 twelve mathematical operators, `◊` and `♪`, each of which layer 5 maps
 as well.
 
-Layer 7 maps every code point of every plane to a glyph naming its block,
-so a chain that reaches it draws no empty box.
+Layer 7 is the reason this directory has a font outside the OFL. Measured
+against layer 3 alone, Jigmo adds 82549 code points that Noto Sans CJK
+does not map; in chain position, after all six earlier layers, it adds
+82486. That is the whole of CJK Unified Ideographs extensions B through J,
+the compatibility ideographs and their supplement, which no other font
+here maps: 102998 kanji in the thirteen ranges its own README names, which
+this repository counted and found equal to the count that README states.
+The rest of what it maps is 13344 non-kanji, mostly kana, Hangul syllables
+and CJK radicals that earlier layers already draw, and 9444 code points of
+plane 16's private use area, U+100000 to U+1024E3, which no earlier layer
+maps and which therefore now reach Jigmo rather than layer 8.
+
+Its cost is style. Jigmo is Mincho, one weight, no italic, so it sets
+ideographs with serifs beside layer 3's sans, and a run of text that falls
+from layer 3 to layer 7 changes style mid-line. The two are not
+interchangeable and the chain does not pretend otherwise.
+
+Layer 8 maps every code point of every plane to a glyph naming its block,
+so a chain that reaches it draws no empty box. It adds 950917 where it
+added 1033403 before layer 7 existed.
 
 ## The terminal chain
 
@@ -51,7 +71,7 @@ so a chain that reaches it draws no empty box.
 | 1 | Atkinson Hyperlegible Mono | `atkinson/AtkinsonHyperlegibleMono[wght].ttf` | 359 | 359 |
 | 2 | Noto Sans Mono | `noto/NotoSansMono[wdth,wght].ttf` | 3490 | 3136 |
 | 3 | Noto Sans Mono CJK, five regions | `noto/cjk/NotoSansMonoCJK-VF.ttf.ttc` | 44810 | 44016 |
-| 4 to 7 | the UI chain from its layer 4 | | | 26753 at layer 4 |
+| 4 to 8 | the UI chain from its layer 4 | | | 26753 at layer 4, 82486 at layer 7 |
 
 Advance widths, in units of an em of 1000, measured over the glyphs with a
 nonzero advance:
@@ -61,11 +81,12 @@ nonzero advance:
 | 1 | 632 for all 352 glyphs | one cell |
 | 2 | 600 for 3340 glyphs, 1200 for 243, 1800 for 9 | one, two or three cells |
 | 3 | 1000 for 51304 glyphs, 920 for 12744, 500 for 185, and 163 other widths over 548 glyphs | one cell for Han and kana, half a cell for ASCII; Hangul at 920 and the remainder do not fit the grid |
-| 4 to 7 | proportional | none |
+| 7 | 1024 for 127019 glyphs, 512 for 400, in an em of 1024 | one cell and half a cell exactly, the only layer here with no third width |
+| 4 to 6, 8 | proportional | none |
 
 ## What is here
 
-The 22 files outside `noto/scripts/`, with the source each was fetched
+The 30 files outside `noto/scripts/`, with the source each was fetched
 from. The retrieval date of every file is 2026-09-17.
 
 | File | Font, version | Source | Bytes | SHA-256 |
@@ -92,6 +113,14 @@ from. The retrieval date of every file is 2026-09-17.
 | `noto/emoji/LICENSE` | its licence | same tag, `fonts/LICENSE` | 4301 | `6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2` |
 | `last-resort/LastResort-Regular.ttf` | Last Resort 18.000 for Unicode 18.0.0 | `unicode-org/last-resort-font` release `18.000` | 9592228 | `ca7df8948cec84240f19508a17a74de037c98ba3a54e1aaa50ea6edbbdc37f64` |
 | `last-resort/LICENSE` | its licence | same tag, `LICENSE` | 4335 | `fc8fc512b27846bdb0d6645bed8069ac87ea599548b58a8d04bc3b0ea705a9c4` |
+| `jigmo/Jigmo.ttf` | Jigmo 2025-09-12, BMP and SMP | `Jigmo-20250912.zip` of the project site | 30048112 | `c8f295b9bd8f9f117a76b3a454aaaa1bb5b4babc18e254978c6deb88464e40cf` |
+| `jigmo/Jigmo2.ttf` | Jigmo2 of the same, SIP | same archive | 35661996 | `5da3582efe77e22073b86b3b86b556d7111148a76b957cfb53318a91da2efff0` |
+| `jigmo/Jigmo3.ttf` | Jigmo3 of the same, TIP | same archive | 7491948 | `815b18c1c670103723fe743090559208fdea47dc587ecb057a5a4721ee8dfeff` |
+| `jigmo/LICENSE.txt` | its licence, CC0 1.0 Universal | same archive | 7171 | `437ca31a127c9f1b191ff9a42bb563e5f7e414ae819006dca4635d9fb34aeb94` |
+| `jigmo/README.txt` | the author's statement of what the glyphs are and where they come from | same archive | 6885 | `9e21785d64d317da46f270c33f464be36ef20d1bfa30f07f5de27a1d1567162f` |
+| `jigmo/THANKS.txt` | the grants and institutions the glyph work was funded by | same archive | 1574 | `e50087723cb3b8fbfaca220398b15014ec0073104449b97fc1f60485331921f6` |
+| `jigmo/jigmo-tooling-MIT.txt` | the MIT licence of the generator repository, which covers no glyph | `kamichikoichi/jigmo` at `master`, `LICENSE` | 1071 | `302b8a6fa541126d167dc236e316a5e317a08d3e60d109ea346b151f5c35b6e4` |
+| `jigmo/glyphwiki-license.txt` | the GlyphWiki data licence, upstream of every glyph | `en.glyphwiki.org/wiki/GlyphWiki:License`, retrieved by hand | 2303 | `b47b76ea888524ce757afce9799b0b347339e4c10efcf2a400a1a91ea76397e7` |
 
 Every file of `noto/scripts/` has its own row in `SHA256SUMS`. One digest
 over those 157 rows, sorted by path, stands in for a table here:
@@ -271,7 +300,7 @@ release the site named at that commit.
 The checksums are here so that a reader can tell a file has not been
 edited since. Every file was fetched twice, by `sh fetch.sh`, which prints
 `<sha256>  <path>` per file, and the two fetches agreed. `shasum -a 256 -c
-SHA256SUMS`, run here, checks all 179 files.
+SHA256SUMS`, run here, checks all 187 files.
 
 ## Rules of selection
 
@@ -284,6 +313,8 @@ SHA256SUMS`, run here, checks all 179 files.
 | An italic for Atkinson Next, Atkinson Mono and Noto Sans only. | The italics of the script fonts, where they exist. | The fonts a UI sets text in are layers 1 and 2. Noto Sans Mono builds no italic. |
 | `Noto Nastaliq Urdu`, `test`, `old-hungarian-ui` skipped. | | Nastaliq is a style of Arabic; `test` is a test family; `old-hungarian-ui` lists no file. |
 | Last Resort at release 18.000. | `LastResortHE-Regular.ttf`, 587864 bytes, `cmap` format 13. | The full build maps every code point through formats 4 and 12, which every other font here uses too. |
+| Jigmo in all three files. | Jigmo.ttf alone, or the pair without Jigmo3. | One sfnt addresses 65536 glyphs and the set draws about 127000, so the split is the format's and not a choice; dropping a file drops a plane. |
+| Jigmo as it is built: Mincho, one weight, no italic. | | The project builds no other. The cost is a style break against layer 3, stated above; the alternative is not drawing extensions B to J at all. |
 
 ## What a parser meets
 
@@ -295,24 +326,74 @@ SHA256SUMS`, run here, checks all 179 files.
 | variation tables | 56 variable fonts, 48 of them in `noto/scripts/`; `fvar`, `gvar`, `HVAR` and `STAT` in all 56, `avar` in 45, `MVAR` in 18 |
 | collections | two, `ttcf` header, five fonts each, 65535 glyphs each, sharing `glyf` |
 | largest `cmap` | Last Resort, 1114112 code points, 5776 glyphs, through format 12 groups mapping a range to one glyph |
-| licence in the file | name ID 13 of every font carries the OFL notice, name ID 0 the copyright |
+| units per em | 1000 in 169 of the 174 `.ttf` files and in both collections, 1024 in the three Jigmo files, 2048 in Last Resort and the emoji font |
+| variation sequences | `cmap` format 14 in six files; the three Jigmo files carry 29635 of them, 26958 in Jigmo, 2673 in Jigmo2 and 4 in Jigmo3, which is the Ideographic Variation Database at its 2025-07-14 revision |
+| glyph counts | 50848, 63050 and 13532 in the three Jigmo files, each under the 65536 an sfnt addresses; 65535 in each font of both collections |
+| licence in the file | name ID 13 carries the OFL notice in 171 of the 174 `.ttf` files and in both collections. The three Jigmo files carry no name ID 13 at all, and their name ID 0 is `Koichi Kamichi`; `jigmo/LICENSE.txt` is the only statement of terms that travels with them |
 
 ## Terms
 
-Every font here is under the SIL Open Font License, Version 1.1, which
-each subdirectory carries as a file and each font in its `name` table.
-The licence permits copying and redistribution of the unmodified files,
-and this repository modifies none. Its one condition on a copy is
-attribution, which the copyright string inside each file and the source
-column above meet. Its condition on a modified font, that a Reserved Font
-Name is not reused, is no constraint here. The Noto CJK fonts name Adobe
-as copyright holder with Reserved Font Name `Source`; the Atkinson fonts
-name the Braille Institute's project authors; Last Resort names Unicode,
-Inc.
+Two licences cover this directory, and which file falls under which is not
+guessable from the file.
+
+The 179 files outside `jigmo/` are under the SIL Open Font License,
+Version 1.1, which each subdirectory carries as a file and each font in
+its `name` table. The licence permits copying and redistribution of the
+unmodified files, and this repository modifies none. Its one condition on
+a copy is attribution, which the copyright string inside each file and the
+source column above meet. Its condition on a modified font, that a
+Reserved Font Name is not reused, is no constraint here. The Noto CJK
+fonts name Adobe as copyright holder with Reserved Font Name `Source`; the
+Atkinson fonts name the Braille Institute's project authors; Last Resort
+names Unicode, Inc.
+
+The six files `jigmo/` takes from the archive are under CC0 1.0 Universal,
+the public domain dedication `jigmo/LICENSE.txt` carries as the archive
+ships it. CC0 waives copyright and related rights worldwide and asks
+nothing in return, so for these files the source column above is a record
+of where the bytes came from and not a condition on keeping them. Jigmo
+states its terms nowhere else: name ID 13 is absent from all three fonts,
+which is why `jigmo/LICENSE.txt` is retained beside them.
+
+`jigmo/jigmo-tooling-MIT.txt` is the MIT licence of
+`github.com/kamichikoichi/jigmo`, Copyright 2023 Koichi Kamichi. That
+repository is the generator, the scripts that assemble the fonts from
+GlyphWiki data, and none of its code is here. It is retained because it is
+the licence a reader finds when they look the project up and because it
+covers no glyph, which is the thing worth knowing about it.
 
 These fonts are not covered by this repository's licence. Rule R8 of the
 safety policy is untouched: nothing here is compiled or linked, and
 `Cargo.lock` still lists only workspace members.
+
+## What CC0 does not settle
+
+CC0 section 4(c) says the Affirmer disclaims responsibility for clearing the
+rights of other persons that may apply to the Work. Jigmo's glyphs are not
+the author's drawings: every one comes from GlyphWiki, so the dedication
+reaches as far as GlyphWiki's own terms reach and no further.
+
+`jigmo/glyphwiki-license.txt` is that page,
+`https://en.glyphwiki.org/wiki/GlyphWiki:License`, retrieved by this
+repository's owner on 2026-09-17 and transcribed, because `glyphwiki.org`
+answers `curl`, a reader proxy and `web.archive.org` alike with a bot check;
+`fetch.sh` therefore does not fetch it, the way `docs/iso/` and `docs/uefi/`
+are handled under D-155. It is a wiki page and can be edited, so the
+checksum in `SHA256SUMS` records which bytes were read, and it is the
+English translation, which the page itself says yields to the Japanese
+original where the two differ.
+
+GlyphWiki's glyph data is public domain: contributors transfer copyright to
+GlyphWiki's operator, User:kamichi, who is Koichi Kamichi, the author of
+Jigmo, so the transferred copyright and the CC0 dedication land in one
+person. The licence grants anyone free use under modification and in
+commercial use, reproduction and redistribution, with no requirement to
+display an author's name, and permits the data as the basis of a new font
+or glyphs copied from it directly into published work.
+
+Konjaku Mojikyo, a commercial Japanese glyph collection, is not used: its
+codepoints, the glyphs of its fonts and anything created using it as a
+reference may not be contributed to GlyphWiki, and none is here.
 
 ## Sources
 
@@ -325,13 +406,30 @@ safety policy is untouched: nothing here is compiled or linked, and
 | Noto Project | `github.com/notofonts/noto-cjk` | tag `Sans2.004` | 2022-01-27 |
 | Google | `github.com/googlefonts/noto-emoji` | tag `v2.051` | 2025-09-15 |
 | Unicode, Inc. | `github.com/unicode-org/last-resort-font` | release `18.000` | 2026-09-16 |
+| Koichi Kamichi | `kamichikoichi.github.io/jigmo` | archive `Jigmo-20250912.zip`, sha256 `5744c7386d129475d87607ca66d043c8793c65448adeaedc921b6931890e5d0b` | 2026-09-17 |
+| Koichi Kamichi | `github.com/kamichikoichi/jigmo` | branch `master` | 2026-09-17 |
 
 The two Atkinson commits are the ones Google Fonts names in its
 `METADATA.pb` for the families, and the files are byte for byte the ones
 Google Fonts serves. Last Resort moves with the Unicode version D-156
 tracks: 19.0.0 brings release `19.000` and a new checksum here.
 
-Refetching everything, 139 MiB in 179 files:
+Jigmo is pinned differently from every other row, because the project
+publishes no release and no tag: the fonts are served from the project
+site as a dated archive, `Jigmo-20250912.zip`, and the pin is that
+archive's own SHA-256, which `fetch.sh` checks before it extracts a single
+file. The date in the name is the version the project gives; its README
+names 2023-08-16 and 2025-09-12 as the only two ever published. What the
+site prints beside the download is labelled `SHA256` and is 40 hex digits,
+a SHA-1; it matches this archive, so it authenticates the bytes, but the
+digest recorded here is the SHA-256 this repository computed. A new dated
+archive is a new row and a new set of checksums, not an update in place.
+`master` of the generator repository is a branch and not a pin, which is
+tolerable only because the file taken from it is a licence text that
+covers nothing shipped here; if it is ever needed for more, it wants a
+commit.
+
+Refetching everything, 201 MiB in 186 files:
 
 ```sh
 sh fonts/fetch.sh

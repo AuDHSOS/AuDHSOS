@@ -21,7 +21,7 @@ The owner authorized continuous execution through T12 on 2026-09-17 (D-163). Sta
 | shaping | Character-to-glyph substitution and glyph positioning using OpenType. |
 | advance | Fractional distance to the next glyph origin. |
 | Fixed | Signed `i64` with 32 fractional bits; one unit is `1 << 32`. |
-| font instance | A face plus explicit variation coordinates, scale, and baseline offset. |
+| font instance | A face plus explicit variation coordinates and scale. |
 | role | `Ui` or `Mono`, selecting an ordered fallback chain. |
 | generation | Caller-supplied `u64` identifying one immutable font-set snapshot. |
 | rasterizer | Outline-to-pixel coverage conversion, outside `text-core`. |
@@ -215,14 +215,18 @@ glyphs under different languages.
 **Option not taken:** host locale and font discovery, which would make the two
 processes depend on hidden state.
 
-Every resolved run carries its face index, variation coordinates, scale, and
-baseline offset. Base ascent/descent use OS/2 typographic metrics when selected
-by the documented T3 rule, otherwise hhea. Each run's scale is style size divided
-by that face's units-per-em under D2; the relative fallback scale is therefore
-the ratio of base to fallback units-per-em. Baseline offset is zero on the
-shared alphabetic baseline in this track. Line extents include scaled fallback
-ascent/descent. Weight selects the explicit `wght` instance where present;
-other axes use font defaults, without automatic optical-size settings.
+Every resolved run carries its face index, variation coordinates, and scale.
+Base ascent/descent use OS/2 typographic metrics when selected by the documented
+T3 rule, otherwise hhea. Each run's scale is style size divided by that face's
+units-per-em under D2; the relative fallback scale is therefore the ratio of
+base to fallback units-per-em. Every run sits on one alphabetic baseline and
+carries no baseline offset (D-171): `Run` has no such field, and a face whose
+`BASE` table declares a different default baseline is placed on the alphabetic
+baseline regardless, because no reader in this crate reads `BASE`.
+`Line::baseline` stays the computed alphabetic coordinate of a line. Line
+extents include scaled fallback ascent/descent. Weight selects the explicit
+`wght` instance where present; other axes use font defaults, without automatic
+optical-size settings.
 Geometry uses `design_value.mul_div(style.size, units_per_em)` for one final
 precision reduction; the rounded run scale describes the instance.
 
@@ -423,6 +427,11 @@ for nondefault instances, otherwise hmtx. Missing required phantom data returns
 `MissingOutline`. `Fixed::mul_div` scales fractional design values with one
 wide division. MVAR updates the selected OS/2 typo metrics before gap clamping.
 CFF2 instance coordinates are explicit; default outlines use zero coordinates.
+`Glyf::outline_instance` treats an absent `fvar` as zero axes and decodes the
+same outline as `outline` for an empty coordinate slice, rejecting a nonempty
+one with `InvalidTable` (D-170); `Cff::outline_instance` accepts a face without
+a CFF2 variation store the same way. A caller passes `Run::coordinates()`
+without testing whether a face is variable.
 **Done when:** defaults/endpoints/intermediate tuples match literal expected
 numbers; malformed maps, stores, packed deltas, axis counts, and blend operands
 return errors; no double application of advance deltas; report acceptance before continuing.
@@ -563,10 +572,10 @@ coverage is 5883/6171 lines (95.33%) and 1926/2170 branches (88.76%).
 **Needs:** generated script properties; `docs/microsoft/languagetags.html:1`
 and `docs/unicode/reports/tr37/tr37-16.html:1`, variation sequences.
 **Does:** apply D5 chain ordering, script/language runs, cluster coverage,
-instance scale/baseline metadata, and missing-glyph reporting.
+instance scale metadata, and missing-glyph reporting.
 **Produces:** resolved runs indexed by role, face, and generation.
 **Done when:** one Han code point resolves differently under zh-Hans, zh-Hant,
-ja, and ko fixtures where appropriate; fallback baselines/scales and combining
+ja, and ko fixtures where appropriate; fallback scales and combining
 clusters remain correct across both roles; report acceptance before continuing.
 
 Resolution uses whole grapheme clusters. Common/Inherited clusters inherit the
@@ -582,7 +591,7 @@ or GPOS; the second pass permits default LangSys when no such face covers the
 cluster. Each pass preserves role-chain order. Coverage includes normalization
 and variation-selector pairs. Bidi levels come from the whole paragraph.
 
-Acceptance: role order, whole combining clusters, fallback scales/baselines,
+Acceptance: role order, whole combining clusters, fallback scales,
 regional language systems, variable weight, script inheritance, bidi levels,
 UVS coverage, missing glyphs, caller capacities, and language extensions pass
 six host tests.
@@ -632,8 +641,20 @@ affinity, and selection queries merge adjacent visual cluster rectangles.
 GDEF carets use instance coordinates, including unhinted TrueType point carets;
 missing carets use fractional interpolation. Deleted glyph clusters retain
 zero-width cursor intervals. Overlapping source ranges from multiple
-substitution followed by ligation merge before grapheme geometry is computed. Output serialization is explicit
-little-endian, versioned, and contains no padding.
+substitution followed by ligation merge before grapheme geometry is computed.
+Output serialization is explicit little-endian, versioned, and contains no
+padding. The version number denotes one record layout, and a reader selects its
+record layout by that number alone. Version 1, written as `TEXT\x01`, gives each
+run record a `Fixed` baseline offset after its scale. Version 2, written as
+`TEXT\x02`, is version 1 without that field, because a run carries no baseline
+offset (D-171); every other record is unchanged. The `u16` after the magic is
+the major Unicode version of the property tables, `unicode::VERSION_MAJOR`,
+which the generator emits from the same pinned `VERSION` the tables are built
+from (D-156). The two numbers answer different questions: the version byte
+selects the record layout, and this word reports which property data produced
+the result, because segmentation, bidi and line breaking are the answers of one
+Unicode version and two streams of one record layout carry different boundaries
+when their tables differ.
 
 Input is capped at 65,536 Unicode scalars. Each owned growing buffer is capped
 at 1,048,576 entries. No-width layout shapes only mandatory-break candidates.
@@ -650,7 +671,7 @@ and cluster geometry path. Limits return typed errors.
 Tabs split shaping runs and occupy hidden glyph slots, preserving tab stops
 across GSUB and GPOS.
 
-Acceptance: eleven layout tests cover fractional advances, legal/emergency
+Acceptance: twelve layout tests cover fractional advances, legal/emergency
 breaks, line-end Arabic/ligature reshaping, bidi carets and selections,
 regional fallback, GDEF coordinate/point carets, deleted clusters, gvar metrics
 without HVAR, overlapping substitution clusters, buffer growth/exhaustion,
@@ -658,13 +679,16 @@ tab shaping barriers, and input/work limits. Emergency-break tests cover an
 unbreakable run, an overlong first cluster, combining marks, multiple glyphs
 from GSUB, and RTL visual order; every case checks progress, exact overflow,
 measurement agreement, and deterministic serialization through caller buffers
-and owned wrappers. Layout and
+and owned wrappers. One test lays out two faces of different units-per-em, one
+of them carrying a `BASE` table whose default baseline is ideographic, and
+asserts that every glyph's y equals `Line::baseline` and that the serialized
+output is byte-identical with and without that table (D-171). Layout and
 measure agree in every case. Separately allocated inputs serialize identically;
-debug/release assert FNV-1a-64 `15cce28391e7c99d` for the mixed-script fixture.
-The complete pure stack has 108 host tests and two doctests; allocator-free
-builds have 101 host tests. All Unicode gates, regeneration, Clippy, bare-target
+debug/release assert FNV-1a-64 `937fa8061318a96c` for the mixed-script fixture.
+The complete pure stack has 110 host tests and two doctests; allocator-free
+builds have 103 host tests. All Unicode gates, regeneration, Clippy, bare-target
 builds, and fourteen fuzz regression seeds pass. Product coverage is
-95.99% of lines and 89.45% of branches after review.
+96.08% of lines and 89.58% of branches after review.
 
 Review traced the earlier E2E disk timeouts to concurrent BAR size probing by
 `app-lspci`. Read-only BAR inspection restores disk notifications during

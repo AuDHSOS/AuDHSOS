@@ -76,11 +76,7 @@ fn ordered_role_fallback_whole_clusters_and_scales() {
     );
     assert_eq!(result[0].scale, style.size.mul_ratio(1, 1000).unwrap());
     assert_eq!(result[1].scale, style.size.mul_ratio(1, 2000).unwrap());
-    assert!(
-        result
-            .iter()
-            .all(|r| r.baseline == Fixed::ZERO && r.generation == 42)
-    );
+    assert!(result.iter().all(|r| r.generation == 42));
     let mono_style = TextStyle {
         role: Role::Mono,
         ..style

@@ -90,8 +90,6 @@ pub struct Run {
     pub level: u8,
     /// Style size divided by this face's units-per-em.
     pub scale: Fixed,
-    /// Offset from the shared alphabetic baseline.
-    pub baseline: Fixed,
     /// Full shaping was explicitly refused for this script.
     pub simple: bool,
     /// The base face supplies glyph zero for uncovered characters.
@@ -110,7 +108,6 @@ impl Default for Run {
             language: Language::UND,
             level: 0,
             scale: Fixed::ZERO,
-            baseline: Fixed::ZERO,
             simple: false,
             missing: false,
             coordinates: [Fixed::ZERO; 64],

@@ -362,4 +362,11 @@ fn variable_host_font_outlines_and_advances_apply_deltas_once() {
         instance.advance(id, Fixed::ONE, None),
         Err(FontError::MissingOutline)
     );
+    let glyf = Glyf::parse(&font).expect("glyf");
+    for wrong in [&[][..], &coords[..1], &[Fixed::ONE, Fixed::from_i32(2)][..]] {
+        assert_eq!(
+            glyf.outline_instance(id, wrong, &mut points, &mut contours, &mut scratch),
+            Err(FontError::InvalidTable)
+        );
+    }
 }
