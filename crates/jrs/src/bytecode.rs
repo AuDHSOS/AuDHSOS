@@ -3372,8 +3372,31 @@ impl RegisterLowerer {
         }
         // 10.2.11 instantiates each of these differently, and they are three
         // pieces of work, so the refusal says which one it stands on.
-        if function.parameters.iter().any(|parameter| parameter.rest) {
-            return Some("a rest parameter");
+        // 8.6.3 binds the Array to a name; a pattern of 8.6.2 over it is a
+        // second piece of work.
+        if function.parameters.iter().any(|parameter| {
+            parameter.rest && !matches!(parameter.pattern, parser::BindingPattern::Name(_))
+        }) {
+            return Some("a rest parameter that is a pattern");
+        }
+        // A rest parameter takes the arguments the call passed beyond it, so
+        // an Initializer of its own would never run.
+        if function
+            .parameters
+            .iter()
+            .any(|parameter| parameter.rest && parameter.default.is_some())
+        {
+            return Some("a rest parameter with an Initializer");
+        }
+        // 15.1.5: only the last parameter is a rest one.
+        if function
+            .parameters
+            .iter()
+            .rev()
+            .skip(1)
+            .any(|parameter| parameter.rest)
+        {
+            return Some("a rest parameter that is not the last");
         }
         let duplicated = !function.parameters.iter().all(|parameter| {
             let Some(name) = parameter.pattern.identifier() else {
@@ -3731,6 +3754,30 @@ impl RegisterLowerer {
         use crate::engine::bytecode::Instruction;
         if let Some(register) = child.code.arguments_register {
             child.code.emit(Instruction::CreateArguments(register));
+        }
+        // 10.2.11 step 28: the rest parameter binds the Array 8.6.3 makes of
+        // the arguments beyond the parameters before it.
+        if let Some(index) = function
+            .parameters
+            .iter()
+            .position(|parameter| parameter.rest)
+            && let parser::BindingPattern::Name(name) = &function.parameters.get(index)?.pattern
+        {
+            let skip = u16::try_from(index).ok()?;
+            let binding = *child.bindings.get(name)?;
+            match binding.storage {
+                RegisterBindingStorage::Register(target) => {
+                    child.code.emit(Instruction::CreateRest { target, skip });
+                }
+                RegisterBindingStorage::Context { .. } => {
+                    let target = child.allocate_register()?;
+                    child.code.emit(Instruction::CreateRest { target, skip });
+                    child.code.emit(Instruction::Ldar(target));
+                    child.store_binding(binding);
+                    child.release_register(target)?;
+                }
+            }
+            child.bindings.get_mut(name)?.value_type = Some(RegisterType::Unknown);
         }
         child.initialize_parameter_defaults(function)?;
         for statement in body {

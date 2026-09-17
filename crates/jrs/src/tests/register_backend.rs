@@ -13,7 +13,7 @@ fn a_realm_on_the_engine_backend_refuses_what_it_cannot_lower() -> Result<(), Er
 
     // The two paths hold separate object models, so a Script the lowering does
     // not take is refused instead of running on the stack path.
-    let source = "{ let z = function(...rest){} }";
+    let source = "{ let z = function(...[a]){} }";
     assert!(
         matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
         "{source}"
@@ -103,7 +103,7 @@ fn a_realm_on_the_engine_backend_evaluates_and_refuses_without_poisoning() -> Re
     // A Script the lowering does not take is refused before anything runs, so
     // the realm stays usable.
     assert!(matches!(
-        realm.evaluate("{ let z = function(...rest){} }"),
+        realm.evaluate("{ let z = function(...[a]){} }"),
         Err(Error::Unsupported { .. })
     ));
     assert_eq!(realm.evaluate("1+1")?, Value::Number(2.0));
@@ -3160,7 +3160,7 @@ fn returned_closures_outlive_register_frames_and_keep_distinct_contexts() -> Res
 fn register_function_calls_preserve_limits_and_reject_unlowered_semantics() -> Result<(), Error> {
     for source in [
         "function f(a,a){return a}f(1,2)",
-        "function f(...a){return a.length}f(1)",
+        "function f(...[a]){return a}f(1)",
         "let f=function inner(){return inner===f};f()",
         "let f=function inner(inner){return inner};f(42)",
         "typeof (function inner(){var inner;return inner})()",
@@ -4925,7 +4925,10 @@ fn a_script_the_lowering_refuses_says_what_it_holds() -> Result<(), Error> {
         // 10.2.11 does more for these parameter lists than the lowering does,
         // and the body is lowered in a unit of its own, so both name what
         // stopped them and not the expression the function was written as.
-        ("var f=function(...r){return r}; f()", "a rest parameter"),
+        (
+            "var f=function(...[a]){return a}; f()",
+            "a rest parameter that is a pattern",
+        ),
         (
             "var f=function(){while(1){try{break}finally{}}}; f()",
             "a jump out of a try with a Finally Block",
@@ -9200,5 +9203,25 @@ fn the_length_of_10_4_2_4_deletes_in_descending_order() -> Result<(), Error> {
         // 10.1.6.3 answers false for the define that stopped.
         "var a=[0,1,2];Object.defineProperty(a,'1',{value:9,configurable:false});''+Reflect.defineProperty(a,'length',{value:0})+a.length",
         "var a=[0,1,2];''+Reflect.defineProperty(a,'length',{value:0})+a.length",
+    ])
+}
+
+#[test]
+fn the_rest_parameter_of_8_6_3_takes_what_the_call_passed_beyond_it() -> Result<(), Error> {
+    differential_scripts(&[
+        "function f(){return arguments.length} ''+f(1,2,3)",
+        "function f(...r){return r.length+':'+r} ''+f(1,2,3)",
+        "function f(a,...r){return a+'|'+r} ''+f(1,2,3)",
+        // A call that passed nothing beyond it leaves an empty Array, not
+        // undefined.
+        "function f(...r){return ''+r+'|'+r.length+Array.isArray(r)} f()",
+        "function f(a,b,...r){return r.length} ''+f(1)",
+        // 15.1.5 stops counting the `length` at the rest parameter.
+        "''+function(a,...r){}.length",
+        // The Array outlives the frame where a closure captured the binding.
+        "function f(...r){return function(){return r.length}} ''+f(1,2)()",
+        // 20.2.3.1 passes a List and no registers of a caller.
+        "function f(...r){return r[0]+':'+r.length} ''+f.apply(null,[7,8])",
+        "function f(a,...r){return r.join('-')} ''+f(1,2,3,4)",
     ])
 }

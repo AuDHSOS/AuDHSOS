@@ -425,6 +425,14 @@ pub enum Instruction {
     /// The frame keeps the caller registers the call passed, so the object
     /// holds every argument, not only the declared parameters.
     CreateArguments(Reg),
+    /// Builds the Array of 8.6.3 in `reg`, out of the arguments the call
+    /// passed beyond the `skip` parameters before the rest one (10.2.11).
+    CreateRest {
+        /// Register the rest parameter binds.
+        target: Reg,
+        /// Number of parameters the rest one stands behind.
+        skip: u16,
+    },
     /// Constructs with a callable: `acc = new func_reg(args)` (7.3.15).
     ///
     /// `target` holds the object 10.1.13 creates, where the collector sees it
@@ -1055,6 +1063,9 @@ impl BytecodeFunction {
             | Instruction::TestInstanceOf(register)
             | Instruction::TestIn(register)
             | Instruction::CreateArguments(register)
+            | Instruction::CreateRest {
+                target: register, ..
+            }
             // 9.4.5 reads the register the binding lives in.
             | Instruction::ThisBinding { register } => Some(register),
             Instruction::Mov { src, dst } => {

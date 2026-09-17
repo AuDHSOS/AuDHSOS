@@ -8161,7 +8161,7 @@ impl RegisterVM {
         // own call was given, which are registers of the caller and not of
         // this frame, so they travel as the List of 7.3.15.
         let (arg_start, arg_count, spread) = if forwarded {
-            let passed = self.passed_arguments()?;
+            let passed = self.passed_arguments(heap)?;
             let count = u16::try_from(passed.len()).map_err(|_| VMError::TypeError)?;
             let list = Self::array_of(passed, heap, realm)?;
             heap.enter_scope();
@@ -8225,26 +8225,55 @@ impl RegisterVM {
         self.enter_call_value(parent, units, active_feedback, heap, realm, call)
     }
 
-    /// The arguments the running call was given, which 10.4.4 and 15.7.14 read
-    /// out of the registers of the caller.
-    fn passed_arguments(&self) -> Result<Vec<Value>, VMError> {
+    /// The arguments the running call was given, which 8.6.3, 10.4.4 and
+    /// 15.7.14 read.
+    ///
+    /// A call of the Script passes registers of the caller; 20.2.3.1 and
+    /// 28.1.1 pass a List no register holds, and a walk of 23.1.3 the state
+    /// the collector traces.
+    fn passed_arguments(&self, heap: &GenerationalHeap) -> Result<Vec<Value>, VMError> {
         let frame = *self.frames.last().ok_or(VMError::InvalidRegister)?;
         let arguments = frame.arguments.ok_or(VMError::Unsupported(
             "the arguments of a call the engine did not open",
         ))?;
-        let mut passed = Vec::with_capacity(usize::from(arguments.count));
-        for index in 0..arguments.count {
-            let slot = frame
-                .caller_fp
-                .checked_add(arguments.start.0 as usize)
-                .and_then(|start| start.checked_add(index as usize))
-                .ok_or(VMError::InvalidRegister)?;
-            passed.push(
-                self.stack
-                    .get(slot)
-                    .copied()
-                    .ok_or(VMError::InvalidRegister)?,
-            );
+        let count = usize::from(arguments.count);
+        let mut passed: Vec<Value> = Vec::with_capacity(count);
+        if let Some(Resume::Iteration { state }) = frame.resume {
+            let passed_in = Self::iteration_arguments(state, heap)?;
+            for index in 0..count.min(passed_in.len()) {
+                passed.push(*passed_in.get(index).unwrap_or(&VALUE_UNDEFINED));
+            }
+        } else if let Some(list) = frame.resume.and_then(Resume::list) {
+            let list = heap
+                .root_value(list)
+                .and_then(Value::as_object)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let store = heap
+                .get_object(list)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?
+                .elements
+                .and_then(|elements| heap.get_elements(elements));
+            for index in 0..arguments.count {
+                passed.push(
+                    store
+                        .and_then(|store| store.get(u32::from(index)))
+                        .unwrap_or(VALUE_UNDEFINED),
+                );
+            }
+        } else {
+            for index in 0..arguments.count {
+                let slot = frame
+                    .caller_fp
+                    .checked_add(arguments.start.0 as usize)
+                    .and_then(|start| start.checked_add(index as usize))
+                    .ok_or(VMError::InvalidRegister)?;
+                passed.push(
+                    self.stack
+                        .get(slot)
+                        .copied()
+                        .ok_or(VMError::InvalidRegister)?,
+                );
+            }
         }
         Ok(passed)
     }
@@ -13160,10 +13189,6 @@ impl RegisterVM {
     /// The mapping of 10.4.4.7 is not built. The lowering only takes a body
     /// where the mapping cannot be observed: one that assigns no parameter and
     /// uses `arguments` for nothing but reading a property of it.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "10.4.4 names every property of the object in one clause"
-    )]
     fn create_arguments(
         &mut self,
         code: &BytecodeFunction,
@@ -13175,53 +13200,12 @@ impl RegisterVM {
         let arguments = frame.arguments.ok_or(VMError::Unsupported(
             "the arguments object of a call the engine did not open",
         ))?;
-        let count = usize::from(arguments.count);
-        if count.saturating_add(2) > self.property_limit {
+        if usize::from(arguments.count).saturating_add(2) > self.property_limit {
             return Err(VMError::PropertyLimit);
         }
-        // The values are taken before anything is allocated: 20.2.3.1 and
-        // 28.1.1 passed a List no register of the caller holds, and every
-        // other call passed registers the allocation below does not move.
-        let mut passed: Vec<Value> = Vec::with_capacity(count);
-        // A walk of 23.1.3 has no frame of a caller either: the arguments of
-        // its callback come from the state the collector traces.
-        if let Some(Resume::Iteration { state }) = frame.resume {
-            let passed_in = Self::iteration_arguments(state, heap)?;
-            for index in 0..count.min(passed_in.len()) {
-                passed.push(*passed_in.get(index).unwrap_or(&VALUE_UNDEFINED));
-            }
-        } else if let Some(list) = frame.resume.and_then(Resume::list) {
-            let list = heap
-                .root_value(list)
-                .and_then(Value::as_object)
-                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
-            let store = heap
-                .get_object(list)
-                .ok_or(VMError::Heap(HeapError::InvalidReference))?
-                .elements
-                .and_then(|elements| heap.get_elements(elements));
-            for index in 0..arguments.count {
-                passed.push(
-                    store
-                        .and_then(|store| store.get(u32::from(index)))
-                        .unwrap_or(VALUE_UNDEFINED),
-                );
-            }
-        } else {
-            for index in 0..arguments.count {
-                let slot = frame
-                    .caller_fp
-                    .checked_add(arguments.start.0 as usize)
-                    .and_then(|start| start.checked_add(index as usize))
-                    .ok_or(VMError::InvalidRegister)?;
-                passed.push(
-                    self.stack
-                        .get(slot)
-                        .copied()
-                        .ok_or(VMError::InvalidRegister)?,
-                );
-            }
-        }
+        // The values are taken before anything is allocated: the allocation
+        // below moves no register of the caller.
+        let passed = self.passed_arguments(heap)?;
         let root_shape = heap.shapes.root_shape();
         let object = self.allocate_object(code, heap, realm, root_shape)?;
         // 10.4.4.7 maps the indices the call passed onto the parameters they
@@ -16587,6 +16571,14 @@ impl RegisterVM {
                             )?;
                         }
                     }
+                }
+                Instruction::CreateRest { target, skip } => {
+                    // 8.6.3 gives the rest parameter an Array of the
+                    // arguments beyond the parameters before it.
+                    let passed = self.passed_arguments(heap)?;
+                    let rest = passed.get(usize::from(skip)..).unwrap_or(&[]).to_vec();
+                    let array = Self::array_of(rest, heap, realm)?;
+                    self.write_reg(target, array)?;
                 }
                 Instruction::CreateArguments(target) => {
                     self.create_arguments(active_code, target, heap, realm)?;
