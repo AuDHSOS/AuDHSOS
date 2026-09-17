@@ -3479,6 +3479,10 @@ fn a_block_scope_is_taken_or_names_what_stops_it() -> Result<(), Error> {
         "var r=0;{let o={a:2};r=o.a}r",
         "var r=0;{let a=[1,2];r=a.length}r",
         "function f(){ {let o={a:3}; return o.a} }f()",
+        // A binding of the Block that a nested function reads lives in the
+        // context of the enclosing function.
+        "let f;{let x=42;f=()=>x}f()",
+        "function f(){ {let x=7; return (function(){return x})()} }f()",
     ] {
         differential(source)?;
     }
@@ -3486,8 +3490,9 @@ fn a_block_scope_is_taken_or_names_what_stops_it() -> Result<(), Error> {
         "{let x=x;x}",
         "{let x=y,y=1;x}",
         "{const x=1;x=2}",
-        "let f;{let x=42;f=()=>x}f()",
         "{function f(){return 42}f()}",
+        // 14.7.4.8 copies a Block binding of a loop per iteration.
+        "var r=[];for(var i=0;i<2;i=i+1){let a=i;r.push(function(){return a})}r[0]()",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(!program.uses_register_backend(), "{source}");
@@ -9395,5 +9400,28 @@ fn a_function_declaration_of_14_2_2_binds_in_its_block() -> Result<(), Error> {
     ])?;
     differential_scripts(&[
         "'use strict';function f(){ { function g(){return 1} function h(){return 2} return h() } } ''+f()",
+    ])
+}
+
+#[test]
+fn a_binding_of_a_block_reaches_the_function_that_reads_it() -> Result<(), Error> {
+    differential_scripts(&["function f(){ { let a=1; return (function(){return a})() } } ''+f()"])?;
+    differential_scripts(&[
+        "function f(){ { let a=1; var g=function(){return a}; } return 1 } ''+f()",
+    ])?;
+    // 14.15.3 binds the catch parameter in its Block alone.
+    differential_scripts(&[
+        "function f(){ try{ throw 5 }catch(e){ return (function(){return e})() } } ''+f()",
+    ])?;
+    // A Block inside a Block, and a Block binding that shadows a `var`.
+    differential_scripts(&[
+        "function f(){ { let a=1; { let b=2; return (function(){return a+b})() } } } ''+f()",
+    ])?;
+    differential_scripts(&[
+        "function f(){ var a=1; { let a=2; return (function(){return a})() } } ''+f()",
+    ])?;
+    // 14.2.2 gives a function declaration of a strict Block the same binding.
+    differential_scripts(&[
+        "'use strict';function f(){ { function g(){return 1} function h(){return g()} return h() } } ''+f()",
     ])
 }

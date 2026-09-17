@@ -727,6 +727,8 @@ struct RegisterLowerer {
     max_binding_count: u16,
     bindings: BTreeMap<String, RegisterBinding>,
     loops: Vec<RegisterLoop>,
+    /// The names each Block scope in flight introduced, innermost last.
+    block_scoped: Vec<BTreeSet<String>>,
     /// Every code id 10.2.5 made a constructor.
     constructible: BTreeSet<u32>,
     /// Which types a loop head starts from. Widened only for the second
@@ -900,6 +902,7 @@ struct RegisterFinally {
 #[derive(Clone)]
 struct RegisterSnapshot {
     instructions: usize,
+    block_scoped: usize,
     constants: usize,
     string_constants: usize,
     next_register: u16,
@@ -944,6 +947,7 @@ impl RegisterLowerer {
             max_binding_count: 0,
             bindings: BTreeMap::new(),
             loops: Vec::new(),
+            block_scoped: Vec::new(),
             completions: Vec::new(),
             constructible: BTreeSet::new(),
             loop_head_types: RegisterLoopHead::Declared,
@@ -1815,6 +1819,13 @@ impl RegisterLowerer {
     }
 
     fn capture_binding(&mut self, name: &str) -> Option<RegisterBinding> {
+        // 14.7.4.8 gives a Block binding inside a loop a copy per iteration,
+        // and one slot of the context holds one value, so the closures of two
+        // iterations would read the same binding.
+        if !self.loops.is_empty() && self.block_scoped.iter().any(|scope| scope.contains(name)) {
+            self.refuse("a Block binding of a loop, read by a nested function");
+            return None;
+        }
         let binding = *self.bindings.get(name)?;
         if matches!(binding.storage, RegisterBindingStorage::Context { .. }) {
             return Some(binding);
@@ -1870,6 +1881,7 @@ impl RegisterLowerer {
     fn snapshot(&self) -> RegisterSnapshot {
         RegisterSnapshot {
             instructions: self.code.instructions.len(),
+            block_scoped: self.block_scoped.len(),
             constants: self.code.constants.len(),
             string_constants: self.code.string_constants.len(),
             next_register: self.next_register,
@@ -1893,6 +1905,7 @@ impl RegisterLowerer {
     }
 
     fn restore(&mut self, snapshot: RegisterSnapshot) {
+        self.block_scoped.truncate(snapshot.block_scoped);
         self.code.instructions.truncate(snapshot.instructions);
         self.code.constants.truncate(snapshot.constants);
         self.code
@@ -3654,8 +3667,13 @@ impl RegisterLowerer {
         if child.maps_arguments {
             child.capture_parameters(function)?;
         }
+        // A name of the body takes its context slot before the body runs; one
+        // a Block or a `for` head binds gets its own when the Block is
+        // entered, so only the first kind is here to capture.
         for name in captured_names {
-            child.capture_binding(name)?;
+            if child.bindings.contains_key(name) {
+                child.capture_binding(name)?;
+            }
         }
         Some((child, self_register))
     }
@@ -6418,6 +6436,8 @@ impl RegisterLowerer {
         )>,
     > {
         let names = register_block_local_names(body)?;
+        self.block_scoped
+            .push(names.keys().cloned().collect::<BTreeSet<String>>());
         let mut scoped = Vec::new();
         for (name, mutable) in names {
             let register = self.allocate_register()?;
@@ -6445,6 +6465,7 @@ impl RegisterLowerer {
             Option<RegisterBinding>,
         )>,
     ) -> Option<()> {
+        self.block_scoped.pop()?;
         for (name, register, previous) in scoped.into_iter().rev() {
             self.bindings.remove(&name)?;
             if let Some(previous) = previous {
@@ -7011,7 +7032,8 @@ impl RegisterLowerer {
         let name = pattern.identifier()?;
         let mut direct = BTreeSet::new();
         let mut nested = BTreeSet::new();
-        register_statement_references(body, &mut direct, &mut nested)?;
+        let mut captured = BTreeSet::new();
+        register_statement_references(body, &mut direct, &mut nested, &mut captured)?;
         if nested.contains(name) {
             return None;
         }
@@ -7129,7 +7151,8 @@ impl RegisterLowerer {
         }
         let mut direct = BTreeSet::new();
         let mut nested = BTreeSet::new();
-        register_statement_references(body, &mut direct, &mut nested)?;
+        let mut captured = BTreeSet::new();
+        register_statement_references(body, &mut direct, &mut nested, &mut captured)?;
         if nested.contains(name) {
             return None;
         }
@@ -9634,8 +9657,9 @@ const ARGUMENTS: &str = "arguments";
 fn register_body_reads_arguments(body: &[Stmt]) -> Option<bool> {
     let mut names = BTreeSet::new();
     let mut nested = BTreeSet::new();
+    let mut captured = BTreeSet::new();
     for statement in body {
-        register_statement_references(statement, &mut names, &mut nested)?;
+        register_statement_references(statement, &mut names, &mut nested, &mut captured)?;
     }
     if nested.contains(ARGUMENTS) {
         return None;
@@ -10190,11 +10214,19 @@ fn register_body_scope(
 ) -> Option<RegisterFunctionScope> {
     let mut direct_references = BTreeSet::new();
     let mut nested_free_names = BTreeSet::new();
+    // A binding of a Block, of a Catch or of a `for` head that a nested
+    // function reads is captured just as a binding of the body is.
+    let mut scoped_captures = BTreeSet::new();
     for statement in body {
-        register_statement_references(statement, &mut direct_references, &mut nested_free_names)?;
+        register_statement_references(
+            statement,
+            &mut direct_references,
+            &mut nested_free_names,
+            &mut scoped_captures,
+        )?;
     }
     let mut free_names: BTreeSet<_> = direct_references.difference(local_names).cloned().collect();
-    let mut captured_names = BTreeSet::new();
+    let mut captured_names = scoped_captures;
     for name in nested_free_names {
         if local_names.contains(&name) {
             captured_names.insert(name);
@@ -10372,10 +10404,15 @@ fn register_binding_pattern_references(
     Some(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one function names every statement beside the names it reaches"
+)]
 fn register_statement_references(
     statement: &Stmt,
     names: &mut BTreeSet<String>,
     nested_free_names: &mut BTreeSet<String>,
+    captured_names: &mut BTreeSet<String>,
 ) -> Option<()> {
     match statement {
         Stmt::Expr(expression) => {
@@ -10398,32 +10435,38 @@ fn register_statement_references(
             }
         }
         Stmt::Block(body) => {
-            register_scoped_block_references(body, &BTreeSet::new(), names, nested_free_names)?;
+            register_scoped_block_references(
+                body,
+                &BTreeSet::new(),
+                names,
+                nested_free_names,
+                captured_names,
+            )?;
         }
         Stmt::If(condition, yes, no) => {
             register_expression_references(condition, names, nested_free_names)?;
-            register_statement_references(yes, names, nested_free_names)?;
+            register_statement_references(yes, names, nested_free_names, captured_names)?;
             if let Some(no) = no {
-                register_statement_references(no, names, nested_free_names)?;
+                register_statement_references(no, names, nested_free_names, captured_names)?;
             }
         }
         Stmt::While(condition, body) => {
             register_expression_references(condition, names, nested_free_names)?;
-            register_statement_references(body, names, nested_free_names)?;
+            register_statement_references(body, names, nested_free_names, captured_names)?;
         }
         Stmt::DoWhile(body, condition) => {
-            register_statement_references(body, names, nested_free_names)?;
+            register_statement_references(body, names, nested_free_names, captured_names)?;
             register_expression_references(condition, names, nested_free_names)?;
         }
         Stmt::For(initializer, condition, step, body) => {
-            register_statement_references(initializer, names, nested_free_names)?;
+            register_statement_references(initializer, names, nested_free_names, captured_names)?;
             if let Some(condition) = condition {
                 register_expression_references(condition, names, nested_free_names)?;
             }
             if let Some(step) = step {
                 register_expression_references(step, names, nested_free_names)?;
             }
-            register_statement_references(body, names, nested_free_names)?;
+            register_statement_references(body, names, nested_free_names, captured_names)?;
         }
         Stmt::Return(value) => {
             if let Some(value) = value {
@@ -10443,7 +10486,13 @@ fn register_statement_references(
         } => {
             // 14.15.1: the try Block, the Catch Block and the Finally Block are
             // separate scopes, and the catch parameter binds only in its Block.
-            register_scoped_block_references(body, &BTreeSet::new(), names, nested_free_names)?;
+            register_scoped_block_references(
+                body,
+                &BTreeSet::new(),
+                names,
+                nested_free_names,
+                captured_names,
+            )?;
             if let Some((parameter, body)) = catch {
                 let mut bound = BTreeSet::new();
                 if let Some(parameter) = parameter {
@@ -10451,14 +10500,31 @@ fn register_statement_references(
                     parameter.names(&mut declared);
                     bound.extend(declared);
                 }
-                register_scoped_block_references(body, &bound, names, nested_free_names)?;
+                register_scoped_block_references(
+                    body,
+                    &bound,
+                    names,
+                    nested_free_names,
+                    captured_names,
+                )?;
             }
             if let Some(body) = finally {
-                register_scoped_block_references(body, &BTreeSet::new(), names, nested_free_names)?;
+                register_scoped_block_references(
+                    body,
+                    &BTreeSet::new(),
+                    names,
+                    nested_free_names,
+                    captured_names,
+                )?;
             }
         }
         Stmt::Switch(_, _) | Stmt::ForIn { .. } | Stmt::ForOf { .. } => {
-            register_scoped_statement_references(statement, names, nested_free_names)?;
+            register_scoped_statement_references(
+                statement,
+                names,
+                nested_free_names,
+                captured_names,
+            )?;
         }
         Stmt::Empty | Stmt::Break | Stmt::Continue => {}
     }
@@ -10470,6 +10536,7 @@ fn register_scoped_statement_references(
     statement: &Stmt,
     names: &mut BTreeSet<String>,
     nested_free_names: &mut BTreeSet<String>,
+    captured_names: &mut BTreeSet<String>,
 ) -> Option<()> {
     match statement {
         Stmt::Switch(discriminant, clauses) => {
@@ -10481,7 +10548,7 @@ fn register_scoped_statement_references(
                 }
             }
             let body: Vec<&Stmt> = clauses.iter().flat_map(|(_, body)| body).collect();
-            register_scoped_clause_references(&body, names, nested_free_names)?;
+            register_scoped_clause_references(&body, names, nested_free_names, captured_names)?;
         }
         Stmt::ForIn {
             binding,
@@ -10517,8 +10584,11 @@ fn register_scoped_statement_references(
             }
             let mut direct = BTreeSet::new();
             let mut nested = BTreeSet::new();
-            register_statement_references(body, &mut direct, &mut nested)?;
+            register_statement_references(body, &mut direct, &mut nested, captured_names)?;
             names.extend(direct.difference(&bound).cloned());
+            // 14.7.5.6 gives the head binding a copy per iteration, which the
+            // lowering refuses to capture.
+            captured_names.extend(nested.intersection(&bound).cloned());
             nested_free_names.extend(nested.difference(&bound).cloned());
         }
         _ => return None,
@@ -10531,6 +10601,7 @@ fn register_scoped_clause_references(
     body: &[&Stmt],
     names: &mut BTreeSet<String>,
     nested_free_names: &mut BTreeSet<String>,
+    captured_names: &mut BTreeSet<String>,
 ) -> Option<()> {
     let mut local_names = BTreeSet::new();
     for statement in body {
@@ -10552,11 +10623,11 @@ fn register_scoped_clause_references(
     let mut direct = BTreeSet::new();
     let mut nested = BTreeSet::new();
     for statement in body {
-        register_statement_references(statement, &mut direct, &mut nested)?;
+        register_statement_references(statement, &mut direct, &mut nested, captured_names)?;
     }
-    if nested.iter().any(|name| local_names.contains(name)) {
-        return None;
-    }
+    // A binding of this scope that a nested function reads lives in the
+    // context of the enclosing function, which the lowering makes.
+    captured_names.extend(nested.intersection(&local_names).cloned());
     names.extend(direct.difference(&local_names).cloned());
     nested_free_names.extend(nested.difference(&local_names).cloned());
     Some(())
@@ -10569,17 +10640,18 @@ fn register_scoped_block_references(
     bound: &BTreeSet<String>,
     names: &mut BTreeSet<String>,
     nested_free_names: &mut BTreeSet<String>,
+    captured_names: &mut BTreeSet<String>,
 ) -> Option<()> {
     let mut local_names: BTreeSet<_> = register_block_local_names(body)?.into_keys().collect();
     local_names.extend(bound.iter().cloned());
     let mut direct = BTreeSet::new();
     let mut nested = BTreeSet::new();
     for statement in body {
-        register_statement_references(statement, &mut direct, &mut nested)?;
+        register_statement_references(statement, &mut direct, &mut nested, captured_names)?;
     }
-    if nested.iter().any(|name| local_names.contains(name)) {
-        return None;
-    }
+    // A binding of this scope that a nested function reads lives in the
+    // context of the enclosing function, which the lowering makes.
+    captured_names.extend(nested.intersection(&local_names).cloned());
     names.extend(direct.difference(&local_names).cloned());
     nested_free_names.extend(nested.difference(&local_names).cloned());
     Some(())
