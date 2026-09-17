@@ -6118,7 +6118,8 @@ impl RegisterVM {
     ///
     /// The `this` value of the call is the object the read or the write named,
     /// not the object the property was found on. `assigned` tells the two
-    /// apart: a read passes none.
+    /// apart: a read passes none, and a write passes the value beside whether
+    /// its Reference is strict.
     #[expect(
         clippy::too_many_arguments,
         reason = "an accessor call runs where a call does, with what a call has"
@@ -6127,7 +6128,7 @@ impl RegisterVM {
         &mut self,
         pair: Value,
         receiver: Value,
-        assigned: Option<Value>,
+        assigned: Option<(Value, bool)>,
         return_pc: usize,
         caller_code_id: Option<u32>,
         code: CodeUnits<'_>,
@@ -6147,7 +6148,7 @@ impl RegisterVM {
             return_pc,
             caller_code_id,
         };
-        let Some(assigned) = assigned else {
+        let Some((assigned, strict)) = assigned else {
             // 10.1.8.1 step 3.b: a property with no getter reads undefined.
             if get.is_undefined() {
                 self.acc = VALUE_UNDEFINED;
@@ -6155,8 +6156,17 @@ impl RegisterVM {
             }
             return self.enter_call_value(get, code, active_feedback, heap, realm, call);
         };
-        // 10.1.9.2 step 5.b: a property with no setter takes no value.
+        // 10.1.9.2 step 7: a property with no setter takes no value, and
+        // step 6.e of 6.2.5.6 turns the refusal of a strict Reference into a
+        // `TypeError`.
         if set.is_undefined() {
+            if strict {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "cannot write a property whose accessor has no setter",
+                ));
+            }
             self.acc = assigned;
             return Ok(None);
         }
@@ -21146,7 +21156,7 @@ impl RegisterVM {
                         if let Some(code_id) = self.enter_accessor(
                             found.value,
                             target,
-                            Some(assigned),
+                            Some((assigned, strict)),
                             pc,
                             current_code_id,
                             code_units,
@@ -21429,7 +21439,7 @@ impl RegisterVM {
                                 if let Some(code_id) = self.enter_accessor(
                                     found.value,
                                     target,
-                                    Some(val),
+                                    Some((val, strict)),
                                     pc,
                                     current_code_id,
                                     code_units,
@@ -21565,7 +21575,7 @@ impl RegisterVM {
                             if let Some(code_id) = self.enter_accessor(
                                 found.value,
                                 target,
-                                Some(val),
+                                Some((val, strict)),
                                 pc,
                                 current_code_id,
                                 code_units,

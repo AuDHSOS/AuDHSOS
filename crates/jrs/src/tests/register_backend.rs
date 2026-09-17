@@ -1326,6 +1326,35 @@ fn a_compound_assignment_reaches_a_property() -> Result<(), Error> {
 }
 
 #[test]
+fn a_strict_write_to_a_property_with_no_setter_is_a_type_error() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // 10.1.9.2 step 7 refuses the write, and 6.2.5.6 step 6.e turns the
+    // refusal into a TypeError where the Reference is strict. The stack
+    // backend answers the refusal only where the name is written out, so
+    // only the engine answers here.
+    let made = "var o={};Object.defineProperty(o,'x',{get:function(){return 1}});var k='x';";
+    for (source, answer) in [
+        (
+            "var r;try{(function(){'use strict';o.x=5})()}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{(function(){'use strict';o[k]=5})()}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        // A Reference that is not strict takes no value and answers the one
+        // it was given.
+        ("''+(o.x=5)+','+o.x", "5,1"),
+        ("''+(o[k]=5)+','+o.x", "5,1"),
+    ] {
+        let source = alloc::format!("{made}{source}");
+        assert_eq!(realm.evaluate(&source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}
+
+#[test]
 fn a_logical_assignment_of_13_15_2_writes_only_where_it_does_not_short_circuit() -> Result<(), Error>
 {
     let mut host = SilentHost;
