@@ -17,6 +17,30 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   Document 17, roadmap track 8.28, and D-158–D-164 define the boundary;
   rasterization, glyph caching, and compositor integration remain unscheduled.
 
+- `fonts/jigmo/`: Jigmo, Jigmo2 and Jigmo3 at the 2025-09-12 version, the
+  last layer of the UI chain before Last Resort and reached by the terminal
+  chain through the shared tail (D-172). Three files because one sfnt
+  addresses 65536 glyphs and the set draws about 127000. It maps 125786
+  code points and adds 82549 that Noto Sans CJK does not: CJK Unified
+  Ideographs extensions B through J, the compatibility ideographs and their
+  supplement, which no other font of `fonts/` draws. Its advances are 1024
+  and 512 in an em of 1024 and nothing else, so it is the only layer after
+  the third that holds the terminal grid exactly. It is Mincho, one weight,
+  no italic, so text falling from layer 3 to layer 7 changes from sans to
+  serif mid-line; the project builds no other style.
+
+  Jigmo is the first font of `fonts/` outside the OFL. It is under CC0 1.0
+  Universal, carried as `jigmo/LICENSE.txt`, and states its terms nowhere
+  else: name ID 13 is absent from all three fonts. The MIT licence of the
+  generator repository is retained beside them and covers no glyph. The
+  project publishes no release and no tag, so the pin is the dated archive
+  `Jigmo-20250912.zip` and its SHA-256, which `fetch.sh` checks before it
+  extracts a file. The glyphs are GlyphWiki's and CC0 4(c) clears no third
+  party's rights, so `fonts/README.md` records that GlyphWiki's glyph data is
+  public domain, its licence page being kept as `jigmo/glyphwiki-license.txt`
+  because the site answers a shell with a bot check, and that Konjaku Mojikyo
+  is not used. D-169 no longer claims one licence covers the directory.
+
 - `fonts/`: the fonts of the UI chain and the terminal chain, 173 font
   files, fetched byte for byte by `fonts/fetch.sh` from the commit or
   release each line names and pinned in `fonts/SHA256SUMS` (D-169).

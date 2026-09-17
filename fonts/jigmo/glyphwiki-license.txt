@@ -1,0 +1,22 @@
+GlyphWiki:License
+From GlyphWiki, the free glyph database
+Contents
+
+* [Data and article usage license](https://en.glyphwiki.org/wiki/GlyphWiki:License#i0)
+* [Words of caution](https://en.glyphwiki.org/wiki/GlyphWiki:License#i1)
+
+This page is a translation of [GlyphWiki:データ・記事のライセンス@15](https://en.glyphwiki.org/wiki/GlyphWiki:%e3%83%87%e3%83%bc%e3%82%bf%e3%83%bb%e8%a8%98%e4%ba%8b%e3%81%ae%e3%83%a9%e3%82%a4%e3%82%bb%e3%83%b3%e3%82%b9@15). This translation is provided as a service, and should not be taken to be a definitive statement. Please be aware that in case the Japanese original and the English version differ, the Japanese original takes precedence.
+
+ Data and article usage license
+
+* The glyphs registered at the GlyphWiki, as well as the articles, can be freely used by anyone.
+* Regardless of all modification, or even in commercial use, free use, reproduction, and redistribution is allowed. There are no specific restrictions with regards to displaying the author's name.
+* Reuse of GlyphWiki data as the basis for a new font, or direct usage of fonts and glyphs copied from GlyphWiki in published work is allowed.
+* GlyphWiki does not hold copyright on any citations used throughout GlyphWiki articles. Please consult their respective licenses when reusing such content.
+
+
+ Words of caution
+
+* In order to guarantee the above license, contributors transfer copyright on contributed articles to GlyphWiki (its operator, [User:kamichi](https://en.glyphwiki.org/wiki/User:kamichi)). By submitting articles the contributor consents to any form of modification or usage, and agrees to refrain from claiming copyright or exercising any author's rights over the submitted articles after submission.
+* The license for articles on Wikipedia differs from GlyphWiki's license, hence it is not possible to copy articles from Wikipedia over to GlyphWiki so please refrain from doing so. Thank you for your cooperation.
+* Konjaku Mojikyo, as well as related products and data cannot be used on GlyphWiki due to its license. Mojikyo codepoints (parts unique to Mojikyo), the glyphs recorded in Mojikyo fonts, or information concluded to have been created using Mojikyo as a reference cannot be used as a reference when contributing to GlyphWiki; we wish for your cooperation.

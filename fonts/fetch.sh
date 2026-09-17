@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (C) 2026 Manuel Baesler and contributors
 # Fetch the fonts of the UI and terminal chains, byte for byte, from the
-# commit or release each line names. Run from anywhere; writes beside this
-# script. Prints `<sha256>  <path>` per file. See README.md.
+# commit, release or dated archive each line names. Run from anywhere; writes
+# beside this script. Prints `<sha256>  <path>` per file. See README.md.
+#
+# The GlyphWiki data licence, which is upstream of every Jigmo glyph, is not
+# fetched here: `glyphwiki.org` answers a shell with a bot check, so its copy
+# is a person's, the way `docs/iso/` and `docs/uefi/` are handled under D-155.
 set -eu
 
 dir=$(cd "$(dirname "$0")" && pwd)
@@ -11,6 +15,30 @@ get() {
 	mkdir -p "$dir/$(dirname "$1")"
 	curl -sSL --fail --max-time 600 "$2" -o "$dir/$1"
 	printf '%s  %s\n' "$(shasum -a 256 "$dir/$1" | cut -d' ' -f1)" "$1"
+}
+
+# A dated archive, pinned by its own digest because the project publishes no
+# commit or tag. Arguments: directory, url, sha256 of the archive, members.
+# Needs `unzip`; the one entry here that does.
+unpack() {
+	into=$1 url=$2 want=$3
+	shift 3
+	mkdir -p "$dir/$into"
+	archive=$(mktemp)
+	trap 'rm -f "$archive"' EXIT
+	curl -sSL --fail --max-time 900 "$url" -o "$archive"
+	got=$(shasum -a 256 "$archive" | cut -d' ' -f1)
+	if [ "$got" != "$want" ]; then
+		echo "$url: sha256 $got, expected $want" >&2
+		exit 1
+	fi
+	for member in "$@"; do
+		unzip -p "$archive" "$member" > "$dir/$into/$member"
+		printf '%s  %s\n' \
+			"$(shasum -a 256 "$dir/$into/$member" | cut -d' ' -f1)" "$into/$member"
+	done
+	rm -f "$archive"
+	trap - EXIT
 }
 
 get 'atkinson/AtkinsonHyperlegibleNext[wght].ttf' 'https://raw.githubusercontent.com/googlefonts/atkinson-hyperlegible-next/7925f50f649b3813257faf2f4c0b381011f434f1/fonts/variable/AtkinsonHyperlegibleNext%5Bwght%5D.ttf'
@@ -192,3 +220,7 @@ get 'noto/emoji/NotoColorEmoji.ttf' 'https://raw.githubusercontent.com/googlefon
 get 'noto/emoji/LICENSE' 'https://raw.githubusercontent.com/googlefonts/noto-emoji/v2.051/fonts/LICENSE'
 get 'last-resort/LastResort-Regular.ttf' 'https://github.com/unicode-org/last-resort-font/releases/download/18.000/LastResort-Regular.ttf'
 get 'last-resort/LICENSE' 'https://raw.githubusercontent.com/unicode-org/last-resort-font/18.000/LICENSE'
+unpack 'jigmo' 'https://kamichikoichi.github.io/jigmo/Jigmo-20250912.zip' \
+	'5744c7386d129475d87607ca66d043c8793c65448adeaedc921b6931890e5d0b' \
+	Jigmo.ttf Jigmo2.ttf Jigmo3.ttf LICENSE.txt README.txt THANKS.txt
+get 'jigmo/jigmo-tooling-MIT.txt' 'https://raw.githubusercontent.com/kamichikoichi/jigmo/master/LICENSE'
