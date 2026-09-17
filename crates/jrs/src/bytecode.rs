@@ -555,8 +555,12 @@ fn compile_parsed(body: &[Stmt], limits: Limits, realm: bool) -> Result<Program,
         limits.properties,
     );
     if stack_refusal.is_some() && register_code.is_none() {
+        // The engine is the backend the migration is heading for, so its own
+        // refusal names the gap where both refuse.
         return Err(Error::Unsupported {
-            feature: stack_refusal.unwrap_or("a Script neither backend takes"),
+            feature: register_refusal
+                .or(stack_refusal)
+                .unwrap_or("a Script neither backend takes"),
         });
     }
     compiler.program.register_code = register_code.map(Rc::new);
