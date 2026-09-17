@@ -181,7 +181,7 @@ proc sqlite3 {name args} {
       last_insert_rowid { return [lindex [harness_send rowid %N%] 0] }
       nullvalue { return [harness_send null %N% [lindex $args 0]] }
       errorcode { return [lindex [harness_send errorcode %N%] 0] }
-      complete { return 1 }
+      complete { return [lindex [harness_send complete %N% [lindex $args 0]] 0] }
       transaction {
         harness_send eval %N% BEGIN
         set rc [catch { uplevel 1 [lindex $args end] } msg]

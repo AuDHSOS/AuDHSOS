@@ -461,6 +461,139 @@ fn run(sql: &[u8], from: usize, keep: fn(u8) -> bool) -> usize {
     i
 }
 
+/// What one token of the walk of [`complete`] is, which is what the
+/// table it reads is read by: a semicolon, whitespace, any other token,
+/// and the five words that bound a `CREATE TRIGGER`.
+const SEMI: usize = 0;
+/// Whitespace, and the comments that stand for it.
+const WHITE: usize = 1;
+/// Any other token.
+const OTHER: usize = 2;
+/// The word `EXPLAIN`.
+const EXPLAIN: usize = 3;
+/// The word `CREATE`.
+const CREATE: usize = 4;
+/// The word `TEMP` or `TEMPORARY`.
+const TEMP: usize = 5;
+/// The word `TRIGGER`.
+const TRIGGER: usize = 6;
+/// The word `END`.
+const END: usize = 7;
+
+/// The state each state moves to for each token, which is `trans` of
+/// `sqlite3_complete`: the states are, in order, the text that carries
+/// nothing yet, the end of a statement, the middle of one, a statement
+/// that began `EXPLAIN`, one that began `CREATE`, the body of a
+/// trigger, the semicolon that ends a statement of that body, and the
+/// `END` after it.
+const MOVES: [[u8; 8]; 8] = [
+    [1, 0, 2, 3, 4, 2, 2, 2],
+    [1, 1, 2, 3, 4, 2, 2, 2],
+    [1, 2, 2, 2, 2, 2, 2, 2],
+    [1, 3, 3, 2, 4, 2, 2, 2],
+    [1, 4, 2, 2, 2, 4, 5, 2],
+    [6, 5, 5, 5, 5, 5, 5, 5],
+    [6, 6, 5, 5, 5, 5, 5, 7],
+    [1, 7, 5, 5, 5, 5, 5, 5],
+];
+
+/// Whether `sql` ends a statement, which is `sqlite3_complete`: the
+/// last token that carries meaning is a semicolon, and a `CREATE
+/// TRIGGER` ends only after the `END` of its body.
+///
+/// A text that never closes a comment, a bracket or a quote ends no
+/// statement. Every byte is read once, so the walk is O(n) in the text.
+#[must_use]
+pub fn complete(sql: &[u8]) -> bool {
+    let mut state: usize = 0;
+    let mut at: usize = 0;
+    while let Some(byte) = sql.get(at).copied() {
+        let (token, next) = stepped(sql, at, byte, state);
+        let Some(next) = next else {
+            return token == SEMI;
+        };
+        at = next.saturating_add(1);
+        state = MOVES
+            .get(state)
+            .and_then(|row| row.get(token))
+            .map_or(0, |moved| usize::from(*moved));
+    }
+    state == 1
+}
+
+/// The token the byte at `at` begins and the byte it ends at, or
+/// nothing where the text ends before the token does: a comment that
+/// runs to the end of the text leaves the state where it stood, which
+/// the answer carries as [`SEMI`] where the state was the end of a
+/// statement, and every other unclosed token ends no statement.
+fn stepped(sql: &[u8], at: usize, byte: u8, state: usize) -> (usize, Option<usize>) {
+    let after = at.saturating_add(1);
+    match byte {
+        b';' => (SEMI, Some(at)),
+        b' ' | b'\r' | b'\t' | b'\n' | 0x0c => (WHITE, Some(at)),
+        b'/' if sql.get(after) == Some(&b'*') => match ended(sql, at.saturating_add(2), b"*/") {
+            Some(end) => (WHITE, Some(end)),
+            None => (OTHER, None),
+        },
+        b'-' if sql.get(after) == Some(&b'-') => match ended(sql, after, b"\n") {
+            Some(end) => (WHITE, Some(end)),
+            // The state stands as it was, which is a statement that
+            // ended where the state says so.
+            None => (usize::from(state != 1), None),
+        },
+        b'[' => match ended(sql, after, b"]") {
+            Some(end) => (OTHER, Some(end)),
+            None => (OTHER, None),
+        },
+        b'`' | b'"' | b'\'' => match ended(sql, after, &[byte]) {
+            Some(end) => (OTHER, Some(end)),
+            None => (OTHER, None),
+        },
+        _ if is_id(byte) => {
+            let end = sql
+                .iter()
+                .skip(after)
+                .position(|held| !is_id(*held))
+                .map_or(sql.len(), |count| after.saturating_add(count));
+            let word = sql.get(at..end).unwrap_or_default();
+            (worded(word), Some(end.saturating_sub(1)))
+        }
+        _ => (OTHER, Some(at)),
+    }
+}
+
+/// Where the token that began at `at` ends, which is the byte the
+/// closing mark stands on, or nothing where the text holds no such
+/// mark.
+fn ended(sql: &[u8], at: usize, mark: &[u8]) -> Option<usize> {
+    let held = sql.get(at..)?;
+    let found = held.windows(mark.len()).position(|bytes| bytes == mark)?;
+    Some(
+        at.saturating_add(found)
+            .saturating_add(mark.len().saturating_sub(1)),
+    )
+}
+
+/// Which of the five words the text is, and [`OTHER`] for every other.
+const fn worded(word: &[u8]) -> usize {
+    if word.eq_ignore_ascii_case(b"create") {
+        return CREATE;
+    }
+    if word.eq_ignore_ascii_case(b"trigger") {
+        return TRIGGER;
+    }
+    if word.eq_ignore_ascii_case(b"temp") || word.eq_ignore_ascii_case(b"temporary") {
+        return TEMP;
+    }
+    if word.eq_ignore_ascii_case(b"end") {
+        return END;
+    }
+    if word.eq_ignore_ascii_case(b"explain") {
+        return EXPLAIN;
+    }
+    OTHER
+}
+
 /// Whether the byte may appear inside an identifier: a letter, a digit,
 /// `_`, `$`, or a byte of a character wider than ASCII.
 #[must_use]

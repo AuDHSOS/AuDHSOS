@@ -5646,6 +5646,25 @@ Document 16 step Q8.
   columns is as wide as the tables it is over, which the count reads no
   table for.
 
+### 6.6.196 Whether a text ends a statement (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A text whose last token that carries meaning is a semicolon ends a
+  statement, and one that holds no token at all ends none, so
+  `SELECT 1;` and `-- a comment ;\n ;` end one and `This is a test`
+  does not.
+- A comment, a bracket or a quote the text never closes ends no
+  statement, and a `--` comment that runs to the end of the text leaves
+  the state where it stood.
+- A `CREATE TRIGGER` ends at the `END` of its body and not at the
+  semicolons inside it, whatever words stand between `CREATE` and
+  `TRIGGER`.
+- `NULLS FIRST` and `NULLS LAST` are written where a statement sorts
+  rows and nowhere else: a `CREATE INDEX`, a `PRIMARY KEY`, a `UNIQUE`
+  and an `ON CONFLICT` target are refused `unsupported use of NULLS
+  LAST`.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

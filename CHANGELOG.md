@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` refuses `NULLS FIRST` and `NULLS LAST` where an index
+  takes its terms, which is a `CREATE INDEX`, a `PRIMARY KEY`, a
+  `UNIQUE` and an `ON CONFLICT` target. D-272 records it. Catalog
+  6.6.196.
+
 - `db-sqlite` counts how many columns a statement an `IN` looks in
   answers where the statement is read, so `a IN (SELECT a, b FROM t3)`
   is refused `sub-select returns 2 columns - expected 1` although the
@@ -217,6 +222,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   cases passing to 214 with none failing. Catalog 6.6.165.
 
 ### Added
+
+- `db-sqlite` answers whether a text ends a statement,
+  `token::complete`, which is `sqlite3_complete`: the last token that
+  carries meaning is a semicolon, and a `CREATE TRIGGER` ends only after
+  the `END` of its body. D-272 records it. Catalog 6.6.196.
 
 - An application defines functions on a `db-sqlite` connection:
   `func::Defined` carries a name, a number of arguments and what the

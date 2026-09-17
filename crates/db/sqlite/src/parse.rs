@@ -82,6 +82,9 @@ pub enum Expected {
     /// Nothing: a token the tokenizer read as no token at all, which
     /// the span names.
     Unrecognized,
+    /// Nothing: a `NULLS FIRST` or a `NULLS LAST` written where an
+    /// index takes its terms, the truth telling the two apart.
+    ExplicitNulls(bool),
     /// Nothing: an `ORDER BY` or a `LIMIT` written on a core of a
     /// compound other than the last, which the word it carries names,
     /// the truth telling the `ORDER BY` from the `LIMIT`.
@@ -707,6 +710,26 @@ impl<'a> Parser<'a> {
         Ok(self.arena.push_orders(&terms))
     }
 
+    /// The same list, held to the terms an index takes: `NULLS FIRST`
+    /// and `NULLS LAST` are written where a statement sorts rows and
+    /// nowhere else, which `sqlite3HasExplicitNulls` refuses.
+    fn indexed_list(&mut self) -> Result<Range, Error> {
+        let terms = self.sort_list()?;
+        let written = self
+            .arena
+            .orders(terms)
+            .iter()
+            .find_map(|term| match term.nulls {
+                Nulls::First => Some(true),
+                Nulls::Last => Some(false),
+                Nulls::Unspecified => None,
+            });
+        match written {
+            Some(first) => Err(self.error(self.peek(), Expected::ExplicitNulls(first))),
+            None => Ok(terms),
+        }
+    }
+
     /// `ASC`, `DESC`, or neither.
     fn sort_order(&mut self) -> Order {
         if self.eat_keyword(Keyword::Asc) {
@@ -945,7 +968,7 @@ impl<'a> Parser<'a> {
         let mut targets = Range::default();
         let mut over = None;
         if self.eat(Kind::Lp) {
-            targets = self.sort_list()?;
+            targets = self.indexed_list()?;
             self.expect(Kind::Rp, Expected::CloseParen)?;
             if self.eat_keyword(Keyword::Where) {
                 over = Some(self.expression()?);
@@ -2052,7 +2075,7 @@ impl<'a> Parser<'a> {
         if self.eat_keyword(Keyword::Primary) {
             self.expect_keyword(Keyword::Key, Expected::Key)?;
             self.expect(Kind::Lp, Expected::OpenParen)?;
-            let columns = self.sort_list()?;
+            let columns = self.indexed_list()?;
             let autoincrement = self.eat_keyword(Keyword::Autoincrement);
             self.expect(Kind::Rp, Expected::CloseParen)?;
             return Ok(TableConstraint::PrimaryKey {
@@ -2063,7 +2086,7 @@ impl<'a> Parser<'a> {
         }
         if self.eat_keyword(Keyword::Unique) {
             self.expect(Kind::Lp, Expected::OpenParen)?;
-            let columns = self.sort_list()?;
+            let columns = self.indexed_list()?;
             self.expect(Kind::Rp, Expected::CloseParen)?;
             return Ok(TableConstraint::Unique {
                 columns,
@@ -2129,7 +2152,7 @@ impl<'a> Parser<'a> {
         self.expect_keyword(Keyword::On, Expected::On)?;
         let table = self.name()?;
         self.expect(Kind::Lp, Expected::OpenParen)?;
-        let columns = self.sort_list()?;
+        let columns = self.indexed_list()?;
         self.expect(Kind::Rp, Expected::CloseParen)?;
         let filter = if self.eat_keyword(Keyword::Where) {
             Some(self.expression()?)

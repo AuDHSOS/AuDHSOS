@@ -113,6 +113,9 @@ pub enum Error {
     OrderMatch(usize),
     /// A `VALUES` whose rows are not all the same width.
     Values,
+    /// A `NULLS FIRST` or a `NULLS LAST` written where an index takes
+    /// its terms, the truth telling the two apart.
+    ExplicitNulls(bool),
     /// An `ORDER BY` or a `LIMIT` written on a core of a compound other
     /// than the last, with which clause it is and the word that joins
     /// that core to the one after it.
@@ -316,6 +319,10 @@ impl Error {
                 alloc::format!("misuse of aggregate function {}()", shown(name))
             }
             Error::NoTables => alloc::string::String::from("no tables specified"),
+            Error::ExplicitNulls(first) => alloc::format!(
+                "unsupported use of NULLS {}",
+                if *first { "FIRST" } else { "LAST" }
+            ),
             Error::Columns(answered, wanted) => {
                 alloc::format!("sub-select returns {answered} columns - expected {wanted}")
             }
@@ -636,6 +643,9 @@ impl Error {
         }
         if error.expected == parse::Expected::Unrecognized {
             return Error::Unrecognized(held.unwrap_or_default().to_vec());
+        }
+        if let parse::Expected::ExplicitNulls(first) = error.expected {
+            return Error::ExplicitNulls(first);
         }
         if let parse::Expected::BeforeCompound(ordered, operator) = error.expected {
             return Error::BeforeCompound(ordered, operator);

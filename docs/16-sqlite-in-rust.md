@@ -798,6 +798,8 @@ Size: L.
     `md5sum` of `testfixture` is, is still open.
 51. The journal mode of a connection, and how many columns a statement
     an `IN` looks in answers. Built, which D-271 records.
+52. Whether a text ends a statement, and where the place of the nulls
+    may be written. Built, which D-272 records.
 
 ### Done when
 
@@ -807,8 +809,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 73 666 cases in 703 files, 61 423
-pass, 2399 answer differently, and 9844 name something the engine
+under the `tclsh` of the machine. Of 73 771 cases in 703 files, 61 566
+pass, 2360 answer differently, and 9845 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts

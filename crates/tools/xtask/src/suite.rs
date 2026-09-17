@@ -545,6 +545,11 @@ impl Session {
                 Ok(Vec::new())
             }
             "exists" => Ok(vec![usize::from(self.held.contains_key(first)).to_string()]),
+            // `sqlite3_complete` reads the text alone, so the
+            // connection the request names says nothing about it.
+            "complete" => Ok(vec![
+                usize::from(db_sqlite::token::complete(second.as_bytes())).to_string(),
+            ]),
             "copy" => self.copy(first, second),
             "null" => {
                 self.nulls.insert(first.to_owned(), second.to_owned());
