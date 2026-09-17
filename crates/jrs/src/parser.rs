@@ -339,8 +339,13 @@ pub(crate) enum Stmt {
         object: Expr,
         body: Box<Stmt>,
     },
-    Break,
-    Continue,
+    /// `break` of 14.9, which names a label where it leaves a statement that
+    /// is not the innermost breakable one.
+    Break(Option<String>),
+    /// `continue` of 14.8, whose label names an iteration statement.
+    Continue(Option<String>),
+    /// `LabelledStatement` of 14.13.
+    Labelled(String, Box<Stmt>),
     Function(String, Function),
     Return(Option<Expr>),
     Throw(Expr),
@@ -380,6 +385,7 @@ fn parse_script(source: &str, limits: Limits, strict_caller: bool) -> Result<Vec
         depth: 0,
         loops: 0,
         switches: 0,
+        labels: Vec::new(),
         functions: 0,
         new_target_context: 0,
         strict: false,
@@ -456,6 +462,9 @@ struct Parser {
     depth: usize,
     loops: usize,
     switches: usize,
+    /// The labels of 14.13 that enclose the statement being parsed, each with
+    /// whether it names an iteration statement.
+    labels: Vec<(String, bool)>,
     functions: usize,
     new_target_context: usize,
     strict: bool,
@@ -474,6 +483,7 @@ impl Parser {
             depth: 0,
             loops: 0,
             switches: 0,
+            labels: Vec::new(),
             functions: 1,
             new_target_context: 1,
             strict: false,
@@ -598,13 +608,13 @@ impl Parser {
         if self.is("with") || self.is("debugger") {
             return Err(Self::unsupported("statement form"));
         }
-        if matches!(&self.token()?.kind, Kind::Word(word) if !reserved(word))
+        if matches!(&self.token()?.kind, Kind::Word(word) if self.label_name(word))
             && self
                 .tokens
                 .get(self.at.saturating_add(1))
                 .is_some_and(|token| token.kind == Kind::Punct(":"))
         {
-            return Err(Self::unsupported("labelled statements"));
+            return self.labelled_statement();
         }
         if self.async_declaration_head() {
             return self.async_declaration();
@@ -739,24 +749,96 @@ impl Parser {
             return Ok(Stmt::For(Box::new(init), cond, step, Box::new(body)));
         }
         if self.is("break") || self.is("continue") {
-            if self.loops == 0 && (self.is("continue") || self.switches == 0) {
-                return Err(self.error("loop control outside a loop"));
-            }
             let is_break = self.eat("break");
             if !is_break {
                 self.need("continue")?;
             }
+            // 14.9.1 and 14.8.1: a label follows on the same line, because a
+            // line terminator ends the statement.
+            let label = if self.token()?.newline {
+                None
+            } else if let Kind::Word(word) = &self.token()?.kind
+                && self.label_name(word)
+            {
+                let word = word.clone();
+                self.at = self.at.saturating_add(1);
+                Some(word)
+            } else {
+                None
+            };
+            match &label {
+                // 14.9.1 and 14.8.1: the label is one of the enclosing ones,
+                // and a `continue` names an iteration statement.
+                Some(name) => {
+                    if !self
+                        .labels
+                        .iter()
+                        .any(|(label, iteration)| label == name && (is_break || *iteration))
+                    {
+                        return Err(self.error("a break or continue of a label that is not there"));
+                    }
+                }
+                None => {
+                    if self.loops == 0 && (!is_break || self.switches == 0) {
+                        return Err(self.error("loop control outside a loop"));
+                    }
+                }
+            }
             self.semicolon()?;
             return Ok(if is_break {
-                Stmt::Break
+                Stmt::Break(label)
             } else {
-                Stmt::Continue
+                Stmt::Continue(label)
             });
         }
         let expr = self.sequence()?;
         self.semicolon()?;
         Ok(Stmt::Expr(expr))
     }
+    /// Whether a word is a `LabelIdentifier` of 13.1: `yield` is one where the
+    /// code is not strict.
+    fn label_name(&self, word: &str) -> bool {
+        !reserved(word) || (!self.strict && word == "yield")
+    }
+
+    /// `LabelledStatement` of 14.13, whose label reaches the statement it
+    /// carries and every label of that statement.
+    fn labelled_statement(&mut self) -> Result<Stmt, Error> {
+        let Kind::Word(name) = &self.token()?.kind else {
+            return Err(self.error("expected a label"));
+        };
+        let name = name.clone();
+        // 14.13.1: no label encloses a label of its own name.
+        if self.labels.iter().any(|(label, _)| *label == name) {
+            return Err(self.error("a label that is already there"));
+        }
+        self.at = self.at.saturating_add(2);
+        // 14.13.1: a label of an iteration statement is the one a `continue`
+        // may name, and a label of a label of one is too.
+        let iteration = self.is("for")
+            || self.is("while")
+            || self.is("do")
+            || matches!(&self.token()?.kind, Kind::Word(word) if self.label_name(word))
+                && self
+                    .tokens
+                    .get(self.at.saturating_add(1))
+                    .is_some_and(|token| token.kind == Kind::Punct(":"));
+        self.labels.push((name.clone(), iteration));
+        let body = self.statement();
+        self.labels.pop();
+        let body = body?;
+        if matches!(body, Stmt::Function(..)) {
+            // 14.13.1 refuses a labelled function declaration in strict code,
+            // and B.3.1 allows one where the code is not strict, which this
+            // parser has no form of.
+            if self.strict {
+                return Err(self.error("a label on a function declaration"));
+            }
+            return Err(Self::unsupported("a labelled function declaration"));
+        }
+        Ok(Stmt::Labelled(name, Box::new(body)))
+    }
+
     fn single_statement(&mut self) -> Result<Stmt, Error> {
         if self.is("let")
             || self.is("const")
@@ -2090,6 +2172,9 @@ impl Parser {
         self.enter()?;
         let loops = core::mem::replace(&mut self.loops, 0);
         let switches = core::mem::replace(&mut self.switches, 0);
+        // 14.13.1: the labels of the enclosing code do not reach into a
+        // function body.
+        let labels = core::mem::take(&mut self.labels);
         self.functions = self.functions.saturating_add(1);
         let inherited = self.strict;
         let outer_async =
@@ -2106,6 +2191,7 @@ impl Parser {
         self.functions = self.functions.saturating_sub(1);
         self.loops = loops;
         self.switches = switches;
+        self.labels = labels;
         self.depth = self.depth.saturating_sub(1);
         let strict = self.strict;
         self.strict = inherited;

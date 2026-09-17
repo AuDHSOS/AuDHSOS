@@ -752,6 +752,9 @@ struct RegisterLowerer {
     max_binding_count: u16,
     bindings: BTreeMap<String, RegisterBinding>,
     loops: Vec<RegisterLoop>,
+    /// The labels of 14.13 the statement being lowered carries, which the
+    /// frame it opens takes.
+    pending_labels: Vec<String>,
     /// The names each Block scope in flight introduced, innermost last.
     block_scoped: Vec<BTreeSet<String>>,
     /// Every code id 10.2.5 made a constructor.
@@ -888,6 +891,11 @@ struct IterationHead<'a> {
 struct RegisterLoop {
     /// A `switch` is a break target but never a continue target (14.12).
     is_switch: bool,
+    /// The labels of 14.13 a `break` or a `continue` names this frame by.
+    labels: Vec<String>,
+    /// How many iterators of an enclosing `for`-`of` were open where the
+    /// frame began, so a jump out of it says which ones it leaves.
+    iterator_depth: usize,
     breaks: Vec<usize>,
     continues: Vec<usize>,
     result_register: crate::engine::bytecode::Reg,
@@ -972,6 +980,7 @@ impl RegisterLowerer {
             max_binding_count: 0,
             bindings: BTreeMap::new(),
             loops: Vec::new(),
+            pending_labels: Vec::new(),
             block_scoped: Vec::new(),
             completions: Vec::new(),
             constructible: BTreeSet::new(),
@@ -5970,14 +5979,15 @@ impl RegisterLowerer {
                 self.initialize_vars(bindings)?;
                 RegisterFlow::Empty
             }
-            Stmt::Break => {
-                self.lower_loop_jump(true)?;
+            Stmt::Break(label) => {
+                self.lower_loop_jump(true, label.as_deref())?;
                 RegisterFlow::Abrupt
             }
-            Stmt::Continue => {
-                self.lower_loop_jump(false)?;
+            Stmt::Continue(label) => {
+                self.lower_loop_jump(false, label.as_deref())?;
                 RegisterFlow::Abrupt
             }
+            Stmt::Labelled(label, body) => self.lower_labelled(label, body)?,
             Stmt::Return(value) if self.allow_return => {
                 let return_type = if let Some(value) = value {
                     self.lower(value)?
@@ -6569,19 +6579,30 @@ impl RegisterLowerer {
         Some(())
     }
 
-    fn lower_loop_jump(&mut self, is_break: bool) -> Option<()> {
+    fn lower_loop_jump(&mut self, is_break: bool, label: Option<&str>) -> Option<()> {
         use crate::engine::bytecode::Instruction;
         // 14.12: `break` leaves the innermost breakable statement, `continue`
-        // the innermost iteration statement, which a `switch` is not.
-        let index = if is_break {
-            self.loops.len().checked_sub(1)?
-        } else {
-            self.loops.iter().rposition(|frame| !frame.is_switch)?
+        // the innermost iteration statement, which a `switch` is not. 14.13.3
+        // names another one by its label, and a `continue` names an iteration
+        // statement there too.
+        let index = match label {
+            Some(label) => self.loops.iter().rposition(|frame| {
+                (is_break || !frame.is_switch) && frame.labels.iter().any(|name| name == label)
+            })?,
+            None if is_break => self.loops.len().checked_sub(1)?,
+            None => self.loops.iter().rposition(|frame| !frame.is_switch)?,
         };
         let loop_state = self.loops.get(index)?;
         if !register_bindings_reach(&self.bindings, &loop_state.bindings)
             || !self.loop_layouts_match(&loop_state.object_layouts)
         {
+            return None;
+        }
+        // 7.4.9 closes every iterator of a `for`-`of` the jump leaves, which
+        // this lowering emits after the body of the loop that opened it and
+        // not on the path of a jump that leaves more than that loop.
+        if self.open_iterators.len() > loop_state.iterator_depth {
+            self.refuse("a break or a continue that leaves a for-of");
             return None;
         }
         let result_register = loop_state.result_register;
@@ -6650,6 +6671,8 @@ impl RegisterLowerer {
 
         self.loops.push(RegisterLoop {
             is_switch: true,
+            labels: core::mem::take(&mut self.pending_labels),
+            iterator_depth: self.open_iterators.len(),
             breaks: Vec::new(),
             continues: Vec::new(),
             result_register,
@@ -6723,6 +6746,81 @@ impl RegisterLowerer {
         // 14.12.2 ends in UpdateEmpty(R, undefined), so the statement never
         // completes empty and never keeps the value before it.
         Some(RegisterFlow::Value(value_type))
+    }
+
+    /// `LabelledEvaluation` of 14.13.4, where the label reaches the statement
+    /// it carries.
+    ///
+    /// An iteration statement and a `switch` open a frame of their own, which
+    /// takes the label; every other statement gets a frame here, which only a
+    /// `break` of that label leaves.
+    fn lower_labelled(&mut self, label: &str, body: &Stmt) -> Option<RegisterFlow> {
+        self.pending_labels.push(String::from(label));
+        if matches!(
+            body,
+            Stmt::While(..)
+                | Stmt::DoWhile(..)
+                | Stmt::For(..)
+                | Stmt::ForIn { .. }
+                | Stmt::ForOf { .. }
+                | Stmt::Switch(..)
+                | Stmt::Labelled(..)
+        ) {
+            return self.lower_statement(body);
+        }
+        self.lower_labelled_body(body)
+    }
+
+    /// The frame a labelled statement that is no iteration statement and no
+    /// `switch` opens, which only a `break` of its label leaves.
+    fn lower_labelled_body(&mut self, body: &Stmt) -> Option<RegisterFlow> {
+        use crate::engine::bytecode::Instruction;
+        let result_register = self.allocate_register()?;
+        self.code.emit(Instruction::LdaUndefined);
+        self.code.emit(Instruction::Star(result_register));
+        let bindings_before = self.bindings.clone();
+        let layouts_before = self.object_layouts.clone();
+        self.loops.push(RegisterLoop {
+            is_switch: true,
+            labels: core::mem::take(&mut self.pending_labels),
+            iterator_depth: self.open_iterators.len(),
+            breaks: Vec::new(),
+            continues: Vec::new(),
+            result_register,
+            bindings: bindings_before.clone(),
+            completion_depth: self.completions.len(),
+            object_layouts: layouts_before.clone(),
+        });
+        self.completions.push(result_register);
+        let flow = self.lower_statement(body);
+        self.completions.pop()?;
+        let frame = self.loops.pop()?;
+        let flow = flow?;
+        // 14.13.3 has no `continue` of a statement that is no iteration
+        // statement, so the parser answered one before this.
+        if !frame.continues.is_empty() {
+            return None;
+        }
+        if frame.breaks.is_empty() {
+            self.release_register(result_register)?;
+            return Some(flow);
+        }
+        // The two paths meet here, so the bindings the statement leaves are
+        // the ones every `break` of it already reached.
+        if !register_bindings_reach(&self.bindings, &bindings_before)
+            || !self.loop_layouts_match(&layouts_before)
+        {
+            return None;
+        }
+        self.bindings = bindings_before;
+        self.object_layouts = layouts_before;
+        let done = self.code.instructions.len();
+        self.code.emit(Instruction::Ldar(result_register));
+        for jump in frame.breaks {
+            self.patch_jump(jump, done)?;
+        }
+        self.release_register(result_register)?;
+        Some(RegisterFlow::Value(RegisterType::Unknown))
     }
 
     /// Lowers a loop, and once more from the types its body's assignments
@@ -6849,6 +6947,8 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Ldar(result_register));
         self.loops.push(RegisterLoop {
             is_switch: false,
+            labels: core::mem::take(&mut self.pending_labels),
+            iterator_depth: self.open_iterators.len(),
             breaks: Vec::new(),
             continues: Vec::new(),
             result_register,
@@ -6911,6 +7011,8 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Ldar(result_register));
         self.loops.push(RegisterLoop {
             is_switch: false,
+            labels: core::mem::take(&mut self.pending_labels),
+            iterator_depth: self.open_iterators.len(),
             breaks: Vec::new(),
             continues: Vec::new(),
             result_register,
@@ -7043,6 +7145,8 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Ldar(result_register));
         self.loops.push(RegisterLoop {
             is_switch: false,
+            labels: core::mem::take(&mut self.pending_labels),
+            iterator_depth: self.open_iterators.len(),
             breaks: Vec::new(),
             continues: Vec::new(),
             result_register,
@@ -7486,6 +7590,8 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Ldar(loop_head.result));
         self.loops.push(RegisterLoop {
             is_switch: false,
+            labels: core::mem::take(&mut self.pending_labels),
+            iterator_depth: self.open_iterators.len(),
             breaks: Vec::new(),
             continues: Vec::new(),
             result_register: loop_head.result,
@@ -9649,7 +9755,7 @@ fn register_statement_var_names(
                 register_statement_var_names(no, names, initialized_only)?;
             }
         }
-        Stmt::While(_, body) | Stmt::DoWhile(body, _) => {
+        Stmt::While(_, body) | Stmt::DoWhile(body, _) | Stmt::Labelled(_, body) => {
             register_statement_var_names(body, names, initialized_only)?;
         }
         Stmt::For(initializer, _, _, body) => {
@@ -9689,8 +9795,8 @@ fn register_statement_var_names(
         | Stmt::Function(_, _)
         | Stmt::Return(_)
         | Stmt::Throw(_)
-        | Stmt::Break
-        | Stmt::Continue => {}
+        | Stmt::Break(_)
+        | Stmt::Continue(_) => {}
     }
     Some(())
 }
@@ -9710,7 +9816,7 @@ fn try_statements<'a>(
 /// have to run a Finally Block before.
 fn register_statement_breaks_control(statement: &Stmt) -> bool {
     match statement {
-        Stmt::Break | Stmt::Continue => true,
+        Stmt::Break(_) | Stmt::Continue(_) => true,
         Stmt::Block(body) => body.iter().any(register_statement_breaks_control),
         Stmt::If(_, yes, no) => {
             register_statement_breaks_control(yes)
@@ -9720,7 +9826,8 @@ fn register_statement_breaks_control(statement: &Stmt) -> bool {
         | Stmt::DoWhile(body, _)
         | Stmt::For(_, _, _, body)
         | Stmt::ForIn { body, .. }
-        | Stmt::ForOf { body, .. } => register_statement_breaks_control(body),
+        | Stmt::ForOf { body, .. }
+        | Stmt::Labelled(_, body) => register_statement_breaks_control(body),
         Stmt::Try {
             body,
             catch,
@@ -9737,7 +9844,7 @@ fn register_statement_breaks_control(statement: &Stmt) -> bool {
 
 fn register_statement_transfers_control(statement: &Stmt) -> bool {
     match statement {
-        Stmt::Break | Stmt::Continue | Stmt::Return(_) => true,
+        Stmt::Break(_) | Stmt::Continue(_) | Stmt::Return(_) => true,
         Stmt::Block(body) => body.iter().any(register_statement_transfers_control),
         Stmt::If(_, yes, no) => {
             register_statement_transfers_control(yes)
@@ -9749,7 +9856,8 @@ fn register_statement_transfers_control(statement: &Stmt) -> bool {
         | Stmt::DoWhile(body, _)
         | Stmt::For(_, _, _, body)
         | Stmt::ForIn { body, .. }
-        | Stmt::ForOf { body, .. } => register_statement_transfers_control(body),
+        | Stmt::ForOf { body, .. }
+        | Stmt::Labelled(_, body) => register_statement_transfers_control(body),
         Stmt::Try {
             body,
             catch,
@@ -9862,7 +9970,7 @@ fn infer_register_var_types(
                 infer_register_var_types(no, bindings, widen)?;
             }
         }
-        Stmt::While(_, body) | Stmt::DoWhile(body, _) => {
+        Stmt::While(_, body) | Stmt::DoWhile(body, _) | Stmt::Labelled(_, body) => {
             infer_register_var_types(body, bindings, widen)?;
         }
         // 14.7.5.6 step 7.g and 14.7.5.7 write the head of each step, so a
@@ -9910,8 +10018,8 @@ fn infer_register_var_types(
         | Stmt::Function(_, _)
         | Stmt::Return(_)
         | Stmt::Throw(_)
-        | Stmt::Break
-        | Stmt::Continue => {}
+        | Stmt::Break(_)
+        | Stmt::Continue(_) => {}
     }
     Some(())
 }
@@ -9997,6 +10105,7 @@ fn register_statement_writes_names(statement: &Stmt, names: &BTreeSet<String>) -
             register_expression_writes_names(condition, names)?
                 || register_statement_writes_names(body, names)?
         }
+        Stmt::Labelled(_, body) => register_statement_writes_names(body, names)?,
         Stmt::DoWhile(body, condition) => {
             register_statement_writes_names(body, names)?
                 || register_expression_writes_names(condition, names)?
@@ -10020,7 +10129,7 @@ fn register_statement_writes_names(statement: &Stmt, names: &BTreeSet<String>) -
         Stmt::Try { .. } | Stmt::Switch(_, _) | Stmt::ForIn { .. } | Stmt::ForOf { .. } => {
             register_scoped_statement_writes_names(statement, names)?
         }
-        Stmt::Empty | Stmt::Return(None) | Stmt::Break | Stmt::Continue => false,
+        Stmt::Empty | Stmt::Return(None) | Stmt::Break(_) | Stmt::Continue(_) => false,
     })
 }
 
@@ -10256,6 +10365,7 @@ fn register_statement_reads(statement: &Stmt, what: Reads) -> bool {
         Stmt::While(condition, body) | Stmt::DoWhile(body, condition) => {
             register_expression_reads(condition, what) || register_statement_reads(body, what)
         }
+        Stmt::Labelled(_, body) => register_statement_reads(body, what),
         Stmt::For(initializer, condition, step, body) => {
             register_statement_reads(initializer, what)
                 || condition
@@ -10289,7 +10399,7 @@ fn register_statement_reads(statement: &Stmt, what: Reads) -> bool {
                 || finally.as_deref().is_some_and(register_body_reads_this)
         }
         Stmt::Function(_, function) => function.arrow && register_body_reads(&function.body, what),
-        Stmt::Empty | Stmt::Break | Stmt::Continue => false,
+        Stmt::Empty | Stmt::Break(_) | Stmt::Continue(_) => false,
     }
 }
 
@@ -10914,6 +11024,9 @@ fn register_statement_references(
             register_statement_references(body, names, nested_free_names, captured_names)?;
             register_expression_references(condition, names, nested_free_names)?;
         }
+        Stmt::Labelled(_, body) => {
+            register_statement_references(body, names, nested_free_names, captured_names)?;
+        }
         Stmt::For(initializer, condition, step, body) => {
             register_statement_references(initializer, names, nested_free_names, captured_names)?;
             if let Some(condition) = condition {
@@ -10982,7 +11095,7 @@ fn register_statement_references(
                 captured_names,
             )?;
         }
-        Stmt::Empty | Stmt::Break | Stmt::Continue => {}
+        Stmt::Empty | Stmt::Break(_) | Stmt::Continue(_) => {}
     }
     Some(())
 }
@@ -11153,6 +11266,7 @@ fn register_script_features(body: &[Stmt], realm: bool) -> Option<(bool, bool)> 
             | Stmt::Switch(_, _)
             | Stmt::ForIn { .. }
             | Stmt::ForOf { .. }
+            | Stmt::Labelled(_, _)
             | Stmt::For(_, _, _, _) => saw_expression = true,
             Stmt::Empty | Stmt::Var(_) => {}
             _ => return None,
@@ -11277,13 +11391,14 @@ const fn statement_refusal(statement: &Stmt) -> &'static str {
         Stmt::Var(_) => "a var declaration",
         Stmt::If(..) => "an if statement",
         Stmt::While(..) => "a while statement",
+        Stmt::Labelled(..) => "a labelled statement",
         Stmt::DoWhile(..) => "a do-while statement",
         Stmt::For(..) => "a for statement",
         Stmt::Switch(..) => "a switch statement",
         Stmt::ForIn { .. } => "a for-in statement",
         Stmt::ForOf { .. } => "a for-of statement",
-        Stmt::Break => "break",
-        Stmt::Continue => "continue",
+        Stmt::Break(_) => "break",
+        Stmt::Continue(_) => "continue",
         Stmt::Function(..) => "a function declaration",
         Stmt::Return(_) => "return",
         Stmt::Throw(_) => "throw",
@@ -11468,7 +11583,7 @@ fn register_statement_has_unsupported_binding_pattern(statement: &Stmt) -> bool 
                     .as_deref()
                     .is_some_and(register_statement_has_unsupported_binding_pattern)
         }
-        Stmt::While(_, body) | Stmt::DoWhile(body, _) => {
+        Stmt::While(_, body) | Stmt::DoWhile(body, _) | Stmt::Labelled(_, body) => {
             register_statement_has_unsupported_binding_pattern(body)
         }
         Stmt::For(initializer, _, _, body) => {
@@ -11507,8 +11622,8 @@ fn register_statement_has_unsupported_binding_pattern(statement: &Stmt) -> bool 
         }
         Stmt::Empty
         | Stmt::Expr(_)
-        | Stmt::Break
-        | Stmt::Continue
+        | Stmt::Break(_)
+        | Stmt::Continue(_)
         | Stmt::Return(_)
         | Stmt::Throw(_) => false,
     }
@@ -11742,6 +11857,7 @@ fn register_statement_stack_requirement(statement: &Stmt) -> usize {
         }),
         Stmt::While(condition, body) => register_expression_stack_requirement(condition)
             .max(register_statement_stack_requirement(body)),
+        Stmt::Labelled(_, body) => register_statement_stack_requirement(body),
         Stmt::DoWhile(body, condition) => register_statement_stack_requirement(body)
             .max(register_expression_stack_requirement(condition)),
         Stmt::For(initializer, condition, step, body) => {
@@ -11973,6 +12089,13 @@ impl Compiler {
                 self.emit(Op::Result)?;
             }
             Stmt::Block(body) => self.block(body)?,
+            // 14.13 names a statement, which the stack backend has no target
+            // for; the engine carries the label of a break and a continue.
+            Stmt::Labelled(..) => {
+                return Err(Error::Unsupported {
+                    feature: "labelled statements",
+                });
+            }
             Stmt::Declare(bindings) => {
                 self.initialize_bindings(bindings)?;
             }
@@ -12031,8 +12154,8 @@ impl Compiler {
                 self.loop_body(cond.as_ref(), step.as_ref(), body, &per_iteration)?;
                 self.scopes.pop();
             }
-            Stmt::Break | Stmt::Continue => {
-                self.loop_control(matches!(stmt, Stmt::Break))?;
+            Stmt::Break(_) | Stmt::Continue(_) => {
+                self.loop_control(matches!(stmt, Stmt::Break(_)))?;
             }
         }
         Ok(())
@@ -13571,7 +13694,9 @@ fn var_names(stmt: &Stmt, names: &mut Vec<String>) {
                 var_names(no, names);
             }
         }
-        Stmt::While(_, body) | Stmt::DoWhile(body, _) => var_names(body, names),
+        Stmt::While(_, body) | Stmt::DoWhile(body, _) | Stmt::Labelled(_, body) => {
+            var_names(body, names);
+        }
         Stmt::For(init, _, _, body) => {
             var_names(init, names);
             var_names(body, names);

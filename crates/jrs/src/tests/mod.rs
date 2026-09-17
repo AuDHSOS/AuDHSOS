@@ -660,7 +660,7 @@ fn unsupported_syntax_is_distinct_from_syntax_errors() {
         "let x={...{a:1}}",
         "let x={*g(){}}",
         "let x={async *g(){}}",
-        "label: 0",
+        "label: function f(){}",
         "let café=1",
     ] {
         assert!(

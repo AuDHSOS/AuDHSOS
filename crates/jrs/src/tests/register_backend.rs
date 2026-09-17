@@ -1326,6 +1326,53 @@ fn a_compound_assignment_reaches_a_property() -> Result<(), Error> {
 }
 
 #[test]
+fn a_label_of_14_13_names_the_statement_a_break_or_a_continue_leaves() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend has no target for a label, so only the engine
+    // answers.
+    for (source, answer) in [
+        // 14.13.3: a `break` of a label leaves the statement that label
+        // names, and a `continue` of one carries on with its next step.
+        (
+            "var k='';o:for(var i=0;i<3;i++){for(var j=0;j<3;j++){if(j===1)continue o;if(i===2)break o;k+=''+i+j}}k",
+            "0010",
+        ),
+        // A label on a statement that is no iteration statement is left by a
+        // `break` of it alone.
+        ("var s='';b:{s+='a';break b;s+='c'}s", "a"),
+        ("var s='';b:{s+='a'}s", "a"),
+        // A label on a label names the same statement.
+        ("var n=0;a:b:for(var i=0;i<2;i++){continue a}''+i", "2"),
+        // 14.12: a `switch` is a break target, and its label is one too.
+        ("var s='';w:switch(1){case 1:s+='x';break w;}s", "x"),
+        // 14.13.1: a `continue` names an iteration statement, a label is not
+        // its own, and every label a `break` names is there.
+        (
+            "var r;try{eval('a: a: 0')}catch(e){r=e instanceof SyntaxError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{eval('a: {continue a}')}catch(e){r=e instanceof SyntaxError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{eval('break x')}catch(e){r=e instanceof SyntaxError};''+r",
+            "true",
+        ),
+        (
+            "var r;try{eval('x: 0; break x')}catch(e){r=e instanceof SyntaxError};''+r",
+            "true",
+        ),
+        // 14.9.1: a line terminator ends the statement before its label.
+        ("var s='';c:for(;;){s+='a';break\nc;}s", "a"),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}
+
+#[test]
 fn a_strict_write_to_a_property_with_no_setter_is_a_type_error() -> Result<(), Error> {
     let mut host = SilentHost;
     let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
