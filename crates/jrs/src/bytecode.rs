@@ -751,6 +751,10 @@ struct RegisterLowerer {
     active_binding_count: u16,
     max_binding_count: u16,
     bindings: BTreeMap<String, RegisterBinding>,
+    /// Whether the bindings this frame inherited stand one context deeper
+    /// than the frame it inherited them from, which holds where the frame was
+    /// made with a context of its own.
+    inherits_at_depth: bool,
     loops: Vec<RegisterLoop>,
     /// The labels of 14.13 the statement being lowered carries, which the
     /// frame it opens takes.
@@ -979,6 +983,9 @@ impl RegisterLowerer {
             active_binding_count: 0,
             max_binding_count: 0,
             bindings: BTreeMap::new(),
+            // A Script has a context of its own wherever it needs one, and no
+            // binding it inherits stands at a depth this would move.
+            inherits_at_depth: false,
             loops: Vec::new(),
             pending_labels: Vec::new(),
             block_scoped: Vec::new(),
@@ -1879,6 +1886,20 @@ impl RegisterLowerer {
         let RegisterBindingStorage::Register(register) = binding.storage else {
             return None;
         };
+        // A frame that was made without a context of its own holds every
+        // binding it inherited at the depth of the frame around it, and a
+        // context made here would stand between the two. A frame that
+        // inherited none has nothing a context of its own would move.
+        if self.code.own_context_slot_count.is_none()
+            && self.inherits_at_depth
+            && self
+                .bindings
+                .values()
+                .any(|binding| matches!(binding.storage, RegisterBindingStorage::Context { .. }))
+        {
+            self.refuse("a capture of a frame that inherits its context");
+            return None;
+        }
         let slot_count = self.code.own_context_slot_count.unwrap_or(0);
         let next = slot_count.checked_add(1)?;
         self.code.own_context_slot_count = Some(next);
@@ -3638,6 +3659,7 @@ impl RegisterLowerer {
             && register_maps_its_parameters(function)
             && register_body_reads_arguments(&function.body)?;
         let depth_shift = u16::from(!captured_names.is_empty() || maps);
+        child.inherits_at_depth = depth_shift == 0;
         for (name, binding) in captures {
             let RegisterBindingStorage::Context { depth, slot } = binding.storage else {
                 return None;
@@ -3850,6 +3872,12 @@ impl RegisterLowerer {
             if name != ARGUMENTS && child.bindings.contains_key(name) {
                 child.capture_binding(name)?;
             }
+        }
+        // Every binding this frame inherited stands one context deeper than
+        // the frame it came from, so the frame has a context of its own even
+        // where nothing was captured into it.
+        if depth_shift == 1 {
+            child.code.own_context_slot_count.get_or_insert(0);
         }
         Some((child, self_register))
     }
@@ -10542,6 +10570,9 @@ fn register_is_method_reading_super(value: &Expr) -> bool {
 enum Reads {
     /// The `this` value of 9.4.5.
     This,
+    /// The `this` value of 9.4.5, read by an arrow of the body and not by the
+    /// body itself, which 10.2.1.1 answers out of the frame around the arrow.
+    ArrowThis,
     /// The `[[HomeObject]]` 13.3.7.3 reads the Prototype of.
     Super,
     /// The `[[NewTarget]]` of 9.4.3.
@@ -10645,8 +10676,10 @@ fn register_expression_reads(expression: &Expr, what: Reads) -> bool {
         // A class body the lowering does not take at all.
         // A class body the lowering takes as a unit of its own, and the
         // default constructor of 15.7.14 reads all three.
-        ExprKind::Class(_) | ExprKind::DefaultSuper => true,
-        ExprKind::Super => !matches!(what, Reads::NewTarget),
+        // An arrow is the only expression that reads the `this` of the frame
+        // around it, so the scan for one stops at every other.
+        ExprKind::Class(_) | ExprKind::DefaultSuper => !matches!(what, Reads::ArrowThis),
+        ExprKind::Super => !matches!(what, Reads::NewTarget | Reads::ArrowThis),
         ExprKind::NewTarget => matches!(what, Reads::This | Reads::NewTarget),
         ExprKind::This => matches!(what, Reads::This),
         ExprKind::BigInt(..)
@@ -10695,7 +10728,19 @@ fn register_expression_reads(expression: &Expr, what: Reads) -> bool {
             .iter()
             .flatten()
             .any(|expression| register_expression_reads(expression, what)),
-        ExprKind::Function(function) => function.arrow && register_body_reads(&function.body, what),
+        ExprKind::Function(function) => {
+            function.arrow
+                && register_body_reads(
+                    &function.body,
+                    // Inside the arrow every `this` is the one the frame
+                    // around it holds.
+                    if matches!(what, Reads::ArrowThis) {
+                        Reads::This
+                    } else {
+                        what
+                    },
+                )
+        }
     }
 }
 
@@ -11001,6 +11046,11 @@ fn register_function_scope(function: &Function) -> Option<RegisterFunctionScope>
         local_names.insert(String::from(ARGUMENTS));
     }
     let mut scope = register_body_scope(&function.body, &local_names)?;
+    // 10.2.1.1 gives an arrow no `this` of its own, so the frame around it
+    // holds the one it reads in a context, like every other name it captures.
+    if !function.arrow && register_body_reads(&function.body, Reads::ArrowThis) {
+        scope.captured_names.insert(String::from(THIS_BINDING));
+    }
     // An Initializer of 8.6.2 runs in the frame of the call, so a name it
     // reads and the body does not is captured just the same.
     let mut direct = BTreeSet::new();
