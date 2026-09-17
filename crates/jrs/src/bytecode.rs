@@ -2075,8 +2075,12 @@ impl RegisterLowerer {
                             let unmapped = self.code.strict
                                 || self.mapped_parameters == 0
                                 || self.code.arguments_map.is_some();
-                            let binding =
-                                self.arguments_binding.filter(|_| member_base || unmapped)?;
+                            let binding = self
+                                .bindings
+                                .get(ARGUMENTS)
+                                .copied()
+                                .or(self.arguments_binding)
+                                .filter(|_| member_base || unmapped)?;
                             self.load_binding(binding);
                             RegisterType::Unknown
                         }
@@ -3567,7 +3571,17 @@ impl RegisterLowerer {
                 return None;
             };
             child.bindings.get_mut(ARGUMENTS)?.value_type = Some(RegisterType::Unknown);
-            child.arguments_binding = child.bindings.remove(ARGUMENTS);
+            child.arguments_binding = child.bindings.get(ARGUMENTS).copied();
+            // 10.4.4.7 maps the indices of a sloppy function's object onto its
+            // parameters, and a nested function that reads the object could
+            // observe the mapping, which this engine does not build.
+            let captures_arguments = captured_names.contains(ARGUMENTS);
+            if captures_arguments && !(function.strict || function.parameters.is_empty() || maps) {
+                return None;
+            }
+            if !captures_arguments {
+                child.bindings.remove(ARGUMENTS);
+            }
             child.mapped_parameters = function.parameters.len();
             child.maps_arguments = maps;
             child.code.arguments_register = Some(register);
@@ -3671,7 +3685,7 @@ impl RegisterLowerer {
         // a Block or a `for` head binds gets its own when the Block is
         // entered, so only the first kind is here to capture.
         for name in captured_names {
-            if child.bindings.contains_key(name) {
+            if name != ARGUMENTS && child.bindings.contains_key(name) {
                 child.capture_binding(name)?;
             }
         }
@@ -3772,6 +3786,12 @@ impl RegisterLowerer {
         use crate::engine::bytecode::Instruction;
         if let Some(register) = child.code.arguments_register {
             child.code.emit(Instruction::CreateArguments(register));
+            // A nested function reads the object out of the context, which
+            // only holds it once 10.4.4 has made it.
+            if child.bindings.contains_key(ARGUMENTS) {
+                child.capture_binding(ARGUMENTS)?;
+                child.arguments_binding = child.bindings.get(ARGUMENTS).copied();
+            }
         }
         // 10.2.11 step 28: the rest parameter binds the Array 8.6.3 makes of
         // the arguments beyond the parameters before it.
@@ -9661,10 +9681,10 @@ fn register_body_reads_arguments(body: &[Stmt]) -> Option<bool> {
     for statement in body {
         register_statement_references(statement, &mut names, &mut nested, &mut captured)?;
     }
-    if nested.contains(ARGUMENTS) {
-        return None;
-    }
-    Some(names.contains(ARGUMENTS))
+    // 10.2.1.1 gives an arrow no object of its own, so one that reads
+    // `arguments` reads the object of the function it stands in, which that
+    // function then has to build.
+    Some(names.contains(ARGUMENTS) || nested.contains(ARGUMENTS))
 }
 
 /// Whether an Initializer of 8.6.2 reads the parameter it binds or one the

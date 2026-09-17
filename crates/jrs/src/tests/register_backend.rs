@@ -976,17 +976,15 @@ fn arguments_inside_a_function_is_never_a_global() -> Result<(), Error> {
     ] {
         differential(source)?;
     }
-    // A binding of that name and an arrow that reads the object of the frame
-    // it was made in are both refused.
-    for source in [
-        "function f(){arguments=1;return 2}f()",
-        "function f(a){return (()=>arguments.length)()}f(1)",
-    ] {
-        assert!(
-            !compile(source, Limits::default())?.uses_register_backend(),
-            "{source}"
-        );
-    }
+    // 10.2.1.1 gives an arrow no object of its own, so it reads the one of the
+    // function it stands in, through the same mapping.
+    differential("function f(a){return (()=>arguments.length)()}f(1)")?;
+    // A binding of that name is refused.
+    let assigned = "function f(){arguments=1;return 2}f()";
+    assert!(
+        !compile(assigned, Limits::default())?.uses_register_backend(),
+        "{assigned}"
+    );
 
     // A binding of that name is an ordinary binding, inside a function and out.
     for source in [
@@ -9424,4 +9422,23 @@ fn a_binding_of_a_block_reaches_the_function_that_reads_it() -> Result<(), Error
     differential_scripts(&[
         "'use strict';function f(){ { function g(){return 1} function h(){return g()} return h() } } ''+f()",
     ])
+}
+
+#[test]
+fn an_arrow_of_10_2_1_1_reads_the_arguments_of_the_function_it_stands_in() -> Result<(), Error> {
+    differential_scripts(&["function f(){ return (()=>arguments[0])() } ''+f(7)"])?;
+    differential_scripts(&["function f(){ return (()=>arguments.length)() } ''+f(7,8)"])?;
+    differential_scripts(&["function f(){ var g=()=>arguments.length; return g() } ''+f(1,2,3)"])?;
+    // 10.4.4.7 maps the indices of a sloppy function's object onto its
+    // parameters, which an arrow reads through the same mapping; 10.4.4.6
+    // gives a strict one no mapping.
+    differential_scripts(&["function f(a){ a=9; return (()=>arguments[0])() } ''+f(7)"])?;
+    differential_scripts(&[
+        "'use strict';function f(a){ a=9; return (()=>arguments[0])() } ''+f(7)",
+    ])?;
+    // An ordinary function nested in one binds its own object.
+    differential_scripts(&[
+        "function f(){ return (function(){return arguments.length})() } ''+f(7,8)",
+    ])?;
+    differential_scripts(&["function f(){ return (()=>(()=>arguments[0])())() } ''+f(5)"])
 }
