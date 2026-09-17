@@ -2574,10 +2574,19 @@ impl RegisterLowerer {
         self.code.emit(Instruction::CreateObject);
         let object = self.allocate_register()?;
         self.code.emit(Instruction::Star(object));
+        let mut spread = false;
         for property in properties {
             if property.prototype {
                 return None;
             }
+            // 13.2.5.5 copies the own enumerable properties of the source,
+            // which leaves the object with a shape this lowering cannot name.
+            let Some(property_key) = &property.key else {
+                self.lower(&property.value)?;
+                self.code.emit(Instruction::SpreadDataProperties(object));
+                spread = true;
+                continue;
+            };
             // 13.2.5.1 defines an accessor property, whose two halves meet on
             // the object. A computed name would have to reach the same
             // property, which needs the key at run time.
@@ -2585,7 +2594,7 @@ impl RegisterLowerer {
                 if property.computed {
                     // 13.2.5.1 with a key only the run time knows: 7.1.19
                     // makes it, and 10.2.10 names the half after it.
-                    if !self.lower(&property.key)?.converts_to_primitive() {
+                    if !self.lower(property_key)?.converts_to_primitive() {
                         return None;
                     }
                     let register = self.allocate_register()?;
@@ -2601,7 +2610,7 @@ impl RegisterLowerer {
                     self.record_ordinary_property_write(object_id, None, RegisterType::Unknown)?;
                     continue;
                 }
-                let name = Self::static_property_name(&property.key)?.to_vec();
+                let name = Self::static_property_name(property_key)?.to_vec();
                 let constant = self.string_constant(&name)?;
                 // 10.2.10 names a getter "get x" and a setter "set x".
                 self.lower_named(&property.value, &accessor_name(setter, &name))?;
@@ -2619,7 +2628,7 @@ impl RegisterLowerer {
             // 13.2.5.5 names the function a definition holds after the key it
             // is given, which for a computed one 10.2.10 does at run time.
             if property.computed && register_names_itself_after_its_key(&property.value) {
-                if !self.lower(&property.key)?.converts_to_primitive() {
+                if !self.lower(property_key)?.converts_to_primitive() {
                     return None;
                 }
                 let register = self.allocate_register()?;
@@ -2635,15 +2644,15 @@ impl RegisterLowerer {
                 continue;
             }
             let key = if property.computed {
-                let static_name = Self::static_property_key_units(&property.key);
-                if !self.lower(&property.key)?.converts_to_primitive() {
+                let static_name = Self::static_property_key_units(property_key);
+                if !self.lower(property_key)?.converts_to_primitive() {
                     return None;
                 }
                 let register = self.allocate_register()?;
                 self.code.emit(Instruction::Star(register));
                 RegisterMemberKey::ObjectKeyed(register, static_name)
             } else {
-                let name = Self::static_property_name(&property.key)?;
+                let name = Self::static_property_name(property_key)?;
                 let name = name.to_vec();
                 RegisterMemberKey::Named {
                     constant: self.string_constant(&name)?,
@@ -2697,6 +2706,12 @@ impl RegisterLowerer {
         }
         self.code.emit(Instruction::Ldar(object));
         self.release_register(object)?;
+        if spread {
+            // The properties a `...` copied are the source's, so the layout
+            // this lowering kept says nothing about the object any more.
+            self.escape(&[RegisterType::Object(object_id)]);
+            return Some(RegisterType::Unknown);
+        }
         Some(RegisterType::Object(object_id))
     }
 
@@ -3350,7 +3365,7 @@ impl RegisterLowerer {
             // 15.7.14 with a key only the run time knows: 7.1.19 makes it, and
             // 10.2.10 names the method after it.
             if method.computed {
-                if !self.lower(&method.key)?.converts_to_primitive() {
+                if !self.lower(method.key.as_ref()?)?.converts_to_primitive() {
                     return None;
                 }
                 let register = self.allocate_register()?;
@@ -3372,7 +3387,7 @@ impl RegisterLowerer {
                 self.release_register(register)?;
                 continue;
             }
-            let name = Self::static_property_name(&method.key)?.to_vec();
+            let name = Self::static_property_name(method.key.as_ref()?)?.to_vec();
             let constant = self.string_constant(&name)?;
             let given = match method.accessor {
                 Some(setter) => accessor_name(setter, &name),
@@ -10447,7 +10462,10 @@ fn register_expression_reads(expression: &Expr, what: Reads) -> bool {
             .iter()
             .any(|(expression, _)| register_expression_reads(expression, what)),
         ExprKind::Object(properties) => properties.iter().any(|property| {
-            register_expression_reads(&property.key, what)
+            property
+                .key
+                .as_ref()
+                .is_some_and(|key| register_expression_reads(key, what))
                 || register_expression_reads(&property.value, what)
         }),
         ExprKind::Array(items) => items
@@ -10494,7 +10512,10 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
         }
         ExprKind::Object(properties) => {
             for property in properties {
-                if register_expression_writes_names(&property.key, names)?
+                if property
+                    .key
+                    .as_ref()
+                    .is_some_and(|key| register_expression_writes_names(key, names) == Some(true))
                     || register_expression_writes_names(&property.value, names)?
                 {
                     return Some(true);
@@ -10619,8 +10640,9 @@ fn register_class_writes_names(class: &parser::Class, names: &BTreeSet<String>) 
         return Some(true);
     }
     for (_, method) in &class.methods {
-        if register_expression_writes_names(&method.key, names)?
-            || register_expression_writes_names(&method.value, names)?
+        if method.key.as_ref().map_or(Some(false), |key| {
+            register_expression_writes_names(key, names)
+        })? || register_expression_writes_names(&method.value, names)?
         {
             return Some(true);
         }
@@ -10639,7 +10661,9 @@ fn register_class_references(
     }
     nested_free_names.extend(register_function_scope(&class.constructor)?.free_names);
     for (_, method) in &class.methods {
-        register_expression_references(&method.key, names, nested_free_names)?;
+        if let Some(key) = &method.key {
+            register_expression_references(key, names, nested_free_names)?;
+        }
         register_expression_references(&method.value, names, nested_free_names)?;
     }
     Some(())
@@ -10842,7 +10866,9 @@ fn register_expression_references(
         }
         ExprKind::Object(properties) => {
             for property in properties {
-                register_expression_references(&property.key, names, nested_free_names)?;
+                if let Some(key) = &property.key {
+                    register_expression_references(key, names, nested_free_names)?;
+                }
                 register_expression_references(&property.value, names, nested_free_names)?;
             }
         }
@@ -13148,7 +13174,14 @@ impl Compiler {
     fn object(&mut self, properties: &[parser::ObjectProperty]) -> Result<(), Error> {
         self.emit(Op::Object)?;
         for property in properties {
-            self.expression(&property.key)?;
+            // 13.2.5.5 copies the properties of another object, which the
+            // stack backend has no operation for.
+            let Some(key) = &property.key else {
+                return Err(Error::Unsupported {
+                    feature: "object spread properties",
+                });
+            };
+            self.expression(key)?;
             self.emit(Op::Key)?;
             self.expression(&property.value)?;
             if matches!(&property.value.kind,ExprKind::Function(f) if !f.constructible&&!f.arrow) {
@@ -13196,7 +13229,7 @@ impl Compiler {
         self.function(&class.constructor, class.name.as_deref().or(inferred_name))?;
         self.emit(Op::Class(class.heritage.is_some()))?;
         for (is_static, method) in &class.methods {
-            self.expression(&method.key)?;
+            self.expression(method.key.as_ref().ok_or(Error::InvalidBytecode)?)?;
             self.emit(Op::Key)?;
             self.expression(&method.value)?;
             self.emit(Op::ClassMethod(*is_static, method.accessor))?;

@@ -85,7 +85,9 @@ pub(crate) enum ExprKind {
 
 #[derive(Debug)]
 pub(crate) struct ObjectProperty {
-    pub(crate) key: Expr,
+    /// The name the property is defined under, and none where the property is
+    /// the `...` of 13.2.5, whose `value` is the source it copies from.
+    pub(crate) key: Option<Expr>,
     pub(crate) value: Expr,
     pub(crate) computed: bool,
     pub(crate) prototype: bool,
@@ -1906,8 +1908,22 @@ impl Parser {
         let mut depth = 1usize;
         let mut has_prototype = false;
         while !self.is("}") {
-            if self.is("...") {
-                return Err(Self::unsupported("object spread properties"));
+            // 13.2.5: `...` copies the own enumerable properties of what its
+            // AssignmentExpression answers.
+            if self.eat("...") {
+                let value = self.expression(1)?;
+                depth = depth.max(value.depth.saturating_add(1));
+                properties.push(ObjectProperty {
+                    key: None,
+                    value,
+                    computed: false,
+                    prototype: false,
+                    accessor: None,
+                });
+                if !self.eat(",") {
+                    break;
+                }
+                continue;
             }
             if self.is("*") {
                 return Err(Self::unsupported("generator methods"));
@@ -2001,7 +2017,7 @@ impl Parser {
                 .max(key.depth.saturating_add(1))
                 .max(value.depth.saturating_add(1));
             properties.push(ObjectProperty {
-                key,
+                key: Some(key),
                 value,
                 computed,
                 prototype,

@@ -21913,6 +21913,69 @@ impl RegisterVM {
                         }
                     }
                 }
+                // 13.2.5.5: the own enumerable properties of the source
+                // become data properties of the object the literal is making.
+                Instruction::SpreadDataProperties(register) => {
+                    let source = self.acc;
+                    // 7.3.25 step 3: undefined and null copy nothing at all.
+                    if source.is_string() {
+                        // 10.4.3 gives the String exotic object 7.1.18 would
+                        // make one own property per code unit.
+                        let length = heap
+                            .strings
+                            .length_of(source)
+                            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+                        for index in 0..u32::try_from(length).unwrap_or(u32::MAX) {
+                            self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+                            let key = PropertyKey::String(heap.intern_index(index)?);
+                            let unit = usize::try_from(index)
+                                .ok()
+                                .and_then(|index| heap.strings.char_code_at(source, index))
+                                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+                            let value = self.allocate_string(heap, &[unit])?;
+                            let target = self
+                                .read_reg(register)?
+                                .as_object()
+                                .ok_or(VMError::TypeError)?;
+                            heap.define_own_named(
+                                target,
+                                key,
+                                value,
+                                PropertyFlags::ordinary_data(),
+                            )?;
+                        }
+                    } else if let Some(object) = source.as_object() {
+                        for (key, enumerable) in heap.own_keys(object)? {
+                            if !enumerable {
+                                continue;
+                            }
+                            self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+                            let target = self
+                                .read_reg(register)?
+                                .as_object()
+                                .ok_or(VMError::TypeError)?;
+                            if heap.own_property_count(target).unwrap_or(usize::MAX)
+                                >= self.property_limit
+                            {
+                                return Err(VMError::PropertyLimit);
+                            }
+                            if heap
+                                .own_named_flags(object, key)?
+                                .is_some_and(|flags| flags.is_accessor)
+                            {
+                                return Err(VMError::Unsupported("a property that is an accessor"));
+                            }
+                            let indexed = Self::element_index_of(object, key, heap);
+                            let value = Self::own_property_value(object, key, indexed, heap)?;
+                            heap.define_own_named(
+                                target,
+                                key,
+                                value,
+                                PropertyFlags::ordinary_data(),
+                            )?;
+                        }
+                    }
+                }
                 Instruction::CreateRest { target, skip } => {
                     // 8.6.3 gives the rest parameter an Array of the
                     // arguments beyond the parameters before it.

@@ -1326,6 +1326,48 @@ fn a_compound_assignment_reaches_a_property() -> Result<(), Error> {
 }
 
 #[test]
+fn a_spread_of_13_2_5_copies_the_own_enumerable_properties_of_its_source() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend has no operation that copies the properties of
+    // another object, so only the engine answers.
+    for (source, answer) in [
+        ("JSON.stringify({...{x:1,y:2},z:3})", "{\"x\":1,\"y\":2,\"z\":3}"),
+        // A later property wins, and a spread writes over an earlier one.
+        ("JSON.stringify({z:0,...{z:1}})", "{\"z\":1}"),
+        ("JSON.stringify({...{z:1},z:0})", "{\"z\":0}"),
+        // 7.3.25 step 3: undefined and null copy nothing at all.
+        ("JSON.stringify({...null,...undefined})", "{}"),
+        // 7.1.18 makes an Object of a primitive, and 10.4.3 gives a String
+        // one own property per code unit.
+        ("JSON.stringify({...'ab'})", "{\"0\":\"a\",\"1\":\"b\"}"),
+        ("JSON.stringify({...7})", "{}"),
+        ("JSON.stringify({...[1,2]})", "{\"0\":1,\"1\":2}"),
+        // Only the own enumerable properties travel.
+        (
+            "var o={a:1};Object.defineProperty(o,'h',{value:2});JSON.stringify({...o})",
+            "{\"a\":1}",
+        ),
+        (
+            "var p={b:2};var o=Object.create(p);o.a=1;JSON.stringify({...o})",
+            "{\"a\":1}",
+        ),
+        // A Symbol key travels too, and the copy is a data property.
+        (
+            "var s=Symbol('k');var t={};t[s]=5;''+Object.getOwnPropertySymbols({...t}).length",
+            "1",
+        ),
+        (
+            "var d=Object.getOwnPropertyDescriptor({...{x:1}},'x');''+d.writable+d.enumerable+d.configurable",
+            "truetruetrue",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}
+
+#[test]
 fn a_label_of_14_13_names_the_statement_a_break_or_a_continue_leaves() -> Result<(), Error> {
     let mut host = SilentHost;
     let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;

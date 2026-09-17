@@ -160,7 +160,7 @@ impl Parser {
                 methods.push((
                     is_static,
                     ObjectProperty {
-                        key,
+                        key: Some(key),
                         value,
                         computed,
                         prototype: false,

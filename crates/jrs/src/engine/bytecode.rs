@@ -309,6 +309,11 @@ pub enum Instruction {
     /// method of the Script: the primitive comes back into the register and the
     /// instruction runs again.
     ToNumeric(Reg),
+
+    /// `CopyDataProperties` of 7.3.25 with no excluded name: the own
+    /// enumerable properties of the accumulator are defined on the object the
+    /// register holds, which 13.2.5.5 does for a `...` of an Object literal.
+    SpreadDataProperties(Reg),
     /// `acc = ToNumber(register)`, which 13.5.4 asks and which refuses the
     /// `BigInt` `ToNumeric` would answer.
     NumberOnly(Reg),
@@ -1069,6 +1074,7 @@ impl BytecodeFunction {
             | Instruction::Star(register)
             | Instruction::ToText(register)
             | Instruction::ToNumeric(register)
+            | Instruction::SpreadDataProperties(register)
             | Instruction::NumberOnly(register)
             | Instruction::Add(register)
             | Instruction::Sub(register)
