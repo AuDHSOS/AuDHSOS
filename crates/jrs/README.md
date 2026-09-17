@@ -875,7 +875,8 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same, before the iterators of 24.1.5 and 24.2.5 (outdated) | focused | `29cc550` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Map test/built-ins/Set --summary` | 587 | 1,169 | 336 (28.74%) | 240 (20.53%) | 593 (50.73%) |
 | The same, on the stack backend (focused) | focused | `29cc550` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Map test/built-ins/Set --summary` | 587 | 1,169 | 0 (0.00%) | 1,051 (89.91%) | 118 (10.09%) |
 | Complete pinned suite, including staging and Intl | full | `bee51e3` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 32,083 (31.17%) | 35,268 (34.26%) |
-| Complete pinned suite on the register engine | full | `1fc1014` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 42,318 (41.12%) | 19,616 (19.06%) | 40,991 (39.83%) |
+| Complete pinned suite on the register engine | full | `10ecace` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 42,340 (41.14%) | 19,630 (19.07%) | 40,955 (39.79%) |
+| Complete pinned suite on the register engine, before the `this` an arrow reads beside a captured name (outdated) | full | `1fc1014` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 42,318 (41.12%) | 19,616 (19.06%) | 40,991 (39.83%) |
 | Complete pinned suite on the register engine, before the private field of 6.2.13 (outdated) | full | `e3bab40` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 41,565 (40.38%) | 19,756 (19.19%) | 41,604 (40.42%) |
 | Complete pinned suite on the register engine, before the field of a class of 15.7.1 (outdated) | full | `fc9e271` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 41,204 (40.03%) | 19,754 (19.19%) | 41,967 (40.77%) |
 | Complete pinned suite on the register engine, before the spread property of 13.2.5 (outdated) | full | `425421f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 41,084 (39.92%) | 19,586 (19.03%) | 42,255 (41.05%) |
@@ -1873,7 +1874,9 @@ full run beside 6.2.13 were measured at tree
 that step gained 753 variants and lost none, and left fourteen variants
 failing: eight on an arrow that reads both `this` and a captured name, which
 answers the wrong one, and six on the `accessor` of a proposal the parser has
-no form of.
+no form of. The full run beside the `this` an arrow reads was measured at
+tree `e207e61494052794c9f43dd753ae7b617b3b806d`, which is the tree of
+`10ecace`; that step gained 22 variants and lost none.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
