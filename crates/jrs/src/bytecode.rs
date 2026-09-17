@@ -3390,7 +3390,41 @@ impl RegisterLowerer {
                     stable_function_identity: false,
                 },
             );
+            // 6.2.13 gives a class body inside another one a Private Name of
+            // its own for the same text, which stands where the outer one
+            // stood and would take the register of it here.
+            if shadowed.is_some() {
+                self.refuse("a private name a class body inside another one names again");
+                return None;
+            }
             private.push((name.clone(), register, shadowed));
+        }
+        // 15.7.14 makes one function per private method and per evaluation of
+        // the class body, which every instance carries. The binding stands
+        // here before the constructor is lowered, because the constructor
+        // captures it to add the method to the instance it is running for;
+        // the function itself is made once the prototype it is a method of
+        // exists.
+        let mut private_values = Vec::new();
+        for (name, _, _) in &class.private_methods {
+            let register = self.allocate_register()?;
+            self.active_binding_count = self.active_binding_count.checked_add(1)?;
+            self.max_binding_count = self.max_binding_count.max(self.active_binding_count);
+            let held = alloc::format!("{name}#");
+            let shadowed = self.bindings.insert(
+                held.clone(),
+                RegisterBinding {
+                    storage: RegisterBindingStorage::Register(register),
+                    value_type: Some(RegisterType::Unknown),
+                    mutable: false,
+                    stable_function_identity: false,
+                },
+            );
+            if shadowed.is_some() {
+                self.refuse("a private name a class body inside another one names again");
+                return None;
+            }
+            private_values.push((held, register, shadowed));
         }
         let value_type = self.lower_callable(&class.constructor, true, name)?;
         // 15.7.14 steps 6 through 8 tie the class to its heritage while the
@@ -3468,6 +3502,32 @@ impl RegisterLowerer {
                 },
             });
         }
+        // 15.7.14 makes the function of each private method a method of the
+        // prototype, or of the constructor where the body says `static`, and
+        // 7.3.26 adds a static one to the constructor at once.
+        for ((name, is_static, function), (held, _, _)) in
+            class.private_methods.iter().zip(&private_values)
+        {
+            let home = if *is_static { constructor } else { prototype };
+            let units: Vec<u16> = name.encode_utf16().collect();
+            self.lower_named(function, &units)?;
+            self.code.emit(Instruction::MakeMethod { home });
+            let binding = *self.bindings.get(held)?;
+            self.store_binding(binding);
+            if *is_static {
+                let key = *self.bindings.get(name)?;
+                let key_register = self.allocate_register()?;
+                self.load_binding(key);
+                self.code.emit(Instruction::Star(key_register));
+                self.load_binding(binding);
+                self.code.emit(Instruction::PrivateAccess {
+                    obj: constructor,
+                    key: key_register,
+                    op: crate::engine::bytecode::PrivateOp::AddMethod,
+                });
+                self.release_register(key_register)?;
+            }
+        }
         // 15.7.14 step 32 defines the static fields on the constructor, in
         // the order the class body names them, with the constructor as the
         // `this` of each Initializer.
@@ -3503,6 +3563,14 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Ldar(constructor));
         self.release_register(prototype)?;
         self.release_register(constructor)?;
+        for (name, register, shadowed) in private_values.into_iter().rev() {
+            match shadowed {
+                Some(shadowed) => self.bindings.insert(name, shadowed),
+                None => self.bindings.remove(&name),
+            };
+            self.active_binding_count = self.active_binding_count.checked_sub(1)?;
+            self.release_register(register)?;
+        }
         for (name, register, shadowed) in private.into_iter().rev() {
             match shadowed {
                 Some(shadowed) => self.bindings.insert(name, shadowed),
@@ -4404,6 +4472,26 @@ impl RegisterLowerer {
         arguments: &[Expr],
     ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
+        // 13.3.6.1 on a private element: 7.3.28 reads it off the object the
+        // call names, which is the `this` of the call.
+        if let ExprKind::PrivateName(name) = &key.kind {
+            let receiver = self.allocate_register()?;
+            self.lower(base)?;
+            self.code.emit(Instruction::Star(receiver));
+            let binding = self.bindings.get(name).copied()?;
+            let key_register = self.allocate_register()?;
+            self.load_binding(binding);
+            self.code.emit(Instruction::Star(key_register));
+            self.code.emit(Instruction::PrivateAccess {
+                obj: receiver,
+                key: key_register,
+                op: crate::engine::bytecode::PrivateOp::Get,
+            });
+            self.release_register(key_register)?;
+            let result = self.lower_dynamic_method_call(receiver, arguments)?;
+            self.release_register(receiver)?;
+            return Some(result);
+        }
         let base_type = self.lower(base)?;
         // 13.3.6.1 sends a primitive base through 7.1.18, whose Prototype
         // carries the method. The engine does that at run time, so the
@@ -5642,8 +5730,11 @@ impl RegisterLowerer {
     /// the element to the instance the constructor is running for.
     fn lower_private_field(&mut self, name: &str, value: Option<&Expr>) -> Option<RegisterFlow> {
         use crate::engine::bytecode::Instruction;
+        // A name that carries a second `#` names a private method, whose
+        // function the class body made once and whose binding this reads.
+        let method = name.strip_suffix('#');
         let this = self.bindings.get(THIS_BINDING).copied()?;
-        let binding = self.bindings.get(name).copied()?;
+        let binding = self.bindings.get(method.unwrap_or(name)).copied()?;
         let object = self.allocate_register()?;
         let key = self.allocate_register()?;
         self.load_binding(this);
@@ -5656,6 +5747,10 @@ impl RegisterLowerer {
                 let units: Vec<u16> = name.encode_utf16().collect();
                 self.lower_named(value, &units)?;
             }
+            None if method.is_some() => {
+                let held = self.bindings.get(name).copied()?;
+                self.load_binding(held);
+            }
             None => {
                 self.code.emit(Instruction::LdaUndefined);
             }
@@ -5663,7 +5758,11 @@ impl RegisterLowerer {
         self.code.emit(Instruction::PrivateAccess {
             obj: object,
             key,
-            op: crate::engine::bytecode::PrivateOp::Add,
+            op: if method.is_some() {
+                crate::engine::bytecode::PrivateOp::AddMethod
+            } else {
+                crate::engine::bytecode::PrivateOp::Add
+            },
         });
         self.release_register(key)?;
         self.release_register(object)?;
@@ -11352,6 +11451,11 @@ fn register_statement_references(
         Stmt::Field(name, value) => {
             if name.starts_with('#') {
                 names.insert(name.clone());
+                // A private method reads the Private Name beside the binding
+                // that holds the function.
+                if let Some(key) = name.strip_suffix('#') {
+                    names.insert(String::from(key));
+                }
             }
             if let Some(value) = value {
                 register_expression_references(value, names, nested_free_names)?;

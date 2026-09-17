@@ -142,6 +142,10 @@ pub(crate) struct Class {
     /// The `static` fields of 15.7.1, which 15.7.14 step 32 defines on the
     /// constructor in the order the class body names them.
     pub(crate) static_fields: Vec<(String, Option<Expr>)>,
+    /// The private methods of 15.7.1, each with whether it is `static` and the
+    /// function it holds, which 7.3.26 adds to every instance and 15.7.14
+    /// adds to the constructor.
+    pub(crate) private_methods: Vec<(String, bool, Expr)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -359,6 +363,10 @@ pub(crate) enum Stmt {
     Labelled(String, Box<Stmt>),
     /// `ClassFieldDefinition` of 15.7.1, which 15.7.15 defines on the
     /// instance before the body of the constructor runs.
+    ///
+    /// A name that carries a `#` names a private element of 6.2.13; one that
+    /// carries a second `#` behind it names a private method, whose value
+    /// stands in the binding of that name and not in an Initializer.
     Field(String, Option<Expr>),
     Function(String, Function),
     Return(Option<Expr>),

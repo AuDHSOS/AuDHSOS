@@ -179,6 +179,8 @@ impl Parser {
         self.private_names.extend(private_names.iter().cloned());
         let mut methods = Vec::new();
         let mut fields = Vec::new();
+        let mut private_methods = Vec::new();
+        let mut private_adds = Vec::new();
         let mut static_fields = Vec::new();
         let mut constructor = None;
         while !self.eat("}") {
@@ -294,9 +296,6 @@ impl Parser {
                 }
                 continue;
             }
-            if matches!(key.kind, ExprKind::PrivateName(_)) {
-                return Err(Self::unsupported("a private method"));
-            }
             let mut function = self.method_function(
                 None,
                 if async_method {
@@ -323,6 +322,20 @@ impl Parser {
             {
                 return Err(self.error("invalid class accessor parameters"));
             }
+            if let ExprKind::PrivateName(name) = &key.kind {
+                // 15.7.14 makes one function per evaluation of the class body
+                // and 7.3.26 adds it to each instance, before the fields run.
+                if accessor.is_some() {
+                    return Err(Self::unsupported("a private accessor"));
+                }
+                let name = name.clone();
+                let value = self.make(ExprKind::Function(function), 1, offset)?;
+                if !is_static {
+                    private_adds.push(Stmt::Field(alloc::format!("{name}#"), None));
+                }
+                private_methods.push((name, is_static, value));
+                continue;
+            }
             if is_constructor {
                 constructor = Some(function);
             } else {
@@ -342,13 +355,13 @@ impl Parser {
         // 15.7.15 runs the field Initializers of an instance before the body
         // of the constructor; a derived constructor binds its `this` only
         // where 13.3.7.1 has run, which this lowering has no place after.
-        if !fields.is_empty() && heritage.is_some() {
+        if !(fields.is_empty() && private_adds.is_empty()) && heritage.is_some() {
             return Err(Self::unsupported("a field of a derived class"));
         }
         // Step 8 of 10.2.2 runs the Initializers before 10.2.11 evaluates the
         // parameter list, and a field this lowering runs as the first
         // statement of the body runs after it.
-        if !fields.is_empty()
+        if !(fields.is_empty() && private_adds.is_empty())
             && constructor.as_ref().is_some_and(|constructor| {
                 constructor.parameters.iter().any(|parameter| {
                     parameter.default.is_some()
@@ -380,8 +393,13 @@ impl Parser {
                 ConstructorKind::BaseClass
             },
         });
+        // 15.7.15 adds the private methods of an instance before it runs the
+        // Initializers of its fields.
         for field in fields.into_iter().rev() {
             constructor.body.insert(0, field);
+        }
+        for add in private_adds.into_iter().rev() {
+            constructor.body.insert(0, add);
         }
         self.private_names.truncate(outer_private);
         constructor.source = Some(self.source_since(offset)?);
@@ -393,6 +411,7 @@ impl Parser {
                 constructor,
                 methods,
                 static_fields,
+                private_methods,
             })),
             1,
             offset,

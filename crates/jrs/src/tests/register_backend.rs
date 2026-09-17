@@ -1370,6 +1370,31 @@ fn a_private_element_of_6_2_13_is_reached_by_the_class_body_alone() -> Result<()
             "var r;try{eval('(class{#constructor})')}catch(e){r=e instanceof SyntaxError};''+r",
             "true",
         ),
+        // 15.7.14 makes one function per private method and per evaluation of
+        // the class body, which 7.3.26 adds to every instance before its
+        // fields run.
+        (
+            "var C=class{#m(){return 42}call(){return this.#m()}};''+new C().call()",
+            "42",
+        ),
+        (
+            "var C=class{#m(){return 1}same(o){return this.#m===o.#m}};''+new C().same(new C())",
+            "true",
+        ),
+        (
+            "var C=class{#v=2;#m(x){return x*this.#v}call(){return this.#m(3)}};''+new C().call()",
+            "6",
+        ),
+        // 7.3.29 step 4.b refuses a write to a method.
+        (
+            "var C=class{#m(){}w(){this.#m=1}};var r;try{new C().w()}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+        // 15.7.14 adds a static one to the constructor.
+        (
+            "var C=class{static #m(){return 5}static call(){return C.#m()}};''+C.call()",
+            "5",
+        ),
         // A class inside a method declares its own names, which the body
         // around it does not read.
         (
