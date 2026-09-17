@@ -9470,3 +9470,21 @@ fn an_indirect_eval_of_19_2_1_1_answers_out_of_the_global_environment() -> Resul
     );
     Ok(())
 }
+
+#[test]
+fn an_element_of_23_1_5_2_1_that_is_an_accessor_answers_through_its_getter() -> Result<(), Error> {
+    // 10.4.2.1 moves an index the attributes of 6.2.6 name into the Shape, so
+    // the step of 23.1.5.2.1 reads it with 7.3.2 and runs the getter.
+    differential_scripts(&[
+        "var a=[1];Object.defineProperty(a,'0',{get:function(){return 9}});var [v]=a;''+v",
+    ])?;
+    differential_scripts(&[
+        "var a=[1,2];Object.defineProperty(a,'1',{get:function(){return 9}});var r='';for(var x of a){r+=x}r",
+    ])?;
+    differential_scripts(&[
+        "var a=[1,2];Object.defineProperty(a,'0',{get:function(){return 8}});var r='';for(var x of a){r+=x}r",
+    ])?;
+    // The ordinary element of the store is unchanged.
+    differential_scripts(&["var a=[1,2,3];var [p,...q]=a;''+p+q.join('-')"])?;
+    differential_scripts(&["var a=[1,2];var r='';for(var x of a){r+=x}r"])
+}

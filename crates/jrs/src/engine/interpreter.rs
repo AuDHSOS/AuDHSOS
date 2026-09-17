@@ -508,6 +508,23 @@ pub enum Resume {
         /// two kinds of collection holds it.
         state: Root,
     },
+    /// 23.1.5.2.1, called as a method, read an element that is an accessor.
+    ///
+    /// The getter answers the element, and the return builds the result
+    /// object of 7.4.14 out of it and moves the iterator on.
+    IteratorResult {
+        /// Root holding the iterator the step is in.
+        state: Root,
+    },
+    /// 23.1.5.2.1 read an element that is an accessor property.
+    ///
+    /// The getter answers the element, and the step of 7.4.8 finishes on the
+    /// return: the value goes in the register beside the iterator, whose
+    /// position moves on.
+    IteratorElement {
+        /// First of the two registers the step works in.
+        state: Reg,
+    },
     /// `[[Get]]` of 10.1.8.1 called the getter of an accessor property.
     ///
     /// The getter answers into the accumulator, which is where every
@@ -827,6 +844,9 @@ pub struct RegisterVM {
     /// Whether that text is a Script 19.2.1 asked to have evaluated, rather
     /// than a unit 20.2.1.1 asked to have compiled.
     pending_script: bool,
+    /// What the next accessor call answers back into, where the read is not
+    /// the plain one of 10.1.8.1.
+    accessor_resume: Option<Resume>,
     /// Whether the unit this run entered is the Script of a Realm, which is
     /// what 19.2.1.1 evaluates a nested Script against.
     entry_is_realm_script: bool,
@@ -876,6 +896,15 @@ pub enum Compiled {
     /// The text is a Script, and the register lowering does not take it, which
     /// is a gap of the migration and no error of the Script.
     Unlowered,
+}
+
+/// What one step of 7.4.8 did.
+enum IteratorStep {
+    /// It answered whether the iterator is still running.
+    Answered(Value),
+    /// It called the getter of an element, and carries the code of the frame
+    /// that call opened, or none where a native answered at once.
+    Entered(Option<u32>),
 }
 
 /// Where a job of 9.5 left the run.
@@ -959,6 +988,7 @@ impl RegisterVM {
             pending_new_target: VALUE_UNDEFINED,
             pending_source: None,
             pending_script: false,
+            accessor_resume: None,
             entry_is_realm_script: false,
             direct_eval: false,
             pending_print: false,
@@ -4112,6 +4142,32 @@ impl RegisterVM {
                 realm,
             );
         }
+        // 23.1.5.2.1 step 10 reads the element with 7.3.2, which runs the
+        // getter of an accessor property; only a frame this call opens can
+        // call one.
+        if intrinsic == Intrinsic::ArrayIteratorPrototypeNext
+            && let Some(iterator) = call.receiver.as_object()
+            && let Some(pair) = Self::iterated_accessor(iterator, heap)?
+        {
+            heap.enter_scope();
+            let state = heap.push_root(call.receiver)?;
+            self.accessor_resume = Some(Resume::IteratorResult { state });
+            let entered = self.enter_accessor(
+                pair,
+                call.receiver,
+                None,
+                call.return_pc,
+                call.caller_code_id,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            )?;
+            if entered.is_none() {
+                self.finish_iterator_result(state, heap, realm)?;
+            }
+            return Ok(entered);
+        }
         // 20.1.2.7 step 4 walks the iterable it was given.
         if intrinsic == Intrinsic::ObjectFromEntries {
             let entries = self.call_argument(&call, 0, heap)?;
@@ -5450,7 +5506,7 @@ impl RegisterVM {
             arg_start: Reg(0),
             arg_count: 0,
             slot: 0,
-            resume: Some(Resume::Getter),
+            resume: Some(self.accessor_resume.take().unwrap_or(Resume::Getter)),
             construct: None,
             return_pc,
             caller_code_id,
@@ -13884,18 +13940,46 @@ impl RegisterVM {
     /// produced. An iterator whose `next` is not a native intrinsic is refused:
     /// calling a bytecode `next` from here needs a frame this operation does
     /// not open.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a step that may open a frame runs with what a call has"
+    )]
     fn iterator_next(
         &mut self,
         state: Reg,
+        return_pc: usize,
+        caller_code_id: Option<u32>,
         units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
         heap: &mut GenerationalHeap,
         realm: &Realm,
-    ) -> Result<Value, VMError> {
+    ) -> Result<IteratorStep, VMError> {
         let value_slot = Reg(state.0.checked_add(1).ok_or(VMError::InvalidRegister)?);
         let iterator = self.read_reg(state)?;
         let Some(reference) = iterator.as_object() else {
             return Err(type_error(heap, realm, "iterator is not an object"));
         };
+        if let Some(pair) = Self::iterated_accessor(reference, heap)? {
+            self.accessor_resume = Some(Resume::IteratorElement { state });
+            let entered = self.enter_accessor(
+                pair,
+                iterator,
+                None,
+                return_pc,
+                caller_code_id,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            )?;
+            if entered.is_none() {
+                // 10.1.8.1 step 3.b answered undefined without a frame, so
+                // the step is over already.
+                self.finish_iterator_element(state, heap)?;
+                return Ok(IteratorStep::Answered(VALUE_TRUE));
+            }
+            return Ok(IteratorStep::Entered(entered));
+        }
         let next_key = PropertyKey::String(heap.strings.intern("next")?);
         let next = heap
             .lookup_named(reference, next_key)?
@@ -13941,7 +14025,109 @@ impl RegisterVM {
             .transpose()?
             .unwrap_or(VALUE_UNDEFINED);
         self.write_reg(value_slot, if done { VALUE_UNDEFINED } else { value })?;
-        Ok(Value::from_bool(!done))
+        Ok(IteratorStep::Answered(Value::from_bool(!done)))
+    }
+
+    /// The accessor pair 23.1.5.2.1 would read at the position the iterator
+    /// stands, where the element is one.
+    ///
+    /// Only the `value` form of 23.1.5.1 is here: the `key` form reads no
+    /// element, and the `key+value` form answers a pair this step does not
+    /// build.
+    fn iterated_accessor(
+        iterator: ObjectRef,
+        heap: &mut GenerationalHeap,
+    ) -> Result<Option<Value>, VMError> {
+        let Some(ObjectKind::ArrayIterator {
+            target,
+            index,
+            kind: ArrayIterationKind::Value,
+        }) = heap.get_object(iterator).map(|entry| entry.kind.clone())
+        else {
+            return Ok(None);
+        };
+        let Some(object) = target.as_object() else {
+            return Ok(None);
+        };
+        // 10.4.2.1 keeps an ordinary index in the Elements store, which holds
+        // no accessor, so only an index that is missing there can be one.
+        if heap
+            .get_object(object)
+            .ok_or(VMError::TypeError)?
+            .elements
+            .and_then(|elements| heap.get_elements(elements))
+            .and_then(|store| store.get(index))
+            .is_some()
+        {
+            return Ok(None);
+        }
+        let key = PropertyKey::String(heap.intern_index(index)?);
+        Ok(heap
+            .lookup_named(object, key)?
+            .filter(|found| found.flags.is_accessor)
+            .map(|found| found.value))
+    }
+
+    /// Builds the result of 7.4.14 out of the element the getter answered and
+    /// moves the iterator on.
+    fn finish_iterator_result(
+        &mut self,
+        state: Root,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let iterator = heap
+            .root_value(state)
+            .and_then(Value::as_object)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let element = self.acc;
+        Self::advance_array_iterator(iterator, heap)?;
+        let result = Self::iterator_result(Some(element), heap, realm)?;
+        heap.exit_scope();
+        self.acc = result;
+        Ok(())
+    }
+
+    /// Step 10.c of 23.1.5.2.1, which moves the position on.
+    fn advance_array_iterator(
+        iterator: ObjectRef,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        if let Some(ObjectKind::ArrayIterator {
+            target,
+            index,
+            kind,
+        }) = heap.get_object(iterator).map(|entry| entry.kind.clone())
+        {
+            heap.set_object_kind(
+                iterator,
+                ObjectKind::ArrayIterator {
+                    target,
+                    index: index.saturating_add(1),
+                    kind,
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Finishes the step of 7.4.8 the getter of an element was in the middle
+    /// of: the accumulator holds the element, and the iterator moves on.
+    fn finish_iterator_element(
+        &mut self,
+        state: Reg,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        let value_slot = Reg(state.0.checked_add(1).ok_or(VMError::InvalidRegister)?);
+        let element = self.acc;
+        self.write_reg(value_slot, element)?;
+        let iterator = self
+            .read_reg(state)?
+            .as_object()
+            .ok_or(VMError::TypeError)?;
+        Self::advance_array_iterator(iterator, heap)?;
+        self.acc = VALUE_TRUE;
+        Ok(())
     }
 
     /// Produces the next key of a for-in enumeration, or undefined when the
@@ -17737,7 +17923,27 @@ impl RegisterVM {
                     return Ok(None);
                 }
                 Instruction::IteratorNext { state } => {
-                    self.acc = self.iterator_next(state, units, heap, realm)?;
+                    // 23.1.5.2.1 step 10 reads the element with 7.3.2, which
+                    // runs the getter of an accessor property; only a frame
+                    // this instruction opens can call one.
+                    match self.iterator_next(
+                        state,
+                        pc,
+                        current_code_id,
+                        units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    )? {
+                        IteratorStep::Answered(answer) => self.acc = answer,
+                        IteratorStep::Entered(code_id) => {
+                            if let Some(code_id) = code_id {
+                                current_code_id = Some(code_id);
+                                pc = 0;
+                            }
+                            return Ok(None);
+                        }
+                    }
                 }
                 Instruction::ForInNext { state } => {
                     self.acc = self.for_in_next(active_code, state, heap, realm)?;
@@ -17843,6 +18049,8 @@ impl RegisterVM {
                                 | Resume::CollectionWalk { .. }
                                 | Resume::CollectionInsert { .. }
                                 | Resume::IteratorWalk { .. }
+                                | Resume::IteratorElement { .. }
+                                | Resume::IteratorResult { .. }
                                 | Resume::Length { .. }
                                 | Resume::Descriptor { .. }
                                 | Resume::Getter
@@ -17888,6 +18096,14 @@ impl RegisterVM {
                                 Resume::IteratorWalk { state } => self.step_iterator_walk(
                                     state, call, units, feedback, heap, realm,
                                 )?,
+                                Resume::IteratorElement { state } => {
+                                    self.finish_iterator_element(state, heap)?;
+                                    None
+                                }
+                                Resume::IteratorResult { state } => {
+                                    self.finish_iterator_result(state, heap, realm)?;
+                                    None
+                                }
                                 Resume::Length { .. } => self.finish_array_like_length(
                                     resume,
                                     pc,
@@ -19473,16 +19689,20 @@ mod tests {
         let mut heap = GenerationalHeap::new();
         let realm = Realm::new(&mut heap).unwrap();
         let mut vm = RegisterVM::with_limits(1000, 8, 8);
+        let mut feedback = FeedbackVector::for_code(&empty);
 
         // A primitive is not an iterator.
         vm.write_reg(Reg(0), Value::from_smi(1)).unwrap();
         assert!(matches!(
             vm.iterator_next(
                 Reg(0),
+                0,
+                None,
                 CodeUnits {
                     table: CodeTable::new(&roots),
                     active: &empty,
                 },
+                &mut feedback,
                 &mut heap,
                 &realm
             ),
@@ -19498,10 +19718,13 @@ mod tests {
         assert!(matches!(
             vm.iterator_next(
                 Reg(0),
+                0,
+                None,
                 CodeUnits {
                     table: CodeTable::new(&roots),
                     active: &empty,
                 },
+                &mut feedback,
                 &mut heap,
                 &realm
             ),
@@ -19521,10 +19744,13 @@ mod tests {
         assert!(matches!(
             vm.iterator_next(
                 Reg(0),
+                0,
+                None,
                 CodeUnits {
                     table: CodeTable::new(&roots),
                     active: &empty,
                 },
+                &mut feedback,
                 &mut heap,
                 &realm
             ),
