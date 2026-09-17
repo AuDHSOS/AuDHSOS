@@ -814,8 +814,9 @@ Size: L.
 56. One place that writes text into the encoding the file names, which
     is `record::write_in`. Built, which D-277 records.
 57. The room the parent of a `balance_quick` has, counted before the
-    routine is chosen. Built, which D-278 records. Four files that
-    refused the balance early now do the work and reach the deadline.
+    routine is chosen. Built, which D-278 records.
+58. The schema a constraint reads, kept beside the cookie it was read
+    under. Built, which D-279 records.
 
 ### Done when
 

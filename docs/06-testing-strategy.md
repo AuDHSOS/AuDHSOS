@@ -5739,6 +5739,10 @@ Document 16 step Q8.
   tree under that page, so two hundred `CREATE TABLE` statements over
   512-byte pages leave a schema of two hundred rows that
   `PRAGMA integrity_check` answers `ok` for.
+- The bytes a constraint reads the schema out of are taken again where
+  the schema cookie moves, so a table written again under the same name
+  is held to the `CHECK`, the generated column and the `DEFAULT` it
+  carries now and not to the ones it carried before.
 
 ## 6.7 CI pipeline
 

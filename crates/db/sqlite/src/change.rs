@@ -385,6 +385,12 @@ const SCHEMA: [Affinity; 5] = [
 pub struct Writer {
     /// The pages of it.
     pages: Pages,
+    /// The bytes of the file as it stood under the schema cookie beside
+    /// them, which a constraint reads the schema out of.
+    ///
+    /// A statement that writes n rows would otherwise build the file
+    /// once per row, which is O(n) in its pages each time.
+    schema_bytes: Option<(u32, Vec<u8>)>,
     /// The header beside them, which every commit writes again.
     header: Header,
     /// The mode a commit writes the rollback journal under.
@@ -478,6 +484,7 @@ impl Writer {
         let pages = Pages::new(page_size, reserved)?;
         Ok(Writer {
             pages,
+            schema_bytes: None,
             mode: Mode::Delete,
             nonce: 0,
             random: crate::random::Source::default(),
@@ -541,6 +548,7 @@ impl Writer {
         let pages = Pages::opened(image, &header)?;
         Ok(Writer {
             pages,
+            schema_bytes: None,
             header,
             mode: Mode::Delete,
             nonce: 0,
@@ -6428,8 +6436,36 @@ impl Writer {
         rowid: i64,
         written: Conflict,
     ) -> Result<bool, Error> {
-        let bytes = self.image();
-        let database = Database::open_collating(&bytes, self.collating)?;
+        // A constraint reads the schema and no row: a `CHECK` reaches
+        // no table and a generated column reaches none either, so the
+        // bytes taken under one schema cookie answer for every row a
+        // statement writes under it. Building them per row costs O(n)
+        // in the pages of the file, which is O(n²) over a statement that
+        // writes n rows.
+        let cookie = self.header.schema_cookie;
+        let bytes = match self.schema_bytes.take() {
+            Some((held, bytes)) if held == cookie => bytes,
+            _ => self.image(),
+        };
+        let answered = self.checked(&bytes, table, values, rowid, written);
+        self.schema_bytes = Some((cookie, bytes));
+        answered
+    }
+
+    /// The same, against the bytes the schema was read out of.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the constraints of the table refuse the row with.
+    fn checked(
+        &mut self,
+        bytes: &[u8],
+        table: &Table,
+        values: &mut [Value],
+        rowid: i64,
+        written: Conflict,
+    ) -> Result<bool, Error> {
+        let database = Database::open_collating(bytes, self.collating)?;
         // `sqlite3ComputeGeneratedColumns` runs before the opcode that
         // holds the row to the types of the table and before the
         // constraints.

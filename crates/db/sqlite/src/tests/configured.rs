@@ -317,3 +317,42 @@ fn a_tree_over_short_pages_grows_past_a_full_parent() {
         alloc::vec![alloc::vec![Value::Text(b"ok".to_vec())]]
     );
 }
+
+/// The bytes a constraint reads the schema out of are taken again
+/// where the schema cookie moves, so a table written again under the
+/// same name is held to the constraints it carries now.
+#[test]
+fn what_a_constraint_reads_after_the_schema_changed() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE t(a CHECK(a > 0), b AS (a * 2), c NOT NULL DEFAULT 7)")
+        .unwrap();
+    writer.run(b"INSERT INTO t(a) VALUES(1)").unwrap();
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO t(a) VALUES(-1)")
+            .unwrap_err()
+            .message(),
+        "CHECK constraint failed: a > 0"
+    );
+    // The same name, other constraints: the cookie moved, so the bytes
+    // the check reads are taken again.
+    writer.run(b"DROP TABLE t").unwrap();
+    writer
+        .run(b"CREATE TABLE t(a CHECK(a < 0), b AS (a * 3), c NOT NULL DEFAULT 9)")
+        .unwrap();
+    writer.run(b"INSERT INTO t(a) VALUES(-1)").unwrap();
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO t(a) VALUES(1)")
+            .unwrap_err()
+            .message(),
+        "CHECK constraint failed: a < 0"
+    );
+    let image = writer.written();
+    let database = Database::open(&image).expect("a database");
+    assert_eq!(
+        rows(&database, b"SELECT a, b, c FROM t"),
+        alloc::vec![alloc::vec![Value::Int(-1), Value::Int(-3), Value::Int(9)]]
+    );
+}

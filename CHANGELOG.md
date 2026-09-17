@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` keeps the bytes a constraint reads the schema out of
+  beside the cookie they were taken under, so a statement that writes n
+  rows reads the schema once rather than building the file per row: an
+  `INSERT` of a hundred thousand rows of two hundred bytes goes from
+  longer than a minute to four seconds. D-279 records it.
+  Catalog 6.6.199.
+
 - `db-sqlite` counts the room in the parent before it chooses
   `balance_quick` and leaves the leaf to the balance proper where the
   parent has none, so a tree over 512-byte pages grows past nine hundred
