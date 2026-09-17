@@ -279,11 +279,11 @@ fn layout_fallback_regional_han_variations_and_determinism() {
     assert_eq!(first.view().write_bytes(&mut a), Ok(a.len()));
     assert_eq!(second.view().write_bytes(&mut b), Ok(b.len()));
     assert_eq!(a, b);
-    assert_eq!(&a[..8], b"TEXT\x01\0\0\0");
+    assert_eq!(&a[..8], b"TEXT\x02\0\0\0");
     let digest = a.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
         (h ^ u64::from(*b)).wrapping_mul(0x100_0000_01b3)
     });
-    assert_eq!(digest, 0x52b0_a4c5_021b_625d);
+    assert_eq!(digest, 0x937f_a806_1318_a96c);
     assert!(first.view().write_bytes(&mut []).is_err());
 }
 #[test]

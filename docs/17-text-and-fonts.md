@@ -641,8 +641,13 @@ affinity, and selection queries merge adjacent visual cluster rectangles.
 GDEF carets use instance coordinates, including unhinted TrueType point carets;
 missing carets use fractional interpolation. Deleted glyph clusters retain
 zero-width cursor intervals. Overlapping source ranges from multiple
-substitution followed by ligation merge before grapheme geometry is computed. Output serialization is explicit
-little-endian, versioned, and contains no padding.
+substitution followed by ligation merge before grapheme geometry is computed.
+Output serialization is explicit little-endian, versioned, and contains no
+padding. The version number denotes one record layout, and a reader selects its
+record layout by that number alone. Version 1, written as `TEXT\x01`, gives each
+run record a `Fixed` baseline offset after its scale. Version 2, written as
+`TEXT\x02`, is version 1 without that field, because a run carries no baseline
+offset (D-171); every other record is unchanged.
 
 Input is capped at 65,536 Unicode scalars. Each owned growing buffer is capped
 at 1,048,576 entries. No-width layout shapes only mandatory-break candidates.
@@ -672,7 +677,7 @@ of them carrying a `BASE` table whose default baseline is ideographic, and
 asserts that every glyph's y equals `Line::baseline` and that the serialized
 output is byte-identical with and without that table (D-171). Layout and
 measure agree in every case. Separately allocated inputs serialize identically;
-debug/release assert FNV-1a-64 `52b0a4c5021b625d` for the mixed-script fixture.
+debug/release assert FNV-1a-64 `937fa8061318a96c` for the mixed-script fixture.
 The complete pure stack has 110 host tests and two doctests; allocator-free
 builds have 103 host tests. All Unicode gates, regeneration, Clippy, bare-target
 builds, and fourteen fuzz regression seeds pass. Product coverage is

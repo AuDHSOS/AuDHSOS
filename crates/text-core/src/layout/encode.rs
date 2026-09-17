@@ -38,7 +38,7 @@ const fn script_id(script: Script) -> u16 {
     script as u16
 }
 impl LayoutView<'_> {
-    /// Size of the version-one little-endian numeric encoding.
+    /// Size of the version-two little-endian numeric encoding.
     /// # Errors
     /// Returns a numeric size overflow.
     pub fn encoded_len(self) -> Result<usize, TextError> {
@@ -52,7 +52,7 @@ impl LayoutView<'_> {
     }
     fn encode(self, out: Option<&mut [u8]>) -> Result<usize, TextError> {
         let mut w = Writer { bytes: out, at: 0 };
-        w.put(b"TEXT\x01\0\0\0")?;
+        w.put(b"TEXT\x02\0\0\0")?;
         w.put(&18_u16.to_le_bytes())?;
         w.put(&self.info.generation.to_le_bytes())?;
         w.put(&[match self.info.role {

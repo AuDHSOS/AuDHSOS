@@ -787,7 +787,9 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   consumer read a constant. This track places every run on one alphabetic
   baseline and reads no `BASE` table; `Line::baseline` remains the computed
   alphabetic coordinate of a line. The serialized layout stream loses the
-  field and the mixed-script fixture digest becomes `52b0a4c5021b625d`.
+  field and rises to `TEXT\x02`, because the version number denotes one record
+  layout: version 1 carries the per-run baseline offset, version 2 does not.
+  The mixed-script fixture digest becomes `937fa8061318a96c`.
 
 - 10.15 states what the transport glue of Phase 15 has to do about the
   ring: `RING_CAPACITY` is 4072 bytes and a TLS record is up to 16640, so
