@@ -98,6 +98,12 @@ pub enum Error {
     DistinctWindow,
     /// A `*` written where the statement reads no table.
     NoTables,
+    /// A `CREATE INDEX` over a table SQLite keeps for itself, named.
+    NotIndexable(Vec<u8>),
+    /// A `CREATE INDEX` over a view, which holds no row of its own.
+    IndexedView,
+    /// A `DROP INDEX` of an index a `UNIQUE` or a `PRIMARY KEY` made.
+    ConstraintIndex,
     /// A `HAVING` on a statement that groups nothing.
     Having,
     /// Two sides of a compound that answer different numbers of columns.
@@ -309,6 +315,16 @@ impl Error {
                 alloc::format!("misuse of aggregate function {}()", shown(name))
             }
             Error::NoTables => alloc::string::String::from("no tables specified"),
+            Error::NotIndexable(name) => {
+                alloc::format!("table {} may not be indexed", shown(name))
+            }
+            Error::IndexedView => alloc::string::String::from("views may not be indexed"),
+            Error::ConstraintIndex => alloc::string::String::from(
+                "index associated with UNIQUE or PRIMARY KEY constraint cannot be dropped",
+            ),
+            Error::Schema(schema::Error::IndexColumn(name)) => {
+                alloc::format!("no such column: {}", shown(name))
+            }
             Error::GroupedAggregate => alloc::string::String::from(
                 "aggregate functions are not allowed in the GROUP BY clause",
             ),
@@ -1740,6 +1756,18 @@ impl<'a> Database<'a> {
                 .iter()
                 .find(|kept| kept.index.name.eq_ignore_ascii_case(name))
                 .map(|kept| (&kept.index, kept.root))
+        })
+    }
+
+    /// Whether the index of `name` is one a `UNIQUE` or a `PRIMARY KEY`
+    /// made, which carries no statement of its own.
+    #[must_use]
+    pub fn constrained(&self, name: &[u8]) -> bool {
+        self.tables.iter().any(|stored| {
+            stored
+                .indexes
+                .iter()
+                .any(|kept| kept.index.name.eq_ignore_ascii_case(name) && kept.sql.is_empty())
         })
     }
 

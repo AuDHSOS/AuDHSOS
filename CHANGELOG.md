@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` holds a `CREATE INDEX` to what `sqlite3CreateIndex` holds
+  it to: the table is there, it is no view, and its name is not one
+  SQLite keeps for itself. A `DROP INDEX` of an index a `UNIQUE` or a
+  `PRIMARY KEY` made is refused, and `CREATE INDEX [i1]` names the index
+  with its quotes taken off. D-268 records it. Catalog 6.6.192.
+
 - `db-sqlite` refuses a compound in the words the C library refuses it
   with: two cores that answer different numbers of columns name the word
   that joins them, two `VALUES` name the rows, and an `ORDER BY` or a
@@ -120,6 +126,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   highest of the four is the pool's.
 
 ### Fixed
+
+- An index entry in `db-sqlite` holds the value the row holds and not
+  the one the statement wrote, so a row written into a column that
+  converts what it is given is found through the index and `PRAGMA
+  integrity_check` answers `ok` for it. D-268 records it. Catalog
+  6.6.192.
+
+- A constraint in `db-sqlite` that says `ON CONFLICT ROLLBACK` undoes
+  the transaction the statement runs in and ends it, where the engine
+  answered it as `ABORT` and left the transaction open. D-268 records
+  it. Catalog 6.6.192.
 
 - `db-sqlite` reads a number written with digit separators as the
   number the separators are taken out of, so `1.1_1` is the real 1.11

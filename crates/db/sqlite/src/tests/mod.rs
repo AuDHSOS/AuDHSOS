@@ -31,6 +31,7 @@ mod header;
 mod image;
 mod index;
 mod indexexpr;
+mod indexing;
 mod insteadof;
 mod journal;
 mod json;

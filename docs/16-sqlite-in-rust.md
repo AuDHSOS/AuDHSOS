@@ -787,6 +787,9 @@ Size: L.
     move. Built, which D-266 records.
 47. The words a compound is refused with, and which column a term of
     its `ORDER BY` counts to. Built, which D-267 records.
+48. What an index entry holds, what a `CREATE INDEX` and a `DROP INDEX`
+    are held to, and what `ON CONFLICT ROLLBACK` undoes. Built, which
+    D-268 records.
 
 ### Done when
 
@@ -796,8 +799,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 72 386 cases in 703 files, 59 521
-pass, 2953 answer differently, and 9912 name something the engine
+under the `tclsh` of the machine. Of 72 426 cases in 703 files, 59 641
+pass, 2884 answer differently, and 9901 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts

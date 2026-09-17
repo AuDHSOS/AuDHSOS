@@ -63,7 +63,7 @@ pub enum Error {
     KeyExpression,
     /// An index term that names a column the table it is over does not
     /// hold.
-    IndexColumn,
+    IndexColumn(Vec<u8>),
     /// An index term that names a column under a table or a schema,
     /// which `sqlite3ResolveSelfReference` refuses under `NC_IdxExpr`.
     IndexDot,
@@ -467,7 +467,7 @@ pub fn index(
                 .columns
                 .iter()
                 .position(|column| column.name.eq_ignore_ascii_case(&name))
-                .ok_or(Error::IndexColumn)?;
+                .ok_or_else(|| Error::IndexColumn(name.clone()))?;
             let held = table
                 .columns
                 .get(at)

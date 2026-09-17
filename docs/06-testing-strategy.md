@@ -5568,6 +5568,28 @@ Document 16 step Q8.
 - A term no core answers is refused `1st ORDER BY term does not match
   any column in the result set`, naming which term it is.
 
+### 6.6.192 What an index is refused with (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A `CREATE INDEX` over a table SQLite keeps for itself is refused
+  `table sqlite_master may not be indexed`, over a view `views may not
+  be indexed`, over a table that is not there `no such table:
+  main.nosuch`, and over a column the table does not hold `no such
+  column: nosuch`.
+- `CREATE INDEX [i1]` over a name the schema holds is refused `index i1
+  already exists`, with the quotes taken off, where `CREATE TABLE [t1]`
+  keeps them.
+- A `DROP INDEX` of an index that is not there is refused `no such
+  index: nosuch`, and of one a `UNIQUE` or a `PRIMARY KEY` made `index
+  associated with UNIQUE or PRIMARY KEY constraint cannot be dropped`.
+- An entry holds the value the row holds, so a row written
+  `INSERT INTO t1 VALUES('1.234e5',1)` into a column of integer affinity
+  is found by `WHERE a=123400` and `PRAGMA integrity_check` answers
+  `ok`.
+- A constraint that says `ON CONFLICT ROLLBACK` undoes the transaction
+  the statement runs in and ends it, where `ABORT` leaves it open.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

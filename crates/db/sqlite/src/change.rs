@@ -419,10 +419,10 @@ pub struct Writer {
     /// one. A connection outside `BEGIN` holds none and commits every
     /// statement of its own.
     began: Option<Header>,
-    /// Whether the statement running now stopped where it stood, which
-    /// is `OE_Fail`: the rows it wrote before that stand, and the
-    /// refusal carries the message of the constraint all the same.
-    stopped: bool,
+
+    /// What the statement running now does beyond refusing the row
+    /// where it breaks a constraint.
+    refusing: Refusing,
     /// The savepoints open now, the outermost first, each holding the
     /// file as it stood when the `SAVEPOINT` ran.
     saved: Vec<Saved>,
@@ -476,7 +476,7 @@ impl Writer {
             writing: 0,
             deferred: 0,
             began: None,
-            stopped: false,
+            refusing: Refusing::Abort,
             saved: Vec::new(),
             returned: Vec::new(),
             making_own: false,
@@ -538,7 +538,7 @@ impl Writer {
             writing: 0,
             deferred: 0,
             began: None,
-            stopped: false,
+            refusing: Refusing::Abort,
             saved: Vec::new(),
             returned: Vec::new(),
             making_own: false,
@@ -1232,6 +1232,12 @@ impl Writer {
             }
             crate::ast::Dropped::Index => {
                 if let Some((_, root)) = database.index(name) {
+                    // `sqlite3DropIndex` refuses an index a `UNIQUE` or
+                    // a `PRIMARY KEY` made, which stands and falls with
+                    // the constraint that made it.
+                    if database.constrained(name) {
+                        return Err(Error::ConstraintIndex);
+                    }
                     roots.push(root);
                     held = true;
                 }
@@ -1378,7 +1384,7 @@ impl Writer {
             self.pages.mark();
         }
         let held = self.header;
-        self.stopped = false;
+        self.refusing = Refusing::Abort;
         self.writing = 0;
         self.returned.clear();
         let ran = self.ran(sql);
@@ -1398,9 +1404,25 @@ impl Writer {
                 // wrote no row that stands, and one that stops where it
                 // stands keeps what it wrote: `sqlite3_changes` counts
                 // the rows that stand either way.
-                let stands = if self.stopped { self.writing } else { 0 };
+                let stands = if matches!(self.refusing, Refusing::Fail) {
+                    self.writing
+                } else {
+                    0
+                };
                 self.counts_step(stands);
-                if !self.stopped {
+                // `OE_Rollback` undoes the whole transaction and ends
+                // it, which is `sqlite3RollbackAll` where the statement
+                // runs inside one and the same pages either way where
+                // it runs on its own.
+                if matches!(self.refusing, Refusing::Rollback) {
+                    let was = self.began.take().unwrap_or(held);
+                    self.saved.clear();
+                    self.deferred = 0;
+                    self.pages.rollback();
+                    self.header = was;
+                    return Err(error);
+                }
+                if matches!(self.refusing, Refusing::Abort) {
                     if self.began.is_none() {
                         self.pages.rollback();
                     } else {
@@ -1603,7 +1625,7 @@ impl Writer {
                 // foreign key held at its end pointing at no row is not
                 // written, and it stays open.
                 if self.deferred != 0 {
-                    self.stopped = true;
+                    self.refusing = Refusing::Fail;
                     return Err(Error::Foreign);
                 }
                 let was = self.began.take().ok_or(Error::NoTransaction)?;
@@ -1681,7 +1703,7 @@ impl Writer {
         // it, so a foreign key held at the end of the transaction is
         // held there and the savepoint stays open.
         if opener && self.deferred != 0 {
-            self.stopped = true;
+            self.refusing = Refusing::Fail;
             return Err(Error::Foreign);
         }
         self.saved.truncate(at);
@@ -2852,6 +2874,9 @@ impl Writer {
                 )
             }
         };
+        if let Definition::Index(_) = definition {
+            self.indexable(&over)?;
+        }
         if self.may_name((&name, written_name), already, &definition)? {
             return Ok(());
         }
@@ -2957,8 +2982,14 @@ impl Writer {
         };
         if same {
             // `sqlite3StartTable` writes the name as the statement
-            // wrote it, which `%T` of the token answers with its quotes.
-            return Err(Error::Exists(held.to_vec(), written.to_vec()));
+            // wrote it, which `%T` of the token answers with its
+            // quotes, and `sqlite3CreateIndex` writes the name with its
+            // quotes taken off.
+            let shown = match making {
+                Making::Index => name,
+                Making::Table => written,
+            };
+            return Err(Error::Exists(held.to_vec(), shown.to_vec()));
         }
         let kind = if making == Making::Index {
             b"table"
@@ -2992,6 +3023,33 @@ impl Writer {
         };
         self.reserved(name)?;
         self.already(held, if_not_exists, making)
+    }
+
+    /// Whether a `CREATE INDEX` may be over this table, which is
+    /// `sqlite3CreateIndex`: the table has to be there, a name SQLite
+    /// keeps for itself may not be indexed, and a view holds no row of
+    /// its own to hold an entry for.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::IndexedView`], [`Error::NoTable`] and
+    /// [`Error::NotIndexable`] name which of the three it is.
+    fn indexable(&self, over: &[u8]) -> Result<(), Error> {
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        if database.view(over).is_some() {
+            return Err(Error::IndexedView);
+        }
+        if database.table(over).is_none() {
+            return Err(Error::NoTable(schema_named_as(over)));
+        }
+        if over
+            .get(..7)
+            .is_some_and(|head| head.eq_ignore_ascii_case(b"sqlite_"))
+        {
+            return Err(Error::NotIndexable(over.to_vec()));
+        }
+        Ok(())
     }
 
     /// Whether the name is one this crate may write, which is
@@ -3089,11 +3147,12 @@ impl Writer {
         let (entries, collations) = {
             let bytes = self.image();
             let database = Database::open(&bytes)?;
-            // `sqlite3CreateIndex` names the schema the table would
-            // stand in.
+            // The statement was held to a table that is there before
+            // the row was written, so the name is one the schema holds
+            // and the refusal is what this reads it with.
             let (table, _) = database
                 .table(over)
-                .ok_or_else(|| Error::NoTable(schema_named_as(over)))?;
+                .ok_or(Error::NoTable(schema_named_as(over)))?;
             let read = crate::schema::index(arena, index, sql, table)?;
             let collations = collations_of(&read);
             let over = Over {
@@ -3729,17 +3788,13 @@ impl Writer {
                     self.upsert_keyed(into, clause, named, &held)?,
                 ));
             }
-            match resolved(into.conflict, into.kept, index) {
+            let answer = resolved(into.conflict, into.kept, index);
+            match answer {
                 Conflict::Ignore => return Ok(Conflicted::Over),
-                Conflict::Fail => {
-                    self.stopped = true;
-                    return Err(Error::Unique(Self::shown_key_of(
-                        into.table, into.kept, index,
-                    )));
-                }
                 Conflict::Replace
                     if self.replaced_keyed(into.root, into.kept, into.table, &held)? => {}
                 _ => {
+                    self.refusing(answer);
                     return Err(Error::Unique(Self::shown_key_of(
                         into.table, into.kept, index,
                     )));
@@ -3932,12 +3987,12 @@ impl Writer {
         }
         match answer {
             Conflict::Ignore => return Ok(false),
-            Conflict::Fail => self.stopped = true,
             Conflict::Replace if self.replaced_keyed(root, kept, table, key)? => {
                 return Ok(true);
             }
             _ => {}
         }
+        self.refusing(answer);
         Err(Error::Unique(Self::shown_keys_of(table)))
     }
 
@@ -4238,15 +4293,16 @@ impl Writer {
         let Some((index, other)) = self.conflicting(kept, table, named, &key, Some(&was))? else {
             return Ok(true);
         };
-        match resolved(written, kept, index) {
-            Conflict::Ignore => Ok(false),
-            Conflict::Fail => {
-                self.stopped = true;
-                Err(Error::Unique(Self::shown_key_of(table, kept, index)))
+        let answer = resolved(written, kept, index);
+        match answer {
+            Conflict::Ignore => return Ok(false),
+            Conflict::Replace if self.replaced_keyed(root, kept, table, &other)? => {
+                return Ok(true);
             }
-            Conflict::Replace if self.replaced_keyed(root, kept, table, &other)? => Ok(true),
-            _ => Err(Error::Unique(Self::shown_key_of(table, kept, index))),
+            _ => {}
         }
+        self.refusing(answer);
+        Err(Error::Unique(Self::shown_key_of(table, kept, index)))
     }
 
     /// The entries of one index written into the tree at `root`, which
@@ -4574,17 +4630,13 @@ impl Writer {
                     (rowid, other),
                 )?));
             }
-            match resolved(into.conflict, into.kept, index) {
+            let answer = resolved(into.conflict, into.kept, index);
+            match answer {
                 crate::ast::Conflict::Ignore => return Ok(Conflicted::Over),
-                crate::ast::Conflict::Fail => {
-                    self.stopped = true;
-                    return Err(Error::Unique(Self::shown_key_of(
-                        into.table, into.kept, index,
-                    )));
-                }
                 crate::ast::Conflict::Replace
                     if self.replaced(into.root, into.kept, into.table, &held)? => {}
                 _ => {
+                    self.refusing(answer);
                     return Err(Error::Unique(Self::shown_key_of(
                         into.table, into.kept, index,
                     )));
@@ -5985,15 +6037,14 @@ impl Writer {
         let Some((index, other)) = found else {
             return Ok(true);
         };
-        match resolved(written, kept, index) {
-            Conflict::Ignore => Ok(false),
-            Conflict::Fail => {
-                self.stopped = true;
-                Err(Error::Unique(Self::shown_key_of(table, kept, index)))
-            }
-            Conflict::Replace if self.replaced(root, kept, table, &other)? => Ok(true),
-            _ => Err(Error::Unique(Self::shown_key_of(table, kept, index))),
+        let answer = resolved(written, kept, index);
+        match answer {
+            Conflict::Ignore => return Ok(false),
+            Conflict::Replace if self.replaced(root, kept, table, &other)? => return Ok(true),
+            _ => {}
         }
+        self.refusing(answer);
+        Err(Error::Unique(Self::shown_key_of(table, kept, index)))
     }
 
     /// The entry every index over the table holds for one row, written,
@@ -6164,14 +6215,11 @@ impl Writer {
             let mut shown = table.name.clone();
             shown.push(b'.');
             shown.extend_from_slice(&column.name);
-            match answer {
-                Conflict::Ignore => return Ok(false),
-                Conflict::Fail => {
-                    self.stopped = true;
-                    return Err(Error::NotNull(shown));
-                }
-                _ => return Err(Error::NotNull(shown)),
+            if answer == Conflict::Ignore {
+                return Ok(false);
             }
+            self.refusing(answer);
+            return Err(Error::NotNull(shown));
         }
         let row = Held {
             table,
@@ -6191,14 +6239,22 @@ impl Writer {
         let Some(shown) = database.refused_check(&table.name, &row)? else {
             return Ok(true);
         };
-        match written {
-            Conflict::Ignore => Ok(false),
-            Conflict::Fail => {
-                self.stopped = true;
-                Err(Error::Check(shown))
-            }
-            _ => Err(Error::Check(shown)),
+        if written == Conflict::Ignore {
+            return Ok(false);
         }
+        self.refusing(written);
+        Err(Error::Check(shown))
+    }
+
+    /// What a broken constraint does to the statement beyond refusing
+    /// the row: `OE_Fail` stops the statement where it stands and
+    /// `OE_Rollback` undoes the transaction it runs in.
+    const fn refusing(&mut self, written: Conflict) {
+        self.refusing = match written {
+            Conflict::Fail => Refusing::Fail,
+            Conflict::Rollback => Refusing::Rollback,
+            _ => Refusing::Abort,
+        };
     }
 
     /// What a row whose key the table already holds does, which is
@@ -6220,12 +6276,12 @@ impl Writer {
         }
         match written {
             Conflict::Ignore => return Ok(false),
-            Conflict::Fail => self.stopped = true,
             Conflict::Replace if self.replaced(root, kept, table, &keyed_as(key))? => {
                 return Ok(true);
             }
             _ => {}
         }
+        self.refusing(written);
         Err(Error::Unique(Self::shown_column(table, alias)))
     }
 
@@ -6430,6 +6486,22 @@ pub(crate) struct Over<'a> {
     pub encoding: Encoding,
 }
 
+/// What the statement running now does beyond refusing the row where
+/// it breaks a constraint, which is the `ON CONFLICT` clause the
+/// constraint carries.
+#[derive(Clone, Copy)]
+enum Refusing {
+    /// `OE_Abort`: the statement leaves the file as it found it, and a
+    /// transaction it runs inside stays open.
+    Abort,
+    /// `OE_Fail`: the statement stops where it stands, so the rows it
+    /// wrote before that stand.
+    Fail,
+    /// `OE_Rollback`: the transaction the statement runs inside is
+    /// undone and ended.
+    Rollback,
+}
+
 /// One row of a table as the expressions of an index read it.
 struct Indexing<'a> {
     /// The table.
@@ -6522,7 +6594,20 @@ pub(crate) fn entry_of(
     let mut key = Vec::new();
     for keyed in &index.columns {
         key.push(match keyed.of {
-            crate::schema::Of::Place(at) => values.get(at).cloned().unwrap_or(Value::Null),
+            crate::schema::Of::Place(at) => {
+                // `sqlite3TableAffinity` converts the row before both
+                // the row and its entries are written, so an entry
+                // holds the value the row holds and not the one the
+                // statement wrote.
+                let mut value = values.get(at).cloned().unwrap_or(Value::Null);
+                let affinity = over
+                    .table
+                    .columns
+                    .get(at)
+                    .map_or(Affinity::None, |column| column.affinity);
+                crate::value::apply(&mut value, affinity);
+                value
+            }
             crate::schema::Of::Term(term) => {
                 crate::eval::evaluate_row(over.arena, term, over.sql, &row)?
             }
