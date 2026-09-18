@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- The suite's own harness rolls back the transaction of a file when a
+  connection over it closes, which `sqlite3_close` does, so a case that
+  ended inside a transaction no longer refuses every `BEGIN` after it.
+  D-304 records it. `temptable2.test` answers 241 cases where it
+  answered 167.
+
 - `db-sqlite` answers `now`, `CURRENT_TIME`, `CURRENT_DATE` and
   `CURRENT_TIMESTAMP` from the moment the caller tells the connection,
   which the harness takes from `sqlite_current_time`. D-303 records it.

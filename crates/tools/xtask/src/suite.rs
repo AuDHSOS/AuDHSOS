@@ -702,6 +702,15 @@ impl Session {
                 Ok(Vec::new())
             }
             "close" => {
+                // `sqlite3_close` rolls back the transaction the
+                // connection had open, and the harness holds one
+                // transaction per file, so the file the connection
+                // closed leaves none.
+                if let Some(path) = self.connections.get(first).cloned()
+                    && let Some(writer) = self.held.get_mut(&path)
+                {
+                    let _ = writer.run(b"ROLLBACK");
+                }
                 self.connections.remove(first);
                 self.nulls.remove(first);
                 self.counters.remove(first);

@@ -366,6 +366,8 @@ Size: S.
 12. `sqlite3_table_column_metadata` answers out of the schema the
     harness holds, and a connection that opens again writes `NULL` as
     the empty string.
+13. A connection that closes leaves the file it read no transaction,
+    which `sqlite3_close` rolls back.
 
 ### Produces
 
