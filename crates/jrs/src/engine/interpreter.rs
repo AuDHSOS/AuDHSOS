@@ -11328,6 +11328,31 @@ impl RegisterVM {
             for index in 0..count.min(passed_in.len()) {
                 passed.push(*passed_in.get(index).unwrap_or(&VALUE_UNDEFINED));
             }
+        } else if let Some(Resume::IteratorWalk { state }) = frame.resume {
+            let passed_in = Self::iterator_walk_arguments(state, heap)?;
+            for index in 0..count.min(passed_in.len()) {
+                passed.push(*passed_in.get(index).unwrap_or(&VALUE_UNDEFINED));
+            }
+        } else if let Some((state, walk)) = frame.resume.and_then(Resume::collection_record) {
+            let record = heap
+                .root_value(state)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let passed_in = if walk {
+                Vec::from([
+                    promise::slot(heap, record, 5),
+                    promise::slot(heap, record, 6),
+                    promise::slot(heap, record, 0),
+                ])
+            } else {
+                Vec::from([promise::slot(heap, record, 1)])
+            };
+            for index in 0..count.min(passed_in.len()) {
+                passed.push(*passed_in.get(index).unwrap_or(&VALUE_UNDEFINED));
+            }
+        } else if let Some(Resume::Setter { value }) = frame.resume {
+            if count > 0 {
+                passed.push(heap.root_value(value).unwrap_or(VALUE_UNDEFINED));
+            }
         } else if let Some(list) = frame.resume.and_then(Resume::list) {
             let list = heap
                 .root_value(list)
