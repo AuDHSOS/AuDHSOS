@@ -7,6 +7,53 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `docs/18-rasterization.md`: the design of `text-raster`, the crate that turns
+  what `text-core` computes into pixels, in thirteen steps and eight decisions.
+  D-177 makes the crate deterministic the way `text-core` is, with no floating
+  point, so a golden image is a gate and asserts exact bytes. D-178 fixes four
+  pixel formats: `A8` coverage, `Rgba16` premultiplied linear light for every
+  blend and every group, and the two opaque display-space formats of `gfx`.
+  D-179 forbids allocation and any `alloc` feature. D-180 refuses hinting,
+  subpixel antialiasing over RGB stripes, vertical layout and faux-bold
+  dilation, and states what each draws instead; the four non-separable blend
+  modes are not refused. D-181 flattens to an eighth of a device pixel with a
+  segment count computed from the control points. D-182 computes coverage by
+  exact area accumulation with the non-zero winding rule, and states what each
+  of five degenerate contours draws. D-184 states the glyph cache key, its
+  first-in first-out ring and its memory bound. Track R of the roadmap carries
+  the thirteen steps; sections 17.28 to 17.30 of document 17 become one table
+  pointing at them.
+
+- `text-raster`, steps R1 to R13 of track R. The crate turns what `text-core`
+  computes into pixels: a surface of four formats with bounds-checked access
+  (R1); outlines to polylines within an eighth of a device pixel, with the
+  segment count computed from the control points (R2); exact-area coverage
+  under the non-zero winding rule, one row of cells at a time (R3); the four
+  horizontal subpixel positions and the whole vertical pixel of D-174 (R4); the
+  transfer function of D-183 as two tables of 256 entries (R5); one coverage
+  mask composited with one text colour, in linear light (R6); the glyph cache
+  of D-184, a caller-owned ring evicted first in, first out (R7); a correctly
+  rounded square root, an inverse tangent in half-turns and a power, each to a
+  stated bound and with no floating point (R8); linear, radial and sweep
+  gradients with pad, repeat and reflect, evaluated in the fill's own space
+  through the inverted transform (R9); the clip stack (R10); all twenty-eight
+  compositing and blending modes, the four non-separable ones included (R11);
+  the whole paint stream of a colour glyph, with its clip and group stacks
+  (R12); and `draw`, which walks a `LayoutView` and is the one entry point the
+  compositor needs (R13).
+
+  154 host tests and one doctest, every one on the host against a `Vec`
+  surface. Nine golden images under `crates/text-raster/src/tests/golden/` are
+  a gate, which D-177 allows because no product path has floating point: the
+  five base glyphs of the COLRv1 fixture, and Latin, Arabic, bidirectional and
+  wrapped text.
+
+- `docs/w3c/compositing-1.html`: *Compositing and Blending Level 1*, the W3C
+  Candidate Recommendation Draft of 21 March 2024, with its 43 figure files
+  under `examples/`. `docs/microsoft/colr.html` defines a colour glyph's
+  composite mode by naming that document's operators rather than restating
+  them, so the twenty-eight formulas R11 implements are read from it.
+
 - `text-core` T13: colour glyphs. `colr::Colr` reads `COLR` versions 0 and 1
   over `CPAL` and resolves one glyph's paint graph into a flat stream of paint
   operations in font units, written into caller storage: clip and group
@@ -834,7 +881,40 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   it, and reports the bit it woke with when the image raises the vector.
   Catalog 6.6.59 and 6.6.60.
 
+### Fixed
+
+- `text-raster`: four defects a review of the new crate found, each with a
+  regression test that fails without its fix. The normalization of a gradient
+  compared the largest coordinate against a limit that halved with every shift
+  instead of doubling, so any geometry above 128 units drove the shift to its
+  maximum and every pixel to the last stop; COLR states a gradient in font
+  units, so that was every real gradient. A gradient was built against a
+  transform with the glyph box's corner taken out of it but evaluated at device
+  coordinates, so a colour glyph whose box did not start at the surface origin
+  read the gradient at the wrong place. The interpolation of an edge's x at a
+  row boundary biased a half-tie by the sign of the denominator as well as the
+  numerator, so an edge running one way rounded differently from the same edge
+  running the other. The length of a second difference used checked products,
+  so a curve beyond the arithmetic returned an error rather than taking the
+  clamp D-181 states. The first two moved the golden images: the fifth base
+  glyph of the COLRv1 fixture went from 139 inked pixels to 460, which is the
+  difference between a scattering of edge pixels and the whole emoji.
+
 ### Changed
+
+- D-183 supersedes D-175 in its mechanism: the gamma value corrects the colour
+  channels around every blend rather than the coverage before it, because at
+  γ = 2.2 and coverage 0.5 a blend in display space needs an alpha of 0.27 for
+  black on white and 0.73 for white on black to reach the same result, so one
+  coverage value would have to become two alphas, while a blend in linear light
+  with alpha equal to coverage reaches it in both directions. The owner of the
+  value, its default of 2.2 and the rule that `text-core` never holds it are
+  unchanged.
+
+- `text-demo` stays the throwaway D-177 to D-184 replace. Bringing it under the
+  workspace checks — the policy table, the SPDX headers, `forbid(unsafe_code)`
+  and two Clippy findings — was done on `main` in parallel by 05bf4e6, and the
+  merge keeps that version.
 
 - `fonts/`: layer 6 of both chains is `noto/emoji/Noto-COLRv1.ttf`, the COLRv1
   build of Noto Color Emoji 2.051, in place of the CBDT `NotoColorEmoji.ttf`

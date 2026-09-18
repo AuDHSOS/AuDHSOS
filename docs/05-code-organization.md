@@ -30,6 +30,7 @@ AuDHSOS/
 │   ├── uefi/                  audhsos-uefi: UEFI structure layouts, GUIDs, constants, the firmware clock conversion (no calls)
 │   ├── gfx/                   gfx: framebuffer logic, bitmap font, damage tracking
 │   ├── text-core/             text-core: sans-I/O font parsing, shaping, Unicode, and layout (document 17)
+│   ├── text-raster/           text-raster: outlines and paint streams to coverage in a caller's surface (document 18)
 │   ├── pci/                   pci: configuration space, BARs, capabilities, MSI-X, the virtio capabilities (document 13)
 │   ├── sync/                  audhsos-sync: Global<T> and Preset<T> cells (unsafe allowed)
 │   ├── time/                  audhsos-time: UnixTime, CivilTime, Instant, Duration (document 12)
@@ -148,6 +149,7 @@ AuDHSOS/
 | `audhsos-abi` | 0 | all | no | yes | `test-support` behind the feature `test-strategies` |
 | `audhsos-elf` | 0 | all | no | yes, fuzz | `test-support` behind the feature `test-strategies` |
 | `text-core` | 0 | all | no | yes, fuzz | none; caller buffers or optional alloc wrappers |
+| `text-raster` | 1 | all | no | yes, fuzz | `text-core`; caller buffers only, no `alloc` feature (D-179) |
 | `audhsos-uefi` | 0 | all | no | yes (layouts) | `audhsos-abi`, `audhsos-time` |
 | `audhsos-sync` | 0 | all | allowlisted | Miri | - |
 | `audhsos-time` | 0 | all | no | yes | `test-support` behind the feature `test-strategies` |
@@ -297,7 +299,13 @@ remains separate. The independent fuzz target is `json_codec`.
     reach them. `fs-gpt` is the one exception to the layer-0 rule: it
     depends on `fs-fat`, which is layer 1, because the block device trait
     it reads through is defined there (D-138).
-12. `driver-virtio-blk` and `driver-virtio-net` are logic crates at layer
+12. `text-raster` is a logic crate at layer 1 and depends on `text-core`
+    alone. It reads no font table, no setting and no file: `text-core`
+    decodes the outline and resolves the paint stream, and the caller
+    passes the gamma value, the palette index and the text colour. It does
+    not depend on `gfx`, whose surface is opaque and tracks damage
+    (D-178), and `gfx` does not depend on it: a compositor uses both.
+13. `driver-virtio-blk` and `driver-virtio-net` are logic crates at layer
     2, because a driver of a virtio device stands above the queue logic it
     drives the device through. Each depends on `virtio-queue` and on
     nothing else: each reaches registers through a trait of its own and

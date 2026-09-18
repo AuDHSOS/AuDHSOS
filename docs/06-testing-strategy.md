@@ -3297,6 +3297,108 @@ alone:
 - Configurations: default alloc, allocator-free APIs, and bare no_std target.
   Fuzz regression exercises font bytes and UTF-8 through bounded layout buffers.
 
+### 6.6.82 Rasterization (`text-raster`, R1–R13)
+
+- R1 shapes: every format at its own bytes per pixel; an exact-length slice
+  and a longer one; a stride equal to the row and one below it.
+- R1 rejections: a zero width, a zero height, a row beyond `u32`, a slice
+  shorter than `height · stride`, a texel of another format, and a position
+  one past each of the four edges and at `u32::MAX`.
+- R1 access: every corner written and read back for every format; the
+  padding bytes of every row and the bytes past the last row still carrying
+  a sentinel after a clear and a full fill; a row returning its visible
+  bytes only.
+- R1 values: every one of the 256 coverage bytes round-tripped; the channel
+  extremes of `Rgba16` round-tripped and their little-endian order read
+  literally; `Rgbx8888` and `Bgrx8888` storing opposite channel orders.
+- R2 flattening: the segment count against the closed form of D-181 at the
+  boundary where it changes and either side; the perpendicular distance
+  from a quarter circle to its polyline, sampled sixteen times inside every
+  segment, at 8, 16, 64 and 256 pixels, for a quadratic and for a cubic;
+  the count doubling when the size quadruples; the clamp at 256; a contour
+  of one point and a curve whose control points coincide giving no edge;
+  a curve whose control points are further apart than the arithmetic
+  reaches taking the clamp rather than failing; contour ends that do not
+  partition the points refused.
+- R3 coverage: literal values for a rectangle inset by a quarter, a half
+  and three quarters of a pixel on each side; the non-zero rule over nested
+  contours of one direction and of opposite directions; a doubly wound
+  contour not exceeding one; a triangle's coverage summing to its area;
+  five degenerate contours that draw without panicking; geometry
+  overhanging or entirely outside the mask; padding bytes untouched; a
+  slanted shape and its mirror covering mirrored pixels, which is what a
+  rounding rule that depended on a sign would break.
+- R4 positions: the four positions at every eighth of a pixel across two
+  pixels, in both signs; ties to even in both signs, horizontally and
+  vertically; a whole vertical pixel; the offset of each position.
+- R5 gamma: every display code round-tripped at three exponents; the
+  identity at 1.0; a strictly increasing decode table, the two darkest
+  codes included; encoding picking the nearer code at every midpoint; an
+  exponent outside `(0, 16]` refused.
+- R6 monochrome: zero coverage leaving the destination alone and full
+  coverage replacing it, on all four formats; the middle value against the
+  linear-light average; black on white against white on black, which is
+  what D-183 exists for; a mask overhanging each of the four edges.
+- R7 cache: a hit returning the bytes it was given, for each of the four
+  subpixel positions; a miss for a change to each key field; two instances
+  whose stored coordinates differ not answering each other; eviction in
+  allocation order; a full entry table; a block larger than the ring never
+  stored; a zero-length ring and an empty table; a generation reset; a ring
+  reused sixty-four times with every survivor holding its own bytes.
+- R8 numerics: the square root bracketed by its neighbours over the range
+  and at every power of two, and exact on exact squares; the inverse
+  tangent at the eight axis and diagonal directions, against the
+  complement identity over 4096 directions, against the tangent addition
+  formula over 576 pairs, and under reflection and scaling over 4224
+  directions; the power against `x^1`, `x^2` and `pow(pow(x, γ), 1/γ)`.
+- R9 gradients: the parameter of a linear gradient along and off its line;
+  the p₃ construction where a naive projection would differ; a p₃ falling
+  on p₀ drawing nothing; a radial gradient between concentric and between
+  separated circles, its empty cone, and a root whose radius would be
+  negative; a sweep at the four axis directions; all three extend modes at
+  seven positions; a line of one stop and two stops at one offset; a
+  singular placement; interpolation on linear light checked against the
+  display-space midpoint it differs from by 58 of 255; and a linear and a
+  radial gradient stated in font units, which is what every COLR gradient
+  is, read at five positions of their ramp.
+- R10 clips: a clip limiting a fill to its outline; nested clips as the
+  product of the two coverages; a restored region; an unmatched `Unclip`
+  and a clip left open both refused; a stack deeper than its storage
+  refused; a clip on a glyph without ink drawing nothing.
+- R11 modes: every one of the twenty-eight over five operand pairs; the
+  thirteen operators against the general Porter-Duff equation with the
+  `Fa` and `Fb` of each; the eleven separable modes against their own
+  formulas over 121 channel pairs; the four non-separable ones against
+  independently written `Lum`, `Sat`, `ClipColor`, `SetLum` and `SetSat`,
+  over eight colour pairs that drive both branches of `ClipColor` and the
+  degenerate branch of `SetSat`; a transparent backdrop leaving every
+  blend at the source.
+- R12 streams: the five base glyphs of the COLRv1 fixture as golden
+  images; groups composing onto what was under them; a `Compose` retaining
+  that ink; a `Compose` with fewer than two groups refused; an unbounded
+  glyph drawing nothing; an empty stream; the foreground resolved; one
+  gradient drawn into boxes at three device offsets giving one set of
+  pixels.
+- R13 drawing: Latin, Arabic, bidirectional and wrapped text as golden
+  images; ink inside the box `measure` reported, checked pixel by pixel; a
+  `COLR` face taking the colour path and a CFF face taking the second
+  outline decoder; the cache changing no pixel and placing a cached glyph
+  where the fresh one was; the four subpixel positions each drawing
+  different pixels; a surface too small drawing what fits; a box entirely
+  outside the surface; a face whose outline table is not there; a hidden
+  glyph; a size below one pixel; a missing face and a coverage buffer too
+  small refused; an affine whose inverse leaves the arithmetic.
+- Determinism: every step checks that the same input twice gives identical
+  bytes. Golden images are a gate on this crate and on no other, which
+  D-177 allows: no product path has floating point, so one input gives one
+  set of bytes on every host, in debug and in release. The nine images are
+  binary PPM under `crates/text-raster/src/tests/golden/` and
+  `AUDHSOS_GOLDEN=1` rewrites them.
+- The one floating-point reference in the crate is the mixing formulas of
+  R11, which `docs/w3c/compositing-1.html` states in real arithmetic; the
+  test compares the crate's integer answer to them within a two-hundredth
+  of a channel, which D-177 admits for a test and for no product path.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

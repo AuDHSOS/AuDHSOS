@@ -20,24 +20,26 @@ for a standard that is neither an RFC nor an Ecma one.
 | `png-3.html` | *Portable Network Graphics (PNG) Specification (Third Edition)*, W3C Recommendation of 24 June 2025 | 2026-09-07 from `https://www.w3.org/TR/png-3/` | 656574 | `a3ac82bb9eb8664b93961a2a9ff6def3d70e3a9f63d92721143c1f391d04edec` |
 | `css-fonts-4.html` | *CSS Fonts Module Level 4*, W3C Working Draft of 13 September 2026 | 2026-09-16 from `https://www.w3.org/TR/2026/WD-css-fonts-4-20260913/` | 1388137 | `4d72b9122458281dc34a830bc952c4495ec09e8c0466ea9722834f32568b93e8` |
 | `woff2.html` | *WOFF File Format 2.0*, W3C Recommendation of 8 August 2024 | 2026-09-16 from `https://www.w3.org/TR/2024/REC-WOFF2-20240808/` | 125108 | `65dfdde1efb57bf123526b9c15a4025ecc78158426a28fefdb396ecf4fc26dc8` |
+| `compositing-1.html` | *Compositing and Blending Level 1*, W3C Candidate Recommendation Draft of 21 March 2024 | 2026-09-18 from `https://www.w3.org/TR/2024/CRD-compositing-1-20240321/` | 234781 | `0fb91119308e706a5e4df368a91fa3b43cd5fe8cd8f192418b2df0a30ba8a62b` |
 
 The checksums are here so that a reader can tell a file has not been
 edited. Each is the page as the server delivered it, byte for byte, of
-9805, 13934 and 1869 lines; each was fetched twice and the two fetches
-agreed. Unlike the specification under `docs/ecma/`, these are kept
-whole: nothing is cut from any of them.
+9805, 13934, 1869 and 3372 lines; each was fetched twice and the two
+fetches agreed. Unlike the specification under `docs/ecma/`, these are
+kept whole: nothing is cut from any of them.
 
-The two font documents were taken from a dated address rather than from
-`/TR/css-fonts-4/` and `/TR/WOFF2/`, because a dated address is fixed and
-the undated one moves to the next draft; both served the same bytes on
-the day of the fetch. PNG predates that rule here and keeps the undated
+The two font documents and Compositing and Blending Level 1 were taken
+from a dated address rather than from `/TR/css-fonts-4/`, `/TR/WOFF2/`
+and `/TR/compositing-1/`, because a dated address is fixed and the
+undated one moves to the next draft; each served the same bytes on the
+day of the fetch. PNG predates that rule here and keeps the undated
 address it was taken from, which for a Recommendation of a finished
 edition names the same document.
 
 CSS Fonts Module Level 4 names 73 figure files by a relative path, and
 they are below `images/`. They are listed one per line with its own
 checksum by `fetch.sh`, and not in the table above, because 73 rows of
-`fiddlesticks-italics.png` would bury the three documents without telling
+`fiddlesticks-italics.png` would bury the four documents without telling
 a reader anything. What pins them is one digest over that listing:
 
 ```sh
@@ -47,6 +49,26 @@ LC_ALL=C find images -type f | LC_ALL=C sort | xargs shasum -a 256 |
 
 answers
 `0223f7c0db9571c9bacd9c670bb8c90d8696d17d78efc66edbbcbc3ba7263848`.
+
+Compositing and Blending Level 1 names 43 figure files the same way, and
+they are below `examples/`, 21 SVG and 22 PNG: a diagram of the four
+regions and one per compositing operator, a rendering per blend mode, and
+the figures of the backdrop, group, isolation and opacity sections.
+The digest over that listing,
+
+```sh
+LC_ALL=C find examples -type f | LC_ALL=C sort | xargs shasum -a 256 |
+	shasum -a 256
+```
+
+answers
+`1c626bf72b2185830083c78bf016cca1f1329890c667039b2fd80c167c99914e`.
+
+A forty-fourth relative name, `ducky.png`, is not fetched and is not
+here. The document writes it inside escaped example markup,
+`&lt;img src="ducky.png"/>`, so it is example text rather than a figure
+the document shows, and the publisher answers `404` for it. `fetch.sh`
+skips that one name and states why.
 
 What is not kept is the presentation. Each document names a stylesheet by
 a relative path — `style.css` for CSS Fonts Module Level 4, `conform.css`
@@ -90,6 +112,26 @@ RFC 8081 belongs with these two and is in
 `font/woff2` among them, which is what says a WOFF 2.0 file is a font
 rather than an application-specific blob.
 
+## Why Compositing and Blending Level 1 is here
+
+For the rasterizer of [document 18](../18-rasterization.md). A COLR
+version 1 colour glyph composes its layers with a mode, and
+`docs/microsoft/colr.html:3094` defines that mode by naming this
+document's operators rather than by restating them. Section 9.1,
+`compositing-1.html:1635`, defines thirteen compositing operators, the
+twelve of Porter and Duff and `lighter`. Section 10,
+`compositing-1.html:1785`, defines sixteen blend modes, twelve separable
+and four non-separable. COLR names all thirteen operators and, of the
+blend modes, every one but `normal`, which its `SrcOver` already is:
+twenty-eight values. D-176 accepted that cost when it made COLRv1 the
+colour format, and this is the document the twenty-eight formulas are
+read from.
+
+It also states the two things the formulas alone do not: a blend runs on
+unpremultiplied colour values and the result is then weighted by the two
+alphas, `compositing-1.html:1785`; and a group is composited against a
+backdrop rather than against the final canvas.
+
 ## Why PNG is here
 
 For the second half of a compressor. `audhsos-deflate` writes what a PDF
@@ -110,7 +152,8 @@ project may one day read or write, and for the one it already writes.
 
 These documents are not covered by this repository's licence. Each
 carries the notice of the World Wide Web Consortium — © 1996-2025 for
-PNG, © 2026 for CSS Fonts Module Level 4, © 2024 for WOFF 2.0 — and each
+PNG, © 2026 for CSS Fonts Module Level 4, © 2024 for WOFF 2.0 and for
+Compositing and Blending Level 1 — and each
 states that the Consortium's liability, trademark and permissive document
 licence rules apply. That licence allows the document to be copied and
 redistributed provided the notice and the link to the licence travel with

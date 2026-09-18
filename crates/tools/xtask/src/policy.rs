@@ -76,6 +76,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "text-raster",
+        path: "crates/text-raster",
+        kind: Kind::Logic,
+        deps: &["text-core"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "audhsos-timer-queue",
         path: "crates/timer-queue",
         kind: Kind::Logic,

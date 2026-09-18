@@ -3,8 +3,8 @@
 ## 17.0 How to read this document
 
 Each step states Status, Depends on, Size, Needs, Does, Produces, and Done
-when, in that order. T1–T13 build `text-core`; R1–R3 describe later work
-outside this task. A step ends with its acceptance results before the next step starts.
+when, in that order. T1–T13 build `text-core`. Section 17.28 says where
+the three steps outside this track, R1 to R3, are now specified. A step ends with its acceptance results before the next step starts.
 The owner authorized continuous execution through T12 on 2026-09-17 (D-163). Status describes implemented behavior, not the target API.
 
 ## 17.1 Terms
@@ -31,9 +31,9 @@ The owner authorized continuous execution through T12 on 2026-09-17 (D-163). Sta
 | clip box | The precomputed box of a colour glyph in the `ClipList`. |
 | ink extents | The box of what a glyph paints, in font units, distinct from its advance. |
 | subpixel position | One of the quantized horizontal glyph origins within a pixel (D-174). |
-| gamma | The exponent that turns coverage into alpha, owned by the compositor (D-175). |
-| rasterizer | Outline-to-pixel coverage conversion, outside `text-core`. |
-| glyph cache | Rasterized glyph storage owned by the drawing side. |
+| gamma | The exponent of the transfer function the compositor owns (D-175, D-183). |
+| rasterizer | `text-raster` of [document 18](18-rasterization.md), outside `text-core`. |
+| glyph cache | Rasterized glyph storage owned by the drawing side (D-184). |
 | compositor | Drawing-command consumer and framebuffer owner. |
 | workspace | Caller-owned mutable slices for intermediate numeric records. |
 | UCD | Unicode Character Database, pinned to 18.0.0 by D-156. |
@@ -74,9 +74,9 @@ The owner authorized continuous execution through T12 on 2026-09-17 (D-163). Sta
 
 | Component | Why required |
 |-----------|--------------|
-| R1–R3 drawing integration | Pixel output needs rendering policy and storage outside the pure library. |
-| Gradient and compositing rasterization | R1 must fill a paint stream, not only an outline; D-176 states the price and why it is paid. |
-| Gamma correction of coverage | The value is a setting, which `text-core` does not read; D-175 names its owner. |
+| R3 drawing integration | A drawing protocol and immutable font distribution are outside this track and outside document 18. |
+| Gradient and compositing rasterization | Specified as steps R9 and R11 of document 18; D-176 states the price and why it is paid. |
+| Gamma correction | The value is a setting, which `text-core` does not read; D-175 names its owner and D-183 states where it enters. |
 
 ## 17.5 Decision D1: ownership and allocation (D-158)
 
@@ -379,9 +379,9 @@ for such a face.
 | T11 resolution | implemented | T10 | M |
 | T12 layout | implemented | T11 | L |
 | T13 colour glyphs | implemented | T12 | XL |
-| R1 rasterizer | unscheduled, outside task | T13 | XL |
-| R2 glyph cache | unscheduled, outside task | R1 | M |
-| R3 integration | unscheduled, outside task | R2 | L |
+| R1 rasterizer | specified as document 18 | T13 | XL |
+| R2 glyph cache | specified as step R7 of document 18 | R1 | M |
+| R3 integration | unscheduled, outside both documents | R2 | L |
 
 ## 17.15 T1: sfnt envelope
 
@@ -916,46 +916,24 @@ driver", once "the forwarded port refused" — so the failure is the
 container's network and not this step: no program or server of the image
 depends on `text-core`, which only `fuzz/text_font` links.
 
-## 17.28 R1: rasterizer (outside this task)
+## 17.28 R1 to R3: the drawing side
 
-**Status:** unscheduled.
-**Depends on:** T13.
-**Size:** XL.
-**Needs:** accepted outline, position and paint stream output; the rounding of
-D7; the gamma value of D8.
-**Does:** convert outlines into bounded pixel coverage buffers, and fill a
-paint stream with solid colours, the three gradients and the twenty-eight
-compositing and blending modes of W3C Compositing and Blending Level 1.
-**Produces:** rasterizer component separate from `text-core`.
-**Done when:** reference images and policy changes preserve T12 measurements.
+The three steps below named the work outside this track and did not
+specify it. [Document 18](18-rasterization.md) specifies R1 and R2 as
+thirteen steps of a track of its own, and D-177 to D-184 are their
+decisions.
 
-Gradients and compositing are what vector emoji cost. D9 states why the cost
-is accepted: this system allows fractional scaling factors and a bitmap
-strike does not survive them. A colour glyph's gradients interpolate in
-linear light, so the rasterizer applies the inverse transfer function of D8
-before it interpolates and the forward one after.
+| Step | Where it is now |
+|------|-----------------|
+| R1 rasterizer | Steps R1 to R13 of document 18. The crate is `text-raster`. Gradients and the twenty-eight compositing and blending modes of `docs/w3c/compositing-1.html` are what vector emoji cost, and D-176 states why the cost is accepted: this system allows fractional scaling factors and a bitmap strike does not survive them. |
+| R2 glyph cache | Step R7 of document 18. D-184 states the key, the eviction rule and the memory bound. |
+| R3 integration | Unscheduled. It needs `text-raster`, immutable font distribution and a drawing protocol, and it is done when both address spaces agree on serialized geometry and a stale generation is rejected or retried against the current snapshot. |
 
-## 17.29 R2: glyph cache (outside this task)
-
-**Status:** unscheduled.
-**Depends on:** R1.
-**Size:** M.
-**Needs:** full rasterization key and caller-supplied capacity.
-**Does:** cache coverage with generation invalidation and bounded eviction.
-**Produces:** drawing-side glyph storage.
-**Done when:** cached and uncached pixels agree and changed instances cannot
-reuse stale glyphs.
-
-## 17.30 R3: integration (outside this task)
-
-**Status:** unscheduled.
-**Depends on:** R2.
-**Size:** L.
-**Needs:** immutable font distribution and drawing protocol design.
-**Does:** connect adapters, toolkit, and compositor through explicit snapshots.
-**Produces:** on-system text drawing and matching application measurements.
-**Done when:** both address spaces agree on serialized geometry; stale
-generation commands are rejected or retried against the current snapshot.
+D-183 supersedes D-175 in its mechanism: the gamma value corrects the
+colour channels around every blend rather than the coverage before it,
+because no mapping of coverage alone removes the asymmetry D-175 was
+written to remove. The owner of the value, its default and the rule that
+`text-core` never holds it are unchanged.
 
 ## 17.31 Risks
 
