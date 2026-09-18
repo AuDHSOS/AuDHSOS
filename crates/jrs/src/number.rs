@@ -5,7 +5,7 @@
 //! The toolchain provides shortest round-tripping digits. Its tie choice is
 //! corrected using exact integer arithmetic, never another floating operation.
 
-use alloc::{format, string::String, string::ToString};
+use alloc::{format, string::String, string::ToString, vec::Vec};
 use core::fmt;
 
 struct Decimal(f64);
@@ -340,6 +340,201 @@ fn space(unit: u16) -> bool {
 
 fn digit(unit: u16) -> bool {
     (48..=57).contains(&unit)
+}
+
+/// The exact decimal expansion of a finite value above zero: its digits with
+/// no leading and no trailing zero, and how many of them stand before the
+/// decimal point.
+///
+/// A double is an integer times a power of two, so its decimal expansion ends;
+/// the smallest subnormal ends after 1074 fraction digits.
+fn exact_decimal(value: f64) -> (Vec<u8>, i32) {
+    let text = format!("{value:.1100}");
+    let mut digits: Vec<u8> = Vec::with_capacity(text.len());
+    let mut point: i32 = 0;
+    let mut seen_point = false;
+    for byte in text.bytes() {
+        if byte == b'.' {
+            seen_point = true;
+            continue;
+        }
+        if !seen_point {
+            point = point.saturating_add(1);
+        }
+        digits.push(byte.wrapping_sub(b'0'));
+    }
+    // A leading zero moves the point, a trailing one is not a digit of the
+    // expansion at all.
+    let leading = digits.iter().take_while(|digit| **digit == 0).count();
+    digits.drain(..leading);
+    point = point.saturating_sub(i32::try_from(leading).unwrap_or(0));
+    while digits.last() == Some(&0) {
+        digits.pop();
+    }
+    (digits, point)
+}
+
+/// Keeps `keep` of the digits and rounds the rest away, with a tie going up,
+/// which is the larger integer every clause of 21.1.3 asks for.
+///
+/// Answers the digits kept and whether the carry ran off the front, which
+/// moves the decimal point one place right.
+fn round_digits(digits: &[u8], keep: usize) -> (Vec<u8>, bool) {
+    let mut kept: Vec<u8> = digits.iter().copied().take(keep).collect();
+    while kept.len() < keep {
+        kept.push(0);
+    }
+    if digits.get(keep).copied().unwrap_or(0) < 5 {
+        return (kept, false);
+    }
+    for index in (0..kept.len()).rev() {
+        let Some(digit) = kept.get_mut(index) else {
+            continue;
+        };
+        if *digit < 9 {
+            *digit = digit.saturating_add(1);
+            return (kept, false);
+        }
+        *digit = 0;
+    }
+    // Every digit was nine, so the answer is one and as many zeros, which the
+    // carry says and the caller writes.
+    (kept, true)
+}
+
+/// `Number.prototype.toFixed` of 21.1.3.3 for a finite value below 10**21.
+pub(crate) fn fixed_notation(value: f64, count: usize) -> String {
+    if value == 0.0 {
+        let mut text = String::from("0");
+        if count > 0 {
+            text.push('.');
+            text.extend(core::iter::repeat_n('0', count));
+        }
+        return text;
+    }
+    let (digits, point) = exact_decimal(value);
+    let keep = point.saturating_add(i32::try_from(count).unwrap_or(0));
+    // A value below half of the last place kept answers zeros alone.
+    let (kept, carried) = if keep < 0 {
+        (Vec::new(), false)
+    } else {
+        round_digits(&digits, usize::try_from(keep).unwrap_or(0))
+    };
+    let mut text = String::new();
+    if carried {
+        text.push('1');
+    }
+    for digit in &kept {
+        text.push(char::from(b'0'.wrapping_add(*digit)));
+    }
+    // 21.1.3.3 step 11 pads the integer to one digit and cuts the fraction
+    // off the end.
+    while text.len() <= count {
+        text.insert(0, '0');
+    }
+    if count > 0 {
+        text.insert(text.len().saturating_sub(count), '.');
+    }
+    text
+}
+
+/// The digits and the decimal exponent 21.1.3.2 and 21.1.3.5 answer: `keep`
+/// significant digits of the value, and the power of ten the first of them
+/// stands at.
+fn significant_digits(value: f64, keep: usize) -> (String, i32) {
+    let (digits, point) = exact_decimal(value);
+    let (kept, carried) = round_digits(&digits, keep);
+    let mut text = String::new();
+    if carried {
+        // The carry made one digit more, and the clause keeps as many as it
+        // asked for: a one and zeros, one decimal place further out.
+        text.push('1');
+        text.extend(core::iter::repeat_n('0', keep.saturating_sub(1)));
+    } else {
+        for digit in &kept {
+            text.push(char::from(b'0'.wrapping_add(*digit)));
+        }
+    }
+    (
+        text,
+        point.saturating_sub(1).saturating_add(i32::from(carried)),
+    )
+}
+
+/// `Number.prototype.toExponential` of 21.1.3.2 for a finite value, with the
+/// count of fraction digits the call named.
+pub(crate) fn exponential_notation(value: f64, count: usize) -> String {
+    let (significand, exponent) = if value == 0.0 {
+        (
+            core::iter::repeat_n('0', count.saturating_add(1)).collect::<String>(),
+            0,
+        )
+    } else {
+        significant_digits(value, count.saturating_add(1))
+    };
+    with_exponent(&significand, exponent, count)
+}
+
+/// Joins the significand and the exponent the way 21.1.3.2 step 12 does.
+fn with_exponent(significand: &str, exponent: i32, count: usize) -> String {
+    let mut text = String::from(significand.get(..1).unwrap_or("0"));
+    if count != 0 {
+        text.push('.');
+        text.push_str(significand.get(1..).unwrap_or_default());
+    }
+    text.push('e');
+    text.push(if exponent < 0 { '-' } else { '+' });
+    text.push_str(&exponent.unsigned_abs().to_string());
+    text
+}
+
+/// The digits 21.1.3.2 answers where the call named no count: the shortest
+/// that name the value again, which 6.1.6.1.20 also uses.
+pub(crate) fn shortest_exponential(value: f64) -> String {
+    if value == 0.0 {
+        return String::from("0e+0");
+    }
+    // The toolchain writes the shortest digits that name the value again,
+    // with the point after the first of them, which is where 21.1.3.2 puts it.
+    let text = format!("{value:e}");
+    let (significand, exponent) = text.split_once('e').unwrap_or((text.as_str(), "0"));
+    let digits: String = significand.chars().filter(|unit| *unit != '.').collect();
+    let count = digits.len().saturating_sub(1);
+    with_exponent(&digits, exponent.parse::<i32>().unwrap_or(0), count)
+}
+
+/// `Number.prototype.toPrecision` of 21.1.3.5 for a finite value, with the
+/// count of significant digits the call named.
+pub(crate) fn precision_notation(value: f64, count: usize) -> String {
+    let (significand, exponent) = if value == 0.0 {
+        (core::iter::repeat_n('0', count).collect::<String>(), 0)
+    } else {
+        significant_digits(value, count)
+    };
+    // Step 12 takes the exponential notation outside the window of 21.1.3.5.
+    if exponent < -6 || exponent >= i32::try_from(count).unwrap_or(i32::MAX) {
+        return with_exponent(&significand, exponent, count.saturating_sub(1));
+    }
+    if exponent == i32::try_from(count).unwrap_or(i32::MAX).saturating_sub(1) {
+        return significand;
+    }
+    let mut text = String::new();
+    if exponent >= 0 {
+        let head = usize::try_from(exponent).unwrap_or(0).saturating_add(1);
+        text.push_str(significand.get(..head).unwrap_or(&significand));
+        text.push('.');
+        text.push_str(significand.get(head..).unwrap_or_default());
+        return text;
+    }
+    text.push_str("0.");
+    text.extend(core::iter::repeat_n(
+        '0',
+        usize::try_from(exponent.saturating_neg())
+            .unwrap_or(0)
+            .saturating_sub(1),
+    ));
+    text.push_str(&significand);
+    text
 }
 
 #[cfg(test)]

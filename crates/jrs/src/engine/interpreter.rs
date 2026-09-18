@@ -3112,6 +3112,13 @@ impl RegisterVM {
                 self.call_string_intrinsic(intrinsic, call, units, heap, realm)
             }
             Intrinsic::StringPrototypeSplit => self.call_split_intrinsic(&call, units, heap, realm),
+            // 21.1.3.2, 21.1.3.3 and 21.1.3.5 write the Number in the notation
+            // the call named, with the digits of its exact value.
+            Intrinsic::NumberPrototypeToFixed
+            | Intrinsic::NumberPrototypeToExponential
+            | Intrinsic::NumberPrototypeToPrecision => {
+                self.number_notation(intrinsic, &call, heap, realm)
+            }
             // 19.2.2 and 19.2.3 answer about the Number their argument is.
             Intrinsic::IsNaN | Intrinsic::IsFinite => {
                 let number = primitive_number(self.call_argument(&call, 0, heap)?, heap)?;
@@ -3327,8 +3334,14 @@ impl RegisterVM {
             // 21.1.3, which this engine has not built.
             Intrinsic::NumberConstructor => {
                 let argument = self.call_argument(&call, 0, heap)?;
+                // 21.1.1.1 step 2.b answers the mathematical value of a
+                // BigInt, where every other conversion of one is a TypeError.
                 let number = if call.arg_count == 0 {
                     0.0
+                } else if let Some(reference) = argument.as_bigint() {
+                    heap.bigint(reference)
+                        .ok_or(VMError::Heap(HeapError::InvalidReference))?
+                        .to_f64()
                 } else {
                     primitive_number(argument, heap)?
                 };
@@ -17579,6 +17592,119 @@ impl RegisterVM {
         if value.is_finite() { value as i64 } else { 0 }
     }
 
+    /// The Number 21.1.3.2, 21.1.3.3 and 21.1.3.5 write, in the notation the
+    /// clause names.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a receiver that is
+    /// no Number and with a `RangeError` for a count outside the window the
+    /// clause names.
+    fn number_notation(
+        &self,
+        intrinsic: Intrinsic,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        // Step 1 of each clause is `ThisNumberValue`, which takes a Number and
+        // the wrapper of one and nothing else.
+        let receiver = call.receiver;
+        let number = receiver
+            .as_f64()
+            .or_else(|| match heap.get_object(receiver.as_object()?)?.kind {
+                ObjectKind::NumberWrapper(number) => Some(number),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                type_error(
+                    heap,
+                    realm,
+                    "a method of 21.1.3 called on a value that is no Number",
+                )
+            })?;
+        let argument = self.call_argument(call, 0, heap)?;
+        // 21.1.3.5 step 2 answers `ToString` where the call named no
+        // precision, and 21.1.3.2 the shortest digits of the value.
+        if argument.is_undefined() && intrinsic == Intrinsic::NumberPrototypeToPrecision {
+            let text = crate::number::decimal_string(number);
+            return self.allocate_string(heap, &text.encode_utf16().collect::<Vec<u16>>());
+        }
+        let count = if argument.is_undefined() {
+            0.0
+        } else {
+            primitive_number(argument, heap)?
+        };
+        // `ToIntegerOrInfinity` of 7.1.5 takes a NaN to zero and leaves an
+        // infinity infinite, which 21.1.3.3 step 4 refuses and the window of
+        // the two other clauses has no room for.
+        if intrinsic == Intrinsic::NumberPrototypeToFixed && count.is_infinite() {
+            return Err(raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::RangeError,
+                "the count of 21.1.3.3 is not finite",
+            ));
+        }
+        let integral = if count.is_nan() {
+            0
+        } else if count == f64::INFINITY {
+            i64::MAX
+        } else if count == f64::NEG_INFINITY {
+            i64::MIN
+        } else {
+            Self::integral(count)
+        };
+        let (low, high) = if intrinsic == Intrinsic::NumberPrototypeToPrecision {
+            (1, 100)
+        } else {
+            (0, 100)
+        };
+        // 21.1.3.2 step 4 and 21.1.3.5 step 4 answer the digits of an
+        // infinity and of a NaN before they look at the count, and 21.1.3.3
+        // step 6 after it.
+        if intrinsic != Intrinsic::NumberPrototypeToFixed && !number.is_finite() {
+            let text = crate::number::decimal_string(number);
+            return self.allocate_string(heap, &text.encode_utf16().collect::<Vec<u16>>());
+        }
+        if integral < low || integral > high {
+            return Err(raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::RangeError,
+                "a count of 21.1.3 outside the window the clause names",
+            ));
+        }
+        if !number.is_finite() {
+            let text = crate::number::decimal_string(number);
+            return self.allocate_string(heap, &text.encode_utf16().collect::<Vec<u16>>());
+        }
+        let held = usize::try_from(integral).unwrap_or(0);
+        let negative = number < 0.0;
+        let magnitude = if negative { -number } else { number };
+        let text = match intrinsic {
+            // 21.1.3.3 step 10 leaves a magnitude of 10**21 and above to
+            // 6.1.6.1.20.
+            Intrinsic::NumberPrototypeToFixed if magnitude >= 1e21 => {
+                crate::number::decimal_string(magnitude)
+            }
+            Intrinsic::NumberPrototypeToFixed => crate::number::fixed_notation(magnitude, held),
+            Intrinsic::NumberPrototypeToExponential if argument.is_undefined() => {
+                crate::number::shortest_exponential(magnitude)
+            }
+            Intrinsic::NumberPrototypeToExponential => {
+                crate::number::exponential_notation(magnitude, held)
+            }
+            _ => crate::number::precision_notation(magnitude, held),
+        };
+        let mut units: Vec<u16> = Vec::new();
+        if negative {
+            units.push(u16::from(b'-'));
+        }
+        units.extend(text.encode_utf16());
+        self.allocate_string(heap, &units)
+    }
+
     /// `TimeClip` of 21.4.1.31.
     fn time_clip(time: f64) -> f64 {
         if !time.is_finite() || time.abs() > 8.64e15 {
@@ -25252,6 +25378,11 @@ impl RegisterVM {
                 realm,
                 "a Symbol where 7.1.4 asks for a Number",
             )),
+            Err(VMError::Unsupported(BIGINT_TO_NUMBER)) => Err(type_error(
+                heap,
+                realm,
+                "a BigInt where 7.1.4 asks for a Number",
+            )),
             stepped => stepped,
         }
     }
@@ -28599,6 +28730,9 @@ const NUMERIC_CONVERSION_GAP: VMError =
 /// it.
 const SYMBOL_TO_NUMBER: &str = "ToNumber of a Symbol";
 
+/// The same for a `BigInt`, which 7.1.4 step 3 refuses.
+const BIGINT_TO_NUMBER: &str = "ToNumber of a BigInt";
+
 /// `StringToBigInt` of 7.1.14: the value a text names, and none for a text
 /// that names no `BigInt`.
 ///
@@ -28677,6 +28811,10 @@ fn primitive_number(value: Value, heap: &GenerationalHeap) -> Result<f64, VMErro
         // 7.1.4 step 2 is a `TypeError`, which this function has no Realm to
         // raise.
         return Err(VMError::Unsupported(SYMBOL_TO_NUMBER));
+    }
+    if value.as_bigint().is_some() {
+        // 7.1.4 step 3 is the same `TypeError`.
+        return Err(VMError::Unsupported(BIGINT_TO_NUMBER));
     }
     Err(VMError::TypeError)
 }
@@ -29505,40 +29643,38 @@ mod tests {
             .allocate_object(heap.shapes.root_shape(), VALUE_NULL)
             .unwrap();
 
-        // 7.1.4 step 2 refuses a Symbol with a `TypeError` of the Realm, which
-        // the run raises where the conversion answered the gap.
-        let mut feedback = FeedbackVector::for_code(&code);
-        let mut vm = RegisterVM::new(100);
-        assert!(matches!(
-            vm.run_with_arguments(
-                &code,
-                &[Value::from_symbol(super::super::value::SymbolRef(0))],
-                &mut feedback,
-                &mut heap,
-                &realm,
-            ),
-            Err(VMError::Thrown(
-                _,
-                Some((crate::engine::realm::NativeErrorKind::TypeError, _))
-            ))
-        ));
-
-        for (value, expected) in [
-            (
-                Value::from_bigint(super::super::value::BigIntRef(0)),
-                VMError::TypeError,
-            ),
-            // 7.1.4 sends an Object through ToPrimitive; this conversion has
-            // no frame to run a `valueOf` of the Script in.
-            (Value::from_object(object), NUMERIC_CONVERSION_GAP),
+        // 7.1.4 steps 2 and 3 refuse a Symbol and a BigInt with a `TypeError`
+        // of the Realm, which the run raises where the conversion answered
+        // the gap.
+        for refused in [
+            Value::from_symbol(super::super::value::SymbolRef(0)),
+            Value::from_bigint(super::super::value::BigIntRef(0)),
         ] {
             let mut feedback = FeedbackVector::for_code(&code);
             let mut vm = RegisterVM::new(100);
-            assert_eq!(
-                vm.run_with_arguments(&code, &[value], &mut feedback, &mut heap, &realm),
-                Err(expected)
-            );
+            assert!(matches!(
+                vm.run_with_arguments(&code, &[refused], &mut feedback, &mut heap, &realm),
+                Err(VMError::Thrown(
+                    _,
+                    Some((crate::engine::realm::NativeErrorKind::TypeError, _))
+                ))
+            ));
         }
+
+        // 7.1.4 sends an Object through ToPrimitive; this conversion has no
+        // frame to run a `valueOf` of the Script in.
+        let mut feedback = FeedbackVector::for_code(&code);
+        let mut vm = RegisterVM::new(100);
+        assert_eq!(
+            vm.run_with_arguments(
+                &code,
+                &[Value::from_object(object)],
+                &mut feedback,
+                &mut heap,
+                &realm
+            ),
+            Err(NUMERIC_CONVERSION_GAP)
+        );
     }
 
     #[test]

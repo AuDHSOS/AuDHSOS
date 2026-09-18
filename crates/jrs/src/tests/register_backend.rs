@@ -6399,6 +6399,66 @@ fn a_function_carries_the_name_it_was_given() -> Result<(), Error> {
 }
 
 #[test]
+fn the_notations_of_21_1_3_write_the_digits_of_the_exact_value() -> Result<(), Error> {
+    // 21.1.3.2, 21.1.3.3 and 21.1.3.5 pick the integer closest to the value
+    // and the larger one of a tie, which only the exact decimal expansion of
+    // the double decides. The stack backend has not built them.
+    for (source, expected) in [
+        ("(1.5).toFixed(2)", "1.50"),
+        ("(0.5).toFixed(0)", "1"),
+        ("(2.5).toFixed(0)", "3"),
+        ("(-1.25).toFixed(1)", "-1.3"),
+        // 1.005 is below the decimal that names it, so it rounds down.
+        ("(1.005).toFixed(2)", "1.00"),
+        ("(999.9).toFixed(0)", "1000"),
+        ("(0).toFixed(2)", "0.00"),
+        // Step 10 leaves a magnitude of 10**21 and above to 6.1.6.1.20.
+        ("(1e21).toFixed(2)", "1e+21"),
+        ("(NaN).toFixed(2)", "NaN"),
+        ("(123.456).toExponential(2)", "1.23e+2"),
+        ("(0).toExponential(2)", "0.00e+0"),
+        ("(0.1).toExponential()", "1e-1"),
+        ("(25).toExponential(0)", "3e+1"),
+        ("(123.456).toPrecision(4)", "123.5"),
+        ("(0.000001).toPrecision(3)", "0.00000100"),
+        ("(123).toPrecision(2)", "1.2e+2"),
+        ("(1e21).toPrecision(3)", "1.00e+21"),
+        ("(Infinity).toPrecision(3)", "Infinity"),
+        // 21.1.1.1 step 2.b answers the mathematical value of a BigInt.
+        ("String(Number(12n))", "12"),
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let answer = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
+        let Value::String(text) = &answer else {
+            panic!("{source}: {answer:?}");
+        };
+        let held: alloc::vec::Vec<u16> = expected.encode_utf16().collect();
+        assert_eq!(&**text, held.as_slice(), "{source}");
+    }
+    // 7.1.5 takes a NaN to zero and leaves an infinity infinite, which step 4
+    // of 21.1.3.3 refuses.
+    for source in [
+        "(1).toFixed(Infinity)",
+        "(1).toFixed(101)",
+        "(1).toPrecision(0)",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        assert!(
+            matches!(
+                Runtime::with_backend(Limits::default(), Backend::Engine)
+                    .run(&program, &mut SilentHost),
+                Err(Error::Range { .. } | Error::Thrown { .. })
+            ),
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn the_case_conversions_of_22_1_3_map_every_code_point() -> Result<(), Error> {
     // 22.1.3.29 to 22.1.3.32 map with the Unicode Default Case Conversion,
     // which the stack backend has not built, so the answers stand here.

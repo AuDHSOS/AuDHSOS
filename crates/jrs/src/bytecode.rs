@@ -10819,6 +10819,9 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::StringPrototypeSubstring
         | crate::engine::realm::Intrinsic::StringPrototypePadEnd
         | crate::engine::realm::Intrinsic::StringPrototypePadStart
+        | crate::engine::realm::Intrinsic::NumberPrototypeToFixed
+        | crate::engine::realm::Intrinsic::NumberPrototypeToExponential
+        | crate::engine::realm::Intrinsic::NumberPrototypeToPrecision
         | crate::engine::realm::Intrinsic::StringPrototypeToLowerCase
         | crate::engine::realm::Intrinsic::StringPrototypeToUpperCase
         | crate::engine::realm::Intrinsic::StringPrototypeToLocaleLowerCase

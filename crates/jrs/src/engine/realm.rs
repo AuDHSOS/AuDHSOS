@@ -651,6 +651,12 @@ pub enum Intrinsic {
     NumberPrototypeValueOf,
     /// `Number.prototype.toString`, 21.1.3.6.
     NumberPrototypeToString,
+    /// `Number.prototype.toFixed` (21.1.3.3).
+    NumberPrototypeToFixed,
+    /// `Number.prototype.toExponential` (21.1.3.2).
+    NumberPrototypeToExponential,
+    /// `Number.prototype.toPrecision` (21.1.3.5).
+    NumberPrototypeToPrecision,
     /// `Boolean.prototype.valueOf`, 20.3.3.3.
     BooleanPrototypeValueOf,
     /// `Boolean.prototype.toString`, 20.3.3.2.
@@ -1372,7 +1378,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 473] = [
+    pub const ALL: [Self; 476] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1490,6 +1496,9 @@ impl Intrinsic {
         Self::ReflectPreventExtensions,
         Self::NumberPrototypeValueOf,
         Self::NumberPrototypeToString,
+        Self::NumberPrototypeToFixed,
+        Self::NumberPrototypeToExponential,
+        Self::NumberPrototypeToPrecision,
         Self::BooleanPrototypeValueOf,
         Self::BooleanPrototypeToString,
         Self::StringPrototypeValueOf,
@@ -2030,9 +2039,11 @@ impl Intrinsic {
             | Self::ReflectOwnKeys
             | Self::ReflectPreventExtensions
             | Self::ReflectSet => IntrinsicHolder::Reflect,
-            Self::NumberPrototypeValueOf | Self::NumberPrototypeToString => {
-                IntrinsicHolder::NumberPrototype
-            }
+            Self::NumberPrototypeValueOf
+            | Self::NumberPrototypeToString
+            | Self::NumberPrototypeToFixed
+            | Self::NumberPrototypeToExponential
+            | Self::NumberPrototypeToPrecision => IntrinsicHolder::NumberPrototype,
             Self::BooleanPrototypeValueOf | Self::BooleanPrototypeToString => {
                 IntrinsicHolder::BooleanPrototype
             }
@@ -2814,6 +2825,9 @@ impl Intrinsic {
             Self::StringPrototypeToUpperCase => 470,
             Self::StringPrototypeToLocaleLowerCase => 471,
             Self::StringPrototypeToLocaleUpperCase => 472,
+            Self::NumberPrototypeToFixed => 473,
+            Self::NumberPrototypeToExponential => 474,
+            Self::NumberPrototypeToPrecision => 475,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3297,6 +3311,9 @@ impl Intrinsic {
             Self::StringPrototypeToUpperCase => 470,
             Self::StringPrototypeToLocaleLowerCase => 471,
             Self::StringPrototypeToLocaleUpperCase => 472,
+            Self::NumberPrototypeToFixed => 473,
+            Self::NumberPrototypeToExponential => 474,
+            Self::NumberPrototypeToPrecision => 475,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3781,6 +3798,9 @@ impl Intrinsic {
             470 => Some(Self::StringPrototypeToUpperCase),
             471 => Some(Self::StringPrototypeToLocaleLowerCase),
             472 => Some(Self::StringPrototypeToLocaleUpperCase),
+            473 => Some(Self::NumberPrototypeToFixed),
+            474 => Some(Self::NumberPrototypeToExponential),
+            475 => Some(Self::NumberPrototypeToPrecision),
             436 => Some(Self::IteratorPrototypeConstructorGet),
             437 => Some(Self::IteratorPrototypeConstructorSet),
             438 => Some(Self::IteratorPrototypeToStringTagGet),
@@ -4225,6 +4245,9 @@ impl Intrinsic {
             Self::StringPrototypeCodePointAt => "codePointAt",
             Self::StringPrototypePadEnd => "padEnd",
             Self::StringPrototypePadStart => "padStart",
+            Self::NumberPrototypeToFixed => "toFixed",
+            Self::NumberPrototypeToExponential => "toExponential",
+            Self::NumberPrototypeToPrecision => "toPrecision",
             Self::StringPrototypeToLowerCase => "toLowerCase",
             Self::StringPrototypeToUpperCase => "toUpperCase",
             Self::StringPrototypeToLocaleLowerCase => "toLocaleLowerCase",
@@ -5162,6 +5185,9 @@ impl Intrinsic {
             | Self::RegExpPrototypeExec
             | Self::RegExpPrototypeTest
             | Self::NumberPrototypeToString
+            | Self::NumberPrototypeToFixed
+            | Self::NumberPrototypeToExponential
+            | Self::NumberPrototypeToPrecision
             | Self::ReflectGetPrototypeOf
             | Self::ReflectIsExtensible
             | Self::ReflectOwnKeys
