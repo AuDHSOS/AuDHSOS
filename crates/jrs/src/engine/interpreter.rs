@@ -481,6 +481,10 @@ pub enum Resume {
         /// which has no register of the caller to answer into: the root the
         /// receiver travels in takes the primitive instead.
         of_receiver: bool,
+        /// Root holding the `length` 7.3.18 read before the conversion, for a
+        /// clause of 23.1.3 that reads it first; the clause takes it back
+        /// rather than reading it again.
+        length: Option<Root>,
     },
     /// 6.2.6.5 is reading the fields of a descriptor, and one of them is a
     /// getter of the Script.
@@ -873,6 +877,7 @@ impl Resume {
                 construct,
                 hint,
                 of_receiver,
+                length,
                 ..
             } => Self::Coercion {
                 intrinsic,
@@ -884,6 +889,7 @@ impl Resume {
                 step: next,
                 hint,
                 of_receiver,
+                length,
             },
             other => other,
         }
@@ -2244,6 +2250,7 @@ impl RegisterVM {
                         intrinsic,
                         index,
                         hint,
+                        None,
                         call,
                         units,
                         active_feedback,
@@ -4947,6 +4954,22 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Option<(u16, PrimitiveHint)>, VMError> {
+        // Every clause that reads the `length` first converts its arguments
+        // after that read, which `run_array_like_clause` asks for.
+        if Self::reads_an_array_like_length(intrinsic) {
+            return Ok(None);
+        }
+        self.next_argument_coercion(intrinsic, call, heap, realm)
+    }
+
+    /// The same, for a clause that has read whatever 7.3.18 gives it already.
+    fn next_argument_coercion(
+        &self,
+        intrinsic: Intrinsic,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<(u16, PrimitiveHint)>, VMError> {
         // A clause of 23.1.3 that walks reads the `length` before it converts
         // the argument it starts from, so the walk converts it where 7.1.5
         // stands and this conversion does not run at all.
@@ -5394,8 +5417,69 @@ impl RegisterVM {
                     realm,
                 );
             }
+            let length = integer_argument(raw, heap, realm)?.max(0);
+            return self.run_array_like_clause(
+                intrinsic,
+                call,
+                length,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
         }
         self.acc = self.call_intrinsic(intrinsic, call, units, heap, realm)?;
+        Ok(None)
+    }
+
+    /// Runs a clause of 23.1.3 that has the `length` 7.3.18 gave it.
+    ///
+    /// 7.1.1 of an Object argument runs a method of the Script, which the
+    /// clause asks for only here, after the read of the `length`; the length
+    /// travels with the conversion so 7.3.18 answers once.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a clause of 23.1.3 runs where a call does, with what a call has"
+    )]
+    fn run_array_like_clause(
+        &mut self,
+        intrinsic: Intrinsic,
+        call: Call,
+        length: i64,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        // 7.3.18 answers a length no larger than 2^53-1, which 7.1.20 allows
+        // one more of.
+        let length = length.clamp(0, INDEX_LIMIT);
+        let call = Call {
+            resume: None,
+            ..call
+        };
+        if let Some((index, hint)) = self.next_argument_coercion(intrinsic, &call, heap, realm)? {
+            return self.begin_coercion(
+                intrinsic,
+                index,
+                hint,
+                Some(index_value(length)),
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
+        let construct = call.construct;
+        self.acc = if Self::edits_an_array(intrinsic) {
+            self.call_array_edit_intrinsic(intrinsic, call, Some(length), heap, realm)?
+        } else {
+            self.call_array_intrinsic(intrinsic, call, Some(length), units, heap, realm)?
+        };
+        if let Some(target) = construct {
+            self.write_construction(target, self.acc, heap)?;
+        }
         Ok(None)
     }
 
@@ -5520,18 +5604,12 @@ impl RegisterVM {
         let intrinsic = Intrinsic::from_id(intrinsic).ok_or(VMError::TypeError)?;
         let length = integer_argument(answered, heap, realm)?.max(0);
         let call = Call {
-            resume: None,
+            arg_start,
+            arg_count,
+            construct,
             ..call
         };
-        self.acc = if Self::edits_an_array(intrinsic) {
-            self.call_array_edit_intrinsic(intrinsic, call, Some(length), heap, realm)?
-        } else {
-            self.call_array_intrinsic(intrinsic, call, Some(length), units, heap, realm)?
-        };
-        if let Some(target) = construct {
-            self.write_construction(target, self.acc, heap)?;
-        }
-        Ok(None)
+        self.run_array_like_clause(intrinsic, call, length, units, active_feedback, heap, realm)
     }
 
     /// Asks the next method of 7.1.1 for the `length` the clause read, with
@@ -6077,6 +6155,7 @@ impl RegisterVM {
         intrinsic: Intrinsic,
         index: u16,
         hint: PrimitiveHint,
+        length: Option<Value>,
         call: Call,
         units: CodeUnits<'_>,
         active_feedback: &mut FeedbackVector,
@@ -6087,6 +6166,7 @@ impl RegisterVM {
         let argument = self.read_reg(register)?;
         heap.enter_scope();
         let receiver = heap.push_root(call.receiver)?;
+        let length = length.map(|value| heap.push_root(value)).transpose()?;
         let resume = Resume::Coercion {
             intrinsic: intrinsic.id(),
             receiver,
@@ -6097,6 +6177,7 @@ impl RegisterVM {
             step: PrimitiveStep::Exotic,
             hint,
             of_receiver: false,
+            length,
         };
         let conversion = Call {
             receiver: argument,
@@ -6152,6 +6233,7 @@ impl RegisterVM {
             step: PrimitiveStep::Exotic,
             hint,
             of_receiver: true,
+            length: None,
         };
         let conversion = Call {
             receiver: call.receiver,
@@ -13497,7 +13579,27 @@ impl RegisterVM {
             return_pc,
             caller_code_id,
         };
+        // A clause that read the `length` before the conversion carries it,
+        // so 7.3.18 answers once however many arguments it converts.
+        let carried = match resume {
+            Resume::Coercion {
+                length: Some(root), ..
+            } => heap.root_value(root),
+            _ => None,
+        };
         heap.exit_scope();
+        if let Some(held) = carried {
+            let length = integer_argument(held, heap, realm)?.max(0);
+            return self.run_array_like_clause(
+                intrinsic,
+                call,
+                length,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
         // A clause that converts more than one argument converts the next one
         // the same way, from the beginning of the native.
         if let Some((index, hint)) = self.next_coercion(intrinsic, &call, heap, realm)? {
@@ -13505,6 +13607,7 @@ impl RegisterVM {
                 intrinsic,
                 index,
                 hint,
+                None,
                 call,
                 units,
                 active_feedback,
@@ -25769,6 +25872,7 @@ impl RegisterVM {
                                 intrinsic,
                                 index,
                                 hint,
+                                None,
                                 call,
                                 units,
                                 active_feedback,
