@@ -15,6 +15,7 @@ pub use layout::{layout_into, measure_into};
 pub mod bidi;
 pub mod cff;
 pub mod cmap;
+pub mod colr;
 mod error;
 mod fixed;
 pub mod glyf;

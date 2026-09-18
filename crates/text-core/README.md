@@ -1,6 +1,6 @@
 # text-core
 
-Deterministic sans-I/O text and font logic. T1–T12 implement the pure stack
+Deterministic sans-I/O text and font logic. T1–T13 implement the pure stack
 specified in `docs/17-text-and-fonts.md`; rasterization and drawing integration
 remain outside this crate.
 
@@ -109,9 +109,28 @@ view.write_bytes(&mut encoded)?; // Versioned little-endian numbers, no padding.
 # }
 ```
 
+`colr::Colr` reads `COLR` versions 0 and 1 over `CPAL`. `paint` resolves one
+glyph's paint graph into a flat `PaintOp` stream in caller storage: clip and
+group brackets, solid fills, and linear, radial and sweep gradients, all in
+font units under the accumulated `Affine`. It covers paint formats 1 to 32
+with their `Var*` twins, all three extend modes, and all 28 composite modes;
+version 0 resolves through the same emitter. A path of 64 paint tables and
+65,536 visits bound the traversal, and a paint table that is its own ancestor
+returns `Cycle`. A `Compose` combines the two groups above it and draws the
+result onto the surface below them with source-over. `clip_box` reads the
+`ClipList`; `extents` unions the outermost clipped outlines, an empty outline
+contributing none; `Painted::bounded` is the specification's answer, a clip
+box bounding the glyph whatever its graph does. `Cpal` resolves palette entries, the foreground entry
+`0xFFFF`, and palette selection by light or dark background.
+
 The box measures advances and line metrics, not rasterized ink. Soft-wrap
 trailing ASCII spaces/tabs collapse; tabs use four base-face space advances.
 A final hard break adds an empty final line; empty input has a zero box.
-Pixel rounding, hinting, antialiasing, and display settings belong to the caller's
-rasterizer. Vertical text, dictionary breaking, color/bitmap/SVG painting, and
-WOFF decompression are refused by this track.
+Antialiasing and display settings belong to the caller's rasterizer, which
+rounds a horizontal glyph origin to one of four subpixel positions per pixel
+and a vertical one to a whole pixel, and gamma-corrects coverage with the
+compositor's value. Vertical text, dictionary breaking, hinting, `CBDT`,
+`sbix`, SVG glyph painting, and WOFF decompression are refused by this track;
+a face whose only glyph data is one of those covers no cluster, so a fallback
+chain moves to its next layer instead of drawing a blank; an `sbix` face
+states a `glyf` whose every entry is empty, so the loca entries decide.

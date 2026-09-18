@@ -216,7 +216,7 @@ get 'noto/symbols/NotoSansSymbols2-Regular.ttf' 'https://raw.githubusercontent.c
 get 'noto/symbols/NotoSansMath-Regular.ttf' 'https://raw.githubusercontent.com/notofonts/notofonts.github.io/53486abe78fc4d44acde82d4b2d6e902f298e016/fonts/NotoSansMath/unhinted/ttf/NotoSansMath-Regular.ttf'
 get 'noto/symbols/NotoMusic-Regular.ttf' 'https://raw.githubusercontent.com/notofonts/notofonts.github.io/53486abe78fc4d44acde82d4b2d6e902f298e016/fonts/NotoMusic/unhinted/ttf/NotoMusic-Regular.ttf'
 get 'noto/symbols/NotoZnamennyMusicalNotation-Regular.ttf' 'https://raw.githubusercontent.com/notofonts/notofonts.github.io/53486abe78fc4d44acde82d4b2d6e902f298e016/fonts/NotoZnamennyMusicalNotation/unhinted/ttf/NotoZnamennyMusicalNotation-Regular.ttf'
-get 'noto/emoji/NotoColorEmoji.ttf' 'https://raw.githubusercontent.com/googlefonts/noto-emoji/v2.051/fonts/NotoColorEmoji.ttf'
+get 'noto/emoji/Noto-COLRv1.ttf' 'https://raw.githubusercontent.com/googlefonts/noto-emoji/v2.051/fonts/Noto-COLRv1.ttf'
 get 'noto/emoji/LICENSE' 'https://raw.githubusercontent.com/googlefonts/noto-emoji/v2.051/fonts/LICENSE'
 get 'last-resort/LastResort-Regular.ttf' 'https://github.com/unicode-org/last-resort-font/releases/download/18.000/LastResort-Regular.ttf'
 get 'last-resort/LICENSE' 'https://raw.githubusercontent.com/unicode-org/last-resort-font/18.000/LICENSE'

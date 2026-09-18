@@ -49,3 +49,15 @@ T10 shaping fixtures (2026-09-17):
 - Generation: fontTools subset with all layout features and name IDs retained.
   Expected glyph IDs, advances and offsets were independently obtained with
   HarfBuzz 14.4.0 at the face's units-per-em. Product/tests do not link HarfBuzz.
+
+`NotoEmoji-colr.ttf` retains U+0034, U+203C, U+2620, U+263A and U+1F39B of
+`Noto-COLRv1.ttf`, the COLRv1 build of Noto Color Emoji that `fonts/` pins
+(D-169), under `OFL-Noto.txt` with embedded copyright notices. Source
+SHA-256 `0ae57fe58645638523ba35f388d93739d292539a9acb84df5700c81b1e1a28d2`,
+subset SHA-256
+`49b471c405f7ecd1f94481136867e7c49be05b2147e40e8a3b2a2cf058bc5800`.
+FontTools' default Subsetter with `populate(text=...)` produced it, keeping
+all layout features and name IDs. The five base glyphs use paint formats 1,
+2, 4, 6, 10, 12, 14, 16, 18 and 32, the last four times in COMPOSITE_SRC_IN.
+Operation counts, clip boxes and gradient geometry were read from the same
+file with fontTools, which decodes the binary independently of this crate.

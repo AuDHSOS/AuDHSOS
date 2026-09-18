@@ -3,7 +3,7 @@
 ## 17.0 How to read this document
 
 Each step states Status, Depends on, Size, Needs, Does, Produces, and Done
-when, in that order. T1–T12 build `text-core`; R1–R3 describe later work
+when, in that order. T1–T13 build `text-core`; R1–R3 describe later work
 outside this task. A step ends with its acceptance results before the next step starts.
 The owner authorized continuous execution through T12 on 2026-09-17 (D-163). Status describes implemented behavior, not the target API.
 
@@ -24,6 +24,14 @@ The owner authorized continuous execution through T12 on 2026-09-17 (D-163). Sta
 | font instance | A face plus explicit variation coordinates and scale. |
 | role | `Ui` or `Mono`, selecting an ordered fallback chain. |
 | generation | Caller-supplied `u64` identifying one immutable font-set snapshot. |
+| colour glyph | A glyph a face draws from `COLR` and `CPAL` rather than from one outline. |
+| paint graph | The acyclic graph of paint tables one `COLR` version 1 colour glyph is defined by. |
+| paint stream | The flat list of paint operations `text-core` resolves a paint graph into. |
+| palette | One row of `CPAL`: an ordered set of sRGB colour records. |
+| clip box | The precomputed box of a colour glyph in the `ClipList`. |
+| ink extents | The box of what a glyph paints, in font units, distinct from its advance. |
+| subpixel position | One of the quantized horizontal glyph origins within a pixel (D-174). |
+| gamma | The exponent that turns coverage into alpha, owned by the compositor (D-175). |
 | rasterizer | Outline-to-pixel coverage conversion, outside `text-core`. |
 | glyph cache | Rasterized glyph storage owned by the drawing side. |
 | compositor | Drawing-command consumer and framebuffer owner. |
@@ -38,7 +46,9 @@ The owner authorized continuous execution through T12 on 2026-09-17 (D-163). Sta
 2. `text-core` parses outlines, resolves fonts, shapes text, and returns
    fractional geometry, lines, cluster carets, selection rectangles, and a box.
 3. Host tests exercise every operation without a running AuDHSOS system.
-4. T1–T12 add no rasterizer, glyph cache, compositor code, file access,
+4. A colour glyph is measured and its paint graph resolved without a
+   rasterizer, so an emoji can be laid out by a program that draws nothing.
+5. T1–T13 add no rasterizer, glyph cache, compositor code, file access,
    memory mapping, settings access, external crate, or C implementation.
 
 ## 17.3 What is already built
@@ -48,6 +58,7 @@ The owner authorized continuous execution through T12 on 2026-09-17 (D-163). Sta
 | Bitmap text and pixel surfaces | `crates/gfx/src/font.rs:1` | `docs/09-decisions.md:39`, D-29 |
 | Logic-crate safety and checked parsing rules | `docs/04-safety-policy.md:62` | `docs/09-decisions.md:15`, D-05 |
 | Host test and coverage tooling | `docs/06-testing-strategy.md:8` | `docs/09-decisions.md:33`, D-23 |
+| T13 colour glyphs | `crates/text-core/src/colr/mod.rs:1` | D-173, D-176 |
 | T8–T12 segmentation, bidi, shaping, resolution, and layout | `crates/text-core/src/lib.rs:12` | D-160, D-162, D-164 |
 | T7 Unicode properties | `crates/text-core/src/unicode/mod.rs:1` | D-160 |
 | T2–T6 payload readers | `crates/text-core/src/lib.rs:8` | D-159 and D-161 |
@@ -64,6 +75,8 @@ The owner authorized continuous execution through T12 on 2026-09-17 (D-163). Sta
 | Component | Why required |
 |-----------|--------------|
 | R1–R3 drawing integration | Pixel output needs rendering policy and storage outside the pure library. |
+| Gradient and compositing rasterization | R1 must fill a paint stream, not only an outline; D-176 states the price and why it is paid. |
+| Gamma correction of coverage | The value is a setting, which `text-core` does not read; D-175 names its owner. |
 
 ## 17.5 Decision D1: ownership and allocation (D-158)
 
@@ -126,8 +139,8 @@ bounded integer ratios and rounded once. Type 2 random uses a specified constant
 seed and integer sequence per glyph invocation, never time. Fixed-point square
 root rounds by the same nearest-even rule. Size is positive; width is nonnegative.
 T3 introduces the shared arithmetic and its signed tie/overflow vectors before
-any scaled metric is exposed. The rasterizer alone chooses pixel rounding,
-hinting, antialiasing, and subpixel policy. GPOS Device pixel adjustments do not
+any scaled metric is exposed. The rasterizer alone rounds to pixels; D7 states
+where. Hinting stays refused, so no outline is fitted to the grid. GPOS Device pixel adjustments do not
 change layout; VariationIndex adjustments do.
 
 ## 17.7 Decision D3: shaping scope and Unicode (D-160)
@@ -157,8 +170,9 @@ UnicodeData First/Last ranges, and surrogate/noncharacter handling are tested.
 Version changes replace sources, generated tables, and conformance answers
 together under D-156. Default UAX #29 and #14 suites are complete gates; dictionary
 word breaking and locale-specific line-break tailoring are refused in this track.
-Vertical layout, color emoji painting, bitmap strikes, SVG glyph painting, and
-WOFF/WOFF2 decompression are refused; supported outline fonts remain usable.
+Vertical layout, bitmap strikes, `sbix`, SVG glyph painting, and WOFF/WOFF2
+decompression are refused; supported outline fonts remain usable. Colour
+glyphs are no longer refused: T13 reads `COLR` and `CPAL` under D9.
 
 ## 17.8 Decision D4: validation and limits (D-161)
 
@@ -243,12 +257,112 @@ byte order; Rust padding and addresses are never compared or transmitted.
 | Owner | Inputs | Outputs and responsibilities |
 |-------|--------|------------------------------|
 | File/settings adapter, later | Files, explicit user settings | Immutable font bytes, ordered FontSet, generation, and style. |
-| `text-core`, T1–T12 | Those values, text, optional width, buffers | Glyph IDs, fixed positions/outlines, line/cluster geometry and box. |
-| Rasterizer, R1 | Outlines and positions, explicit rendering policy | Pixel coverage; hinting and rounding cannot feed back into advances. |
-| Glyph cache, R2 | Generation, face, instance, size, glyph, raster policy | Cached pixel data with bounded eviction and generation invalidation. |
+| `text-core`, T1–T13 | Those values, text, optional width, buffers | Glyph IDs, fixed positions/outlines, line/cluster geometry and box; a colour glyph's paint stream and ink extents (D6). |
+| Rasterizer, R1 | Outlines, positions and paint streams, explicit rendering policy | Pixel coverage; hinting and rounding cannot feed back into advances. D7 states the rounding, D8 the gamma. |
+| Glyph cache, R2 | Generation, face, instance, size, glyph, subpixel position, raster policy | Cached pixel data with bounded eviction and generation invalidation. Four horizontal positions per pixel (D7). |
 | Toolkit/compositor integration, R3 | Same font-set snapshot and style | Measurement and drawing commands with checked generation agreement. |
 
-## 17.10 The order of the steps
+## 17.10 Decision D6: colour glyphs belong to `text-core` (D-173)
+
+**Decision:** `text-core` reads `COLR` and `CPAL`, resolves the paint graph,
+and reports ink extents. The rasterizer turns a resolved paint stream into
+pixels and reads no font table. Colour glyph work is step T13 of this track.
+
+1. Reason: an application measures text without rasterizing it, and an emoji
+   whose box no reader can report cannot be laid out.
+2. Reason: a paint graph is untrusted input with the cycle and depth hazards
+   the composite decoder of T4 and the subroutine interpreter of T5 already
+   bound in this crate.
+3. Reason: a colour glyph's advance and vertical origin are the base glyph's
+   own, which T3 reads; a second reader would repeat T3.
+
+**Option not taken:** the colour tables in the rasterizer, which gives the
+toolkit and the compositor two readers of one byte range and makes a
+measurement depend on a rasterizer the measuring program does not run.
+
+The boundary of D1 is unchanged. The palette index and the text colour are
+parameters; palette entry `0xFFFF` resolves to a named foreground, never to a
+colour. `Colr::paint` writes into caller storage and allocates nothing.
+
+| Owner | Reads | Produces |
+|-------|-------|----------|
+| `text-core`, T13 | `COLR`, `CPAL`, the outline tables, an explicit palette index and instance | Paint operations in font units, colour stops, the clip box, the boundedness verdict, ink extents |
+| Rasterizer, R1 | That stream, an explicit rendering policy | Pixel coverage; it walks no graph and meets no cycle |
+
+## 17.11 Decision D7: where rounding happens (D-174)
+
+**Decision:** a horizontal glyph origin is quantized to one of **four**
+subpixel positions per pixel. A vertical glyph origin is a whole pixel. An
+advance stays fractional through shaping and layout and is never rounded
+there. Hinting stays refused, so no outline is fitted to the grid.
+
+1. Reason: a whole-pixel horizontal origin moves each glyph by up to half a
+   pixel against the fractional advance layout reported, once per glyph, so a
+   run drifts from the box `measure` returned; a quarter of a pixel bounds
+   that error at an eighth of a pixel.
+2. Reason: every glyph of a line shares one baseline (D-171), so a whole-pixel
+   vertical origin is one rounding per line and keeps a horizontal stem on a
+   pixel row.
+3. Reason: four positions bound the glyph cache of R2 at four entries per
+   glyph, instance and size; a free fractional origin has an unbounded key.
+
+**Option not taken:** sixteen subpixel positions, which quadruple that cache
+for a shift of a sixteenth of a pixel.
+
+The number four is part of the R2 cache key, so changing it invalidates every
+cached entry. A glyph at a subpixel position is the same outline translated;
+this rounding changes no advance, no line break and no box.
+
+## 17.12 Decision D8: gamma (D-175)
+
+**Decision:** coverage is gamma-corrected before it becomes alpha. One value
+does it for the whole system. `server-display` owns that value and reports it
+to its clients through the display protocol of `user-proto`. Its default is
+2.2.
+
+1. Reason: uncorrected coverage composites light text on a dark background
+   heavier than dark text on a light one, so with a switchable appearance the
+   apparent stroke weight of one font at one size moves when the theme
+   changes.
+2. Reason: one value system-wide is what makes the text of two programs match
+   on one screen.
+3. Reason: a COLR gradient interpolates in linear light, which
+   `docs/microsoft/cpal.html`, "Interpolation of colors", requires, so the
+   compositor already holds that transfer function.
+
+**Option not taken:** correction per program, whose cost is text that differs
+between one window and the window beside it.
+
+`text-core` cannot hold the value: it is a setting, and this crate reads no
+setting (D1). It reaches the rasterizer as a parameter of R1's rendering
+policy, the way the palette index reaches T13.
+
+## 17.13 Decision D9: COLRv1 as the colour format (D-176)
+
+**Decision:** T13 implements COLR version 1 with CPAL, and COLR version 0 as
+the same table's degenerate case through the same emitter. `CBDT`/`CBLC`,
+`sbix` and OpenType-SVG are refused. Layer 6 of both chains of D-169 becomes
+`fonts/noto/emoji/Noto-COLRv1.ttf`.
+
+1. Reason: this system allows fractional scaling factors, and a bitmap strike
+   does not survive them.
+2. Reason: version 0 is version 1 with one solid fill per clipped layer, so
+   one emitter answers both and no second path can disagree with the first.
+
+**Option not taken:** the CBDT build, whose cost is that scaling; and
+`Noto-COLRv1-noflags.ttf`, which drops 26 regional indicators and ten
+plane 15 code points so that flags fall to a later layer of the chain.
+
+The price of the decision falls on the rasterizer, which now needs gradients
+and the compositing and blending modes of W3C Compositing and Blending
+Level 1 that it would not otherwise need. It is paid deliberately.
+
+A chain layer whose only glyph data is a refused colour format covers no
+cluster: T11 skips it and the chain moves to its next layer, so a face this
+track cannot draw never yields a blank. `Colr::parse` returns `MissingTable`
+for such a face.
+
+## 17.14 The order of the steps
 
 | Step | Status | Depends on | Size |
 |------|--------|------------|------|
@@ -264,11 +378,12 @@ byte order; Rust padding and addresses are never compared or transmitted.
 | T10 shaping | implemented | T9 | XL |
 | T11 resolution | implemented | T10 | M |
 | T12 layout | implemented | T11 | L |
-| R1 rasterizer | unscheduled, outside task | T12 | XL |
+| T13 colour glyphs | implemented | T12 | XL |
+| R1 rasterizer | unscheduled, outside task | T13 | XL |
 | R2 glyph cache | unscheduled, outside task | R1 | M |
 | R3 integration | unscheduled, outside task | R2 | L |
 
-## 17.11 T1: sfnt envelope
+## 17.15 T1: sfnt envelope
 
 **Status:** implemented.
 **Depends on:** decisions D1–D5 above.
@@ -299,7 +414,7 @@ documentation, and QEMU tests. The existing end-to-end run fails after
 its workspace fuzz-regression phase. The separate `text_font` regression
 command exits 0. `text-core` has no system-image consumer in T1.
 
-## 17.12 T2: cmap
+## 17.16 T2: cmap
 
 **Status:** implemented; 28 crate tests, release and bare-target checks, and nine fuzz regression seeds pass.
 **Depends on:** T1 acceptance.
@@ -324,7 +439,7 @@ variation sequences return `None`.
 **Done when:** all six formats pass literal vectors and malformed count,
 range, offset, sentinel, and glyph-bound tests; report acceptance before continuing.
 
-## 17.13 T3: metrics and Fixed
+## 17.17 T3: metrics and Fixed
 
 **Status:** implemented; 34 crate tests and strict Clippy pass; debug/release and bare-target builds pass. Eight installed DejaVu fonts pass the host metrics/cmap probe.
 **Depends on:** T2.
@@ -345,7 +460,7 @@ PostScript glyph names are validated but do not affect layout.
 **Done when:** exact scaled metrics, negative ties, overflow, truncated metric
 arrays, and invalid count relationships pass host tests; report acceptance before continuing.
 
-## 17.14 T4: glyf and loca
+## 17.18 T4: glyf and loca
 
 **Status:** implemented; 41 crate tests and strict Clippy pass in debug/release; bare-target builds pass. Host probes decode all 31,597 glyphs of eight DejaVu fonts.
 **Depends on:** T3.
@@ -369,7 +484,7 @@ O(decoded points + component visits); loca validation is O(glyph count).
 out-of-order offsets, cycles, self-reference, depth exhaustion, and truncated
 coordinates have exact results or typed errors; report acceptance before continuing.
 
-## 17.15 T5: CFF and CFF2
+## 17.19 T5: CFF and CFF2
 
 **Status:** implemented; 50 tests, strict Clippy, release/bare-target builds, and 11 fuzz seeds pass. The full Noto Sans CJK JP host probe decodes 65,535 glyphs and 4,336,282 commands; checked-in fixtures verify literal coordinates and the CFF2 worked example.
 **Depends on:** T4.
@@ -403,7 +518,7 @@ the operation limit. FDSelect lookup is O(range count).
 INDEX offSize/count errors, operand overflow, invalid operators, recursive
 subroutines, stack and depth limits all pass negative tests; report acceptance before continuing.
 
-## 17.16 T6: variations
+## 17.20 T6: variations
 
 **Status:** implemented and accepted (2026-09-17).
 **Depends on:** T5.
@@ -442,7 +557,7 @@ Acceptance: 62 host tests and one doctest pass in debug/release; Clippy,
 probe decodes all 4515 glyphs of Noto Sans at wght=900/wdth=75.
 The full-system E2E failure recorded in T1 remains outside this crate.
 
-## 17.17 T7: Unicode generation
+## 17.21 T7: Unicode generation
 
 **Status:** implemented and accepted (2026-09-17).
 **Depends on:** T6.
@@ -471,7 +586,7 @@ AGPL-3.0-only AND Unicode-3.0 and both copyright notices; xtask checks the exact
 
 Product coverage after T7 is 3461/3639 lines (95.11%) and 975/1116 branches (87.37%).
 
-## 17.18 T8: segmentation
+## 17.22 T8: segmentation
 
 **Status:** implemented and accepted (2026-09-17).
 **Depends on:** T7.
@@ -498,7 +613,7 @@ capacity failures, UTF-8 offsets, and mandatory breaks pass. Clippy, the
 bare-target build, and 13 fuzz seeds pass. Product coverage is 3883/4063 lines
 (95.57%) and 1341/1488 branches (90.12%).
 
-## 17.19 T9: bidirectional algorithm
+## 17.23 T9: bidirectional algorithm
 
 **Status:** implemented and accepted (2026-09-17).
 **Depends on:** T8.
@@ -520,7 +635,7 @@ Clippy, the bare target, and 13 fuzz seeds pass. Product coverage is
 `resolve` retains paragraph levels; `reorder_line` applies L1/L2 independently.
 Both use caller buffers. Runtime is O(N(log R + 126 + 63)); storage is O(N).
 
-## 17.20 T10: shaping
+## 17.24 T10: shaping
 
 **Status:** implemented and accepted (2026-09-17).
 **Depends on:** T9.
@@ -564,7 +679,7 @@ and tone marks. The default stages include legacy Arabic mset substitution.
 Debug/release, Clippy, and bare-target checks pass. Product
 coverage is 5883/6171 lines (95.33%) and 1926/2170 branches (88.76%).
 
-## 17.21 T11: resolution
+## 17.25 T11: resolution
 
 **Status:** implemented and accepted (2026-09-17).
 **Depends on:** T10.
@@ -597,7 +712,7 @@ UVS coverage, missing glyphs, caller capacities, and language extensions pass
 six host tests.
 Debug/release, strict Clippy, and the bare target pass.
 
-## 17.22 T12: layout
+## 17.26 T12: layout
 
 **Status:** implemented and accepted (2026-09-17).
 **Depends on:** T11.
@@ -695,17 +810,132 @@ Review traced the earlier E2E disk timeouts to concurrent BAR size probing by
 startup (D-165); the main E2E run passes with the fix.
 
 
-## 17.23 R1: rasterizer (outside this task)
+## 17.27 T13: colour glyphs
 
-**Status:** unscheduled.
+**Status:** implemented and accepted (2026-09-18).
 **Depends on:** T12.
 **Size:** XL.
-**Needs:** accepted outline and position output, explicit rendering policy.
-**Does:** convert outlines into bounded pixel coverage buffers.
+**Needs:** `docs/microsoft/colr.html:1130` and `docs/microsoft/cpal.html:740`;
+the item variation store of T6; the outline decoders of T4 and T5.
+**Does:** validate `CPAL` and `COLR` of either version, resolve one glyph's
+paint graph into a flat paint stream in font units, report the clip box, the
+boundedness verdict, and ink extents.
+**Produces:** `crates/text-core/src/colr`, `Colr`, `Cpal`, `PaintOp`, `Fill`,
+`ColorLine`, `Affine`, `CompositeMode`, `Extents`.
+
+`Cpal::parse` validates every palette's record range and the optional palette
+types array; the two label arrays name `name` strings and are range-checked
+and not read. `Cpal::color` multiplies the record's alpha by the paint
+table's, clamped to `[0, 1]`; entry `0xFFFF` is the foreground.
+`Cpal::palette_for` selects by light or dark background, and a table without
+a types array declares no preference.
+
+`Colr::parse_tables` validates the record arrays, the base glyph order, the
+clip ranges and every glyph identifier once; each paint table is validated
+when the traversal reaches it. Limits: 65,536 base glyph records, 1,048,576
+`LayerList` entries, 65,536 clip records, 1,024 palettes, a path of 64
+paint tables and 65,536 paint table visits per glyph.
+A paint table that is its own ancestor returns `Cycle` before recursion. A
+paint format this version does not define, and its sub-graph, are ignored and
+count as bounded, which the format's own section requires and which D-167
+already decided for the CFF2 interpreter.
+
+`Colr::paint` writes `PaintOp` into caller storage: `Clip` and `Unclip`
+bracket a clip region, `Group` and `Compose` bracket an offscreen surface.
+A `Compose` consumes the two groups above it, combines them with its mode,
+and draws the result onto the surface below them with source-over, which is
+what the rendering algorithm of `docs/microsoft/colr.html:3332` does, so the
+ink that surface already held stays under the result. `Fill` carries the
+accumulated transform and either a solid colour or a gradient naming a range
+of the caller's colour stop slice. Stops are written in increasing offset
+order, which a variable font can change, so each is placed by binary search
+into the part already written. Rotation and skew need a sine, a cosine and a
+tangent; `colr::trig` computes them from integer Taylor series after an exact
+reduction to a quarter turn, within 2⁻²⁸ of the real value, so D2 admits no
+floating point here either.
+
+Variation deltas are integers applied to the stored representation: a `FWORD`
+takes one font unit per delta, an `F2DOT14` one unit of 2⁻¹⁴, a `Fixed` one
+unit of 2⁻¹⁶. A `varIndexBase` of `0xFFFFFFFF`, a face without an item
+variation store, and a non-variable format each leave the stored numbers
+alone. Without a `DeltaSetIndexMap` the sequence is the delta-set index
+itself, high word outer and low word inner.
+
+`Colr::clip_box` is O(log N) over the `ClipList`. `Colr::extents` is the
+union of the boxes of the outermost clipped outlines, decoded through T4 or
+T5 into caller scratch; curved segments contribute their control points, so
+the box can exceed the ink. `Painted::bounded` is the specification's answer:
+a clip box bounds the glyph whatever its graph does, and without one the rule
+of each format decides, computed during the traversal. Resolution is O(P) for P
+paint table visits plus O(S²) worst case for S colour stops, a binary search
+and a move of the tail per stop; S is bounded by the caller's stop slice.
+Storage is the caller's two slices and nothing else.
+
+Layout is unchanged: a colour glyph's advance and vertical origin are the
+base glyph's own, which T3 already reads, so T12 needs no new field.
+
+**Done when:** every paint format, every extend mode and every composite mode
+has a literal result vector; cyclic, self-referential and overlong graphs
+return typed errors; version 0 and version 1 of one table resolve through one
+emitter; a real COLRv1 face's operation counts, clip boxes and gradient
+geometry match numbers obtained independently; report acceptance.
+
+Acceptance: 33 host tests. Synthetic tables cover CPAL versions 0 and 1,
+palette selection, foreground entries, alpha multiplication and clamping,
+version 0 layers and their malformed record arrays, version 1 layer lists,
+all three gradients, all three extend modes, the ten non-variable affine
+formats by the position they map, the ten variable ones against their twins
+built from the stored numbers plus the deltas, every composite mode value
+including the unrecognized ones, `PaintColrGlyph` reuse,
+three shapes of cycle, the depth limit at equality and one beyond, caller
+capacity exhaustion, an undefined paint format, variable paints with and
+without a delta-set index map, a reserved variation base, stop reordering
+under variation, clip boxes of both formats, and overlapping and inverted
+clip ranges, a variation base at the end of its range whose sequence fits its
+own field count and one whose sequence does not, a clip box bounding a glyph
+whose graph alone does not, and an empty clipped outline contributing no ink.
+The `NotoEmoji-colr.ttf` fixture, five base glyphs of the build
+D-176 pins, exercises paint formats 1, 2, 4, 6, 10, 12, 14, 16, 18 and 32;
+its operation and stop counts, clip boxes and gradient geometry were read
+from the same file with fontTools. Every truncated prefix of its `COLR` and
+`CPAL` tables is refused or bounded. A face whose only glyph data is a
+refused colour format covers no cluster and the chain falls through to its
+next layer, both for a face that states no outline table and for a strike
+face that states a `glyf` whose every entry is empty, and the notdef of a
+cluster no face covers comes from a face that can draw one. Debug/release, strict Clippy, the bare target and the
+`text_font` fuzz regression, which gained the seeds `colr-emoji` and
+`colr-cycle`, all pass. Product coverage after T13 is 96.09% of lines and
+89.49% of branches.
+
+`sh tools/xtask-check.sh --quiet` on 2026-09-18 passes lint, layering,
+dependency checks, unsafe budgets, host tests, coverage, Miri, documentation
+and the QEMU tests, and fails in its end-to-end run. The same run on the
+unmodified default branch fails the same way, with a different violation on
+each attempt — once "the application said nothing through the console
+driver", once "the forwarded port refused" — so the failure is the
+container's network and not this step: no program or server of the image
+depends on `text-core`, which only `fuzz/text_font` links.
+
+## 17.28 R1: rasterizer (outside this task)
+
+**Status:** unscheduled.
+**Depends on:** T13.
+**Size:** XL.
+**Needs:** accepted outline, position and paint stream output; the rounding of
+D7; the gamma value of D8.
+**Does:** convert outlines into bounded pixel coverage buffers, and fill a
+paint stream with solid colours, the three gradients and the twenty-eight
+compositing and blending modes of W3C Compositing and Blending Level 1.
 **Produces:** rasterizer component separate from `text-core`.
 **Done when:** reference images and policy changes preserve T12 measurements.
 
-## 17.24 R2: glyph cache (outside this task)
+Gradients and compositing are what vector emoji cost. D9 states why the cost
+is accepted: this system allows fractional scaling factors and a bitmap
+strike does not survive them. A colour glyph's gradients interpolate in
+linear light, so the rasterizer applies the inverse transfer function of D8
+before it interpolates and the forward one after.
+
+## 17.29 R2: glyph cache (outside this task)
 
 **Status:** unscheduled.
 **Depends on:** R1.
@@ -716,7 +946,7 @@ startup (D-165); the main E2E run passes with the fix.
 **Done when:** cached and uncached pixels agree and changed instances cannot
 reuse stale glyphs.
 
-## 17.25 R3: integration (outside this task)
+## 17.30 R3: integration (outside this task)
 
 **Status:** unscheduled.
 **Depends on:** R2.
@@ -727,7 +957,7 @@ reuse stale glyphs.
 **Done when:** both address spaces agree on serialized geometry; stale
 generation commands are rejected or retried against the current snapshot.
 
-## 17.26 Risks
+## 17.31 Risks
 
 | # | Risk | Effect | Reduction |
 |---|------|--------|-----------|
@@ -738,3 +968,5 @@ generation commands are rejected or retried against the current snapshot.
 | 5 | Fallback or generation mismatch | Wrong glyphs and line geometry | Explicit language, ordered chains, instance metadata, generation. |
 | 6 | Strict envelope policy | Some readable fonts refused | Documented overlap/limit errors; valid TTC sharing tests. |
 | 7 | Growing layout data | Allocation failure or resource abuse | Caller buffers first; fallible optional vectors; work limits. |
+| 8 | Malformed or cyclic paint graph | Unbounded recursion or work | Path tracking, depth 64, 65,536 visits, typed errors; cyclic, self-referential and overlong tests at T13. |
+| 9 | Rasterizer cost of vector emoji | R1 grows gradients and 28 blend modes | The cost is stated in D9 and bounded by the paint stream, which carries no graph. |
