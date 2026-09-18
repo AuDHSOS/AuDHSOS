@@ -222,9 +222,6 @@ impl Parser {
             let async_method = self.async_method_head();
             if async_method {
                 self.need("async")?;
-                if self.is("*") {
-                    return Err(Self::unsupported("async generator methods"));
-                }
             }
             let generator = self.eat("*");
             let accessor = if (self.is("get") || self.is("set"))

@@ -665,6 +665,10 @@ pub enum Instruction {
     /// `YieldExpression` of 15.5: the body leaves with the accumulator, and
     /// 27.5.1.2 takes it back here with what the call of `next` was given.
     Yield,
+    /// The same in an async generator of 27.6: 27.6.3.8 answers the request
+    /// at the front of the queue with the accumulator, and the body carries on
+    /// where another request waits behind it.
+    AsyncYield,
     /// The private element of 6.2.13 that the key register names, which
     /// 7.3.28 reads and 7.3.29 writes, and 7.3.27 adds.
     ///
@@ -893,6 +897,9 @@ pub struct BytecodeFunction {
     /// Whether this unit is the body of a generator of 27.5, whose function
     /// object 27.3.3 gives a prototype of its own.
     pub generator: bool,
+    /// Whether it is the body of an async generator of 27.6, whose `yield`
+    /// answers a request of the queue rather than the call that resumed it.
+    pub async_generator: bool,
     /// The `name` 10.2.10 gives the function, as an index into this unit's
     /// own string constants. A function 8.5.2 gives no name has none.
     pub name: Option<u16>,
@@ -947,6 +954,7 @@ impl BytecodeFunction {
             promise_register: None,
             generator_register: None,
             generator: false,
+            async_generator: false,
             name: None,
             source: None,
             realm_script: false,
@@ -1364,6 +1372,7 @@ impl BytecodeFunction {
             | Instruction::Await
             | Instruction::GeneratorStart
             | Instruction::Yield
+            | Instruction::AsyncYield
             | Instruction::Return => None,
             Instruction::CopyDataProperties {
                 source,

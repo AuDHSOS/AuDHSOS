@@ -319,6 +319,21 @@ pub enum ObjectKind {
         /// suspended at a `yield`, 2 while it runs and 3 once it is done.
         state: u8,
     },
+    /// An `AsyncGenerator` of 27.6, which holds the frame its body suspended
+    /// in beside the requests of 27.6.3.1 that wait for it.
+    AsyncGenerator {
+        /// The continuation of the body, or undefined where it has none left.
+        continuation: Value,
+        /// The queue of 27.6.3.1 as an Array: each request is the capability
+        /// of 27.2.1.1 it answers through and the value its call was given.
+        queue: Value,
+        /// Where the front of the queue stands, which a request that was
+        /// answered moves.
+        head: u32,
+        /// `[[AsyncGeneratorState]]` of 27.6.1: 0 before the body ran, 1 where
+        /// it suspended at a `yield`, 2 while it runs and 3 once it is done.
+        state: u8,
+    },
     /// Bound function exotic object, the slots of 10.4.1.
     BoundFunction {
         /// `[[BoundTargetFunction]]`.
@@ -360,6 +375,11 @@ impl ObjectKind {
                 ..
             } => [Some(*registers), Some(*capability), None, None, None],
             Self::Generator { continuation, .. } => [Some(*continuation), None, None, None, None],
+            Self::AsyncGenerator {
+                continuation,
+                queue,
+                ..
+            } => [Some(*continuation), Some(*queue), None, None, None],
             Self::BoundFunction {
                 target,
                 receiver,

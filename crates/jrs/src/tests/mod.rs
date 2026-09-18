@@ -652,13 +652,13 @@ fn error_variants_render_useful_messages() {
 #[test]
 fn unsupported_syntax_is_distinct_from_syntax_errors() {
     for source in [
-        "async function* g(){}",
-        "async function* g(){}",
+        "for await(const x of []){}",
+        "class C{ static { 1 } }",
         "class C{x=1}",
         "let x={};x?.y",
         "let x={...{a:1}}",
-        "let x={async *g(){}}",
-        "let x={async *g(){}}",
+        "with(1){}",
+        "class C{ static {} }",
         "label: function f(){}",
         "let \\u0069f=1",
     ] {

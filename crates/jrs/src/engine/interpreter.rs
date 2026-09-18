@@ -403,6 +403,13 @@ pub enum Resume {
         /// Root holding the Generator whose body ran.
         state: Root,
     },
+    /// 27.6.1.2 took the body of an `AsyncGenerator` back, and the answer is
+    /// the promise of the request the call made.
+    AsyncGeneratorStep {
+        /// Root holding the capability of 27.2.1.1 that request answers
+        /// through.
+        capability: Root,
+    },
     /// A native operation asked the Script for a primitive argument.
     ///
     /// The native has no frame, and the caller's registers still hold the
@@ -1408,14 +1415,23 @@ impl RegisterVM {
     fn make_generator_function(
         &mut self,
         code: &BytecodeFunction,
+        asynchronous: bool,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<(), VMError> {
         let prototype = self.allocate_object(code, heap, realm, heap.shapes.root_shape())?;
-        let generator_prototype = realm.generator_prototype(heap)?;
+        let generator_prototype = if asynchronous {
+            realm.async_generator_prototype(heap)?
+        } else {
+            realm.generator_prototype(heap)?
+        };
         heap.set_object_prototype(prototype, generator_prototype)?;
         let function = self.acc.as_object().ok_or(VMError::TypeError)?;
-        let inherited = realm.generator_function_prototype(heap)?;
+        let inherited = if asynchronous {
+            realm.async_generator_function_prototype(heap)?
+        } else {
+            realm.generator_function_prototype(heap)?
+        };
         heap.set_object_prototype(function, inherited)?;
         let name = PropertyKey::String(heap.strings.intern("prototype")?);
         heap.define_own_named(
@@ -2170,7 +2186,11 @@ impl RegisterVM {
         // the `prototype` the function carries, and the frame keeps it in a
         // register of its own.
         if let Some(register) = callee.generator_register {
-            let generator = Self::allocate_generator(function_ref, heap, realm)?;
+            let generator = if callee.async_generator {
+                Self::allocate_async_generator(function_ref, heap, realm)?
+            } else {
+                Self::allocate_generator(function_ref, heap, realm)?
+            };
             self.write_reg(register, generator)?;
         }
         self.acc = VALUE_UNDEFINED;
@@ -2579,7 +2599,10 @@ impl RegisterVM {
             | Intrinsic::IteratorPrototypeReduce
             | Intrinsic::GeneratorPrototypeNext
             | Intrinsic::GeneratorPrototypeReturn
-            | Intrinsic::GeneratorPrototypeThrow => Err(VMError::InvalidFeedbackVector),
+            | Intrinsic::GeneratorPrototypeThrow
+            | Intrinsic::AsyncGeneratorPrototypeNext
+            | Intrinsic::AsyncGeneratorPrototypeReturn
+            | Intrinsic::AsyncGeneratorPrototypeThrow => Err(VMError::InvalidFeedbackVector),
             // 20.5.3.4 joins the `name` and the `message` the Error holds.
             Intrinsic::ErrorPrototypeToString => self.error_text(call.receiver, heap, realm),
             // 20.2.3 accepts any argument and answers undefined.
@@ -4849,6 +4872,16 @@ impl RegisterVM {
                 heap,
                 realm,
             );
+        }
+        // 27.6.1.2 to 27.6.1.4 answer a promise of their own and take the body
+        // of an AsyncGenerator back where it suspended.
+        if matches!(
+            intrinsic,
+            Intrinsic::AsyncGeneratorPrototypeNext
+                | Intrinsic::AsyncGeneratorPrototypeReturn
+                | Intrinsic::AsyncGeneratorPrototypeThrow
+        ) {
+            return self.begin_async_generator_step(intrinsic, call, units, heap, realm);
         }
         // 27.5.1.2 to 27.5.1.4 take the body of a Generator back where it
         // suspended, which is a frame this call pushes.
@@ -11898,6 +11931,7 @@ impl RegisterVM {
             | ObjectKind::TypedArray { .. }
             | ObjectKind::Continuation { .. }
             | ObjectKind::Generator { .. }
+            | ObjectKind::AsyncGenerator { .. }
             | ObjectKind::Accessor { .. }
             | ObjectKind::RegExp { .. }
             // 27.2.5.5 tags a Promise through @@toStringTag, and 24.1.3.13 and
@@ -12810,8 +12844,10 @@ impl RegisterVM {
                 | ObjectKind::SharedArrayBuffer { .. }
                 | ObjectKind::Atomics
                 | ObjectKind::Host262
-                // 27.5.1.5 tags a Generator through @@toStringTag.
+                // 27.5.1.5 tags a Generator through @@toStringTag, and
+                // 27.6.1.5 tags an AsyncGenerator.
                 | ObjectKind::Generator { .. }
+                | ObjectKind::AsyncGenerator { .. }
                 | ObjectKind::DataView { .. }
                 | ObjectKind::TypedArray { .. }
                 | ObjectKind::CollectionIterator { .. }
@@ -19285,6 +19321,27 @@ impl RegisterVM {
             .is_none_or(|code| !code.handlers.is_empty())
     }
 
+    /// The same for an `AsyncGenerator` of 27.6, whose answer is the promise of
+    /// the request rather than what the body left with.
+    fn resume_async_frame(
+        &mut self,
+        frame: ObjectRef,
+        sent: Value,
+        call: Call,
+        held: Root,
+        units: CodeUnits<'_>,
+        heap: &GenerationalHeap,
+    ) -> Result<Option<u32>, VMError> {
+        self.resume_suspended_frame(
+            frame,
+            sent,
+            call,
+            Resume::AsyncGeneratorStep { capability: held },
+            units,
+            heap,
+        )
+    }
+
     /// The frame a Generator suspended in, pushed on the frame the call to
     /// 27.5.1.2 stands in so that its return reaches that call.
     fn resume_generator_frame(
@@ -19293,6 +19350,27 @@ impl RegisterVM {
         sent: Value,
         call: Call,
         held: Root,
+        units: CodeUnits<'_>,
+        heap: &GenerationalHeap,
+    ) -> Result<Option<u32>, VMError> {
+        self.resume_suspended_frame(
+            frame,
+            sent,
+            call,
+            Resume::GeneratorStep { state: held },
+            units,
+            heap,
+        )
+    }
+
+    /// The frame a body suspended in, pushed on the frame the call that
+    /// resumes it stands in, so that its return reaches that call.
+    fn resume_suspended_frame(
+        &mut self,
+        frame: ObjectRef,
+        sent: Value,
+        call: Call,
+        resume: Resume,
         units: CodeUnits<'_>,
         heap: &GenerationalHeap,
     ) -> Result<Option<u32>, VMError> {
@@ -19339,7 +19417,7 @@ impl RegisterVM {
             caller_unit: self.unit,
             caller_binding_count: self.active_binding_count,
             caller_context: self.current_context,
-            resume: Some(Resume::GeneratorStep { state: held }),
+            resume: Some(resume),
             construct: None,
             arguments: None,
         });
@@ -19408,6 +19486,318 @@ impl RegisterVM {
         Ok(())
     }
 
+    /// 27.6.3.2 on a body that threw: the request at the front of the queue is
+    /// rejected with the value and the frame leaves.
+    fn unwind_async_generator(
+        &mut self,
+        code: &BytecodeFunction,
+        value: Value,
+        native: Option<(super::realm::NativeErrorKind, &'static str)>,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(usize, Option<u32>), VMError> {
+        self.settle_async_generator_end(code, value, true, heap, realm)?;
+        let Some(frame) = self.frames.pop() else {
+            self.fp = 0;
+            self.active_binding_count = 0;
+            self.current_context = None;
+            self.settled_async_body = true;
+            return Err(VMError::Thrown(value, native));
+        };
+        self.fp = frame.caller_fp;
+        self.active_binding_count = frame.caller_binding_count;
+        self.current_context = frame.caller_context;
+        self.unit = frame.caller_unit;
+        self.acc = VALUE_UNDEFINED;
+        if let Some(Resume::AsyncGeneratorStep { capability }) = frame.resume {
+            let held = heap
+                .root_value(capability)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            heap.exit_scope();
+            self.acc = promise::slot(heap, held, promise::CAPABILITY_PROMISE);
+        }
+        Ok((frame.return_pc, frame.caller_code_id))
+    }
+
+    /// 27.6.3.2: the body of an `AsyncGenerator` ended, so the request at the
+    /// front of the queue takes the result that says so and the Generator is
+    /// done.
+    fn settle_async_generator_end(
+        &self,
+        code: &BytecodeFunction,
+        value: Value,
+        rejected: bool,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let register = code.generator_register.ok_or(VMError::InvalidRegister)?;
+        let result = if rejected {
+            value
+        } else {
+            let made = Self::iterator_result(None, heap, realm)?;
+            let object = made.as_object().ok_or(VMError::TypeError)?;
+            let key = PropertyKey::String(heap.strings.intern("value")?);
+            heap.define_own_named(object, key, value, PropertyFlags::ordinary_data())?;
+            made
+        };
+        let generator = self
+            .read_reg(register)?
+            .as_object()
+            .ok_or(VMError::TypeError)?;
+        Self::set_async_generator(generator, None, GENERATOR_COMPLETED, heap)?;
+        self.answer_async_request(generator, result, rejected, heap, realm)
+    }
+
+    /// 27.6.1.2: a request of the queue of 27.6.3.1, which the body answers
+    /// where it yields, returns or throws.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a receiver that is
+    /// no `AsyncGenerator`.
+    fn begin_async_generator_step(
+        &mut self,
+        intrinsic: Intrinsic,
+        call: Call,
+        units: CodeUnits<'_>,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let Some(generator) = call.receiver.as_object() else {
+            return Err(type_error(
+                heap,
+                realm,
+                "the receiver of 27.6.1 is no AsyncGenerator",
+            ));
+        };
+        let Some(&ObjectKind::AsyncGenerator {
+            continuation,
+            queue,
+            state,
+            ..
+        }) = heap.get_object(generator).map(|entry| &entry.kind)
+        else {
+            return Err(type_error(
+                heap,
+                realm,
+                "the receiver of 27.6.1 is no AsyncGenerator",
+            ));
+        };
+        if intrinsic != Intrinsic::AsyncGeneratorPrototypeNext {
+            // 27.6.3.9 and 27.6.3.10 take the body back with an abrupt
+            // completion, which this lowering has no form of.
+            if state != GENERATOR_COMPLETED && !continuation.is_undefined() {
+                return Err(VMError::Unsupported(
+                    "a return or a throw of an AsyncGenerator that is suspended",
+                ));
+            }
+        }
+        let sent = self.call_argument(&call, 0, heap)?;
+        let capability = promise::capability(heap, realm)?;
+        let generator = call.receiver.as_object().ok_or(VMError::TypeError)?;
+        // 27.6.3.3 puts the request at the end of the queue, which the body
+        // answers in the order the calls made them.
+        let list = queue.as_object().ok_or(VMError::TypeError)?;
+        let Some(&ObjectKind::Array { length: end, .. }) =
+            heap.get_object(list).map(|entry| &entry.kind)
+        else {
+            return Err(VMError::TypeError);
+        };
+        heap.set_array_element(list, end, capability)?;
+        heap.set_array_element(list, end.saturating_add(1), sent)?;
+        if state == GENERATOR_COMPLETED || continuation.is_undefined() {
+            // 27.6.1.2 step 8: a body that is done answers the same result
+            // every time, and 27.6.1.3 answers the value its call was given.
+            let value = if intrinsic == Intrinsic::AsyncGeneratorPrototypeReturn {
+                sent
+            } else {
+                VALUE_UNDEFINED
+            };
+            let rejected = intrinsic == Intrinsic::AsyncGeneratorPrototypeThrow;
+            let result = if rejected {
+                sent
+            } else {
+                Self::iterator_result(None, heap, realm)?
+            };
+            let generator = call.receiver.as_object().ok_or(VMError::TypeError)?;
+            if !rejected && !value.is_undefined() {
+                let object = result.as_object().ok_or(VMError::TypeError)?;
+                let key = PropertyKey::String(heap.strings.intern("value")?);
+                heap.define_own_named(object, key, value, PropertyFlags::ordinary_data())?;
+            }
+            self.answer_async_request(generator, result, rejected, heap, realm)?;
+            self.acc = promise::slot(heap, capability, promise::CAPABILITY_PROMISE);
+            return Ok(None);
+        }
+        if state == GENERATOR_RUNNING {
+            // The body is running and answers this request where it yields.
+            self.acc = promise::slot(heap, capability, promise::CAPABILITY_PROMISE);
+            return Ok(None);
+        }
+        Self::set_async_generator(generator, None, GENERATOR_RUNNING, heap)?;
+        let frame = continuation.as_object().ok_or(VMError::TypeError)?;
+        // The capability outlives every frame the body opens, so it is a root
+        // of a scope of its own, which the answer leaves.
+        heap.enter_scope();
+        let held = heap.push_root(capability)?;
+        let entered = self.resume_async_frame(frame, sent, call, held, units, heap);
+        if entered.is_err() {
+            heap.exit_scope();
+        }
+        entered
+    }
+
+    /// 27.6.3.8: the request at the front of the queue takes what the body
+    /// yielded.
+    ///
+    /// Answers whether another request waits behind it, which the body
+    /// carries on with rather than suspending.
+    fn settle_async_generator_yield(
+        &mut self,
+        code: &BytecodeFunction,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<bool, VMError> {
+        let register = code.generator_register.ok_or(VMError::InvalidRegister)?;
+        let value = self.acc;
+        // The result was allocated, which may have moved the Generator.
+        let result = Self::iterator_result(Some(value), heap, realm)?;
+        let generator = self
+            .read_reg(register)?
+            .as_object()
+            .ok_or(VMError::TypeError)?;
+        self.answer_async_request(generator, result, false, heap, realm)?;
+        let Some((_, sent)) = Self::async_request(generator, heap) else {
+            return Ok(false);
+        };
+        self.acc = sent;
+        Ok(true)
+    }
+
+    /// The capability and the value of the request at the front of the queue
+    /// of 27.6.3.1, where one waits.
+    fn async_request(generator: ObjectRef, heap: &GenerationalHeap) -> Option<(Value, Value)> {
+        let &ObjectKind::AsyncGenerator { queue, head, .. } =
+            heap.get_object(generator).map(|entry| &entry.kind)?
+        else {
+            return None;
+        };
+        let list = queue.as_object()?;
+        let &ObjectKind::Array { length, .. } = heap.get_object(list).map(|entry| &entry.kind)?
+        else {
+            return None;
+        };
+        if head.checked_add(1)? >= length {
+            return None;
+        }
+        Some((
+            promise::slot(heap, queue, head),
+            promise::slot(heap, queue, head.checked_add(1)?),
+        ))
+    }
+
+    /// 27.6.3.2: the request at the front of the queue is answered and leaves
+    /// it, which moves the front behind it.
+    fn answer_async_request(
+        &self,
+        generator: ObjectRef,
+        value: Value,
+        rejected: bool,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let Some((capability, _)) = Self::async_request(generator, heap) else {
+            return Ok(());
+        };
+        let &ObjectKind::AsyncGenerator {
+            continuation,
+            queue,
+            head,
+            state,
+        } = heap
+            .get_object(generator)
+            .map(|entry| &entry.kind)
+            .ok_or(VMError::TypeError)?
+        else {
+            return Err(VMError::TypeError);
+        };
+        let index = if rejected {
+            promise::CAPABILITY_REJECT
+        } else {
+            promise::CAPABILITY_RESOLVE
+        };
+        let settle = promise::slot(heap, capability, index);
+        let front = head.saturating_add(2);
+        // The queue holds nothing once its last request was answered, and the
+        // front stands at its start again.
+        let list = queue.as_object().ok_or(VMError::TypeError)?;
+        let empty = matches!(
+            heap.get_object(list).map(|entry| &entry.kind),
+            Some(&ObjectKind::Array { length, .. }) if front >= length
+        );
+        if empty {
+            Self::clear_async_queue(list, heap)?;
+        }
+        heap.set_object_kind(
+            generator,
+            ObjectKind::AsyncGenerator {
+                continuation,
+                queue,
+                head: if empty { 0 } else { front },
+                state,
+            },
+        )?;
+        self.settle_through(settle, value, rejected, heap, realm)?;
+        Ok(())
+    }
+
+    /// Empties the queue of 27.6.3.1, which holds nothing once every request
+    /// in it was answered.
+    fn clear_async_queue(list: ObjectRef, heap: &mut GenerationalHeap) -> Result<(), VMError> {
+        let Some(&ObjectKind::Array { length, .. }) =
+            heap.get_object(list).map(|entry| &entry.kind)
+        else {
+            return Err(VMError::TypeError);
+        };
+        for index in 0..length {
+            heap.set_array_element(list, index, VALUE_UNDEFINED)?;
+        }
+        heap.set_array_length(list, 0)?;
+        Ok(())
+    }
+
+    /// Writes the state of an `AsyncGenerator` of 27.6.1, keeping the queue it
+    /// carries.
+    fn set_async_generator(
+        generator: ObjectRef,
+        continuation: Option<Value>,
+        state: u8,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        let &ObjectKind::AsyncGenerator {
+            continuation: held,
+            queue,
+            head,
+            ..
+        } = heap
+            .get_object(generator)
+            .map(|entry| &entry.kind)
+            .ok_or(VMError::TypeError)?
+        else {
+            return Err(VMError::TypeError);
+        };
+        heap.set_object_kind(
+            generator,
+            ObjectKind::AsyncGenerator {
+                continuation: continuation.unwrap_or(held),
+                queue,
+                head,
+                state,
+            },
+        )?;
+        Ok(())
+    }
+
     /// 27.5.1.1: the Generator a call of a generator function answers, whose
     /// Prototype is the `prototype` the function carries.
     fn allocate_generator(
@@ -19430,6 +19820,36 @@ impl RegisterVM {
             object,
             ObjectKind::Generator {
                 continuation: VALUE_UNDEFINED,
+                state: GENERATOR_SUSPENDED_START,
+            },
+        )?;
+        Ok(Value::from_object(object))
+    }
+
+    /// 27.6.1.1: the `AsyncGenerator` a call of an async generator function
+    /// answers, whose Prototype is the `prototype` the function carries.
+    fn allocate_async_generator(
+        function: ObjectRef,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let key = PropertyKey::String(heap.strings.intern("prototype")?);
+        let carried = heap
+            .own_named_flags(function, key)?
+            .filter(|flags| !flags.is_accessor)
+            .and_then(|_| Self::own_property_value(function, key, None, heap).ok());
+        let prototype = match carried {
+            Some(value) if value.as_object().is_some() => value,
+            _ => realm.async_generator_prototype(heap)?,
+        };
+        let queue = realm.array(heap, 0)?;
+        let object = heap.allocate_object(heap.shapes.root_shape(), prototype)?;
+        heap.set_object_kind(
+            object,
+            ObjectKind::AsyncGenerator {
+                continuation: VALUE_UNDEFINED,
+                queue: Value::from_object(queue),
+                head: 0,
                 state: GENERATOR_SUSPENDED_START,
             },
         )?;
@@ -19536,12 +19956,17 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        let register = code.promise_register.ok_or(VMError::InvalidBytecode(
-            VerificationError::FunctionOutOfBounds {
-                pc,
-                index: code_id.unwrap_or(u32::MAX),
-            },
-        ))?;
+        // 27.6.3.8 waits in the body of an AsyncGenerator, which carries its
+        // own object where an async function carries its capability.
+        let register =
+            code.promise_register
+                .or(code.generator_register)
+                .ok_or(VMError::InvalidBytecode(
+                    VerificationError::FunctionOutOfBounds {
+                        pc,
+                        index: code_id.unwrap_or(u32::MAX),
+                    },
+                ))?;
         let capability = self.read_reg(register)?;
         let awaited = self.resolved_promise(self.acc, heap, realm)?;
         let continuation = self.suspend_frame(code, pc, code_id, capability, heap, realm)?;
@@ -19556,6 +19981,9 @@ impl RegisterVM {
             heap,
             realm,
         )?;
+        if code.async_generator {
+            return Ok(VALUE_UNDEFINED);
+        }
         Ok(promise::slot(heap, capability, promise::CAPABILITY_PROMISE))
     }
 
@@ -20204,6 +20632,12 @@ impl RegisterVM {
                 self.write_reg(handler.exception, value)?;
                 self.acc = VALUE_UNDEFINED;
                 return Ok((handler.handler_pc as usize, current_code_id));
+            }
+            // 27.6.3.2: no handler of the body took the value, so the request
+            // at the front of the queue is rejected with it and the Generator
+            // is done.
+            if active_code.async_generator {
+                return self.unwind_async_generator(active_code, value, native, heap, realm);
             }
             // 27.7.5.2 step 4: no handler of the body took the value, so the
             // capability of the async function takes it and the caller takes
@@ -22654,6 +23088,7 @@ impl RegisterVM {
                     let captures_context = !target.outer_context_slot_counts.is_empty();
                     let constructible = target.constructible;
                     let generator = target.generator;
+                    let asynchronous = target.async_generator;
                     let expected_arguments = target.expected_arguments;
                     let function = self.allocate_function(
                         active_code,
@@ -22679,7 +23114,7 @@ impl RegisterVM {
                     // .prototype%` and a `prototype` of its own, which 27.5.1.1
                     // gives every Generator it makes.
                     if generator {
-                        self.make_generator_function(active_code, heap, realm)?;
+                        self.make_generator_function(active_code, asynchronous, heap, realm)?;
                     }
                 }
                 Instruction::Construct {
@@ -23024,11 +23459,15 @@ impl RegisterVM {
                 Instruction::Await
                 | Instruction::Return
                 | Instruction::GeneratorStart
-                | Instruction::Yield => {
-                    // 27.5.1.1 and 15.5: the body of a Generator leaves with
-                    // the frame it stands in, which its own object holds until
-                    // 27.5.1.2 takes it back.
-                    if matches!(inst, Instruction::GeneratorStart | Instruction::Yield) {
+                | Instruction::Yield
+                | Instruction::AsyncYield => {
+                    // 27.6.3.8: the request at the front of the queue takes
+                    // what the body yielded, and the body carries on where
+                    // another one waits behind it.
+                    if matches!(inst, Instruction::AsyncYield) {
+                        if self.settle_async_generator_yield(active_code, heap, realm)? {
+                            return Ok(None);
+                        }
                         let register = active_code
                             .generator_register
                             .ok_or(VMError::InvalidRegister)?;
@@ -23044,17 +23483,49 @@ impl RegisterVM {
                             .read_reg(register)?
                             .as_object()
                             .ok_or(VMError::TypeError)?;
-                        heap.set_object_kind(
+                        Self::set_async_generator(
                             generator,
-                            ObjectKind::Generator {
-                                continuation,
-                                state: if matches!(inst, Instruction::GeneratorStart) {
-                                    GENERATOR_SUSPENDED_START
-                                } else {
-                                    GENERATOR_SUSPENDED_YIELD
-                                },
-                            },
+                            Some(continuation),
+                            GENERATOR_SUSPENDED_YIELD,
+                            heap,
                         )?;
+                        self.acc = VALUE_UNDEFINED;
+                    }
+                    // 27.5.1.1 and 15.5: the body of a Generator leaves with
+                    // the frame it stands in, which its own object holds until
+                    // 27.5.1.2 takes it back.
+                    else if matches!(inst, Instruction::GeneratorStart | Instruction::Yield) {
+                        let register = active_code
+                            .generator_register
+                            .ok_or(VMError::InvalidRegister)?;
+                        let continuation = self.suspend_frame(
+                            active_code,
+                            pc,
+                            current_code_id,
+                            VALUE_UNDEFINED,
+                            heap,
+                            realm,
+                        )?;
+                        let generator = self
+                            .read_reg(register)?
+                            .as_object()
+                            .ok_or(VMError::TypeError)?;
+                        let state = if matches!(inst, Instruction::GeneratorStart) {
+                            GENERATOR_SUSPENDED_START
+                        } else {
+                            GENERATOR_SUSPENDED_YIELD
+                        };
+                        if active_code.async_generator {
+                            Self::set_async_generator(generator, Some(continuation), state, heap)?;
+                        } else {
+                            heap.set_object_kind(
+                                generator,
+                                ObjectKind::Generator {
+                                    continuation,
+                                    state,
+                                },
+                            )?;
+                        }
                         if matches!(inst, Instruction::GeneratorStart) {
                             self.acc = Value::from_object(generator);
                         }
@@ -23068,6 +23539,12 @@ impl RegisterVM {
                         // object its own `this` binding holds, and refuses
                         // every other value but undefined.
                         self.acc = self.derived_result(active_code, heap, realm)?;
+                    } else if active_code.async_generator {
+                        // 27.6.3.2 step 5: the body ended, so the request at
+                        // the front of the queue takes the result that says
+                        // so, and the Generator is done.
+                        self.settle_async_generator_end(active_code, self.acc, false, heap, realm)?;
+                        self.acc = VALUE_UNDEFINED;
                     } else if active_code.asynchronous {
                         // 27.7.5.2 step 4: the body ended, so its capability
                         // takes the answer and the caller takes the promise.
@@ -23165,6 +23642,7 @@ impl RegisterVM {
                                 | Resume::Executor { .. }
                                 | Resume::Job { .. }
                                 | Resume::GeneratorStep { .. }
+                                | Resume::AsyncGeneratorStep { .. }
                                 | Resume::Setter { .. } => Reg(0),
                             };
                             let call = Call {
@@ -23208,6 +23686,17 @@ impl RegisterVM {
                                 // answer says whether it is done.
                                 Resume::GeneratorStep { state } => {
                                     self.finish_generator_step(state, heap, realm)?;
+                                    None
+                                }
+                                // 27.6.1.2 step 9 answers the promise of the
+                                // request, whatever the body did with it.
+                                Resume::AsyncGeneratorStep { capability } => {
+                                    let held = heap
+                                        .root_value(capability)
+                                        .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+                                    heap.exit_scope();
+                                    self.acc =
+                                        promise::slot(heap, held, promise::CAPABILITY_PROMISE);
                                     None
                                 }
                                 Resume::IteratorElement { state } => {

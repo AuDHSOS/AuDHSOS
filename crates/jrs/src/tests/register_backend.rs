@@ -8364,6 +8364,57 @@ fn an_async_function_answers_a_promise_and_waits_in_the_job_queue() -> Result<()
 }
 
 #[test]
+fn an_async_generator_of_27_6_answers_the_requests_of_its_queue() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend has no frame that leaves and comes back, so only the
+    // engine answers. The log is read after the queue of 9.5 is drained.
+    for (source, answer) in [
+        // 27.6.1.2 answers a promise of its own, and 27.6.3.8 gives the
+        // request at the front of the queue what the body yielded.
+        (
+            "var l=[];async function* g(){yield 1;yield 2}var i=g();i.next().then(function(r){l.push(r.value+':'+r.done);return i.next()}).then(function(r){l.push(r.value+':'+r.done);return i.next()}).then(function(r){l.push(r.value+':'+r.done)});0",
+            "1:false|2:false|undefined:true",
+        ),
+        // The body waits as an async function does, and the request waits
+        // with it.
+        (
+            "var l=[];async function* g(){var a=await 10;yield a;return 'e'}var i=g();i.next().then(function(r){l.push(r.value);return i.next()}).then(function(r){l.push(r.value+':'+r.done)});0",
+            "10|e:true",
+        ),
+        // 27.6.3.3 puts every request at the end of the queue, which the body
+        // answers in the order the calls made them.
+        (
+            "var l=[];async function* g(){yield 1;yield 2;yield 3}var i=g();i.next().then(function(r){l.push('a'+r.value)});i.next().then(function(r){l.push('b'+r.value)});i.next().then(function(r){l.push('c'+r.value)});0",
+            "a1|b2|c3",
+        ),
+        // A body that throws rejects the request that waits for it.
+        (
+            "var l=[];async function* g(){throw 'x'}var i=g();i.next().catch(function(e){l.push('c'+e);return i.next()}).then(function(r){l.push(''+r.done)});0",
+            "cx|true",
+        ),
+    ] {
+        let mut host = SilentHost;
+        let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+        realm.evaluate(source)?;
+        assert_eq!(
+            realm.evaluate("l.join('|')")?,
+            Value::string(answer),
+            "{source}"
+        );
+    }
+    // 27.4.1.1 gives an async generator function no `[[Construct]]`, and
+    // 27.6.1.5 tags every AsyncGenerator.
+    assert_eq!(
+        realm.evaluate(
+            "async function* g(){};var i=g();''+(Object.getPrototypeOf(i)===g.prototype)+Object.prototype.toString.call(i)"
+        )?,
+        Value::string("true[object AsyncGenerator]")
+    );
+    Ok(())
+}
+
+#[test]
 fn concat_spreads_what_23_1_3_1_1_says_it_spreads() -> Result<(), Error> {
     for source in [
         // `@@isConcatSpreadable` decides it where the object has one.

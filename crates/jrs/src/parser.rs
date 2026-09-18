@@ -1918,25 +1918,21 @@ impl Parser {
     fn async_declaration(&mut self) -> Result<Stmt, Error> {
         let offset = self.token()?.offset;
         self.at = self.at.saturating_add(2);
-        if self.is("*") {
-            return Err(Self::unsupported("async generator functions"));
-        }
+        let generator = self.eat("*");
         let name = self.name()?;
-        let mut function = self.function_kind(None, AsyncKind::Async)?;
+        let mut function = self.async_generator_function(None, generator)?;
         function.source = Some(self.source_since(offset)?);
         Ok(Stmt::Function(name, function))
     }
     fn async_expression(&mut self, offset: usize) -> Result<Expr, Error> {
         self.need("function")?;
-        if self.is("*") {
-            return Err(Self::unsupported("async generator functions"));
-        }
+        let generator = self.eat("*");
         let name = if self.is("(") {
             None
         } else {
             Some(self.name()?)
         };
-        let mut function = self.function_kind(name, AsyncKind::Async)?;
+        let mut function = self.async_generator_function(name, generator)?;
         function.source = Some(self.source_since(offset)?);
         self.make(ExprKind::Function(function), 1, offset)
     }
@@ -2046,14 +2042,11 @@ impl Parser {
                 continue;
             }
             let method_start = self.token()?.offset;
-            let generator = self.eat("*");
             let async_method = self.async_method_head();
             if async_method {
                 self.need("async")?;
-                if self.is("*") {
-                    return Err(Self::unsupported("async generator methods"));
-                }
             }
+            let generator = self.eat("*");
             let accessor = if (self.is("get") || self.is("set"))
                 && self
                     .tokens
@@ -2193,6 +2186,22 @@ impl Parser {
 
     fn function(&mut self, name: Option<String>) -> Result<Function, Error> {
         self.function_kind(name, AsyncKind::Sync)
+    }
+
+    /// An async function of 27.7 or an async generator of 27.6, whose body
+    /// reads both `await` and `yield`.
+    fn async_generator_function(
+        &mut self,
+        name: Option<String>,
+        generator: bool,
+    ) -> Result<Function, Error> {
+        self.pending_generator = generator;
+        let result = self.function_kind(name, AsyncKind::Async);
+        self.pending_generator = false;
+        result.map(|mut function| {
+            function.generator = generator;
+            function
+        })
     }
 
     /// A function of 15.2 or a generator of 27.5, whose body reads `yield` as

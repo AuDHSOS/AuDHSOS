@@ -2278,7 +2278,15 @@ impl RegisterLowerer {
                 // The caller of 27.5.1.2 reads what the body yielded, so
                 // everything it names leaves with it.
                 self.escape(&[value_type]);
-                self.code.emit(crate::engine::bytecode::Instruction::Yield);
+                // 27.6.3.8 step 5 waits for the value before the request of
+                // the queue takes it.
+                if self.code.async_generator {
+                    self.code.emit(crate::engine::bytecode::Instruction::Await);
+                    self.code
+                        .emit(crate::engine::bytecode::Instruction::AsyncYield);
+                } else {
+                    self.code.emit(crate::engine::bytecode::Instruction::Yield);
+                }
                 RegisterType::Unknown
             }
             // 27.7.5.3: the operand is evaluated and the body waits for it.
@@ -3931,7 +3939,9 @@ impl RegisterLowerer {
         // 27.7.5.2 makes the capability before the body runs and keeps it in
         // a register of the frame, where the collector sees it and where a
         // continuation of 27.7.5.3 takes it along.
-        if function.async_kind != parser::AsyncKind::Sync {
+        // 27.6.1.1 gives an async generator no capability of its own: each
+        // request of its queue carries one, and the body answers them in turn.
+        if function.async_kind != parser::AsyncKind::Sync && !function.generator {
             child.code.asynchronous = true;
             child.declare(PROMISE_BINDING, false)?;
             let RegisterBindingStorage::Register(register) =
@@ -3947,6 +3957,7 @@ impl RegisterLowerer {
         // suspension of 15.5 reads it.
         if function.generator {
             child.code.generator = true;
+            child.code.async_generator = function.async_kind != parser::AsyncKind::Sync;
             child.declare(GENERATOR_BINDING, false)?;
             let RegisterBindingStorage::Register(register) =
                 child.bindings.get(GENERATOR_BINDING)?.storage
@@ -9894,6 +9905,9 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::IteratorPrototypeToArray
         // 27.5.1.2 to 27.5.1.4 answer what the body of the Generator left,
         // which this lowering cannot read.
+        | crate::engine::realm::Intrinsic::AsyncGeneratorPrototypeNext
+        | crate::engine::realm::Intrinsic::AsyncGeneratorPrototypeReturn
+        | crate::engine::realm::Intrinsic::AsyncGeneratorPrototypeThrow
         | crate::engine::realm::Intrinsic::GeneratorPrototypeNext
         | crate::engine::realm::Intrinsic::GeneratorPrototypeReturn
         | crate::engine::realm::Intrinsic::GeneratorPrototypeThrow

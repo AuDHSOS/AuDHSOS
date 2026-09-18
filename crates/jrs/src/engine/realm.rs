@@ -1140,6 +1140,12 @@ pub enum Intrinsic {
     GeneratorPrototypeReturn,
     /// `throw`, 27.5.1.4.
     GeneratorPrototypeThrow,
+    /// `next`, 27.6.1.2.
+    AsyncGeneratorPrototypeNext,
+    /// `return`, 27.6.1.3.
+    AsyncGeneratorPrototypeReturn,
+    /// `throw`, 27.6.1.4.
+    AsyncGeneratorPrototypeThrow,
     /// `get constructor`, 27.1.3.3.1.1.
     IteratorPrototypeConstructorGet,
     /// `set constructor`, 27.1.3.3.1.2.
@@ -1219,6 +1225,8 @@ pub enum IntrinsicHolder {
     ArrayIteratorPrototype,
     /// `%GeneratorPrototype%`, which 27.5.1 gives every Generator.
     GeneratorPrototype,
+    /// `%AsyncGeneratorPrototype%`, which 27.6.1 gives every `AsyncGenerator`.
+    AsyncGeneratorPrototype,
     /// The global object, which 19.1 gives the constructors of clause 20 and
     /// after.
     Global,
@@ -1293,7 +1301,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 449] = [
+    pub const ALL: [Self; 452] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1712,6 +1720,9 @@ impl Intrinsic {
         Self::GeneratorPrototypeNext,
         Self::GeneratorPrototypeReturn,
         Self::GeneratorPrototypeThrow,
+        Self::AsyncGeneratorPrototypeNext,
+        Self::AsyncGeneratorPrototypeReturn,
+        Self::AsyncGeneratorPrototypeThrow,
         Self::IteratorPrototypeConstructorGet,
         Self::IteratorPrototypeConstructorSet,
         Self::IteratorPrototypeToStringTagGet,
@@ -1852,6 +1863,9 @@ impl Intrinsic {
             Self::GeneratorPrototypeNext
             | Self::GeneratorPrototypeReturn
             | Self::GeneratorPrototypeThrow => IntrinsicHolder::GeneratorPrototype,
+            Self::AsyncGeneratorPrototypeNext
+            | Self::AsyncGeneratorPrototypeReturn
+            | Self::AsyncGeneratorPrototypeThrow => IntrinsicHolder::AsyncGeneratorPrototype,
             Self::ArrayConstructor | Self::ObjectConstructor | Self::FunctionConstructor => {
                 IntrinsicHolder::Global
             }
@@ -2661,6 +2675,9 @@ impl Intrinsic {
             Self::GeneratorPrototypeNext => 446,
             Self::GeneratorPrototypeReturn => 447,
             Self::GeneratorPrototypeThrow => 448,
+            Self::AsyncGeneratorPrototypeNext => 449,
+            Self::AsyncGeneratorPrototypeReturn => 450,
+            Self::AsyncGeneratorPrototypeThrow => 451,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3120,6 +3137,9 @@ impl Intrinsic {
             Self::GeneratorPrototypeNext => 446,
             Self::GeneratorPrototypeReturn => 447,
             Self::GeneratorPrototypeThrow => 448,
+            Self::AsyncGeneratorPrototypeNext => 449,
+            Self::AsyncGeneratorPrototypeReturn => 450,
+            Self::AsyncGeneratorPrototypeThrow => 451,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3580,6 +3600,9 @@ impl Intrinsic {
             446 => Some(Self::GeneratorPrototypeNext),
             447 => Some(Self::GeneratorPrototypeReturn),
             448 => Some(Self::GeneratorPrototypeThrow),
+            449 => Some(Self::AsyncGeneratorPrototypeNext),
+            450 => Some(Self::AsyncGeneratorPrototypeReturn),
+            451 => Some(Self::AsyncGeneratorPrototypeThrow),
             436 => Some(Self::IteratorPrototypeConstructorGet),
             437 => Some(Self::IteratorPrototypeConstructorSet),
             438 => Some(Self::IteratorPrototypeToStringTagGet),
@@ -4032,9 +4055,10 @@ impl Intrinsic {
             Self::ArrayIteratorPrototypeNext
             | Self::MapIteratorPrototypeNext
             | Self::SetIteratorPrototypeNext
-            | Self::GeneratorPrototypeNext => "next",
-            Self::GeneratorPrototypeReturn => "return",
-            Self::GeneratorPrototypeThrow => "throw",
+            | Self::GeneratorPrototypeNext
+            | Self::AsyncGeneratorPrototypeNext => "next",
+            Self::GeneratorPrototypeReturn | Self::AsyncGeneratorPrototypeReturn => "return",
+            Self::GeneratorPrototypeThrow | Self::AsyncGeneratorPrototypeThrow => "throw",
             Self::ArrayPrototypeJoin | Self::TypedArrayPrototypeJoin => "join",
             Self::ArrayPrototypePop => "pop",
             Self::ArrayPrototypePush => "push",
@@ -4981,6 +5005,9 @@ impl Intrinsic {
             | Self::GeneratorPrototypeNext
             | Self::GeneratorPrototypeReturn
             | Self::GeneratorPrototypeThrow
+            | Self::AsyncGeneratorPrototypeNext
+            | Self::AsyncGeneratorPrototypeReturn
+            | Self::AsyncGeneratorPrototypeThrow
             | Self::IteratorPrototypeToStringTagSet
             | Self::HostDetachArrayBuffer
             | Self::TypedArrayPrototypeAt
@@ -6015,6 +6042,12 @@ pub struct Realm {
     /// `%GeneratorFunction.prototype%` of 27.3.3, which every generator
     /// function inherits and whose `prototype` is `%GeneratorPrototype%`.
     generator_function_prototype: Root,
+    /// `%AsyncGeneratorPrototype%` of 27.6.1, which every `AsyncGenerator`
+    /// inherits, and `%AsyncGeneratorFunction.prototype%` of 27.4.3.
+    async_generator_prototype: Root,
+    async_generator_function_prototype: Root,
+    /// `%AsyncIteratorPrototype%` of 27.1.4, which 27.6.1 stands on.
+    async_iterator_prototype: Root,
     error_prototype: Root,
     native_error_prototypes: [Root; NATIVE_ERROR_COUNT],
     intrinsics: [Root; Intrinsic::ALL.len()],
@@ -6090,6 +6123,7 @@ struct Holders {
     set_iterator_prototype: Root,
     iterator_prototype: Root,
     generator_prototype: Root,
+    async_generator_prototype: Root,
 }
 
 /// Global Environment Record of 9.1.1.4.
@@ -6254,6 +6288,20 @@ impl Realm {
             heap.allocate_immortal_object(root_shape, Self::rooted(heap, function_prototype)?)?;
         let generator_function_prototype =
             heap.push_root(Value::from_object(generator_function_prototype))?;
+        // 27.1.4 gives every async iterator `%AsyncIteratorPrototype%`, which
+        // 27.6.1 stands on, and 27.4.3 gives every async generator function
+        // `%AsyncGeneratorFunction.prototype%`.
+        let async_iterator_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
+        let async_iterator_prototype =
+            heap.push_root(Value::from_object(async_iterator_prototype))?;
+        let async_generator_prototype = heap
+            .allocate_immortal_object(root_shape, Self::rooted(heap, async_iterator_prototype)?)?;
+        let async_generator_prototype =
+            heap.push_root(Value::from_object(async_generator_prototype))?;
+        let async_generator_function_prototype =
+            heap.allocate_immortal_object(root_shape, Self::rooted(heap, function_prototype)?)?;
+        let async_generator_function_prototype =
+            heap.push_root(Value::from_object(async_generator_function_prototype))?;
 
         // 20.5.3: %Error.prototype% is an ordinary object with "message" and
         // "name", not an Error instance.
@@ -6332,6 +6380,7 @@ impl Realm {
                 set_iterator_prototype,
                 iterator_prototype: iterator_prototype_root,
                 generator_prototype,
+                async_generator_prototype,
             },
         )?;
 
@@ -6416,6 +6465,18 @@ impl Realm {
             "constructor",
             generator_function_prototype,
         )?;
+        Self::define_link(
+            heap,
+            async_generator_function_prototype,
+            "prototype",
+            async_generator_prototype,
+        )?;
+        Self::define_link(
+            heap,
+            async_generator_prototype,
+            "constructor",
+            async_generator_function_prototype,
+        )?;
         Self::define_to_string_tags(
             heap,
             &[
@@ -6427,6 +6488,8 @@ impl Realm {
                 // 27.5.1.5 and 27.3.3.2 name the two of clause 27.
                 (generator_prototype, "Generator"),
                 (generator_function_prototype, "GeneratorFunction"),
+                (async_generator_prototype, "AsyncGenerator"),
+                (async_generator_function_prototype, "AsyncGeneratorFunction"),
                 (promise_prototype, "Promise"),
                 (map_prototype, "Map"),
                 (set_prototype, "Set"),
@@ -6501,6 +6564,9 @@ impl Realm {
             iterator_prototype: iterator_prototype_root,
             generator_prototype,
             generator_function_prototype,
+            async_generator_prototype,
+            async_generator_function_prototype,
+            async_iterator_prototype,
             error_prototype,
             native_error_prototypes,
             intrinsics,
@@ -7811,6 +7877,9 @@ impl Realm {
                 IntrinsicHolder::GeneratorPrototype => {
                     Self::rooted(heap, holders.generator_prototype)?
                 }
+                IntrinsicHolder::AsyncGeneratorPrototype => {
+                    Self::rooted(heap, holders.async_generator_prototype)?
+                }
                 IntrinsicHolder::MapIteratorPrototype => {
                     Self::rooted(heap, holders.map_iterator_prototype)?
                 }
@@ -8287,6 +8356,36 @@ impl Realm {
         heap: &GenerationalHeap,
     ) -> Result<Value, HeapError> {
         Self::rooted(heap, self.generator_function_prototype)
+    }
+
+    /// `%AsyncGeneratorPrototype%`, 27.6.1.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale root.
+    pub fn async_generator_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.async_generator_prototype)
+    }
+
+    /// `%AsyncGeneratorFunction.prototype%`, 27.4.3.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale root.
+    pub fn async_generator_function_prototype(
+        &self,
+        heap: &GenerationalHeap,
+    ) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.async_generator_function_prototype)
+    }
+
+    /// `%AsyncIteratorPrototype%`, 27.1.4.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale root.
+    pub fn async_iterator_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.async_iterator_prototype)
     }
 
     /// `%BigInt.prototype%`, 21.2.3.
