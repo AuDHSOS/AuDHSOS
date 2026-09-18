@@ -905,8 +905,19 @@ const REGEXP_RECORD_FLAGS: u32 = 3;
 const REGEXP_RECORD_EXEC: u32 = 4;
 /// What the `exec` of the Script answered.
 const REGEXP_RECORD_RESULT: u32 = 5;
+/// The String the clause was given, before `ToString`.
+const REGEXP_RECORD_TEXT: u32 = 6;
+/// The second argument: the replacement of 22.2.6.11 or the limit of
+/// 22.2.6.14.
+const REGEXP_RECORD_SECOND: u32 = 7;
+/// What `Get(rx, "constructor")` answered.
+const REGEXP_RECORD_CONSTRUCTOR: u32 = 8;
+/// What `Get(C, @@species)` answered.
+const REGEXP_RECORD_SPECIES: u32 = 9;
+/// What the `@@match` of 7.2.8 answered.
+const REGEXP_RECORD_MATCHER: u32 = 10;
 /// How many slots the record of a clause of 22.2.6 holds.
-const REGEXP_RECORD_SLOTS: usize = 6;
+const REGEXP_RECORD_SLOTS: usize = 11;
 /// The walk of 7.4.2 has not called the `@@iterator` yet.
 const ITERATOR_WALK_STARTING: i32 = 0;
 /// It is waiting for the `@@iterator` it called.
@@ -5239,13 +5250,28 @@ impl RegisterVM {
                 realm,
             );
         }
-        // 22.2.6.11 reads the `flags` and the `exec` of its receiver, either
-        // of which a getter of the Script answers.
+        // 22.2.6.11, 22.2.6.14 and 22.2.6.16 read the `flags`, the `exec` and
+        // the `constructor` of their receiver, any of which a getter of the
+        // Script answers.
         if matches!(
             intrinsic,
-            Intrinsic::RegExpPrototypeReplace | Intrinsic::RegExpPrototypeTest
+            Intrinsic::RegExpPrototypeReplace
+                | Intrinsic::RegExpPrototypeTest
+                | Intrinsic::RegExpPrototypeSplit
         ) {
-            return self.begin_regexp_clause(intrinsic, call, units, active_feedback, heap, realm);
+            let text = self.call_argument(&call, 0, heap)?;
+            let second = self.call_argument(&call, 1, heap)?;
+            return self.begin_regexp_clause(
+                intrinsic,
+                call.receiver,
+                text,
+                second,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
         }
         // 22.1.3.14, 22.1.3.15, 22.1.3.19, 22.1.3.20 and 22.1.3.23 read a
         // method off their argument before the `this` value is converted, and
@@ -5254,6 +5280,28 @@ impl RegisterVM {
             self.delegate_of_22_1_3(intrinsic, &call, units, active_feedback, heap, realm)?
         {
             return Ok(entered);
+        }
+        // 22.1.3.23 step 2 answers with the `@@split` of a RegExp, which
+        // 22.2.6.14 runs on the separator with the `this` value of the call.
+        if intrinsic == Intrinsic::StringPrototypeSplit {
+            let separator = self.call_argument(&call, 0, heap)?;
+            if let Some(reference) = separator.as_object()
+                && Self::regexp_pattern(reference, heap).is_some()
+            {
+                let second = self.call_argument(&call, 1, heap)?;
+                let receiver = call.receiver;
+                return self.begin_regexp_clause(
+                    Intrinsic::RegExpPrototypeSplit,
+                    separator,
+                    receiver,
+                    second,
+                    call,
+                    units,
+                    active_feedback,
+                    heap,
+                    realm,
+                );
+            }
         }
         // 22.1.3.14 step 5 and 22.1.3.20 step 5 call a method of the RegExp
         // step 4 made, which the Script may have replaced.
@@ -5653,9 +5701,16 @@ impl RegisterVM {
     }
 
     /// Opens the record a clause of 22.2.6 keeps its reads in and runs it.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a clause of 22.2.6 runs where a call does, with what a call has"
+    )]
     fn begin_regexp_clause(
         &mut self,
         intrinsic: Intrinsic,
+        receiver: Value,
+        text: Value,
+        second: Value,
         call: Call,
         units: CodeUnits<'_>,
         active_feedback: &mut FeedbackVector,
@@ -5664,7 +5719,7 @@ impl RegisterVM {
     ) -> Result<Option<u32>, VMError> {
         // Step 1 refuses a `this` value that is no Object before anything of
         // the arguments is read.
-        if !call.receiver.is_object() {
+        if !receiver.is_object() {
             return Err(type_error(
                 heap,
                 realm,
@@ -5675,7 +5730,11 @@ impl RegisterVM {
         for (index, slot) in slots.iter_mut().enumerate() {
             let index = u32::try_from(index).unwrap_or(u32::MAX);
             if index == REGEXP_RECORD_RECEIVER {
-                *slot = call.receiver;
+                *slot = receiver;
+            } else if index == REGEXP_RECORD_TEXT {
+                *slot = text;
+            } else if index == REGEXP_RECORD_SECOND {
+                *slot = second;
             } else if index == REGEXP_RECORD_PENDING || index == REGEXP_RECORD_PHASE {
                 *slot = Value::from_smi(0);
             }
@@ -5724,13 +5783,14 @@ impl RegisterVM {
             .ok_or(VMError::Heap(HeapError::InvalidReference))?;
         let receiver = promise::slot(heap, record, REGEXP_RECORD_RECEIVER);
         let object = receiver.as_object().ok_or(VMError::TypeError)?;
-        // Step 2 of 22.2.6.11 and of 22.2.6.16 converts the String, and step 5
-        // of 22.2.6.11 the replacement; an Object in either place is a gap and
-        // not an answer.
-        let text = property_name_units(self.call_argument(&call, 0, heap)?, heap, realm)?;
+        // Step 2 of 22.2.6.11, 22.2.6.14 and 22.2.6.16 converts the String,
+        // and step 5 of 22.2.6.11 the replacement; an Object in either place
+        // is a gap and not an answer.
+        let text =
+            property_name_units(promise::slot(heap, record, REGEXP_RECORD_TEXT), heap, realm)?;
         let replaces = intrinsic == Intrinsic::RegExpPrototypeReplace;
         let replacement = if replaces {
-            let replacement = self.call_argument(&call, 1, heap)?;
+            let replacement = promise::slot(heap, record, REGEXP_RECORD_SECOND);
             if Self::is_callable(replacement, heap) {
                 return Err(VMError::Unsupported("a replace value that is callable"));
             }
@@ -5738,11 +5798,26 @@ impl RegisterVM {
         } else {
             Vec::new()
         };
+        // 22.2.6.14 constructs the splitter of steps 3 to 7 before it reads
+        // anything else, and walks the text with it.
+        if intrinsic == Intrinsic::RegExpPrototypeSplit {
+            return self.split_with_a_splitter(
+                &text,
+                record,
+                state,
+                &call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
         let key = PropertyKey::String(heap.strings.intern("flags")?);
         let flags = if replaces {
             match self.cached_property(
                 record,
                 REGEXP_RECORD_FLAGS,
+                REGEXP_RECORD_RECEIVER,
                 key,
                 intrinsic,
                 state,
@@ -5778,6 +5853,7 @@ impl RegisterVM {
         let exec = match self.cached_property(
             record,
             REGEXP_RECORD_EXEC,
+            REGEXP_RECORD_RECEIVER,
             key,
             intrinsic,
             state,
@@ -5887,6 +5963,7 @@ impl RegisterVM {
         &mut self,
         record: Value,
         slot: u32,
+        target: u32,
         key: PropertyKey,
         intrinsic: Intrinsic,
         state: Root,
@@ -5900,7 +5977,7 @@ impl RegisterVM {
         if held != VALUE_UNINITIALIZED {
             return Ok(Cached::Value(held));
         }
-        let receiver = promise::slot(heap, record, REGEXP_RECORD_RECEIVER);
+        let receiver = promise::slot(heap, record, target);
         let object = receiver
             .as_object()
             .ok_or_else(|| type_error(heap, realm, "this value is not an object"))?;
@@ -5946,6 +6023,178 @@ impl RegisterVM {
         let value = self.acc;
         promise::set_slot(heap, record, slot, value)?;
         Ok(Cached::Value(value))
+    }
+
+    /// Steps 3 to 12 of 22.2.6.14: the splitter the species constructor makes
+    /// walks the text.
+    ///
+    /// The construct of step 7 reads the `@@match` of the receiver, which is
+    /// what 7.2.8 asks of it, and refuses the flags of step 6 where 22.2.3.4
+    /// does.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a clause of 22.2.6 runs where a call does, with what a call has"
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function carries the splitter of 22.2.6.14 from its reads to its walk"
+    )]
+    fn split_with_a_splitter(
+        &mut self,
+        text: &[u16],
+        record: Value,
+        state: Root,
+        call: &Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let intrinsic = Intrinsic::RegExpPrototypeSplit;
+        // Step 3: `SpeciesConstructor` of 7.3.22 reads the `constructor` and
+        // the `@@species` of it; this Realm builds no `@@species` of its own.
+        let key = PropertyKey::String(heap.strings.intern("constructor")?);
+        let constructor = match self.cached_property(
+            record,
+            REGEXP_RECORD_CONSTRUCTOR,
+            REGEXP_RECORD_RECEIVER,
+            key,
+            intrinsic,
+            state,
+            call,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )? {
+            Cached::Value(value) => value,
+            Cached::Entered(entered) => return Ok(entered),
+        };
+        if !constructor.is_undefined() {
+            if constructor.as_object().is_none() {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "the constructor of 7.3.22 is no Object",
+                ));
+            }
+            let key = super::realm::WellKnownSymbol::Species.key();
+            let species = match self.cached_property(
+                record,
+                REGEXP_RECORD_SPECIES,
+                REGEXP_RECORD_CONSTRUCTOR,
+                key,
+                intrinsic,
+                state,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            )? {
+                Cached::Value(value) => value,
+                Cached::Entered(entered) => return Ok(entered),
+            };
+            let default = species.is_undefined()
+                || species.is_null()
+                || Self::is_intrinsic(species, Intrinsic::RegExpConstructor, heap);
+            if !default {
+                return Err(VMError::Unsupported(
+                    "a splitter of a constructor that is not %RegExp%",
+                ));
+            }
+        }
+        // Step 4 reads the flags off the object, whatever 22.2.6.4 would
+        // answer for it.
+        let key = PropertyKey::String(heap.strings.intern("flags")?);
+        let flags = match self.cached_property(
+            record,
+            REGEXP_RECORD_FLAGS,
+            REGEXP_RECORD_RECEIVER,
+            key,
+            intrinsic,
+            state,
+            call,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )? {
+            Cached::Value(value) => property_name_units(value, heap, realm)?,
+            Cached::Entered(entered) => return Ok(entered),
+        };
+        // Step 7 constructs the splitter, and 22.2.3.1 step 1 asks 7.2.8 of
+        // the pattern, which reads its `@@match`.
+        let key = super::realm::WellKnownSymbol::Match.key();
+        match self.cached_property(
+            record,
+            REGEXP_RECORD_MATCHER,
+            REGEXP_RECORD_RECEIVER,
+            key,
+            intrinsic,
+            state,
+            call,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )? {
+            Cached::Value(_) => {}
+            Cached::Entered(entered) => return Ok(entered),
+        }
+        let receiver = promise::slot(heap, record, REGEXP_RECORD_RECEIVER);
+        let object = receiver.as_object().ok_or(VMError::TypeError)?;
+        // Step 4 of 22.2.3.1: a pattern that carries a `[[RegExpMatcher]]`
+        // gives its own source, and every other one reaches `ToString`.
+        let source = match Self::regexp_pattern(object, heap) {
+            Some(pattern) => pattern.source.clone(),
+            None => alloc::rc::Rc::from(property_name_units(receiver, heap, realm)?),
+        };
+        // 22.2.7.1 step 1 reads the `exec` of the splitter, which is the one
+        // %RegExp.prototype% carries; a `exec` of the Script needs a frame
+        // per step of the walk.
+        let prototype = realm
+            .regexp_prototype(heap)?
+            .as_object()
+            .ok_or(VMError::TypeError)?;
+        let key = PropertyKey::String(heap.strings.intern("exec")?);
+        let exec = match heap.lookup_named(prototype, key)? {
+            Some(found) => Self::plain_value(found)?,
+            None => VALUE_UNDEFINED,
+        };
+        if !Self::is_intrinsic(exec, Intrinsic::RegExpPrototypeExec, heap) {
+            return Err(VMError::Unsupported("an exec of the Script"));
+        }
+        // Step 6 adds `y` to the flags the object answered, and 22.2.3.4
+        // refuses text that names no flags of table 66.
+        let mut units_of_flags = flags.clone();
+        if !flags.contains(&u16::from(b'y')) {
+            units_of_flags.push(u16::from(b'y'));
+        }
+        let text_of_flags =
+            alloc::string::String::from_utf16(&units_of_flags).map_err(|_| VMError::StringLimit)?;
+        let splitter = crate::regexp::RegExp::compile(source, &text_of_flags).map_err(|_| {
+            raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::SyntaxError,
+                "invalid regular expression flags",
+            )
+        })?;
+        // Step 9 takes the limit through `ToUint32`, and step 10 answers an
+        // empty Array for a limit of zero.
+        let limit = promise::slot(heap, record, REGEXP_RECORD_SECOND);
+        let limit = if limit.is_undefined() {
+            u32::MAX
+        } else {
+            crate::value::number_uint32(primitive_number(limit, heap)?)
+        };
+        let unicode = flags.contains(&u16::from(b'u')) || flags.contains(&u16::from(b'v'));
+        self.acc = self.walk_the_split(text, &splitter, limit, unicode, heap, realm)?;
+        if let Some(target) = call.construct {
+            self.write_construction(target, self.acc, heap)?;
+        }
+        Ok(None)
     }
 
     /// Takes a clause of 22.2.6 back once a getter of the Script answered.
@@ -15762,19 +16011,13 @@ impl RegisterVM {
     /// A separator that is a `RegExp` carries the `@@split` of 22.2.6.14;
     /// every other Object reaches `ToString`, which names its own gap.
     fn call_split_intrinsic(
-        &mut self,
+        &self,
         call: &Call,
         units: CodeUnits<'_>,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
         let text = self.receiver_units(call.receiver, units, heap, realm)?;
-        let separator = self.call_argument(call, 0, heap)?;
-        if let Some(reference) = separator.as_object()
-            && let Some(pattern) = Self::regexp_pattern(reference, heap)
-        {
-            return self.regexp_split(&text, &pattern, call, heap, realm);
-        }
         self.string_split(&text, call, heap, realm)
     }
 
@@ -16033,19 +16276,6 @@ impl RegisterVM {
             let start = i32::try_from(matched.range.start).map_err(|_| VMError::StringLimit)?;
             return Ok(Value::from_smi(start));
         }
-        if intrinsic == Intrinsic::RegExpPrototypeSplit {
-            let name = PropertyKey::String(heap.strings.intern("constructor")?);
-            let constructor = match heap.lookup_named(receiver, name)? {
-                Some(found) => Self::plain_value(found)?,
-                None => VALUE_UNDEFINED,
-            };
-            if !Self::is_intrinsic(constructor, Intrinsic::RegExpConstructor, heap) {
-                return Err(VMError::Unsupported(
-                    "a splitter of a constructor that is not %RegExp%",
-                ));
-            }
-            return self.regexp_split(&text, &pattern, call, heap, realm);
-        }
         // Step 3 reads the flags off the object, and step 6 answers what
         // 22.2.7.2 answers where they do not name `g`.
         let flags = self.regexp_flags_text(call.receiver, heap, realm)?;
@@ -16071,25 +16301,20 @@ impl RegisterVM {
     ///
     /// The parts are cut out of the text before anything is allocated, so no
     /// String of a part is held unrooted while the next one is made.
-    fn regexp_split(
+    fn walk_the_split(
         &mut self,
         text: &[u16],
         pattern: &crate::regexp::RegExp,
-        call: &Call,
+        limit: u32,
+        unicode: bool,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        let limit = self.call_argument(call, 1, heap)?;
-        let limit = if limit.is_undefined() {
-            u32::MAX
-        } else {
-            crate::value::number_uint32(primitive_number(limit, heap)?)
-        };
         let limit = usize::try_from(limit).unwrap_or(usize::MAX);
         if limit == 0 {
             return self.split_result(&[], heap, realm);
         }
-        // Step 10: an empty text answers itself unless the pattern matches it.
+        // Step 11: an empty text answers itself unless the pattern matches it.
         if text.is_empty() {
             let matched = self.sticky_match(pattern, text, 0)?.is_some();
             let parts: &[Option<&[u16]>] = if matched { &[] } else { &[Some(text)] };
@@ -16101,13 +16326,13 @@ impl RegisterVM {
         while at < text.len() {
             self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
             let Some(found) = self.sticky_match(pattern, text, at)? else {
-                at = at.saturating_add(1);
+                at = Self::advance_string_index(text, at, unicode);
                 continue;
             };
             let end = found.range.end.min(text.len());
             // A match that ends where the last part began makes no progress.
             if end == start {
-                at = at.saturating_add(1);
+                at = Self::advance_string_index(text, at, unicode);
                 continue;
             }
             parts.push(Some(text.get(start..at).unwrap_or_default()));
