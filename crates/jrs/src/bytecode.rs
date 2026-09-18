@@ -10079,6 +10079,7 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::StringPrototypeSearch
         | crate::engine::realm::Intrinsic::SymbolPrototypeValueOf
         | crate::engine::realm::Intrinsic::SymbolPrototypeToPrimitive
+        | crate::engine::realm::Intrinsic::SymbolPrototypeDescription
         | crate::engine::realm::Intrinsic::SymbolFor
         | crate::engine::realm::Intrinsic::ParseInt
         | crate::engine::realm::Intrinsic::ParseFloat

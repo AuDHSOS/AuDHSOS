@@ -3250,6 +3250,17 @@ impl RegisterVM {
             }
             // 20.4.3.3 and 20.4.3.4 take a `this` that is a Symbol or the
             // wrapper 7.1.18 makes of one.
+            // 20.4.3.2 answers the `[[Description]]` of the Symbol its
+            // receiver holds, and undefined where it has none.
+            Intrinsic::SymbolPrototypeDescription => {
+                let Some(symbol) = Self::this_symbol_value(call.receiver, heap) else {
+                    return Err(type_error(heap, realm, "value is not a Symbol"));
+                };
+                match Self::symbol_description(symbol, heap) {
+                    Some(description) => self.allocate_string(heap, &description),
+                    None => Ok(VALUE_UNDEFINED),
+                }
+            }
             Intrinsic::SymbolPrototypeToString | Intrinsic::SymbolPrototypeValueOf => {
                 let Some(symbol) = Self::this_symbol_value(call.receiver, heap) else {
                     return Err(type_error(heap, realm, "value is not a Symbol"));

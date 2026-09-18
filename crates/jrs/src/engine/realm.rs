@@ -1171,6 +1171,8 @@ pub enum Intrinsic {
     ErrorIsError,
     /// `AggregateError`, 20.5.7.1, which takes the errors before the message.
     AggregateErrorConstructor,
+    /// `get description`, 20.4.3.2, the accessor of `%Symbol.prototype%`.
+    SymbolPrototypeDescription,
     /// `get constructor`, 27.1.3.3.1.1.
     IteratorPrototypeConstructorGet,
     /// `set constructor`, 27.1.3.3.1.2.
@@ -1333,7 +1335,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 462] = [
+    pub const ALL: [Self; 463] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1765,6 +1767,7 @@ impl Intrinsic {
         Self::SymbolPrototypeToPrimitive,
         Self::ErrorIsError,
         Self::AggregateErrorConstructor,
+        Self::SymbolPrototypeDescription,
         Self::IteratorPrototypeConstructorGet,
         Self::IteratorPrototypeConstructorSet,
         Self::IteratorPrototypeToStringTagGet,
@@ -1914,7 +1917,6 @@ impl Intrinsic {
                 IntrinsicHolder::AsyncFromSyncIteratorPrototype
             }
             Self::AsyncIteratorPrototypeAsyncIterator => IntrinsicHolder::AsyncIteratorPrototype,
-            Self::SymbolPrototypeToPrimitive => IntrinsicHolder::SymbolPrototype,
             Self::ErrorIsError => IntrinsicHolder::ErrorConstructor,
             Self::ArrayConstructor | Self::ObjectConstructor | Self::FunctionConstructor => {
                 IntrinsicHolder::Global
@@ -1983,9 +1985,10 @@ impl Intrinsic {
             Self::StringPrototypeValueOf | Self::StringPrototypeToString => {
                 IntrinsicHolder::StringPrototype
             }
-            Self::SymbolPrototypeToString | Self::SymbolPrototypeValueOf => {
-                IntrinsicHolder::SymbolPrototype
-            }
+            Self::SymbolPrototypeToString
+            | Self::SymbolPrototypeValueOf
+            | Self::SymbolPrototypeToPrimitive
+            | Self::SymbolPrototypeDescription => IntrinsicHolder::SymbolPrototype,
             Self::SymbolFor | Self::SymbolKeyFor => IntrinsicHolder::SymbolConstructor,
             Self::RegExpPrototypeExec
             | Self::RegExpPrototypeReplace
@@ -2742,6 +2745,7 @@ impl Intrinsic {
             Self::SymbolPrototypeToPrimitive => 459,
             Self::ErrorIsError => 460,
             Self::AggregateErrorConstructor => 461,
+            Self::SymbolPrototypeDescription => 462,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3214,6 +3218,7 @@ impl Intrinsic {
             Self::SymbolPrototypeToPrimitive => 459,
             Self::ErrorIsError => 460,
             Self::AggregateErrorConstructor => 461,
+            Self::SymbolPrototypeDescription => 462,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3687,6 +3692,7 @@ impl Intrinsic {
             459 => Some(Self::SymbolPrototypeToPrimitive),
             460 => Some(Self::ErrorIsError),
             461 => Some(Self::AggregateErrorConstructor),
+            462 => Some(Self::SymbolPrototypeDescription),
             436 => Some(Self::IteratorPrototypeConstructorGet),
             437 => Some(Self::IteratorPrototypeConstructorSet),
             438 => Some(Self::IteratorPrototypeToStringTagGet),
@@ -3956,6 +3962,7 @@ impl Intrinsic {
             Self::SpeciesGetter => "get [Symbol.species]",
             Self::RegExpPrototypeFlags => "get flags",
             Self::RegExpPrototypeSource => "get source",
+            Self::SymbolPrototypeDescription => "get description",
             Self::RegExpPrototypeHasIndices => "get hasIndices",
             Self::RegExpPrototypeGlobal => "get global",
             Self::RegExpPrototypeIgnoreCase => "get ignoreCase",
@@ -4825,6 +4832,7 @@ impl Intrinsic {
     pub const fn length(self) -> u32 {
         match self {
             Self::ThrowTypeError
+            | Self::SymbolPrototypeDescription
             | Self::FunctionPrototype
             | Self::SpeciesGetter
             | Self::RegExpPrototypeFlags
@@ -6609,6 +6617,7 @@ impl Realm {
         Self::define_regexp_accessors(heap, &intrinsics, regexp_prototype)?;
         Self::define_collection_size_getters(heap, &intrinsics, map_prototype, set_prototype)?;
         Self::define_array_buffer_getters(heap, &intrinsics, array_buffer_prototype)?;
+        Self::define_symbol_description(heap, &intrinsics, symbol_prototype)?;
         Self::define_data_view_getters(heap, &intrinsics, data_view_prototype)?;
         Self::define_typed_array_getters(heap, &intrinsics, typed_array_prototype)?;
         Self::define_iterator_accessors(heap, &intrinsics, iterator_prototype_root)?;
@@ -7410,6 +7419,49 @@ impl Realm {
         Ok(())
     }
 
+    /// The accessor 20.4.3.2 gives `%Symbol.prototype%`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    fn define_symbol_description(
+        heap: &mut GenerationalHeap,
+        intrinsics: &[Root],
+        symbol_prototype: Root,
+    ) -> Result<(), HeapError> {
+        let holder = Self::rooted(heap, symbol_prototype)?
+            .as_object()
+            .ok_or(HeapError::InvalidReference)?;
+        let getter = Self::rooted(
+            heap,
+            *intrinsics
+                .get(Intrinsic::SymbolPrototypeDescription.index())
+                .ok_or(HeapError::InvalidReference)?,
+        )?;
+        let shape = heap.shapes.root_shape();
+        let pair = heap.allocate_immortal_object(shape, super::value::VALUE_NULL)?;
+        heap.set_object_kind(
+            pair,
+            super::object::ObjectKind::Accessor {
+                get: getter,
+                set: super::value::VALUE_UNDEFINED,
+            },
+        )?;
+        let key = PropertyKey::String(heap.strings.intern("description")?);
+        heap.define_own_named(
+            holder,
+            key,
+            Value::from_object(pair),
+            PropertyFlags {
+                writable: false,
+                enumerable: false,
+                configurable: true,
+                is_accessor: true,
+            },
+        )?;
+        Ok(())
+    }
+
     /// The three accessors 25.3.4 gives `%DataView.prototype%`.
     ///
     /// # Errors
@@ -8163,6 +8215,7 @@ impl Realm {
                     | Intrinsic::SpeciesGetter
                     | Intrinsic::RegExpPrototypeFlags
                     | Intrinsic::RegExpPrototypeSource
+                    | Intrinsic::SymbolPrototypeDescription
                     | Intrinsic::RegExpPrototypeHasIndices
                     | Intrinsic::RegExpPrototypeGlobal
                     | Intrinsic::RegExpPrototypeIgnoreCase
