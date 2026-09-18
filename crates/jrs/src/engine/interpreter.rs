@@ -5466,9 +5466,41 @@ impl RegisterVM {
             {
                 continue;
             }
+            // Step 2 of 22.1.3.19 answers with the `@@replace` of the search
+            // value, and step 5 keeps a replace value that is callable as it
+            // is: neither of the two reaches the conversion of step 4 or 5.
+            if intrinsic == Intrinsic::StringPrototypeReplace
+                && self.takes_the_replace_over(*index, call, heap)?
+            {
+                continue;
+            }
             return Ok(Some((*index, *hint)));
         }
         Ok(None)
+    }
+
+    /// Whether the value at this position of 22.1.3.19 stands where the clause
+    /// converts none: an `@@replace` of the Realm or of the Script at step 2,
+    /// or a replace value step 5 calls.
+    fn takes_the_replace_over(
+        &self,
+        index: u16,
+        call: &Call,
+        heap: &GenerationalHeap,
+    ) -> Result<bool, VMError> {
+        let argument = self.call_argument(call, index, heap)?;
+        if index == 1 {
+            return Ok(Self::is_callable(argument, heap));
+        }
+        let Some(object) = argument.as_object() else {
+            return Ok(false);
+        };
+        let method =
+            match heap.lookup_named(object, super::realm::WellKnownSymbol::Replace.key())? {
+                Some(found) => Self::plain_value(found)?,
+                None => VALUE_UNDEFINED,
+            };
+        Ok(!method.is_undefined() && !method.is_null())
     }
 
     /// Whether step 1 of the clause throws for this target, which it reads

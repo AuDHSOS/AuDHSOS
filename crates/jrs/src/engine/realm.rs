@@ -4375,6 +4375,10 @@ impl Intrinsic {
         /// The second argument alone, converted by `ToString`, which 20.5.7.1
         /// applies to the message it takes after the errors.
         const SECOND_TEXT: &[(u16, PrimitiveHint)] = &[(1, PrimitiveHint::String)];
+        /// Two texts, which 22.1.3.19 converts where neither of them takes the
+        /// clause over.
+        const TWO_TEXTS: &[(u16, PrimitiveHint)] =
+            &[(0, PrimitiveHint::String), (1, PrimitiveHint::String)];
         /// A text to search for, then where to start.
         const TEXT_THEN_NUMBER: &[(u16, PrimitiveHint)] =
             &[(0, PrimitiveHint::String), (1, PrimitiveHint::Number)];
@@ -4443,6 +4447,9 @@ impl Intrinsic {
             | Self::StringPrototypeLink
             // 22.2.6.11 step 2 converts the String it replaces in.
             | Self::RegExpPrototypeReplace => TEXT,
+            // 22.1.3.19 steps 4 and 5 convert the value it searches for and
+            // the one it writes, where neither takes the clause over.
+            Self::StringPrototypeReplace => TWO_TEXTS,
             // 20.5.7.1 step 4 applies `ToString` to the message, which it
             // takes after the errors.
             Self::AggregateErrorConstructor => SECOND_TEXT,

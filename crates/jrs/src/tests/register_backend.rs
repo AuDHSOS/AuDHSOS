@@ -6402,6 +6402,27 @@ fn a_function_carries_the_name_it_was_given() -> Result<(), Error> {
 }
 
 #[test]
+fn the_replace_of_22_1_3_19_converts_what_it_searches_for_and_writes() -> Result<(), Error> {
+    // Steps 4 and 5 convert the search value and the replace value with
+    // 7.1.17, which for an Object is a method of the Script.
+    for source in [
+        "'abc'.replace({toString:function(){return 'b'}},'X')",
+        "'abc'.replace('b',{toString:function(){return 'X'}})",
+        "'abc'.replace({toString:function(){return 'b'}},{toString:function(){return 'X'}})",
+        // Step 2 answers with the `@@replace` of the search value, which
+        // converts nothing.
+        "'abc'.replace(/b/,'X')",
+        "'abc'.replace('b','X')",
+        // A search value that is no Object reaches neither.
+        "'abc'.replace(2,'X')",
+        "'a2c'.replace(2,'X')",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
+
+#[test]
 fn the_sort_of_23_1_3_30_asks_the_comparator_about_each_pair() -> Result<(), Error> {
     // 23.1.3.30 orders the elements by what 23.1.3.30.1 answers, which for a
     // comparator is a call of the Script; the merge is stable and puts
