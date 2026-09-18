@@ -4504,10 +4504,15 @@ impl RegisterVM {
     /// `OrdinarySetPrototypeOf` of 10.1.2: the same value is always taken, a
     /// different one only while the object is extensible and the chain stays
     /// acyclic.
+    ///
+    /// `%Object.prototype%` is the immutable prototype exotic object of
+    /// 10.4.7, whose `[[SetPrototypeOf]]` takes the value it already has and
+    /// refuses every other one.
     fn set_object_prototype(
         object: ObjectRef,
         prototype: Value,
         heap: &mut GenerationalHeap,
+        realm: &Realm,
     ) -> Result<bool, VMError> {
         let current = heap
             .get_object(object)
@@ -4515,6 +4520,9 @@ impl RegisterVM {
             .prototype;
         if same_value(current, prototype, heap)? {
             return Ok(true);
+        }
+        if realm.object_prototype(heap)?.as_object() == Some(object) {
+            return Ok(false);
         }
         if !heap.is_extensible(object).unwrap_or(false) {
             return Ok(false);
@@ -5132,7 +5140,7 @@ impl RegisterVM {
                     }
                     return Ok(target);
                 };
-                let took = Self::set_object_prototype(object, key, heap)?;
+                let took = Self::set_object_prototype(object, key, heap, realm)?;
                 if reflect {
                     return Ok(Value::from_bool(took));
                 }
@@ -28778,6 +28786,19 @@ impl RegisterVM {
                 }
                 // 13.2.5.5: the own enumerable properties of the source
                 // become data properties of the object the literal is making.
+                Instruction::SetLiteralPrototype(register) => {
+                    // Step 7.a takes an Object and null; every other value
+                    // leaves the Prototype the literal started with.
+                    let value = self.acc;
+                    if value.is_object() || value.is_null() {
+                        let object = self
+                            .read_reg(register)?
+                            .as_object()
+                            .ok_or(VMError::TypeError)?;
+                        heap.set_object_prototype(object, value)
+                            .map_err(VMError::Heap)?;
+                    }
+                }
                 Instruction::SpreadDataProperties(register) => {
                     let source = self.acc;
                     // 7.3.25 step 3: undefined and null copy nothing at all.

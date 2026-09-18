@@ -2841,8 +2841,13 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Star(object));
         let mut spread = false;
         for property in properties {
+            // 13.2.5.5 step 7: `__proto__: value` sets the `[[Prototype]]` of
+            // the object and defines no property, which step 5 keeps from
+            // naming a function after the key as well.
             if property.prototype {
-                return None;
+                self.lower(&property.value)?;
+                self.code.emit(Instruction::SetLiteralPrototype(object));
+                continue;
             }
             // 13.2.5.5 copies the own enumerable properties of the source,
             // which leaves the object with a shape this lowering cannot name.

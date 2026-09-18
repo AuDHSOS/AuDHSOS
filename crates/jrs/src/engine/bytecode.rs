@@ -348,6 +348,13 @@ pub enum Instruction {
     /// enumerable properties of the accumulator are defined on the object the
     /// register holds, which 13.2.5.5 does for a `...` of an Object literal.
     SpreadDataProperties(Reg),
+    /// 13.2.5.5 step 7: `__proto__: value` in an Object literal sets the
+    /// `[[Prototype]]` of the object the register holds to what the
+    /// accumulator holds, and leaves it alone for any other value.
+    ///
+    /// The definition reaches the object itself, not the accessor B.2.2.1
+    /// puts on `%Object.prototype%`.
+    SetLiteralPrototype(Reg),
     /// `acc = ToNumber(register)`, which 13.5.4 asks and which refuses the
     /// `BigInt` `ToNumeric` would answer.
     NumberOnly(Reg),
@@ -1207,6 +1214,7 @@ impl BytecodeFunction {
             | Instruction::ToNumeric(register)
             | Instruction::ToPropertyKey(register)
             | Instruction::SpreadDataProperties(register)
+            | Instruction::SetLiteralPrototype(register)
             | Instruction::NumberOnly(register)
             | Instruction::Add(register)
             | Instruction::Sub(register)

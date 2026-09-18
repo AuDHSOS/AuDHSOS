@@ -6144,6 +6144,38 @@ fn an_object_literal_defines_accessor_properties() -> Result<(), Error> {
 }
 
 #[test]
+fn an_object_literal_sets_its_prototype_from_the_proto_key() -> Result<(), Error> {
+    // 13.2.5.5 step 7 sets the `[[Prototype]]` for an Object and for null,
+    // and defines no property of that name.
+    for source in [
+        "var p={m:1};var o={__proto__:p};o.m",
+        "var p={m:1};var o={__proto__:p};Object.getPrototypeOf(o)===p",
+        "var o={__proto__:null};Object.getPrototypeOf(o)===null",
+        "var p={m:1};var o={__proto__:p};Object.keys(o).length",
+        "var p={m:1};var o={__proto__:p};o.hasOwnProperty('__proto__')",
+        // Step 7.a leaves the Prototype alone for every other value.
+        "var o={__proto__:5};Object.getPrototypeOf(o)===Object.prototype",
+        "var o={__proto__:undefined};Object.getPrototypeOf(o)===Object.prototype",
+        "var o={__proto__:'x'};Object.getPrototypeOf(o)===Object.prototype",
+        // A computed key and a shorthand name a property, not the Prototype.
+        "var __proto__=7;var o={__proto__};o.__proto__",
+        "var p={};var o={['__proto__']:p};Object.getPrototypeOf(o)===Object.prototype",
+        // Step 5 names a function after the key it is given, which the
+        // Prototype setter is not.
+        "var o={__proto__:function(){}};Object.getPrototypeOf(o).name===''",
+        "var p={m:1};var o={a:1,__proto__:p,b:2};''+o.a+o.b+o.m",
+        // 10.4.7: `%Object.prototype%` takes the Prototype it has and no
+        // other.
+        "Reflect.setPrototypeOf(Object.prototype,null)",
+        "Reflect.setPrototypeOf(Object.prototype,{})",
+        "var r;try{Object.setPrototypeOf(Object.prototype,{})}catch(e){r=e instanceof TypeError};r",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn a_class_body_builds_its_constructor_and_its_prototype() -> Result<(), Error> {
     // 15.7.14 makes the constructor and the object it carries, and puts every
     // method the body defines on one of the two.
