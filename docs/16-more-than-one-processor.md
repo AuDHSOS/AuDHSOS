@@ -159,9 +159,10 @@ from being Rust:
 
 About twenty instructions, run once per processor at start-up and never
 again. No assembler program enters the build: `naked_asm!` is the
-compiler's, and `kernel-hal-x86_64` holds thirty of its sites today
+compiler's, and the budget counts `asm!` and `naked_asm!` in one number,
+which for `kernel-hal-x86_64` is thirty today, two of them `naked_asm!`
 (`crates/tools/xtask/src/policy.rs`, line 692). D8 makes this the
-thirty-first.
+thirty-first site of that number and the third `naked_asm!`.
 
 **The decision: one `#[unsafe(naked)]` function whose body is
 `naked_asm!`, placed in its own output section, copied into the start-up
@@ -272,8 +273,9 @@ that keeps that token answers as it does today: its owner is `0` whichever
 processor borrows it. `audhsos-sync` has three dependents, all of them
 kernel crates — `kernel-core`, `kernel-hal-x86_64` and `audhsos-kernel`
 (`crates/tools/xtask/src/policy.rs`, lines 678, 699 and 726) — so the
-cells D6 lists are every cell a second processor can reach, and S6 gives
-each of them the kernel's token.
+cells D6 lists are every cell of the kernel image a second processor can
+reach, and S6 gives each of them the kernel's token. The kernel test
+image holds two more, which D6 names.
 Result: `borrowed: AtomicBool` becomes `owner: AtomicU32` with
 `u32::MAX` for free. The wait is a compare-and-exchange loop that calls
 `ExclusiveToken::wait`, whose default is `core::hint::spin_loop` — a safe
@@ -327,6 +329,22 @@ at each, because a processor refused one loses the work the cell carries:
 
 The last four are in the test kernel alone, and every `Done when` of S7
 and S8 reports through them from the application processor.
+
+**The two cells of the kernel test image.** The budget scan reads
+`<crate>/src` alone (`crates/tools/xtask/src/unsafe_budget.rs`, line 287),
+so these two are outside the sixteen and outside every count D8 states.
+Each is borrowed on a path every processor runs once S8 and S9 land, so
+S6 installs the kernel's token at each of them too, and both come last in
+the order beside the eight:
+
+| Cell | Where | Borrowed from | What a refusal costs |
+|------|-------|---------------|----------------------|
+| `TICK_HOOK` | `crates/kernel/bin/tests/support/mod.rs`, line 134 | `on_interrupt` for the timer vector, line 1496 | The tick hook of a test does not run on that tick, so a test that counts ticks per processor counts the boot processor's alone. |
+| `CALL_HOOK` | `crates/kernel/bin/tests/support/mod.rs`, line 147 | the system-call path, line 1111 | A system call is not recorded, so `syscalls.rs` reads a short log. |
+
+`SEEN`, `PAGES` and `LOG` (`crates/kernel/bin/tests/wrappers.rs`, line 51;
+`ipc.rs`, line 132; `syscalls.rs`, line 124) keep `UncontendedToken`: each
+is borrowed from a test case body, which runs on the boot processor.
 
 The remaining four cells need no token. `DOUBLE_FAULT_STACK`, `TSS_IMAGE`
 and `GDT` stop being shared when S6 moves them into `Processor`; `IDT` is
@@ -396,14 +414,14 @@ their budget today, so the first commit of S6 fails
 | Crate | Now | After | Where the budget stands |
 |-------|-----|-------|-------------------------|
 | `audhsos-sync` | 4 unsafe, 0 asm | 4 unsafe, 0 asm | `crates/tools/xtask/src/policy.rs`, line 454 |
-| `kernel-hal-x86_64` | 152 unsafe, 30 asm | 169 unsafe, 31 asm | `crates/tools/xtask/src/policy.rs`, line 691 |
+| `kernel-hal-x86_64` | 152 unsafe, 30 asm | 170 unsafe, 31 asm | `crates/tools/xtask/src/policy.rs`, line 691 |
 | `audhsos-kernel` | 33 unsafe, 0 asm | 37 unsafe, 0 asm | `crates/tools/xtask/src/policy.rs`, line 712 |
 
 `audhsos-sync` gains nothing: the wait replaces one compare-and-exchange
 with a loop around it and reaches the value through the `slot` that is
 already there.
 
-The seventeen new `unsafe` sites of `kernel-hal-x86_64`:
+The eighteen new `unsafe` sites of `kernel-hal-x86_64`:
 
 | Sites | Step | What they do |
 |-------|------|--------------|
@@ -411,7 +429,7 @@ The seventeen new `unsafe` sites of `kernel-hal-x86_64`:
 | 4 | S6 | Build a per-processor task state segment, load it, load the per-processor global descriptor table, load the interrupt descriptor table on an application processor. |
 | 2 | S6 | Construct a second `LocalApic` over the window the boot processor mapped, and enable it. |
 | 1 | S6 | Read the local APIC identifier register through `APIC_WINDOW`, which is `processor()` of D1. |
-| 5 | S7 | Copy the start-up code into the page, write the parameter block, read the two section symbols, take the address of the Rust entry, enter the kernel from the start-up page. |
+| 6 | S7 | Copy the start-up code into the page, write the parameter block, read the two section symbols, take the address of the Rust entry, enter the kernel from the start-up page, and the `#[unsafe(naked)]` attribute of D2, which the counter reads as an `unsafe` keyword (`crates/tools/xtask/src/unsafe_budget.rs`, line 50). |
 | 2 | S10 | Invalidate a page named by another processor; read the request word of this processor. |
 
 The one new `asm!` site is the `naked_asm!` of D2, in S7.
@@ -421,7 +439,7 @@ application processor lands on, the switch into its idle thread, and the
 two calls that turn interrupts on and off around them.
 
 **The option not taken: a budget stated as a total rather than site by
-site.** A named count is checkable: an eighteenth site in
+site.** A named count is checkable: a nineteenth site in
 `kernel-hal-x86_64` is a change to this decision and not to a number.
 
 ## 16.13 The order of the steps
@@ -590,7 +608,7 @@ The walk stays O(entries) and the storage stays a fixed array.
 (`crates/kernel/acpi/src/madt.rs`, line 164). It has three callers, all
 of them tests: `crates/kernel/acpi/src/tests/madt.rs`, lines 40 and 63,
 which read the count, and `crates/kernel/bin/tests/interrupts.rs`, line
-209, which reads it in QEMU and asserts that the machine reports at least
+213, which reads it in QEMU and asserts that the machine reports at least
 one processor. The first two compare against a length, the third against
 the length of the list.
 
@@ -742,8 +760,9 @@ Size: L.
 4. Add `processor() -> Option<u8>`: read register `0x20` through
    `APIC_WINDOW`, scan `IDENTIFIERS`, answer the position. The scan is
    over `CPUS` entries and `CPUS` is a constant, so the call is O(1).
-5. Install the kernel's token of S5 at the twelve cells D6 orders — the
-   four held cells and the eight taken alone — in place of
+5. Install the kernel's token of S5 at the fourteen cells D6 orders — the
+   four held cells, the eight taken alone, and the two of the kernel test
+   image — in place of
    `UncontendedToken`: its `owner` is `processor()`, its `wait` is
    `remote::poll` of S10 followed by `spin_loop`. Until S10 exists the
    `wait` is `spin_loop` alone, which one processor cannot deadlock on.
