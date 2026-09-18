@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` answers a `WITH` term that reads a term written after it,
+  refuses terms that read each other with `circular reference: X` where
+  the statement reads one of them and leaves them unanswered where it
+  reads none, and refuses two terms of one `WITH` under one name with
+  `duplicate WITH table name: X`. D-284 records it. Catalog 6.6.200.
+
 - `db-sqlite` takes a real written as one for the second argument of
   `likelihood`, between nought and one, refuses `#1` as a syntax error
   where it read it as a variable before, and holds a column added to a

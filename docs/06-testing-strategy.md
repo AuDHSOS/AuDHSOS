@@ -5776,6 +5776,17 @@ Document 16 step Q8.
   to nothing: `ADD COLUMN g REFERENCES t1 DEFAULT 4` is refused
   `Cannot add a REFERENCES column with non-NULL default value`, and
   `DEFAULT NULL` and a column that points at no row both stand.
+- A `WITH` term reads a term written after it, so
+  `WITH tmp2(x) AS (SELECT * FROM tmp1), tmp1(a) AS (SELECT * FROM t1)`
+  answers the two rows of `t1`.
+- Terms that read each other are refused `circular reference: X` naming
+  the term the statement reads, and two terms under one name are refused
+  `duplicate WITH table name: X`.
+- A circle the statement never reads is left unanswered, so
+  `WITH i(x) AS (SELECT * FROM j), j(x) AS (SELECT * FROM i) SELECT *
+  FROM t1` answers the rows of `t1`.
+- A term that reads a table the database does not hold is refused for
+  that table and not for a circle.
 
 ## 6.7 CI pipeline
 

@@ -127,6 +127,10 @@ pub enum Error {
     /// A column added to a table that points at a row of another and
     /// falls back to something.
     PointingDefault,
+    /// Two `WITH` terms of one statement under one name.
+    DuplicateTerm(Vec<u8>),
+    /// `WITH` terms that read each other.
+    Circular(Vec<u8>),
     /// An `ORDER BY` or a `LIMIT` written on a core of a compound other
     /// than the last, with which clause it is and the word that joins
     /// that core to the one after it.
@@ -344,6 +348,10 @@ impl Error {
             Error::PointingDefault => alloc::string::String::from(
                 "Cannot add a REFERENCES column with non-NULL default value",
             ),
+            Error::DuplicateTerm(name) => {
+                alloc::format!("duplicate WITH table name: {}", shown(name))
+            }
+            Error::Circular(name) => alloc::format!("circular reference: {}", shown(name)),
             Error::QualifiedInTrigger => alloc::string::String::from(concat!(
                 "qualified table names are not allowed on ",
                 "INSERT, UPDATE, and DELETE statements within triggers"
@@ -2713,24 +2721,80 @@ impl<'a> Database<'a> {
         scope: Scope<'_>,
     ) -> Result<Vec<(Vec<u8>, Answered)>, Error> {
         let mut out = scope.terms.to_vec();
+        let mut waiting: Vec<(Vec<u8>, &crate::ast::Cte)> = Vec::new();
         for cte in arena.ctes(select.ctes) {
             let name = dequote(cte.name.text(sql));
-            let mine = Scope {
-                terms: &out,
-                outer: scope.outer,
-                views: scope.views,
-            };
-            // `RECURSIVE` says nothing: a term that reads its own name
-            // reads itself whether the word was written or not, which
-            // is what `sqlite3WithPush` decides by the name alone.
-            let mut answered = match self.recursive(arena, cte, &name, sql, mine)? {
-                Some(answered) => answered,
-                None => self.statement(arena, cte.select, sql, mine)?,
-            };
-            renamed(arena, cte.columns, sql, &mut answered)?;
-            out.push((name, answered));
+            // `sqlite3WithAdd` holds the names of one `WITH` apart.
+            if waiting
+                .iter()
+                .any(|(held, _)| held.eq_ignore_ascii_case(&name))
+            {
+                return Err(Error::DuplicateTerm(name));
+            }
+            waiting.push((name, cte));
+        }
+        // A term reads the terms beside it, whichever was written
+        // first, so the one that reads no other is answered first and
+        // the ones that read it follow. A turn that answers none of
+        // what is left leaves only terms that read each other.
+        while !waiting.is_empty() {
+            let held = waiting.len();
+            let mut later = Vec::new();
+            for (name, cte) in waiting {
+                let mine = Scope {
+                    terms: &out,
+                    outer: scope.outer,
+                    views: scope.views,
+                };
+                match self.term(arena, cte, &name, sql, mine) {
+                    Ok(answered) => out.push((name, answered)),
+                    // A term the statement has no answer for yet is one
+                    // this turn passes over; every other refusal is the
+                    // term's own.
+                    Err(Error::NoTable(wanted)) if holds_term(arena, select, sql, &wanted) => {
+                        later.push((name, cte));
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            if later.len() == held {
+                // A term the statement never reads is left unanswered,
+                // which is what the C library does by answering a term
+                // where it is read; only a circle the statement reaches
+                // refuses it.
+                return match circling(arena, select, sql, &later) {
+                    Some(name) => Err(Error::Circular(name)),
+                    None => Ok(out),
+                };
+            }
+            waiting = later;
         }
         Ok(out)
+    }
+
+    /// One `WITH` term answered.
+    ///
+    /// `RECURSIVE` says nothing: a term that reads its own name reads
+    /// itself whether the word was written or not, which is what
+    /// `sqlite3WithPush` decides by the name alone.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the statement of the term is refused with.
+    fn term(
+        &self,
+        arena: &Arena,
+        cte: &crate::ast::Cte,
+        name: &[u8],
+        sql: &[u8],
+        scope: Scope<'_>,
+    ) -> Result<Answered, Error> {
+        let mut answered = match self.recursive(arena, cte, name, sql, scope)? {
+            Some(answered) => answered,
+            None => self.statement(arena, cte.select, sql, scope)?,
+        };
+        renamed(arena, cte.columns, sql, &mut answered)?;
+        Ok(answered)
     }
 
     /// A `WITH` term that reads itself, which is
@@ -5107,6 +5171,35 @@ fn chain(arena: &Arena, id: SelectId) -> Vec<Link> {
         at = core.compound.map(|(_, next)| next);
     }
     links
+}
+
+/// Whether `wanted` names a `WITH` term of this statement.
+///
+/// A term already answered is one the statement finds, so a refusal
+/// that names a term names one with no answer yet. Costs O(n) over the
+/// terms.
+fn holds_term(arena: &Arena, select: &Select, sql: &[u8], wanted: &[u8]) -> bool {
+    arena
+        .ctes(select.ctes)
+        .iter()
+        .any(|cte| dequote(cte.name.text(sql)).eq_ignore_ascii_case(wanted))
+}
+
+/// The term a circle is named after, which is the one the statement
+/// reads, and nothing where the statement reads none of them.
+///
+/// `sqlite3WithPush` names the term the resolver reached the circle
+/// through, and a term no statement reads is never resolved at all.
+fn circling(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    later: &[(Vec<u8>, &crate::ast::Cte)],
+) -> Option<Vec<u8>> {
+    later
+        .iter()
+        .find(|(name, _)| reads(arena, select, sql, name))
+        .map(|(name, _)| name.clone())
 }
 
 /// The operator that stands in front of the core at `at`.

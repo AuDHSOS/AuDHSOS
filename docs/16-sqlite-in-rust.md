@@ -826,6 +826,10 @@ Size: L.
 61. The second argument of `likelihood`, the register `#1` names, and
     what a column that points may fall back to. Built, which D-283
     records.
+62. What the terms of a `WITH` may read. Built, which D-284 records. A
+    term that reads itself inside a subquery is still answered rather
+    than refused `circular reference`, and a term with more than one
+    recursive reference is not refused for that.
 
 ### Done when
 
@@ -835,8 +839,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 82 322 cases in 702 files, 70 980
-pass, 2307 answer differently, and 9035 name something the engine
+under the `tclsh` of the machine. Of 81 884 cases in 702 files, 70 567
+pass, 2298 answer differently, and 9019 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts

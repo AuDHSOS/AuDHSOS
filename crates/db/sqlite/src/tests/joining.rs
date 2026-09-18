@@ -253,3 +253,88 @@ fn what_a_column_that_points_may_fall_back_to() {
         .run(b"ALTER TABLE t1 ADD COLUMN i DEFAULT 4")
         .expect("a column");
 }
+
+/// A `WITH` term reads the terms beside it, whichever was written
+/// first, and terms that read each other are refused naming the one
+/// the statement reads.
+#[test]
+fn what_the_terms_of_a_with_may_read() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t1(x)").unwrap();
+    writer.run(b"INSERT INTO t1 VALUES(1),(2)").unwrap();
+    let image = writer.written();
+    let database = Database::open(&image).expect("a database");
+    // A term written after the one that reads it is answered first.
+    assert_eq!(
+        database
+            .query(
+                b"WITH tmp2(x) AS (SELECT * FROM tmp1), tmp1(a) AS (SELECT * FROM t1) \
+                  SELECT * FROM tmp2"
+            )
+            .unwrap()
+            .rows
+            .len(),
+        2
+    );
+    for (sql, message) in [
+        (
+            "WITH tmp2(x) AS (SELECT * FROM tmp1), tmp1(a) AS (SELECT * FROM tmp2) \
+             SELECT * FROM tmp1",
+            "circular reference: tmp1",
+        ),
+        (
+            "WITH i(x) AS (SELECT * FROM j), j(x) AS (SELECT * FROM k), \
+             k(x) AS (SELECT * FROM i) SELECT * FROM i",
+            "circular reference: i",
+        ),
+        (
+            "WITH i(x) AS (SELECT * FROM (SELECT * FROM j)), \
+             j(x) AS (SELECT * FROM (SELECT * FROM i)) SELECT * FROM i",
+            "circular reference: i",
+        ),
+        (
+            "WITH tmp(a) AS (SELECT * FROM t1), tmp(a) AS (SELECT * FROM t1) \
+             SELECT * FROM tmp",
+            "duplicate WITH table name: tmp",
+        ),
+    ] {
+        assert_eq!(
+            database.query(sql.as_bytes()).unwrap_err().message(),
+            message,
+            "{sql}"
+        );
+    }
+    // A circle the statement never reads is left unanswered, which is
+    // what the C library does by answering a term where it is read.
+    assert_eq!(
+        database
+            .query(
+                b"WITH i(x) AS (SELECT * FROM j), j(x) AS (SELECT * FROM i) \
+                  SELECT * FROM t1"
+            )
+            .unwrap()
+            .rows
+            .len(),
+        2
+    );
+    assert_eq!(
+        database
+            .query(
+                b"WITH a(x) AS (SELECT 1), b(x) AS (SELECT * FROM c), \
+                  c(x) AS (SELECT * FROM b) SELECT * FROM a"
+            )
+            .unwrap()
+            .rows
+            .len(),
+        1
+    );
+    // A term that reads a table the database does not hold is refused
+    // for that table and not for a circle.
+    assert_eq!(
+        database
+            .query(b"WITH i(x) AS (SELECT * FROM nowhere) SELECT * FROM i")
+            .unwrap_err()
+            .message(),
+        "no such table: nowhere"
+    );
+}
