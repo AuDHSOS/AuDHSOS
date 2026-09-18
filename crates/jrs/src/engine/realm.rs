@@ -5050,7 +5050,6 @@ impl Intrinsic {
             | Self::RegExpConstructor
             | Self::RegExpPrototypeExec
             | Self::RegExpPrototypeTest
-            | Self::JsonParse
             | Self::NumberPrototypeToString
             | Self::ReflectGetPrototypeOf
             | Self::ReflectIsExtensible
@@ -5228,7 +5227,9 @@ impl Intrinsic {
             | Self::AtomicsStore
             | Self::AtomicsSub
             | Self::AtomicsXor
-            | Self::AtomicsNotify => 3,
+            | Self::AtomicsNotify
+            // 25.5.2 takes the value, the replacer and the space.
+            | Self::JsonStringify => 3,
             Self::MathPow
             | Self::ObjectGetOwnPropertyDescriptor
             | Self::ObjectCreate
@@ -5248,7 +5249,8 @@ impl Intrinsic {
             | Self::ArrayPrototypeWith
             | Self::MathMax
             | Self::MathMin
-            | Self::JsonStringify
+            // 25.5.1 takes the text and the reviver.
+            | Self::JsonParse
             | Self::MathImul
             | Self::ParseInt
             | Self::FunctionPrototypeApply

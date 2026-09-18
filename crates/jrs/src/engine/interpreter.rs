@@ -18363,6 +18363,13 @@ impl RegisterVM {
             if Self::is_callable(value, heap) {
                 return Ok(false);
             }
+            // Step 7 takes the primitive a wrapper carries: 7.1.4 of a
+            // `[[NumberData]]`, 7.1.17 of a `[[StringData]]` and the
+            // `[[BooleanData]]` itself.
+            if let Some(held) = Self::json_wrapped_primitive(object, heap)? {
+                self.fuel = work;
+                return self.json_quote_value(held, out, depth, heap, realm);
+            }
             self.fuel = work;
             return self.json_quote_object(object, out, depth, heap, realm);
         } else if value.is_bigint() {
@@ -18374,6 +18381,48 @@ impl RegisterVM {
         }
         self.fuel = work;
         Ok(true)
+    }
+
+    /// Step 7 of 25.5.2.4: the primitive a Number, String or Boolean wrapper
+    /// carries, and none for every other object.
+    ///
+    /// 7.1.4 of a `[[NumberData]]` calls `valueOf` and 7.1.17 of a
+    /// `[[StringData]]` calls `toString`; an object that answers those with a
+    /// method of the Script is a gap, because the clause has no frame to call
+    /// one from.
+    fn json_wrapped_primitive(
+        object: ObjectRef,
+        heap: &mut GenerationalHeap,
+    ) -> Result<Option<Value>, VMError> {
+        let held = match heap.get_object(object).map(|entry| &entry.kind) {
+            Some(&ObjectKind::BooleanWrapper(boolean)) => {
+                return Ok(Some(if boolean { VALUE_TRUE } else { VALUE_FALSE }));
+            }
+            Some(&ObjectKind::NumberWrapper(number)) => ("valueOf", Value::from_f64(number)),
+            Some(&ObjectKind::StringWrapper(text)) => ("toString", text),
+            _ => return Ok(None),
+        };
+        let (name, primitive) = held;
+        if heap
+            .lookup_named(object, super::realm::WellKnownSymbol::ToPrimitive.key())?
+            .is_some()
+        {
+            return Err(VMError::Unsupported(
+                "the @@toPrimitive of a wrapper 25.5.2.4 converts",
+            ));
+        }
+        let key = PropertyKey::String(heap.strings.intern(name)?);
+        let method = heap
+            .lookup_named(object, key)?
+            .map(Self::plain_value)
+            .transpose()?
+            .unwrap_or(VALUE_UNDEFINED);
+        if Self::is_script_function(method, heap) {
+            return Err(VMError::Unsupported(
+                "a conversion of 25.5.2.4 that runs a method of the Script",
+            ));
+        }
+        Ok(Some(primitive))
     }
 
     /// `SerializeJSONArray` of 25.5.2.5 and `SerializeJSONObject` of 25.5.2.6.
@@ -18417,6 +18466,12 @@ impl RegisterVM {
                 .ok_or(VMError::Heap(HeapError::InvalidReference))?;
             let held = match Self::typed_array_read(object, Value::from_string(name), heap)? {
                 Some(element) => element,
+                // 10.4.3 gives a String exotic object own indices no Shape and
+                // no element store carries.
+                None if Self::owns_string_exotic(object, key, heap)? => {
+                    let indexed = Self::element_index_of(object, key, heap);
+                    Self::own_property_value(object, key, indexed, heap)?
+                }
                 None => Self::plain_value(
                     heap.lookup_named(object, key)?
                         .ok_or(VMError::Heap(HeapError::InvalidReference))?,
