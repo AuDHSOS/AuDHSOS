@@ -1356,7 +1356,11 @@ impl GenerationalHeap {
     }
 
     /// The canonical array index a property key denotes, if it denotes one.
-    fn array_index_of(&self, name: StringRef) -> Result<Option<u32>, HeapError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale String.
+    pub fn array_index_of(&self, name: StringRef) -> Result<Option<u32>, HeapError> {
         let units = self
             .strings
             .to_utf16(Value::from_string(name))

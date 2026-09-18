@@ -6823,6 +6823,10 @@ impl RegisterVM {
         Ok(Some(true))
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function keeps each step beside the clause it is"
+    )]
     fn define_property_from(
         object: ObjectRef,
         name: PropertyKey,
@@ -6837,6 +6841,19 @@ impl RegisterVM {
             Self::define_typed_array_index(object, name, descriptor, heap, realm)?
         {
             return Ok(defined);
+        }
+        // 10.4.2.1 step 3.c: an index at or past a `length` that is no longer
+        // writable takes no descriptor, whatever the descriptor names.
+        if let Some(length) = heap.array_length(object)
+            && heap.array_length_is_writable(object) == Some(false)
+            && let Some(index) = name
+                .as_string()
+                .map(|name| heap.array_index_of(name))
+                .transpose()?
+                .flatten()
+            && index >= length
+        {
+            return Ok(false);
         }
         let indexed = Self::element_index_of(object, name, heap);
         let Some(current) = heap.own_named_flags(object, name)? else {
@@ -7124,6 +7141,12 @@ impl RegisterVM {
         let writable = heap
             .array_length_is_writable(object)
             .ok_or(VMError::TypeError)?;
+        // Steps 3 to 5 convert the value and refuse one that is no length
+        // before step 6 asks 10.1.6.3 anything about the attributes.
+        let wanted = descriptor
+            .value
+            .map(|value| Self::array_length_of(value, heap, realm))
+            .transpose()?;
         if descriptor.is_accessor()
             || descriptor.enumerable == Some(true)
             || descriptor.configurable == Some(true)
@@ -7141,9 +7164,8 @@ impl RegisterVM {
             }
             return Ok(true);
         };
-        // Steps 3 to 5 convert the value and refuse one that is no length,
-        // before step 11 reads the writable the property has.
-        let wanted = Self::array_length_of(value, heap, realm)?;
+        let _ = value;
+        let wanted = wanted.ok_or(VMError::TypeError)?;
         let current = heap.array_length(object).ok_or(VMError::TypeError)?;
         // Steps 10 and 11: a length that is not writable takes no new value,
         // and 10.1.6.3 answers true for the one it already holds.
