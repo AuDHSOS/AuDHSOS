@@ -584,8 +584,8 @@ negative-test passes. Other parser/builtin completeness gaps remain open.
 The engine is the target of the migration and the stack backend the
 source (architecture, section 17.1). What gates the switch is not the
 count either path reaches but the set of variants the stack path passes
-and the engine does not. At `a47aa3e` that set holds 2,270 variants:
-none of them the engine fails, and 2,270 it names as gaps. The engine
+and the engine does not. At `10c18a2` that set holds 2,236 variants:
+none of them the engine fails, and 2,236 it names as gaps. The engine
 passes 25,097 variants the stack path does not. Only the failures are
 breaches of the equality duty; a gap costs coverage and answers nothing
 wrongly.
@@ -605,9 +605,9 @@ What a switch would cost is those gaps, by the reason the engine names:
 | 92 | an `exec` of the Script |
 | 81 | an eval of a Script the lowering does not take |
 | 50 | a switch statement |
-| 46 | a species constructor of the Script |
 | 46 | a frame of a call the lowering does not prepare |
-| 1,001 | 76 further reasons, none above 40 variants |
+| 40 | a name |
+| 973 | 76 further reasons, none above 38 variants |
 
 | Commit | Blockers | Failures | Gaps |
 |---|---:|---:|---:|
@@ -718,6 +718,7 @@ What a switch would cost is those gaps, by the reason the engine names:
 | `442fd9d` | 2,324 | **0** | 2,324 |
 | `73a90be` | 2,296 | **0** | 2,296 |
 | `a47aa3e` | 2,270 | **0** | 2,270 |
+| `10c18a2` | 2,236 | **0** | 2,236 |
 
 The list is the join of the two per-variant runs, without `--summary`:
 
@@ -1040,7 +1041,8 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same, before the iterable of 24.1.1.1 (outdated) | focused | `48b1816` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Map test/built-ins/Set --summary` | 587 | 1,169 | 458 (39.18%) | 192 (16.42%) | 519 (44.40%) |
 | The same, before the iterators of 24.1.5 and 24.2.5 (outdated) | focused | `29cc550` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Map test/built-ins/Set --summary` | 587 | 1,169 | 336 (28.74%) | 240 (20.53%) | 593 (50.73%) |
 | The same, on the stack backend (focused) | focused | `29cc550` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Map test/built-ins/Set --summary` | 587 | 1,169 | 0 (0.00%) | 1,051 (89.91%) | 118 (10.09%) |
-| 23.1.3.4 with a species of the Script (focused) | focused | `a47aa3e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 5,482 (89.62%) | 46 (0.75%) | 589 (9.63%) |
+| 23.1.3.4 with a species of the Script (focused) | focused | `10c18a2` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 5,516 (90.17%) | 46 (0.75%) | 555 (9.07%) |
+| The same, before the species of 23.1.3.1 (outdated) | focused | `a47aa3e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 5,482 (89.62%) | 46 (0.75%) | 589 (9.63%) |
 | The same, on the stack backend (focused) | focused | `a47aa3e` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 5,066 (82.82%) | 983 (16.07%) | 68 (1.11%) |
 | Clause 25.5 entire (focused) | focused | `73a90be` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/JSON test/staging/sm/JSON --summary` | 204 | 408 | 296 (72.55%) | 4 (0.98%) | 108 (26.47%) |
 | The same, on the stack backend (focused) | focused | `73a90be` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/JSON test/staging/sm/JSON --summary` | 204 | 408 | 350 (85.78%) | 40 (9.80%) | 18 (4.41%) |
@@ -1055,7 +1057,8 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | 13.3.7.1 with a spread element in the argument list (focused) | focused | `03d3688` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/super test/staging/sm/class --summary` | 188 | 371 | 232 (62.53%) | 14 (3.77%) | 125 (33.69%) |
 | The same, on the stack backend (focused) | focused | `03d3688` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/super test/staging/sm/class --summary` | 188 | 371 | 258 (69.54%) | 61 (16.44%) | 52 (14.02%) |
 | Complete pinned suite on the register engine, before the close of 14.7.5.7 step 3.j (outdated) | full | `33ffe90` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 58,747 (57.08%) | 20,543 (19.96%) | 23,635 (22.96%) |
-| Complete pinned suite on the register engine | full | `a47aa3e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 62,273 (60.50%) | 19,353 (18.80%) | 21,299 (20.69%) |
+| Complete pinned suite on the register engine | full | `10c18a2` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 62,307 (60.54%) | 19,353 (18.80%) | 21,265 (20.66%) |
+| Complete pinned suite on the register engine, before the species of 23.1.3.1 (outdated) | full | `a47aa3e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 62,273 (60.50%) | 19,353 (18.80%) | 21,299 (20.69%) |
 | Complete pinned suite on the register engine, before the species of 23.1.3.4 (outdated) | full | `73a90be` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 62,247 (60.48%) | 19,353 (18.80%) | 21,325 (20.72%) |
 | Complete pinned suite on the register engine, before the reviver of 25.5.1 (outdated) | full | `442fd9d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 62,213 (60.44%) | 19,353 (18.80%) | 21,359 (20.75%) |
 | Complete pinned suite on the register engine, before the replacer of 25.5.2 (outdated) | full | `c6c2d14` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 62,137 (60.37%) | 19,359 (18.81%) | 21,429 (20.82%) |
@@ -1117,7 +1120,8 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | Complete pinned suite on the register engine, before the pairs of 22.2.7.8 (outdated) | full | `1b57b97` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 58,924 (57.25%) | 20,312 (19.73%) | 23,689 (23.02%) |
 | Complete pinned suite on the register engine, before the constructor of 23.1.2 (outdated) | full | `6fdbb2d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 58,869 (57.20%) | 20,379 (19.80%) | 23,677 (23.00%) |
 | Complete pinned suite on the register engine, before the order of 10.4.2.4 (outdated) | full | `b646a1d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 58,821 (57.15%) | 20,445 (19.86%) | 23,659 (22.99%) |
-| Complete pinned suite, including staging and Intl | full | `a47aa3e` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 39,354 (38.24%) | 38,582 (37.49%) | 24,989 (24.28%) |
+| Complete pinned suite, including staging and Intl | full | `10c18a2` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 39,354 (38.24%) | 38,582 (37.49%) | 24,989 (24.28%) |
+| The same, unchanged at `a47aa3e` (outdated) | full | `a47aa3e` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 39,354 (38.24%) | 38,582 (37.49%) | 24,989 (24.28%) |
 | The same, unchanged at `73a90be` (outdated) | full | `73a90be` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 39,354 (38.24%) | 38,582 (37.49%) | 24,989 (24.28%) |
 | The same, unchanged at `442fd9d` (outdated) | full | `442fd9d` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 39,354 (38.24%) | 38,582 (37.49%) | 24,989 (24.28%) |
 | The same, unchanged at `c6c2d14` (outdated) | full | `c6c2d14` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 39,354 (38.24%) | 38,582 (37.49%) | 24,989 (24.28%) |
