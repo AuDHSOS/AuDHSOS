@@ -10819,6 +10819,10 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::StringPrototypeSubstring
         | crate::engine::realm::Intrinsic::StringPrototypePadEnd
         | crate::engine::realm::Intrinsic::StringPrototypePadStart
+        | crate::engine::realm::Intrinsic::StringPrototypeToLowerCase
+        | crate::engine::realm::Intrinsic::StringPrototypeToUpperCase
+        | crate::engine::realm::Intrinsic::StringPrototypeToLocaleLowerCase
+        | crate::engine::realm::Intrinsic::StringPrototypeToLocaleUpperCase
         | crate::engine::realm::Intrinsic::StringPrototypeTrim
         | crate::engine::realm::Intrinsic::StringPrototypeTrimEnd
         | crate::engine::realm::Intrinsic::StringPrototypeTrimStart

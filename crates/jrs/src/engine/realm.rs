@@ -350,6 +350,14 @@ pub enum Intrinsic {
     StringPrototypePadEnd,
     /// `String.prototype.padStart` (22.1.3.16).
     StringPrototypePadStart,
+    /// `String.prototype.toLowerCase` (22.1.3.29).
+    StringPrototypeToLowerCase,
+    /// `String.prototype.toUpperCase` (22.1.3.32).
+    StringPrototypeToUpperCase,
+    /// `String.prototype.toLocaleLowerCase` (22.1.3.30).
+    StringPrototypeToLocaleLowerCase,
+    /// `String.prototype.toLocaleUpperCase` (22.1.3.31).
+    StringPrototypeToLocaleUpperCase,
     /// `String.prototype.trim` (22.1.3.32).
     StringPrototypeTrim,
     /// `String.prototype.trimEnd` (22.1.3.33).
@@ -1364,7 +1372,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 469] = [
+    pub const ALL: [Self; 473] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1384,6 +1392,10 @@ impl Intrinsic {
         Self::StringPrototypeCodePointAt,
         Self::StringPrototypePadEnd,
         Self::StringPrototypePadStart,
+        Self::StringPrototypeToLowerCase,
+        Self::StringPrototypeToUpperCase,
+        Self::StringPrototypeToLocaleLowerCase,
+        Self::StringPrototypeToLocaleUpperCase,
         Self::StringPrototypeTrim,
         Self::StringPrototypeTrimEnd,
         Self::StringPrototypeTrimStart,
@@ -1869,6 +1881,10 @@ impl Intrinsic {
             | Self::StringPrototypeCodePointAt
             | Self::StringPrototypePadEnd
             | Self::StringPrototypePadStart
+            | Self::StringPrototypeToLowerCase
+            | Self::StringPrototypeToUpperCase
+            | Self::StringPrototypeToLocaleLowerCase
+            | Self::StringPrototypeToLocaleUpperCase
             | Self::StringPrototypeTrim
             | Self::StringPrototypeTrimEnd
             | Self::StringPrototypeTrimStart
@@ -2794,6 +2810,10 @@ impl Intrinsic {
             Self::StringPrototypeIterator => 466,
             Self::StringIteratorPrototypeNext => 467,
             Self::ProxyConstructor => 468,
+            Self::StringPrototypeToLowerCase => 469,
+            Self::StringPrototypeToUpperCase => 470,
+            Self::StringPrototypeToLocaleLowerCase => 471,
+            Self::StringPrototypeToLocaleUpperCase => 472,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3273,6 +3293,10 @@ impl Intrinsic {
             Self::StringPrototypeIterator => 466,
             Self::StringIteratorPrototypeNext => 467,
             Self::ProxyConstructor => 468,
+            Self::StringPrototypeToLowerCase => 469,
+            Self::StringPrototypeToUpperCase => 470,
+            Self::StringPrototypeToLocaleLowerCase => 471,
+            Self::StringPrototypeToLocaleUpperCase => 472,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3753,6 +3777,10 @@ impl Intrinsic {
             466 => Some(Self::StringPrototypeIterator),
             467 => Some(Self::StringIteratorPrototypeNext),
             468 => Some(Self::ProxyConstructor),
+            469 => Some(Self::StringPrototypeToLowerCase),
+            470 => Some(Self::StringPrototypeToUpperCase),
+            471 => Some(Self::StringPrototypeToLocaleLowerCase),
+            472 => Some(Self::StringPrototypeToLocaleUpperCase),
             436 => Some(Self::IteratorPrototypeConstructorGet),
             437 => Some(Self::IteratorPrototypeConstructorSet),
             438 => Some(Self::IteratorPrototypeToStringTagGet),
@@ -4197,6 +4225,10 @@ impl Intrinsic {
             Self::StringPrototypeCodePointAt => "codePointAt",
             Self::StringPrototypePadEnd => "padEnd",
             Self::StringPrototypePadStart => "padStart",
+            Self::StringPrototypeToLowerCase => "toLowerCase",
+            Self::StringPrototypeToUpperCase => "toUpperCase",
+            Self::StringPrototypeToLocaleLowerCase => "toLocaleLowerCase",
+            Self::StringPrototypeToLocaleUpperCase => "toLocaleUpperCase",
             Self::StringPrototypeTrim => "trim",
             Self::StringPrototypeTrimEnd => "trimEnd",
             Self::StringPrototypeTrimStart => "trimStart",
@@ -4932,6 +4964,10 @@ impl Intrinsic {
             | Self::SymbolPrototypeToString
             | Self::SymbolPrototypeValueOf
             | Self::FunctionPrototypeToString
+            | Self::StringPrototypeToLowerCase
+            | Self::StringPrototypeToUpperCase
+            | Self::StringPrototypeToLocaleLowerCase
+            | Self::StringPrototypeToLocaleUpperCase
             | Self::StringPrototypeTrim
             | Self::StringPrototypeTrimEnd
             | Self::StringPrototypeTrimStart

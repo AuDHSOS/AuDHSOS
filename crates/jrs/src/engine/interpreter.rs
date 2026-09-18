@@ -3085,6 +3085,10 @@ impl RegisterVM {
             | Intrinsic::StringPrototypeCodePointAt
             | Intrinsic::StringPrototypePadEnd
             | Intrinsic::StringPrototypePadStart
+            | Intrinsic::StringPrototypeToLowerCase
+            | Intrinsic::StringPrototypeToUpperCase
+            | Intrinsic::StringPrototypeToLocaleLowerCase
+            | Intrinsic::StringPrototypeToLocaleUpperCase
             | Intrinsic::StringPrototypeTrim
             | Intrinsic::StringPrototypeTrimEnd
             | Intrinsic::StringPrototypeTrimStart
@@ -16432,6 +16436,31 @@ impl RegisterVM {
                 };
                 Ok(Value::from_smi(order))
             }
+            // 22.1.3.29 to 22.1.3.32 map every code point with the Unicode
+            // Default Case Conversion, which has no locale to refine.
+            Intrinsic::StringPrototypeToLowerCase
+            | Intrinsic::StringPrototypeToUpperCase
+            | Intrinsic::StringPrototypeToLocaleLowerCase
+            | Intrinsic::StringPrototypeToLocaleUpperCase => {
+                // 22.1.3.30 and 22.1.3.31 take the locales the call names,
+                // which decide the mapping of the dotted and dotless i; this
+                // Realm holds the data of no locale.
+                if matches!(
+                    intrinsic,
+                    Intrinsic::StringPrototypeToLocaleLowerCase
+                        | Intrinsic::StringPrototypeToLocaleUpperCase
+                ) && !self.call_argument(&call, 0, heap)?.is_undefined()
+                {
+                    return Err(VMError::Unsupported("a locale of 22.1.3.30"));
+                }
+                let upper = matches!(
+                    intrinsic,
+                    Intrinsic::StringPrototypeToUpperCase
+                        | Intrinsic::StringPrototypeToLocaleUpperCase
+                );
+                let mapped = Self::change_the_case(&units, upper)?;
+                self.allocate_string(heap, &mapped)
+            }
             // 22.1.3.32 to 22.1.3.34: TrimString removes the white space and
             // line terminators of 11.2 and 11.3 from the named ends.
             Intrinsic::StringPrototypeTrim
@@ -21304,6 +21333,54 @@ impl RegisterVM {
         }
         out.extend_from_slice(text.get(taken..).unwrap_or_default());
         self.allocate_string(heap, &out)
+    }
+
+    /// `toLowercase` and `toUppercase` of the Unicode Default Case Conversion,
+    /// which 22.1.3.29 to 22.1.3.32 map every code point of the String with.
+    ///
+    /// An unpaired surrogate is no code point and stands as it is.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Unsupported`] for `Final_Sigma`, the one conditional
+    /// mapping of the table that no language selects, which asks for the Cased
+    /// and `Case_Ignorable` properties this engine holds no table of.
+    fn change_the_case(units: &[u16], upper: bool) -> Result<Vec<u16>, VMError> {
+        let mut out: Vec<u16> = Vec::with_capacity(units.len());
+        let mut index = 0;
+        while let Some(&unit) = units.get(index) {
+            index = index.saturating_add(1);
+            let low = units.get(index).copied().unwrap_or(0);
+            // A high surrogate with a low one behind it is one code point.
+            let point = if (0xD800..0xDC00).contains(&unit) && (0xDC00..0xE000).contains(&low) {
+                index = index.saturating_add(1);
+                0x10000u32
+                    .saturating_add((u32::from(unit) - 0xD800) << 10)
+                    .saturating_add(u32::from(low) - 0xDC00)
+            } else {
+                u32::from(unit)
+            };
+            let Some(character) = char::from_u32(point) else {
+                out.push(unit);
+                continue;
+            };
+            if !upper && character == '\u{03A3}' {
+                return Err(VMError::Unsupported(
+                    "a Final_Sigma of the Unicode Default Case Conversion",
+                ));
+            }
+            let mut buffer = [0u16; 2];
+            if upper {
+                for mapped in character.to_uppercase() {
+                    out.extend_from_slice(mapped.encode_utf16(&mut buffer));
+                }
+            } else {
+                for mapped in character.to_lowercase() {
+                    out.extend_from_slice(mapped.encode_utf16(&mut buffer));
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// `GetSubstitution` of 22.1.3.19.1 for a replacement that is a String.

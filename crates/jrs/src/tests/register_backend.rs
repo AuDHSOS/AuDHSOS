@@ -6399,6 +6399,54 @@ fn a_function_carries_the_name_it_was_given() -> Result<(), Error> {
 }
 
 #[test]
+fn the_case_conversions_of_22_1_3_map_every_code_point() -> Result<(), Error> {
+    // 22.1.3.29 to 22.1.3.32 map with the Unicode Default Case Conversion,
+    // which the stack backend has not built, so the answers stand here.
+    for (source, expected) in [
+        ("'AbC'.toLowerCase()", [0x61u16, 0x62, 0x63].as_slice()),
+        ("'AbC'.toUpperCase()", [0x41, 0x42, 0x43].as_slice()),
+        ("'abc'.toLocaleUpperCase()", [0x41, 0x42, 0x43].as_slice()),
+        ("'ABC'.toLocaleLowerCase()", [0x61, 0x62, 0x63].as_slice()),
+        // The mapping of one code point is not one code point: the table
+        // gives the sharp s two letters.
+        ("'\\u00df'.toUpperCase()", [0x53, 0x53].as_slice()),
+        // A code point of a Supplementary Plane is two code units.
+        (
+            "'\\ud801\\udc00'.toLowerCase()",
+            [0xD801, 0xDC28].as_slice(),
+        ),
+        // An unpaired surrogate is no code point and stands as it is.
+        ("'\\ud801'.toUpperCase()", [0xD801].as_slice()),
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let answer = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
+        let Value::String(text) = &answer else {
+            panic!("{source}: {answer:?}");
+        };
+        assert_eq!(&**text, expected, "{source}");
+    }
+    // 22.1.3.30 and 22.1.3.31 take the locales the call names, whose data
+    // this Realm holds none of.
+    let program = compile("'I'.toLocaleLowerCase('tr')", Limits::default())?;
+    assert!(program.uses_register_backend());
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
+    // `Final_Sigma` of the table is conditional on the Cased and
+    // `Case_Ignorable` properties, which this engine holds no table of.
+    let program = compile("'\\u03a3'.toLowerCase()", Limits::default())?;
+    assert!(program.uses_register_backend());
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
+    Ok(())
+}
+
+#[test]
 fn the_arguments_object_of_a_strict_function_is_a_value() -> Result<(), Error> {
     // 10.4.4 makes an unmapped arguments object for a strict function, so
     // nothing of it can be observed that this engine does not build. It is a
