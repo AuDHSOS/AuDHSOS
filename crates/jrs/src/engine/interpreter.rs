@@ -17526,8 +17526,9 @@ impl RegisterVM {
         };
         if writes {
             let bytes = super::object::write_element(written, size, kind, little);
-            if let Some(ObjectKind::ArrayBuffer(Some(block))) =
-                heap.object_kind_mut(block).map(|entry| &mut entry.kind)
+            // 25.2 gives a shared block the same `[[ArrayBufferData]]` 25.1
+            // gives an ordinary one, which a view of it writes into.
+            if let Some(block) = Self::array_buffer_bytes_mut(block, heap)
                 && let Some(slot) = block.get_mut(start..end)
             {
                 slot.copy_from_slice(bytes.get(..size).unwrap_or_default());
@@ -17558,12 +17559,14 @@ impl RegisterVM {
             return Err(type_error(heap, realm, "a constructor called without new"));
         }
         let buffer = self.call_argument(call, 0, heap)?;
+        // Step 2 asks for a `[[ArrayBufferData]]`, which 25.2 gives a shared
+        // block as 25.1 gives an ordinary one.
         let block = buffer
             .as_object()
             .filter(|object| {
                 matches!(
                     heap.get_object(*object).map(|entry| &entry.kind),
-                    Some(&ObjectKind::ArrayBuffer(_))
+                    Some(&ObjectKind::ArrayBuffer(_) | &ObjectKind::SharedArrayBuffer { .. })
                 )
             })
             .ok_or_else(|| type_error(heap, realm, "the argument carries no ArrayBuffer"))?;
