@@ -451,6 +451,12 @@ impl Runner {
         }
         for script in harness {
             if let Err(e) = realm.run_compiled(&script) {
+                // A named gap is a gap wherever it is reached: the harness
+                // asks for something the engine has not built, which the body
+                // of a test reports as unsupported too.
+                if let Error::Unsupported { feature } = &e {
+                    return Outcome::Unsupported((*feature).into());
+                }
                 return Outcome::Fail(format!("harness execution: {}", describe(&mut realm, &e)));
             }
         }
