@@ -635,6 +635,15 @@ pub enum Resume {
         /// Root holding the List the two resolving functions travel in.
         arguments: Root,
     },
+    /// 13.10.2 step 3 called the `@@hasInstance` of the right-hand side.
+    ///
+    /// The operator answers `ToBoolean` of what the method answered, so the
+    /// frame is not a tail call and the List its argument travels in is a root
+    /// of a scope the return leaves.
+    Instance {
+        /// Root holding the List the argument travels in.
+        arguments: Root,
+    },
     /// `[[Set]]` of 10.1.9.2 called the setter of an accessor property.
     ///
     /// A setter answers nothing, and 13.15.2 answers the value assigned, so
@@ -882,6 +891,7 @@ impl Resume {
     const fn list(self) -> Option<Root> {
         match self {
             Self::Spread { arguments }
+            | Self::Instance { arguments }
             | Self::Job { arguments }
             | Self::Executor { arguments, .. } => Some(arguments),
             _ => None,
@@ -1325,6 +1335,44 @@ impl RegisterVM {
         Ok(Value::from_object(Self::coerce_object(
             receiver, heap, realm,
         )?))
+    }
+
+    /// Step 2 of 13.10.2: the `@@hasInstance` of the right-hand side, where it
+    /// is not the one 20.2.3.6 gives.
+    ///
+    /// The method of this Realm is `OrdinaryHasInstance` itself, which the
+    /// operator runs without a frame.
+    fn has_instance_method(
+        constructor: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<Value>, VMError> {
+        let Some(object) = constructor.as_object() else {
+            return Err(type_error(
+                heap,
+                realm,
+                "right-hand side of instanceof is not an object",
+            ));
+        };
+        let key = super::realm::WellKnownSymbol::HasInstance.key();
+        let method = match heap.lookup_named(object, key)? {
+            Some(found) => Self::plain_value(found)?,
+            None => VALUE_UNDEFINED,
+        };
+        if method.is_undefined() || method.is_null() {
+            return Ok(None);
+        }
+        if Self::is_intrinsic(method, Intrinsic::FunctionPrototypeHasInstance, heap) {
+            return Ok(None);
+        }
+        if !Self::is_callable(method, heap) {
+            return Err(type_error(
+                heap,
+                realm,
+                "the @@hasInstance of the right-hand side is not callable",
+            ));
+        }
+        Ok(Some(method))
     }
 
     /// `OrdinaryHasInstance` of 7.3.22, which 13.10.2 reaches because no
@@ -14661,6 +14709,7 @@ impl RegisterVM {
             method,
             argument,
             arguments,
+            false,
             *call,
             units,
             active_feedback,
@@ -14721,6 +14770,7 @@ impl RegisterVM {
             method,
             made,
             arguments,
+            false,
             *call,
             units,
             active_feedback,
@@ -14746,6 +14796,7 @@ impl RegisterVM {
         method: Value,
         receiver: Value,
         arguments: Vec<Value>,
+        verdict: bool,
         call: Call,
         units: CodeUnits<'_>,
         active_feedback: &mut FeedbackVector,
@@ -14765,11 +14816,16 @@ impl RegisterVM {
         // scope of its own, which the return leaves.
         heap.enter_scope();
         let arguments = heap.push_root(list)?;
+        let resume = if verdict {
+            Resume::Instance { arguments }
+        } else {
+            Resume::Spread { arguments }
+        };
         let next = Call {
             receiver,
             arg_count,
             arg_start: Reg(0),
-            resume: Some(Resume::Spread { arguments }),
+            resume: Some(resume),
             construct: None,
             ..call
         };
@@ -23615,12 +23671,43 @@ impl RegisterVM {
                 Instruction::TestInstanceOf(reg) => {
                     let constructor = self.read_reg(reg)?;
                     let value = self.acc;
-                    self.acc = Value::from_bool(Self::ordinary_has_instance(
-                        constructor,
-                        value,
-                        heap,
-                        realm,
-                    )?);
+                    // 13.10.2 step 2 reads `@@hasInstance` with 7.3.11 and
+                    // step 3 answers what it answers.
+                    let method = Self::has_instance_method(constructor, heap, realm)?;
+                    if let Some(method) = method {
+                        let call = Call {
+                            receiver: constructor,
+                            func: Reg(0),
+                            arg_start: Reg(0),
+                            arg_count: 1,
+                            slot: 0,
+                            return_pc: pc,
+                            caller_code_id: current_code_id,
+                            resume: None,
+                            construct: None,
+                        };
+                        if let Some(code_id) = self.answer_with_a_method(
+                            method,
+                            constructor,
+                            Vec::from([value]),
+                            true,
+                            call,
+                            units,
+                            active_feedback,
+                            heap,
+                            realm,
+                        )? {
+                            current_code_id = Some(code_id);
+                            pc = self.pending_pc.take().unwrap_or(0);
+                        }
+                    } else {
+                        self.acc = Value::from_bool(Self::ordinary_has_instance(
+                            constructor,
+                            value,
+                            heap,
+                            realm,
+                        )?);
+                    }
                 }
                 Instruction::TestLessThan(reg) => {
                     let rhs = self.read_reg(reg)?;
@@ -25664,6 +25751,7 @@ impl RegisterVM {
                                     | Resume::Descriptor { .. }
                                     | Resume::Getter
                                     | Resume::Spread { .. }
+                                    | Resume::Instance { .. }
                                     | Resume::Executor { .. }
                                     | Resume::Job { .. }
                                     | Resume::GeneratorStep { .. }
@@ -25765,6 +25853,14 @@ impl RegisterVM {
                                     // The call answered, and the List its
                                     // arguments were is no longer reachable.
                                     Resume::Spread { .. } => {
+                                        heap.exit_scope();
+                                        None
+                                    }
+                                    // 13.10.2 step 3 answers `ToBoolean` of
+                                    // what the method answered.
+                                    Resume::Instance { .. } => {
+                                        self.acc =
+                                            Value::from_bool(Self::to_boolean(self.acc, heap)?);
                                         heap.exit_scope();
                                         None
                                     }
