@@ -14181,7 +14181,7 @@ impl RegisterVM {
                 NativeErrorKind::ReferenceError
             }
             BindingOutcome::Missing(feature) => return VMError::Unsupported(feature),
-            BindingOutcome::Accessor => {
+            BindingOutcome::Accessor(_) => {
                 return VMError::Unsupported("a binding the global object holds as an accessor");
             }
             BindingOutcome::Immutable => {
@@ -23818,6 +23818,7 @@ impl RegisterVM {
                     name: index,
                     strict,
                 } => {
+                    let code_units = units;
                     let units = active_code
                         .string_constants
                         .get(index as usize)
@@ -23825,10 +23826,32 @@ impl RegisterVM {
                     let name = PropertyKey::String(heap.strings.intern_units(units)?);
                     let value = self.acc;
                     let units = units.clone();
-                    realm
+                    let written = realm
                         .global_environment()
-                        .set_mutable_binding(heap, name, value, strict)?
-                        .map_err(|outcome| Self::binding_error(heap, realm, outcome, &units))?;
+                        .set_mutable_binding(heap, name, value, strict)?;
+                    // 10.1.9.2 step 5 calls the setter with the binding object
+                    // as its `this`, which takes a frame of the Script.
+                    if let Err(super::realm::BindingOutcome::Accessor(accessor)) = written {
+                        let target =
+                            Value::from_object(realm.global_environment().global_object(heap)?);
+                        if let Some(code_id) = self.enter_accessor(
+                            accessor,
+                            target,
+                            Some((value, strict)),
+                            pc,
+                            current_code_id,
+                            code_units,
+                            active_feedback,
+                            heap,
+                            realm,
+                        )? {
+                            current_code_id = Some(code_id);
+                            pc = self.pending_pc.take().unwrap_or(0);
+                        }
+                    } else {
+                        written
+                            .map_err(|outcome| Self::binding_error(heap, realm, outcome, &units))?;
+                    }
                 }
                 Instruction::VerifyGlobalVar(index) => {
                     let units = active_code

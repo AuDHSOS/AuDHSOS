@@ -6324,9 +6324,10 @@ pub enum BindingOutcome {
     /// Clause 19 gives the global object this name and this Realm has not
     /// built it yet, so its absence is a gap and not an answer.
     Missing(&'static str),
-    /// The binding object holds the name as an accessor, which only an
-    /// instruction of a Script can read or write.
-    Accessor,
+    /// The binding object, or a Prototype of it, holds the name as an
+    /// accessor, which only a frame of the Script reads or writes; the value
+    /// is the accessor pair.
+    Accessor(Value),
 }
 
 /// The rows of table 71.
@@ -7185,7 +7186,10 @@ impl GlobalEnvironment {
             // 9.1.1.1.5: an uninitialized binding is a ReferenceError, and one
             // that is not writable is a TypeError under strict evaluation.
             if flags.is_accessor {
-                return Ok(Err(BindingOutcome::Accessor));
+                let value = heap
+                    .lookup_named(declarative, name)?
+                    .map_or(VALUE_UNDEFINED, |property| property.value);
+                return Ok(Err(BindingOutcome::Accessor(value)));
             }
             let current = heap
                 .lookup_named(declarative, name)?
@@ -7199,26 +7203,37 @@ impl GlobalEnvironment {
             heap.define_own_named(declarative, name, value, flags)?;
             return Ok(Ok(()));
         }
-        // 9.1.1.2.5: a name the binding object does not have is a
-        // ReferenceError under strict evaluation and a new property otherwise.
+        // 9.1.1.2.5 step 1 asks 7.3.11 of the binding object, which reads the
+        // Prototype Chain: a name nothing of it has is a ReferenceError under
+        // strict evaluation and a new property otherwise.
         let global = self.global_object(heap)?;
-        let existing = heap.own_named_flags(global, name)?;
-        if existing.is_none() && strict {
+        let own = heap.own_named_flags(global, name)?;
+        let found = heap.lookup_named(global, name)?;
+        if own.is_none() && found.is_none() && strict {
             return Ok(Err(BindingOutcome::Unresolvable));
         }
-        let flags = existing.unwrap_or(PropertyFlags::ordinary_data());
-        if flags.is_accessor {
-            return Ok(Err(BindingOutcome::Accessor));
+        // 10.1.9.2 step 5: a property of the object or of a Prototype of it
+        // that is an accessor is written by calling its setter.
+        if let Some(property) = found
+            && property.flags.is_accessor
+        {
+            return Ok(Err(BindingOutcome::Accessor(property.value)));
         }
         // 9.1.1.2.5 writes with 7.3.4, whose `Throw` is the strictness of the
         // reference: 6.2.5.6 step 6.e makes a refused write a TypeError under
-        // strict evaluation and nothing at all otherwise.
-        if !flags.writable {
+        // strict evaluation and nothing at all otherwise. 10.1.9.1 step 2.a
+        // refuses a data property that is not writable, wherever the chain
+        // carries it.
+        if found.is_some_and(|property| !property.flags.writable) {
             if strict {
                 return Ok(Err(BindingOutcome::Immutable));
             }
             return Ok(Ok(()));
         }
+        // 10.1.9.2 step 3: the write creates an own property of the receiver
+        // where the chain carried the name, and keeps the attributes of one
+        // the object already has.
+        let flags = own.unwrap_or(PropertyFlags::ordinary_data());
         heap.define_own_named(global, name, value, flags)?;
         Ok(Ok(()))
     }
@@ -7250,7 +7265,7 @@ impl GlobalEnvironment {
         }
         if let Some(property) = heap.lookup_named(self.global_object(heap)?, name)? {
             if property.flags.is_accessor {
-                return Ok(Err(BindingOutcome::Accessor));
+                return Ok(Err(BindingOutcome::Accessor(property.value)));
             }
             return Ok(Ok(property.value));
         }
