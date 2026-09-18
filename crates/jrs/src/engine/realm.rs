@@ -7020,13 +7020,28 @@ impl GlobalEnvironment {
             .is_some_and(|flags| !flags.configurable))
     }
 
+    /// `CanDeclareGlobalVar` of 9.1.1.4.15.
+    ///
+    /// The name may be declared where the global object already has it as an
+    /// own property, and otherwise only where that object takes new ones.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`HeapError`] when the global object cannot be read.
+    pub fn can_declare_global_var(
+        &self,
+        heap: &GenerationalHeap,
+        name: PropertyKey,
+    ) -> Result<bool, HeapError> {
+        let global = self.global_object(heap)?;
+        if heap.own_named_flags(global, name)?.is_some() {
+            return Ok(true);
+        }
+        Ok(heap.is_extensible(global).unwrap_or(true))
+    }
+
     /// `CreateGlobalVarBinding` of 9.1.1.4.16 with `deletable` false, which is
     /// what a Script declaration asks for.
-    ///
-    /// 9.1.1.4.14 `CanDeclareGlobalVar` answers true for every name here: it
-    /// asks whether the global object already has the property or is
-    /// extensible, and this engine has no `[[PreventExtensions]]`, so every
-    /// object is extensible.
     ///
     /// # Errors
     ///

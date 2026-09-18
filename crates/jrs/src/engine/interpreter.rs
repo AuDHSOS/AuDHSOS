@@ -23846,6 +23846,18 @@ impl RegisterVM {
                             "a lexical declaration of this name already exists",
                         ));
                     }
+                    // 16.1.7 step 12 and 19.2.1.1 step 8.a.i.i: a name the
+                    // global object cannot take is a TypeError.
+                    if !realm
+                        .global_environment()
+                        .can_declare_global_var(heap, name)?
+                    {
+                        return Err(type_error(
+                            heap,
+                            realm,
+                            "the global object takes no declaration of this name",
+                        ));
+                    }
                 }
                 // 16.1.7 step 3: a lexical name this Realm already binds, or
                 // one an existing global property would shadow, is a
