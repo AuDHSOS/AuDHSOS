@@ -33,6 +33,15 @@ socket of `server-net` and runs a command there, which is the acceptance
 of the track. What it is given — the host keys it trusts and its own
 secret — is D-146.
 
+The text stack runs beside the phases as two tracks. Track T is
+finished: `text-core` of [document 17](17-text-and-fonts.md) parses a
+font, shapes and lays out text, and resolves a colour glyph's paint
+graph, in thirteen steps and without a rasterizer. Track R builds the
+rasterizer, which [document 18](18-rasterization.md) specifies in
+thirteen steps of its own: `text-raster` turns an outline into coverage
+and a paint stream into pixels, writing into a surface the caller owns.
+Step R1 is built.
+
 ## Reading order
 
 | # | Document | Content |
@@ -53,12 +62,14 @@ secret — is D-146.
 | 14 | [Secure Shell as a client](14-secure-shell-as-a-client.md) | The SSH-2 client: the algorithm set and what is refused, the crate, the three layers of the protocol, trusting a host key, testing against an implementation from outside |
 | 15 | [The disk on the machine](15-the-disk-on-the-machine.md) | The file system server and what had to exist before it: the handover of a PCI device, the two adapters, the server, the file protocol, and the move of the programs onto the volume |
 | 16 | [More than one processor](16-more-than-one-processor.md) | The SMP track: the processor list, interprocessor interrupts, a borrow that waits, per-processor data, the start-up of an application processor, per-processor run queues, remote invalidation |
-| 17 | [Text and fonts](17-text-and-fonts.md) | The pure `text-core` track: borrowed font parsing, fixed-point geometry, Unicode, shaping, resolution, layout, and colour glyphs; the two contracts the rasterizer is written against; separate future rasterization and drawing integration |
+| 17 | [Text and fonts](17-text-and-fonts.md) | The pure `text-core` track: borrowed font parsing, fixed-point geometry, Unicode, shaping, resolution, layout, and colour glyphs; the two contracts the rasterizer is written against |
+| 18 | [Rasterization](18-rasterization.md) | The `text-raster` track: the surface, flattening to a tolerance, exact-area coverage, subpixel positioning, gamma, the glyph cache, the transcendentals, gradients, the clip and group stacks, and drawing a `LayoutView` |
 
 Beside the documents lie the standards they cite, verbatim and with
 their checksums, one directory per body that publishes them: [rfc/](rfc)
 for the RFCs (D-59), [oasis/](oasis) for what OASIS publishes (D-100),
-[w3c/](w3c), [ecma/](ecma), [unicode/](unicode) for the annexes,
+[w3c/](w3c), which holds the compositing and blending modes a colour
+glyph is drawn with (D-177), [ecma/](ecma), [unicode/](unicode) for the annexes,
 reports, character database and conformance test files of Unicode 18.0.0
 (D-153), [microsoft/](microsoft) for the OpenType specification (D-154),
 [adobe/](adobe) for the three technical notes that specification defers

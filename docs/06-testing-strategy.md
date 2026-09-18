@@ -3297,6 +3297,29 @@ alone:
 - Configurations: default alloc, allocator-free APIs, and bare no_std target.
   Fuzz regression exercises font bytes and UTF-8 through bounded layout buffers.
 
+### 6.6.82 Rasterization (`text-raster`, R1–R13)
+
+This section grows with the track; what is listed is what is built.
+
+- R1 shapes: every format at its own bytes per pixel; an exact-length slice
+  and a longer one; a stride equal to the row and one below it.
+- R1 rejections: a zero width, a zero height, a row beyond `u32`, a slice
+  shorter than `height · stride`, a texel of another format, and a position
+  one past each of the four edges and at `u32::MAX`.
+- R1 access: every corner written and read back for every format; the
+  padding bytes of every row and the bytes past the last row still carrying
+  a sentinel after a clear and a full fill; a row returning its visible
+  bytes only.
+- R1 values: every one of the 256 coverage bytes round-tripped; the channel
+  extremes of `Rgba16` round-tripped and their little-endian order read
+  literally; `Rgbx8888` and `Bgrx8888` storing opposite channel orders for
+  one texel, read literally as `11 22 33 00` and `33 22 11 00`.
+- R1 determinism: the same sequence of writes into two independently
+  allocated `Vec`s, one of them longer, produces identical bytes.
+- Golden images are a gate on this crate and on no other, which D-177
+  allows: the crate has no floating point, so the bytes are the same on
+  every host and in debug and release.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

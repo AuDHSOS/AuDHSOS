@@ -40,7 +40,11 @@ to 8.25, specified in [document 12](12-parallel-work.md), and the Secure
 Shell client of section 8.26, specified in
 [document 14](14-secure-shell-as-a-client.md). The disk and the file
 system server are off the phases as well, built and specified in
-[document 15](15-the-disk-on-the-machine.md). Section 8.27 states how
+[document 15](15-the-disk-on-the-machine.md). The text stack is off the
+phases too: track T of section 8.28 built `text-core`, specified in
+[document 17](17-text-and-fonts.md), and track R of section 8.29 builds
+`text-raster`, specified in [document 18](18-rasterization.md). Section
+8.27 states how
 many of them may be active at once and which phase work may be pulled
 forward. Of the tracks of documents 11 and 12 everything but the
 integration of track C is finished, and that is Phase 15; track D's own
@@ -747,6 +751,9 @@ replay, which is the one way this track differs in kind from track C.
 - Track S (8.26) is finished. Where it fell in the order above was never
   settled, because the order is the history of the tracks that are done
   and no phase required track S of anything.
+- Track R (8.29) follows track T and depends on nothing else. It touches
+  no kernel crate, no server and no phase, so the rule above holds for it
+  unchanged: it is worked on between phases, never instead of one.
 - Phase work whose logic passes the admission test may be pulled
   forward without changing its phase, its catalog items, or its
   acceptance criteria: `gfx` (Phase 9), `driver-i8042` (Phase 10), the
@@ -786,6 +793,39 @@ rasterizer.
 | T11 | role/script/language resolution | T10 | M | implemented: whole-cluster role fallback, explicit regional language systems, UVS, scale/baseline and weight coordinates |
 | T12 | layout and measure | T11 | L | implemented: fractional lines, bidi cluster carets/selections, reshaping, layout/measure equality, explicit deterministic serialization; 106 host tests and two doctests, 95.99% line / 89.45% branch coverage |
 | T13 | COLRv1 and CPAL | T12 | XL | implemented: CPAL palettes and selection, paint formats 1 to 32 with their `Var*` twins, all three extend modes, all 28 composite modes, COLR version 0 through the same emitter, clip boxes, boundedness and ink extents; 33 host tests over synthetic tables and a COLRv1 emoji fixture, two new fuzz seeds |
-| R1 | rasterizer | T13 | XL | unscheduled; outside this task. D-174 fixes the rounding, D-175 the gamma; gradients and 28 blend modes are the price of vector emoji (D-176) |
-| R2 | glyph cache | R1 | M | unscheduled; outside this task |
-| R3 | toolkit/compositor integration | R2 | L | unscheduled; outside this task |
+| R1 | rasterizer | T13 | XL | specified as steps R1 to R13 of track R, section 8.29 and [document 18](18-rasterization.md) |
+| R2 | glyph cache | R1 | M | specified as step R7 of track R |
+| R3 | toolkit/compositor integration | R2 | L | unscheduled; needs `text-raster` of track R and a drawing protocol |
+
+The three rows above named the work of the drawing side and did not
+specify it. Track R does, and its thirteen steps replace them.
+
+## 8.29 Track R: rasterization
+
+Design: [document 18](18-rasterization.md), D-177 to D-184, and D-174 and
+D-176 of track T. The crate is `text-raster`, pure host-testable logic
+with no I/O and no settings of its own: its input is a `LayoutView`, the
+faces layout named and the values the compositor owns, and its output is
+coverage written into a caller-supplied surface. Every test runs on the
+host against a `Vec` surface. Each step ends with its acceptance report
+before the next step starts.
+
+| Step | Work | Depends on | Size | Acceptance / status |
+|------|------|------------|------|---------------------|
+| R1 | the surface: dimensions, format, borrowed bytes, bounds-checked access | D-177 to D-180 | S | implemented: four formats, construction and access rejections, padding bytes untouched, channel order literal, identical bytes from two allocations |
+| R2 | flattening to a stated tolerance, quadratic and cubic | R1 | M | planned: segment count against the closed form of D-181, deviation below an eighth of a pixel at four sizes, the clamp at 256 |
+| R3 | coverage: exact-area scanline, non-zero winding, antialiased | R2 | L | planned: literal coverage of inset rectangles, the non-zero rule over nested contours, five degenerate contours that do not panic, an edge fuzz target |
+| R4 | subpixel positioning, four horizontal and whole vertical | R3 | S | planned: the four positions across two pixels in both signs, ties to even, an unchanged `LayoutView` |
+| R5 | gamma: the two tables of one value, per context | R1 | M | planned: round trip over all 256 display values at three exponents, identity at 1.0, a rejected exponent |
+| R6 | monochrome glyphs: coverage with one text colour | R4, R5 | M | planned: the linear-light average at the middle value, black on white against white on black, overhang on four edges |
+| R7 | the glyph cache | R6 | M | planned: a miss per key field, no digest collision, eviction in allocation order, cached and uncached bytes identical |
+| R8 | the transcendentals: square root, inverse tangent, power | D-177 | M | planned: a correctly rounded square root, an inverse tangent within 2⁻²⁸ checked through `colr::trig`, a power within 2⁻²⁴ |
+| R9 | gradients: linear, radial, sweep; pad, repeat, reflect | R5, R8 | L | planned: the p₃ construction off the gradient line, the two-circle root rule, the wrap of a sweep, interpolation in linear light |
+| R10 | the clip stack | R3 | M | planned: nested clips as the product of coverages, a restored mask byte for byte, an unmatched `Unclip` as an error |
+| R11 | groups and the twenty-eight composite modes | R5, R10 | L | planned: a literal vector per mode over five operand pairs, the four non-separable modes against their auxiliary functions, the ink under a `Compose` retained |
+| R12 | the whole paint stream | R9, R11 | M | planned: the five base glyphs of the COLRv1 fixture as golden images, an unbounded glyph drawing nothing, the foreground resolved |
+| R13 | drawing a `LayoutView` | R7, R12 | M | planned: five golden images over Latin, Arabic, bidirectional, wrapped and emoji text; ink inside the box `measure` reported |
+
+Golden images are a gate on this track and on no other, which D-177
+allows: the crate has no floating point, so the bytes are the same on
+every host and in debug and release.
