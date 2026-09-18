@@ -3484,22 +3484,10 @@ impl RegisterLowerer {
         name: Option<&[u16]>,
     ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
-        // 15.7.14 step 5 evaluates the heritage before the constructor is
-        // made, and the register keeps it where the collector sees it. The
-        // binding of the class name is in its Temporal Dead Zone there, which
-        // the lowering answers by not carrying it yet.
-        let heritage = match &class.heritage {
-            Some(heritage) => {
-                self.lower(heritage)?;
-                let register = self.allocate_register()?;
-                self.code.emit(Instruction::Star(register));
-                Some(register)
-            }
-            None => None,
-        };
         // 15.7.14 steps 3 and 4 give the class body a binding of its own for
-        // the class name, which the constructor and every method reach and
-        // nothing can write.
+        // the class name, which the heritage, the constructor and every
+        // method reach and nothing can write. 9.1.1.1.1 leaves it
+        // uninitialized until step 17.
         let inner = class.name.clone();
         let inner = match &inner {
             Some(inner) => {
@@ -3513,10 +3501,33 @@ impl RegisterLowerer {
                         value_type: Some(RegisterType::Unknown),
                         mutability: Mutability::Immutable,
                         stable_function_identity: false,
-                        initialized: true,
+                        initialized: false,
                     },
                 );
                 Some((inner.clone(), register, shadowed))
+            }
+            None => None,
+        };
+        // A heritage that names the class reads the binding in its Temporal
+        // Dead Zone, and a context slot is where 9.1.1.1.6 answers such a
+        // read with a ReferenceError.
+        if let (Some((inner, ..)), Some(heritage)) = (&inner, &class.heritage) {
+            let mut direct = BTreeSet::new();
+            let mut nested = BTreeSet::new();
+            register_expression_references(heritage, &mut direct, &mut nested)?;
+            if direct.contains(inner) {
+                let inner = inner.clone();
+                self.capture_binding(&inner)?;
+            }
+        }
+        // 15.7.14 step 5 evaluates the heritage before the constructor is
+        // made, and the register keeps it where the collector sees it.
+        let heritage = match &class.heritage {
+            Some(heritage) => {
+                self.lower(heritage)?;
+                let register = self.allocate_register()?;
+                self.code.emit(Instruction::Star(register));
+                Some(register)
             }
             None => None,
         };
@@ -3628,7 +3639,8 @@ impl RegisterLowerer {
         if let Some((name, _, _)) = &inner {
             let binding = *self.bindings.get(name)?;
             self.code.emit(Instruction::Ldar(constructor));
-            self.store_binding(binding);
+            self.store_binding_as(binding, true);
+            self.bindings.get_mut(name)?.initialized = true;
         }
         // 15.7.14 puts every method the body defines on the prototype the
         // constructor carries, and a static one on the constructor itself.
@@ -3793,6 +3805,11 @@ impl RegisterLowerer {
             self.active_binding_count = self.active_binding_count.checked_sub(1)?;
             self.release_register(register)?;
         }
+        // The heritage took its register after the binding of the class name
+        // took one, and a register is freed in the order the frame gave them.
+        if let Some(heritage) = heritage {
+            self.release_register(heritage)?;
+        }
         if let Some((name, register, shadowed)) = inner {
             match shadowed {
                 Some(shadowed) => self.bindings.insert(name, shadowed),
@@ -3800,9 +3817,6 @@ impl RegisterLowerer {
             };
             self.active_binding_count = self.active_binding_count.checked_sub(1)?;
             self.release_register(register)?;
-        }
-        if let Some(heritage) = heritage {
-            self.release_register(heritage)?;
         }
         Some(value_type)
     }

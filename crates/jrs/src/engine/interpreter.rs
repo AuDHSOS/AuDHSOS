@@ -23503,7 +23503,13 @@ impl RegisterVM {
         }
         self.acc = VALUE_UNDEFINED;
         if let Some(slot_count) = code.own_context_slot_count {
-            self.current_context = Some(self.allocate_context(code, heap, None, slot_count)?);
+            let context = self.allocate_context(code, heap, None, slot_count)?;
+            // 9.1.1.1.1 leaves a lexical binding uninitialized until its
+            // declaration runs, in the Script as much as in a call.
+            for slot in &code.lexical_context_slots {
+                heap.set_context_slot(context, 0, *slot, VALUE_UNINITIALIZED)?;
+            }
+            self.current_context = Some(context);
         }
         self.run_loop(units, feedback, heap, realm, pc, current_code_id)
     }
