@@ -6399,7 +6399,11 @@ impl RegisterVM {
             target
         };
         // Steps 1 and 3 ask both for `[[Construct]]`.
-        if !Self::constructs(target, heap) || !Self::constructs(new_target, heap) {
+        if !Self::constructs(target, heap)
+            || !Self::constructs(new_target, heap)
+            || Self::has_no_construct(target, heap, realm)?
+            || Self::has_no_construct(new_target, heap, realm)?
+        {
             return Err(type_error(heap, realm, "value is not a constructor"));
         }
         if !Self::is_script_function(target, heap) {
@@ -6543,7 +6547,8 @@ impl RegisterVM {
             .ok_or(VMError::Heap(HeapError::InvalidReference))?
             .prototype;
         Ok(prototype == realm.generator_function_prototype(heap)?
-            || prototype == realm.async_generator_function_prototype(heap)?)
+            || prototype == realm.async_generator_function_prototype(heap)?
+            || prototype == realm.async_function_prototype(heap)?)
     }
 
     /// `IsRegExp` of 22.2.7.2: `@@match` decides it where the object has one,
