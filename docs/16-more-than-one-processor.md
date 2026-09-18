@@ -740,6 +740,13 @@ Size: XL.
   frame, and `drop_identity`, which shows how a low identity mapping is
   removed again (`crates/kernel/core/src/memory.rs`, line 646).
 - `read_msr` and `write_msr`, for `IA32_EFER`.
+- The low usable memory of the reference machine. The firmware reports
+  `0x0-0xa0000` usable, 160 frames, and `normalize`
+  (`crates/kernel/mm/src/memory_map.rs`, line 367) keeps the span whole,
+  including frame 0, which step 1 below excludes by taking a frame at or
+  above `0x1000`. `select_reserve` takes the kernel reserve out of
+  `0x900000` and leaves the span untouched, because 3660 frames do not fit
+  into 160.
 
 ### Does, in order
 
