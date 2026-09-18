@@ -7088,18 +7088,33 @@ fn json_parses_and_quotes_what_it_reaches() -> Result<(), Error> {
             Value::string("true")
         );
     }
-    // 25.5.1 takes a reviver and 25.5.2 a space, neither of which this
-    // engine has built.
+    // 25.5.1 step 7 calls the reviver for every name it parsed, after the
+    // names that name holds.
     for source in [
         "JSON.parse('1',function(k,v){return v})",
-        "JSON.stringify({},null,2)",
+        "JSON.stringify(JSON.parse('{\"a\":1,\"b\":2}',function(k,v){return typeof v==='number'?v*2:v}))",
+        "JSON.stringify(JSON.parse('{\"a\":1,\"b\":2}',function(k,v){return k==='a'?undefined:v}))",
+        "JSON.stringify(JSON.parse('[1,2,3]',function(k,v){return v===2?undefined:v}))",
+        "JSON.stringify(JSON.parse('{\"a\":{\"b\":[1,2]}}',function(k,v){return v}))",
+        "var l=[];JSON.parse('{\"a\":1,\"b\":{\"c\":2}}',function(k,v){l.push(k);return v});l.join('|')",
+        "JSON.parse('[1,2,3]',function(k,v){if(k==='')return v;return undefined})+''",
+        // 25.5.1.1 step 2 gives the reviver the source text of a value that
+        // is no Object.
+        "var l=[];JSON.parse('[1,\"a\"]',function(k,v,c){l.push(''+(c&&c.source));return v});l.join('|')",
+        "var l=[];JSON.parse('{\"a\":true}',function(k,v,c){l.push(''+(c&&c.source));return v});l.join('|')",
+        // What the reviver throws leaves the clause.
+        "var r;try{JSON.parse('{\"a\":1}',function(){throw 'b'})}catch(e){r=e};''+r",
     ] {
+        differential_scripts(&[source])?;
+    }
+    // 25.5.2 takes a space, which this engine has not built.
+    {
         let mut host = SilentHost;
         let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
-        assert!(
-            matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
-            "{source}"
-        );
+        assert!(matches!(
+            realm.evaluate("JSON.stringify({},null,2)"),
+            Err(Error::Unsupported { .. })
+        ));
     }
     Ok(())
 }

@@ -202,6 +202,50 @@ const CAPABILITY_WAIT_EXECUTOR: u32 = 3;
 /// Index of the constructor the clause was called on.
 const CAPABILITY_WAIT_CONSTRUCTOR: u32 = 4;
 
+/// Index of the stack of the walk in the record of 25.5.1.
+const REVIVER_STACK: u32 = 0;
+/// Index of the reviver the call named.
+const REVIVER_FUNCTION: u32 = 1;
+/// Index of the arguments of the call in flight.
+const REVIVER_ARGUMENTS: u32 = 2;
+/// Index of the arena of 25.5.2.2 the text was parsed into.
+const REVIVER_ARENA: u32 = 3;
+
+/// Index of the holder in one frame of that stack.
+const REVIVER_FRAME_HOLDER: u32 = 0;
+/// Index of the name the frame stands at.
+const REVIVER_FRAME_NAME: u32 = 1;
+/// Index of the value that name holds.
+const REVIVER_FRAME_VALUE: u32 = 2;
+/// Index of the keys of that value, where it is an Object.
+const REVIVER_FRAME_KEYS: u32 = 3;
+/// Index of how many of them are done.
+const REVIVER_FRAME_INDEX: u32 = 4;
+/// Index of the node of the arena of 25.5.2.2 that value was parsed from.
+const REVIVER_FRAME_PARSED: u32 = 5;
+
+/// Index of the nodes of the arena of 25.5.2.2 in the record that holds it.
+const JSON_ARENA_NODES: u32 = 0;
+/// Index of the children of every node, one run per node.
+const JSON_ARENA_CHILDREN: u32 = 1;
+/// Index of the names of those children, where the node is an Object.
+const JSON_ARENA_NAMES: u32 = 2;
+/// Index of the node the text as a whole stands for.
+const JSON_ARENA_ROOT: u32 = 3;
+
+/// How many slots one node of that arena holds.
+const JSON_NODE_STRIDE: u32 = 5;
+/// Offset of the value the node stands for.
+const JSON_NODE_VALUE: u32 = 0;
+/// Offset of the source text it was written as.
+const JSON_NODE_SOURCE: u32 = 1;
+/// Offset of where its children start.
+const JSON_NODE_FIRST: u32 = 2;
+/// Offset of how many it has.
+const JSON_NODE_COUNT: u32 = 3;
+/// Offset of whether those children carry names.
+const JSON_NODE_NAMED: u32 = 4;
+
 /// Index of the stack of open containers in the record of 25.5.2.
 const JSON_STACK: u32 = 0;
 /// Index of the replacer function, and undefined where the call named none.
@@ -564,6 +608,13 @@ pub enum Resume {
         /// value the call was given, how many arguments it passed, whether
         /// the rejection closes the iterator, and the three the continuation
         /// keeps between its allocations.
+        state: Root,
+    },
+    /// 25.5.1.1 called the reviver for one name, and the answer takes the
+    /// place of the value it was given.
+    Reviver {
+        /// Root holding the record: the stack of the walk and the arguments
+        /// of the call in flight.
         state: Root,
     },
     /// 25.5.2.4 step 5 called a `toJSON`, or step 6 the replacer, and the
@@ -2930,6 +2981,14 @@ impl RegisterVM {
             if promise::slot(heap, record, 3).as_smi().unwrap_or(0) > 0 {
                 self.place_arguments(next_frame, callee, &[promise::slot(heap, record, 2)])?;
             }
+        } else if let Some(Resume::Reviver { state }) = call.resume {
+            // 25.5.1.1 step 3 passes the name and the value.
+            let record = heap
+                .root_value(state)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let arguments = promise::slot(heap, record, REVIVER_ARGUMENTS);
+            let passed = Self::record_values(arguments, heap);
+            self.place_arguments(next_frame, callee, &passed)?;
         } else if let Some(Resume::Stringify { state }) = call.resume {
             // 25.5.2.4 step 5 passes the key, and step 6 the key and the
             // value.
@@ -4117,6 +4176,14 @@ impl RegisterVM {
                 .get(usize::from(index))
                 .copied()
                 .unwrap_or(VALUE_UNDEFINED));
+        }
+        // 25.5.1.1 step 3 passes the name and the value.
+        if let Some(Resume::Reviver { state }) = call.resume {
+            let record = heap
+                .root_value(state)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let arguments = promise::slot(heap, record, REVIVER_ARGUMENTS);
+            return Ok(promise::slot(heap, arguments, u32::from(index)));
         }
         // 25.5.2.4 step 5 passes the key, and step 6 the key and the value.
         if let Some(Resume::Stringify { state }) = call.resume {
@@ -6041,6 +6108,25 @@ impl RegisterVM {
             return self.begin_typed_array_construct(
                 kind,
                 source,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
+        // 25.5.1 step 7 calls the reviver for every name it parsed, which is
+        // a frame the walk of 25.5.1.1 opens.
+        if intrinsic == Intrinsic::JsonParse
+            && Self::is_callable(self.call_argument(&call, 1, heap)?, heap)
+        {
+            let text = property_name_units(self.call_argument(&call, 0, heap)?, heap, realm)?;
+            let (parsed, record) = self.json_parse(&text, true, heap, realm)?;
+            let reviver = self.call_argument(&call, 1, heap)?;
+            return self.begin_the_reviver(
+                parsed,
+                record,
+                reviver,
                 call,
                 units,
                 active_feedback,
@@ -14284,6 +14370,15 @@ impl RegisterVM {
             for index in 0..count.min(passed_in.len()) {
                 passed.push(*passed_in.get(index).unwrap_or(&VALUE_UNDEFINED));
             }
+        } else if let Some(Resume::Reviver { state }) = frame.resume {
+            let record = heap
+                .root_value(state)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let passed_in =
+                Self::record_values(promise::slot(heap, record, REVIVER_ARGUMENTS), heap);
+            for index in 0..count.min(passed_in.len()) {
+                passed.push(*passed_in.get(index).unwrap_or(&VALUE_UNDEFINED));
+            }
         } else if let Some(Resume::Stringify { state }) = frame.resume {
             let record = heap
                 .root_value(state)
@@ -18796,12 +18891,13 @@ impl RegisterVM {
         }
         let second = self.call_argument(call, 1, heap)?;
         if intrinsic == Intrinsic::JsonParse {
-            // 25.5.1 step 7 calls the reviver for every name it parsed.
-            if Self::is_callable(second, heap) {
-                return Err(VMError::Unsupported("a reviver of 25.5.1"));
-            }
             let text = property_name_units(first, heap, realm)?;
-            return self.json_parse(&text, heap, realm);
+            // 25.5.1 step 7 calls the reviver for every name it parsed, which
+            // `dispatch_native` has the frame for.
+            if Self::is_callable(second, heap) {
+                return Err(VMError::InvalidFeedbackVector);
+            }
+            return Ok(self.json_parse(&text, false, heap, realm)?.0);
         }
         // 25.5.2 opens a frame for the `toJSON` of 25.5.2.4 step 5 and for
         // the replacer of step 6, which `dispatch_native` answers.
@@ -22141,14 +22237,19 @@ impl RegisterVM {
         Ok(Value::from_object(object))
     }
 
-    /// `JSON.parse` of 25.5.1 without its reviver: the text is parsed once
-    /// and the tree is built from the leaves up.
+    /// `JSON.parse` of 25.5.1: the text is parsed once and the tree is built
+    /// from the leaves up.
+    ///
+    /// `records` also builds the JSON Parse Records of 25.5.2.2, which
+    /// 25.5.1.1 gives the reviver as the `source` of its context; the answer
+    /// is the value and the record of the root.
     fn json_parse(
         &mut self,
         text: &[u16],
+        records: bool,
         heap: &mut GenerationalHeap,
         realm: &Realm,
-    ) -> Result<Value, VMError> {
+    ) -> Result<(Value, Value), VMError> {
         let limits = audhsos_json::Limits {
             input: self.string_units_limit,
             ..audhsos_json::Limits::default()
@@ -22198,10 +22299,452 @@ impl RegisterVM {
             };
             built.push(heap.push_root(value)?);
         }
+        let arena = if records {
+            self.json_parse_arena(&document, text, &built, heap, realm)?
+        } else {
+            VALUE_UNDEFINED
+        };
         let root = *built.get(document.root).ok_or(VMError::InvalidRegister)?;
         let value = heap.root_value(root).unwrap_or(VALUE_UNDEFINED);
         heap.exit_scope();
-        Ok(value)
+        Ok((value, arena))
+    }
+
+    /// The JSON Parse Records of 25.5.2.2 for one text, in three Arrays of
+    /// the heap: what every node holds, the nodes its children are, and the
+    /// names of those children.
+    ///
+    /// A record of its own for every node would allocate one object per node,
+    /// which the Nursery of a native has no room for; the three Arrays cost
+    /// four objects however long the text is.
+    fn json_parse_arena(
+        &self,
+        document: &audhsos_json::Document,
+        text: &[u16],
+        built: &[Root],
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let nodes = Value::from_object(realm.array(heap, 0)?);
+        let children = Value::from_object(realm.array(heap, 0)?);
+        let names = Value::from_object(realm.array(heap, 0)?);
+        let mut written = 0u32;
+        for (at, node) in document.nodes.iter().enumerate() {
+            let at = u32::try_from(at).map_err(|_| VMError::PropertyLimit)?;
+            let held = *built.get(at as usize).ok_or(VMError::InvalidRegister)?;
+            let value = heap.root_value(held).unwrap_or(VALUE_UNDEFINED);
+            let source =
+                self.allocate_string(heap, text.get(node.source.clone()).unwrap_or_default())?;
+            let first = written;
+            let object = match &node.kind {
+                audhsos_json::Kind::Array(elements) => {
+                    for element in elements {
+                        let element =
+                            i32::try_from(*element).map_err(|_| VMError::PropertyLimit)?;
+                        promise::set_slot(heap, children, written, Value::from_smi(element))?;
+                        written = written.saturating_add(1);
+                    }
+                    false
+                }
+                audhsos_json::Kind::Object(properties) => {
+                    for (name, child) in properties {
+                        let child = i32::try_from(*child).map_err(|_| VMError::PropertyLimit)?;
+                        promise::set_slot(heap, children, written, Value::from_smi(child))?;
+                        let name = Value::from_string(heap.strings.intern_units(name)?);
+                        promise::set_slot(heap, names, written, name)?;
+                        written = written.saturating_add(1);
+                    }
+                    true
+                }
+                _ => false,
+            };
+            let count = written.saturating_sub(first);
+            let base = at.saturating_mul(JSON_NODE_STRIDE);
+            promise::set_slot(heap, nodes, base.saturating_add(JSON_NODE_VALUE), value)?;
+            promise::set_slot(heap, nodes, base.saturating_add(JSON_NODE_SOURCE), source)?;
+            promise::set_slot(
+                heap,
+                nodes,
+                base.saturating_add(JSON_NODE_FIRST),
+                Value::from_smi(i32::try_from(first).map_err(|_| VMError::PropertyLimit)?),
+            )?;
+            promise::set_slot(
+                heap,
+                nodes,
+                base.saturating_add(JSON_NODE_COUNT),
+                Value::from_smi(i32::try_from(count).map_err(|_| VMError::PropertyLimit)?),
+            )?;
+            promise::set_slot(
+                heap,
+                nodes,
+                base.saturating_add(JSON_NODE_NAMED),
+                Value::from_bool(object),
+            )?;
+        }
+        let root = i32::try_from(document.root).map_err(|_| VMError::PropertyLimit)?;
+        promise::record(
+            heap,
+            realm,
+            &[nodes, children, names, Value::from_smi(root)],
+        )
+        .map_err(VMError::Heap)
+    }
+
+    /// `InternalizeJSONProperty` of 25.5.1.1.
+    ///
+    /// Step 3 calls the reviver for every name, after the names it holds, so
+    /// the walk keeps what it has opened on a stack of the heap rather than
+    /// on the stack of Rust.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a call a native makes runs where a call does, with what a call has"
+    )]
+    fn begin_the_reviver(
+        &mut self,
+        value: Value,
+        arena: Value,
+        reviver: Value,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        // Step 7.a holds the value as the one property of a wrapper.
+        let wrapper = realm.ordinary_object(heap)?;
+        let empty = heap.strings.allocate_str("")?;
+        let key = PropertyKey::String(heap.strings.intern("")?);
+        heap.define_own_named(wrapper, key, value, PropertyFlags::ordinary_data())?;
+        let frame = promise::record(
+            heap,
+            realm,
+            &[
+                Value::from_object(wrapper),
+                Value::from_string(empty),
+                VALUE_UNINITIALIZED,
+                VALUE_UNDEFINED,
+                Value::from_smi(0),
+                promise::slot(heap, arena, JSON_ARENA_ROOT),
+            ],
+        )?;
+        let stack = promise::record(heap, realm, &[frame])?;
+        let record = promise::record(heap, realm, &[stack, reviver, VALUE_UNDEFINED, arena])?;
+        // The record outlives every frame the walk opens, so it is a root of
+        // a scope of its own, which the last name leaves.
+        heap.enter_scope();
+        let state = heap.push_root(record)?;
+        self.step_the_reviver(state, None, call, units, active_feedback, heap, realm)
+    }
+
+    /// One step of that walk: it takes what the reviver answered for a name
+    /// and goes on to the next, or calls the reviver for a name whose own
+    /// names are done.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a call a native makes runs where a call does, with what a call has"
+    )]
+    fn step_the_reviver(
+        &mut self,
+        state: Root,
+        answered: Option<Value>,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let mut pending = answered;
+        loop {
+            let record = heap
+                .root_value(state)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            if let Some(value) = pending.take() {
+                match Self::take_one_revision(state, value, heap, realm) {
+                    Ok(done) => {
+                        if let Some(answer) = done {
+                            heap.exit_scope();
+                            self.acc = answer;
+                            return Ok(None);
+                        }
+                        continue;
+                    }
+                    Err(refused) => {
+                        heap.exit_scope();
+                        return Err(refused);
+                    }
+                }
+            }
+            let stack = promise::slot(heap, record, REVIVER_STACK);
+            let frames = Self::record_values(stack, heap);
+            let top = frames.last().copied().ok_or(VMError::TypeError)?;
+            let taken =
+                self.open_the_next_name(state, top, call, units, active_feedback, heap, realm);
+            match taken {
+                Ok(Some(entered)) => return Ok(Some(entered)),
+                // The reviver of this Realm answered without a frame.
+                Ok(None) => pending = Some(self.acc),
+                Err(refused) => {
+                    heap.exit_scope();
+                    return Err(refused);
+                }
+            }
+        }
+    }
+
+    /// Steps 1 and 2 of 25.5.1.1 for the frame on top of the stack: the value
+    /// is read, its own names are walked first, and step 3 calls the reviver.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a call a native makes runs where a call does, with what a call has"
+    )]
+    fn open_the_next_name(
+        &mut self,
+        state: Root,
+        top: Value,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        // Step 1 reads the property the frame stands at, once.
+        if promise::slot(heap, top, REVIVER_FRAME_VALUE) == VALUE_UNINITIALIZED {
+            let holder = promise::slot(heap, top, REVIVER_FRAME_HOLDER);
+            let name = promise::slot(heap, top, REVIVER_FRAME_NAME);
+            let value = Self::json_property_of(holder, name, heap, realm)?;
+            promise::set_slot(heap, top, REVIVER_FRAME_VALUE, value)?;
+            let keys = match value.as_object() {
+                Some(object) if Self::is_array(value, heap) => {
+                    self.json_index_names(object, heap, realm)?
+                }
+                Some(object) => Self::json_own_keys(object, heap, realm)?,
+                None => Value::from_object(realm.array(heap, 0)?),
+            };
+            promise::set_slot(heap, top, REVIVER_FRAME_KEYS, keys)?;
+            // Step 3 keeps the node only where it stands for this value.
+            let arena = promise::slot(heap, record, REVIVER_ARENA);
+            let node = promise::slot(heap, top, REVIVER_FRAME_PARSED);
+            let held = Self::json_node_slot(arena, node, JSON_NODE_VALUE, heap);
+            if !same_value(held, value, heap)? {
+                promise::set_slot(heap, top, REVIVER_FRAME_PARSED, VALUE_UNDEFINED)?;
+            }
+        }
+        let keys = promise::slot(heap, top, REVIVER_FRAME_KEYS);
+        let index = promise::slot(heap, top, REVIVER_FRAME_INDEX)
+            .as_smi()
+            .unwrap_or(0)
+            .max(0);
+        let names = Self::record_values(keys, heap);
+        // Step 2 walks every own name of the value before step 3 runs.
+        if let Some(name) = names
+            .get(usize::try_from(index).unwrap_or(usize::MAX))
+            .copied()
+        {
+            promise::set_slot(
+                heap,
+                top,
+                REVIVER_FRAME_INDEX,
+                Value::from_smi(index.saturating_add(1)),
+            )?;
+            let value = promise::slot(heap, top, REVIVER_FRAME_VALUE);
+            let arena = promise::slot(heap, record, REVIVER_ARENA);
+            let parsed = Self::json_node_of_the_name(arena, top, name, index, heap);
+            let frame = promise::record(
+                heap,
+                realm,
+                &[
+                    value,
+                    name,
+                    VALUE_UNINITIALIZED,
+                    VALUE_UNDEFINED,
+                    Value::from_smi(0),
+                    parsed,
+                ],
+            )?;
+            let stack = promise::slot(heap, record, REVIVER_STACK);
+            let at = u32::try_from(Self::record_values(stack, heap).len())
+                .map_err(|_| VMError::PropertyLimit)?;
+            promise::set_slot(heap, stack, at, frame)?;
+            // The new frame answers nothing yet, so the walk goes on.
+            self.acc = VALUE_UNINITIALIZED;
+            return Ok(None);
+        }
+        // Step 3 calls the reviver with the name, the value and the context
+        // of 25.5.1.1 step 2.
+        let holder = promise::slot(heap, top, REVIVER_FRAME_HOLDER);
+        let name = promise::slot(heap, top, REVIVER_FRAME_NAME);
+        let value = promise::slot(heap, top, REVIVER_FRAME_VALUE);
+        let context = Value::from_object(realm.ordinary_object(heap)?);
+        let parsed = promise::slot(heap, top, REVIVER_FRAME_PARSED);
+        // Step 2.a.i gives the context the source text of a value that is no
+        // Object, which is the text the record kept.
+        if !parsed.is_undefined() && !value.is_object() {
+            let arena = promise::slot(heap, record, REVIVER_ARENA);
+            let source = Self::json_node_slot(arena, parsed, JSON_NODE_SOURCE, heap);
+            let object = context.as_object().ok_or(VMError::TypeError)?;
+            let key = PropertyKey::String(heap.strings.intern("source")?);
+            heap.define_own_named(object, key, source, PropertyFlags::ordinary_data())?;
+        }
+        let arguments = promise::record(heap, realm, &[name, value, context])?;
+        promise::set_slot(heap, record, REVIVER_ARGUMENTS, arguments)?;
+        let reviver = promise::slot(heap, record, REVIVER_FUNCTION);
+        let next = Call {
+            receiver: holder,
+            arg_count: 3,
+            arg_start: Reg(0),
+            resume: Some(Resume::Reviver { state }),
+            construct: None,
+            ..call
+        };
+        self.enter_call_value(reviver, units, active_feedback, heap, realm, next)
+    }
+
+    /// Step 2.a.ii and step 2.b.ii of 25.5.1.1: what the reviver answered is
+    /// written back, and an undefined deletes the name.
+    ///
+    /// Answers the value of the whole walk once the wrapper of step 7.a is
+    /// done.
+    fn take_one_revision(
+        state: Root,
+        answer: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<Value>, VMError> {
+        // A frame the walk has just opened answers nothing of its own.
+        if answer == VALUE_UNINITIALIZED {
+            return Ok(None);
+        }
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let stack = promise::slot(heap, record, REVIVER_STACK);
+        let frames = Self::record_values(stack, heap);
+        let top = frames.last().copied().ok_or(VMError::TypeError)?;
+        let name = promise::slot(heap, top, REVIVER_FRAME_NAME);
+        let holder = promise::slot(heap, top, REVIVER_FRAME_HOLDER);
+        let shorter = frames
+            .get(..frames.len().saturating_sub(1))
+            .unwrap_or_default()
+            .to_vec();
+        let shorter = promise::record(heap, realm, &shorter)?;
+        promise::set_slot(heap, record, REVIVER_STACK, shorter)?;
+        // The wrapper of step 7.a answers what the reviver said of it.
+        if Self::record_values(shorter, heap).is_empty() {
+            return Ok(Some(answer));
+        }
+        let object = holder.as_object().ok_or(VMError::TypeError)?;
+        Self::revise_the_property(object, name, answer, heap, realm)?;
+        Ok(None)
+    }
+
+    /// One slot of one node of the arena of 25.5.2.2.
+    fn json_node_slot(arena: Value, node: Value, offset: u32, heap: &GenerationalHeap) -> Value {
+        let Some(at) = node.as_smi().filter(|at| *at >= 0) else {
+            return VALUE_UNDEFINED;
+        };
+        let nodes = promise::slot(heap, arena, JSON_ARENA_NODES);
+        let base = u32::try_from(at)
+            .unwrap_or(u32::MAX)
+            .saturating_mul(JSON_NODE_STRIDE);
+        promise::slot(heap, nodes, base.saturating_add(offset))
+    }
+
+    /// The node 25.5.1.1 gives one name: the element at that index for an
+    /// Array, and the last entry of that name for an Object.
+    fn json_node_of_the_name(
+        arena: Value,
+        top: Value,
+        name: Value,
+        index: i32,
+        heap: &GenerationalHeap,
+    ) -> Value {
+        let node = promise::slot(heap, top, REVIVER_FRAME_PARSED);
+        if node.is_undefined() {
+            return VALUE_UNDEFINED;
+        }
+        let first = Self::json_node_slot(arena, node, JSON_NODE_FIRST, heap)
+            .as_smi()
+            .unwrap_or(0)
+            .max(0);
+        let count = Self::json_node_slot(arena, node, JSON_NODE_COUNT, heap)
+            .as_smi()
+            .unwrap_or(0)
+            .max(0);
+        let held = promise::slot(heap, arena, JSON_ARENA_CHILDREN);
+        let keyed = Self::json_node_slot(arena, node, JSON_NODE_NAMED, heap) == VALUE_TRUE;
+        if !keyed {
+            if index >= count {
+                return VALUE_UNDEFINED;
+            }
+            let at = u32::try_from(first.saturating_add(index)).unwrap_or(u32::MAX);
+            return promise::slot(heap, held, at);
+        }
+        let names = promise::slot(heap, arena, JSON_ARENA_NAMES);
+        let Some(text) = heap.strings.to_utf16(name) else {
+            return VALUE_UNDEFINED;
+        };
+        let mut at = count;
+        while at > 0 {
+            at = at.saturating_sub(1);
+            let slot = u32::try_from(first.saturating_add(at)).unwrap_or(u32::MAX);
+            let held = promise::slot(heap, names, slot);
+            if heap
+                .strings
+                .to_utf16(held)
+                .is_some_and(|other| other == text)
+            {
+                return promise::slot(heap, held, slot);
+            }
+        }
+        VALUE_UNDEFINED
+    }
+
+    /// Step 2.a.iii and step 2.b.iii of 25.5.1.1: what the reviver answered
+    /// takes the place of the name, and an undefined deletes it.
+    ///
+    /// 7.3.5 and 10.1.10 both answer false for a property 10.1.6.3 refuses,
+    /// which 25.5.1.1 discards: such a property keeps what it held.
+    fn revise_the_property(
+        object: ObjectRef,
+        name: Value,
+        answer: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let key = property_key(name, heap, realm)?;
+        if heap
+            .own_named_flags(object, key)?
+            .is_some_and(|flags| !flags.configurable)
+        {
+            return Ok(());
+        }
+        let index = key
+            .as_string()
+            .and_then(|name| heap.strings.to_utf16(Value::from_string(name)))
+            .and_then(|units| array_index_units(&units));
+        if answer.is_undefined() {
+            match index {
+                Some(index) if heap.array_length(object).is_some() => {
+                    Self::delete_element_at(object, index, heap)?;
+                }
+                _ => {
+                    delete_property(object, key, index, heap)?;
+                }
+            }
+            return Ok(());
+        }
+        match index {
+            Some(index) if heap.array_length(object).is_some() => {
+                heap.set_array_element(object, index, answer)?;
+            }
+            _ => {
+                heap.define_own_named(object, key, answer, PropertyFlags::ordinary_data())?;
+            }
+        }
+        Ok(())
     }
 
     /// `JSON.stringify` of 25.5.2.
@@ -28089,6 +28632,7 @@ impl RegisterVM {
                         | Resume::Capability { .. }
                         | Resume::Replace { .. }
                         | Resume::Stringify { .. }
+                        | Resume::Reviver { .. }
                         | Resume::Answered { .. }
                 )
             ) {
@@ -31531,6 +32075,7 @@ impl RegisterVM {
                                     | Resume::Capability { .. }
                                     | Resume::Replace { .. }
                                     | Resume::Stringify { .. }
+                                    | Resume::Reviver { .. }
                                     | Resume::CollectionWalk { .. }
                                     | Resume::CollectionInsert { .. }
                                     | Resume::IteratorWalk { .. }
@@ -31681,6 +32226,17 @@ impl RegisterVM {
                                         resume,
                                         pc,
                                         current_code_id,
+                                        units,
+                                        feedback,
+                                        heap,
+                                        realm,
+                                    )?,
+                                    // 25.5.1.1 step 3 takes what the reviver
+                                    // answered for one name.
+                                    Resume::Reviver { state } => self.step_the_reviver(
+                                        state,
+                                        Some(self.acc),
+                                        call,
                                         units,
                                         feedback,
                                         heap,
