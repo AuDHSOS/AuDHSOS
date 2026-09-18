@@ -432,6 +432,10 @@ pub struct FrameArguments {
     /// Caller register holding the Function object, which 10.4.4 makes
     /// `callee`.
     pub callee: Reg,
+    /// The function object whose body the frame runs, which 10.4.4 step 8
+    /// makes `callee` where a bound function or a native opened the call and
+    /// no register of the caller holds it.
+    pub function: ObjectRef,
 }
 
 /// What an operation that called user code does when the call returns.
@@ -2461,6 +2465,7 @@ impl RegisterVM {
                 start: call.arg_start,
                 count: call.arg_count,
                 callee: call.func,
+                function: function_ref,
             }),
         });
         self.unit = unit;
@@ -22016,18 +22021,10 @@ impl RegisterVM {
             )?;
             return Ok(());
         }
-        // 10.4.4 step 8 gives a sloppy function's object the callee itself,
-        // which the caller kept in a register of its own.
-        let callee = self
-            .stack
-            .get(
-                frame
-                    .caller_fp
-                    .checked_add(arguments.callee.0 as usize)
-                    .ok_or(VMError::InvalidRegister)?,
-            )
-            .copied()
-            .ok_or(VMError::InvalidRegister)?;
+        // 10.4.4 step 8 gives a sloppy function's object the function whose
+        // body runs, which is not what the caller named where 10.4.1.1 or a
+        // native opened the call.
+        let callee = Value::from_object(arguments.function);
         let key = PropertyKey::String(heap.strings.intern_units(&CALLEE_NAME)?);
         self.define_own(target, key, PropertyFlags::constructor_data(), callee, heap)?;
         Ok(())
