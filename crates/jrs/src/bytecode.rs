@@ -4748,8 +4748,21 @@ impl RegisterLowerer {
             // Prototype of the primitive.
             let name = Self::static_property_name(key)
                 .map(<[u16]>::to_vec)
-                .or_else(|| self.static_key_units(key))?;
-            let intrinsic = crate::engine::realm::holder_intrinsic(holder, &name)?;
+                .or_else(|| self.static_key_units(key));
+            let found = name
+                .as_deref()
+                .and_then(|name| crate::engine::realm::holder_intrinsic(holder, name));
+            let (Some(name), Some(intrinsic)) = (name, found) else {
+                // A key this lowering cannot name, or a name the Prototype
+                // answers with something other than one of its own methods,
+                // is read at run time off the object 7.1.18 makes, and 7.3.14
+                // dispatches on what it answers.
+                self.code.emit(Instruction::Ldar(receiver));
+                self.lower_unknown_member(key)?;
+                let result = self.lower_dynamic_method_call(receiver, arguments)?;
+                self.release_register(receiver)?;
+                return Some(result);
+            };
             let constant = self.string_constant(&name)?;
             let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
             self.code.emit(Instruction::GetNamed {

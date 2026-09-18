@@ -13858,6 +13858,21 @@ impl RegisterVM {
             }
             return Ok(VALUE_UNDEFINED);
         }
+        // 7.1.18 resolves a Number or a Boolean on the Prototype of clause 21
+        // or 20.3, so a name one of them owns and this Realm has not built is
+        // the same gap.
+        if target.is_number() {
+            if chain && super::realm::number_prototype_owns(name) {
+                return Err(VMError::Unsupported("a property of %Number.prototype%"));
+            }
+            return Ok(VALUE_UNDEFINED);
+        }
+        if target.is_boolean() {
+            if chain && super::realm::boolean_prototype_owns(name) {
+                return Err(VMError::Unsupported("a property of %Boolean.prototype%"));
+            }
+            return Ok(VALUE_UNDEFINED);
+        }
         // The Prototype itself owns the names its instances resolve on it, so
         // a miss there is the same gap read one object earlier.
         if let Some(owner) = Self::prototype_owes(target, name, heap, realm)? {
