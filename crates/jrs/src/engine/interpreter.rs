@@ -4003,12 +4003,16 @@ impl RegisterVM {
             }
             // 28.1.10 answers every own key, which for this engine is every
             // own String key: it gives no Script a way to make a Symbol one.
+            // 28.1.11 lists every own key, which 10.1.11.1 orders as the
+            // indices, the other Strings and then the Symbols.
             Intrinsic::ReflectOwnKeys => {
                 let names: Vec<Value> = heap
                     .own_keys(object)?
                     .into_iter()
-                    .filter_map(|(name, _)| name.as_string())
-                    .map(Value::from_string)
+                    .map(|(name, _)| match name {
+                        PropertyKey::String(name) => Value::from_string(name),
+                        PropertyKey::Symbol(symbol) => Value::from_symbol(symbol),
+                    })
                     .collect();
                 Self::array_of(names, heap, realm)
             }
