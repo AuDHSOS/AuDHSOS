@@ -408,6 +408,13 @@ implemented methods of 23.1.3; constructor clauses are 10.2.2, 10.2.5 and
 13.3.5. Algorithms are independently implemented; no source code from another
 runtime is included.
 
+Clause numbers in the source comments follow the edition that preceded the
+Resource Management clauses, not the draft in `docs/ecma/ecma262.html`,
+which numbers Promise 27.5, `GeneratorFunction` 27.6, Generator 27.8 and
+`AsyncGenerator` 27.9, and which renumbered the operations of 7.4. The
+algorithms are the ones the draft states; only the numbers naming them are
+of the older edition, and renumbering them is open work.
+
 `RegExp` uses the separate [regex core](../regex/README.md),
 with a Thompson NFA/DFA and no backtracking fallback or external dependency.
 General backreferences conflict with this automaton restriction and remain
