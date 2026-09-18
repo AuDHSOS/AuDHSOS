@@ -3035,6 +3035,26 @@ impl RegisterVM {
                 realm,
             ),
             Intrinsic::ObjectPrototypeToString => self.object_to_string(call.receiver, heap, realm),
+            // 21.1.3.4 answers what 21.1.3.6 answers with no radix, because
+            // this Realm holds the data of no locale.
+            Intrinsic::NumberPrototypeToLocaleString => {
+                let number = call
+                    .receiver
+                    .as_f64()
+                    .or_else(|| match heap.get_object(call.receiver.as_object()?)?.kind {
+                        ObjectKind::NumberWrapper(number) => Some(number),
+                        _ => None,
+                    })
+                    .ok_or_else(|| {
+                        type_error(
+                            heap,
+                            realm,
+                            "a method of 21.1.3 called on a value that is no Number",
+                        )
+                    })?;
+                let text = crate::number::decimal_string(number);
+                self.allocate_string(heap, &text.encode_utf16().collect::<Vec<u16>>())
+            }
             // 28.1.2 leaves to the constructor it was given, so it never
             // answers here.
             // The dispatch that can open a frame reaches these before this.

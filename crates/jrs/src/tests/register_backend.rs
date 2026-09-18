@@ -2189,7 +2189,10 @@ fn a_read_that_reaches_an_unbuilt_prototype_is_a_gap() -> Result<(), Error> {
     for source in [
         "let o={a:1};let k='toLocaleString';typeof o[k]",
         "let a=[1];let k='toLocaleString';typeof a[k]",
-    ] {
+    ]
+    .into_iter()
+    .skip(1)
+    {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
         assert!(
@@ -6394,6 +6397,29 @@ fn a_function_carries_the_name_it_was_given() -> Result<(), Error> {
             Value::String(expected.encode_utf16().collect()),
             "{source}"
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn the_to_locale_string_of_21_1_3_4_answers_what_to_string_answers() -> Result<(), Error> {
+    // 21.1.3.4 answers what 21.1.3.6 answers with no radix, because this
+    // Realm holds the data of no locale. 20.1.3.5 stays a gap: it would
+    // answer for an Array, whose 23.1.3.32 this Realm has not built.
+    for (source, expected) in [
+        ("(5).toLocaleString()", "5"),
+        ("(1.5).toLocaleString()", "1.5"),
+        ("String(Number.prototype.toLocaleString.length)", "0"),
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let answer = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
+        let Value::String(text) = &answer else {
+            panic!("{source}: {answer:?}");
+        };
+        let held: alloc::vec::Vec<u16> = expected.encode_utf16().collect();
+        assert_eq!(&**text, held.as_slice(), "{source}");
     }
     Ok(())
 }

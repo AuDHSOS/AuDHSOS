@@ -350,6 +350,8 @@ pub enum Intrinsic {
     StringPrototypePadEnd,
     /// `String.prototype.padStart` (22.1.3.16).
     StringPrototypePadStart,
+    /// `Number.prototype.toLocaleString` (21.1.3.4).
+    NumberPrototypeToLocaleString,
     /// `String.prototype.normalize` (22.1.3.15).
     StringPrototypeNormalize,
     /// `String.prototype.toLowerCase` (22.1.3.29).
@@ -1380,7 +1382,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 477] = [
+    pub const ALL: [Self; 478] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1400,6 +1402,7 @@ impl Intrinsic {
         Self::StringPrototypeCodePointAt,
         Self::StringPrototypePadEnd,
         Self::StringPrototypePadStart,
+        Self::NumberPrototypeToLocaleString,
         Self::StringPrototypeNormalize,
         Self::StringPrototypeToLowerCase,
         Self::StringPrototypeToUpperCase,
@@ -2045,6 +2048,7 @@ impl Intrinsic {
             | Self::ReflectSet => IntrinsicHolder::Reflect,
             Self::NumberPrototypeValueOf
             | Self::NumberPrototypeToString
+            | Self::NumberPrototypeToLocaleString
             | Self::NumberPrototypeToFixed
             | Self::NumberPrototypeToExponential
             | Self::NumberPrototypeToPrecision => IntrinsicHolder::NumberPrototype,
@@ -2833,6 +2837,7 @@ impl Intrinsic {
             Self::NumberPrototypeToExponential => 474,
             Self::NumberPrototypeToPrecision => 475,
             Self::StringPrototypeNormalize => 476,
+            Self::NumberPrototypeToLocaleString => 477,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3320,6 +3325,7 @@ impl Intrinsic {
             Self::NumberPrototypeToExponential => 474,
             Self::NumberPrototypeToPrecision => 475,
             Self::StringPrototypeNormalize => 476,
+            Self::NumberPrototypeToLocaleString => 477,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3808,6 +3814,7 @@ impl Intrinsic {
             474 => Some(Self::NumberPrototypeToExponential),
             475 => Some(Self::NumberPrototypeToPrecision),
             476 => Some(Self::StringPrototypeNormalize),
+            477 => Some(Self::NumberPrototypeToLocaleString),
             436 => Some(Self::IteratorPrototypeConstructorGet),
             437 => Some(Self::IteratorPrototypeConstructorSet),
             438 => Some(Self::IteratorPrototypeToStringTagGet),
@@ -3961,9 +3968,9 @@ impl Intrinsic {
             Self::DatePrototypeToDateString => "toDateString",
             Self::DatePrototypeToTimeString => "toTimeString",
             Self::DatePrototypeToUtcString => "toUTCString",
-            Self::DatePrototypeToLocaleString | Self::BigIntPrototypeToLocaleString => {
-                "toLocaleString"
-            }
+            Self::DatePrototypeToLocaleString
+            | Self::BigIntPrototypeToLocaleString
+            | Self::NumberPrototypeToLocaleString => "toLocaleString",
             Self::DatePrototypeToLocaleDateString => "toLocaleDateString",
             Self::DatePrototypeToLocaleTimeString => "toLocaleTimeString",
             Self::ArrayBufferConstructor => "ArrayBuffer",
@@ -5000,6 +5007,7 @@ impl Intrinsic {
             | Self::StringPrototypeToLocaleLowerCase
             | Self::StringPrototypeToLocaleUpperCase
             | Self::StringPrototypeNormalize
+            | Self::NumberPrototypeToLocaleString
             | Self::StringPrototypeTrim
             | Self::StringPrototypeTrimEnd
             | Self::StringPrototypeTrimStart

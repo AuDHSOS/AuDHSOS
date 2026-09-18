@@ -10822,6 +10822,7 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::NumberPrototypeToFixed
         | crate::engine::realm::Intrinsic::NumberPrototypeToExponential
         | crate::engine::realm::Intrinsic::NumberPrototypeToPrecision
+        | crate::engine::realm::Intrinsic::NumberPrototypeToLocaleString
         | crate::engine::realm::Intrinsic::StringPrototypeNormalize
         | crate::engine::realm::Intrinsic::StringPrototypeToLowerCase
         | crate::engine::realm::Intrinsic::StringPrototypeToUpperCase
