@@ -2961,8 +2961,13 @@ fn computed_object_data_properties_use_keyed_shape_storage() -> Result<(), Error
         );
     }
 
-    let fallback = "let key={toString(){return 'x'}};let o={[key]:42};o.x";
-    assert!(!compile(fallback, Limits::default())?.uses_register_backend());
+    // 13.2.5.5 makes the key with the `ToPropertyKey` of 7.1.19 before it
+    // evaluates the value, and an Object key runs a method of the Script
+    // there.
+    differential("let key={toString(){return 'x'}};let o={[key]:42};o.x")?;
+    differential(
+        "let order='';let key={toString(){order+='k';return 'p'}};         let o={[key]:(order+='v',1)};order",
+    )?;
     Ok(())
 }
 

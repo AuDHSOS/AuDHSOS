@@ -2734,6 +2734,23 @@ impl RegisterLowerer {
         Some(yes_type.merge(no_type))
     }
 
+    /// Lowers a computed key into a register, with the `ToPropertyKey` of
+    /// 7.1.19 where the lowering cannot name a primitive.
+    ///
+    /// 13.2.5.5 makes the key before it evaluates the value, and the
+    /// conversion of an Object key runs a method of the Script.
+    fn lower_computed_key(&mut self, key: &Expr) -> Option<crate::engine::bytecode::Reg> {
+        use crate::engine::bytecode::Instruction;
+        let key_type = self.lower(key)?;
+        let register = self.allocate_register()?;
+        self.code.emit(Instruction::Star(register));
+        if !key_type.is_primitive() {
+            self.code.emit(Instruction::ToPropertyKey(register));
+            self.code.emit(Instruction::Star(register));
+        }
+        Some(register)
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "one function emits every property definition of 13.2.5"
@@ -2773,11 +2790,7 @@ impl RegisterLowerer {
                 if property.computed {
                     // 13.2.5.1 with a key only the run time knows: 7.1.19
                     // makes it, and 10.2.10 names the half after it.
-                    if !self.lower(property_key)?.converts_to_primitive() {
-                        return None;
-                    }
-                    let register = self.allocate_register()?;
-                    self.code.emit(Instruction::Star(register));
+                    let register = self.lower_computed_key(property_key)?;
                     self.lower(&property.value)?;
                     self.code.emit(Instruction::DefineAccessorByValue {
                         obj: object,
@@ -2807,11 +2820,7 @@ impl RegisterLowerer {
             // 13.2.5.5 names the function a definition holds after the key it
             // is given, which for a computed one 10.2.10 does at run time.
             if property.computed && register_names_itself_after_its_key(&property.value) {
-                if !self.lower(property_key)?.converts_to_primitive() {
-                    return None;
-                }
-                let register = self.allocate_register()?;
-                self.code.emit(Instruction::Star(register));
+                let register = self.lower_computed_key(property_key)?;
                 self.lower(&property.value)?;
                 self.code.emit(Instruction::DefineMethodByValue {
                     obj: object,
@@ -2824,11 +2833,7 @@ impl RegisterLowerer {
             }
             let key = if property.computed {
                 let static_name = Self::static_property_key_units(property_key);
-                if !self.lower(property_key)?.converts_to_primitive() {
-                    return None;
-                }
-                let register = self.allocate_register()?;
-                self.code.emit(Instruction::Star(register));
+                let register = self.lower_computed_key(property_key)?;
                 RegisterMemberKey::ObjectKeyed(register, static_name)
             } else {
                 let name = Self::static_property_name(property_key)?;
