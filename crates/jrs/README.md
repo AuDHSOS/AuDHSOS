@@ -586,7 +586,7 @@ source (architecture, section 17.1). What gates the switch is not the
 count either path reaches but the set of variants the stack path passes
 and the engine does not. At `888356e` that set holds 3,471 variants:
 63 of them the engine fails, and 3,408 it names as gaps. The engine
-passes 23,392 variants the stack path does not. Only the 367
+passes 23,458 variants the stack path does not. Only the 367
 are breaches of the equality duty; a gap costs coverage and answers
 nothing wrongly.
 
@@ -984,7 +984,7 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | Complete pinned suite on the register engine, before the pairs of 22.2.7.8 (outdated) | full | `1b57b97` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 58,924 (57.25%) | 20,312 (19.73%) | 23,689 (23.02%) |
 | Complete pinned suite on the register engine, before the constructor of 23.1.2 (outdated) | full | `6fdbb2d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 58,869 (57.20%) | 20,379 (19.80%) | 23,677 (23.00%) |
 | Complete pinned suite on the register engine, before the order of 10.4.2.4 (outdated) | full | `b646a1d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 58,821 (57.15%) | 20,445 (19.86%) | 23,659 (22.99%) |
-| Complete pinned suite, including staging and Intl | full | `e904f7e` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 39,354 (38.24%) | 38,561 (37.47%) | 25,010 (24.30%) |
+| Complete pinned suite, including staging and Intl | full | `888356e` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 39,354 (38.24%) | 38,561 (37.47%) | 25,010 (24.30%) |
 | Complete pinned suite on the register engine, before the closing of the blockers of the switch (outdated) | full | `32351fe` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 58,430 (56.77%) | 21,483 (20.87%) | 23,012 (22.36%) |
 | Complete pinned suite, including staging and Intl, before the yield of an iterable of 15.5.5 (outdated) | full | `98ff8ed` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 39,216 (38.10%) | 38,623 (37.53%) | 25,086 (24.37%) |
 | Complete pinned suite on the register engine, before the yield of an iterable of 15.5.5 (outdated) | full | `98ff8ed` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 56,212 (54.61%) | 21,620 (21.00%) | 25,093 (24.38%) |
