@@ -10651,6 +10651,15 @@ impl RegisterVM {
         Ok(())
     }
 
+    /// Charges for one step of a walk whose indices reach past 2^32-1, by the
+    /// count of steps it has taken rather than by the index it is at.
+    fn charge_for_step(&mut self, step: i64) -> Result<(), VMError> {
+        if step.rem_euclid(i64::from(HOLES_PER_FUEL_UNIT)) == 0 {
+            self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+        }
+        Ok(())
+    }
+
     /// The methods of 23.1.3 that move elements of the receiver, or copy it
     /// into an Array of their own.
     ///
@@ -10682,11 +10691,25 @@ impl RegisterVM {
             Some(length) => length,
             None => Self::array_like_length(heap, object, realm)?,
         };
-        // Each of these walks the whole `length`, which a Script can make
-        // 2^32-1 without holding one element. The walk is charged before it
-        // starts, so a budget that cannot pay for it ends here rather than
-        // after four billion lookups.
-        self.charge_for_scan(length)?;
+        // 23.1.3.2, 23.1.3.14, 23.1.3.30 and 23.1.3.34 walk the whole
+        // `length`, which a Script can make 2^53-1 without holding one
+        // element, so the walk is charged before it starts. Every other
+        // clause here walks a range it resolves first and is charged per
+        // element it touches.
+        // 10.4.2.2 refuses a copy longer than 2^32-1 before the walk of it is
+        // charged for, let alone run.
+        if intrinsic == Intrinsic::ArrayPrototypeToSorted {
+            Self::refuse_long_copy(length, heap, realm)?;
+        }
+        if matches!(
+            intrinsic,
+            Intrinsic::ArrayPrototypeConcat
+                | Intrinsic::ArrayPrototypeFlat
+                | Intrinsic::ArrayPrototypeSort
+                | Intrinsic::ArrayPrototypeToSorted
+        ) {
+            self.charge_for_scan(length)?;
+        }
         // The range 7.1.25 makes of a relative index, clamped into the Array.
         let bounded = |value: Value, fallback: i64, heap: &mut GenerationalHeap| {
             if value.is_undefined() {
@@ -10701,17 +10724,20 @@ impl RegisterVM {
             // and the Array is one shorter.
             Intrinsic::ArrayPrototypeShift => {
                 if length <= 0 {
-                    Self::set_array_like_length(object, 0, heap, realm)?;
+                    Self::set_array_like_length_wide(object, 0, heap, realm)?;
                     return Ok(VALUE_UNDEFINED);
                 }
-                let first = Self::element_at(heap, object, 0)?.unwrap_or(VALUE_UNDEFINED);
-                for index in 1..Self::scan_range(0, length).end {
-                    let moved = Self::element_at(heap, object, index)?;
-                    Self::place_element(heap, object, index.saturating_sub(1), moved, realm)?;
+                let first = Self::element_at_wide(heap, object, 0)?.unwrap_or(VALUE_UNDEFINED);
+                let mut index = 1i64;
+                while index < length {
+                    self.charge_for_step(index)?;
+                    let moved = Self::element_at_wide(heap, object, index)?;
+                    Self::place_element_wide(heap, object, index.saturating_sub(1), moved, realm)?;
+                    index = index.saturating_add(1);
                 }
-                let last = u32::try_from(length.saturating_sub(1)).unwrap_or(u32::MAX);
-                Self::delete_element_or_throw(object, last, heap, realm)?;
-                Self::set_array_like_length(object, last, heap, realm)?;
+                let last = length.saturating_sub(1);
+                Self::delete_element_or_throw_wide(object, last, heap, realm)?;
+                Self::set_array_like_length_wide(object, last, heap, realm)?;
                 Ok(first)
             }
             // 23.1.3.37: the arguments go in front, so every element moves up
@@ -10719,16 +10745,27 @@ impl RegisterVM {
             Intrinsic::ArrayPrototypeUnshift => {
                 let count = i64::from(call.arg_count);
                 if count > 0 {
-                    for index in Self::scan_range(0, length).rev() {
-                        let moved = Self::element_at(heap, object, index)?;
-                        let target = u32::try_from(i64::from(index).saturating_add(count))
-                            .map_err(|_| VMError::PropertyLimit)?;
-                        Self::place_element(heap, object, target, moved, realm)?;
+                    // Step 3.a refuses a length the arguments would push past
+                    // 2^53-1 before it moves anything.
+                    if length.saturating_add(count) > INDEX_LIMIT {
+                        return Err(type_error(
+                            heap,
+                            realm,
+                            "the length of an array-like cannot exceed 2^53-1",
+                        ));
+                    }
+                    let mut index = length;
+                    while index > 0 {
+                        index = index.saturating_sub(1);
+                        self.charge_for_step(index)?;
+                        let moved = Self::element_at_wide(heap, object, index)?;
+                        let target = index.saturating_add(count);
+                        Self::place_element_wide(heap, object, target, moved, realm)?;
                     }
                     for offset in 0..call.arg_count {
-                        Self::set_element(
+                        Self::set_element_wide(
                             object,
-                            u32::from(offset),
+                            i64::from(offset),
                             self.call_argument(&call, offset, heap)?,
                             heap,
                             realm,
@@ -10737,9 +10774,12 @@ impl RegisterVM {
                 }
                 // Step 4.e sets the length with 7.3.4, which throws where
                 // 10.4.2.4 refuses it.
-                let written = u32::try_from(length.saturating_add(count))
-                    .map_err(|_| VMError::PropertyLimit)?;
-                Self::set_array_like_length(object, written, heap, realm)?;
+                Self::set_array_like_length_wide(
+                    object,
+                    length.saturating_add(count),
+                    heap,
+                    realm,
+                )?;
                 Ok(index_value(length.saturating_add(count)))
             }
             // 23.1.3.31: the removed elements answer as an Array of their own,
@@ -10755,25 +10795,32 @@ impl RegisterVM {
                         .clamp(0, length.saturating_sub(start))
                 };
                 let inserted = i64::from(call.arg_count.saturating_sub(2));
+                // Step 7 refuses a length the arguments would push past
+                // 2^53-1 before it makes the answer.
+                if length.saturating_sub(removed).saturating_add(inserted) > INDEX_LIMIT {
+                    return Err(type_error(
+                        heap,
+                        realm,
+                        "the length of an array-like cannot exceed 2^53-1",
+                    ));
+                }
                 // 23.1.3.31 step 8 makes the answer with 23.1.3.4.
-                let result = Self::array_species_create(
-                    object,
-                    u32::try_from(removed).map_err(|_| VMError::PropertyLimit)?,
-                    heap,
-                    realm,
-                )?;
+                let result = Self::array_species_create_wide(object, removed, heap, realm)?;
                 let mut target = 0u32;
-                for index in Self::scan_range(start, start.saturating_add(removed)) {
-                    if let Some(value) = Self::element_at(heap, object, index)? {
+                let mut index = start;
+                let taken = start.saturating_add(removed);
+                while index < taken {
+                    self.charge_for_step(i64::from(target))?;
+                    if let Some(value) = Self::element_at_wide(heap, object, index)? {
                         heap.set_array_element(result, target, value)?;
                     }
                     target = target.saturating_add(1);
+                    index = index.saturating_add(1);
                 }
-                Self::splice_tail(object, start, removed, inserted, length, heap, realm)?;
+                self.splice_tail(object, start, removed, inserted, length, heap, realm)?;
                 for offset in 2..call.arg_count {
                     let index = start.saturating_add(i64::from(offset.saturating_sub(2)));
-                    let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
-                    Self::set_element(
+                    Self::set_element_wide(
                         object,
                         index,
                         self.call_argument(&call, offset, heap)?,
@@ -10782,12 +10829,7 @@ impl RegisterVM {
                     )?;
                 }
                 let final_length = length.saturating_sub(removed).saturating_add(inserted);
-                Self::set_array_like_length(
-                    object,
-                    u32::try_from(final_length).map_err(|_| VMError::PropertyLimit)?,
-                    heap,
-                    realm,
-                )?;
+                Self::set_array_like_length_wide(object, final_length, heap, realm)?;
                 Ok(Value::from_object(result))
             }
             // 23.1.3.7: one value fills the range, and answers the receiver.
@@ -10795,8 +10837,13 @@ impl RegisterVM {
                 let value = self.call_argument(&call, 0, heap)?;
                 let start = bounded(self.call_argument(&call, 1, heap)?, 0, heap)?;
                 let end = bounded(self.call_argument(&call, 2, heap)?, length, heap)?;
-                for index in Self::scan_range(start, end) {
-                    Self::set_element(object, index, value, heap, realm)?;
+                let mut index = start;
+                let mut step = 0i64;
+                while index < end {
+                    self.charge_for_step(step)?;
+                    step = step.saturating_add(1);
+                    Self::set_element_wide(object, index, value, heap, realm)?;
+                    index = index.saturating_add(1);
                 }
                 Ok(Value::from_object(object))
             }
@@ -10813,13 +10860,16 @@ impl RegisterVM {
                 // The ranges may overlap, so the copy reads every element
                 // before it writes any of them.
                 let mut taken = Vec::new();
-                for index in Self::scan_range(start, start.saturating_add(count)) {
-                    taken.push(Self::element_at(heap, object, index)?);
+                let mut index = start;
+                let last = start.saturating_add(count);
+                while index < last {
+                    self.charge_for_step(index.saturating_sub(start))?;
+                    taken.push(Self::element_at_wide(heap, object, index)?);
+                    index = index.saturating_add(1);
                 }
                 for (offset, value) in taken.into_iter().enumerate() {
                     let index = target.saturating_add(i64::try_from(offset).unwrap_or(i64::MAX));
-                    let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
-                    Self::place_element(heap, object, index, value, realm)?;
+                    Self::place_element_wide(heap, object, index, value, realm)?;
                 }
                 Ok(Value::from_object(object))
             }
@@ -10872,20 +10922,42 @@ impl RegisterVM {
                         .clamp(0, length.saturating_sub(start)),
                 };
                 let inserted = i64::from(call.arg_count).saturating_sub(2).max(0);
-                let mut values = Vec::new();
-                for position in Self::scan_range(0, start) {
-                    values.push(Some(
-                        Self::element_at(heap, object, position)?.unwrap_or(VALUE_UNDEFINED),
+                // Step 6 refuses a copy longer than 2^53-1, and 10.4.2.2 one
+                // longer than 2^32-1; both stand before any element is read.
+                let copied = length
+                    .saturating_sub(skipped)
+                    .saturating_add(inserted)
+                    .max(0);
+                if copied > INDEX_LIMIT {
+                    return Err(type_error(
+                        heap,
+                        realm,
+                        "the length of an array-like cannot exceed 2^53-1",
                     ));
+                }
+                Self::refuse_long_copy(copied, heap, realm)?;
+                let mut values = Vec::new();
+                let mut position = 0i64;
+                while position < start {
+                    self.charge_for_step(position)?;
+                    values.push(Some(
+                        Self::element_at_wide(heap, object, position)?.unwrap_or(VALUE_UNDEFINED),
+                    ));
+                    position = position.saturating_add(1);
                 }
                 for offset in 0..inserted {
                     let index = u16::try_from(offset.saturating_add(2)).unwrap_or(u16::MAX);
                     values.push(Some(self.call_argument(&call, index, heap)?));
                 }
-                for position in Self::scan_range(start.saturating_add(skipped), length) {
+                let mut position = start.saturating_add(skipped);
+                let mut step = 0i64;
+                while position < length {
+                    self.charge_for_step(step)?;
+                    step = step.saturating_add(1);
                     values.push(Some(
-                        Self::element_at(heap, object, position)?.unwrap_or(VALUE_UNDEFINED),
+                        Self::element_at_wide(heap, object, position)?.unwrap_or(VALUE_UNDEFINED),
                     ));
+                    position = position.saturating_add(1);
                 }
                 Self::array_from_holes(values, heap, realm)
             }
@@ -10950,9 +11022,11 @@ impl RegisterVM {
                         "index is outside the Array",
                     ));
                 }
+                Self::refuse_long_copy(length, heap, realm)?;
                 let replacement = self.call_argument(&call, 1, heap)?;
                 let mut values = Vec::new();
                 for position in Self::scan_range(0, length) {
+                    self.charge_for_one_of_a_scan(position)?;
                     let value = if i64::from(position) == index {
                         Some(replacement)
                     } else {
@@ -10966,8 +11040,10 @@ impl RegisterVM {
             }
             // 23.1.3.33: a copy in the other order, which reads every index.
             _ => {
+                Self::refuse_long_copy(length, heap, realm)?;
                 let mut values = Vec::new();
                 for position in Self::scan_range(0, length).rev() {
+                    self.charge_for_one_of_a_scan(position)?;
                     values.push(Some(
                         Self::element_at(heap, object, position)?.unwrap_or(VALUE_UNDEFINED),
                     ));
@@ -11048,6 +11124,171 @@ impl RegisterVM {
             }
         }
         heap.set_array_element(object, index, value)?;
+        Ok(())
+    }
+
+    /// Reads the index of 7.3.18, which reaches 2^53-1 on an array-like that
+    /// holds no Elements store; an Array keeps the 2^32-1 of 10.4.2.
+    ///
+    /// Above 2^32-1 no Elements store can hold the index and no Array has the
+    /// length, so the name of the index is an ordinary property.
+    fn element_at_wide(
+        heap: &mut GenerationalHeap,
+        object: ObjectRef,
+        index: i64,
+    ) -> Result<Option<Value>, VMError> {
+        let Some(index) = Self::narrow_index(index) else {
+            let key = PropertyKey::String(heap.intern_index_wide(Self::wide_index(index))?);
+            return match heap.lookup_named(object, key)? {
+                // 10.1.8.1 step 3 reads an accessor through its getter, which
+                // is a call of the Script this clause has no frame to make.
+                Some(found) if found.flags.is_accessor => {
+                    Err(VMError::Unsupported("a property that is an accessor"))
+                }
+                Some(found) => Ok(Some(found.value)),
+                None => Ok(None),
+            };
+        };
+        Self::element_at(heap, object, index)
+    }
+
+    /// Writes that index with 7.3.4.
+    fn set_element_wide(
+        object: ObjectRef,
+        index: i64,
+        value: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let Some(index) = Self::narrow_index(index) else {
+            let key = PropertyKey::String(heap.intern_index_wide(Self::wide_index(index))?);
+            return match heap.own_named_flags(object, key)? {
+                Some(flags) if flags.is_accessor => {
+                    Err(VMError::Unsupported("a property that is an accessor"))
+                }
+                Some(flags) if !flags.writable => Err(type_error(
+                    heap,
+                    realm,
+                    "cannot write a property that is not writable",
+                )),
+                Some(_) => {
+                    heap.define_own_named(object, key, value, PropertyFlags::ordinary_data())?;
+                    Ok(())
+                }
+                None if heap.is_extensible(object).unwrap_or(true) => {
+                    heap.define_own_named(object, key, value, PropertyFlags::ordinary_data())?;
+                    Ok(())
+                }
+                None => Err(type_error(
+                    heap,
+                    realm,
+                    "cannot add a property to an object that is not extensible",
+                )),
+            };
+        };
+        Self::set_element(object, index, value, heap, realm)
+    }
+
+    /// Deletes that index with 7.3.9.
+    fn delete_element_or_throw_wide(
+        object: ObjectRef,
+        index: i64,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let Some(index) = Self::narrow_index(index) else {
+            let key = PropertyKey::String(heap.intern_index_wide(Self::wide_index(index))?);
+            if let Some(flags) = heap.own_named_flags(object, key)? {
+                if !flags.configurable {
+                    return Err(type_error(
+                        heap,
+                        realm,
+                        "cannot delete a property that is not configurable",
+                    ));
+                }
+                delete_property(object, key, None, heap)?;
+            }
+            return Ok(());
+        };
+        Self::delete_element_or_throw(object, index, heap, realm)
+    }
+
+    /// Writes the index with 7.3.4 where the value is present and deletes it
+    /// with 7.3.9 where it is absent.
+    fn place_element_wide(
+        heap: &mut GenerationalHeap,
+        object: ObjectRef,
+        index: i64,
+        value: Option<Value>,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        match value {
+            Some(value) => Self::set_element_wide(object, index, value, heap, realm),
+            None => Self::delete_element_or_throw_wide(object, index, heap, realm),
+        }
+    }
+
+    /// The index as a `u32` where an Elements store could hold it.
+    ///
+    /// 10.4.2.1 names an index below 2^32-1 and no other, so 2^32-1 itself is
+    /// an ordinary property name and takes the wide path.
+    const fn narrow_index(index: i64) -> Option<u32> {
+        match index {
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "the pattern answers for exactly the values this converts"
+            )]
+            0..=0xffff_fffe => Some(index as u32),
+            _ => None,
+        }
+    }
+
+    /// The same index as the unsigned one a name is made of.
+    const fn wide_index(index: i64) -> u64 {
+        if index < 0 { 0 } else { index as u64 }
+    }
+
+    /// `Set(O, "length", 𝔽(length), true)` of 7.3.4 for a length 7.3.18 read,
+    /// which an array-like carries up to 2^53-1.
+    fn set_array_like_length_wide(
+        object: ObjectRef,
+        length: i64,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        // 10.4.2.4 holds a `length` up to 2^32-1, one past the largest index.
+        if let Ok(length) = u32::try_from(length)
+            && heap.array_length(object).is_some()
+        {
+            return Self::set_array_like_length(object, length, heap, realm);
+        }
+        if heap.array_length(object).is_some() {
+            // 10.4.2.4 refuses a `length` above 2^32-1 with a RangeError.
+            return Err(raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::RangeError,
+                "invalid array length",
+            ));
+        }
+        let name = PropertyKey::String(heap.strings.intern_units(&LENGTH_NAME)?);
+        if heap
+            .own_named_flags(object, name)?
+            .is_some_and(|flags| flags.is_accessor || !flags.writable)
+        {
+            return Err(type_error(
+                heap,
+                realm,
+                "cannot write a property that is not writable",
+            ));
+        }
+        heap.define_own_named(
+            object,
+            name,
+            index_value(length),
+            PropertyFlags::ordinary_data(),
+        )?;
         Ok(())
     }
 
@@ -11191,7 +11432,12 @@ impl RegisterVM {
 
     /// Moves the tail of 23.1.3.31 over the elements it removed, in the
     /// direction that does not overwrite what it has still to read.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the tail of 23.1.3.31 moves over a range of the receiver"
+    )]
     fn splice_tail(
+        &mut self,
         object: ObjectRef,
         start: i64,
         removed: i64,
@@ -11203,27 +11449,35 @@ impl RegisterVM {
         if inserted == removed {
             return Ok(());
         }
-        let shift = |index: u32, heap: &mut GenerationalHeap| -> Result<(), VMError> {
-            let from = i64::from(index);
-            let moved = Self::element_at(heap, object, index)?;
-            let to = from.saturating_sub(removed).saturating_add(inserted);
-            let to = u32::try_from(to).map_err(|_| VMError::PropertyLimit)?;
-            Self::place_element(heap, object, to, moved, realm)
+        let shift = |index: i64, heap: &mut GenerationalHeap| -> Result<(), VMError> {
+            let moved = Self::element_at_wide(heap, object, index)?;
+            let to = index.saturating_sub(removed).saturating_add(inserted);
+            Self::place_element_wide(heap, object, to, moved, realm)
         };
-        let tail = Self::scan_range(start.saturating_add(removed), length);
+        let first = start.saturating_add(removed);
+        let mut step = 0i64;
         if inserted < removed {
-            for index in tail {
+            let mut index = first;
+            while index < length {
+                self.charge_for_step(step)?;
+                step = step.saturating_add(1);
                 shift(index, heap)?;
+                index = index.saturating_add(1);
             }
             // The Array is shorter, so the indices past its new end are gone.
-            for index in Self::scan_range(
-                length.saturating_sub(removed).saturating_add(inserted),
-                length,
-            ) {
-                Self::delete_element_or_throw(object, index, heap, realm)?;
+            let mut index = length.saturating_sub(removed).saturating_add(inserted);
+            while index < length {
+                self.charge_for_step(step)?;
+                step = step.saturating_add(1);
+                Self::delete_element_or_throw_wide(object, index, heap, realm)?;
+                index = index.saturating_add(1);
             }
         } else {
-            for index in tail.rev() {
+            let mut index = length;
+            while index > first {
+                index = index.saturating_sub(1);
+                self.charge_for_step(step)?;
+                step = step.saturating_add(1);
                 shift(index, heap)?;
             }
         }
@@ -11352,6 +11606,44 @@ impl RegisterVM {
     /// `constructor` or an `@@species` of the Script decides the answer and
     /// needs a frame, which the clause names rather than making an Array of
     /// its own.
+    /// 10.4.2.2 step 1: an Array holds no more than 2^32-1 elements, so
+    /// 23.1.3.33 to 23.1.3.35 and 23.1.3.39 refuse a longer copy before they
+    /// read any element of the source.
+    fn refuse_long_copy(
+        length: i64,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        if u32::try_from(length).is_err() {
+            return Err(raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::RangeError,
+                "invalid array length",
+            ));
+        }
+        Ok(())
+    }
+
+    /// The same for a count 7.3.18 allows, which 10.4.2.2 step 1 refuses past
+    /// 2^32-1 before it reads any element.
+    fn array_species_create_wide(
+        original: ObjectRef,
+        length: i64,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<ObjectRef, VMError> {
+        let Ok(length) = u32::try_from(length) else {
+            return Err(raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::RangeError,
+                "invalid array length",
+            ));
+        };
+        Self::array_species_create(original, length, heap, realm)
+    }
+
     fn array_species_create(
         original: ObjectRef,
         length: u32,
@@ -11462,16 +11754,13 @@ impl RegisterVM {
             Some(length) => length,
             None => Self::array_like_length(heap, object, realm)?,
         };
-        // A clause that walks the whole `length` is charged for it before it
-        // starts, because a Script can make one 2^32-1 without holding an
-        // element. 23.1.3.1 reads a single index, and the three that search
-        // stop at what they find, so those are charged where they look.
-        if !matches!(
+        // 23.1.3.20 and 23.1.3.21 walk what their range holds, and 23.1.3.29
+        // joins every index, so each one is charged where it looks rather
+        // than by a `length` a Script can make 2^53-1 without holding an
+        // element of it.
+        if matches!(
             intrinsic,
-            Intrinsic::ArrayPrototypeAt
-                | Intrinsic::ArrayPrototypeIncludes
-                | Intrinsic::ArrayPrototypeIndexOf
-                | Intrinsic::ArrayPrototypeLastIndexOf
+            Intrinsic::ArrayPrototypeJoin | Intrinsic::ArrayPrototypeToString
         ) {
             self.charge_for_scan(length)?;
         }
@@ -11603,12 +11892,21 @@ impl RegisterVM {
             // 23.1.3.23: each argument is written at the length reached so
             // far, and the new length is the answer.
             Intrinsic::ArrayPrototypePush => {
+                // Step 4 refuses a length the arguments would push past
+                // 2^53-1 before it writes any of them.
+                if length.saturating_add(i64::from(call.arg_count)) > INDEX_LIMIT {
+                    return Err(type_error(
+                        heap,
+                        realm,
+                        "the length of an array-like cannot exceed 2^53-1",
+                    ));
+                }
                 let mut next = length;
                 for offset in 0..call.arg_count {
-                    let index = u32::try_from(next).map_err(|_| VMError::PropertyLimit)?;
-                    Self::set_element(
+                    self.charge_for_step(i64::from(offset))?;
+                    Self::set_element_wide(
                         object,
-                        index,
+                        next,
                         self.call_argument(&call, offset, heap)?,
                         heap,
                         realm,
@@ -11617,34 +11915,35 @@ impl RegisterVM {
                 }
                 // Step 5 sets the length with 7.3.4, which throws where
                 // 10.4.2.4 refuses it.
-                let written = u32::try_from(next).map_err(|_| VMError::PropertyLimit)?;
-                Self::set_array_like_length(object, written, heap, realm)?;
+                Self::set_array_like_length_wide(object, next, heap, realm)?;
                 Ok(index_value(next))
             }
             // 23.1.3.22: the last element leaves the Array, which is then one
             // shorter; an empty Array only has its length set again.
             Intrinsic::ArrayPrototypePop => {
-                let Ok(last) = u32::try_from(length.saturating_sub(1)) else {
-                    Self::set_array_like_length(object, 0, heap, realm)?;
+                if length <= 0 {
+                    Self::set_array_like_length_wide(object, 0, heap, realm)?;
                     return Ok(VALUE_UNDEFINED);
-                };
-                let element = Self::element_at(heap, object, last)?.unwrap_or(VALUE_UNDEFINED);
+                }
+                let last = length.saturating_sub(1);
+                let element = Self::element_at_wide(heap, object, last)?.unwrap_or(VALUE_UNDEFINED);
                 // Step 4.b deletes the index with 7.3.9 and sets the length
                 // with 7.3.4, and both throw where 10.1 refuses.
-                Self::delete_element_or_throw(object, last, heap, realm)?;
-                Self::set_array_like_length(object, last, heap, realm)?;
+                Self::delete_element_or_throw_wide(object, last, heap, realm)?;
+                Self::set_array_like_length_wide(object, last, heap, realm)?;
                 Ok(element)
             }
             // 23.1.3.26: the two ends swap until they meet, and an index that
             // is absent stays absent at the position it moves to.
             Intrinsic::ArrayPrototypeReverse => {
-                let mut lower = 0u32;
-                let mut upper = Self::scan_range(0, length).end.saturating_sub(1);
+                let mut lower = 0i64;
+                let mut upper = length.saturating_sub(1);
                 while lower < upper {
-                    let lower_value = Self::element_at(heap, object, lower)?;
-                    let upper_value = Self::element_at(heap, object, upper)?;
-                    Self::place_element(heap, object, lower, upper_value, realm)?;
-                    Self::place_element(heap, object, upper, lower_value, realm)?;
+                    self.charge_for_step(lower)?;
+                    let lower_value = Self::element_at_wide(heap, object, lower)?;
+                    let upper_value = Self::element_at_wide(heap, object, upper)?;
+                    Self::place_element_wide(heap, object, lower, upper_value, realm)?;
+                    Self::place_element_wide(heap, object, upper, lower_value, realm)?;
                     lower = lower.saturating_add(1);
                     upper = upper.saturating_sub(1);
                 }
@@ -11662,18 +11961,16 @@ impl RegisterVM {
                     absolute_index(integer_argument(last, heap, realm)?, length).clamp(0, length)
                 };
                 let count = end.saturating_sub(start).max(0);
-                let result = Self::array_species_create(
-                    object,
-                    u32::try_from(count).map_err(|_| VMError::PropertyLimit)?,
-                    heap,
-                    realm,
-                )?;
+                let result = Self::array_species_create_wide(object, count, heap, realm)?;
                 let mut target = 0u32;
-                for index in Self::scan_range(start, end) {
-                    if let Some(value) = Self::element_at(heap, object, index)? {
+                let mut index = start;
+                while index < end {
+                    self.charge_for_step(i64::from(target))?;
+                    if let Some(value) = Self::element_at_wide(heap, object, index)? {
                         heap.set_array_element(result, target, value)?;
                     }
                     target = target.saturating_add(1);
+                    index = index.saturating_add(1);
                 }
                 Ok(Value::from_object(result))
             }
@@ -11689,14 +11986,17 @@ impl RegisterVM {
                 } else {
                     length.saturating_sub(1)
                 };
-                for index in Self::scan_range(0, from.saturating_add(1)).rev() {
-                    self.charge_for_one_of_a_scan(index)?;
-                    let Some(element) = Self::element_at(heap, object, index)? else {
-                        continue;
-                    };
-                    if Self::strictly_equals(search, element, heap)? {
-                        return Ok(index_value(i64::from(index)));
+                let mut index = from;
+                let mut step = 0i64;
+                while index >= 0 {
+                    self.charge_for_step(step)?;
+                    step = step.saturating_add(1);
+                    if let Some(element) = Self::element_at_wide(heap, object, index)?
+                        && Self::strictly_equals(search, element, heap)?
+                    {
+                        return Ok(index_value(index));
                     }
+                    index = index.saturating_sub(1);
                 }
                 Ok(Value::from_smi(-1))
             }
@@ -12559,9 +12859,8 @@ impl RegisterVM {
         } else {
             property.value
         };
-        // 7.1.20 ToLength clamps into 0..2^53-1; the scan is bounded again by
-        // the index space, so the clamp loses no reachable index.
-        Ok(integer_argument(value, heap, realm)?.max(0))
+        // 7.1.20 ToLength clamps into 0..2^53-1.
+        Ok(integer_argument(value, heap, realm)?.clamp(0, INDEX_LIMIT))
     }
 
     /// `Get(O, ! ToString(𝔽(index)))` of 7.3.2, absent when `HasProperty` is
@@ -24806,6 +25105,10 @@ fn trimmable(unit: u16) -> bool {
 
 /// The largest integer a binary64 represents exactly, which bounds every index.
 const INTEGER_LIMIT: f64 = 9_007_199_254_740_992.0;
+
+/// 7.1.20 clamps every `length` to 2^53-1, which is the largest index of
+/// 7.3.18 plus one.
+const INDEX_LIMIT: i64 = 9_007_199_254_740_991;
 
 /// `ToIntegerOrInfinity` of 7.1.5 for a primitive argument, clamped to the
 /// range an index can occupy.

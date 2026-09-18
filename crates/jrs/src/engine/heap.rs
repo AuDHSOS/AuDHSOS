@@ -1369,7 +1369,17 @@ impl GenerationalHeap {
     ///
     /// Returns a string error when the name cannot be interned.
     pub fn intern_index(&mut self, index: u32) -> Result<StringRef, HeapError> {
-        let mut digits = [0u16; 10];
+        self.intern_index_wide(u64::from(index))
+    }
+
+    /// The same for an index of 7.3.18, which reaches 2^53-1 on an array-like
+    /// that is no Array.
+    ///
+    /// # Errors
+    ///
+    /// Returns a string error when the name cannot be interned.
+    pub fn intern_index_wide(&mut self, index: u64) -> Result<StringRef, HeapError> {
+        let mut digits = [0u16; 20];
         let mut written = 0;
         let mut value = index;
         loop {
