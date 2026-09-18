@@ -24,7 +24,9 @@ everywhere.
 | interprocessor interrupt | An interrupt one processor sends to another through the interrupt command register. Abbreviated IPI. |
 | `INIT-SIPI-SIPI` | The three IPIs that bring an application processor from reset to the start-up page, *Intel SDM* Vol. 3A, 11.4.4.1. |
 | interrupt command register | Local APIC registers `0x300` and `0x310`, which send an IPI, *Intel SDM* Vol. 3A, 13.6.1. Abbreviated ICR. |
-| kernel cell | One of the four `static` cells the kernel borrows: the console, the memory, the machine, the controller. |
+| kernel cell | One of the sixteen `static` cells of `audhsos-sync` the kernel borrows. D6 (16.10) names them and orders them. |
+| held cell | A kernel cell a processor holds while it takes another. There are four: the controller, the console, the memory, the machine. |
+| cell taken alone | A kernel cell whose borrow ends before the caller does anything else. There are eight, listed in D6 (16.10). |
 | machine cell | `MACHINE` in `crates/kernel/core/src/machine.rs`, line 44, holding the object pools and the run queues. |
 | home processor | The processor whose run queue a thread is enqueued in. Fixed when the thread is created. |
 | remote invalidation | Removing a translation from the translation lookaside buffer of a processor other than the one that changed the page table. |
@@ -81,6 +83,7 @@ implements it rather than reopening it.
 | 10 | Run queues per processor. `Machine` holds one `Scheduler`, and eighteen signatures take `&mut Scheduler`. | `crates/kernel/core/src/machine.rs`, line 23; `crates/kernel/syscall/src/dispatch.rs`, line 38 | S9 |
 | 11 | Remote invalidation. `LocalTlb` invalidates on the calling processor and nowhere else. | `crates/kernel/hal-x86_64/src/paging.rs`, line 24 | S10 |
 | 12 | A clock that counts once. `TICKS` is one counter, and `acknowledge` raises it through `record_tick` for a timer vector, whichever processor took it. | `crates/kernel/hal-x86_64/src/timer.rs`, line 81; `crates/kernel/hal-x86_64/src/interrupts.rs`, line 195 | S6 |
+| 13 | The kernel's token at the eight cells taken alone. They keep `UncontendedToken`, whose owner is `0` for every processor, so a second processor is refused rather than made to wait, and loses what the cell carries. | `crates/kernel/hal-x86_64/src/traps.rs`, lines 74, 78 and 97; `crates/kernel/hal-x86_64/src/testing.rs`, lines 35, 42, 51 and 54; `crates/kernel/core/src/state.rs`, line 62 | S6 |
 
 ## 16.5 Decision D1: how a processor finds its own data
 
@@ -264,9 +267,13 @@ drop the work rather than defer it — a system call that answers nothing,
 not a tick that skips.
 Reason 3: the owner is supplied by the token the borrow already takes, so
 no call site changes. `ExclusiveToken` gains `fn owner(&self) -> u32`
-with a default of `0`, `UncontendedToken` keeps the default, and every
-userland caller therefore behaves exactly as today because it can never
-see a second owner.
+with a default of `0`, and `UncontendedToken` keeps the default, so a cell
+that keeps that token answers as it does today: its owner is `0` whichever
+processor borrows it. `audhsos-sync` has three dependents, all of them
+kernel crates — `kernel-core`, `kernel-hal-x86_64` and `audhsos-kernel`
+(`crates/tools/xtask/src/policy.rs`, lines 678, 699 and 726) — so the
+cells D6 lists are every cell a second processor can reach, and S6 gives
+each of them the kernel's token.
 Result: `borrowed: AtomicBool` becomes `owner: AtomicU32` with
 `u32::MAX` for free. The wait is a compare-and-exchange loop that calls
 `ExclusiveToken::wait`, whose default is `core::hint::spin_loop` — a safe
@@ -279,14 +286,15 @@ is halfway through reads a half-written machine.
 
 ## 16.10 Decision D6: the order of the locks
 
-This decision must be made before S5 starts. Four kernel cells exist and a
-wait turns two taken in the wrong order into a machine that stops.
+This decision must be made before S5 starts. Sixteen kernel cells exist
+and a wait turns two taken in the wrong order into a machine that stops.
 
-**The decision: the order is controller, console, memory, machine. A
-processor that holds one may take only a cell later in the list.**
+**The decision: the order is controller, console, memory, machine, then
+the eight cells taken alone. A processor that holds one may take only a
+cell later in the list.**
 
-The order is the one the code already has, and it is fixed rather than
-chosen:
+Four cells are held while another is taken. The order among them is the
+one the code already has, and it is fixed rather than chosen:
 
 | Where | What it nests |
 |-------|---------------|
@@ -298,6 +306,33 @@ chosen:
 `forward` takes the machine cell and gives it back before it takes the
 controller (`crates/kernel/bin/src/main.rs`, lines 283 to 297), so those
 two are held one after the other and not one inside the other.
+
+**The eight cells taken alone.** Each borrow copies a value out or writes
+one in and ends before the caller does anything else, so none of these
+cells is held while another cell is taken and they come last in the
+order. A trap arrives while a processor holds one of the four, so the
+eight come after those four and not before. S6 installs the kernel's token
+at each, because a processor refused one loses the work the cell carries:
+
+| Cell | Where | What a refusal costs |
+|------|-------|----------------------|
+| `HANDLER` | `crates/kernel/hal-x86_64/src/traps.rs`, line 74 | `dispatch` halts the machine. |
+| `DEVICE_HANDLER` | `crates/kernel/hal-x86_64/src/traps.rs`, line 78 | `deliver` drops the interrupt and sends no end-of-interrupt, after which that line delivers nothing. |
+| `SYSCALL_HANDLER` | `crates/kernel/hal-x86_64/src/traps.rs`, line 97 | `call_kernel` returns without an answer. |
+| `KERNEL` | `crates/kernel/core/src/state.rs`, line 62 | `on_interrupt` counts no interrupt and expires no deadline (`crates/kernel/bin/src/main.rs`, line 210). |
+| `HARNESS` | `crates/kernel/hal-x86_64/src/testing.rs`, line 35 | A report is lost, and `on_panic` exits the machine with failure. |
+| `HOOK` | `crates/kernel/hal-x86_64/src/testing.rs`, line 42 | `on_trap` reports a trap the image expected as a failure. |
+| `CURRENT` | `crates/kernel/hal-x86_64/src/testing.rs`, line 51 | A report names `OUTSIDE` and not the test that is running. |
+| `PLATFORM` | `crates/kernel/hal-x86_64/src/testing.rs`, line 54 | `with_platform` answers `None`, which its caller reads as a loader that described no machine. |
+
+The last four are in the test kernel alone, and every `Done when` of S7
+and S8 reports through them from the application processor.
+
+The remaining four cells need no token. `DOUBLE_FAULT_STACK`, `TSS_IMAGE`
+and `GDT` stop being shared when S6 moves them into `Processor`; `IDT` is
+borrowed in `descriptors::install` alone, which runs once on the boot
+processor (`crates/kernel/hal-x86_64/src/descriptors.rs`, lines 29 to 38
+and 118).
 
 **The one cycle a wait would create, and what removes it.** A processor
 waiting for a cell waits with interrupts off, so it answers no IPI; a
@@ -313,6 +348,13 @@ It admits a timer tick into a processor that is inside a wait, and that
 tick takes the same cell the wait is for, so the wait nests one level per
 interrupt.
 
+**The option not taken: an atomic in place of the eight cells.** Each of
+them is written once during bring-up and read from then on, so an atomic
+word would need no borrow and no order. It costs a `transmute` per read to
+get a function pointer back out of an integer, which is an `unsafe` site
+per cell against the budget D8 states, and it takes the four handler cells
+out of the one form the kernel uses for shared state.
+
 ## 16.11 Decision D7: how many processors
 
 **The decision: `CPUS` is sixteen. A machine that reports more is used up
@@ -324,7 +366,21 @@ sixteen schedulers are 13 KiB of `.bss`.
 Reason 2: sixteen is four times the largest `-smp` the check needs, so a
 raise is not what a wider acceptance run asks for first.
 Reason 3: the processor number is a `u8` field of `Thread` and stays one.
-Where: `kernel_core::config`, beside `THREADS` and `KERNEL_STACKS`.
+
+Where: `kernel_objects::config`, beside `THREADS`, re-exported by
+`kernel_core::config` the way `THREADS` already is
+(`crates/kernel/core/src/config.rs`, line 33). The reason is the layering:
+`kernel-sched` holds `Processors` of S9 and depends on `kernel-objects`,
+`kernel-types` and `audhsos-abi` and not on `kernel-core`
+(`crates/tools/xtask/src/policy.rs`, line 616), so a `CPUS` in
+`kernel_core::config` is one `kernel-sched` cannot read. `Thread` gains
+its `cpu: u8` in that same crate
+(`crates/kernel/objects/src/object.rs`, line 362).
+
+`kernel-acpi` depends on `kernel-types` alone
+(`crates/tools/xtask/src/policy.rs`, line 592) and reaches neither
+constant, so `MAX_PROCESSORS` of S3 is its own and `kernel-hal-x86_64`,
+which depends on both crates, asserts the two equal.
 
 **The option not taken: as many as the firmware reports.** A `Scheduler`
 per processor would then be a run-time allocation out of the kernel
@@ -504,7 +560,9 @@ Size: M.
 
 ### Does
 
-1. Add `MAX_PROCESSORS`, equal to `CPUS` of D7.
+1. Add `MAX_PROCESSORS` to `kernel-acpi`, and a `const` assertion in
+   `kernel-hal-x86_64` that it equals `CPUS` of D7. The two constants are
+   separate because `kernel-acpi` cannot read `CPUS`, which D7 states.
 2. Read entry type 0, the processor local APIC, whole: the ACPI processor
    identifier, the local APIC identifier, and the flags. *ACPI 6.6*,
    5.2.12.2, table 5.22.
@@ -549,7 +607,9 @@ the length of the list.
 5. A host test parses a table whose type 0 entry has `Enabled` clear and
    `Online Capable` set, and keeps a processor that is not startable.
 6. The fuzz target of `kernel-acpi` runs against the new entry types.
-7. 6.6.11 of [document 6](06-testing-strategy.md) lists the five cases.
+7. A `MAX_PROCESSORS` different from `CPUS` is a compile error of
+   `kernel-hal-x86_64` and not a test failure.
+8. 6.6.11 of [document 6](06-testing-strategy.md) lists the five cases.
 
 ## 16.17 S4. The interrupt command register
 
@@ -682,7 +742,8 @@ Size: L.
 4. Add `processor() -> Option<u8>`: read register `0x20` through
    `APIC_WINDOW`, scan `IDENTIFIERS`, answer the position. The scan is
    over `CPUS` entries and `CPUS` is a constant, so the call is O(1).
-5. Install the kernel's token of S5 at the four cells, in place of
+5. Install the kernel's token of S5 at the twelve cells D6 orders — the
+   four held cells and the eight taken alone — in place of
    `UncontendedToken`: its `owner` is `processor()`, its `wait` is
    `remote::poll` of S10 followed by `spin_loop`. Until S10 exists the
    `wait` is `spin_loop` alone, which one processor cannot deadlock on.
@@ -725,9 +786,12 @@ an end-of-interrupt that costs one MMIO write and no wait.
 4. A kernel test raises a double fault and lands on the boot processor's
    interrupt-stack-table stack, which is the existing
    `double_fault.rs` test and must still pass.
-5. A machine with `-smp 1` boots, runs the root task, and ends as it does
+5. A kernel test borrows a cell taken alone twice on the boot processor
+   and reads `AlreadyBorrowed`, which is the refusal D5 keeps for the
+   processor that holds the cell.
+6. A machine with `-smp 1` boots, runs the root task, and ends as it does
    today.
-6. `sh tools/xtask.sh unsafe-budget` passes at the numbers D8 names.
+7. `sh tools/xtask.sh unsafe-budget` passes at the numbers D8 names.
 
 ## 16.20 S7. The start-up page and the first application processor
 
@@ -866,7 +930,9 @@ is what S9 and S10 are built on.
    while the boot processor holds the controller cell, and a second tick
    arriving after it — which is gap 7 of 16.4 and the reason S6 gave each
    processor its own `LocalApic`.
-4. A machine with `-smp 1` behaves as it does today.
+4. A kernel test with `-smp 2` reports a line from each processor at the
+   same time and loses neither, which is the harness cell of D6.
+5. A machine with `-smp 1` behaves as it does today.
 
 ## 16.22 S9. Per-processor run queues
 
@@ -884,9 +950,10 @@ Size: XL.
 
 ### Does
 
-1. Add `Processors`, a logic type in `kernel-sched`: `[Scheduler; CPUS]`,
-   the number of the calling processor, and a bitmask of the processors
-   that need a reschedule IPI.
+1. Add `Processors`, a logic type in `kernel-sched`: `[Scheduler; CPUS]`
+   with `CPUS` read from `kernel_objects::config`, the number of the
+   calling processor, and a bitmask of the processors that need a
+   reschedule IPI.
 2. `Processors` offers the method surface `Scheduler` offers, and routes
    each call by the home processor of the thread it is given: `enqueue`,
    `dequeue`, `on_wake`, `on_block`, `suspend`, `resume`, `fault`,
@@ -1051,7 +1118,7 @@ on four processors, and stays whole otherwise.
 | 1 | No usable frame below 1 MiB. | No application processor starts. | S7 step 1 searches the map rather than fixing an address, and the machine boots on one processor and says so. The start-up code is position-independent (D2, reason 2), so any low frame serves. |
 | 2 | An application processor faults before it reaches Rust. | It triple-faults; `-no-reboot` turns that into a QEMU exit, which the runner reports as a crash of the whole machine. | S7 ends with a test that reports the second processor's own reading of its identifier, so the first thing built is the thing that proves the sequence. The boot processor's wait has a deadline, so a processor that never reports costs 100 ms and not the run. |
 | 3 | The wait of S5 replaces a refusal that some caller relied on. | A path that used to skip now blocks. | D5 keeps the refusal for the processor that holds the cell, which is every caller that exists today. S5's Miri test insists on the refusal. |
-| 4 | Two processors take two cells in opposite orders. | Both wait forever. | D6 fixes the order and names the four sites that already have it. A fifth cell is a change to D6. |
+| 4 | Two processors take two cells in opposite orders. | Both wait forever. | D6 fixes the order, names the four sites that already nest, and puts the eight cells taken alone last. A seventeenth cell is a change to D6. |
 | 5 | The `-smp 4` run under TCG is slower and finds new flakes. | The check takes longer and fails intermittently. | `-smp 1` stays the default of every existing run (S2). A run with more processors is the acceptance of this track and not of everything else. |
 | 6 | Round robin gives one processor the busy threads. | One processor is loaded and another idles. | D4 states the cost and names work stealing as what removes it, after S11 has measured. |
 | 7 | Remote invalidation is missed on a path that changes a page table without `TlbControl`. | A processor reads memory through a translation that no longer exists. | R5 of [document 4](04-safety-policy.md) keeps every page-table change in `kernel-mm`, which reaches the hardware only through `TlbControl`, `FrameAccess` and `activate`. S10 replaces the implementation at all six call sites and leaves `LocalTlb` reachable only from the bring-up. |
