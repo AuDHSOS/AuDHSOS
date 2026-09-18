@@ -3011,7 +3011,8 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Star(iterator));
         let next = self.allocate_register()?;
         let step = self.allocate_register()?;
-        let head = self.code.instructions.len();
+        // 7.4.2 step 3 reads `next` once, when the iterator is opened, and
+        // 7.4.4 calls the one the record kept at every step.
         let next_name = self.string_constant(&"next".encode_utf16().collect::<Vec<_>>())?;
         let next_slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
         self.code.emit(Instruction::GetNamed {
@@ -3020,6 +3021,7 @@ impl RegisterLowerer {
             slot: next_slot,
         });
         self.code.emit(Instruction::Star(next));
+        let head = self.code.instructions.len();
         let step_slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
         self.code.emit(Instruction::CallMethod {
             receiver: iterator,
@@ -8360,7 +8362,8 @@ impl RegisterLowerer {
         )?;
         self.bindings = bindings_at_head.clone();
 
-        let head = self.code.instructions.len();
+        // 7.4.2 step 3 reads `next` once, when the iterator is opened, and
+        // 7.4.4 calls the one the record kept at every step.
         let next_name = self.string_constant(&"next".encode_utf16().collect::<Vec<_>>())?;
         let next_slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
         self.code.emit(Instruction::GetNamed {
@@ -8369,6 +8372,7 @@ impl RegisterLowerer {
             slot: next_slot,
         });
         self.code.emit(Instruction::Star(next));
+        let head = self.code.instructions.len();
         let step_slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
         self.code.emit(Instruction::CallMethod {
             receiver: iterator,
