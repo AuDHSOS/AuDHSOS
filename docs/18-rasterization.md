@@ -90,8 +90,12 @@ outline to an alpha value.
 ## 18.5 Decision D1: the numeric contract (D-177)
 
 **Decision:** `text-raster` is deterministic the way `text-core` is. Every
-coordinate, coverage value, colour channel and transcendental is `Fixed`
-Q32.32 or a narrower integer. The crate contains no `f32` and no `f64`.
+coordinate, coverage value, colour channel and transcendental of the
+product code is `Fixed` Q32.32 or a narrower integer. No product path
+contains an `f32` or an `f64`. A test may evaluate a formula the
+specification states in real arithmetic with the host's floating point
+and compare to a tolerance, because what it then checks is a bound and
+not a bit pattern; a golden image may not.
 
 1. Reason: one numeric contract for the whole stack, because the same
    rounding rule of D-159 then governs a glyph origin, an advance and a
@@ -110,7 +114,11 @@ and whose cost is that a golden image can assert only a tolerance.
 What a golden-image test may then assert: the exact bytes of the surface.
 A golden image is a gate under this decision, on every host, in debug and
 in release, and a change to its bytes is a change to the rendering and is
-reviewed as one.
+reviewed as one. The one floating-point reference in the crate is the
+twenty-eight mixing formulas of R11, which
+`docs/w3c/compositing-1.html:1832` and `docs/w3c/compositing-1.html:1967`
+state in real arithmetic; the test compares the crate's integer answer to
+them within a two-hundredth of a channel.
 
 ## 18.6 Decision D2: surface formats (D-178)
 
@@ -130,10 +138,10 @@ premultiplied. Every blend of this crate runs on linear-light values.
    that.
 2. Reason: the same page states that greater than eight-bit precision is
    required in the linearization, the premultiply and the interpolation.
-   At γ = 2.2 the display-space codes 1 and 2 of 255 are 5.1·10⁻⁶ and
-   2.3·10⁻⁵ of linear light; an eight-bit linear channel, whose step is
-   3.9·10⁻³, maps both to zero, and a sixteen-bit one, whose step is
-   1.5·10⁻⁵, separates them.
+   At γ = 2.2 an eight-bit linear channel maps the first fifteen display
+   codes onto zero and leaves 184 distinct levels of 256; a sixteen-bit
+   one leaves 255, and the one pair it cannot separate, the two darkest
+   codes, R5 separates by one level.
 3. Reason: premultiplied is the form the general Porter-Duff equation of
    `docs/w3c/compositing-1.html:1635` is written in, so an operator is a
    multiply-add per channel and no division.
@@ -338,18 +346,18 @@ directly, every time.
 | Step | Status | Depends on | Size |
 |------|--------|------------|------|
 | R1 the surface | implemented | D1–D4 | S |
-| R2 flattening | planned | R1 acceptance, R8 | M |
-| R3 coverage | planned | R2 | L |
-| R4 subpixel positioning | planned | R3 | S |
-| R5 gamma | planned | R1 | M |
-| R6 monochrome glyphs | planned | R4, R5 | M |
-| R7 the glyph cache | planned | R6 | M |
-| R8 the transcendentals | planned | D1 | M |
-| R9 gradients | planned | R5, R8 | L |
-| R10 the clip stack | planned | R3 | M |
-| R11 groups and composition | planned | R5, R10 | L |
-| R12 the paint stream | planned | R9, R11 | M |
-| R13 drawing a `LayoutView` | planned | R7, R12 | M |
+| R2 flattening | implemented | R1 acceptance, R8 | M |
+| R3 coverage | implemented | R2 | L |
+| R4 subpixel positioning | implemented | R3 | S |
+| R5 gamma | implemented | R1 | M |
+| R6 monochrome glyphs | implemented | R4, R5 | M |
+| R7 the glyph cache | implemented | R6 | M |
+| R8 the transcendentals | implemented | D1 | M |
+| R9 gradients | implemented | R5, R8 | L |
+| R10 the clip stack | implemented | R3 | M |
+| R11 groups and composition | implemented | R5, R10 | L |
+| R12 the paint stream | implemented | R9, R11 | M |
+| R13 drawing a `LayoutView` | implemented | R7, R12 | M |
 
 R8 depends on D1 alone and on no other step, so it is written where it is
 first needed, which is the segment count of R2.
@@ -398,7 +406,7 @@ extra storage.
 
 ## 18.15 R2: flattening
 
-**Status:** planned.
+**Status:** implemented and accepted (2026-09-18).
 **Depends on:** R1 acceptance, and `sqrt` of R8.
 **Size:** M.
 **Needs:** D5; `sqrt` of R8 for the segment count; `Glyf::outline_instance` at
@@ -410,15 +418,22 @@ and replace every curve segment by line segments within the tolerance.
 **Produces:** `flatten_glyf`, `flatten_cff`, `Edge`, `Transform`.
 **Done when:** host tests check the segment count of a quadratic and a
 cubic against the closed form of D5 at the boundary where the count
-changes and one unit either side; check that the largest deviation of the
-produced polyline from the curve, sampled at 64 parameter values, is
-below one eighth of a pixel for a circle, a half-circle and a
-quarter-circle at 8, 16, 64 and 256 pixels; check that a segment count
-above 256 is clamped and reported; check that a degenerate segment whose
-control points coincide produces one line; check that a contour of one
-point produces no edge; and check that the same outline flattened twice
-into two buffers gives identical edges. A buffer too small returns
+changes and one unit either side; check that the largest perpendicular
+distance from the curve to the polyline, sampled sixteen times inside
+every segment, is at most one eighth of a pixel for a quarter circle
+stated as one quadratic and as one cubic, at 8, 16, 64 and 256 pixels;
+check that the count doubles when the size quadruples; check that a
+second difference beyond the clamp gives 256; check that a contour of one
+point and a curve whose control points all coincide each produce no edge;
+check that a contour closes without a closing command and that two
+contours both close; check that contour ends which do not partition the
+points are refused; and check that the same outline flattened twice into
+two buffers gives identical edges. A buffer too small returns
 `RasterError::BufferTooSmall` and leaves the buffer unspecified.
+
+A segment whose two endpoints coincide is dropped: it encloses no area
+and deposits no coverage, so keeping it would cost the caller a slot and
+change no pixel.
 
 The transform composes the run scale, the glyph origin of R4, and the
 `Affine` a `PaintOp::Fill` carries, and flips y, because font space
@@ -429,7 +444,7 @@ Complexity: `O(P + Σ nᵢ)` for `P` points and `nᵢ` segments per curve,
 
 ## 18.16 R3: coverage
 
-**Status:** planned.
+**Status:** implemented and accepted (2026-09-18).
 **Depends on:** R2.
 **Size:** L.
 **Needs:** D6; the edges of R2; an `A8` surface from R1.
@@ -450,17 +465,21 @@ assert that no coverage value exceeds 255; and assert that the same edge
 list filled twice gives identical bytes. A fuzz target drives arbitrary
 edge coordinates, including the extremes of `Fixed`, through the filler.
 
-Edges are ordered by their top y with an in-place heapsort over the
-caller's edge slice, so the ordering allocates nothing and the
-comparator is a total order over `(y_top, x_top, index)` and does not
-depend on the sort's stability.
+Edges are ordered by their top y with `slice::sort_unstable_by_key`,
+which is in-place and allocates nothing. The key is a total order over
+the edge's own four numbers — the top, the bottom, the smaller x and the
+larger — so two edges the key cannot separate are interchangeable and the
+result does not depend on the sort's stability. A row then activates
+every edge whose top it has reached, retires every edge whose bottom it
+has passed by swapping it to the front of the active range, and sweeps
+its cells.
 
 Complexity: `O(E log E + C)` time for `E` edges and `C` cells touched,
 `O(width + E)` storage, all of it the caller's.
 
 ## 18.17 R4: subpixel positioning
 
-**Status:** planned.
+**Status:** implemented and accepted (2026-09-18).
 **Depends on:** R3.
 **Size:** S.
 **Needs:** D-174.
@@ -486,7 +505,7 @@ Complexity: `O(1)`.
 
 ## 18.18 R5: gamma
 
-**Status:** planned.
+**Status:** implemented and accepted (2026-09-18).
 **Depends on:** R1.
 **Size:** M.
 **Needs:** D7; `pow` of R8.
@@ -503,7 +522,7 @@ returns `RasterError::Gamma`; and check that two contexts built from the
 same γ hold identical tables.
 
 `Gamma` holds two tables of 256 `u16` each. `decode` maps a display byte
-to its linear value. `encode` holds, for each display code, the linear
+to its linear value. `edges` holds, for each display code, the linear
 midpoint between that code and the next, so encoding is a binary search
 for the code nearest in linear light, which is the correctly rounded
 answer and needs no wider table. Both are built once, by the `pow` of R8,
@@ -511,13 +530,20 @@ in `O(256)` operations; a blend then costs a lookup or eight comparisons
 and no power. The context is passed per call and holds no state a draw
 changes.
 
+`decode` is strictly increasing by construction. At γ = 2.2 the second
+display code is 0.33 of 65535 and rounds onto the first, so one level is
+added wherever a code would otherwise collide with the code below it. The
+adjustment is a few parts in 65535, far below one display code anywhere,
+and without it a code would have no linear value of its own and could not
+be encoded back.
+
 Complexity: `O(1)` to decode, `O(log 256)` to encode, `O(256)` to
 construct; 1024 bytes per context, on the caller's stack or in the
 caller's storage.
 
 ## 18.19 R6: monochrome glyphs
 
-**Status:** planned.
+**Status:** implemented and accepted (2026-09-18).
 **Depends on:** R4, R5.
 **Size:** M.
 **Needs:** the coverage of R3; the gamma context of R5.
@@ -539,7 +565,7 @@ storage.
 
 ## 18.20 R7: the glyph cache
 
-**Status:** planned.
+**Status:** implemented and accepted (2026-09-18).
 **Depends on:** R6.
 **Size:** M.
 **Needs:** D8; the key fields D-174 and D-162 fix.
@@ -568,7 +594,7 @@ an insertion that evicts `k` entries, `O(1)` for a generation change.
 
 ## 18.21 R8: the transcendentals
 
-**Status:** planned.
+**Status:** implemented and accepted (2026-09-18).
 **Depends on:** D1.
 **Size:** M.
 **Needs:** the contract of `crates/text-core/src/colr/trig.rs:31`: a
@@ -606,7 +632,7 @@ for `log2`, and a fixed series length for `exp2` and for `atan`.
 
 ## 18.22 R9: gradients
 
-**Status:** planned.
+**Status:** implemented and accepted (2026-09-18).
 **Depends on:** R5, R8.
 **Size:** L.
 **Needs:** `Fill` of `crates/text-core/src/colr/paint.rs:148`; the
@@ -633,8 +659,17 @@ computed value, which differs from the display-space midpoint by about
 bytes.
 
 Every gradient is evaluated in the fill's own coordinate space, reached
-by inverting the `Affine` the `PaintOp::Fill` carries. A singular
-`Affine`, whose determinant is zero, draws nothing and returns `Ok`.
+by inverting the `Affine` the `PaintOp::Fill` carries, composed with the
+glyph's own. A singular `Affine`, whose determinant is zero, draws
+nothing and returns `Ok`.
+
+`Gradient::new` takes the inverse once and normalizes the geometry: every
+coordinate is divided by the smallest power of two that brings it to 128
+or below, which is exact in the exponent and rounds the mantissa once.
+The parameter of all three shapes is unchanged by one scale applied to
+every input, and the normalization is what keeps the products of the
+two-circle form — `b` squared and `a` times `c` — inside Q32.32 for a
+gradient stated in the font units of a 2048-unit em.
 
 The linear gradient uses the p₃ construction: p₃ is the orthogonal
 projection of p₀p₁ onto the line through p₀ perpendicular to p₀p₂, and
@@ -656,7 +691,7 @@ Complexity: `O(1)` per pixel plus `O(log S)` for the binary search over
 
 ## 18.23 R10: the clip stack
 
-**Status:** planned.
+**Status:** implemented and accepted (2026-09-18).
 **Depends on:** R3.
 **Size:** M.
 **Needs:** `PaintOp::Clip` and `PaintOp::Unclip` of
@@ -674,17 +709,19 @@ the caller's mask storage returns `RasterError::BufferTooSmall`; and
 check that a `Clip` on a glyph with no outline gives an empty mask, so
 the operations under it draw nothing.
 
-A mask is an `A8` surface over the caller's bytes, one per stack level,
-bounded to the intersection of the box of the clipping outline and the
-box of the level above, so a deep stack costs less than the surface at
-every level but the first.
+A mask is an `A8` plane of the glyph's box over the caller's bytes, one
+per stack level, and the depth the caller's slice allows is the depth the
+stream may reach. One box for every level is what makes a nested clip one
+multiplication per pixel and a `Compose` one pass over two planes of
+equal shape; bounding each level to its own outline's box would save
+memory on a deep stack and cost an intersection on every access.
 
-Complexity: `O(w · h)` per `Clip` over the intersected box, `O(1)` per
-`Unclip`, storage the caller's mask slice.
+Complexity: `O(w · h)` per `Clip`, `O(1)` per `Unclip`, storage the
+caller's mask slice.
 
 ## 18.24 R11: groups and composition
 
-**Status:** planned.
+**Status:** implemented and accepted (2026-09-18).
 **Depends on:** R5, R10.
 **Size:** L.
 **Needs:** the thirteen operators of
@@ -695,7 +732,7 @@ algorithm of `docs/microsoft/colr.html:3332`.
 **Does:** open an offscreen `Rgba16` surface for `Group`, combine the two
 surfaces above with the mode of `Compose`, and draw the result onto the
 surface below with source-over.
-**Produces:** `GroupStack`, `composite`, `blend`.
+**Produces:** `composite`, and the group stack of R12.
 **Done when:** each of the twenty-eight modes has a literal result vector
 over a matrix of operands: opaque over opaque, opaque over transparent,
 transparent over opaque, and two partial alphas; the thirteen operators
@@ -711,6 +748,11 @@ before a `Compose` is still under the result, which is what the rendering
 algorithm requires; and the same stream composed twice gives identical
 bytes.
 
+`composite` is a pure function of a mode and two premultiplied pixels, so
+every one of the twenty-eight modes is checked without a surface. The
+stack of offscreen planes belongs to R12, which is where the stream that
+opens and closes them is read.
+
 A blend mode runs on unpremultiplied values, which
 `docs/w3c/compositing-1.html:1785` requires, so the two operands are
 divided by their alphas first; that division is the only one in a blend,
@@ -718,28 +760,32 @@ and an operand of zero alpha skips it and contributes its own colour.
 The thirteen operators need no division, because the equation of
 `docs/w3c/compositing-1.html:1635` is written on premultiplied values.
 
-Complexity: `O(w · h)` per `Compose` over the union of the two groups'
-boxes, storage the caller's group slice.
+Complexity: `O(1)` per pixel per mode, `O(w · h)` per `Compose` over the
+glyph's box, storage the caller's group slice.
 
 ## 18.25 R12: the whole paint stream
 
-**Status:** planned.
+**Status:** implemented and accepted (2026-09-18).
 **Depends on:** R9, R11.
 **Size:** M.
 **Needs:** `Colr::paint` at `crates/text-core/src/colr/mod.rs:220`;
 `Painted` at `crates/text-core/src/colr/mod.rs:102`.
 **Does:** consume `PaintOp` in order and drive R6, R9, R10 and R11.
-**Produces:** `draw_color_glyph`.
+**Produces:** `draw_color_glyph`, `Bounds`, `PaintScratch`.
 **Done when:** the five base glyphs of the COLRv1 fixture, a copy of
 `crates/text-core/src/tests/fixtures/NotoEmoji-colr.ttf` under
-`crates/text-raster/src/tests/fixtures/`, draw, and their
-surfaces are golden images the test asserts byte for byte, which D1
-allows; `Painted::bounded` false draws nothing and returns `Ok`;
-`ColorSource::Foreground` resolves to the caller's text colour and
-palette entry `0xFFFF` reaches it; a stream whose `Clip` and `Unclip` do
-not match returns `RasterError::Stream`; a stream longer than the
-caller's storage returns `RasterError::BufferTooSmall`; an empty stream
-writes nothing; and the same stream drawn twice gives identical bytes.
+`crates/text-raster/src/tests/fixtures/`, draw through the whole stack —
+clips, groups, composites and gradients — and their surfaces are golden
+images the test asserts byte for byte, which D1 allows;
+`Painted::bounded` false draws nothing and returns `Ok`;
+`ColorSource::Foreground` resolves to the caller's text colour; a stream
+whose `Clip` and `Unclip` do not match returns `RasterError::Stream`, and
+so does one that leaves a bracket open at its end; a stack deeper than
+the caller's storage returns `RasterError::BufferTooSmall`; a `Compose`
+with fewer than two groups above it returns `RasterError::Stream`; the
+ink a surface held before a `Compose` is still under the result; an empty
+stream writes nothing; and the same stream drawn twice gives identical
+bytes.
 
 Complexity: `O(Σ over the operations)` with each operation's own cost
 above; the stream carries no graph, so this step meets no cycle, which is
@@ -747,7 +793,7 @@ what D-173 bought.
 
 ## 18.26 R13: drawing a `LayoutView`
 
-**Status:** planned.
+**Status:** implemented and accepted (2026-09-18).
 **Depends on:** R7, R12.
 **Size:** M.
 **Needs:** `LayoutView` at `crates/text-core/src/layout/mod.rs:146`;
@@ -755,21 +801,37 @@ what D-173 bought.
 **Does:** walk lines and glyphs, apply each run's scale and variation
 coordinates, quantize each origin through R4, and dispatch each glyph to
 the monochrome path or the colour path.
-**Produces:** `draw`, `Context`.
+**Produces:** `draw`, `Context`, `OutlineScratch`, `outline_edges`.
 **Done when:** a line of Latin text at 16 pixels, a line of Arabic, a
-mixed bidirectional line, a wrapped paragraph and a line mixing text with
-an emoji each draw into a `Vec` surface and are golden images the test
-asserts byte for byte; the ink of every drawing lies inside the box
-`measure` reported, which is checked pixel by pixel; a glyph of a face
-without a `COLR` table takes the monochrome path and one with a covered
-`COLR` entry takes the colour path; a run whose face index is out of
-range returns `RasterError::Face`; a surface too small for the layout
-draws the part that fits and writes nothing outside; and drawing the same
-view twice, with and without a glyph cache, gives identical bytes.
+mixed bidirectional line and a wrapped paragraph each draw into a `Vec`
+surface and are golden images the test asserts byte for byte; the ink of
+every drawing lies inside the box `measure` reported, which is checked
+pixel by pixel; a glyph of a face with a `COLR` table takes the colour
+path; a run whose face index is out of range returns `RasterError::Face`;
+a coverage buffer too small returns `RasterError::BufferTooSmall`; a
+surface too small for the layout draws the part that fits and writes
+nothing outside; an empty string draws nothing; a larger size inks more
+pixels; the four subpixel positions of D-174 each draw different pixels;
+and drawing the same view twice, with and without a glyph cache, gives
+identical bytes.
+
+A line mixing text with an emoji is not among the golden images: the
+COLRv1 fixture is subset to five base glyphs and maps no character, so no
+string reaches them through `cmap`. The colour path's own golden images
+are R12's, which drive the same code from the paint stream the fixture
+does state.
 
 This is the only entry point the compositor needs. It reads no font
 table: `text-core` decodes the outline and resolves the paint stream, and
 this step positions and fills.
+
+A glyph's box is not known before its outline is flattened, so the edges
+are produced against the pixel the origin sits in and the box is read off
+them. The subpixel offset of R4 stays in that transform, because it is
+what the four positions distinguish; only the whole pixels come off, and
+they are added back when the coverage is composited. The box is grown by
+two pixels on every side, so that the rounding of the box never clips a
+stem.
 
 Complexity: `O(G)` glyph dispatches plus each glyph's own cost, with a
 cache hit costing `O(w · h)` of the glyph and no flattening and no fill.

@@ -10,5 +10,8 @@ license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 
+[dependencies]
+text-core = { workspace = true, default-features = false }
+
 [lints]
 workspace = true

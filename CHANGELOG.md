@@ -24,14 +24,29 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   the thirteen steps; sections 17.28 to 17.30 of document 17 become one table
   pointing at them.
 
-- `text-raster` R1: the surface. Width, height, a stride in bytes, one of the
-  four formats of D-178, and a borrowed mutable byte slice, with bounds-checked
-  access by texel and by row. Construction refuses a zero width or height, a
-  stride below the row, a row whose bytes leave `u32`, and a slice shorter than
-  the shape; a read outside the surface is `None`, a write outside it or of a
-  texel the format does not carry is an error. The bytes of a row past its last
-  visible column are never written. 19 host tests and one doctest over `Vec`
-  surfaces, no display and no running system.
+- `text-raster`, steps R1 to R13 of track R. The crate turns what `text-core`
+  computes into pixels: a surface of four formats with bounds-checked access
+  (R1); outlines to polylines within an eighth of a device pixel, with the
+  segment count computed from the control points (R2); exact-area coverage
+  under the non-zero winding rule, one row of cells at a time (R3); the four
+  horizontal subpixel positions and the whole vertical pixel of D-174 (R4); the
+  transfer function of D-183 as two tables of 256 entries (R5); one coverage
+  mask composited with one text colour, in linear light (R6); the glyph cache
+  of D-184, a caller-owned ring evicted first in, first out (R7); a correctly
+  rounded square root, an inverse tangent in half-turns and a power, each to a
+  stated bound and with no floating point (R8); linear, radial and sweep
+  gradients with pad, repeat and reflect, evaluated in the fill's own space
+  through the inverted transform (R9); the clip stack (R10); all twenty-eight
+  compositing and blending modes, the four non-separable ones included (R11);
+  the whole paint stream of a colour glyph, with its clip and group stacks
+  (R12); and `draw`, which walks a `LayoutView` and is the one entry point the
+  compositor needs (R13).
+
+  154 host tests and one doctest, every one on the host against a `Vec`
+  surface. Nine golden images under `crates/text-raster/src/tests/golden/` are
+  a gate, which D-177 allows because no product path has floating point: the
+  five base glyphs of the COLRv1 fixture, and Latin, Arabic, bidirectional and
+  wrapped text.
 
 - `docs/w3c/compositing-1.html`: *Compositing and Blending Level 1*, the W3C
   Candidate Recommendation Draft of 21 March 2024, with its 43 figure files

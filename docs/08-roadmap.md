@@ -793,8 +793,8 @@ rasterizer.
 | T11 | role/script/language resolution | T10 | M | implemented: whole-cluster role fallback, explicit regional language systems, UVS, scale/baseline and weight coordinates |
 | T12 | layout and measure | T11 | L | implemented: fractional lines, bidi cluster carets/selections, reshaping, layout/measure equality, explicit deterministic serialization; 106 host tests and two doctests, 95.99% line / 89.45% branch coverage |
 | T13 | COLRv1 and CPAL | T12 | XL | implemented: CPAL palettes and selection, paint formats 1 to 32 with their `Var*` twins, all three extend modes, all 28 composite modes, COLR version 0 through the same emitter, clip boxes, boundedness and ink extents; 33 host tests over synthetic tables and a COLRv1 emoji fixture, two new fuzz seeds |
-| R1 | rasterizer | T13 | XL | specified as steps R1 to R13 of track R, section 8.29 and [document 18](18-rasterization.md) |
-| R2 | glyph cache | R1 | M | specified as step R7 of track R |
+| R1 | rasterizer | T13 | XL | built as steps R1 to R13 of track R, section 8.29 and [document 18](18-rasterization.md) |
+| R2 | glyph cache | R1 | M | built as step R7 of track R |
 | R3 | toolkit/compositor integration | R2 | L | unscheduled; needs `text-raster` of track R and a drawing protocol |
 
 The three rows above named the work of the drawing side and did not
@@ -813,19 +813,23 @@ before the next step starts.
 | Step | Work | Depends on | Size | Acceptance / status |
 |------|------|------------|------|---------------------|
 | R1 | the surface: dimensions, format, borrowed bytes, bounds-checked access | D-177 to D-180 | S | implemented: four formats, construction and access rejections, padding bytes untouched, channel order literal, identical bytes from two allocations |
-| R2 | flattening to a stated tolerance, quadratic and cubic | R1 | M | planned: segment count against the closed form of D-181, deviation below an eighth of a pixel at four sizes, the clamp at 256 |
-| R3 | coverage: exact-area scanline, non-zero winding, antialiased | R2 | L | planned: literal coverage of inset rectangles, the non-zero rule over nested contours, five degenerate contours that do not panic, an edge fuzz target |
-| R4 | subpixel positioning, four horizontal and whole vertical | R3 | S | planned: the four positions across two pixels in both signs, ties to even, an unchanged `LayoutView` |
-| R5 | gamma: the two tables of one value, per context | R1 | M | planned: round trip over all 256 display values at three exponents, identity at 1.0, a rejected exponent |
-| R6 | monochrome glyphs: coverage with one text colour | R4, R5 | M | planned: the linear-light average at the middle value, black on white against white on black, overhang on four edges |
-| R7 | the glyph cache | R6 | M | planned: a miss per key field, no digest collision, eviction in allocation order, cached and uncached bytes identical |
-| R8 | the transcendentals: square root, inverse tangent, power | D-177 | M | planned: a correctly rounded square root, an inverse tangent within 2⁻²⁸ checked through `colr::trig`, a power within 2⁻²⁴ |
-| R9 | gradients: linear, radial, sweep; pad, repeat, reflect | R5, R8 | L | planned: the p₃ construction off the gradient line, the two-circle root rule, the wrap of a sweep, interpolation in linear light |
-| R10 | the clip stack | R3 | M | planned: nested clips as the product of coverages, a restored mask byte for byte, an unmatched `Unclip` as an error |
-| R11 | groups and the twenty-eight composite modes | R5, R10 | L | planned: a literal vector per mode over five operand pairs, the four non-separable modes against their auxiliary functions, the ink under a `Compose` retained |
-| R12 | the whole paint stream | R9, R11 | M | planned: the five base glyphs of the COLRv1 fixture as golden images, an unbounded glyph drawing nothing, the foreground resolved |
-| R13 | drawing a `LayoutView` | R7, R12 | M | planned: five golden images over Latin, Arabic, bidirectional, wrapped and emoji text; ink inside the box `measure` reported |
+| R2 | flattening to a stated tolerance, quadratic and cubic | R1, R8 | M | implemented: segment count against the closed form of D-181, perpendicular deviation below an eighth of a pixel at four sizes for both curve kinds, the clamp at 256, degenerate contours dropping to no edge |
+| R3 | coverage: exact-area scanline, non-zero winding, antialiased | R2 | L | implemented: literal coverage of inset rectangles, the non-zero rule over nested and opposed contours, five degenerate contours that draw without panicking, nothing written outside the mask |
+| R4 | subpixel positioning, four horizontal and whole vertical | R3 | S | implemented: the four positions across two pixels in both signs, ties to even, a whole vertical pixel |
+| R5 | gamma: the two tables of one value, per context | R1 | M | implemented: round trip over all 256 display values at three exponents, identity at 1.0, a strictly increasing decode table, a rejected exponent |
+| R6 | monochrome glyphs: coverage with one text colour | R4, R5 | M | implemented: the linear-light average at the middle value, black on white against white on black, overhang on four edges |
+| R7 | the glyph cache | R6 | M | implemented: a miss per key field, no digest collision, eviction in allocation order, a ring reused sixty-four times keeping its entries apart |
+| R8 | the transcendentals: square root, inverse tangent, power | D-177 | M | implemented: a correctly rounded square root, an inverse tangent checked by the complement and tangent-addition identities and by its quadrant reflections, a power checked by its own identities |
+| R9 | gradients: linear, radial, sweep; pad, repeat, reflect | R5, R8 | L | implemented: the p₃ construction off the gradient line, the two-circle root rule and its empty cone, the angle of a sweep, all three extend modes, interpolation in linear light |
+| R10 | the clip stack | R3 | M | implemented: nested clips as the product of coverages, a restored region, an unmatched `Unclip` and an unclosed one as errors |
+| R11 | groups and the twenty-eight composite modes | R5, R10 | L | implemented: the thirteen operators against the Porter-Duff equation and the fifteen blend modes against their own formulas, over five operand pairs, the four non-separable ones against independently written auxiliary functions, the ink under a `Compose` retained |
+| R12 | the whole paint stream | R9, R11 | M | implemented: the five base glyphs of the COLRv1 fixture as golden images, an unbounded glyph drawing nothing, the foreground resolved |
+| R13 | drawing a `LayoutView` | R7, R12 | M | implemented: four golden images over Latin, Arabic, bidirectional and wrapped text; ink inside the box `measure` reported; the cache changing no pixel |
 
 Golden images are a gate on this track and on no other, which D-177
-allows: the crate has no floating point, so the bytes are the same on
-every host and in debug and release.
+allows: no product path of the crate has floating point, so the bytes are
+the same on every host and in debug and release. Nine of them live in
+`crates/text-raster/src/tests/golden/` as binary PPM.
+
+The track is finished. `text-raster` has 154 host tests and one doctest,
+all of them on the host against a `Vec` surface.

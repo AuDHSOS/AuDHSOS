@@ -40,7 +40,7 @@ graph, in thirteen steps and without a rasterizer. Track R builds the
 rasterizer, which [document 18](18-rasterization.md) specifies in
 thirteen steps of its own: `text-raster` turns an outline into coverage
 and a paint stream into pixels, writing into a surface the caller owns.
-Step R1 is built.
+Both tracks are finished.
 
 ## Reading order
 

@@ -76,6 +76,70 @@ pub enum Texel {
     Display([u8; 3]),
 }
 
+/// A read-only plane of coverage bytes.
+///
+/// A [`Format::A8`] surface and a cached glyph both answer as one, so the
+/// compositing of R6 has one input shape whether the coverage was just
+/// rasterized or came out of the cache of R7.
+#[derive(Clone, Copy, Debug)]
+pub struct Mask<'a> {
+    bytes: &'a [u8],
+    width: u32,
+    height: u32,
+    stride: u32,
+}
+
+impl<'a> Mask<'a> {
+    /// A mask of this shape over `bytes`.
+    /// # Errors
+    /// The errors of [`Surface::new`], for the same reasons.
+    pub fn new(bytes: &'a [u8], width: u32, height: u32, stride: u32) -> Result<Self, RasterError> {
+        if width == 0 || height == 0 {
+            return Err(RasterError::Empty);
+        }
+        if stride < width {
+            return Err(RasterError::Stride);
+        }
+        let needed = u64::from(height).saturating_mul(u64::from(stride));
+        let given = bytes.len();
+        if u64::try_from(given).unwrap_or(u64::MAX) < needed {
+            return Err(RasterError::TooShort {
+                needed: usize::try_from(needed).unwrap_or(usize::MAX),
+                given,
+            });
+        }
+        Ok(Self {
+            bytes,
+            width,
+            height,
+            stride,
+        })
+    }
+
+    /// Visible columns.
+    #[must_use]
+    pub const fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// Visible rows.
+    #[must_use]
+    pub const fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// The coverage at `(x, y)`, or `None` outside the mask.
+    #[must_use]
+    pub fn coverage(&self, x: u32, y: u32) -> Option<u8> {
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        let row = u64::from(y).checked_mul(u64::from(self.stride))?;
+        let at = usize::try_from(row.checked_add(u64::from(x))?).ok()?;
+        self.bytes.get(at).copied()
+    }
+}
+
 /// The bytes of a picture, the shape they carry, and bounds-checked access.
 #[derive(Debug)]
 pub struct Surface<'a> {
@@ -236,6 +300,15 @@ impl<'a> Surface<'a> {
             }
         }
         Ok(())
+    }
+
+    /// This surface as a read-only coverage plane, or `None` unless it is
+    /// [`Format::A8`].
+    #[must_use]
+    pub fn mask(&self) -> Option<Mask<'_>> {
+        (self.format == Format::A8)
+            .then(|| Mask::new(self.bytes, self.width, self.height, self.stride).ok())
+            .flatten()
     }
 
     /// Write zero into every byte of every visible pixel.

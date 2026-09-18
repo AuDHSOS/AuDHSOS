@@ -5,7 +5,7 @@
 
 //! R1: the surface, its construction rules and its bounds-checked access.
 
-use crate::{Format, RasterError, Surface, Texel};
+use crate::{Format, Mask, RasterError, Surface, Texel};
 
 /// A byte pattern that is not zero and not a texel any test writes, so that a
 /// byte still carrying it was never written.
@@ -304,4 +304,44 @@ fn raster_error_displays_every_variant() {
         assert!(!message.is_empty());
     }
     assert_eq!(messages[3], "a surface of 4 bytes over a slice of 2");
+}
+
+#[test]
+fn a_mask_reads_the_same_coverage_as_its_surface() {
+    let mut bytes = canvas(3, 6, 0);
+    let mut surface = Surface::new(&mut bytes, 4, 3, 6, Format::A8).unwrap();
+    surface.clear();
+    surface.set_texel(2, 1, Texel::Coverage(0x7f)).unwrap();
+    let mask = surface.mask().unwrap();
+    assert_eq!((mask.width(), mask.height()), (4, 3));
+    assert_eq!(mask.coverage(2, 1), Some(0x7f));
+    assert_eq!(mask.coverage(0, 0), Some(0));
+    assert_eq!(mask.coverage(4, 0), None);
+    assert_eq!(mask.coverage(0, 3), None);
+}
+
+#[test]
+fn a_surface_of_another_format_has_no_mask() {
+    for &format in Format::ALL {
+        let stride = 2 * format.bytes_per_pixel();
+        let mut bytes = canvas(2, stride, 0);
+        let surface = Surface::new(&mut bytes, 2, 2, stride, format).unwrap();
+        assert_eq!(surface.mask().is_some(), format == Format::A8);
+    }
+}
+
+#[test]
+fn a_mask_of_a_shape_its_bytes_cannot_hold_is_refused() {
+    let bytes = [0_u8; 8];
+    assert_eq!(Mask::new(&bytes, 0, 2, 4).unwrap_err(), RasterError::Empty);
+    assert_eq!(Mask::new(&bytes, 2, 0, 4).unwrap_err(), RasterError::Empty);
+    assert_eq!(Mask::new(&bytes, 4, 2, 2).unwrap_err(), RasterError::Stride);
+    assert_eq!(
+        Mask::new(&bytes, 4, 4, 4).unwrap_err(),
+        RasterError::TooShort {
+            needed: 16,
+            given: 8,
+        }
+    );
+    assert!(Mask::new(&bytes, 4, 2, 4).is_ok());
 }
