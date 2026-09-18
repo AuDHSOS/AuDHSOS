@@ -2182,7 +2182,11 @@ impl RegisterVM {
         let mut call = call;
         // 10.4.1.1 puts the arguments a bind kept in front of the ones the
         // call site passes, which no register of the caller holds together.
-        if Self::bound_with_arguments(function, heap) {
+        // 10.4.1.2 constructs the target and gives it none of the `this` value
+        // the bind holds, so a construct of a bound function goes there too.
+        if Self::bound_with_arguments(function, heap)
+            || (call.construct.is_some() && Self::bound_target(function, heap) != function)
+        {
             return self.begin_bound_call(function, call, units, active_feedback, heap, realm);
         }
         let function_ref = self.resolve_callee(function, &mut call, heap, realm)?;
@@ -6245,11 +6249,10 @@ impl RegisterVM {
                 "new of a bound function whose target is written in Rust",
             ));
         }
-        // 13.3.7.1 makes the object of a derived constructor, not 10.1.13.
+        // 13.3.7.1 makes the object of a derived constructor at its super
+        // call, not 10.1.13 here.
         if Self::derives(target, units, heap) {
-            return Err(VMError::Unsupported(
-                "new of a bound function whose target is a derived constructor",
-            ));
+            return Ok(VALUE_UNINITIALIZED);
         }
         heap.enter_scope();
         let held = heap.push_root(target)?;
