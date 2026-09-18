@@ -690,6 +690,9 @@ pub enum Resume {
         intrinsic: u32,
         /// Root holding the record of the reads.
         state: Root,
+        /// Root holding the argument a call of 22.2.7.1 step 2 passes; a
+        /// getter takes none and the call passes none.
+        value: Root,
         /// First argument register of the call.
         arg_start: Reg,
         /// Number of arguments the call passed.
@@ -900,8 +903,10 @@ const REGEXP_RECORD_PHASE: u32 = 2;
 const REGEXP_RECORD_FLAGS: u32 = 3;
 /// What `Get(rx, "exec")` answered.
 const REGEXP_RECORD_EXEC: u32 = 4;
+/// What the `exec` of the Script answered.
+const REGEXP_RECORD_RESULT: u32 = 5;
 /// How many slots the record of a clause of 22.2.6 holds.
-const REGEXP_RECORD_SLOTS: usize = 5;
+const REGEXP_RECORD_SLOTS: usize = 6;
 /// The walk of 7.4.2 has not called the `@@iterator` yet.
 const ITERATOR_WALK_STARTING: i32 = 0;
 /// It is waiting for the `@@iterator` it called.
@@ -2508,7 +2513,17 @@ impl RegisterVM {
         call: Call,
         heap: &GenerationalHeap,
     ) -> Result<(), VMError> {
-        if let Some(
+        if let Some(Resume::Property { value, .. }) = call.resume {
+            // 22.2.7.1 step 2 passes the String, and the getter of a read
+            // passes nothing at all.
+            if callee.parameter_count > 0 && call.arg_count > 0 {
+                *self
+                    .stack
+                    .get_mut(next_frame)
+                    .ok_or(VMError::StackOverflow)? =
+                    heap.root_value(value).unwrap_or(VALUE_UNDEFINED);
+            }
+        } else if let Some(
             Resume::Setter { value }
             | Resume::Answered { value, .. }
             | Resume::Element { value, .. },
@@ -5226,7 +5241,10 @@ impl RegisterVM {
         }
         // 22.2.6.11 reads the `flags` and the `exec` of its receiver, either
         // of which a getter of the Script answers.
-        if intrinsic == Intrinsic::RegExpPrototypeReplace {
+        if matches!(
+            intrinsic,
+            Intrinsic::RegExpPrototypeReplace | Intrinsic::RegExpPrototypeTest
+        ) {
             return self.begin_regexp_clause(intrinsic, call, units, active_feedback, heap, realm);
         }
         // 22.1.3.14, 22.1.3.15, 22.1.3.19, 22.1.3.20 and 22.1.3.23 read a
@@ -5687,6 +5705,10 @@ impl RegisterVM {
         clippy::too_many_arguments,
         reason = "a clause of 22.2.6 runs where a call does, with what a call has"
     )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function carries a clause of 22.2.6 across the reads it makes"
+    )]
     fn run_regexp_clause(
         &mut self,
         intrinsic: Intrinsic,
@@ -5702,38 +5724,48 @@ impl RegisterVM {
             .ok_or(VMError::Heap(HeapError::InvalidReference))?;
         let receiver = promise::slot(heap, record, REGEXP_RECORD_RECEIVER);
         let object = receiver.as_object().ok_or(VMError::TypeError)?;
-        // Steps 2 and 5 convert the two arguments, before step 6 reads the
-        // flags; an Object in either place is a gap and not an answer.
+        // Step 2 of 22.2.6.11 and of 22.2.6.16 converts the String, and step 5
+        // of 22.2.6.11 the replacement; an Object in either place is a gap and
+        // not an answer.
         let text = property_name_units(self.call_argument(&call, 0, heap)?, heap, realm)?;
-        let replacement = self.call_argument(&call, 1, heap)?;
-        if Self::is_callable(replacement, heap) {
-            return Err(VMError::Unsupported("a replace value that is callable"));
-        }
-        let replacement = property_name_units(replacement, heap, realm)?;
-        let key = PropertyKey::String(heap.strings.intern("flags")?);
-        let flags = match self.cached_property(
-            record,
-            REGEXP_RECORD_FLAGS,
-            key,
-            intrinsic,
-            state,
-            &call,
-            units,
-            active_feedback,
-            heap,
-            realm,
-        )? {
-            Cached::Value(value) => value,
-            Cached::Entered(entered) => return Ok(entered),
+        let replaces = intrinsic == Intrinsic::RegExpPrototypeReplace;
+        let replacement = if replaces {
+            let replacement = self.call_argument(&call, 1, heap)?;
+            if Self::is_callable(replacement, heap) {
+                return Err(VMError::Unsupported("a replace value that is callable"));
+            }
+            property_name_units(replacement, heap, realm)?
+        } else {
+            Vec::new()
         };
-        let flags = property_name_units(flags, heap, realm)?;
+        let key = PropertyKey::String(heap.strings.intern("flags")?);
+        let flags = if replaces {
+            match self.cached_property(
+                record,
+                REGEXP_RECORD_FLAGS,
+                key,
+                intrinsic,
+                state,
+                &call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            )? {
+                Cached::Value(value) => property_name_units(value, heap, realm)?,
+                Cached::Entered(entered) => return Ok(entered),
+            }
+        } else {
+            Vec::new()
+        };
         let global = flags.contains(&u16::from(b'g'));
         // Step 8 sets `lastIndex` before 22.2.7.1 reads `exec`, and runs once
-        // however often the clause runs.
-        if promise::slot(heap, record, REGEXP_RECORD_PHASE)
-            .as_smi()
-            .unwrap_or(0)
-            == 0
+        // however often the clause runs. 22.2.6.16 sets none.
+        if replaces
+            && promise::slot(heap, record, REGEXP_RECORD_PHASE)
+                .as_smi()
+                .unwrap_or(0)
+                == 0
         {
             if global {
                 Self::set_last_index(object, Value::from_smi(0), heap, realm)?;
@@ -5758,24 +5790,84 @@ impl RegisterVM {
             Cached::Value(value) => value,
             Cached::Entered(entered) => return Ok(entered),
         };
-        if !Self::is_intrinsic(exec, Intrinsic::RegExpPrototypeExec, heap) {
+        // 22.2.7.1 step 2 calls an `exec` the object carries where it is
+        // callable, and takes an Object or null from it.
+        let own_exec = Self::is_callable(exec, heap)
+            && !Self::is_intrinsic(exec, Intrinsic::RegExpPrototypeExec, heap);
+        if intrinsic == Intrinsic::RegExpPrototypeTest && own_exec {
+            let held = promise::slot(heap, record, REGEXP_RECORD_RESULT);
+            if held == VALUE_UNINITIALIZED {
+                if !Self::is_script_function(exec, heap) {
+                    return Err(VMError::Unsupported("an exec of a native function"));
+                }
+                promise::set_slot(
+                    heap,
+                    record,
+                    REGEXP_RECORD_PENDING,
+                    Value::from_smi(i32::try_from(REGEXP_RECORD_RESULT).unwrap_or(0)),
+                )?;
+                let text = self.allocate_string(heap, &text)?;
+                let value = heap.push_root(text)?;
+                let exec_call = Call {
+                    receiver,
+                    func: call.arg_start,
+                    arg_start: call.arg_start,
+                    arg_count: 1,
+                    slot: 0,
+                    resume: Some(Resume::Property {
+                        intrinsic: intrinsic.id(),
+                        state,
+                        value,
+                        arg_start: call.arg_start,
+                        arg_count: call.arg_count,
+                    }),
+                    construct: None,
+                    return_pc: call.return_pc,
+                    caller_code_id: call.caller_code_id,
+                    coerced: 0,
+                };
+                return self.enter_call_value(exec, units, active_feedback, heap, realm, exec_call);
+            }
+            // Step 2.b refuses everything but an Object and null.
+            if held.as_object().is_none() && !held.is_null() {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "the exec of a RegExp answered neither an Object nor null",
+                ));
+            }
+            self.acc = Value::from_bool(!held.is_null());
+            if let Some(target) = call.construct {
+                self.write_construction(target, self.acc, heap)?;
+            }
+            return Ok(None);
+        }
+        if own_exec {
             return Err(VMError::Unsupported("an exec of the Script"));
         }
+        // Step 3 of 22.2.7.1: an `exec` that is not callable leaves the read
+        // for 22.2.7.2, which takes a RegExp and no other object.
         // Step 2 of 22.2.7.1: the `exec` of this Realm answers for the
         // pattern the object carries, which every step after this one reads.
         let pattern = Self::regexp_pattern(object, heap)
             .ok_or_else(|| type_error(heap, realm, "this value is not a RegExp"))?;
         let unicode = flags.contains(&u16::from(b'u')) || flags.contains(&u16::from(b'v'));
-        self.acc = self.replace_matches(
-            object,
-            &pattern,
-            &text,
-            &replacement,
-            global,
-            unicode,
-            heap,
-            realm,
-        )?;
+        self.acc = if intrinsic == Intrinsic::RegExpPrototypeTest {
+            // 22.2.6.16 step 4 answers whether 22.2.7.2 found a match.
+            let matched = self.regexp_exec(object, &pattern, &text, heap, realm)?;
+            Value::from_bool(matched.is_some())
+        } else {
+            self.replace_matches(
+                object,
+                &pattern,
+                &text,
+                &replacement,
+                global,
+                unicode,
+                heap,
+                realm,
+            )?
+        };
         if let Some(target) = call.construct {
             self.write_construction(target, self.acc, heap)?;
         }
@@ -5826,9 +5918,12 @@ impl RegisterVM {
             REGEXP_RECORD_PENDING,
             Value::from_smi(i32::try_from(slot).unwrap_or(0)),
         )?;
+        // A getter takes no argument, so the root the call would pass names
+        // the record itself, which the frame never reads.
         self.accessor_resume = Some(Resume::Property {
             intrinsic: intrinsic.id(),
             state,
+            value: state,
             arg_start: call.arg_start,
             arg_count: call.arg_count,
         });
@@ -5868,6 +5963,7 @@ impl RegisterVM {
             state,
             arg_start,
             arg_count,
+            ..
         } = resume
         else {
             return Ok(None);
@@ -12167,7 +12263,8 @@ impl RegisterVM {
         } else if let Some(
             Resume::Setter { value }
             | Resume::Answered { value, .. }
-            | Resume::Element { value, .. },
+            | Resume::Element { value, .. }
+            | Resume::Property { value, .. },
         ) = frame.resume
         {
             if count > 0 {
