@@ -383,8 +383,7 @@ fn malformed_source_is_rejected_before_execution() {
         "true ?? false || 1",
         "false && null ?? 1",
         "class X{constructor(){} constructor(){}}",
-        "let ä=1",
-        "let \\u0061=1",
+        "let \\u0020=1",
         "@",
         "return 1",
     ] {
@@ -661,7 +660,7 @@ fn unsupported_syntax_is_distinct_from_syntax_errors() {
         "let x={async *g(){}}",
         "let x={async *g(){}}",
         "label: function f(){}",
-        "let café=1",
+        "let \\u0069f=1",
     ] {
         assert!(
             matches!(

@@ -271,19 +271,8 @@ impl Lexer<'_> {
             let word = self.source.get(start..self.at).unwrap_or_default();
             return Ok(Kind::Private(String::from(word)));
         }
-        if identifier_start(ch) {
-            let start = self.at;
-            self.bump();
-            while self.peek().is_some_and(identifier_part) {
-                self.bump();
-            }
-            let word = self.source.get(start..self.at).unwrap_or_default();
-            return Ok(match word {
-                "true" => Kind::Literal(Value::Boolean(true)),
-                "false" => Kind::Literal(Value::Boolean(false)),
-                "null" => Kind::Literal(Value::Null),
-                _ => Kind::Word(String::from(word)),
-            });
+        if identifier_start(ch) || (ch == '\\' && self.rest().chars().nth(1) == Some('u')) {
+            return self.identifier();
         }
         // Longest match. Unsupported operators remain whole tokens and cannot
         // accidentally be interpreted as a sequence of supported operators.
@@ -430,6 +419,79 @@ impl Lexer<'_> {
         }
     }
 
+    /// `IdentifierName` of 12.7.1, whose characters a `\u` escape may name.
+    ///
+    /// 12.7.1 reads the escape as the character it stands for, so a reserved
+    /// word written with one is that word and no name; this lexer answers the
+    /// gap for it rather than the word.
+    fn identifier(&mut self) -> Result<Kind, Error> {
+        let mut text = String::new();
+        let mut escaped = false;
+        loop {
+            let first = text.is_empty();
+            match self.peek() {
+                Some('\\') => {
+                    self.bump();
+                    if self.bump() != Some('u') {
+                        return Err(self.error("invalid escape in an identifier"));
+                    }
+                    escaped = true;
+                    let code = if self.peek() == Some('{') {
+                        self.bump();
+                        let mut code = 0u32;
+                        while self.peek() != Some('}') {
+                            code = code
+                                .checked_mul(16)
+                                .and_then(|value| value.checked_add(self.hex(1).ok()?))
+                                .filter(|value| *value <= 0x10_ffff)
+                                .ok_or_else(|| self.error("invalid Unicode escape"))?;
+                        }
+                        self.bump();
+                        code
+                    } else {
+                        self.hex(4)?
+                    };
+                    let ch =
+                        char::from_u32(code).ok_or_else(|| self.error("invalid Unicode escape"))?;
+                    if !(if first {
+                        identifier_start(ch)
+                    } else {
+                        identifier_part(ch)
+                    }) {
+                        return Err(self.error("an escape that is no part of a name"));
+                    }
+                    text.push(ch);
+                }
+                Some(ch) if (first && identifier_start(ch)) || (!first && identifier_part(ch)) => {
+                    self.bump();
+                    text.push(ch);
+                }
+                _ => break,
+            }
+        }
+        if escaped {
+            // 12.7.2: a reserved word an escape writes is that word, which
+            // stands where no name may.
+            // 12.7.2 and the contextual words of 13.1: an escape writes the
+            // word, and the word stands where this lexer answers a name.
+            if reserved_word(&text)
+                || matches!(
+                    text.as_str(),
+                    "async" | "get" | "set" | "of" | "as" | "from" | "target" | "accessor"
+                )
+            {
+                return Err(Self::unsupported("an escaped keyword"));
+            }
+            return Ok(Kind::Word(text));
+        }
+        Ok(match text.as_str() {
+            "true" => Kind::Literal(Value::Boolean(true)),
+            "false" => Kind::Literal(Value::Boolean(false)),
+            "null" => Kind::Literal(Value::Null),
+            _ => Kind::Word(text),
+        })
+    }
+
     fn hex(&mut self, count: usize) -> Result<u32, Error> {
         let mut value = 0u32;
         for _ in 0..count {
@@ -553,9 +615,83 @@ impl Lexer<'_> {
 
 // Full Unicode ID_Start/ID_Continue and escaped identifiers are deliberately
 // not approximated by Rust's alphabetic predicate. They are not supported yet.
-const fn identifier_start(ch: char) -> bool {
-    ch.is_ascii_alphabetic() || matches!(ch, '_' | '$')
+/// Whether the text is one of the words 12.7.2 reserves, which no name is.
+fn reserved_word(text: &str) -> bool {
+    matches!(
+        text,
+        "await"
+            | "break"
+            | "case"
+            | "catch"
+            | "class"
+            | "const"
+            | "continue"
+            | "debugger"
+            | "default"
+            | "delete"
+            | "do"
+            | "else"
+            | "enum"
+            | "export"
+            | "extends"
+            | "false"
+            | "finally"
+            | "for"
+            | "function"
+            | "if"
+            | "import"
+            | "in"
+            | "instanceof"
+            | "new"
+            | "null"
+            | "return"
+            | "super"
+            | "switch"
+            | "this"
+            | "throw"
+            | "true"
+            | "try"
+            | "typeof"
+            | "var"
+            | "void"
+            | "while"
+            | "with"
+            | "yield"
+            | "let"
+            | "static"
+            | "implements"
+            | "interface"
+            | "package"
+            | "private"
+            | "protected"
+            | "public"
+    )
 }
-const fn identifier_part(ch: char) -> bool {
-    identifier_start(ch) || ch.is_ascii_digit()
+
+/// `IdentifierStartChar` of 12.7.1, which is `ID_Start` beside `$` and `_`.
+///
+/// Every character a Unicode letter is, is one; the categories `Nl` and
+/// `Other_ID_Start` that `ID_Start` adds to them carry no character this
+/// lexer answers for.
+fn identifier_start(ch: char) -> bool {
+    ch.is_ascii_alphabetic()
+        || matches!(ch, '_' | '$')
+        || (!ch.is_ascii() && ch.is_alphabetic())
+        // `Other_ID_Start`, which names six characters no category of letters
+        // carries.
+        || matches!(
+            ch,
+            '\u{1885}' | '\u{1886}' | '\u{2118}' | '\u{212e}' | '\u{309b}' | '\u{309c}'
+        )
+}
+
+/// `IdentifierPartChar` of 12.7.1, which is `ID_Continue` beside `$`, the
+/// zero-width non-joiner and the zero-width joiner.
+fn identifier_part(ch: char) -> bool {
+    identifier_start(ch)
+        || ch.is_ascii_digit()
+        || matches!(ch, '\u{200c}' | '\u{200d}')
+        || (!ch.is_ascii() && ch.is_alphanumeric())
+        // `Other_ID_Continue`, which names five more.
+        || matches!(ch, '\u{b7}' | '\u{387}' | '\u{1369}'..='\u{1371}' | '\u{19da}')
 }
