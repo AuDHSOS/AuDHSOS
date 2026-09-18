@@ -420,6 +420,9 @@ pub struct Writer {
     /// The moment `now` names, as the seconds since 1970, and nothing
     /// where the caller told the connection none.
     clock: Option<i64>,
+    /// The page size a `PRAGMA page_size` named after the first table
+    /// was made, which the next `VACUUM` writes the file under.
+    wanted_page: Option<u32>,
     /// What the connection was told for each pragma of
     /// [`crate::pragma::HELD`], where it was told one.
     kept: Vec<Option<i64>>,
@@ -511,6 +514,7 @@ impl Writer {
             nonce: 0,
             random: crate::random::Source::default(),
             clock: None,
+            wanted_page: None,
             kept: alloc::vec![None; crate::pragma::HELD.len()],
             running: Vec::new(),
             sector: SECTOR,
@@ -578,6 +582,7 @@ impl Writer {
             nonce: 0,
             random: crate::random::Source::default(),
             clock: None,
+            wanted_page: None,
             kept: alloc::vec![None; crate::pragma::HELD.len()],
             running: Vec::new(),
             sector: SECTOR,
@@ -1406,6 +1411,12 @@ impl Writer {
     ///
     /// [`Error::Unsupported`] for a pragma no header of a file holds.
     fn pragma_read(&self, setting: crate::pragma::Setting) -> Result<Vec<Vec<Value>>, Error> {
+        // `sqlite3Pragma` answers no row for a name it does not know, and
+        // the names this crate accepts and holds nothing for are the ones
+        // no version of the library holds either.
+        if setting == crate::pragma::Setting::Ignored {
+            return Ok(Vec::new());
+        }
         if setting == crate::pragma::Setting::CountChanges {
             return Ok(alloc::vec![alloc::vec![Value::Int(i64::from(
                 self.counting
@@ -1466,6 +1477,182 @@ impl Writer {
             Value::Int(counted),
             Value::Int(counted)
         ]]
+    }
+
+    /// `VACUUM`: the database is made again from nothing, with every
+    /// table and index of the schema made in the order the schema holds
+    /// them and every row written under the key it had, which is
+    /// `sqlite3RunVacuum` running `INSERT INTO vacuum_db.x SELECT * FROM
+    /// main.x` per table.
+    ///
+    /// The file the statement leaves holds the rows in the order of
+    /// their keys and no free page, which is what a vacuum is for. It
+    /// costs O(n) in the rows of the database and O(k log n) in the
+    /// entries of its indexes.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::VacuumInTransaction`] where the connection has a
+    /// transaction open, [`Error::NoSchema`] for a schema this
+    /// connection does not hold, and [`Error::Unsupported`] for
+    /// `VACUUM INTO`, which writes a file this crate hands no caller.
+    fn vacuum(&mut self, asked: &crate::ast::Vacuum, sql: &[u8]) -> Result<(), Error> {
+        if asked.into.is_some() {
+            return Err(Error::Unsupported);
+        }
+        if let Some(schema) = asked.schema {
+            let named = crate::schema::dequote(schema.text(sql));
+            if !named.eq_ignore_ascii_case(b"main") && !named.eq_ignore_ascii_case(b"temp") {
+                return Err(Error::NoSchema(named));
+            }
+        }
+        if self.began.is_some() {
+            return Err(Error::VacuumInTransaction);
+        }
+        let bytes = self.image();
+        let held = self.header;
+        let size = self.wanted_page.unwrap_or(held.page_size);
+        let mut fresh = Writer::new(size, held.reserved, held.encoding)?;
+        fresh.defines(self.defined);
+        fresh.collates(self.collating);
+        fresh.kept.clone_from(&self.kept);
+        // `sqlite3RunVacuum` writes the new file as the old one was: the
+        // pages it keeps for the free list it points at, and the numbers
+        // the header carries for the application.
+        if held.largest_root != 0 {
+            fresh.vacuuming(held.incremental_vacuum != 0);
+        }
+        fresh.making_own = true;
+        let schema = self.schema_of(&bytes)?;
+        let database = self.reading(&bytes)?;
+        for made in &schema {
+            // A table the engine writes for itself is there already
+            // where a table of the schema made it, which
+            // `sqlite_sequence` is for a key that counts up.
+            let makes = made.kind == b"table" || made.kind == b"index";
+            if makes && !fresh.holds(&made.name)? {
+                fresh.run(&made.statement)?;
+            }
+        }
+        for made in &schema {
+            if made.kind != b"table" {
+                continue;
+            }
+            let rows = database.held_rows_of(&made.name)?;
+            fresh.put_rows(&made.name, &rows)?;
+        }
+        for made in &schema {
+            if made.kind == b"view" || made.kind == b"trigger" {
+                fresh.run(&made.statement)?;
+            }
+        }
+        fresh.making_own = false;
+        drop(database);
+        self.pages = fresh.pages;
+        self.header.page_size = fresh.header.page_size;
+        self.header.pages = fresh.header.pages;
+        self.header.freelist = fresh.header.freelist;
+        self.header.freelist_pages = fresh.header.freelist_pages;
+        self.header.largest_root = fresh.header.largest_root;
+        self.header.schema_cookie = held.schema_cookie.saturating_add(1);
+        self.header.change_counter = held.change_counter.saturating_add(1);
+        self.header.version_valid_for = self.header.change_counter;
+        Ok(())
+    }
+
+    /// The rows of the schema, in the order the schema tree holds them:
+    /// what each row makes, the name it makes it under, and the
+    /// statement that made it.
+    ///
+    /// A row whose statement is empty is an index a `PRIMARY KEY` or a
+    /// `UNIQUE` made, which the table's own statement makes again.
+    /// Reading them costs O(n) in the rows of the schema.
+    ///
+    /// # Errors
+    ///
+    /// Whatever reading the schema tree refuses.
+    fn schema_of(&self, bytes: &[u8]) -> Result<Vec<Made>, Error> {
+        let image = crate::image::Image::open(bytes)?;
+        let mut out = Vec::new();
+        let mut payload = Vec::new();
+        for row in image.schema() {
+            let row = row?;
+            payload.clear();
+            payload.resize(row.payload.total, 0);
+            image.read_payload(&row.payload, &mut payload)?;
+            let record = crate::record::Record::parse(&payload)?;
+            let text = |at: usize| -> Result<Vec<u8>, Error> {
+                Ok(match record.value(at)? {
+                    Some(crate::record::Value::Text(bytes)) => {
+                        crate::value::decoded(bytes, self.header.encoding)
+                    }
+                    _ => Vec::new(),
+                })
+            };
+            let statement = text(4)?;
+            if statement.is_empty() {
+                continue;
+            }
+            out.push(Made {
+                kind: text(0)?,
+                name: text(1)?,
+                statement,
+            });
+        }
+        Ok(out)
+    }
+
+    /// The rows of a table written into the tree of the table and into
+    /// every index over it, each under the key it carries, with no
+    /// constraint read and no trigger run.
+    ///
+    /// `sqlite3RunVacuum` writes the rows of a table into the file it
+    /// makes this way. Writing n rows costs O(n log n) in the rows and
+    /// O(k n log n) in the entries of k indexes.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoTable`] where the file holds no such table, and
+    /// whatever writing a row refuses.
+    fn put_rows(&mut self, name: &[u8], rows: &[crate::db::Reading]) -> Result<(), Error> {
+        let bytes = self.image();
+        let (table, root, kept) = {
+            let database = self.reading(&bytes)?;
+            let (table, root) = database.table(name).ok_or(Error::NoTable(Vec::new()))?;
+            (table.clone(), root, kept_indexes(&database, name))
+        };
+        let affinities = ordered_affinities(&table);
+        for (key, values) in rows {
+            self.index_row(&kept, &table, values, key)?;
+            if table.without_rowid {
+                let record = crate::record::write_in(
+                    &ordered(&table, values),
+                    &affinities,
+                    4,
+                    self.header.encoding,
+                );
+                let collations = crate::schema::key_collations(&table);
+                let order = ordering(&collations, self.header.encoding);
+                crate::tree::insert_entry(&mut self.pages, root, &record, key, order, false)?;
+                continue;
+            }
+            let mut held = values.clone();
+            for slot in held
+                .iter_mut()
+                .skip(table.rowid_alias.unwrap_or(usize::MAX))
+                .take(1)
+            {
+                *slot = Value::Null;
+            }
+            let record = crate::record::write_in(
+                &ordered(&table, &held),
+                &affinities,
+                4,
+                self.header.encoding,
+            );
+            insert(&mut self.pages, root, keyed_rowid(key), &record)?;
+        }
+        Ok(())
     }
 
     /// The database `bytes` hold, told what this connection was told:
@@ -2019,6 +2206,12 @@ impl Writer {
             return Ok(Vec::new());
         }
         if self.header.schema_cookie != 0 && setting != crate::pragma::Setting::JournalMode {
+            // `sqlite3BtreeSetPageSize` keeps the size the pragma named
+            // for the next `VACUUM`, which is the only thing that can
+            // write the file again under another size.
+            if setting == crate::pragma::Setting::PageSize {
+                self.wanted_page = crate::pragma::whole_number(text);
+            }
             return Ok(Vec::new());
         }
         match setting {
@@ -3163,6 +3356,7 @@ impl Writer {
                 return self.drop_constraint(arena, &asked, sql);
             }
             Definition::Trigger(trigger) => return self.create_trigger(arena, &trigger, sql),
+            Definition::Vacuum(asked) => return self.vacuum(&asked, sql),
             Definition::Table(table) => {
                 if let TableBody::Select(select) = table.body {
                     return self.create_as(arena, &table, select, sql);
@@ -3274,9 +3468,13 @@ impl Writer {
     ///
     /// Whatever making the table refuses.
     fn own_table(&mut self, sql: &[u8]) -> Result<(), Error> {
+        // A `VACUUM` writes the tables of the schema with this flag
+        // already set, and one of them may make a table of its own, so
+        // the flag is left as it was found.
+        let held = self.making_own;
         self.making_own = true;
         let made = self.ran(sql);
-        self.making_own = false;
+        self.making_own = held;
         made.map(|_| ())
     }
 
@@ -5659,6 +5857,17 @@ fn writes_one(
 /// the body where the statement runs, so the count is the frames the
 /// stack holds and is bounded the way a view that names itself is.
 const TRIGGER_DEPTH: usize = 32;
+
+/// One row of the schema: what it makes, the name it makes it under, and
+/// the statement that made it.
+struct Made {
+    /// `table`, `index`, `view` or `trigger`.
+    kind: Vec<u8>,
+    /// The name it makes.
+    name: Vec<u8>,
+    /// The statement that made it.
+    statement: Vec<u8>,
+}
 
 /// What an `INSERT` writes.
 struct Inserting {

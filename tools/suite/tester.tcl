@@ -520,6 +520,28 @@ proc set_test_counter {args} { return 0 }
 # which this engine has none of.
 proc test_set_config_pagecache {args} { return 0 }
 
+# md5 and md5file of test_md5.c: the digest of RFC 1321 over a text and
+# over a file the harness holds.
+proc md5 {text} { return [lindex [harness_send md5 $text] 0] }
+proc md5file {name} { return [lindex [harness_send md5file $name] 0] }
+
+# cksum of the suite's own tester: one state of a database as a text, so
+# that two states are held against each other.
+proc cksum {{db db}} {
+  set txt [$db eval {
+      SELECT name, type, sql FROM sqlite_master order by name
+  }]\n
+  foreach tbl [$db eval {
+      SELECT name FROM sqlite_master WHERE type='table' order by name
+  }] {
+    append txt [$db eval "SELECT * FROM $tbl"]\n
+  }
+  foreach prag {default_synchronous default_cache_size} {
+    append txt $prag-[$db eval "PRAGMA $prag"]\n
+  }
+  return [string length $txt]-[md5 $txt]
+}
+
 # hexio_read, hexio_write and the three that read or write a number of
 # test_hexio.c: the bytes of a file the harness holds, as capital
 # hexadecimal digits.

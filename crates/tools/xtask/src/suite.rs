@@ -267,7 +267,7 @@ const LOOPING: usize = 5000;
 
 /// The capabilities an `ifcapable` may name that this engine does not
 /// have. Every other name is answered as held.
-const MISSING: [&str; 22] = [
+const MISSING: [&str; 21] = [
     "vtab",
     "fts1",
     "fts2",
@@ -282,7 +282,6 @@ const MISSING: [&str; 22] = [
     "crashtest",
     "codec",
     "atomicwrite",
-    "vacuum",
     "attach",
     "explain",
     "autovacuum",
@@ -724,6 +723,10 @@ impl Session {
                 Ok(Vec::new())
             }
             "exists" => Ok(vec![usize::from(self.sized(first).is_some()).to_string()]),
+            // `md5` and `md5file` of `test_md5.c`: the digest of a text
+            // and the digest of a file the harness holds.
+            "md5" => Ok(vec![crate::md5::digest(first.as_bytes())]),
+            "md5file" => self.digest_of(first),
             // `hexio_read` and `hexio_write` of `test_hexio.c`: the
             // bytes of a file this harness holds, read out as
             // hexadecimal digits and written back from them.
@@ -936,6 +939,16 @@ impl Session {
             usize::from(found.key != 0 || alias).to_string(),
             usize::from(alias && held.autoincrement).to_string(),
         ])
+    }
+
+    /// `md5file`: the digest of the file the harness holds under `name`.
+    ///
+    /// Reading it costs O(n) in the bytes of the file.
+    fn digest_of(&self, name: &str) -> Result<Vec<String>, String> {
+        let bytes = self
+            .bytes_of(name)
+            .ok_or_else(|| format!("cannot open input file {name}"))?;
+        Ok(vec![crate::md5::digest(&bytes)])
     }
 
     /// The bytes the harness holds under `name`: the database itself,

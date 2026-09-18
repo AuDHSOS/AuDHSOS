@@ -396,7 +396,11 @@ pub fn of_name(name: &[u8]) -> Option<Setting> {
         b"foreign_key_list" => Setting::ForeignKeyList,
         b"foreign_key_check" => Setting::ForeignKeyCheck,
         b"wal_checkpoint" => Setting::WalCheckpoint,
-        b"legacy_file_format"
+        // `PRAGMA default_synchronous` is a pragma no version of the
+        // library still holds, and `sqlite3Pragma` answers no row for a
+        // name it does not know.
+        b"default_synchronous"
+        | b"legacy_file_format"
         | b"legacy_alter_table"
         | b"empty_result_callbacks"
         | b"cache_spill"

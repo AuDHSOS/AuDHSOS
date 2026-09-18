@@ -25,6 +25,7 @@ same rule and for the same reason (D-100).
 | `rfc1035.txt` | RFC 1035, *Domain Names — Implementation and Specification*, P. Mockapetris, November 1987 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc1035.txt` | 122549 | `d14ae809fc9b41bbcae26bb38c937c9515808b944f3252b00de9fe0e95f4fdfb` |
 | `rfc1071.txt` | RFC 1071, *Computing the Internet Checksum*, R. Braden, D. Borman, C. Partridge, September 1988 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc1071.txt` | 53524 | `e10dfd6816447843d47a7f1b990eba756a791a6308fd5b698a6276075a8e4f9b` |
 | `rfc1122.txt` | RFC 1122, *Requirements for Internet Hosts — Communication Layers*, R. Braden (ed.), October 1989 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc1122.txt` | 289148 | `9f526e6bebc868324fedb90aebbcf6e5b15c53fd373ca5d5ce1c2cdcd264e04f` |
+| `rfc1321.txt` | RFC 1321, *The MD5 Message-Digest Algorithm*, R. Rivest, April 1992 | 2026-09-18 from `https://www.rfc-editor.org/rfc/rfc1321.txt` | 35222 | `284a79d148400d9cd2a423211d1103b5cef0fb9256a4cbe6d7ebe5197c3149dd` |
 | `rfc1950.txt` | RFC 1950, *ZLIB Compressed Data Format Specification version 3.3*, P. Deutsch, J-L. Gailly, May 1996 | 2026-09-07 from `https://www.rfc-editor.org/rfc/rfc1950.txt` | 20502 | `8f0475a5c984657bf26277f73df9456c9b97f175084f0c1748f1eb1f0b9b10b9` |
 | `rfc1951.txt` | RFC 1951, *DEFLATE Compressed Data Format Specification version 1.3*, P. Deutsch, May 1996 | 2026-09-07 from `https://www.rfc-editor.org/rfc/rfc1951.txt` | 36944 | `5ebf4b5b7fe1c3a0c0ab9aa3ac8c0f3853a7dc484905e76e03b0b0f301350009` |
 | `rfc2104.txt` | RFC 2104, *HMAC: Keyed-Hashing for Message Authentication*, H. Krawczyk, M. Bellare, R. Canetti, February 1997 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc2104.txt` | 22297 | `64d5245a9101929025336e470e3737f118704001249d503c85a86e19fe9fbb01` |
@@ -452,6 +453,22 @@ value it hands out text and not bytes; the case-insensitive comparison of
 field names in section 5.1; and the status classes of section 15, of which
 the five redirects a client may follow are 301, 302, 303, 307 and 308 and
 not the whole 3xx range.
+
+## The one document of MD5
+
+**RFC 1321** is the digest the suite's own harness answers `md5` with.
+Section 3 gives the five steps: the message is padded with one bit and
+then zero bits until its length is 448 modulo 512, the length in bits is
+appended as two 32-bit words low word first, the four words A, B, C and D
+start at 0x67452301, 0xefcdab89, 0x98badcfe and 0x10325476, and each
+512-bit block runs four rounds of sixteen operations over the auxiliary
+functions F, G, H and I. Section 3.4 carries the table of 64 sine
+constants and the shift amounts of each round, and section A.5 the seven
+test digests, which the harness holds against its own.
+
+The digest is a checksum of what the engine answered and no part of the
+engine: `cksum` of the suite compares one state of a database against
+another, and a `VACUUM` is right where the two agree.
 
 ## The two documents of JSON
 

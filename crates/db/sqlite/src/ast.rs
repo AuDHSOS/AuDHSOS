@@ -811,6 +811,18 @@ pub enum Definition {
     Trigger(CreateTrigger),
     /// `DROP TABLE`, `DROP INDEX`, `DROP VIEW` and `DROP TRIGGER`.
     Drop(Drop),
+    /// `VACUUM`.
+    Vacuum(Vacuum),
+}
+
+/// `VACUUM [schema] [INTO expr]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Vacuum {
+    /// The schema the statement names, and nothing where it names none.
+    pub schema: Option<Span>,
+    /// The file `INTO` names, and nothing where the statement writes the
+    /// database it was run on.
+    pub into: Option<ExprId>,
 }
 
 /// What a `DROP` takes away.

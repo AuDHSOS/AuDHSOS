@@ -167,6 +167,10 @@ pub enum Error {
     /// A `CREATE` of a name SQLite keeps for itself, which is one that
     /// begins `sqlite_`.
     Reserved(Vec<u8>),
+    /// A statement that names a schema this connection does not hold.
+    NoSchema(Vec<u8>),
+    /// A `VACUUM` on a connection with a transaction open.
+    VacuumInTransaction,
     /// A `COMMIT` or a `ROLLBACK` on a connection with no transaction
     /// open.
     NoTransaction,
@@ -364,6 +368,10 @@ impl Error {
             }
             Error::NotIndexable(name) => {
                 alloc::format!("table {} may not be indexed", shown(name))
+            }
+            Error::NoSchema(name) => alloc::format!("unknown database {}", shown(name)),
+            Error::VacuumInTransaction => {
+                alloc::string::String::from("cannot VACUUM from within a transaction")
             }
             Error::IndexedView => alloc::string::String::from("views may not be indexed"),
             Error::ConstraintIndex => alloc::string::String::from(

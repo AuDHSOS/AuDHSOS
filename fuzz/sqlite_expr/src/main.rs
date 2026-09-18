@@ -158,6 +158,13 @@ fn walk_definition(arena: &Arena, definition: Definition) {
         // A `DROP` names a table, an index, a view or a trigger, a
         // `RENAME` names two tables and a `DROP COLUMN` names a column;
         // none of them holds an expression.
+        // `VACUUM INTO` carries one expression, which the fuzzer reads
+        // as it reads every other.
+        Definition::Vacuum(vacuum) => {
+            if let Some(into) = vacuum.into {
+                walk(arena, into, 0);
+            }
+        }
         Definition::Drop(_)
         | Definition::Rename(_)
         | Definition::DropColumn(_)

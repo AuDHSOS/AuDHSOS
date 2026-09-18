@@ -16,6 +16,7 @@ mod json;
 mod layering;
 mod linker;
 mod mcdc;
+mod md5;
 mod out;
 mod policy;
 mod ppm;

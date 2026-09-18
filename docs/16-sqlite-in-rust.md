@@ -841,6 +841,9 @@ Size: L.
 66. The moment `now` names, which the caller tells the connection.
     Built, which D-303 records. `localtime` is still refused, because
     the rules of a time zone are what it needs.
+67. `VACUUM`, which makes the database again from nothing. Built, which
+    D-305 records. `VACUUM INTO` writes a file this crate hands no
+    caller and is refused.
 
 ### Done when
 

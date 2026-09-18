@@ -65,6 +65,7 @@ mod tree;
 mod upfrom;
 mod upsert;
 mod utf8;
+mod vacuum;
 mod value;
 mod wal;
 mod window;

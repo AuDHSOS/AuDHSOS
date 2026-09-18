@@ -7,6 +7,20 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` answers `VACUUM`, which makes the database again from
+  nothing: every table and index of the schema in the order the schema
+  holds them, every row under the key it had, and then the views and the
+  triggers. D-305 records it. Catalog 6.6.206. SQLite's vacuum files
+  answer 146 cases where `ifcapable vacuum` skipped every one.
+
+- `db-sqlite` answers no row for a pragma no version of the library
+  holds, rather than refusing it. D-306 records it, amending the scope of
+  D-202.
+
+- The suite's own harness answers `md5` and `md5file` with the digest of
+  RFC 1321, whose document is now under `docs/rfc/`, and the tester
+  carries `cksum`. D-307 records it.
+
 - The suite's own harness rolls back the transaction of a file when a
   connection over it closes, which `sqlite3_close` does, so a case that
   ended inside a transaction no longer refuses every `BEGIN` after it.

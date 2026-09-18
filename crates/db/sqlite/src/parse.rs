@@ -1148,6 +1148,9 @@ impl<'a> Parser<'a> {
         if self.eat_keyword(Keyword::Alter) {
             return self.alter_table();
         }
+        if self.eat_keyword(Keyword::Vacuum) {
+            return Ok(Definition::Vacuum(self.vacuum()?));
+        }
         self.expect_keyword(Keyword::Create, Expected::Create)?;
         let temporary = self.at_temporary();
         if temporary {
@@ -1165,6 +1168,24 @@ impl<'a> Parser<'a> {
         let unique = self.eat_keyword(Keyword::Unique);
         self.expect_keyword(Keyword::Index, Expected::Table)?;
         Ok(Definition::Index(self.create_index(unique)?))
+    }
+
+    /// `VACUUM [schema] [INTO expr]`, with the word already read.
+    fn vacuum(&mut self) -> Result<crate::ast::Vacuum, Error> {
+        // The schema is a name and `INTO` is a word, so the token after
+        // `VACUUM` says which of the two stands there, and a statement
+        // that ends after the word names neither.
+        let named = self.peek().is_some_and(|token| match token.kind {
+            Kind::Id | Kind::String => true,
+            Kind::Keyword(keyword) => keyword != Keyword::Into && keyword.can_be_name(),
+            _ => false,
+        });
+        let schema = named.then(|| self.name()).transpose()?;
+        let into = self
+            .eat_keyword(Keyword::Into)
+            .then(|| self.expression())
+            .transpose()?;
+        Ok(crate::ast::Vacuum { schema, into })
     }
 
     /// Whether `TEMP` or `TEMPORARY` stands here as the word and not as

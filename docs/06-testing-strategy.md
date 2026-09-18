@@ -5990,3 +5990,22 @@ Document 16 step Q8.
   `date` and `datetime` of the clock.
 - A connection told no clock refuses the three literals and answers
   nothing for `now`.
+
+### 6.6.206 What a `VACUUM` leaves (`db-sqlite`)
+
+Document 16 step Q8.
+
+- The rows, the indexes, the views and the triggers of a database stand
+  after a `VACUUM`, and the file holds no free page and answers
+  `PRAGMA integrity_check` with `ok`.
+- A row the vacuum wrote fires no trigger, so a log table holds only the
+  rows the statements before the vacuum wrote.
+- A `PRAGMA page_size` written after the first table changes nothing
+  until the vacuum runs, and the file the vacuum wrote holds that size.
+- A table without a rowid keeps its rows under their keys, and a key that
+  counts up keeps the counter it reached, so the next key is past the one
+  a delete took away.
+- A `VACUUM` inside a transaction, one that names a schema the connection
+  does not hold, and `VACUUM INTO` are each refused.
+- A pragma no version of the library holds answers no row when read and
+  when set, and a name this crate holds nothing for at all is refused.
