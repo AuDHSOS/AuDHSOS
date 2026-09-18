@@ -9354,6 +9354,35 @@ fn a_capability_of_27_2_1_5_constructs_a_constructor_of_the_script() -> Result<(
 }
 
 #[test]
+fn a_combinator_of_27_2_4_runs_on_a_constructor_of_the_script() -> Result<(), Error> {
+    // 27.2.4.1 step 1 takes the constructor it was called on, 27.2.1.5 makes
+    // the capability with it, and `GetPromiseResolve` reads its `resolve`,
+    // which step 4.i calls for every element.
+    let made = "var l=[];function C(e){e(function(v){l.push('r'+(Array.isArray(v)?v.join(','):v))},function(x){l.push('x'+(x instanceof TypeError?'T':x))})};C.resolve=function(v){return Promise.resolve(v)};";
+    for source in [
+        "Promise.all.call(C,[1,2]);l.join('|')",
+        "Promise.all.call(C,[]);l.join('|')",
+        "Promise.race.call(C,[1]);l.join('|')",
+        "Promise.allSettled.call(C,[]);l.join('|')",
+        // Step 4.u invokes the `then` of what the `resolve` answered, which a
+        // thenable of the Script carries.
+        "C.resolve=function(v){return {then:function(f,r){f(v)}}};Promise.all.call(C,[7]);l.join('|')",
+        "C.resolve=function(v){return {then:function(f,r){r('e')}}};Promise.all.call(C,[7]);l.join('|')",
+        "C.resolve=function(v){return {then:function(f,r){f(v)}}};Promise.race.call(C,[7]);l.join('|')",
+        // Step 3 refuses a `resolve` that is not callable, and a throw of the
+        // `resolve` rejects the capability rather than reaching the caller.
+        "C.resolve=5;Promise.all.call(C,[1]);l.join('|')",
+        "C.resolve=function(){throw 'b'};Promise.all.call(C,[1]);l.join('|')",
+        // 27.2.4.1 step 2 lets what the constructor throws reach the caller.
+        "var r;try{Promise.all.call(function(){throw new RangeError('q')},[1])}catch(e){r=e.message};r",
+    ] {
+        let source = alloc::format!("{made}{source}");
+        differential(&source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn the_engine_names_the_parts_of_clause_27_it_has_not_built() -> Result<(), Error> {
     // 27.2.4 gives `%Promise%` five combinators and 27.2.5.3 gives the
     // prototype `finally`; a read of one of them is a gap and not undefined.

@@ -73,6 +73,15 @@ pub const GROUP_VALUES: u32 = 0;
 pub const GROUP_CAPABILITY: u32 = 1;
 /// Index of `[[RemainingElements]]` in that record.
 pub const GROUP_REMAINING: u32 = 2;
+/// Index of the constructor the combinator was called on.
+pub const GROUP_CONSTRUCTOR: u32 = 3;
+/// Index of the `resolve` `GetPromiseResolve` read off that constructor, and
+/// undefined where `%Promise.resolve%` of `%Promise%` answers without a frame.
+pub const GROUP_RESOLVE: u32 = 4;
+/// Index of the `onFulfilled` the element in flight is given.
+pub const GROUP_FULFILLED: u32 = 5;
+/// Index of its `onRejected`.
+pub const GROUP_REJECTED: u32 = 6;
 
 /// Index of the shared record in the state of one element function.
 pub const ELEMENT_GROUP: u32 = 0;
