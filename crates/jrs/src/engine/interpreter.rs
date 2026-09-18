@@ -4380,10 +4380,16 @@ impl RegisterVM {
             .map(|(key, _)| key)
             .collect();
         for key in keys {
-            let Some(found) = heap.lookup_named(source, key)? else {
-                continue;
-            };
-            let value = Self::plain_value(found)?;
+            // 10.4.2, 10.4.3 and 10.4.5 hold an own index outside the Shape,
+            // where a lookup of the chain finds nothing.
+            if heap
+                .own_named_flags(source, key)?
+                .is_some_and(|flags| flags.is_accessor)
+            {
+                return Err(VMError::Unsupported("a property that is an accessor"));
+            }
+            let indexed = Self::element_index_of(source, key, heap);
+            let value = Self::own_property_value(source, key, indexed, heap)?;
             if !Self::write_own(target, key, value, heap, realm)? {
                 return Err(type_error(
                     heap,
@@ -4406,6 +4412,12 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<bool, VMError> {
+        // 10.4.3.1 gives a String exotic object own indices and a `length`
+        // that are neither writable nor configurable, none of which a Shape
+        // carries and a lookup of the chain finds.
+        if Self::owns_string_exotic(target, key, heap)? {
+            return Ok(false);
+        }
         if let Some(found) = heap.lookup_named(target, key)? {
             if found.flags.is_accessor {
                 return Err(VMError::Unsupported("a property that is an accessor"));
@@ -6525,6 +6537,46 @@ impl RegisterVM {
             .prototype;
         Ok(prototype == realm.generator_function_prototype(heap)?
             || prototype == realm.async_generator_function_prototype(heap)?)
+    }
+
+    /// `IsRegExp` of 22.2.7.2: `@@match` decides it where the object has one,
+    /// and the `[[RegExpMatcher]]` slot otherwise.
+    fn is_a_regexp(value: Value, heap: &GenerationalHeap) -> Result<bool, VMError> {
+        let Some(object) = value.as_object() else {
+            return Ok(false);
+        };
+        let matcher = match heap.lookup_named(object, super::realm::WellKnownSymbol::Match.key())? {
+            Some(found) => Self::plain_value(found)?,
+            None => VALUE_UNDEFINED,
+        };
+        if matcher.is_undefined() {
+            return Ok(matches!(
+                heap.get_object(object).map(|entry| &entry.kind),
+                Some(&ObjectKind::RegExp { .. })
+            ));
+        }
+        Self::to_boolean(matcher, heap)
+    }
+
+    /// Step 1.b of 22.2.3.1: whether the `constructor` of the pattern is
+    /// `%RegExp%` itself.
+    fn regexp_constructor_of(
+        value: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<bool, VMError> {
+        let Some(object) = value.as_object() else {
+            return Ok(false);
+        };
+        let key = PropertyKey::String(heap.strings.intern("constructor")?);
+        let found = match heap.lookup_named(object, key)? {
+            Some(found) => Self::plain_value(found)?,
+            None => VALUE_UNDEFINED,
+        };
+        Ok(found.as_object()
+            == realm
+                .intrinsic(heap, Intrinsic::RegExpConstructor)?
+                .as_object())
     }
 
     /// `IsRegExp` of 22.2.7.2, which 22.1.3.7, 22.1.3.8 and 22.1.3.22 refuse
@@ -15497,15 +15549,25 @@ impl RegisterVM {
         name: PropertyKey,
         heap: &GenerationalHeap,
     ) -> Result<bool, VMError> {
-        if Self::string_data(object, heap).is_none() {
+        let Some(count) = Self::string_data_length(object, heap)? else {
             return Ok(false);
-        }
+        };
         // A name the Shape carries is an ordinary own property of the object,
         // which 10.4.3.1 leaves to 10.1.
         if Self::shape_holds(object, name, heap)? {
             return Ok(false);
         }
-        Ok(heap.own_named_flags(object, name)?.is_some())
+        let Some(string) = name.as_string() else {
+            return Ok(false);
+        };
+        let units = heap
+            .strings
+            .to_utf16(Value::from_string(string))
+            .unwrap_or_default();
+        if units == LENGTH_NAME {
+            return Ok(true);
+        }
+        Ok(array_index_units(&units).is_some_and(|index| index < count))
     }
 
     /// The own property 10.4.3.1 gives a String exotic object: its `length`
@@ -19969,8 +20031,13 @@ impl RegisterVM {
             .and_then(|object| Self::regexp_pattern(object, heap));
         let (source, text) = if let Some(held) = held {
             // Step 1.c: `RegExp(re)` without `new` and without flags answers
-            // the same object.
-            if call.construct.is_none() && flags.is_undefined() {
+            // the same object, where 22.2.7.2 still calls it a RegExp and its
+            // `constructor` is `%RegExp%` itself.
+            if call.construct.is_none()
+                && flags.is_undefined()
+                && Self::is_a_regexp(pattern, heap)?
+                && Self::regexp_constructor_of(pattern, heap, realm)?
+            {
                 return Ok(pattern);
             }
             let flags = if flags.is_undefined() {
