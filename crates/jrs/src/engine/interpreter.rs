@@ -7545,11 +7545,35 @@ impl RegisterVM {
             // 21.3.2.28 is floor(x + 0.5), except that it keeps the sign of a
             // zero and of every argument in [-0.5, 0).
             Intrinsic::MathRound => {
-                let rounded = Self::round_toward(value + 0.5, true);
-                if rounded == 0.0 && (value < 0.0 || value.is_sign_negative()) {
+                // Step 3 answers an integral Number as it stands, which the
+                // sum of step 6 would move where the spacing is above one.
+                let whole = if value < 0.0 {
+                    -Self::round_toward(-value, true)
+                } else {
+                    Self::round_toward(value, true)
+                };
+                #[expect(
+                    clippy::float_cmp,
+                    reason = "21.3.2.28 step 3 asks whether the two are the same Number"
+                )]
+                let integral = whole == value;
+                if integral {
+                    return Ok(value);
+                }
+                // Steps 4 and 5 name the two ranges where the sum of step 6
+                // would round to one in binary64 and the closest integer is a
+                // zero.
+                if value > 0.0 && value < 0.5 {
+                    0.0
+                } else if (-0.5..0.0).contains(&value) {
                     -0.0
                 } else {
-                    rounded
+                    let rounded = Self::round_toward(value + 0.5, true);
+                    if rounded == 0.0 && (value < 0.0 || value.is_sign_negative()) {
+                        -0.0
+                    } else {
+                        rounded
+                    }
                 }
             }
             // 21.3.2.29 answers the argument itself for either zero.
