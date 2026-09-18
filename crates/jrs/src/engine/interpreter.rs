@@ -598,6 +598,16 @@ pub enum Resume {
         /// value of the callback and the position of the next entry.
         state: Root,
     },
+    /// 23.1.3.30.1 called the comparator of a sort.
+    ///
+    /// The clause has no frame of its own, so the merge waits in a record of
+    /// the heap the collector traces, and each return takes it to its next
+    /// comparison.
+    Sort {
+        /// Root holding the record: the items, the copy they merge into, the
+        /// comparator and where the merge stands.
+        state: Root,
+    },
     /// 7.4.2 or 7.4.4 called a method of the iterable, or 23.1.2.1 step 6.c
     /// the mapper.
     ///
@@ -880,6 +890,47 @@ impl IteratorWalkTaker {
         }
     }
 }
+
+/// The items 23.1.3.30 step 3 read, in the order the merge has reached.
+const SORT_ITEMS: u32 = 0;
+/// The copy the merge writes each pass into.
+const SORT_COPY: u32 = 1;
+/// The comparator the call named.
+const SORT_COMPARATOR: u32 = 2;
+/// How many items the sort has.
+const SORT_COUNT: u32 = 3;
+/// The width of the runs the pass merges.
+const SORT_WIDTH: u32 = 4;
+/// Where the run the pass merges begins.
+const SORT_LEFT: u32 = 5;
+/// Where its second half begins.
+const SORT_MIDDLE: u32 = 6;
+/// Where the run after it begins.
+const SORT_RIGHT: u32 = 7;
+/// The position the first half has reached.
+const SORT_FIRST: u32 = 8;
+/// The position the second half has reached.
+const SORT_SECOND: u32 = 9;
+/// The position the copy has reached.
+const SORT_TARGET: u32 = 10;
+/// Where the merge stands.
+const SORT_PHASE: u32 = 11;
+/// The two values the comparator was called with.
+const SORT_LEFT_VALUE: u32 = 12;
+/// The second of them.
+const SORT_RIGHT_VALUE: u32 = 13;
+/// Whether 23.1.3.30 writes the order back over the receiver.
+const SORT_IN_PLACE: u32 = 14;
+/// The `length` of the receiver, which step 8 deletes the rest of.
+const SORT_LENGTH: u32 = 15;
+/// The object 23.1.3.30 writes the order back over, which the record holds
+/// because the collector moves it while the comparator runs.
+const SORT_RECEIVER: u32 = 16;
+
+/// The merge is between two runs and needs no answer.
+const SORT_MERGING: i32 = 0;
+/// The comparator was called and its answer decides which run goes on.
+const SORT_COMPARING: i32 = 1;
 
 /// The walk keeps each element in an Array of its own.
 const ITERATOR_WALK_ARRAY: i32 = 0;
@@ -2701,6 +2752,9 @@ impl RegisterVM {
         } else if let Some(Resume::IteratorWalk { state }) = call.resume {
             let passed = Self::iterator_walk_arguments(state, heap)?;
             self.place_arguments(next_frame, callee, &passed)?;
+        } else if let Some(Resume::Sort { state }) = call.resume {
+            let passed = Self::sort_arguments(state, heap)?;
+            self.place_arguments(next_frame, callee, &passed)?;
         } else if let Some((state, walk)) = call.resume.and_then(Resume::collection_record) {
             // 24.1.3.5 step 4.b.i passes the value, the key and the
             // collection, and 24.1.3.8 step 6 the key alone.
@@ -3867,6 +3921,13 @@ impl RegisterVM {
         // A walk of 7.4.2 passes the arguments out of its record the same way.
         if let Some(Resume::IteratorWalk { state }) = call.resume {
             return Ok(Self::iterator_walk_arguments(state, heap)?
+                .get(usize::from(index))
+                .copied()
+                .unwrap_or(VALUE_UNDEFINED));
+        }
+        // 23.1.3.30.1 passes the two values it compares the same way.
+        if let Some(Resume::Sort { state }) = call.resume {
+            return Ok(Self::sort_arguments(state, heap)?
                 .get(usize::from(index))
                 .copied()
                 .unwrap_or(VALUE_UNDEFINED));
@@ -5740,6 +5801,34 @@ impl RegisterVM {
                 heap,
                 realm,
             );
+        }
+        // 23.1.3.30 and 23.1.3.34 ask a comparator of the Script about each
+        // pair, which is a frame this call opens.
+        if matches!(
+            intrinsic,
+            Intrinsic::ArrayPrototypeSort | Intrinsic::ArrayPrototypeToSorted
+        ) {
+            let comparator = self.call_argument(&call, 0, heap)?;
+            if !comparator.is_undefined() {
+                // Step 1 refuses a comparator that is not callable before it
+                // looks at the receiver.
+                if !Self::is_callable(comparator, heap) {
+                    return Err(type_error(heap, realm, "comparator is not callable"));
+                }
+                let object = Self::coerce_object(call.receiver, heap, realm)?;
+                let length = Self::array_like_length(heap, object, realm)?;
+                return self.begin_the_sort(
+                    intrinsic,
+                    object,
+                    length,
+                    comparator,
+                    call,
+                    units,
+                    active_feedback,
+                    heap,
+                    realm,
+                );
+            }
         }
         // Step 8 of 24.1.1.1 and step 5 of 24.3.1.1 add every element the
         // iterable answers, which a walk of 7.4.2 reaches.
@@ -9682,6 +9771,350 @@ impl RegisterVM {
         self.step_iterator_walk(state, call, units, active_feedback, heap, realm)
     }
 
+    /// 23.1.3.30 step 3 and 23.1.3.34 step 4: the elements the sort orders,
+    /// read before the first comparison, and the merge that orders them.
+    ///
+    /// The merge is a bottom-up merge sort, which is stable and compares
+    /// O(n log n) times; every comparison a comparator decides is a frame this
+    /// clause opens, so the merge waits in a record between them.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` for a comparator that is
+    /// not callable.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the sort runs where a call does, with what a call has"
+    )]
+    fn begin_the_sort(
+        &mut self,
+        intrinsic: Intrinsic,
+        object: ObjectRef,
+        length: i64,
+        comparator: Value,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        Self::refuse_a_sort_of_23_2(object, heap)?;
+        let in_place = intrinsic == Intrinsic::ArrayPrototypeSort;
+        let items = realm.array(heap, 0)?;
+        let mut count: u32 = 0;
+        // Step 5 of 23.1.3.30 passes over a hole; step 5 of 23.1.3.34 reads it
+        // as undefined and keeps the length.
+        for position in Self::scan_range(0, length) {
+            self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+            let found = Self::element_at(heap, object, position)?;
+            let Some(value) = found.or_else(|| (!in_place).then_some(VALUE_UNDEFINED)) else {
+                continue;
+            };
+            heap.set_array_element(items, count, value)?;
+            count = count.checked_add(1).ok_or(VMError::PropertyLimit)?;
+        }
+        let copy = realm.array(heap, count)?;
+        let record = promise::record(
+            heap,
+            realm,
+            &[
+                Value::from_object(items),
+                Value::from_object(copy),
+                comparator,
+                Value::from_smi(i32::try_from(count).unwrap_or(i32::MAX)),
+                Value::from_smi(1),
+                Value::from_smi(0),
+                Value::from_smi(0),
+                Value::from_smi(0),
+                Value::from_smi(0),
+                Value::from_smi(0),
+                Value::from_smi(0),
+                Value::from_smi(SORT_MERGING),
+                VALUE_UNDEFINED,
+                VALUE_UNDEFINED,
+                Value::from_smi(i32::from(in_place)),
+                index_value(length),
+                Value::from_object(object),
+            ],
+        )?;
+        // The record outlives every frame the sort opens, so it is a root of a
+        // scope of its own, which the last step leaves.
+        heap.enter_scope();
+        let state = heap.push_root(record)?;
+        self.step_the_sort(state, call, units, active_feedback, heap, realm)
+    }
+
+    /// One step of the merge: it runs until the next comparison a comparator
+    /// decides, or until the items stand in order.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function keeps the whole merge and its comparison together"
+    )]
+    fn step_the_sort(
+        &mut self,
+        state: Root,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        loop {
+            let record = heap
+                .root_value(state)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let count = promise::slot(heap, record, SORT_COUNT)
+                .as_smi()
+                .unwrap_or(0);
+            let items = promise::slot(heap, record, SORT_ITEMS)
+                .as_object()
+                .ok_or(VMError::TypeError)?;
+            let copy = promise::slot(heap, record, SORT_COPY)
+                .as_object()
+                .ok_or(VMError::TypeError)?;
+            let phase = promise::slot(heap, record, SORT_PHASE)
+                .as_smi()
+                .unwrap_or(0);
+            let mut first = promise::slot(heap, record, SORT_FIRST)
+                .as_smi()
+                .unwrap_or(0);
+            let mut second = promise::slot(heap, record, SORT_SECOND)
+                .as_smi()
+                .unwrap_or(0);
+            let mut target = promise::slot(heap, record, SORT_TARGET)
+                .as_smi()
+                .unwrap_or(0);
+            let middle = promise::slot(heap, record, SORT_MIDDLE)
+                .as_smi()
+                .unwrap_or(0);
+            let right = promise::slot(heap, record, SORT_RIGHT)
+                .as_smi()
+                .unwrap_or(0);
+            // 23.1.3.30.1 step 4: a comparator that answered NaN orders
+            // nothing, and every other answer decides by its sign.
+            if phase == SORT_COMPARING {
+                let answered = match primitive_number(self.acc, heap) {
+                    Ok(number) => number,
+                    Err(refused) => {
+                        heap.exit_scope();
+                        return Err(refused);
+                    }
+                };
+                // A NaN and every answer that is not above zero keep the
+                // first of the two, which is what makes the merge stable.
+                let takes_the_first = matches!(
+                    answered.partial_cmp(&0.0),
+                    None | Some(core::cmp::Ordering::Less | core::cmp::Ordering::Equal)
+                );
+                let from = if takes_the_first {
+                    first = first.saturating_add(1);
+                    SORT_LEFT_VALUE
+                } else {
+                    second = second.saturating_add(1);
+                    SORT_RIGHT_VALUE
+                };
+                let value = promise::slot(heap, record, from);
+                Self::place_sorted(copy, target, value, heap)?;
+                target = target.saturating_add(1);
+                promise::set_slot(heap, record, SORT_FIRST, Value::from_smi(first))?;
+                promise::set_slot(heap, record, SORT_SECOND, Value::from_smi(second))?;
+                promise::set_slot(heap, record, SORT_TARGET, Value::from_smi(target))?;
+                promise::set_slot(heap, record, SORT_PHASE, Value::from_smi(SORT_MERGING))?;
+            }
+            // The two runs the pass merges, one element at a time.
+            if first < middle && second < right {
+                self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+                let left_value = Self::sorted_at(items, first, heap)?;
+                let right_value = Self::sorted_at(items, second, heap)?;
+                // 23.1.3.30.1 steps 1 to 3 order undefined last without
+                // asking the comparator at all.
+                if left_value.is_undefined() || right_value.is_undefined() {
+                    let takes_the_first = !left_value.is_undefined();
+                    let (value, next_first, next_second) = if takes_the_first {
+                        (left_value, first.saturating_add(1), second)
+                    } else {
+                        (right_value, first, second.saturating_add(1))
+                    };
+                    Self::place_sorted(copy, target, value, heap)?;
+                    promise::set_slot(heap, record, SORT_FIRST, Value::from_smi(next_first))?;
+                    promise::set_slot(heap, record, SORT_SECOND, Value::from_smi(next_second))?;
+                    promise::set_slot(
+                        heap,
+                        record,
+                        SORT_TARGET,
+                        Value::from_smi(target.saturating_add(1)),
+                    )?;
+                    continue;
+                }
+                promise::set_slot(heap, record, SORT_LEFT_VALUE, left_value)?;
+                promise::set_slot(heap, record, SORT_RIGHT_VALUE, right_value)?;
+                promise::set_slot(heap, record, SORT_PHASE, Value::from_smi(SORT_COMPARING))?;
+                let comparator = promise::slot(heap, record, SORT_COMPARATOR);
+                let mut call = call;
+                call.receiver = VALUE_UNDEFINED;
+                call.arg_count = 2;
+                call.arg_start = Reg(0);
+                call.resume = Some(Resume::Sort { state });
+                call.construct = None;
+                call.coerced = 0;
+                return self.enter_call_value(
+                    comparator,
+                    units,
+                    active_feedback,
+                    heap,
+                    realm,
+                    call,
+                );
+            }
+            // The rest of whichever run is left goes over as it stands.
+            while first < middle {
+                let value = Self::sorted_at(items, first, heap)?;
+                Self::place_sorted(copy, target, value, heap)?;
+                first = first.saturating_add(1);
+                target = target.saturating_add(1);
+            }
+            while second < right {
+                let value = Self::sorted_at(items, second, heap)?;
+                Self::place_sorted(copy, target, value, heap)?;
+                second = second.saturating_add(1);
+                target = target.saturating_add(1);
+            }
+            // The next pair of runs, and the next pass once none is left.
+            let width = promise::slot(heap, record, SORT_WIDTH)
+                .as_smi()
+                .unwrap_or(1);
+            let left = right;
+            if left < count {
+                let middle = left.saturating_add(width).min(count);
+                let right = left.saturating_add(width.saturating_mul(2)).min(count);
+                promise::set_slot(heap, record, SORT_LEFT, Value::from_smi(left))?;
+                promise::set_slot(heap, record, SORT_MIDDLE, Value::from_smi(middle))?;
+                promise::set_slot(heap, record, SORT_RIGHT, Value::from_smi(right))?;
+                promise::set_slot(heap, record, SORT_FIRST, Value::from_smi(left))?;
+                promise::set_slot(heap, record, SORT_SECOND, Value::from_smi(middle))?;
+                promise::set_slot(heap, record, SORT_TARGET, Value::from_smi(left))?;
+                continue;
+            }
+            // The pass is done: the copy holds the order, and the next pass
+            // merges runs twice as wide.
+            if width < count {
+                for position in 0..count {
+                    let value = Self::sorted_at(copy, position, heap)?;
+                    Self::place_sorted(items, position, value, heap)?;
+                }
+                let width = width.saturating_mul(2);
+                promise::set_slot(heap, record, SORT_WIDTH, Value::from_smi(width))?;
+                promise::set_slot(heap, record, SORT_LEFT, Value::from_smi(0))?;
+                promise::set_slot(heap, record, SORT_MIDDLE, Value::from_smi(width.min(count)))?;
+                promise::set_slot(
+                    heap,
+                    record,
+                    SORT_RIGHT,
+                    Value::from_smi(width.saturating_mul(2).min(count)),
+                )?;
+                promise::set_slot(heap, record, SORT_FIRST, Value::from_smi(0))?;
+                promise::set_slot(heap, record, SORT_SECOND, Value::from_smi(width.min(count)))?;
+                promise::set_slot(heap, record, SORT_TARGET, Value::from_smi(0))?;
+                continue;
+            }
+            return self.finish_the_sort(record, heap, realm).map(|()| None);
+        }
+    }
+
+    /// The order the merge reached, written back over the receiver of
+    /// 23.1.3.30 or into the Array 23.1.3.34 answers.
+    fn finish_the_sort(
+        &mut self,
+        record: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let count = promise::slot(heap, record, SORT_COUNT)
+            .as_smi()
+            .unwrap_or(0);
+        let items = promise::slot(heap, record, SORT_ITEMS)
+            .as_object()
+            .ok_or(VMError::TypeError)?;
+        let in_place = promise::slot(heap, record, SORT_IN_PLACE)
+            .as_smi()
+            .unwrap_or(0)
+            == 1;
+        let mut values: Vec<Option<Value>> = Vec::new();
+        for position in 0..count {
+            values.push(Some(Self::sorted_at(items, position, heap)?));
+        }
+        let length = promise::slot(heap, record, SORT_LENGTH)
+            .as_f64()
+            .map_or(0, Self::integral);
+        let receiver = promise::slot(heap, record, SORT_RECEIVER);
+        heap.exit_scope();
+        if !in_place {
+            self.acc = Self::array_from_holes(values, heap, realm)?;
+            return Ok(());
+        }
+        let object = receiver
+            .as_object()
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let written = i64::try_from(values.len()).unwrap_or(i64::MAX);
+        for (offset, value) in values.into_iter().enumerate() {
+            let index = u32::try_from(offset).map_err(|_| VMError::PropertyLimit)?;
+            Self::place_element(heap, object, index, value, realm)?;
+        }
+        // Step 8 deletes the indices the holes left behind.
+        for position in Self::scan_range(written, length) {
+            Self::delete_element_or_throw(object, position, heap, realm)?;
+        }
+        self.acc = Value::from_object(object);
+        Ok(())
+    }
+
+    /// 23.1.3.30 reads and writes the indices of the receiver, which for an
+    /// array of 23.2 are the elements of its buffer: a store this clause does
+    /// not reach, so the sort of one is a gap.
+    fn refuse_a_sort_of_23_2(object: ObjectRef, heap: &GenerationalHeap) -> Result<(), VMError> {
+        if matches!(
+            heap.get_object(object).map(|entry| &entry.kind),
+            Some(&ObjectKind::TypedArray { .. })
+        ) {
+            return Err(VMError::Unsupported("a sort of an array of 23.2"));
+        }
+        Ok(())
+    }
+
+    /// One item of the sort, which stands in an Array of the engine and never
+    /// in a Shape.
+    fn sorted_at(
+        array: ObjectRef,
+        index: i32,
+        heap: &mut GenerationalHeap,
+    ) -> Result<Value, VMError> {
+        let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+        Ok(Self::element_at(heap, array, index)?.unwrap_or(VALUE_UNDEFINED))
+    }
+
+    /// Writes one item of the sort back.
+    fn place_sorted(
+        array: ObjectRef,
+        index: i32,
+        value: Value,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+        heap.set_array_element(array, index, value)?;
+        Ok(())
+    }
+
+    /// The two values 23.1.3.30.1 passes the comparator.
+    fn sort_arguments(state: Root, heap: &GenerationalHeap) -> Result<Vec<Value>, VMError> {
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        Ok(Vec::from([
+            promise::slot(heap, record, SORT_LEFT_VALUE),
+            promise::slot(heap, record, SORT_RIGHT_VALUE),
+        ]))
+    }
+
     /// 7.4.2 step 1 for a clause that walks an iterable of the Script.
     ///
     /// The walk waits in a record the collector traces: the Array it fills,
@@ -12864,6 +13297,11 @@ impl RegisterVM {
             for index in 0..count.min(passed_in.len()) {
                 passed.push(*passed_in.get(index).unwrap_or(&VALUE_UNDEFINED));
             }
+        } else if let Some(Resume::Sort { state }) = frame.resume {
+            let passed_in = Self::sort_arguments(state, heap)?;
+            for index in 0..count.min(passed_in.len()) {
+                passed.push(*passed_in.get(index).unwrap_or(&VALUE_UNDEFINED));
+            }
         } else if let Some((state, walk)) = frame.resume.and_then(Resume::collection_record) {
             let record = heap
                 .root_value(state)
@@ -13679,6 +14117,7 @@ impl RegisterVM {
             // 23.1.3.30 and 23.1.3.34: the elements in the order 23.1.3.30.1
             // compares them, written back over the receiver or into a copy.
             Intrinsic::ArrayPrototypeSort | Intrinsic::ArrayPrototypeToSorted => {
+                Self::refuse_a_sort_of_23_2(object, heap)?;
                 let comparator = self.call_argument(&call, 0, heap)?;
                 if !comparator.is_undefined() {
                     if !Self::is_callable(comparator, heap) {
@@ -25360,6 +25799,11 @@ impl RegisterVM {
                     )?;
                 }
             }
+            // 23.1.3.30.1: a comparator that throws leaves the merge, and the
+            // record it waited in gives its scope back.
+            if matches!(frame.resume, Some(Resume::Sort { .. })) {
+                heap.exit_scope();
+            }
             // 23.1.2.1 step 6.c.ix and 24.1.1.2 step 4.e: a mapper or an adder
             // that throws closes the iterator with 7.4.11 before the value it
             // threw leaves the walk.
@@ -28725,6 +29169,7 @@ impl RegisterVM {
                                     | Resume::CollectionWalk { .. }
                                     | Resume::CollectionInsert { .. }
                                     | Resume::IteratorWalk { .. }
+                                    | Resume::Sort { .. }
                                     | Resume::IteratorElement { .. }
                                     | Resume::IteratorResult { .. }
                                     | Resume::Length { .. }
@@ -28780,6 +29225,10 @@ impl RegisterVM {
                                     Resume::IteratorWalk { state } => self.step_iterator_walk(
                                         state, call, units, feedback, heap, realm,
                                     )?,
+                                    // 23.1.3.30.1 answered, so the merge goes
+                                    // on with the value it ordered first.
+                                    Resume::Sort { state } => self
+                                        .step_the_sort(state, call, units, feedback, heap, realm)?,
                                     // 27.5.1.2 step 8: the body left, and the
                                     // answer says whether it is done.
                                     Resume::GeneratorStep { state } => {

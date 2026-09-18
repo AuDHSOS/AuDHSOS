@@ -6402,6 +6402,41 @@ fn a_function_carries_the_name_it_was_given() -> Result<(), Error> {
 }
 
 #[test]
+fn the_sort_of_23_1_3_30_asks_the_comparator_about_each_pair() -> Result<(), Error> {
+    // 23.1.3.30 orders the elements by what 23.1.3.30.1 answers, which for a
+    // comparator is a call of the Script; the merge is stable and puts
+    // undefined last without asking.
+    for source in [
+        "[3,1,2].sort(function(a,b){return a-b}).join(',')",
+        "[3,1,2].sort(function(a,b){return b-a}).join(',')",
+        "[5,3,9,1,7,2,8,6,4,0].sort(function(a,b){return a-b}).join('')",
+        "[].sort(function(a,b){return a-b}).length",
+        "[5].sort(function(a,b){return a-b})[0]",
+        "[3,undefined,1].sort(function(a,b){return a-b}).join(',')",
+        // 23.1.3.30.1 step 4 answers zero for a NaN, which orders nothing.
+        "[2,1].sort(function(){return NaN}).join(',')",
+        "[2,1].sort(function(){return 'x'}).join(',')",
+        // Step 3 reads the elements before the first comparison, and a hole
+        // goes to the end.
+        "var a=[1,,3];a.sort(function(x,y){return x-y});a.length+','+(1 in a)",
+        // The clause answers the object it sorted, and 23.1.3.34 a copy.
+        "var a=[3,1,2];var b=a.sort(function(x,y){return x-y});(a===b)+','+a.join(',')",
+        "[3,1,2].toSorted(function(a,b){return a-b}).join(',')",
+        // An array-like of the Script is sorted through its own indices.
+        "var o={0:'b',1:'a',length:2};Array.prototype.sort.call(o,function(x,y){return x<y?-1:1});o[0]+o[1]",
+        // A comparator that throws leaves the merge with what it threw.
+        "var r='';try{[3,1,2].sort(function(){throw 1})}catch(e){r='c'+e}r",
+        "var r='';try{[1].sort(1)}catch(e){r=e.constructor.name}r",
+        // The order of the pairs the comparator is asked about is the order
+        // of the merge, which both paths answer alike.
+        "var r=[];[1,2,3].sort(function(a,b){r.push(a+':'+b);return a-b});r.join('|')",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
+
+#[test]
 fn the_finally_of_27_2_5_3_calls_its_callback_and_keeps_the_settlement() -> Result<(), Error> {
     // 27.2.5.3 registers the two closures of 27.2.5.3.1 and 27.2.5.3.2 with
     // `then`: each calls the callback and answers the value or the reason the
