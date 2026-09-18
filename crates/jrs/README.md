@@ -574,8 +574,8 @@ negative-test passes. Other parser/builtin completeness gaps remain open.
 
 ### Current Test262 result
 
-The latest measurements were run on 2026-09-14, 2026-09-15, 2026-09-16 and
-2026-09-17 against Test262
+The latest measurements were run on 2026-09-14, 2026-09-15, 2026-09-16,
+2026-09-17 and 2026-09-18 against Test262
 revision
 `419d3e0a2273ba01a3bfcbec423f2801425b8e93`; the rows carry the implementation
 commit each one measured, and the compound-assignment rows and the full runs
@@ -666,6 +666,8 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same, on the stack backend, which has no frame that leaves and comes back (focused) | focused | `ed7b0e6` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/generators test/language/expressions/generators --summary` | 556 | 1,056 | 310 (29.36%) | 637 (60.32%) | 109 (10.32%) |
 | Identifiers (focused) | focused | `725bb96` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/identifiers --summary` | 268 | 535 | 233 (43.55%) | 68 (12.71%) | 234 (43.74%) |
 | The same, on the stack backend, which reads the same names (focused) | focused | `725bb96` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/identifiers --summary` | 268 | 535 | 203 (37.94%) | 68 (12.71%) | 264 (49.35%) |
+| Async generators (focused) | focused | `6929ec5` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/async-generator test/language/expressions/async-generator --summary` | 924 | 1,802 | 983 (54.55%) | 340 (18.87%) | 479 (26.58%) |
+| The same, on the stack backend, which has no async generator (focused) | focused | `6929ec5` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/async-generator test/language/expressions/async-generator --summary` | 924 | 1,802 | 164 (9.10%) | 1,092 (60.60%) | 546 (30.30%) |
 | Class elements (focused) | focused | `1784e60` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/class/elements test/language/expressions/class/elements --summary` | 2,962 | 5,897 | 2,177 (36.92%) | 48 (0.81%) | 3,672 (62.27%) |
 | The same, before the private accessor of 15.7.1 (outdated) | focused | `1d9478d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/class/elements test/language/expressions/class/elements --summary` | 2,962 | 5,897 | 2,011 (34.10%) | 34 (0.58%) | 3,852 (65.32%) |
 | The same, before the computed name of a field (outdated) | focused | `8e2095d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/class/elements test/language/expressions/class/elements --summary` | 2,962 | 5,897 | 1,789 (30.34%) | 20 (0.34%) | 4,088 (69.32%) |
@@ -883,7 +885,8 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same, before the iterators of 24.1.5 and 24.2.5 (outdated) | focused | `29cc550` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Map test/built-ins/Set --summary` | 587 | 1,169 | 336 (28.74%) | 240 (20.53%) | 593 (50.73%) |
 | The same, on the stack backend (focused) | focused | `29cc550` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Map test/built-ins/Set --summary` | 587 | 1,169 | 0 (0.00%) | 1,051 (89.91%) | 118 (10.09%) |
 | Complete pinned suite, including staging and Intl | full | `bee51e3` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 32,083 (31.17%) | 35,268 (34.26%) |
-| Complete pinned suite on the register engine | full | `725bb96` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 50,527 (49.09%) | 20,623 (20.04%) | 31,775 (30.87%) |
+| Complete pinned suite on the register engine | full | `6929ec5` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 54,603 (53.05%) | 21,596 (20.98%) | 26,726 (25.97%) |
+| Complete pinned suite on the register engine, before the async generator of 27.6 (outdated) | full | `725bb96` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 50,527 (49.09%) | 20,623 (20.04%) | 31,775 (30.87%) |
 | Complete pinned suite on the register engine, before the Unicode identifier of 12.7.1 (outdated) | full | `1784e60` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 50,132 (48.71%) | 20,233 (19.66%) | 32,560 (31.63%) |
 | Complete pinned suite on the register engine, before the private accessor of 15.7.1 (outdated) | full | `1d9478d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 49,944 (48.52%) | 20,223 (19.65%) | 32,758 (31.83%) |
 | Complete pinned suite on the register engine, before the computed name of a field (outdated) | full | `8e2095d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 49,478 (48.07%) | 20,209 (19.63%) | 33,238 (32.29%) |
