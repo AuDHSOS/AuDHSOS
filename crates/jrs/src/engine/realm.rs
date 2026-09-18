@@ -5061,7 +5061,6 @@ impl Intrinsic {
             | Self::NumberIsNaN
             | Self::NumberIsSafeInteger
             | Self::BooleanConstructor
-            | Self::RegExpConstructor
             | Self::RegExpPrototypeExec
             | Self::RegExpPrototypeTest
             | Self::NumberPrototypeToString
@@ -5263,6 +5262,8 @@ impl Intrinsic {
             | Self::ArrayPrototypeWith
             | Self::MathMax
             | Self::MathMin
+            // 22.2.3.1 takes the pattern and the flags.
+            | Self::RegExpConstructor
             // 25.5.1 takes the text and the reviver.
             | Self::JsonParse
             | Self::MathImul

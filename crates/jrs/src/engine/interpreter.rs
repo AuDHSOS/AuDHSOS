@@ -2697,7 +2697,9 @@ impl RegisterVM {
             Intrinsic::PromiseAll | Intrinsic::PromiseRace | Intrinsic::PromiseAllSettled => {
                 self.promise_combinator(intrinsic, &call, heap, realm)
             }
-            Intrinsic::PromiseWithResolvers => Self::promise_with_resolvers(heap, realm),
+            Intrinsic::PromiseWithResolvers => {
+                Self::promise_with_resolvers(call.receiver, heap, realm)
+            }
             Intrinsic::PromiseAllElement
             | Intrinsic::PromiseAllSettledFulfilled
             | Intrinsic::PromiseAllSettledRejected => {
@@ -4526,13 +4528,13 @@ impl RegisterVM {
             | Intrinsic::SyntaxErrorConstructor
             | Intrinsic::TypeErrorConstructor
             | Intrinsic::UriErrorConstructor => {
-                Self::construct_error(intrinsic, target, heap, realm)
+                Self::construct_error(intrinsic, target, key, heap, realm)
             }
             // 20.5.7.1 takes the errors before the message, and step 6 gives
             // the error an `errors` property of the List it made of them.
             Intrinsic::AggregateErrorConstructor => {
                 let list = Self::aggregated_errors(target, heap, realm)?;
-                let error = Self::construct_error(intrinsic, key, heap, realm)?;
+                let error = Self::construct_error(intrinsic, key, attributes, heap, realm)?;
                 let object = error.as_object().ok_or(VMError::TypeError)?;
                 let name = PropertyKey::String(heap.strings.intern("errors")?);
                 heap.define_own_named(object, name, list, PropertyFlags::ordinary_data())?;
@@ -7367,7 +7369,9 @@ impl RegisterVM {
     /// Each one answers NaN for NaN, because 6.1.6.1 propagates it, and each
     /// keeps the sign of a zero where the clause says so.
     fn math_of_one(intrinsic: Intrinsic, value: f64) -> Result<f64, VMError> {
-        if value.is_nan() {
+        // 21.3.2.11 converts with 7.1.6, which makes zero of NaN, so it is the
+        // one clause here that answers a number for one.
+        if value.is_nan() && intrinsic != Intrinsic::MathClz32 {
             return Ok(f64::NAN);
         }
         Ok(match intrinsic {
@@ -7550,6 +7554,7 @@ impl RegisterVM {
     fn construct_error(
         intrinsic: Intrinsic,
         message: Value,
+        options: Value,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
@@ -7565,7 +7570,46 @@ impl RegisterVM {
             Some(kind) => realm.create_native_error_units(heap, kind, text.as_deref())?,
             None => realm.create_error_units(heap, text.as_deref())?,
         };
+        Self::install_error_cause(error, options, heap, realm)?;
         Ok(Value::from_object(error))
+    }
+
+    /// `InstallErrorCause` of 20.5.8.1: an options object that has a `cause`
+    /// gives the error one of its own.
+    ///
+    /// The property is writable and configurable and not enumerable, which is
+    /// what 20.5.8.1 step 1.b names.
+    fn install_error_cause(
+        error: ObjectRef,
+        options: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let Some(object) = options.as_object() else {
+            return Ok(());
+        };
+        let name = PropertyKey::String(heap.strings.intern("cause")?);
+        let Some(found) = heap.lookup_named(object, name)? else {
+            return Ok(());
+        };
+        if found.flags.is_accessor {
+            return Err(VMError::Unsupported(
+                "the cause of 20.5.8.1 that is an accessor",
+            ));
+        }
+        let _ = realm;
+        heap.define_own_named(
+            error,
+            name,
+            found.value,
+            PropertyFlags {
+                writable: true,
+                enumerable: false,
+                configurable: true,
+                is_accessor: false,
+            },
+        )?;
+        Ok(())
     }
 
     /// The constructors of 24.1.1.1 and 24.2.1.1 and the clauses of 24.1.3
@@ -20871,9 +20915,25 @@ impl RegisterVM {
 
     /// 27.2.4.9: the promise and the pair that settles it, in one object.
     fn promise_with_resolvers(
+        constructor: Value,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
+        // 27.2.1.5 step 1 refuses a `this` value that constructs nothing, and
+        // step 4 constructs the one it was given, which only `%Promise%`
+        // itself does without a frame here.
+        if !Self::constructs(constructor, heap) {
+            return Err(type_error(heap, realm, "value is not a constructor"));
+        }
+        if constructor.as_object()
+            != realm
+                .intrinsic(heap, Intrinsic::PromiseConstructor)?
+                .as_object()
+        {
+            return Err(VMError::Unsupported(
+                "a constructor of 27.2.1.5 that is not %Promise%",
+            ));
+        }
         let capability = promise::capability(heap, realm)?;
         let object = realm.ordinary_object(heap)?;
         let flags = PropertyFlags {
