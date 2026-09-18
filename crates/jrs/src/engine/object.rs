@@ -201,6 +201,14 @@ pub enum ObjectKind {
         /// `[[ArrayLikeIterationKind]]`.
         kind: ArrayIterationKind,
     },
+    /// The iterator 22.1.5 gives a String: the text it walks and where it
+    /// stands in it, in code units.
+    StringIterator {
+        /// `[[IteratedString]]`, undefined once the iteration is done.
+        target: Value,
+        /// `[[StringNextIndex]]`.
+        index: u32,
+    },
     /// The state of one call of a method of 23.1.3 that calls back into the
     /// Script (23.1.3.5, .8, .11, .12, .15, .21, .24, .25).
     ///
@@ -368,6 +376,7 @@ impl ObjectKind {
         match self {
             Self::StringWrapper(value)
             | Self::ArrayIterator { target: value, .. }
+            | Self::StringIterator { target: value, .. }
             | Self::CollectionIterator { target: value, .. }
             | Self::NativeFunction { state: value, .. }
             | Self::Collection { entries: value, .. }
@@ -469,6 +478,7 @@ impl ObjectKind {
         match self {
             Self::StringWrapper(value)
             | Self::ArrayIterator { target: value, .. }
+            | Self::StringIterator { target: value, .. }
             | Self::CollectionIterator { target: value, .. }
             | Self::NativeFunction { state: value, .. }
             | Self::Collection { entries: value, .. }

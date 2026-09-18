@@ -1193,6 +1193,10 @@ pub enum Intrinsic {
     AsyncGeneratorFunctionConstructor,
     /// `%AsyncFunction%`, 27.7.1.
     AsyncFunctionConstructor,
+    /// `String.prototype[@@iterator]`, 22.1.3.36.
+    StringPrototypeIterator,
+    /// `%StringIteratorPrototype%.next`, 22.1.5.1.
+    StringIteratorPrototypeNext,
     /// `get constructor`, 27.1.3.3.1.1.
     IteratorPrototypeConstructorGet,
     /// `set constructor`, 27.1.3.3.1.2.
@@ -1270,6 +1274,9 @@ pub enum IntrinsicHolder {
     ArrayPrototype,
     /// `%ArrayIteratorPrototype%`.
     ArrayIteratorPrototype,
+    /// `%StringIteratorPrototype%`, which 22.1.5 gives the iterator of a
+    /// String.
+    StringIteratorPrototype,
     /// `%GeneratorPrototype%`, which 27.5.1 gives every Generator.
     GeneratorPrototype,
     /// `%AsyncGeneratorPrototype%`, which 27.6.1 gives every `AsyncGenerator`.
@@ -1355,7 +1362,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 466] = [
+    pub const ALL: [Self; 468] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1791,6 +1798,8 @@ impl Intrinsic {
         Self::GeneratorFunctionConstructor,
         Self::AsyncGeneratorFunctionConstructor,
         Self::AsyncFunctionConstructor,
+        Self::StringPrototypeIterator,
+        Self::StringIteratorPrototypeNext,
         Self::IteratorPrototypeConstructorGet,
         Self::IteratorPrototypeConstructorSet,
         Self::IteratorPrototypeToStringTagGet,
@@ -1837,7 +1846,8 @@ impl Intrinsic {
             | Self::ObjectPrototypePropertyIsEnumerable
             | Self::ObjectPrototypeToString
             | Self::ObjectPrototypeValueOf => IntrinsicHolder::ObjectPrototype,
-            Self::StringPrototypeIsWellFormed
+            Self::StringPrototypeIterator
+            | Self::StringPrototypeIsWellFormed
             | Self::StringPrototypeToWellFormed
             | Self::StringPrototypeSubstr
             | Self::StringPrototypeLocaleCompare
@@ -1915,6 +1925,8 @@ impl Intrinsic {
             | Self::ArrayPrototypeReduceRight
             | Self::ArrayPrototypeFlatMap => IntrinsicHolder::ArrayPrototype,
             Self::ArrayIteratorPrototypeNext => IntrinsicHolder::ArrayIteratorPrototype,
+            // 22.1.5.1 stands on the prototype of the iterator 22.1.3.36 makes.
+            Self::StringIteratorPrototypeNext => IntrinsicHolder::StringIteratorPrototype,
             // 27.1.2.1 stands on %IteratorPrototype%, which every iterator of
             // the specification inherits.
             Self::IteratorPrototypeIterator
@@ -2775,6 +2787,8 @@ impl Intrinsic {
             Self::GeneratorFunctionConstructor => 463,
             Self::AsyncGeneratorFunctionConstructor => 464,
             Self::AsyncFunctionConstructor => 465,
+            Self::StringPrototypeIterator => 466,
+            Self::StringIteratorPrototypeNext => 467,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3251,6 +3265,8 @@ impl Intrinsic {
             Self::GeneratorFunctionConstructor => 463,
             Self::AsyncGeneratorFunctionConstructor => 464,
             Self::AsyncFunctionConstructor => 465,
+            Self::StringPrototypeIterator => 466,
+            Self::StringIteratorPrototypeNext => 467,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3728,6 +3744,8 @@ impl Intrinsic {
             463 => Some(Self::GeneratorFunctionConstructor),
             464 => Some(Self::AsyncGeneratorFunctionConstructor),
             465 => Some(Self::AsyncFunctionConstructor),
+            466 => Some(Self::StringPrototypeIterator),
+            467 => Some(Self::StringIteratorPrototypeNext),
             436 => Some(Self::IteratorPrototypeConstructorGet),
             437 => Some(Self::IteratorPrototypeConstructorSet),
             438 => Some(Self::IteratorPrototypeToStringTagGet),
@@ -4114,7 +4132,7 @@ impl Intrinsic {
             | Self::TypedArrayPrototypeReduce
             | Self::IteratorPrototypeReduce => "reduce",
             Self::ArrayPrototypeReduceRight | Self::TypedArrayPrototypeReduceRight => "reduceRight",
-            Self::IteratorPrototypeIterator => "[Symbol.iterator]",
+            Self::IteratorPrototypeIterator | Self::StringPrototypeIterator => "[Symbol.iterator]",
             Self::AsyncIteratorPrototypeAsyncIterator => "[Symbol.asyncIterator]",
             Self::FunctionPrototypeHasInstance => "[Symbol.hasInstance]",
             Self::SymbolPrototypeToPrimitive => "[Symbol.toPrimitive]",
@@ -4193,7 +4211,8 @@ impl Intrinsic {
             | Self::SetIteratorPrototypeNext
             | Self::GeneratorPrototypeNext
             | Self::AsyncGeneratorPrototypeNext
-            | Self::AsyncFromSyncIteratorPrototypeNext => "next",
+            | Self::AsyncFromSyncIteratorPrototypeNext
+            | Self::StringIteratorPrototypeNext => "next",
             Self::GeneratorPrototypeReturn
             | Self::AsyncGeneratorPrototypeReturn
             | Self::AsyncFromSyncIteratorPrototypeReturn => "return",
@@ -4911,6 +4930,8 @@ impl Intrinsic {
             | Self::ArrayPrototypeToString
             | Self::ArrayPrototypeShift
             | Self::IteratorPrototypeIterator
+            | Self::StringPrototypeIterator
+            | Self::StringIteratorPrototypeNext
             | Self::AsyncIteratorPrototypeAsyncIterator
             | Self::ArrayPrototypeFlat
             | Self::ArrayOf
@@ -6261,6 +6282,8 @@ pub struct Realm {
     map_iterator_prototype: Root,
     set_iterator_prototype: Root,
     array_iterator_prototype: Root,
+    /// `%StringIteratorPrototype%` of 22.1.5, which 22.1.3.36 makes.
+    string_iterator_prototype: Root,
     iterator_prototype: Root,
     /// `%GeneratorPrototype%` of 27.5.1, which every Generator inherits.
     generator_prototype: Root,
@@ -6352,6 +6375,7 @@ struct Holders {
     weak_set_prototype: Root,
     map_iterator_prototype: Root,
     set_iterator_prototype: Root,
+    string_iterator_prototype: Root,
     iterator_prototype: Root,
     generator_prototype: Root,
     async_generator_prototype: Root,
@@ -6510,6 +6534,10 @@ impl Realm {
             heap.allocate_immortal_object(root_shape, Value::from_object(iterator_prototype))?;
         let array_iterator_prototype =
             heap.push_root(Value::from_object(array_iterator_prototype))?;
+        let string_iterator_prototype =
+            heap.allocate_immortal_object(root_shape, Value::from_object(iterator_prototype))?;
+        let string_iterator_prototype =
+            heap.push_root(Value::from_object(string_iterator_prototype))?;
         // 27.5.1 gives every Generator `%GeneratorPrototype%`, which inherits
         // from `%IteratorPrototype%`, and 27.3.3 gives every generator
         // function `%GeneratorFunction.prototype%`, whose `prototype` is that
@@ -6623,6 +6651,7 @@ impl Realm {
                 weak_set_prototype,
                 map_iterator_prototype,
                 set_iterator_prototype,
+                string_iterator_prototype,
                 iterator_prototype: iterator_prototype_root,
                 generator_prototype,
                 async_generator_prototype,
@@ -6779,6 +6808,8 @@ impl Realm {
                 (reflect, "Reflect"),
                 (symbol_prototype, "Symbol"),
                 (array_iterator_prototype, "Array Iterator"),
+                // 22.1.5.2 names the iterator of a String.
+                (string_iterator_prototype, "String Iterator"),
                 // 27.5.1.5 and 27.3.3.2 name the two of clause 27.
                 (generator_prototype, "Generator"),
                 (generator_function_prototype, "GeneratorFunction"),
@@ -6873,6 +6904,7 @@ impl Realm {
             map_iterator_prototype,
             set_iterator_prototype,
             array_iterator_prototype,
+            string_iterator_prototype,
             iterator_prototype: iterator_prototype_root,
             generator_prototype,
             generator_function_prototype,
@@ -8181,6 +8213,9 @@ impl Realm {
                 IntrinsicHolder::ArrayIteratorPrototype => {
                     Self::rooted(heap, holders.array_iterator_prototype)?
                 }
+                IntrinsicHolder::StringIteratorPrototype => {
+                    Self::rooted(heap, holders.string_iterator_prototype)?
+                }
                 IntrinsicHolder::Global => Self::rooted(heap, holders.global_object)?,
                 IntrinsicHolder::FunctionPrototype => {
                     Self::rooted(heap, holders.function_prototype)?
@@ -8373,9 +8408,11 @@ impl Realm {
                 Self::define_well_known_symbols(heap, constructor)?;
                 continue;
             }
-            // 27.1.2.1 is a Symbol-keyed property, so it takes no String name
-            // on its holder.
-            if intrinsic == Intrinsic::IteratorPrototypeIterator {
+            // 27.1.2.1 and 22.1.3.36 are Symbol-keyed properties, so they take
+            // no String name on their holders.
+            if intrinsic == Intrinsic::IteratorPrototypeIterator
+                || intrinsic == Intrinsic::StringPrototypeIterator
+            {
                 heap.define_own_named(
                     holder,
                     WellKnownSymbol::Iterator.key(),
@@ -8812,6 +8849,15 @@ impl Realm {
         heap: &GenerationalHeap,
     ) -> Result<Value, HeapError> {
         Self::rooted(heap, self.async_generator_function_prototype)
+    }
+
+    /// `%StringIteratorPrototype%`, 22.1.5.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale root.
+    pub fn string_iterator_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.string_iterator_prototype)
     }
 
     /// `%AsyncFunction.prototype%`, 27.7.3.

@@ -10240,6 +10240,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // this lowering did not make and cannot name.
         // 10.2.4.1 answers nothing at all: it throws.
         crate::engine::realm::Intrinsic::ThrowTypeError
+        | crate::engine::realm::Intrinsic::StringPrototypeIterator
+        | crate::engine::realm::Intrinsic::StringIteratorPrototypeNext
         | crate::engine::realm::Intrinsic::GeneratorFunctionConstructor
         | crate::engine::realm::Intrinsic::AsyncGeneratorFunctionConstructor
         | crate::engine::realm::Intrinsic::AsyncFunctionConstructor

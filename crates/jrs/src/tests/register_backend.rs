@@ -5026,20 +5026,10 @@ fn register_lowering_rejects_for_in_heads_it_cannot_model() -> Result<(), Error>
         );
     }
     // 8.6.2 binds the names a pattern head names out of the value of each
-    // step, in a `for`-`in` as in a `for`-`of`. A `for`-`in` key is a String,
-    // whose iterator 22.1.3.34 gives is not built, so that one names the gap.
+    // step, in a `for`-`in` as in a `for`-`of`; a `for`-`in` key is a String,
+    // which 22.1.3.36 gives an iterator of its code points.
     differential("for(const [a] of [[1]]){}")?;
-    let source = "for(const [k] in {a:1}){}";
-    let program = compile(source, Limits::default())?;
-    assert!(program.uses_register_backend(), "{source}");
-    assert!(
-        matches!(
-            Runtime::with_backend(Limits::default(), Backend::Engine)
-                .run(&program, &mut SilentHost),
-            Err(Error::Unsupported { .. })
-        ),
-        "{source}"
-    );
+    differential("var s='';for(const [k] in {ab:1}){s+=k}s")?;
     Ok(())
 }
 
@@ -5687,19 +5677,13 @@ fn a_for_of_walks_an_iterable_by_the_protocol_of_7_4() -> Result<(), Error> {
     ] {
         differential(source)?;
     }
-    // 22.1.3.34 gives a String an iterator this Realm has not built, and
-    // answering undefined would say a String is not iterable.
-    for source in ["for(var c of 'ab'){}", "for(const c of 'ab'){}"] {
-        let program = compile(source, Limits::default())?;
-        assert!(program.uses_register_backend(), "{source}");
-        assert!(
-            matches!(
-                Runtime::with_backend(Limits::default(), Backend::Engine)
-                    .run(&program, &mut SilentHost),
-                Err(Error::Unsupported { .. })
-            ),
-            "{source}"
-        );
+    // 22.1.3.36 gives a String an iterator of its code points, so a surrogate
+    // pair leaves a `for`-`of` as one element.
+    for source in [
+        "var s='';for(var c of 'ab'){s+=c+'|'}s",
+        "var s='';for(const c of 'a\\u{1F600}'){s+=c+'|'}s",
+    ] {
+        differential(source)?;
     }
     // A body that leaves by `return` closes the iterator where it leaves.
     let source = "function f(a){for(var x of a.values()){return x}}f([1])";

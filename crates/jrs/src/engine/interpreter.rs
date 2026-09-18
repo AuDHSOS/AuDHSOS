@@ -2893,6 +2893,10 @@ impl RegisterVM {
             | Intrinsic::ArrayIteratorPrototypeNext => {
                 Self::call_iterator_intrinsic(intrinsic, call, heap, realm)
             }
+            // 22.1.3.36 makes the iterator of 22.1.5 and 22.1.5.1 walks it.
+            Intrinsic::StringPrototypeIterator | Intrinsic::StringIteratorPrototypeNext => {
+                self.call_string_iterator_intrinsic(intrinsic, &call, units, heap, realm)
+            }
             Intrinsic::ArrayPrototypeAt
             | Intrinsic::ArrayPrototypeIncludes
             | Intrinsic::ArrayPrototypeIndexOf
@@ -8116,11 +8120,6 @@ impl RegisterVM {
         if !mapper.is_undefined() && !Self::is_callable(mapper, heap) {
             return Err(type_error(heap, realm, "the mapper is not callable"));
         }
-        // 22.1.3.36 gives a String an iterator that yields code points, which
-        // this Realm has not built and which no index walk stands in for.
-        if Self::string_data(target, heap).is_some() {
-            return Err(VMError::Unsupported("an @@iterator of a String"));
-        }
         let method =
             match heap.lookup_named(target, super::realm::WellKnownSymbol::Iterator.key())? {
                 Some(found) => Self::plain_value(found)?,
@@ -13335,6 +13334,7 @@ impl RegisterVM {
             | ObjectKind::Math
             | ObjectKind::Array { .. }
             | ObjectKind::ArrayIterator { .. }
+            | ObjectKind::StringIterator { .. }
             // The state of a walk of 23.1.3, the pair of 6.1.7.1 and the
             // suspended body of 27.7.5.3 are reachable from no Script, so no
             // conversion of them is owed.
@@ -14246,6 +14246,8 @@ impl RegisterVM {
                 // of 21.3, 25.5 and 28.1 and the iterator of 23.1.5.2.2.
                 ObjectKind::Ordinary
                 | ObjectKind::SymbolWrapper(_)
+                // 22.1.5.2 tags the iterator of a String the same way.
+                | ObjectKind::StringIterator { .. }
                 // 21.2.3.5 tags a BigInt wrapper through @@toStringTag.
                 | ObjectKind::BigIntWrapper(_)
                 | ObjectKind::Promise { .. }
@@ -15126,6 +15128,81 @@ impl RegisterVM {
         }
         parts.push(Some(units.get(start..).unwrap_or_default()));
         self.split_result(&parts, heap, realm)
+    }
+
+    /// 22.1.3.36 and 22.1.5.1: the iterator of a String and one step of it.
+    ///
+    /// The iterator holds the text and where it stands in it; 22.1.5.1 yields
+    /// one code point at a time, so a surrogate pair leaves as one String.
+    fn call_string_iterator_intrinsic(
+        &self,
+        intrinsic: Intrinsic,
+        call: &Call,
+        units: CodeUnits<'_>,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if intrinsic == Intrinsic::StringPrototypeIterator {
+            // Step 1 refuses a `this` value of null or undefined, and step 2
+            // converts every other one.
+            let text = self.receiver_units(call.receiver, units, heap, realm)?;
+            let text = self.allocate_string(heap, &text)?;
+            let prototype = realm.string_iterator_prototype(heap)?;
+            let shape = heap.shapes.root_shape();
+            let iterator = heap.allocate_object(shape, prototype)?;
+            heap.set_object_kind(
+                iterator,
+                ObjectKind::StringIterator {
+                    target: text,
+                    index: 0,
+                },
+            )?;
+            return Ok(Value::from_object(iterator));
+        }
+        let reference = call.receiver.as_object().ok_or(VMError::TypeError)?;
+        let ObjectKind::StringIterator { target, index } =
+            heap.get_object(reference).ok_or(VMError::TypeError)?.kind
+        else {
+            return Err(type_error(
+                heap,
+                realm,
+                "next called on a value that is not a String Iterator",
+            ));
+        };
+        let text = heap
+            .strings
+            .to_utf16(target)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let at = usize::try_from(index).unwrap_or(usize::MAX);
+        if at >= text.len() {
+            heap.set_object_kind(
+                reference,
+                ObjectKind::StringIterator {
+                    target: VALUE_UNDEFINED,
+                    index,
+                },
+            )?;
+            return Self::iterator_result(None, heap, realm);
+        }
+        // 11.1.4 takes a trailing surrogate with its leading one and every
+        // other unit on its own.
+        let leading = text.get(at).copied().unwrap_or(0);
+        let paired = (0xD800..0xDC00).contains(&leading)
+            && text
+                .get(at.saturating_add(1))
+                .is_some_and(|unit| (0xDC00..0xE000).contains(unit));
+        let end = at.saturating_add(if paired { 2 } else { 1 });
+        let point = text.get(at..end).unwrap_or_default().to_vec();
+        let value = self.allocate_string(heap, &point)?;
+        let next = u32::try_from(end).map_err(|_| VMError::StringLimit)?;
+        heap.set_object_kind(
+            reference,
+            ObjectKind::StringIterator {
+                target,
+                index: next,
+            },
+        )?;
+        Self::iterator_result(Some(value), heap, realm)
     }
 
     /// `CreateArrayFromList` of 7.3.18 for the parts of a split.
