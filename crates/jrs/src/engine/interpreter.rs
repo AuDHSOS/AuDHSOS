@@ -2756,6 +2756,36 @@ impl RegisterVM {
             Intrinsic::IteratorPrototypeIterator
             | Intrinsic::AsyncIteratorPrototypeAsyncIterator
             | Intrinsic::SpeciesGetter => Ok(call.receiver),
+            // 20.2.3.6 answers 7.3.21 for the receiver and the argument.
+            Intrinsic::FunctionPrototypeHasInstance => {
+                let value = self.call_argument(&call, 0, heap)?;
+                if !Self::is_callable(call.receiver, heap) {
+                    return Ok(VALUE_FALSE);
+                }
+                Ok(Value::from_bool(Self::ordinary_has_instance(
+                    call.receiver,
+                    value,
+                    heap,
+                    realm,
+                )?))
+            }
+            // 20.5.2.1 answers whether the value carries `[[ErrorData]]`.
+            Intrinsic::ErrorIsError => {
+                let value = self.call_argument(&call, 0, heap)?;
+                let is_error = value
+                    .as_object()
+                    .and_then(|object| heap.get_object(object))
+                    .is_some_and(|entry| matches!(entry.kind, ObjectKind::Error));
+                Ok(Value::from_bool(is_error))
+            }
+            // 20.4.3.5 answers the Symbol the receiver holds, whichever hint
+            // it was given.
+            Intrinsic::SymbolPrototypeToPrimitive => {
+                let Some(symbol) = Self::this_symbol_value(call.receiver, heap) else {
+                    return Err(type_error(heap, realm, "value is not a Symbol"));
+                };
+                Ok(Value::from_symbol(symbol))
+            }
             // 23.1.2.3 makes an Array of the arguments it was given.
             Intrinsic::ArrayOf => {
                 let mut values = Vec::new();

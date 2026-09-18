@@ -9900,6 +9900,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
     match intrinsic {
         crate::engine::realm::Intrinsic::ObjectPrototypeHasOwnProperty
         | crate::engine::realm::Intrinsic::ObjectPrototypeIsPrototypeOf
+        | crate::engine::realm::Intrinsic::FunctionPrototypeHasInstance
+        | crate::engine::realm::Intrinsic::ErrorIsError
         | crate::engine::realm::Intrinsic::ObjectPrototypePropertyIsEnumerable
         | crate::engine::realm::Intrinsic::StringPrototypeEndsWith
         | crate::engine::realm::Intrinsic::StringPrototypeIncludes
@@ -10045,6 +10047,7 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::StringPrototypeMatch
         | crate::engine::realm::Intrinsic::StringPrototypeSearch
         | crate::engine::realm::Intrinsic::SymbolPrototypeValueOf
+        | crate::engine::realm::Intrinsic::SymbolPrototypeToPrimitive
         | crate::engine::realm::Intrinsic::SymbolFor
         | crate::engine::realm::Intrinsic::ParseInt
         | crate::engine::realm::Intrinsic::ParseFloat

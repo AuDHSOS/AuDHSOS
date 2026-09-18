@@ -1160,6 +1160,13 @@ pub enum Intrinsic {
     AsyncFromSyncCloseIterator,
     /// `[Symbol.asyncIterator]`, 27.1.4.1, which answers the iterator itself.
     AsyncIteratorPrototypeAsyncIterator,
+    /// `[Symbol.hasInstance]`, 20.2.3.6, which 7.3.21 answers for.
+    FunctionPrototypeHasInstance,
+    /// `[Symbol.toPrimitive]`, 20.4.3.5, which answers the Symbol itself.
+    SymbolPrototypeToPrimitive,
+    /// `Error.isError`, 20.5.2.1, which answers whether a value carries
+    /// `[[ErrorData]]`.
+    ErrorIsError,
     /// `get constructor`, 27.1.3.3.1.1.
     IteratorPrototypeConstructorGet,
     /// `set constructor`, 27.1.3.3.1.2.
@@ -1276,6 +1283,8 @@ pub enum IntrinsicHolder {
     SymbolPrototype,
     /// `%Symbol%`, which carries the functions 20.4.2 gives the constructor.
     SymbolConstructor,
+    /// `%Error%`, which carries the function 20.5.2 gives the constructor.
+    ErrorConstructor,
     /// `%Error.prototype%`, which carries the methods 20.5.3 gives it.
     ErrorPrototype,
     /// `%Map.prototype%`, which carries the methods 24.1.3 gives it.
@@ -1320,7 +1329,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 458] = [
+    pub const ALL: [Self; 461] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1748,6 +1757,9 @@ impl Intrinsic {
         Self::AsyncFromSyncUnwrap,
         Self::AsyncFromSyncCloseIterator,
         Self::AsyncIteratorPrototypeAsyncIterator,
+        Self::FunctionPrototypeHasInstance,
+        Self::SymbolPrototypeToPrimitive,
+        Self::ErrorIsError,
         Self::IteratorPrototypeConstructorGet,
         Self::IteratorPrototypeConstructorSet,
         Self::IteratorPrototypeToStringTagGet,
@@ -1897,6 +1909,8 @@ impl Intrinsic {
                 IntrinsicHolder::AsyncFromSyncIteratorPrototype
             }
             Self::AsyncIteratorPrototypeAsyncIterator => IntrinsicHolder::AsyncIteratorPrototype,
+            Self::SymbolPrototypeToPrimitive => IntrinsicHolder::SymbolPrototype,
+            Self::ErrorIsError => IntrinsicHolder::ErrorConstructor,
             Self::ArrayConstructor | Self::ObjectConstructor | Self::FunctionConstructor => {
                 IntrinsicHolder::Global
             }
@@ -1904,7 +1918,8 @@ impl Intrinsic {
             | Self::FunctionPrototypeCall
             | Self::FunctionPrototypeBind
             | Self::FunctionPrototypeApply
-            | Self::FunctionPrototypeToString => IntrinsicHolder::FunctionPrototype,
+            | Self::FunctionPrototypeToString
+            | Self::FunctionPrototypeHasInstance => IntrinsicHolder::FunctionPrototype,
             Self::MathPow
             | Self::MathAbs
             | Self::MathCeil
@@ -2717,6 +2732,9 @@ impl Intrinsic {
             Self::AsyncFromSyncUnwrap => 455,
             Self::AsyncFromSyncCloseIterator => 456,
             Self::AsyncIteratorPrototypeAsyncIterator => 457,
+            Self::FunctionPrototypeHasInstance => 458,
+            Self::SymbolPrototypeToPrimitive => 459,
+            Self::ErrorIsError => 460,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3185,6 +3203,9 @@ impl Intrinsic {
             Self::AsyncFromSyncUnwrap => 455,
             Self::AsyncFromSyncCloseIterator => 456,
             Self::AsyncIteratorPrototypeAsyncIterator => 457,
+            Self::FunctionPrototypeHasInstance => 458,
+            Self::SymbolPrototypeToPrimitive => 459,
+            Self::ErrorIsError => 460,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3654,6 +3675,9 @@ impl Intrinsic {
             455 => Some(Self::AsyncFromSyncUnwrap),
             456 => Some(Self::AsyncFromSyncCloseIterator),
             457 => Some(Self::AsyncIteratorPrototypeAsyncIterator),
+            458 => Some(Self::FunctionPrototypeHasInstance),
+            459 => Some(Self::SymbolPrototypeToPrimitive),
+            460 => Some(Self::ErrorIsError),
             436 => Some(Self::IteratorPrototypeConstructorGet),
             437 => Some(Self::IteratorPrototypeConstructorSet),
             438 => Some(Self::IteratorPrototypeToStringTagGet),
@@ -4038,6 +4062,9 @@ impl Intrinsic {
             Self::ArrayPrototypeReduceRight | Self::TypedArrayPrototypeReduceRight => "reduceRight",
             Self::IteratorPrototypeIterator => "[Symbol.iterator]",
             Self::AsyncIteratorPrototypeAsyncIterator => "[Symbol.asyncIterator]",
+            Self::FunctionPrototypeHasInstance => "[Symbol.hasInstance]",
+            Self::SymbolPrototypeToPrimitive => "[Symbol.toPrimitive]",
+            Self::ErrorIsError => "isError",
             Self::ObjectPreventExtensions | Self::ReflectPreventExtensions => "preventExtensions",
             Self::ObjectIsExtensible | Self::ReflectIsExtensible => "isExtensible",
             Self::ObjectSeal => "seal",
@@ -5073,6 +5100,9 @@ impl Intrinsic {
             | Self::AsyncFromSyncIteratorPrototypeThrow
             | Self::AsyncFromSyncUnwrap
             | Self::AsyncFromSyncCloseIterator
+            | Self::FunctionPrototypeHasInstance
+            | Self::SymbolPrototypeToPrimitive
+            | Self::ErrorIsError
             | Self::IteratorPrototypeToStringTagSet
             | Self::HostDetachArrayBuffer
             | Self::TypedArrayPrototypeAt
@@ -7943,6 +7973,12 @@ impl Realm {
                         .get(Intrinsic::DateConstructor.index())
                         .ok_or(HeapError::InvalidReference)?,
                 )?,
+                IntrinsicHolder::ErrorConstructor => Self::rooted(
+                    heap,
+                    *intrinsics
+                        .get(Intrinsic::ErrorConstructor.index())
+                        .ok_or(HeapError::InvalidReference)?,
+                )?,
                 IntrinsicHolder::WeakMapPrototype => {
                     Self::rooted(heap, holders.weak_map_prototype)?
                 }
@@ -8098,6 +8134,37 @@ impl Realm {
                 )?;
                 continue;
             }
+            // 20.2.3.6 is neither writable nor configurable; 20.4.3.5 is
+            // configurable and not writable, as every Symbol-keyed method of
+            // clause 20 is.
+            if intrinsic == Intrinsic::FunctionPrototypeHasInstance {
+                heap.define_own_named(
+                    holder,
+                    WellKnownSymbol::HasInstance.key(),
+                    function,
+                    PropertyFlags {
+                        writable: false,
+                        enumerable: false,
+                        configurable: false,
+                        is_accessor: false,
+                    },
+                )?;
+                continue;
+            }
+            if intrinsic == Intrinsic::SymbolPrototypeToPrimitive {
+                heap.define_own_named(
+                    holder,
+                    WellKnownSymbol::ToPrimitive.key(),
+                    function,
+                    PropertyFlags {
+                        writable: false,
+                        enumerable: false,
+                        configurable: true,
+                        is_accessor: false,
+                    },
+                )?;
+                continue;
+            }
             // 22.2.6 gives %RegExp.prototype% four Symbol-keyed methods.
             if let Some(key) = match intrinsic {
                 Intrinsic::RegExpPrototypeReplace => Some(WellKnownSymbol::Replace.key()),
@@ -8116,6 +8183,17 @@ impl Realm {
             if intrinsic == Intrinsic::NumberConstructor {
                 let constructor = function.as_object().ok_or(HeapError::InvalidReference)?;
                 Self::define_number_constants(heap, constructor)?;
+            }
+            // 21.1.2.12 and 21.1.2.13 are the same function objects as the
+            // two of 19.2.4 and 19.2.5 on the global object.
+            if matches!(intrinsic, Intrinsic::ParseInt | Intrinsic::ParseFloat) {
+                let number = *intrinsics
+                    .get(Intrinsic::NumberConstructor.index())
+                    .ok_or(HeapError::InvalidReference)?;
+                let number = Self::rooted(heap, number)?
+                    .as_object()
+                    .ok_or(HeapError::InvalidReference)?;
+                heap.define_own_named(number, key, function, builtin_data())?;
             }
             // 23.2.3.37: %TypedArray.prototype%[@@iterator] is the same
             // function object as `values`.
