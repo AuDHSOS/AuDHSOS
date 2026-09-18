@@ -3642,6 +3642,16 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
     ) -> Result<f64, VMError> {
         let key = PropertyKey::String(heap.strings.intern("length")?);
+        // Step 6 asks for the `length` with 7.3.12, which runs a getter of the
+        // Script that this native has no frame for.
+        if heap
+            .own_named_flags(target, key)?
+            .is_some_and(|flags| flags.is_accessor)
+        {
+            return Err(VMError::Unsupported(
+                "a length of 20.2.3.2 that is an accessor",
+            ));
+        }
         let held = heap
             .own_named_flags(target, key)?
             .filter(|flags| !flags.is_accessor)
@@ -3653,15 +3663,31 @@ impl RegisterVM {
             reason = "an argument count is below 2^16"
         )]
         let taken = count as f64;
-        Ok(held.map_or(0.0, |length| (length - taken).max(0.0)))
+        // Step 7.b takes the integer part of the `length` the target carries,
+        // which 7.1.5 makes of it.
+        Ok(held.map_or(0.0, |length| {
+            let whole = if length < 0.0 {
+                -Self::round_toward(-length, true)
+            } else {
+                Self::round_toward(length, true)
+            };
+            (whole - taken).max(0.0)
+        }))
     }
 
     /// The `name` 20.2.3.2 step 8 gives a bound function: "bound " before the
     /// `name` of the target where that is a String.
     fn bound_name(target: ObjectRef, heap: &mut GenerationalHeap) -> Result<Vec<u16>, VMError> {
         let key = PropertyKey::String(heap.strings.intern("name")?);
-        let held = heap
-            .lookup_named(target, key)?
+        let found = heap.lookup_named(target, key)?;
+        // Step 8 reads the `name` with 7.3.2, which runs a getter of the
+        // Script that this native has no frame for.
+        if found.is_some_and(|property| property.flags.is_accessor) {
+            return Err(VMError::Unsupported(
+                "a name of 20.2.3.2 that is an accessor",
+            ));
+        }
+        let held = found
             .filter(|property| !property.flags.is_accessor)
             .map(|property| property.value)
             .filter(|value| value.is_string())
@@ -20071,9 +20097,51 @@ impl RegisterVM {
         let units: Vec<u16> = if pattern.source.is_empty() {
             "(?:)".encode_utf16().collect()
         } else {
-            pattern.source.to_vec()
+            Self::escaped_pattern(&pattern.source)
         };
         self.allocate_string(heap, &units)
+    }
+
+    /// `EscapeRegExpPattern` of 22.2.6.13.1: the text between the two solidi
+    /// of a literal that compiles to this pattern.
+    ///
+    /// A solidus that is not escaped already would end the literal, and a line
+    /// terminator would end the line, so both take a backslash.
+    fn escaped_pattern(source: &[u16]) -> Vec<u16> {
+        let mut units = Vec::with_capacity(source.len());
+        let mut escaped = false;
+        for unit in source.iter().copied() {
+            if escaped {
+                units.push(unit);
+                escaped = false;
+                continue;
+            }
+            match unit {
+                0x5C => escaped = true,
+                0x2F => units.push(0x5C),
+                // 12.9.3 ends a line at each of the four, which the text
+                // between two solidi cannot hold.
+                0x0A => {
+                    units.extend_from_slice(&[0x5C, 0x6E]);
+                    continue;
+                }
+                0x0D => {
+                    units.extend_from_slice(&[0x5C, 0x72]);
+                    continue;
+                }
+                0x2028 => {
+                    units.extend_from_slice(&[0x5C, 0x75, 0x32, 0x30, 0x32, 0x38]);
+                    continue;
+                }
+                0x2029 => {
+                    units.extend_from_slice(&[0x5C, 0x75, 0x32, 0x30, 0x32, 0x39]);
+                    continue;
+                }
+                _ => {}
+            }
+            units.push(unit);
+        }
+        units
     }
 
     /// `get flags` of 22.2.6.4.
