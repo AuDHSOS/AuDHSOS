@@ -197,8 +197,13 @@ fn the_time_slice_rotates_two_threads_that_never_yield() {
     let second = thread_of(SPIN, support::DEFAULT_PRIORITY);
     end_these(&[first.thread, second.thread]);
     begin_run();
-    support::start(first.thread);
-    support::start(second.thread);
+    // Both starts before the next tick: a tick between them hands the
+    // processor to the first thread, and the image gets it back only when
+    // the hook ends the run, which ends the second thread unstarted.
+    support::without_ticks(|| {
+        support::start(first.thread);
+        support::start(second.thread);
+    });
     finish_run();
 
     for (name, thread) in [("the first", &first), ("the second", &second)] {

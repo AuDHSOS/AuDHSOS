@@ -1422,6 +1422,19 @@ fn disable_interrupts() {
     }
 }
 
+/// Runs `body` with no tick inside it.
+///
+/// A test that makes two scheduler calls of one run needs this: a tick
+/// between them can give the processor to the thread the first call
+/// started, and the image gets it back only once the tick hook has ended
+/// the run — which ends the thread the second call was about to start.
+pub(crate) fn without_ticks<R>(body: impl FnOnce() -> R) -> R {
+    disable_interrupts();
+    let answer = body();
+    enable_interrupts();
+    answer
+}
+
 /// Runs whatever is runnable and comes back when nothing is, with the
 /// timer still reaching this thread. This is the loop of the idle thread
 /// in an image that has a timer.
