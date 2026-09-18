@@ -4982,6 +4982,20 @@ impl RegisterVM {
         {
             return Ok(entered);
         }
+        // 22.1.3.14 step 5 and 22.1.3.20 step 5 call a method of the RegExp
+        // step 4 made, which the Script may have replaced.
+        if !call.receiver.is_object()
+            && let Delegated::Entered(entered) = self.delegate_to_the_regexp_of_22_1_3(
+                intrinsic,
+                &call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            )?
+        {
+            return Ok(entered);
+        }
         // 22.1.3 sends the `this` value through ToString before it reads its
         // arguments, which is a method of the Script for an Object.
         if intrinsic.coerces_its_receiver() && call.receiver.is_object() {
@@ -14656,6 +14670,66 @@ impl RegisterVM {
         .map(Delegated::Entered)
     }
 
+    /// Step 5 of 22.1.3.14 and 22.1.3.20: the clause answers what the method
+    /// of the `RegExp` step 4 made answers, which the Script may have put
+    /// there in place of the one 22.2.6 gives.
+    fn delegate_to_the_regexp_of_22_1_3(
+        &mut self,
+        intrinsic: Intrinsic,
+        call: &Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Delegated, VMError> {
+        let (symbol, own) = match intrinsic {
+            Intrinsic::StringPrototypeMatch => (
+                super::realm::WellKnownSymbol::Match,
+                Intrinsic::RegExpPrototypeMatch,
+            ),
+            Intrinsic::StringPrototypeSearch => (
+                super::realm::WellKnownSymbol::Search,
+                Intrinsic::RegExpPrototypeSearch,
+            ),
+            _ => return Ok(Delegated::No),
+        };
+        let argument = self.call_argument(call, 0, heap)?;
+        let made = Self::regexp_of_22_1_3(argument, heap, realm)?;
+        let object = made.as_object().ok_or(VMError::TypeError)?;
+        let method = match heap.lookup_named(object, symbol.key())? {
+            Some(found) => Self::plain_value(found)?,
+            None => VALUE_UNDEFINED,
+        };
+        // 7.3.19 asks for a method, and the one 22.2.6 gives is what the
+        // clause runs without a frame.
+        if Self::is_intrinsic(method, own, heap) {
+            return Ok(Delegated::No);
+        }
+        if !Self::is_callable(method, heap) {
+            return Err(type_error(
+                heap,
+                realm,
+                "the method of 22.2.6 the RegExp holds is not callable",
+            ));
+        }
+        // Step 3 has converted the `this` value already, and step 5 passes
+        // the String it answered.
+        let answered = self.receiver_units(call.receiver, units, heap, realm)?;
+        let text = self.allocate_string(heap, &answered)?;
+        let arguments = Vec::from([text]);
+        self.answer_with_a_method(
+            method,
+            made,
+            arguments,
+            *call,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )
+        .map(Delegated::Entered)
+    }
+
     /// Enters a method of the Script whose answer is the answer of the native
     /// that called it.
     ///
@@ -19243,6 +19317,43 @@ impl RegisterVM {
         self.match_array(&text, &matched, pattern.indices, heap, realm)
     }
 
+    /// `RegExpCreate(regexp, undefined)` of 22.1.3.14 step 4 and 22.1.3.20
+    /// step 4, which answers an argument that is a `RegExp` unchanged.
+    ///
+    /// 22.2.3.1 would send an argument that is an Object through `ToString`,
+    /// which runs a method of the Script that this clause has no frame for.
+    fn regexp_of_22_1_3(
+        argument: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if argument
+            .as_object()
+            .and_then(|object| Self::regexp_pattern(object, heap))
+            .is_some()
+        {
+            return Ok(argument);
+        }
+        if argument.is_object() {
+            return Err(VMError::Unsupported("ToString of an Object"));
+        }
+        let source: alloc::rc::Rc<[u16]> = if argument.is_undefined() {
+            alloc::rc::Rc::from(&[][..])
+        } else {
+            alloc::rc::Rc::from(property_name_units(argument, heap, realm)?)
+        };
+        let compiled = crate::regexp::RegExp::compile(source, "").map_err(|_| {
+            raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::SyntaxError,
+                "invalid regular expression",
+            )
+        })?;
+        let pattern = super::object::PatternRef(alloc::rc::Rc::new(compiled));
+        Self::allocate_regexp(pattern, heap, realm)
+    }
+
     /// `String.prototype.match` of 22.1.3.14 and `String.prototype.search` of
     /// 22.1.3.20, both through the method 22.2.6 gives a `RegExp`.
     ///
@@ -19258,33 +19369,7 @@ impl RegisterVM {
     ) -> Result<Value, VMError> {
         let text = self.receiver_units(call.receiver, units, heap, realm)?;
         let argument = self.call_argument(call, 0, heap)?;
-        // 22.1.3.13 step 5 and 22.1.3.15 step 4 make a RegExp of an argument
-        // that is not one, with no flags.
-        let held = argument
-            .as_object()
-            .and_then(|object| Self::regexp_pattern(object, heap));
-        let argument = if held.is_some() {
-            argument
-        } else {
-            if argument.is_object() {
-                return Err(VMError::Unsupported("ToString of an Object"));
-            }
-            let source: alloc::rc::Rc<[u16]> = if argument.is_undefined() {
-                alloc::rc::Rc::from(&[][..])
-            } else {
-                alloc::rc::Rc::from(property_name_units(argument, heap, realm)?)
-            };
-            let compiled = crate::regexp::RegExp::compile(source, "").map_err(|_| {
-                raise(
-                    heap,
-                    realm,
-                    super::realm::NativeErrorKind::SyntaxError,
-                    "invalid regular expression",
-                )
-            })?;
-            let pattern = super::object::PatternRef(alloc::rc::Rc::new(compiled));
-            Self::allocate_regexp(pattern, heap, realm)?
-        };
+        let argument = Self::regexp_of_22_1_3(argument, heap, realm)?;
         let receiver = argument.as_object().ok_or(VMError::TypeError)?;
         let pattern = Self::regexp_pattern(receiver, heap).ok_or(VMError::TypeError)?;
         if intrinsic == Intrinsic::StringPrototypeSearch {
