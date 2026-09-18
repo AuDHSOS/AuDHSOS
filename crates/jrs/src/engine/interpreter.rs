@@ -6436,17 +6436,24 @@ impl RegisterVM {
         } else {
             call.arg_start
         };
-        let object = self.create_from_new_target(heap, realm, new_target)?;
+        // 10.2.2 step 5 creates the object for a base constructor and leaves a
+        // derived one to make its own at its super call.
+        let derives = Self::derives(self.read_reg(call.arg_start)?, units, heap);
+        let receiver = if derives {
+            VALUE_UNINITIALIZED
+        } else {
+            Value::from_object(self.create_from_new_target(heap, realm, new_target)?)
+        };
         // The new object goes where the List came in: the caller has no use
         // for that register any more, and the collector sees it there.
         let held = Reg(call.arg_start.0.saturating_add(1));
-        self.write_reg(held, Value::from_object(object))?;
+        self.write_reg(held, receiver)?;
         let target = self.read_reg(call.arg_start)?;
         // Step 5 gives the call the `newTarget` it was passed, and nothing
         // allocates between here and the frame.
         self.pending_new_target = self.read_reg(new_target)?;
         let call = Call {
-            receiver: Value::from_object(object),
+            receiver,
             arg_count,
             resume: Some(Resume::Spread { arguments }),
             construct: Some(Construction::Register(held)),
