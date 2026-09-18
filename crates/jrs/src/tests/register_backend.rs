@@ -7710,14 +7710,33 @@ fn an_object_rest_element_copies_what_the_pattern_left() -> Result<(), Error> {
     ] {
         differential_scripts(&[source])?;
     }
-    // A property that is an accessor runs its getter, which a copy has no
-    // frame for.
-    let mut host = SilentHost;
-    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
-    assert!(matches!(
-        realm.evaluate("function f(o){var {...r}=o;return r.a}f({get a(){return 1}})"),
-        Err(Error::Unsupported { .. })
-    ));
+    // Step 4.c.ii reads a property that is an accessor through its getter,
+    // which the copy opens a frame for and takes the answer of.
+    for source in [
+        "function f(o){var {...r}=o;return r.a}''+f({get a(){return 1}})",
+        "var l='';var o={get a(){l=l+'a';return 1},get b(){l=l+'b';return 2}};var {...r}=o;l+r.a+r.b",
+        "var t='';try{var {...r}={get a(){throw 1}}}catch(e){t='c'+e}t",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // 13.2.5.5 copies the same way, which the stack backend has not built.
+    for (source, expected) in [
+        (
+            "var o={get a(){return 5},b:2};var s={...o};s.a+','+s.b",
+            "5,2",
+        ),
+        ("var r={...'ab'};r[0]+r[1]", "ab"),
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let answer = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
+        let Value::String(text) = &answer else {
+            panic!("{source}: {answer:?}");
+        };
+        let held: alloc::vec::Vec<u16> = expected.encode_utf16().collect();
+        assert_eq!(&**text, held.as_slice(), "{source}");
+    }
     Ok(())
 }
 

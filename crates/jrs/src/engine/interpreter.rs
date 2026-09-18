@@ -598,6 +598,16 @@ pub enum Resume {
         /// value of the callback and the position of the next entry.
         state: Root,
     },
+    /// 7.3.25 step 4.c.ii called the getter of an own property it copies.
+    ///
+    /// The instruction has no frame of its own, so the copy waits in a record
+    /// of the heap the collector traces, and each return takes it to the next
+    /// key.
+    Copy {
+        /// Root holding the record: the object the copy fills, the source,
+        /// the keys it still has to copy and the one it is at.
+        state: Root,
+    },
     /// 23.1.3.30.1 called the comparator of a sort.
     ///
     /// The clause has no frame of its own, so the merge waits in a record of
@@ -890,6 +900,17 @@ impl IteratorWalkTaker {
         }
     }
 }
+
+/// The object 7.3.25 fills with the properties it copies.
+const COPY_TARGET: u32 = 0;
+/// The object it copies them from.
+const COPY_SOURCE: u32 = 1;
+/// The keys step 4 walks, in the order 10.1.11 gives them.
+const COPY_KEYS: u32 = 2;
+/// The key the copy is at.
+const COPY_POSITION: u32 = 3;
+/// The key a getter of the Script is answering for.
+const COPY_PENDING: u32 = 4;
 
 /// The items 23.1.3.30 step 3 read, in the order the merge has reached.
 const SORT_ITEMS: u32 = 0;
@@ -9808,7 +9829,166 @@ impl RegisterVM {
         self.step_iterator_walk(state, call, units, active_feedback, heap, realm)
     }
 
-    /// 23.1.3.30 step 3 and 23.1.3.34 step 4: the elements the sort orders,
+    /// `CopyDataProperties` of 7.3.25 steps 4 and 5: every own enumerable key
+    /// of the source that the excluded list does not name becomes a data
+    /// property of the target.
+    ///
+    /// Step 4.c.ii reads each of them with 7.3.2, which for an accessor is a
+    /// getter of the Script: the copy waits in a record between the keys.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the copy opens a frame, which needs what a call needs"
+    )]
+    fn begin_the_copy(
+        &mut self,
+        target: ObjectRef,
+        source: Value,
+        excluded: &[PropertyKey],
+        return_pc: usize,
+        caller_code_id: Option<u32>,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        // 7.3.25 step 3: undefined and null copy nothing at all.
+        let Some(object) = source.as_object() else {
+            self.acc = Value::from_object(target);
+            return Ok(None);
+        };
+        let keys = realm.array(heap, 0)?;
+        let mut count: u32 = 0;
+        for (key, enumerable) in heap.own_keys(object)? {
+            if !enumerable || excluded.contains(&key) {
+                continue;
+            }
+            let held = match key {
+                PropertyKey::String(name) => Value::from_string(name),
+                PropertyKey::Symbol(symbol) => Value::from_symbol(symbol),
+            };
+            heap.set_array_element(keys, count, held)?;
+            count = count.checked_add(1).ok_or(VMError::PropertyLimit)?;
+        }
+        let record = promise::record(
+            heap,
+            realm,
+            &[
+                Value::from_object(target),
+                source,
+                Value::from_object(keys),
+                Value::from_smi(0),
+                VALUE_UNINITIALIZED,
+            ],
+        )?;
+        // The record outlives every frame the copy opens, so it is a root of a
+        // scope of its own, which the last key leaves.
+        heap.enter_scope();
+        let state = heap.push_root(record)?;
+        self.step_the_copy(
+            state,
+            return_pc,
+            caller_code_id,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )
+    }
+
+    /// One step of the copy: it runs until the next getter of the Script, or
+    /// until the target carries every key.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the copy opens a frame, which needs what a call needs"
+    )]
+    fn step_the_copy(
+        &mut self,
+        state: Root,
+        return_pc: usize,
+        caller_code_id: Option<u32>,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        'copy: {
+            let target = promise::slot(heap, record, COPY_TARGET)
+                .as_object()
+                .ok_or(VMError::TypeError)?;
+            let source = promise::slot(heap, record, COPY_SOURCE);
+            let keys = promise::slot(heap, record, COPY_KEYS)
+                .as_object()
+                .ok_or(VMError::TypeError)?;
+            let mut position = promise::slot(heap, record, COPY_POSITION)
+                .as_smi()
+                .unwrap_or(0);
+            // The getter of the key the copy stood at has answered.
+            let pending = promise::slot(heap, record, COPY_PENDING);
+            if pending != VALUE_UNINITIALIZED {
+                let key = property_key(pending, heap, realm)?;
+                let answer = self.acc;
+                heap.define_own_named(target, key, answer, PropertyFlags::ordinary_data())?;
+                promise::set_slot(heap, record, COPY_PENDING, VALUE_UNINITIALIZED)?;
+                position = position.saturating_add(1);
+                promise::set_slot(heap, record, COPY_POSITION, Value::from_smi(position))?;
+            }
+            let Some(object) = source.as_object() else {
+                break 'copy;
+            };
+            loop {
+                let index = u32::try_from(position).map_err(|_| VMError::PropertyLimit)?;
+                let Some(held) = Self::element_at(heap, keys, index)? else {
+                    promise::set_slot(heap, record, COPY_POSITION, Value::from_smi(position))?;
+                    heap.exit_scope();
+                    self.acc = Value::from_object(target);
+                    return Ok(None);
+                };
+                self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+                if heap.own_property_count(target).unwrap_or(usize::MAX) >= self.property_limit {
+                    heap.exit_scope();
+                    return Err(VMError::PropertyLimit);
+                }
+                let key = property_key(held, heap, realm)?;
+                // Step 4.c.i passes over a key the source no longer has.
+                let Some(flags) = heap.own_named_flags(object, key)? else {
+                    position = position.saturating_add(1);
+                    continue;
+                };
+                if flags.is_accessor {
+                    let pair = heap
+                        .lookup_named(object, key)?
+                        .map(|found| found.value)
+                        .ok_or(VMError::TypeError)?;
+                    promise::set_slot(heap, record, COPY_PENDING, held)?;
+                    promise::set_slot(heap, record, COPY_POSITION, Value::from_smi(position))?;
+                    self.accessor_resume = Some(Resume::Copy { state });
+                    return self.enter_accessor(
+                        pair,
+                        source,
+                        None,
+                        return_pc,
+                        caller_code_id,
+                        units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    );
+                }
+                let indexed = Self::element_index_of(object, key, heap);
+                let value = Self::own_property_value(object, key, indexed, heap)?;
+                heap.define_own_named(target, key, value, PropertyFlags::ordinary_data())?;
+                position = position.saturating_add(1);
+            }
+        }
+        heap.exit_scope();
+        self.acc = promise::slot(heap, record, COPY_TARGET);
+        Ok(None)
+    }
+
+    /// 23.1.3.30 step 3 and 23.1.3.34 step 4: the elements the sort orders,    /// 23.1.3.30 step 3 and 23.1.3.34 step 4: the elements the sort orders,
     /// read before the first comparison, and the merge that orders them.
     ///
     /// Every step of the clause can reach the Script: an index of the receiver
@@ -25985,9 +26165,13 @@ impl RegisterVM {
                     )?;
                 }
             }
-            // 23.1.3.30.1: a comparator that throws leaves the merge, and the
-            // record it waited in gives its scope back.
-            if matches!(frame.resume, Some(Resume::Sort { .. })) {
+            // 23.1.3.30.1: a comparator that throws leaves the merge, and
+            // 7.3.25 step 4.c.ii a getter that throws leaves the copy; the
+            // record each waited in gives its scope back.
+            if matches!(
+                frame.resume,
+                Some(Resume::Sort { .. } | Resume::Copy { .. })
+            ) {
                 heap.exit_scope();
             }
             // 23.1.2.1 step 6.c.ix and 24.1.1.2 step 4.e: a mapper or an adder
@@ -28539,33 +28723,22 @@ impl RegisterVM {
                             )?;
                         }
                     }
-                    // 7.3.25 step 3: undefined and null copy nothing at all.
-                    if let Some(object) = target.as_object() {
-                        for (key, enumerable) in heap.own_keys(object)? {
-                            if !enumerable || names.contains(&key) {
-                                continue;
-                            }
-                            self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
-                            if heap.own_property_count(rest).unwrap_or(usize::MAX)
-                                >= self.property_limit
-                            {
-                                return Err(VMError::PropertyLimit);
-                            }
-                            if heap
-                                .own_named_flags(object, key)?
-                                .is_some_and(|flags| flags.is_accessor)
-                            {
-                                return Err(VMError::Unsupported("a property that is an accessor"));
-                            }
-                            let indexed = Self::element_index_of(object, key, heap);
-                            let value = Self::own_property_value(object, key, indexed, heap)?;
-                            heap.define_own_named(
-                                rest,
-                                key,
-                                value,
-                                PropertyFlags::ordinary_data(),
-                            )?;
-                        }
+                    // 7.3.25 step 4 reads each key with 7.3.2, which for an
+                    // accessor is a getter of the Script.
+                    let rest = self.acc.as_object().ok_or(VMError::TypeError)?;
+                    if let Some(code_id) = self.begin_the_copy(
+                        rest,
+                        target,
+                        &names,
+                        pc,
+                        current_code_id,
+                        units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    )? {
+                        current_code_id = Some(code_id);
+                        pc = self.pending_pc.take().unwrap_or(0);
                     }
                 }
                 // 13.2.5.5: the own enumerable properties of the source
@@ -28599,35 +28772,32 @@ impl RegisterVM {
                                 PropertyFlags::ordinary_data(),
                             )?;
                         }
-                    } else if let Some(object) = source.as_object() {
-                        for (key, enumerable) in heap.own_keys(object)? {
-                            if !enumerable {
-                                continue;
+                    } else if source.is_object() {
+                        // 7.3.25 step 4 reads each key with 7.3.2, which for
+                        // an accessor is a getter of the Script.
+                        let target = self
+                            .read_reg(register)?
+                            .as_object()
+                            .ok_or(VMError::TypeError)?;
+                        let held = self.acc;
+                        match self.begin_the_copy(
+                            target,
+                            source,
+                            &[],
+                            pc,
+                            current_code_id,
+                            units,
+                            active_feedback,
+                            heap,
+                            realm,
+                        )? {
+                            Some(code_id) => {
+                                current_code_id = Some(code_id);
+                                pc = self.pending_pc.take().unwrap_or(0);
                             }
-                            self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
-                            let target = self
-                                .read_reg(register)?
-                                .as_object()
-                                .ok_or(VMError::TypeError)?;
-                            if heap.own_property_count(target).unwrap_or(usize::MAX)
-                                >= self.property_limit
-                            {
-                                return Err(VMError::PropertyLimit);
-                            }
-                            if heap
-                                .own_named_flags(object, key)?
-                                .is_some_and(|flags| flags.is_accessor)
-                            {
-                                return Err(VMError::Unsupported("a property that is an accessor"));
-                            }
-                            let indexed = Self::element_index_of(object, key, heap);
-                            let value = Self::own_property_value(object, key, indexed, heap)?;
-                            heap.define_own_named(
-                                target,
-                                key,
-                                value,
-                                PropertyFlags::ordinary_data(),
-                            )?;
+                            // 13.2.5.5 leaves the value the spread named where
+                            // it stood, not the object the copy filled.
+                            None => self.acc = held,
                         }
                     }
                 }
@@ -29355,6 +29525,7 @@ impl RegisterVM {
                                     | Resume::CollectionWalk { .. }
                                     | Resume::CollectionInsert { .. }
                                     | Resume::IteratorWalk { .. }
+                                    | Resume::Copy { .. }
                                     | Resume::Sort { .. }
                                     | Resume::IteratorElement { .. }
                                     | Resume::IteratorResult { .. }
@@ -29415,6 +29586,18 @@ impl RegisterVM {
                                     // on with the value it ordered first.
                                     Resume::Sort { state } => self
                                         .step_the_sort(state, call, units, feedback, heap, realm)?,
+                                    // 7.3.25 step 4.c.ii answered, so the copy
+                                    // writes that key and goes on with the
+                                    // next.
+                                    Resume::Copy { state } => self.step_the_copy(
+                                        state,
+                                        call.return_pc,
+                                        call.caller_code_id,
+                                        units,
+                                        feedback,
+                                        heap,
+                                        realm,
+                                    )?,
                                     // 27.5.1.2 step 8: the body left, and the
                                     // answer says whether it is done.
                                     Resume::GeneratorStep { state } => {
