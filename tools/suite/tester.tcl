@@ -461,10 +461,9 @@ proc memdebug_log_sql {args} {}
 # that reads the answer of one of these is refused, because the command
 # raises rather than answering nothing.
 foreach cmd {
-  sqlite3_test_control sqlite3_soft_heap_limit
-  sqlite3_hard_heap_limit sqlite3_memory_used sqlite3_memory_highwater
-  sqlite3_shutdown sqlite3_initialize sqlite3_config sqlite3_db_config
-  sqlite3_db_config_lookaside sqlite3_db_status sqlite3_status
+  sqlite3_memory_used sqlite3_memory_highwater
+  sqlite3_config sqlite3_db_config
+  sqlite3_db_status sqlite3_status
   sqlite3_reset_auto_extension sqlite3_create_function sqlite3_limit
   sqlite3_extended_result_codes sqlite3_connection_pointer sqlite3_prepare
   sqlite3_prepare_v2 sqlite3_prepare_v3 sqlite3_finalize sqlite3_step
@@ -472,7 +471,7 @@ foreach cmd {
   sqlite3_enable_shared_cache sqlite3_release_memory sqlite3_db_release_memory
   sqlite3_memdebug_vfs_oom_test sqlite3_memdebug_settitle sqlite3_memdebug_fail
   sqlite3_memdebug_pending sqlite3_memdebug_log sqlite3_stmt_status
-  testvfs test_syscall test_sqlite3_log optimization_control
+  testvfs test_syscall test_sqlite3_log
   register_wholenumber_module register_echo_module register_tclvar_module
   register_fs_module register_dbstat_vtab register_schema_module
   load_static_extension run_thread_tests test_cli_invocation
@@ -521,6 +520,40 @@ proc set_test_counter {args} { return 0 }
 # which this engine has none of.
 proc test_set_config_pagecache {args} { return 0 }
 
+# hexio_read, hexio_write and the three that read or write a number of
+# test_hexio.c: the bytes of a file the harness holds, as capital
+# hexadecimal digits.
+proc hexio_read {file offset amt} {
+  return [lindex [harness_send read $file $offset $amt] 0]
+}
+proc hexio_write {file offset data} {
+  return [lindex [harness_send write $file $offset $data] 0]
+}
+proc hexio_get_int {args} {
+  set little 0
+  if {[llength $args] > 1} {
+    set little 1
+    set digits [lindex $args 1]
+  } else {
+    set digits [lindex $args 0]
+  }
+  binary scan [binary format H* $digits] c* bytes
+  set four {0 0 0 0}
+  set count [llength $bytes]
+  if {$count >= 4} {
+    set four [lrange $bytes 0 3]
+  } else {
+    set four [concat [lrange {0 0 0 0} 0 [expr {3-$count}]] $bytes]
+  }
+  if {$little} { set four [lreverse $four] }
+  set value 0
+  foreach byte $four { set value [expr {($value << 8) | ($byte & 0xff)}] }
+  if {$value >= 0x80000000} { set value [expr {$value - 0x100000000}] }
+  return $value
+}
+proc hexio_render_int16 {value} { return [format %04X [expr {$value & 0xffff}]] }
+proc hexio_render_int32 {value} { return [format %08X [expr {$value & 0xffffffff}]] }
+
 # `sqlite3_simulate_device` names the sector size and the properties of
 # the device under the file, which this engine reads none of.
 proc sqlite3_simulate_device {args} { return "" }
@@ -539,6 +572,25 @@ proc sqlite3_sourceid {} { return "3.53.4" }
 proc sqlite3_wal_checkpoint_v2 {db {mode passive} args} {
   return [$db eval "PRAGMA wal_checkpoint = $mode"]
 }
+
+# The commands that size or count what the C library holds, which this
+# engine holds none of.
+proc sqlite3_soft_heap_limit {args} { return 0 }
+proc sqlite3_hard_heap_limit {args} { return 0 }
+proc sqlite3_shutdown {args} { return 0 }
+proc sqlite3_initialize {args} { return 0 }
+proc sqlite3_db_config_lookaside {args} { return 0 }
+proc optimization_control {args} { return "" }
+# `sqlite3_test_control` turns on what the C library keeps for its own
+# tests: the internal functions, the imposter tables, the sorter's use
+# of a mapped file, and a clock that fails. This engine holds none of
+# them, so a case that reads one of those answers differently rather
+# than ending the file.
+proc sqlite3_test_control {args} { return 0 }
+proc extra_schema_checks {args} { return 1 }
+proc test_restore_config_pagecache {args} { return 0 }
+proc unregister_devsim {args} { return "" }
+proc translate_selftest {args} { return "" }
 
 # save_prng_state, restore_prng_state: the state random and randomblob
 # draw from next, which a test holds to draw the same words again.
@@ -721,6 +773,24 @@ set ::SQLITE_MAX_PAGE_COUNT 4294967294
 set ::SQLITE_MAX_LIKE_PATTERN_LENGTH 50000
 set ::SQLITE_MAX_TRIGGER_DEPTH 1000
 set ::SQLITE_MAX_MMAP_SIZE 0
+set ::SQLITE_DEFAULT_FILE_FORMAT 4
+set ::AUTOVACUUM 0
+set ::TEMP_STORE 1
+set ::bitmask_size 64
+
+# The compile options a file reads to skip a case its build cannot
+# reach, which `ifcapable` answers for as well.
+foreach option {
+  fts3 fts5 rtree icu vtab incrblob shared_cache codec atomicwrite vacuum
+  attach explain autovacuum session setlk_timeout configslower
+  memorymanage threadsafe
+} { set ::sqlite_options($option) 0 }
+foreach option {
+  wal utf16 integrityck casesensitivelike trigger view subquery compound
+  foreignkey json1 like_match_blobs pragma reindex analyze altertable
+  cast check conflict datetime floatingpoint or_opt stat4 update_delete_limit
+} { set ::sqlite_options($option) 1 }
+set ::sqlite_options(default_autovacuum) 0
 set ::SQLITE_MAX_WORKER_THREADS 0
 
 set ::tcl_precision 15

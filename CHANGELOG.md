@@ -7,6 +7,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- The suite's own tester reaches the bytes the harness holds for
+  `hexio_read` and `hexio_write`, which the new `read` and `write`
+  requests carry as hexadecimal digits. D-297 records it. `corruptF.test`
+  answers 266 cases where it answered 4.
+
+- The suite's own tester carries the compile options as
+  `$::sqlite_options(name)` and answers rather than raises for eleven
+  more commands of `testfixture`. D-298 records it. `expr.test` answers
+  613 cases where it answered 315.
+
 - The suite's own tester answers `file size` and `file exists` over a
   database the harness holds, the log beside it or the journal beside
   it, which the new `size` request asks for, and `wal_common.tcl` counts

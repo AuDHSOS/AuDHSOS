@@ -704,6 +704,11 @@ impl Session {
                 Ok(Vec::new())
             }
             "exists" => Ok(vec![usize::from(self.sized(first).is_some()).to_string()]),
+            // `hexio_read` and `hexio_write` of `test_hexio.c`: the
+            // bytes of a file this harness holds, read out as
+            // hexadecimal digits and written back from them.
+            "read" => self.read_bytes(first, second, args.get(2).map_or("", String::as_str)),
+            "write" => self.write_bytes(first, second, args.get(2).map_or("", String::as_str)),
             // `file size`: the bytes the harness holds under a name,
             // and minus one where it holds nothing under it.
             "size" => Ok(vec![
@@ -791,6 +796,67 @@ impl Session {
         match tail {
             "wal" => writer.log().map(<[u8]>::len),
             "journal" => writer.journal().map(<[u8]>::len),
+            _ => None,
+        }
+    }
+
+    /// `hexio_read FILENAME OFFSET AMT`: `amt` bytes of the file from
+    /// `offset`, as the capital hexadecimal digits `sqlite3TestBinToHex`
+    /// writes.
+    ///
+    /// A read past the end of the file answers the bytes up to it.
+    /// Reading costs O(n) in the bytes it answers.
+    fn read_bytes(&self, name: &str, offset: &str, amount: &str) -> Result<Vec<String>, String> {
+        let bytes = self
+            .bytes_of(name)
+            .ok_or_else(|| format!("cannot open input file {name}"))?;
+        let at = number_of(offset)?;
+        let wanted = number_of(amount)?;
+        let end = at.saturating_add(wanted).min(bytes.len());
+        let mut out = String::with_capacity(end.saturating_sub(at).saturating_mul(2));
+        for byte in bytes.get(at..end).unwrap_or_default() {
+            for half in [byte >> 4, byte & 0xf] {
+                out.push(char::from_digit(u32::from(half), 16).unwrap_or('0'));
+            }
+        }
+        Ok(vec![out.to_uppercase()])
+    }
+
+    /// `hexio_write FILENAME OFFSET HEXDATA`: the bytes those digits
+    /// name, written into the file from `offset`, and how many of them
+    /// were written.
+    ///
+    /// The file is read again from the bytes the write left, so a write
+    /// that leaves a file this engine cannot read is refused. Writing
+    /// costs O(n) in the bytes of the file.
+    fn write_bytes(&mut self, name: &str, offset: &str, data: &str) -> Result<Vec<String>, String> {
+        let mut bytes = self
+            .bytes_of(name)
+            .ok_or_else(|| format!("cannot open output file {name}"))?;
+        let at = number_of(offset)?;
+        let written = binary(data);
+        for (slot, byte) in bytes.iter_mut().skip(at).zip(written.iter()) {
+            *slot = *byte;
+        }
+        let mut writer = Writer::opened(&bytes).map_err(|error| error.message())?;
+        writer.defines(DEFINED);
+        self.held.insert(name.to_owned(), writer);
+        Ok(vec![written.len().to_string()])
+    }
+
+    /// The bytes the harness holds under `name`: the database itself,
+    /// the log beside it, or the journal beside it.
+    ///
+    /// Writing the database out costs O(n) in its pages.
+    fn bytes_of(&self, name: &str) -> Option<Vec<u8>> {
+        if let Some(writer) = self.held.get(name) {
+            return Some(writer.written());
+        }
+        let (base, tail) = name.rsplit_once('-')?;
+        let writer = self.held.get(base)?;
+        match tail {
+            "wal" => writer.log().map(<[u8]>::to_vec),
+            "journal" => writer.journal().map(<[u8]>::to_vec),
             _ => None,
         }
     }
@@ -1558,6 +1624,33 @@ fn narrowed(number: i64) -> i32 {
 fn shape(text: &str, message: String) -> String {
     say(&format!("S {} {message}", first_words(text)));
     message
+}
+
+/// A whole number a request carries, which every request that names a
+/// place in a file carries two of.
+fn number_of(text: &str) -> Result<usize, String> {
+    text.parse::<usize>()
+        .map_err(|source| format!("a place in a file is a whole number: {source}"))
+}
+
+/// The bytes a run of hexadecimal digits names, which is
+/// `sqlite3TestHexToBin`: a digit that is none ends the run.
+///
+/// Reading them costs O(n) in the digits.
+fn binary(digits: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(digits.len() / 2);
+    let mut held: Option<u8> = None;
+    for digit in digits.chars() {
+        let Some(value) = digit.to_digit(16) else {
+            break;
+        };
+        let low = u8::try_from(value).unwrap_or(0);
+        match held.take() {
+            Some(high) => out.push((high << 4) | low),
+            None => held = Some(low),
+        }
+    }
+    out
 }
 
 /// The first line of what a file stopped at, cut to 72 characters,
