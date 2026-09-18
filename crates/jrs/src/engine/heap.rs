@@ -1402,6 +1402,11 @@ impl GenerationalHeap {
         Ok(self.strings.intern_units(&units)?)
     }
 
+    /// The `length` 10.4.2 gives an Array, as the Number a read answers.
+    fn length_of_array(length: u32) -> Value {
+        Value::from_f64(f64::from(length))
+    }
+
     /// Resolves a named property through the Prototype Chain.
     ///
     /// # Errors
@@ -1463,6 +1468,32 @@ impl GenerationalHeap {
                         self.shapes.prototype_epoch()
                     },
                     mapped: mapped.is_some(),
+                }));
+            }
+            // 10.4.2 gives an Array a `length` of its own that no Shape
+            // carries, and 10.1.8.1 walks it like any other property of a
+            // Prototype. The answer names no slot, so no inline cache
+            // records it.
+            if let Some(length) = self.array_length(current)
+                && name
+                    .as_string()
+                    .and_then(|name| self.strings.to_utf16(Value::from_string(name)))
+                    .is_some_and(|units| units == LENGTH_UNITS)
+            {
+                return Ok(Some(NamedProperty {
+                    receiver_shape,
+                    holder_depth: depth,
+                    holder_shape: object.shape_id,
+                    slot: 0,
+                    value: Self::length_of_array(length),
+                    flags: PropertyFlags {
+                        writable: self.array_length_is_writable(current).unwrap_or(true),
+                        enumerable: false,
+                        configurable: false,
+                        is_accessor: false,
+                    },
+                    prototype_epoch: None,
+                    mapped: true,
                 }));
             }
             if object.prototype.is_null() {
