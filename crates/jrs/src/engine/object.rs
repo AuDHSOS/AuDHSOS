@@ -238,6 +238,9 @@ pub enum ObjectKind {
         /// the `length` 7.1.20 reads, or the index 7.1.5 makes of the
         /// argument a scan starts from.
         converting: u8,
+        /// Which part of 23.1.2 the walk stands in: the elements, the
+        /// construct of the receiver, or the `length` of the answer.
+        phase: u8,
         /// Which method 7.1.1 has already asked for the value in flight: 0
         /// before any, 1 after the getter, 2 after `valueOf`, 3 after
         /// `toString`. The object being converted waits in `element`.
