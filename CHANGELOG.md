@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` answers `PRAGMA wal_checkpoint`, which writes the pages
+  the log holds into the database file and answers how many frames it
+  moved; `TRUNCATE` and `RESTART` begin the log again at once and every
+  other mode leaves that to the commit after the checkpoint. D-292
+  records it. Catalog 6.6.203.
+
 - `db-sqlite` gives the next row of a table whose largest key is
   9223372036854775807 a key drawn at random, up to a hundred draws,
   after which the write is refused `database or disk is full`; a table

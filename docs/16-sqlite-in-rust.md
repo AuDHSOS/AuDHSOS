@@ -832,6 +832,10 @@ Size: L.
     recursive reference is not refused for that.
 63. The key an `INSERT` takes where the table holds the largest key an
     integer holds. Built, which D-286 records.
+64. `PRAGMA wal_checkpoint`, which writes the frames of the log into the
+    database file. Built, which D-292 records. A second connection that
+    holds the log back is still one this crate has none of, so the first
+    column is always nought.
 
 ### Done when
 
@@ -841,8 +845,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 90 462 cases in 727 files, 76 804
-pass, 2667 answer differently, and 10 991 name something the engine
+under the `tclsh` of the machine. Of 92 156 cases in 727 files, 79 410
+pass, 2673 answer differently, and 10 073 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts

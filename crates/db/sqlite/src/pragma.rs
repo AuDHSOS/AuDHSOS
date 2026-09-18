@@ -59,6 +59,9 @@ pub enum Setting {
     /// `PRAGMA foreign_key_check`, which answers one row per row that
     /// points at no row.
     ForeignKeyCheck,
+    /// `PRAGMA wal_checkpoint`, which moves the frames of the log into
+    /// the database file.
+    WalCheckpoint,
 }
 
 /// What a pragma the connection keeps a value for is written as.
@@ -392,6 +395,7 @@ pub fn of_name(name: &[u8]) -> Option<Setting> {
         b"quick_check" => Setting::Quick,
         b"foreign_key_list" => Setting::ForeignKeyList,
         b"foreign_key_check" => Setting::ForeignKeyCheck,
+        b"wal_checkpoint" => Setting::WalCheckpoint,
         b"legacy_file_format"
         | b"legacy_alter_table"
         | b"empty_result_callbacks"
@@ -449,7 +453,8 @@ impl Setting {
             | Setting::Integrity
             | Setting::Quick
             | Setting::ForeignKeyList
-            | Setting::ForeignKeyCheck => return None,
+            | Setting::ForeignKeyCheck
+            | Setting::WalCheckpoint => return None,
         })
     }
 }

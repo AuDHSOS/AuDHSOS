@@ -5942,3 +5942,21 @@ Document 16 step Q8.
 - `bytes::varint_again` answers the value a varint carried, how many
   bytes the write took and how many the read took, and the three agree
   for 0, 127, 128, 16383, 16384 and the largest number a `u64` holds.
+
+### 6.6.203 What a checkpoint answers (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A file that is not logging answers `0 -1 -1`, because it holds no
+  frame.
+- A checkpoint over a log answers nought, then twice how many frames the
+  log holds, and the file it wrote holds the rows the log held while the
+  file before it named no table.
+- The commit after a checkpoint begins the log again, so the checkpoint
+  after that commit counts the frames of that commit alone.
+- A checkpoint that follows one with no commit between them counts the
+  same frames again.
+- `RESTART` counts the frames it moved and leaves a log of no frame, so
+  the checkpoint after it answers `0 0 0`.
+- `TRUNCATE` answers `0 0 0` whatever the log held, and the rows stand in
+  the file it wrote.

@@ -249,6 +249,34 @@ impl Log {
     pub const fn page_size(&self) -> u32 {
         self.page_size
     }
+
+    /// How many frames the log holds, which is what
+    /// `PRAGMA wal_checkpoint` answers for its second and third
+    /// columns.
+    ///
+    /// Counting them costs O(1).
+    #[must_use]
+    pub fn frames(&self) -> usize {
+        let each = FRAME.saturating_add(size(u64::from(self.page_size)));
+        self.bytes
+            .len()
+            .saturating_sub(HEADER)
+            .checked_div(each)
+            .unwrap_or(0)
+    }
+
+    /// The log begun again, which `walRestartHdr` writes after a
+    /// checkpoint moved every frame into the database: the frames go,
+    /// the count of checkpoints rises by one, and the first salt rises
+    /// by one so that no frame of the log before it reads as one of
+    /// this log.
+    ///
+    /// Writing the header again costs O(1).
+    pub fn restart(&mut self) {
+        let checkpoint = u32_at(&self.bytes, 12).unwrap_or(0).wrapping_add(1);
+        let salt = (self.salt.0.wrapping_add(1), self.salt.1);
+        *self = Self::new(self.page_size, salt, checkpoint, self.big);
+    }
 }
 
 /// Records that `frame` holds the newest copy of `page` so far.

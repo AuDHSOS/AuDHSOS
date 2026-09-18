@@ -435,6 +435,9 @@ pub struct Writer {
     /// The file as write-ahead logging began, which is what a database
     /// no checkpoint has run over holds.
     origin: Option<Vec<u8>>,
+    /// Whether the commit after this one begins the log again, which a
+    /// checkpoint that left the frames where they are asks for.
+    restarting: bool,
     /// Whether a statement that changes rows answers how many it
     /// changed, which `PRAGMA count_changes` sets.
     counting: bool,
@@ -510,6 +513,7 @@ impl Writer {
             journal: None,
             log: None,
             origin: None,
+            restarting: false,
             counting: false,
             counted: crate::func::Counted::default(),
             writing: 0,
@@ -575,6 +579,7 @@ impl Writer {
             journal: None,
             log: None,
             origin: None,
+            restarting: false,
             counting: false,
             counted: crate::func::Counted::default(),
             writing: 0,
@@ -1364,6 +1369,80 @@ impl Writer {
         }
     }
 
+    /// `PRAGMA name`, which answers the one row the connection holds for
+    /// that pragma.
+    ///
+    /// A connection answers a pragma out of what it holds and not out of
+    /// the file, because a file with no table holds no encoding:
+    /// `sqlite3Pragma` reads the schema in memory. Answering one costs
+    /// O(1).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unsupported`] for a pragma no header of a file holds.
+    fn pragma_read(&self, setting: crate::pragma::Setting) -> Result<Vec<Vec<Value>>, Error> {
+        if setting == crate::pragma::Setting::CountChanges {
+            return Ok(alloc::vec![alloc::vec![Value::Int(i64::from(
+                self.counting
+            ))]]);
+        }
+        if let crate::pragma::Setting::Held(at) = setting {
+            return Ok(alloc::vec![alloc::vec![self.held(at)]]);
+        }
+        // The journal mode belongs to the connection, which holds it
+        // whatever the header of the file says.
+        if setting == crate::pragma::Setting::JournalMode {
+            return Ok(alloc::vec![alloc::vec![Value::Text(
+                self.journalled().to_vec()
+            )]]);
+        }
+        let read = setting.read(&self.now()).ok_or(Error::Unsupported)?;
+        Ok(alloc::vec![alloc::vec![read]])
+    }
+
+    /// `PRAGMA wal_checkpoint`: the pages the log holds are written into
+    /// the database file, and the three columns
+    /// `sqlite3_wal_checkpoint_v2` answers say so.
+    ///
+    /// The first column is nought, because one connection writes here
+    /// and no other holds the log back. The second and the third are how
+    /// many frames the log holds, and both are nought for `TRUNCATE`,
+    /// which leaves a log of no frame. `RESTART` and `TRUNCATE` begin
+    /// the log again at once; every other mode leaves the frames where
+    /// they are and the commit after the checkpoint begins the log
+    /// again, which is `walRestartLog`. Writing the file costs O(n) in
+    /// its pages.
+    fn checkpoint(&mut self, how: Option<&[u8]>) -> Vec<Vec<Value>> {
+        let named = |word: &[u8]| how.is_some_and(|text| text.eq_ignore_ascii_case(word));
+        let Some(mut log) = self.log.take() else {
+            // A file that is not logging holds no frame, which the C
+            // library says with minus one rather than nought.
+            return alloc::vec![alloc::vec![Value::Int(0), Value::Int(-1), Value::Int(-1)]];
+        };
+        let frames = i64::try_from(log.frames()).unwrap_or(i64::MAX);
+        let truncating = named(b"truncate");
+        let restarting = truncating || named(b"restart");
+        if restarting {
+            log.restart();
+        }
+        self.log = Some(log);
+        self.restarting = !restarting;
+        // `pager_write_changecounter`: the file the checkpoint writes
+        // carries the counter the frames carried.
+        let mut now = self.now();
+        now.change_counter = now.change_counter.saturating_add(1);
+        now.version_valid_for = now.change_counter;
+        self.origin = Some(self.pages.written(&now));
+        self.header.change_counter = now.change_counter;
+        self.header.version_valid_for = now.version_valid_for;
+        let counted = if truncating { 0 } else { frames };
+        alloc::vec![alloc::vec![
+            Value::Int(0),
+            Value::Int(counted),
+            Value::Int(counted)
+        ]]
+    }
+
     /// The file the pages hold, which is what a statement reads its
     /// rows out of, whatever a log beside the file holds.
     fn image(&self) -> Vec<u8> {
@@ -1808,6 +1887,13 @@ impl Writer {
             // there. A commit that writes the file itself carries the
             // counter on.
             if let Some(log) = &mut self.log {
+                // `walRestartLog`: the commit after a checkpoint begins
+                // the log again, because every frame of it is in the
+                // file already.
+                if self.restarting {
+                    log.restart();
+                    self.restarting = false;
+                }
                 let mut now = self.header;
                 now.change_counter = now.change_counter.saturating_add(1);
                 now.version_valid_for = now.change_counter;
@@ -1858,6 +1944,10 @@ impl Writer {
                 .map(|value| crate::schema::dequote(value.text(sql)));
             return self.checked_keys(named.as_deref());
         }
+        if setting == crate::pragma::Setting::WalCheckpoint {
+            let how = asked.value.map(|value| value.text(sql));
+            return Ok(self.checkpoint(how));
+        }
         if let Some(quick) = quick {
             let bytes = self.image();
             let database = Database::open_collating(&bytes, self.collating)?;
@@ -1867,26 +1957,7 @@ impl Writer {
                 .collect());
         }
         let Some(value) = asked.value else {
-            // A connection answers a pragma out of what it holds and
-            // not out of the file, because a file with no table holds
-            // no encoding: `sqlite3Pragma` reads the schema in memory.
-            if setting == crate::pragma::Setting::CountChanges {
-                return Ok(alloc::vec![alloc::vec![Value::Int(i64::from(
-                    self.counting
-                ))]]);
-            }
-            if let crate::pragma::Setting::Held(at) = setting {
-                return Ok(alloc::vec![alloc::vec![self.held(at)]]);
-            }
-            // The journal mode belongs to the connection, which holds
-            // it whatever the header of the file says.
-            if setting == crate::pragma::Setting::JournalMode {
-                return Ok(alloc::vec![alloc::vec![Value::Text(
-                    self.journalled().to_vec()
-                )]]);
-            }
-            let read = setting.read(&self.now()).ok_or(Error::Unsupported)?;
-            return Ok(alloc::vec![alloc::vec![read]]);
+            return self.pragma_read(setting);
         };
         let text = value.text(sql);
         if setting == crate::pragma::Setting::Ignored {

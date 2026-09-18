@@ -52,8 +52,8 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-90 462 cases of 727 files: 76 804 pass, 2667 answer differently and
-10 991 are refused.
+92 156 cases of 727 files: 79 410 pass, 2673 answer differently and
+10 073 are refused.
 
 `--configuration` opens every connection of a run under one of nine
 page-size, encoding and journal-mode settings, which D-275 decides.
@@ -61,7 +61,7 @@ What each answers, over the same files:
 
 | Configuration | Passed | Answered differently | Refused |
 |---------------|-------:|---------------------:|--------:|
-| `utf8-4096-delete` | 76 804 | 2667 | 10 991 |
+| `utf8-4096-delete` | 79 410 | 2673 | 10 073 |
 | `utf16le-4096-delete` | 61 214 | 2392 | 9500 |
 | `utf16be-4096-delete` | 61 229 | 2392 | 9500 |
 | `utf8-512-delete` | 61 073 | 2452 | 9435 |
@@ -73,7 +73,7 @@ What each answers, over the same files:
 
 The counts move by tens between runs of one configuration, because the
 files the deadline ends are counted with the cases they ran. Only the
-first row is a run after D-286 to D-291; the other eight were measured
+first row is a run after D-286 to D-292; the other eight were measured
 before them and are lower than they would read now.
 
 One row is behind the others by more than that: `utf8-4096-wal` refuses
