@@ -920,7 +920,15 @@ type RegisterArrayLayout<'a> = (
 #[derive(Clone, Copy)]
 enum ForInHead<'a> {
     /// A lexical head: 14.7.5.5 makes one binding per iteration.
-    PerIteration { name: &'a str, mutable: bool },
+    PerIteration {
+        /// The name the head declares.
+        name: &'a str,
+        /// Whether the declaration is a `let`.
+        mutable: bool,
+        /// Whether a nested function of the body reads the binding, which is
+        /// what makes the environment of an iteration observable.
+        captured: bool,
+    },
     /// A `var` head: the one binding the declaration made, in its register.
     Var {
         name: &'a str,
@@ -7920,7 +7928,7 @@ impl RegisterLowerer {
         // A context of the frame that holds anything but the bindings of the
         // head would be copied with them, and the copy would take the writes
         // of every closure that captured a binding before the loop.
-        if self.code.own_context_slot_count.is_some() || own != u16::try_from(held).ok() {
+        if self.code.own_context_slot_count.unwrap_or(0) != 0 || own != u16::try_from(held).ok() {
             self.refuse("a binding of a `for` head that a nested function reads");
             return None;
         }
@@ -8147,9 +8155,13 @@ impl RegisterLowerer {
             });
         }
         if lexical.is_some() {
-            return self
-                .iteration_binding(binding, target, body)
-                .map(|(name, mutable)| ForInHead::PerIteration { name, mutable });
+            return self.iteration_binding(binding, target, body).map(
+                |(name, mutable, captured)| ForInHead::PerIteration {
+                    name,
+                    mutable,
+                    captured,
+                },
+            );
         }
         let name = pattern.identifier()?;
         let mut direct = BTreeSet::new();
@@ -8261,7 +8273,7 @@ impl RegisterLowerer {
         binding: Option<&'a (BindingPattern, Option<bool>)>,
         target: Option<&parser::AssignmentTarget>,
         body: &Stmt,
-    ) -> Option<(&'a str, bool)> {
+    ) -> Option<(&'a str, bool, bool)> {
         if target.is_some() {
             return None;
         }
@@ -8276,10 +8288,48 @@ impl RegisterLowerer {
         let mut nested = BTreeSet::new();
         let mut captured = BTreeSet::new();
         register_statement_references(body, &mut direct, &mut nested, &mut captured)?;
-        if nested.contains(name) {
+        Some((name, *mutable, nested.contains(name)))
+    }
+
+    /// 14.7.5.7 step 3.e makes an environment of its own for the iteration and
+    /// the binding of the head in it, which is what a nested function of the
+    /// body reads.
+    ///
+    /// Names in `scoped` the binding the body stores into, and leaves it where
+    /// it stands where no nested function reads the head and the register of
+    /// the head is all the body needs.
+    fn scope_the_iteration_binding(
+        &mut self,
+        head_binding: ForInHead<'_>,
+        scoped: &mut Option<RegisterBinding>,
+    ) -> Option<()> {
+        let ForInHead::PerIteration {
+            name,
+            captured: true,
+            ..
+        } = head_binding
+        else {
+            return Some(());
+        };
+        // The copy of an iteration carries every slot of the context, so a
+        // context that holds anything beside the binding of the head would
+        // take the writes of a closure made before the loop.
+        if self.code.own_context_slot_count.unwrap_or(0) != 0 {
+            self.refuse("a capture beside the binding of a loop head");
             return None;
         }
-        Some((name, *mutable))
+        *scoped = Some(self.capture_binding(name)?);
+        Some(())
+    }
+
+    /// Refuses a loop whose body captured anything beside the binding of the
+    /// head, which the copy of an iteration would carry with it.
+    fn close_the_iteration_scope(&mut self, scoped: Option<RegisterBinding>) -> Option<()> {
+        if scoped.is_some() && self.code.own_context_slot_count != Some(1) {
+            self.refuse("a capture beside the binding of a loop head");
+            return None;
+        }
+        Some(())
     }
 
     /// Lowers `for (ForDeclaration in Expression) Statement` of 14.7.5.
@@ -8305,7 +8355,7 @@ impl RegisterLowerer {
         // runs and leaves it uninitialized there, so a closure the expression
         // makes reads it in its Temporal Dead Zone for ever.
         let shadowed = match head_binding {
-            ForInHead::PerIteration { name, mutable }
+            ForInHead::PerIteration { name, mutable, .. }
                 if Self::head_expression_reads(name, object) =>
             {
                 Some(self.open_head_scope(name, mutable)?)
@@ -8337,7 +8387,7 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Star(result_register));
 
         let key_register = match head_binding {
-            ForInHead::PerIteration { name, mutable } => {
+            ForInHead::PerIteration { name, mutable, .. } => {
                 let key_register = self.allocate_register()?;
                 self.active_binding_count = self.active_binding_count.checked_add(1)?;
                 self.max_binding_count = self.max_binding_count.max(self.active_binding_count);
@@ -8374,6 +8424,8 @@ impl RegisterLowerer {
                 register
             }
         };
+        let mut scoped = None;
+        self.scope_the_iteration_binding(head_binding, &mut scoped)?;
         let head_global = match head_binding {
             ForInHead::Global { name } => {
                 let units: Vec<u16> = name.encode_utf16().collect();
@@ -8414,12 +8466,13 @@ impl RegisterLowerer {
                 result: result_register,
                 source: None,
                 guarded_layout: None,
-                scoped: None,
+                scoped,
                 close: None,
             },
             &bindings_at_head,
         )?;
         self.bindings = bindings_at_head;
+        self.close_the_iteration_scope(scoped)?;
         match head_binding {
             ForInHead::PerIteration { name, .. } => {
                 self.bindings.remove(name)?;
@@ -8742,6 +8795,8 @@ impl RegisterLowerer {
         let step = self.allocate_register()?;
         let next = self.allocate_register()?;
         let variable = self.iteration_variable(head_binding, RegisterType::Unknown)?;
+        let mut scoped = None;
+        self.scope_the_iteration_binding(head_binding, &mut scoped)?;
         let head_global = match head_binding {
             ForInHead::Global { name } => {
                 let units: Vec<u16> = name.encode_utf16().collect();
@@ -8821,7 +8876,7 @@ impl RegisterLowerer {
                 result: result_register,
                 source: None,
                 guarded_layout: None,
-                scoped: None,
+                scoped,
                 close: Some((iterator, next, false)),
             },
             &bindings_at_head,
@@ -8829,6 +8884,7 @@ impl RegisterLowerer {
         self.open_iterators.pop();
         let flow = flow?;
         self.bindings = bindings_at_head;
+        self.close_the_iteration_scope(scoped)?;
         self.close_iteration_variable(head_binding, variable, RegisterType::Unknown)?;
         self.release_register(next)?;
         self.release_register(step)?;
@@ -9055,6 +9111,8 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Star(result_register));
         let step = self.allocate_register()?;
         let variable = self.iteration_variable(head_binding, RegisterType::Unknown)?;
+        let mut scoped = None;
+        self.scope_the_iteration_binding(head_binding, &mut scoped)?;
         let head_global = match head_binding {
             ForInHead::Global { name } => {
                 let units: Vec<u16> = name.encode_utf16().collect();
@@ -9124,7 +9182,7 @@ impl RegisterLowerer {
                 result: result_register,
                 source: None,
                 guarded_layout: None,
-                scoped: None,
+                scoped,
                 close: Some((iterator, step, true)),
             },
             &bindings_at_head,
@@ -9132,6 +9190,7 @@ impl RegisterLowerer {
         self.open_iterators.pop();
         let flow = flow?;
         self.bindings = bindings_at_head;
+        self.close_the_iteration_scope(scoped)?;
         self.close_iteration_variable(head_binding, variable, RegisterType::Unknown)?;
         self.release_register(step)?;
         self.release_register(result_register)?;
@@ -9355,7 +9414,7 @@ impl RegisterLowerer {
         element_type: RegisterType,
     ) -> Option<crate::engine::bytecode::Reg> {
         match head_binding {
-            ForInHead::PerIteration { name, mutable } => {
+            ForInHead::PerIteration { name, mutable, .. } => {
                 let register = self.allocate_register()?;
                 self.active_binding_count = self.active_binding_count.checked_add(1)?;
                 self.max_binding_count = self.max_binding_count.max(self.active_binding_count);
@@ -9447,7 +9506,7 @@ impl RegisterLowerer {
         // runs and leaves it uninitialized there, so a closure the expression
         // makes reads it in its Temporal Dead Zone for ever.
         let shadowed = match head_binding {
-            ForInHead::PerIteration { name, mutable }
+            ForInHead::PerIteration { name, mutable, .. }
                 if Self::head_expression_reads(name, object) =>
             {
                 Some(self.open_head_scope(name, mutable)?)
@@ -9492,7 +9551,7 @@ impl RegisterLowerer {
         let result_register = self.allocate_register()?;
         self.code.emit(Instruction::Star(result_register));
         let key_register = match head_binding {
-            ForInHead::PerIteration { name, mutable } => {
+            ForInHead::PerIteration { name, mutable, .. } => {
                 let key_register = self.allocate_register()?;
                 self.active_binding_count = self.active_binding_count.checked_add(1)?;
                 self.max_binding_count = self.max_binding_count.max(self.active_binding_count);
@@ -9526,6 +9585,8 @@ impl RegisterLowerer {
                 register
             }
         };
+        let mut scoped = None;
+        self.scope_the_iteration_binding(head_binding, &mut scoped)?;
         let head_global = match head_binding {
             ForInHead::Global { name } => {
                 let units: Vec<u16> = name.encode_utf16().collect();
@@ -9567,12 +9628,13 @@ impl RegisterLowerer {
                 result: result_register,
                 source: Some(value),
                 guarded_layout: Some(object_id),
-                scoped: None,
+                scoped,
                 close: None,
             },
             &bindings_at_head,
         )?;
         self.bindings = bindings_at_head;
+        self.close_the_iteration_scope(scoped)?;
         match head_binding {
             ForInHead::PerIteration { name, .. } => {
                 self.bindings.remove(name)?;

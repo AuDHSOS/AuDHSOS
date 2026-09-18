@@ -5032,20 +5032,17 @@ fn register_lowering_rejects_for_in_heads_it_cannot_model() -> Result<(), Error>
         Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
         Err(Error::Unsupported { .. })
     ));
-    for source in [
-        // An assignment head writes an existing reference.
-        // A captured per-iteration binding needs a context of its own.
-        "for(const k in {a:1}){(()=>k)}",
-        // A per-iteration binding captured by a closure needs a context.
-        "for(const x of [1]){(()=>x)}",
-        // A head that shadows a binding of the enclosing scope is not lowered.
-        "let x=1;for(const x of [2]){}x",
-    ] {
-        assert!(
-            !compile(source, Limits::default())?.uses_register_backend(),
-            "{source}"
-        );
-    }
+    // 14.7.5.7 step 3.e gives every iteration an environment of its own, which
+    // a closure the body makes tells apart.
+    differential("let f=[];for(const k in {a:1,b:2}){f.push(()=>k)}f[0]()+f[1]()")?;
+    differential("let f=[];for(const x of [1,2]){f.push(()=>x)}f[0]()+f[1]()")?;
+    differential("let f=[];for(let x of [1,2]){x*=10;f.push(()=>x)}f[0]()+f[1]()")?;
+    differential(
+        "function g(){let f=[];for(const x of [1,2]){f.push(()=>x)}return f[0]()+f[1]()}g()",
+    )?;
+    // A head that shadows a binding of the enclosing scope is not lowered.
+    let source = "let x=1;for(const x of [2]){}x";
+    assert!(!compile(source, Limits::default())?.uses_register_backend());
     // 8.6.2 binds the names a pattern head names out of the value of each
     // step, in a `for`-`in` as in a `for`-`of`; a `for`-`in` key is a String,
     // which 22.1.3.36 gives an iterator of its code points.

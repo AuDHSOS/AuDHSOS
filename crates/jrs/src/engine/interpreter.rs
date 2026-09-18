@@ -19433,7 +19433,23 @@ impl RegisterVM {
                         "the width of 21.2.2 is no index",
                     ));
                 };
-                Self::new_bigint(held.as_n(bits, intrinsic == Intrinsic::BigIntAsIntN), heap)
+                let signed = intrinsic == Intrinsic::BigIntAsIntN;
+                // A width above the bit length of the value keeps every bit
+                // of it, so the value is the answer; the one value it is not
+                // the answer of is a negative value of 21.2.2.2, whose
+                // `2**bits` no limb count this engine holds would carry.
+                if held.keeps_every_bit(bits) {
+                    if !signed && held.is_negative() {
+                        return Err(raise(
+                            heap,
+                            realm,
+                            super::realm::NativeErrorKind::RangeError,
+                            "the width of 21.2.2 is beyond this engine",
+                        ));
+                    }
+                    return Self::new_bigint(held, heap);
+                }
+                Self::new_bigint(held.as_n(bits, signed), heap)
             }
             _ => {
                 // 21.2.3.4 `thisBigIntValue` takes a BigInt and the wrapper of
