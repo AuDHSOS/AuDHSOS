@@ -444,9 +444,9 @@ pub struct Writer {
     /// Whether the commit after this one begins the log again, which a
     /// checkpoint that left the frames where they are asks for.
     restarting: bool,
-    /// Whether a statement that changes rows answers how many it
-    /// changed, which `PRAGMA count_changes` sets.
-    counting: bool,
+    /// What the connection was told for the two pragmas that hold a
+    /// truth value outside [`crate::pragma::HELD`].
+    truth: Truths,
     /// What the connection has written, which `changes()`,
     /// `total_changes()` and `last_insert_rowid()` answer.
     counted: crate::func::Counted,
@@ -500,6 +500,19 @@ struct Saved {
     opener: bool,
 }
 
+/// What a connection was told for the two pragmas that hold a truth
+/// value and stand outside [`crate::pragma::HELD`], because neither
+/// answers the row that table answers.
+#[derive(Clone, Copy, Debug, Default)]
+struct Truths {
+    /// Whether a statement that changes rows answers how many it
+    /// changed, which `PRAGMA count_changes` sets.
+    counting: bool,
+    /// Whether `LIKE` tells the twenty-six letters apart, which
+    /// `PRAGMA case_sensitive_like` sets.
+    sensitive: bool,
+}
+
 impl Writer {
     /// A database of one page, which is what a connection that opened a
     /// file that was not there writes.
@@ -524,7 +537,7 @@ impl Writer {
             log: None,
             origin: None,
             restarting: false,
-            counting: false,
+            truth: Truths::default(),
             counted: crate::func::Counted::default(),
             writing: 0,
             deferred: 0,
@@ -593,7 +606,7 @@ impl Writer {
             log: None,
             origin: None,
             restarting: false,
-            counting: false,
+            truth: Truths::default(),
             counted: crate::func::Counted::default(),
             writing: 0,
             deferred: 0,
@@ -635,6 +648,15 @@ impl Writer {
     #[must_use]
     pub const fn clock(&self) -> Option<i64> {
         self.clock
+    }
+
+    /// Whether `LIKE` tells the twenty-six letters apart on this
+    /// connection, which `PRAGMA case_sensitive_like` sets and a caller
+    /// that opens a [`Database`] of its own passes to
+    /// [`Database::sensitively`].
+    #[must_use]
+    pub const fn sensitive(&self) -> bool {
+        self.truth.sensitive
     }
 
     /// What the next draw follows from, which `save_prng_state` holds
@@ -1177,6 +1199,7 @@ impl Writer {
             encoding: self.header.encoding,
             random: &self.random,
             clock: self.clock.map(crate::date::julian_of),
+            sensitive: self.truth.sensitive,
             counted: self.counted,
             defined: self.defined,
             grouped: self.grouped,
@@ -1419,12 +1442,15 @@ impl Writer {
         // `sqlite3Pragma` answers no row for a name it does not know, and
         // the names this crate accepts and holds nothing for are the ones
         // no version of the library holds either.
-        if setting == crate::pragma::Setting::Ignored {
+        if matches!(
+            setting,
+            crate::pragma::Setting::Ignored | crate::pragma::Setting::CaseSensitiveLike
+        ) {
             return Ok(Vec::new());
         }
         if setting == crate::pragma::Setting::CountChanges {
             return Ok(alloc::vec![alloc::vec![Value::Int(i64::from(
-                self.counting
+                self.truth.counting
             ))]]);
         }
         if let crate::pragma::Setting::Held(at) = setting {
@@ -1522,6 +1548,7 @@ impl Writer {
         fresh.groups(self.grouped);
         fresh.collates(self.collating);
         fresh.kept.clone_from(&self.kept);
+        fresh.truth = self.truth;
         // `sqlite3RunVacuum` writes the new file as the old one was: the
         // pages it keeps for the free list it points at, and the numbers
         // the header carries for the application.
@@ -1674,7 +1701,8 @@ impl Writer {
     fn reading<'a>(&self, bytes: &'a [u8]) -> Result<Database<'a>, Error> {
         let database = Database::open_collating(bytes, self.collating)?
             .defining(self.defined)
-            .grouping(self.grouped);
+            .grouping(self.grouped)
+            .sensitively(self.truth.sensitive);
         Ok(match self.clock {
             Some(seconds) => database.clocked(seconds),
             None => database,
@@ -1839,7 +1867,7 @@ impl Writer {
         }
         // `PRAGMA count_changes`: a statement that changes rows answers
         // how many it changed, which is one row of one column.
-        if self.counting {
+        if self.truth.counting {
             return Ok(alloc::vec![alloc::vec![Value::Int(changed)]]);
         }
         Ok(Vec::new())
@@ -2197,8 +2225,68 @@ impl Writer {
         let Some(value) = asked.value else {
             return self.pragma_read(setting);
         };
-        let text = value.text(sql);
+        self.pragma_write(setting, value.text(sql))
+    }
+
+    /// `PRAGMA name = value`, with `text` for what is written.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unsupported`] for a pragma this crate does not write
+    /// and for a value it does not name.
+    fn pragma_write(
+        &mut self,
+        setting: crate::pragma::Setting,
+        text: &[u8],
+    ) -> Result<Vec<Vec<Value>>, Error> {
         if setting == crate::pragma::Setting::Ignored {
+            return Ok(Vec::new());
+        }
+        // `PragTyp_ENCODING` reads the name against its own table before
+        // it reads whether the schema is there, so a name no encoding
+        // carries is refused whatever the file already holds.
+        if setting == crate::pragma::Setting::Encoding && crate::pragma::encoding_of(text).is_none()
+        {
+            return Err(Error::NoEncoding(crate::schema::dequote(text)));
+        }
+        // `PRAGMA freelist_count` and `PRAGMA page_count` read the file
+        // whatever stands after the equals sign: the first carries
+        // `PragFlg_ReadOnly`, and `PragTyp_PAGE_COUNT` reads where the
+        // name begins with `p`.
+        if matches!(
+            setting,
+            crate::pragma::Setting::FreelistCount | crate::pragma::Setting::PageCount
+        ) {
+            return self.pragma_read(setting);
+        }
+        if setting == crate::pragma::Setting::CaseSensitiveLike {
+            self.truth.sensitive = crate::pragma::truth(text).unwrap_or(false);
+            return Ok(Vec::new());
+        }
+        if setting == crate::pragma::Setting::DefaultCacheSize {
+            // `PragTyp_DEFAULT_CACHE_SIZE` writes the header word and
+            // the connection's own cache size together, so the pragma
+            // that reads either answers what this one wrote.
+            let size = crate::pragma::cache_word(text);
+            self.header.cache_size = size;
+            for slot in self.kept.iter_mut().skip(crate::pragma::CACHED).take(1) {
+                *slot = Some(i64::from(size));
+            }
+            return Ok(Vec::new());
+        }
+        // `PragTyp_HEADER_VALUE` writes one word of the header in a
+        // transaction of its own, and the three words a pragma writes are
+        // the schema cookie, the number of the application and the
+        // number of the user. `data_version` and `freelist_count` carry
+        // `PragFlg_ReadOnly` and are read alone.
+        let word = match setting {
+            crate::pragma::Setting::SchemaVersion => Some(&mut self.header.schema_cookie),
+            crate::pragma::Setting::UserVersion => Some(&mut self.header.user_version),
+            crate::pragma::Setting::ApplicationId => Some(&mut self.header.application_id),
+            _ => None,
+        };
+        if let Some(word) = word {
+            *word = crate::pragma::header_word(text);
             return Ok(Vec::new());
         }
         if let crate::pragma::Setting::Held(at) = setting {
@@ -2210,7 +2298,7 @@ impl Writer {
         // to the connection and is set whenever `sqlite3PragmaJournalMode`
         // is asked.
         if setting == crate::pragma::Setting::CountChanges {
-            self.counting = crate::pragma::truth(text).ok_or(Error::Unsupported)?;
+            self.truth.counting = crate::pragma::truth(text).ok_or(Error::Unsupported)?;
             return Ok(Vec::new());
         }
         if self.header.schema_cookie != 0 && setting != crate::pragma::Setting::JournalMode {
@@ -2356,9 +2444,15 @@ impl Writer {
     /// [`crate::pragma::HELD`], which is what it was told or what a
     /// connection told nothing answers.
     fn held(&self, at: usize) -> Value {
-        let fallback = crate::pragma::HELD
-            .get(at)
-            .map_or(0, |keeps| keeps.fallback);
+        // `sqlite3InitOne` reads the cache size a connection begins with
+        // out of the header word, so the file and not the crate says
+        // what a connection told nothing answers.
+        let fallback = match at {
+            crate::pragma::CACHED => crate::pragma::default_cache(self.header.cache_size),
+            _ => crate::pragma::HELD
+                .get(at)
+                .map_or(0, |keeps| keeps.fallback),
+        };
         let value = self.kept.get(at).copied().flatten().unwrap_or(fallback);
         crate::pragma::kept(at, value)
     }
@@ -2372,6 +2466,11 @@ impl Writer {
         // `PragTyp_FLAG` takes `SQLITE_ForeignKeys` out of the mask
         // where the connection has a transaction open, so a statement
         // there changes nothing.
+        // `PragTyp_SYNCHRONOUS` refuses inside a transaction, because the
+        // level says what a commit writes and a commit is waiting.
+        if self.began.is_some() && keeps.is_some_and(|keeps| keeps.name == b"synchronous") {
+            return Err(Error::SafetyInTransaction);
+        }
         let held = self.began.is_some() && keeps.is_some_and(|keeps| keeps.name == b"foreign_keys");
         if !held && !keeps.is_some_and(|keeps| keeps.fixed) {
             for slot in self.kept.iter_mut().skip(at).take(1) {
@@ -3996,6 +4095,7 @@ impl Writer {
                         encoding: self.header.encoding,
                         random: &self.random,
                         clock: self.clock.map(crate::date::julian_of),
+                        sensitive: self.truth.sensitive,
                         counted: self.counted,
                         defined: self.defined,
                         grouped: self.grouped,
@@ -4078,6 +4178,7 @@ impl Writer {
                     encoding: self.header.encoding,
                     random: &self.random,
                     clock: self.clock.map(crate::date::julian_of),
+                    sensitive: self.truth.sensitive,
                     counted: self.counted,
                     defined: self.defined,
                     grouped: self.grouped,
@@ -4148,6 +4249,7 @@ impl Writer {
             encoding: self.header.encoding,
             random: &self.random,
             clock: self.clock.map(crate::date::julian_of),
+            sensitive: self.truth.sensitive,
             counted: self.counted,
             defined: self.defined,
             grouped: self.grouped,
@@ -4716,6 +4818,7 @@ impl Writer {
                     encoding: self.header.encoding,
                     random: &self.random,
                     clock: self.clock.map(crate::date::julian_of),
+                    sensitive: self.truth.sensitive,
                     counted: self.counted,
                     defined: self.defined,
                     grouped: self.grouped,
@@ -5718,6 +5821,9 @@ struct Held<'a> {
     random: &'a crate::random::Source,
     /// What the clock says, which `now` names.
     clock: Option<i64>,
+    /// Whether `LIKE` tells the twenty-six letters apart, which
+    /// `PRAGMA case_sensitive_like` sets.
+    sensitive: bool,
     /// What the connection has written, which `changes()`,
     /// `total_changes()` and `last_insert_rowid()` answer.
     counted: crate::func::Counted,
@@ -5754,6 +5860,10 @@ impl crate::eval::Row for Held<'_> {
 
     fn clock(&self) -> Option<i64> {
         self.clock
+    }
+
+    fn sensitive(&self) -> bool {
+        self.sensitive
     }
 
     fn counted(&self) -> crate::func::Counted {
@@ -6435,6 +6545,7 @@ impl Writer {
                     encoding: self.header.encoding,
                     random: &self.random,
                     clock: self.clock.map(crate::date::julian_of),
+                    sensitive: self.truth.sensitive,
                     counted: self.counted,
                     defined: self.defined,
                     grouped: self.grouped,
@@ -6568,6 +6679,7 @@ impl Writer {
                     encoding: self.header.encoding,
                     random: &self.random,
                     clock: self.clock.map(crate::date::julian_of),
+                    sensitive: self.truth.sensitive,
                     counted: self.counted,
                     defined: self.defined,
                     grouped: self.grouped,
@@ -6988,6 +7100,7 @@ impl Writer {
             encoding: self.header.encoding,
             random: &self.random,
             clock: self.clock.map(crate::date::julian_of),
+            sensitive: self.truth.sensitive,
             counted: self.counted,
             defined: self.defined,
             grouped: self.grouped,

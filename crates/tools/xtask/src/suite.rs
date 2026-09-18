@@ -1140,14 +1140,16 @@ impl Session {
             .held
             .get(&path)
             .ok_or_else(|| format!("no such database: {path}"))?;
-        let last = statements(sql)
+        // The column names are the ones the last statement that answers
+        // rows carries, which is what `exec_printf_cb` writes for the
+        // first row it is given whatever stands after that statement.
+        let Some(last) = statements(sql)
             .into_iter()
             .map(str::trim)
-            .rfind(|text| !text.is_empty())
-            .unwrap_or("");
-        if !reads(last) {
+            .rfind(|text| reads(text))
+        else {
             return Ok(Vec::new());
-        }
+        };
         let collating = self.collations.get(name).copied().unwrap_or_default();
         let defines = self.defines(name);
         let bytes = writer.written();
@@ -1166,6 +1168,7 @@ impl Session {
                     .naming(writer.naming())
                     .defining(defines)
                     .grouping(GROUPED)
+                    .sensitively(writer.sensitive())
                     .journalling(writer.journalled());
                 match held {
                     Some(seconds) => database.clocked(seconds),
@@ -1421,6 +1424,7 @@ fn run_one(
         let counted = writer.counts();
         let naming = writer.naming();
         let journalled = writer.journalled();
+        let sensitive = writer.sensitive();
         let held = writer.clock();
         let answered = opened
             .map(|database| {
@@ -1429,6 +1433,7 @@ fn run_one(
                     .naming(naming)
                     .defining(defines)
                     .grouping(GROUPED)
+                    .sensitively(sensitive)
                     .journalling(journalled);
                 match held {
                     Some(seconds) => database.clocked(seconds),

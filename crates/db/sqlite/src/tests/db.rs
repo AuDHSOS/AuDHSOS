@@ -66,6 +66,7 @@ fn quoted(value: &Value) -> String {
             random: None,
             counted: crate::func::Counted::default(),
             clock: None,
+            sensitive: false,
         },
     )
     .expect("a function that always answers");

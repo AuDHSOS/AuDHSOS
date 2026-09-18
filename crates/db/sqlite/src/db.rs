@@ -171,6 +171,12 @@ pub enum Error {
     NoSchema(Vec<u8>),
     /// A `VACUUM` on a connection with a transaction open.
     VacuumInTransaction,
+    /// A `PRAGMA synchronous = value` on a connection with a transaction
+    /// open.
+    SafetyInTransaction,
+    /// A `PRAGMA encoding = value` naming no encoding the library holds,
+    /// with the name it was written as.
+    NoEncoding(Vec<u8>),
     /// A `COMMIT` or a `ROLLBACK` on a connection with no transaction
     /// open.
     NoTransaction,
@@ -373,6 +379,13 @@ impl Error {
             Error::VacuumInTransaction => {
                 alloc::string::String::from("cannot VACUUM from within a transaction")
             }
+            Error::SafetyInTransaction => {
+                alloc::string::String::from("Safety level may not be changed inside a transaction")
+            }
+            Error::NoEncoding(name) => alloc::format!(
+                "unsupported encoding: {}",
+                alloc::string::String::from_utf8_lossy(name)
+            ),
             Error::IndexedView => alloc::string::String::from("views may not be indexed"),
             Error::ConstraintIndex => alloc::string::String::from(
                 "index associated with UNIQUE or PRIMARY KEY constraint cannot be dropped",
@@ -1242,6 +1255,9 @@ pub struct Database<'a> {
     /// The moment `now` names, as the seconds since 1970, and nothing
     /// where the caller told the connection none.
     clock: Option<i64>,
+    /// Whether `LIKE` tells the twenty-six letters apart, which
+    /// `PRAGMA case_sensitive_like` on the connection that writes sets.
+    sensitive: bool,
     /// What the connection has written, which `changes()`,
     /// `total_changes()` and `last_insert_rowid()` answer.
     counted: crate::func::Counted,
@@ -1450,6 +1466,7 @@ impl<'a> Database<'a> {
             encoding,
             random: crate::random::Source::default(),
             clock: None,
+            sensitive: false,
             counted: crate::func::Counted::default(),
             naming: Naming::default(),
             defined: &[],
@@ -1486,6 +1503,19 @@ impl<'a> Database<'a> {
     #[must_use]
     pub const fn clocked(mut self, seconds: i64) -> Self {
         self.clock = Some(seconds);
+        self
+    }
+
+    /// The same database, with `LIKE` telling the twenty-six letters
+    /// apart where `sensitive` says so.
+    ///
+    /// `PRAGMA case_sensitive_like` registers the `like` function again
+    /// on one connection, so a database that is not told answers what
+    /// `sqlite3RegisterLikeFunctions` registers at open: `LIKE` that
+    /// folds the letters.
+    #[must_use]
+    pub const fn sensitively(mut self, sensitive: bool) -> Self {
+        self.sensitive = sensitive;
         self
     }
 
@@ -6136,6 +6166,10 @@ impl eval::Row for Cursor<'_> {
 
     fn clock(&self) -> Option<i64> {
         self.reach.database.clock.map(crate::date::julian_of)
+    }
+
+    fn sensitive(&self) -> bool {
+        self.reach.database.sensitive
     }
 
     fn grouped(&self) -> &'static [crate::func::Grouped] {

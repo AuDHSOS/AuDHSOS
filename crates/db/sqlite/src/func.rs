@@ -920,7 +920,8 @@ pub struct Counted {
 
 /// What a function reads beside its arguments: where the bytes of
 /// `random` and `randomblob` come from, what the counters of the
-/// connection stand at, and what the clock says.
+/// connection stand at, what the clock says, and whether `like` tells
+/// the twenty-six letters apart.
 ///
 /// The clock is the moment `now` names, as the julian day number times
 /// 86 400 000, and is nothing where the connection was told none.
@@ -932,6 +933,9 @@ pub struct Given<'a> {
     pub counted: Counted,
     /// What the clock says, which `now` names.
     pub clock: Option<i64>,
+    /// Whether `like` tells the twenty-six letters apart, which
+    /// `PRAGMA case_sensitive_like` sets.
+    pub sensitive: bool,
 }
 
 /// What `function` answers for `args`, under `collation` where it
@@ -956,6 +960,7 @@ pub fn call(
         random,
         counted,
         clock,
+        sensitive,
     } = given;
     let arg = |at: usize| args.get(at).cloned().unwrap_or(Value::Null);
     let first = arg(0);
@@ -1219,7 +1224,7 @@ pub fn call(
                 }
             },
             Function::Like | Function::Glob => {
-                return pattern(function, args).map(|value| (value, false));
+                return pattern(function, args, sensitive).map(|value| (value, false));
             }
             Function::Json { which, binary } => return json_call(which, binary, args, carried),
         },
@@ -1600,8 +1605,10 @@ struct Pattern {
     fold: bool,
 }
 
-/// `like(P,X[,E])` and `glob(P,X)`.
-fn pattern(function: Function, args: &[Value]) -> Result<Value, Error> {
+/// `like(P,X[,E])` and `glob(P,X)`, with `sensitive` for the connection
+/// that registered `like` through `sqlite3RegisterLikeFunctions` with
+/// the twenty-six letters told apart.
+fn pattern(function: Function, args: &[Value], sensitive: bool) -> Result<Value, Error> {
     let mut info = if function == Function::Glob {
         Pattern {
             many: u32::from(b'*'),
@@ -1614,7 +1621,7 @@ fn pattern(function: Function, args: &[Value]) -> Result<Value, Error> {
             many: u32::from(b'%'),
             one: u32::from(b'_'),
             set: 0,
-            fold: true,
+            fold: !sensitive,
         }
     };
     if args.first().and_then(Value::text).unwrap_or_default().len() > MAX_PATTERN {

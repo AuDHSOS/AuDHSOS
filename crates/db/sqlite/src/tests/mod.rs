@@ -13,6 +13,7 @@
 mod ambiguous;
 mod balance;
 mod bytes;
+mod caching;
 mod checkpoint;
 mod collating;
 mod colnames;

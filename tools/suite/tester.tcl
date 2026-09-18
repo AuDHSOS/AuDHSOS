@@ -246,6 +246,7 @@ proc sqlite3 {name args} {
         }
         return {}
       }
+      names { return [harness_send names %N% [bound [lindex $args 0]]] }
       one - onecolumn { return [lindex [harness_send eval %N% [bound [lindex $args 0]]] 0] }
       exists { return [expr {[llength [harness_send eval %N% [bound [lindex $args 0]]]] > 0}] }
       close { return [harness_send close %N%] }
@@ -288,6 +289,41 @@ proc catchsql {sql {db db}} {
   set rc [catch { $db eval $sql } msg]
   return [list $rc $msg]
 }
+
+# The `%XX` escapes `test_exec` of `research/sqlite/src/test1.c:442`
+# reads, which is how a file writes a byte it cannot hold as text.
+proc exec_bytes {sql} {
+  set out ""
+  set at 0
+  set n [string length $sql]
+  while {$at < $n} {
+    set c [string index $sql $at]
+    set hex [string range $sql [expr {$at+1}] [expr {$at+2}]]
+    if {$c eq "%" && [string length $hex] == 2 && [scan $hex %2x byte] == 1} {
+      append out [format %c $byte]
+      incr at 3
+    } else {
+      append out $c
+      incr at 1
+    }
+  }
+  return $out
+}
+
+# `sqlite3_exec DB SQL` of `research/sqlite/src/test1.c:421`: the code
+# the statement answered, and then the column names followed by every
+# row's values, which `exec_printf_cb` writes only where a first row
+# arrived. An error answers the code and the message.
+proc sqlite3_exec {db sql} {
+  set sql [exec_bytes $sql]
+  if {[catch { set rows [$db eval $sql] } msg]} { return [list 1 $msg] }
+  if {[llength $rows] == 0} { return [list 0 {}] }
+  return [list 0 [concat [$db names $sql] $rows]]
+}
+
+# `sqlite3_exec_nr DB SQL`, which drops what the statement answered.
+proc sqlite3_exec_nr {db sql} { return [lindex [sqlite3_exec $db $sql] 0] }
+
 proc db_eval {sql} { return [db eval $sql] }
 proc stepsql {db sql} { return [$db eval $sql] }
 

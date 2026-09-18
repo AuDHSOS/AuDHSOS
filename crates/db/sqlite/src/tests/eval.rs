@@ -56,6 +56,7 @@ fn shown(value: &Value) -> (Vec<u8>, Vec<u8>) {
                 random: None,
                 counted: crate::func::Counted::default(),
                 clock: None,
+                sensitive: false,
             },
         )
         .expect("a function that always answers")

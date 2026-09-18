@@ -2512,8 +2512,17 @@ fn what_a_pragma_refuses() {
     assert!(writer.run(b"PRAGMA encoding='UTF-32'").is_err());
     assert!(writer.run(b"PRAGMA page_size=five").is_err());
     assert!(writer.run(b"PRAGMA page_size=99999999999").is_err());
-    // The page count is what the file holds, not what a statement sets.
-    assert!(writer.run(b"PRAGMA page_count=7").is_err());
+    // The page count is what the file holds, not what a statement sets,
+    // so `PragTyp_PAGE_COUNT` reads it whatever stands after the equals
+    // sign.
+    assert_eq!(
+        writer.run(b"PRAGMA page_count=7").unwrap(),
+        [[Value::Int(1)]]
+    );
+    // The bytes the b-tree layer may not use and the format the schema
+    // was written under are read and never set.
+    assert!(writer.run(b"PRAGMA reserved_bytes=5").is_err());
+    assert!(writer.run(b"PRAGMA schema_format=3").is_err());
     // The three that say how the first table is written stand before
     // it, and one written after it changes nothing.
     writer.run(b"PRAGMA auto_vacuum=full").unwrap();

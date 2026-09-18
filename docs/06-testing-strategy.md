@@ -6023,3 +6023,47 @@ Document 16 step Q8.
 - An `OVER` reads the aggregate over the frame, so each row answers the
   rows up to it.
 - A name the connection was not told of is no function at all.
+
+### 6.6.208 What `PRAGMA case_sensitive_like` sets (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `LIKE` folds the twenty-six letters where the connection was told
+  nothing.
+- `PRAGMA case_sensitive_like=on` makes `LIKE` and the `like` function
+  tell the letters apart.
+- The pragma answers no row, set or read.
+- A word that names no truth value turns the pragma off.
+- `GLOB` tells the letters apart whatever the pragma says.
+- A `DELETE` and an `UPDATE` read the pragma as a `SELECT` does.
+- A database the caller opens without the pragma folds the letters.
+
+### 6.6.209 What the header word holds of the cache size (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `PRAGMA default_cache_size=-123` writes 123 into the word at offset 48
+  and answers 123 for both cache pragmas.
+- A reopen reads the word, and a `VACUUM` leaves it.
+- A word of nought answers −2000 for `PRAGMA default_cache_size` and
+  nought for `PRAGMA cache_size`.
+- Text that names no number, and a number no signed word of 32 bits
+  holds, write nought.
+- `PRAGMA cache_size=-4321` stands over the word for that connection and
+  writes no byte of the file.
+- A word below nought answers its negation.
+
+### 6.6.210 What a pragma writes of the header words (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `PRAGMA schema_version`, `PRAGMA user_version` and `PRAGMA
+  application_id` write their word, and a reopen reads it.
+- Text that names no number writes nought, and a number below nought is
+  kept as the bytes of a word of 32 bits.
+- `PRAGMA freelist_count`, `PRAGMA page_count` and `PRAGMA data_version`
+  read the file whatever stands after the equals sign.
+- `PRAGMA encoding=bogus` is refused over a file that already holds a
+  table.
+- `PRAGMA synchronous=OFF` inside a transaction is refused and leaves the
+  level as it was.

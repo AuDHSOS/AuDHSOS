@@ -7,6 +7,25 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` sets whether `LIKE` tells the twenty-six letters apart from
+  `PRAGMA case_sensitive_like`, which answers no row set or read. D-309
+  records it. Catalog 6.6.208.
+
+- `db-sqlite` writes and reads the cache size of a file through `PRAGMA
+  default_cache_size`, which is the word at offset 48 of the header, and
+  `PRAGMA cache_size` answers that word where the connection was told
+  nothing. D-310 records it. Catalog 6.6.209.
+
+- `db-sqlite` writes the schema version, the user version and the
+  application id into the header, reads `PRAGMA freelist_count` and
+  `PRAGMA page_count` whatever stands after the equals sign, and refuses
+  `PRAGMA encoding=bogus` and a `PRAGMA synchronous` inside a
+  transaction. D-312 records it. Catalog 6.6.210.
+
+- The suite's own harness answers `sqlite3_exec`, and the `names` request
+  answers for the last statement of a text that reads rows. D-311 records
+  it.
+
 - `db-sqlite` takes an aggregate an application defines on a
   connection, which the harness answers `md5sum` with. D-308 records it.
   Catalog 6.6.207.

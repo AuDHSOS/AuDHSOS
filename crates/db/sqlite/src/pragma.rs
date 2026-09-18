@@ -62,6 +62,16 @@ pub enum Setting {
     /// `PRAGMA wal_checkpoint`, which moves the frames of the log into
     /// the database file.
     WalCheckpoint,
+    /// `PRAGMA case_sensitive_like`, which sets whether `LIKE` tells
+    /// the twenty-six letters apart and answers no row either way,
+    /// because `PragFlg_NoColumns` stands against its name in
+    /// `research/sqlite/pragma.h:200`.
+    CaseSensitiveLike,
+    /// `PRAGMA default_cache_size`, which writes the word at offset 48
+    /// of the header and the connection's own cache size together, and
+    /// is `PragTyp_DEFAULT_CACHE_SIZE` of
+    /// `research/sqlite/src/pragma.c:553`.
+    DefaultCacheSize,
 }
 
 /// What a pragma the connection keeps a value for is written as.
@@ -280,14 +290,7 @@ pub static HELD: &[Keeps] = &[
     },
     Keeps {
         name: b"cache_size",
-        fallback: -2000,
-        written: Written::Number,
-        answers: false,
-        fixed: false,
-    },
-    Keeps {
-        name: b"default_cache_size",
-        fallback: -2000,
+        fallback: CACHE_SIZE,
         written: Written::Number,
         answers: false,
         fixed: false,
@@ -355,7 +358,8 @@ pub fn keeping(at: usize, text: &[u8]) -> Option<i64> {
 
 /// The whole number a pragma is set to, with the minus sign a cache
 /// size and a size limit may carry.
-fn signed_number(text: &[u8]) -> Option<i64> {
+#[must_use]
+pub fn signed_number(text: &[u8]) -> Option<i64> {
     let (negative, digits) = match text.strip_prefix(b"-") {
         Some(rest) => (true, rest),
         None => (false, text),
@@ -396,6 +400,8 @@ pub fn of_name(name: &[u8]) -> Option<Setting> {
         b"foreign_key_list" => Setting::ForeignKeyList,
         b"foreign_key_check" => Setting::ForeignKeyCheck,
         b"wal_checkpoint" => Setting::WalCheckpoint,
+        b"case_sensitive_like" => Setting::CaseSensitiveLike,
+        b"default_cache_size" => Setting::DefaultCacheSize,
         // `PRAGMA default_synchronous` is a pragma no version of the
         // library still holds, and `sqlite3Pragma` answers no row for a
         // name it does not know.
@@ -404,7 +410,6 @@ pub fn of_name(name: &[u8]) -> Option<Setting> {
         | b"legacy_alter_table"
         | b"empty_result_callbacks"
         | b"cache_spill"
-        | b"case_sensitive_like"
         | b"shrink_memory"
         | b"optimize" => Setting::Ignored,
         _ => {
@@ -447,6 +452,7 @@ impl Setting {
             Setting::UserVersion => number(header.user_version),
             Setting::ApplicationId => number(header.application_id),
             Setting::SchemaFormat => number(header.schema_format),
+            Setting::DefaultCacheSize => Value::Int(default_cache(header.cache_size)),
             // A pragma the file does not hold, the ones the connection
             // holds, and the two that walk the file rather than read
             // its header have no answer out of a header.
@@ -454,6 +460,7 @@ impl Setting {
             | Setting::CountChanges
             | Setting::Held(_)
             | Setting::Ignored
+            | Setting::CaseSensitiveLike
             | Setting::Integrity
             | Setting::Quick
             | Setting::ForeignKeyList
@@ -461,6 +468,52 @@ impl Setting {
             | Setting::WalCheckpoint => return None,
         })
     }
+}
+
+/// Where `cache_size` stands in [`HELD`], which `PRAGMA
+/// default_cache_size` sets along with the word at offset 48 of the
+/// header.
+pub const CACHED: usize = 23;
+
+/// What a header word of `held` answers for `PRAGMA
+/// default_cache_size` and for the cache size a connection was told
+/// nothing for.
+///
+/// `research/sqlite/src/prepare.c:325` reads the word through
+/// `sqlite3AbsInt32`: the word where it is above nought, its negation
+/// where it is below, and [`CACHE_SIZE`] where it is nought.
+#[must_use]
+pub fn default_cache(held: u32) -> i64 {
+    let signed = held.cast_signed();
+    match signed {
+        0 => CACHE_SIZE,
+        _ => i64::from(signed.unsigned_abs()),
+    }
+}
+
+/// What a connection over a file whose header word is nought holds,
+/// which is `SQLITE_DEFAULT_CACHE_SIZE` of
+/// `research/sqlite/src/sqliteLimit.h:161`.
+pub const CACHE_SIZE: i64 = -2000;
+
+/// The header word `PRAGMA default_cache_size = value` writes, which is
+/// `sqlite3AbsInt32(sqlite3Atoi(zRight))` of
+/// `research/sqlite/src/pragma.c:577`, with nought for text that names
+/// no number.
+#[must_use]
+pub fn cache_word(text: &[u8]) -> u32 {
+    let held = signed_number(&crate::schema::dequote(text).to_ascii_lowercase()).unwrap_or(0);
+    i32::try_from(held).unwrap_or(0).unsigned_abs()
+}
+
+/// The header word `PRAGMA name = value` writes for the three pragmas
+/// `PragTyp_HEADER_VALUE` writes, which is `sqlite3Atoi(zRight)` of
+/// `research/sqlite/src/pragma.c:2340` kept as the bytes of a word of 32
+/// bits, with nought for text that names no number.
+#[must_use]
+pub fn header_word(text: &[u8]) -> u32 {
+    let held = signed_number(&crate::schema::dequote(text).to_ascii_lowercase()).unwrap_or(0);
+    i32::try_from(held).unwrap_or(0).cast_unsigned()
 }
 
 /// The encoding a `PRAGMA encoding` names, with the quotes and the

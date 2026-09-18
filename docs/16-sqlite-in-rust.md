@@ -846,6 +846,17 @@ Size: L.
 68. An aggregate the application defines on a connection, which
     `md5sum` of `testfixture` is. Built, which D-308 records; this is
     what item 50 left open.
+69. `PRAGMA case_sensitive_like`, which sets whether `LIKE` tells the
+    twenty-six letters apart. Built, which D-309 records. The LIKE
+    optimization the pragma turns on in the C library is not here, so
+    the cases of `like.test` that count the calls of the function are
+    still refused.
+70. `PRAGMA default_cache_size`, which is the word at offset 48 of the
+    header and the cache size of the connection together. Built, which
+    D-310 records.
+71. The three words of the header a pragma writes, and the two it may
+    not. Built, which D-312 records. `SQLITE_DBCONFIG_DEFENSIVE`, which
+    turns the write of `schema_version` into a no-op, is not here.
 
 ### Done when
 

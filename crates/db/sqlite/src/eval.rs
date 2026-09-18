@@ -312,6 +312,13 @@ pub trait Row {
         None
     }
 
+    /// Whether `LIKE` tells the twenty-six letters apart, which
+    /// `PRAGMA case_sensitive_like` sets and a connection told nothing
+    /// answers false for.
+    fn sensitive(&self) -> bool {
+        false
+    }
+
     /// The first row the statement `select` answers, each value with
     /// the affinity and the collation a comparison against it uses,
     /// which is what a row compared against `(SELECT a, b)` compares
@@ -334,6 +341,7 @@ fn given_of(row: &dyn Row) -> func::Given<'_> {
         random: row.random(),
         counted: row.counted(),
         clock: row.clock(),
+        sensitive: row.sensitive(),
     }
 }
 
