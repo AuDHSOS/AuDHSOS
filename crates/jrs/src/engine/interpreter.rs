@@ -806,6 +806,15 @@ enum IteratorWalkTaker {
         /// named none.
         initial: Value,
     },
+    /// 27.2.4.1, 27.2.4.2 and 27.2.4.5 start an element each and answer the
+    /// promise of the capability they made.
+    Combinator {
+        /// Which of the three combinators walks.
+        tag: i32,
+        /// The record 27.2.4.1.1 shares between the elements: the values, the
+        /// capability and how many are outstanding.
+        group: Value,
+    },
     /// Step 8 of 24.1.1.1 adds it to this Map, or to this Set.
     Collection {
         /// The Map or the Set the constructor made.
@@ -825,7 +834,7 @@ impl IteratorWalkTaker {
             Self::Entries { .. } => ITERATOR_WALK_ENTRIES,
             Self::TypedArray { .. } => ITERATOR_WALK_TYPED_ARRAY,
             Self::Each => ITERATOR_WALK_EACH,
-            Self::Verdict { tag } => tag,
+            Self::Verdict { tag } | Self::Combinator { tag, .. } => tag,
             Self::Reduce { .. } => ITERATOR_WALK_REDUCE,
             Self::Collection { set, weak, .. } => match (set, weak) {
                 (false, false) => ITERATOR_WALK_MAP,
@@ -857,6 +866,7 @@ impl IteratorWalkTaker {
             },
             Self::Entries { object } => object,
             Self::TypedArray { kind } => Value::from_smi(kind as i32),
+            Self::Combinator { group, .. } => group,
             Self::Collection { collection, .. } => collection,
         }
     }
@@ -887,6 +897,12 @@ const ITERATOR_WALK_EVERY: i32 = 9;
 const ITERATOR_WALK_FIND: i32 = 10;
 /// It carries the accumulator of 27.1.3.3.9 from element to element.
 const ITERATOR_WALK_REDUCE: i32 = 11;
+/// 27.2.4.1 starts every element and answers the promise of its capability.
+const ITERATOR_WALK_ALL: i32 = 12;
+/// 27.2.4.2 does the same with the handlers of a settled element.
+const ITERATOR_WALK_ALL_SETTLED: i32 = 13;
+/// 27.2.4.5 settles the capability with the first element that settles.
+const ITERATOR_WALK_RACE: i32 = 14;
 
 /// `[[GeneratorState]]` of 27.5.1 before the body has run.
 const GENERATOR_SUSPENDED_START: u8 = 0;
@@ -2980,9 +2996,6 @@ impl RegisterVM {
                 heap.set_object_kind(block, ObjectKind::ArrayBuffer(None))?;
                 Ok(VALUE_UNDEFINED)
             }
-            Intrinsic::PromiseAll | Intrinsic::PromiseRace | Intrinsic::PromiseAllSettled => {
-                self.promise_combinator(intrinsic, &call, heap, realm)
-            }
             Intrinsic::PromiseWithResolvers => {
                 Self::promise_with_resolvers(call.receiver, heap, realm)
             }
@@ -3017,6 +3030,9 @@ impl RegisterVM {
             // answers here.
             // The dispatch that can open a frame reaches these before this.
             Intrinsic::ReflectConstruct
+            | Intrinsic::PromiseAll
+            | Intrinsic::PromiseAllSettled
+            | Intrinsic::PromiseRace
             | Intrinsic::RegExpPrototypeReplace
             | Intrinsic::IteratorPrototypeToArray
             | Intrinsic::IteratorPrototypeForEach
@@ -5638,6 +5654,21 @@ impl RegisterVM {
             return self.begin_typed_array_construct(
                 kind,
                 source,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
+        // Step 6 of 27.2.4.1, 27.2.4.2 and 27.2.4.5 starts every element the
+        // iterable answers, which a walk of 7.4.2 reaches.
+        if matches!(
+            intrinsic,
+            Intrinsic::PromiseAll | Intrinsic::PromiseAllSettled | Intrinsic::PromiseRace
+        ) {
+            return self.begin_promise_combinator(
+                intrinsic,
                 call,
                 units,
                 active_feedback,
@@ -9692,7 +9723,11 @@ impl RegisterVM {
                 realm,
             ) {
                 Ok(made) => made,
-                Err(refused) => return Err(Self::leave_iterator_walk(heap, refused)),
+                Err(refused) => {
+                    return self
+                        .leave_iterator_walk(record, heap, realm, refused)
+                        .map(|()| None);
+                }
             };
             let record = heap
                 .root_value(state)
@@ -9793,7 +9828,11 @@ impl RegisterVM {
                 ITERATOR_WALK_OPENED => {
                     match Self::open_iterator_walk(record, answered, heap, realm) {
                         Ok(called) => Some(called),
-                        Err(error) => return Err(Self::leave_iterator_walk(heap, error)),
+                        Err(error) => {
+                            return self
+                                .leave_iterator_walk(record, heap, realm, error)
+                                .map(|()| None);
+                        }
                     }
                 }
                 // 7.4.4 step 3 reads the result, and a `done` that is true
@@ -9811,7 +9850,11 @@ impl RegisterVM {
                                 self.answer_iterator_walk(record, heap, realm)?;
                                 None
                             }
-                            Err(error) => return Err(Self::leave_iterator_walk(heap, error)),
+                            Err(error) => {
+                                return self
+                                    .leave_iterator_walk(record, heap, realm, error)
+                                    .map(|()| None);
+                            }
                         },
                         // 7.4.10 closes the iterator before the value a step
                         // threw leaves the walk.
@@ -9819,14 +9862,22 @@ impl RegisterVM {
                             match Self::request_abrupt_close(record, thrown, heap, realm) {
                                 Ok(Some(called)) => Some(called),
                                 _ => {
-                                    return Err(Self::leave_iterator_walk(
-                                        heap,
-                                        VMError::Thrown(thrown, native),
-                                    ));
+                                    return self
+                                        .leave_iterator_walk(
+                                            record,
+                                            heap,
+                                            realm,
+                                            VMError::Thrown(thrown, native),
+                                        )
+                                        .map(|()| None);
                                 }
                             }
                         }
-                        Err(error) => return Err(Self::leave_iterator_walk(heap, error)),
+                        Err(error) => {
+                            return self
+                                .leave_iterator_walk(record, heap, realm, error)
+                                .map(|()| None);
+                        }
                     }
                 }
                 // 27.1.3.3.7 step 4.b and 7.4.9 step 3 read the `return` of
@@ -9836,22 +9887,31 @@ impl RegisterVM {
                         Ok(Some(called)) => Some(called),
                         Ok(None) | Err(VMError::Thrown(..)) => {
                             let error = type_error(heap, realm, "the procedure is not callable");
-                            return Err(Self::leave_iterator_walk(heap, error));
+                            return self
+                                .leave_iterator_walk(record, heap, realm, error)
+                                .map(|()| None);
                         }
-                        Err(error) => return Err(Self::leave_iterator_walk(heap, error)),
+                        Err(error) => {
+                            return self
+                                .leave_iterator_walk(record, heap, realm, error)
+                                .map(|()| None);
+                        }
                     }
                 }
                 // 7.4.11 step 6 keeps the value the step threw, whatever the
                 // close answered.
                 ITERATOR_WALK_ABRUPT => {
                     let thrown = promise::slot(heap, record, 12);
-                    heap.exit_scope();
-                    return Err(VMError::Thrown(thrown, None));
+                    return self
+                        .leave_iterator_walk(record, heap, realm, VMError::Thrown(thrown, None))
+                        .map(|()| None);
                 }
                 // 7.4.9 step 5 keeps the error the close was given.
                 ITERATOR_WALK_REFUSED => {
                     let error = type_error(heap, realm, "the procedure is not callable");
-                    return Err(Self::leave_iterator_walk(heap, error));
+                    return self
+                        .leave_iterator_walk(record, heap, realm, error)
+                        .map(|()| None);
                 }
                 // 7.4.9 step 6 takes an Object and no other value from
                 // `return`.
@@ -9859,7 +9919,9 @@ impl RegisterVM {
                     if answered.as_object().is_none() {
                         let error =
                             type_error(heap, realm, "the return of an iterator answered no object");
-                        return Err(Self::leave_iterator_walk(heap, error));
+                        return self
+                            .leave_iterator_walk(record, heap, realm, error)
+                            .map(|()| None);
                     }
                     self.answer_iterator_verdict(record, heap);
                     None
@@ -9873,7 +9935,11 @@ impl RegisterVM {
                             self.answer_iterator_verdict(record, heap);
                             None
                         }
-                        Err(error) => return Err(Self::leave_iterator_walk(heap, error)),
+                        Err(error) => {
+                            return self
+                                .leave_iterator_walk(record, heap, realm, error)
+                                .map(|()| None);
+                        }
                     }
                 }
                 // 23.1.2.1 step 6.c.viii keeps what the mapper answered.
@@ -9890,14 +9956,22 @@ impl RegisterVM {
                             match Self::request_abrupt_close(record, thrown, heap, realm) {
                                 Ok(Some(called)) => Some(called),
                                 _ => {
-                                    return Err(Self::leave_iterator_walk(
-                                        heap,
-                                        VMError::Thrown(thrown, native),
-                                    ));
+                                    return self
+                                        .leave_iterator_walk(
+                                            record,
+                                            heap,
+                                            realm,
+                                            VMError::Thrown(thrown, native),
+                                        )
+                                        .map(|()| None);
                                 }
                             }
                         }
-                        Err(error) => return Err(Self::leave_iterator_walk(heap, error)),
+                        Err(error) => {
+                            return self
+                                .leave_iterator_walk(record, heap, realm, error)
+                                .map(|()| None);
+                        }
                     }
                 }
             };
@@ -9920,7 +9994,11 @@ impl RegisterVM {
                 // the walk on; a native has answered into the accumulator.
                 Ok(Some(code_id)) => return Ok(Some(code_id)),
                 Ok(None) => {}
-                Err(error) => return Err(Self::leave_iterator_walk(heap, error)),
+                Err(error) => {
+                    return self
+                        .leave_iterator_walk(record, heap, realm, error)
+                        .map(|()| None);
+                }
             }
         }
     }
@@ -10021,7 +10099,7 @@ impl RegisterVM {
             let accumulator = promise::slot(heap, record, 0);
             if accumulator == VALUE_UNINITIALIZED {
                 let error = type_error(heap, realm, "a reduce of 27.1.3.3 with no element at all");
-                return Err(Self::leave_iterator_walk(heap, error));
+                return self.leave_iterator_walk(record, heap, realm, error);
             }
             accumulator
         } else if tag == ITERATOR_WALK_EACH {
@@ -10035,8 +10113,35 @@ impl RegisterVM {
                 .unwrap_or(0);
             match Self::typed_array_of_list(list, kind, heap, realm) {
                 Ok(made) => made,
-                Err(error) => return Err(Self::leave_iterator_walk(heap, error)),
+                Err(error) => return self.leave_iterator_walk(record, heap, realm, error),
             }
+        } else if tag == ITERATOR_WALK_ALL
+            || tag == ITERATOR_WALK_ALL_SETTLED
+            || tag == ITERATOR_WALK_RACE
+        {
+            // Step 6.d of 27.2.4.1 and of 27.2.4.2: the walk is done, so the
+            // count it started at one drops, and a count of zero settles the
+            // capability with the values; 27.2.4.5 settles with the first
+            // element alone and holds no values.
+            let group = promise::slot(heap, record, 10);
+            let capability = promise::slot(heap, group, promise::GROUP_CAPABILITY);
+            if tag != ITERATOR_WALK_RACE {
+                let remaining = Self::remaining(heap, group).saturating_sub(1);
+                promise::set_slot(
+                    heap,
+                    group,
+                    promise::GROUP_REMAINING,
+                    Value::from_smi(remaining),
+                )?;
+                if remaining == 0 {
+                    let values = promise::slot(heap, group, promise::GROUP_VALUES);
+                    let resolve = promise::slot(heap, capability, promise::CAPABILITY_RESOLVE);
+                    if let Err(error) = self.settle_through(resolve, values, false, heap, realm) {
+                        return self.leave_iterator_walk(record, heap, realm, error);
+                    }
+                }
+            }
+            promise::slot(heap, capability, promise::CAPABILITY_PROMISE)
         } else {
             promise::slot(heap, record, 10)
         };
@@ -10249,6 +10354,15 @@ impl RegisterVM {
             let held = Self::element_at(heap, pair, 1)?.unwrap_or(VALUE_UNDEFINED);
             let key = property_key(key, heap, realm)?;
             heap.define_own_named(object, key, held, PropertyFlags::ordinary_data())?;
+        } else if tag == ITERATOR_WALK_ALL
+            || tag == ITERATOR_WALK_ALL_SETTLED
+            || tag == ITERATOR_WALK_RACE
+        {
+            // Step 6 of 27.2.4.1, 27.2.4.2 and 27.2.4.5 starts the element
+            // with the handlers its combinator gives.
+            let group = promise::slot(heap, record, 10);
+            let at = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+            self.start_one_element(tag, group, at, value, heap, realm)?;
         } else {
             let collection = promise::slot(heap, record, 10);
             let set = tag == ITERATOR_WALK_SET || tag == ITERATOR_WALK_WEAK_SET;
@@ -10326,9 +10440,34 @@ impl RegisterVM {
     }
 
     /// Leaves the scope the walk held before its error reaches the caller.
-    fn leave_iterator_walk(heap: &mut GenerationalHeap, error: VMError) -> VMError {
+    ///
+    /// A combinator of 27.2.4 answers instead: `IfAbruptRejectPromise` of its
+    /// step 5 rejects the capability with the value the walk threw, and the
+    /// clause answers the promise of that capability.
+    fn leave_iterator_walk(
+        &mut self,
+        record: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+        error: VMError,
+    ) -> Result<(), VMError> {
+        let tag = promise::slot(heap, record, 9).as_smi().unwrap_or(0);
+        let combinator = tag == ITERATOR_WALK_ALL
+            || tag == ITERATOR_WALK_ALL_SETTLED
+            || tag == ITERATOR_WALK_RACE;
+        if combinator && let VMError::Thrown(value, _) = error {
+            let group = promise::slot(heap, record, 10);
+            let capability = promise::slot(heap, group, promise::GROUP_CAPABILITY);
+            let reject = promise::slot(heap, capability, promise::CAPABILITY_REJECT);
+            let answer = promise::slot(heap, capability, promise::CAPABILITY_PROMISE);
+            let settled = self.settle_through(reject, value, true, heap, realm);
+            heap.exit_scope();
+            settled?;
+            self.acc = answer;
+            return Ok(());
+        }
         heap.exit_scope();
-        error
+        Err(error)
     }
 
     /// 24.1.3.8 and 24.3.3.5, which ask the Script for the value of a key
@@ -22490,15 +22629,17 @@ impl RegisterVM {
     /// is given as its pair of handlers.
     ///
     /// Steps 3 to 6 stand inside one guard: a value thrown while the iterable
-    /// is read or an element is started rejects the capability rather than
-    /// reaching the caller.
-    fn promise_combinator(
-        &self,
+    /// is read rejects the capability rather than reaching the caller, and the
+    /// walk rejects it for every value thrown after that.
+    fn begin_promise_combinator(
+        &mut self,
         intrinsic: Intrinsic,
-        call: &Call,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
         heap: &mut GenerationalHeap,
         realm: &Realm,
-    ) -> Result<Value, VMError> {
+    ) -> Result<Option<u32>, VMError> {
         if !Self::is_intrinsic(call.receiver, Intrinsic::PromiseConstructor, heap) {
             if call.receiver.as_object().is_none() {
                 return Err(type_error(
@@ -22512,27 +22653,45 @@ impl RegisterVM {
             ));
         }
         let capability = promise::capability(heap, realm)?;
-        let argument = self.call_argument(call, 0, heap)?;
-        match self.start_elements(intrinsic, argument, capability, heap, realm) {
-            Ok(()) => {}
+        let argument = self.call_argument(&call, 0, heap)?;
+        match self.open_promise_combinator(
+            intrinsic,
+            argument,
+            capability,
+            call,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        ) {
+            // The guard holds no frame, so the capability the local names is
+            // the one the record holds.
             Err(VMError::Thrown(value, _)) => {
                 let reject = promise::slot(heap, capability, promise::CAPABILITY_REJECT);
                 self.settle_through(reject, value, true, heap, realm)?;
+                self.acc = promise::slot(heap, capability, promise::CAPABILITY_PROMISE);
+                Ok(None)
             }
-            Err(error) => return Err(error),
+            other => other,
         }
-        Ok(promise::slot(heap, capability, promise::CAPABILITY_PROMISE))
     }
 
-    /// Steps 3 to 6 of the three combinators.
-    fn start_elements(
-        &self,
+    /// Steps 3 to 6 of the three combinators, which a walk of 7.4.2 runs.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a walk of 7.4.2 runs where a call does, with what a call has"
+    )]
+    fn open_promise_combinator(
+        &mut self,
         intrinsic: Intrinsic,
         argument: Value,
         capability: Value,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
         heap: &mut GenerationalHeap,
         realm: &Realm,
-    ) -> Result<(), VMError> {
+    ) -> Result<Option<u32>, VMError> {
         // Step 3 reads `resolve` once, before the iterable is read.
         let constructor = realm
             .intrinsic(heap, Intrinsic::PromiseConstructor)?
@@ -22548,90 +22707,118 @@ impl RegisterVM {
                 "a `resolve` that is not %Promise.resolve%",
             ));
         }
-        let elements = Self::iterable_elements(argument, heap, realm)?;
-        let values = Value::from_object(realm.array(heap, 0)?);
-        let group = promise::record(heap, realm, &[values, capability, Value::from_smi(1)])?;
-        for (index, element) in elements.into_iter().enumerate() {
-            let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
-            if intrinsic != Intrinsic::PromiseRace {
-                promise::set_slot(heap, values, index, VALUE_UNDEFINED)?;
-            }
-            promise::set_slot(
-                heap,
-                group,
-                promise::GROUP_REMAINING,
-                Value::from_smi(Self::remaining(heap, group).saturating_add(1)),
-            )?;
-            let next = self.resolved_promise(element, heap, realm)?;
-            let (on_fulfilled, on_rejected) = match intrinsic {
-                Intrinsic::PromiseRace => (
-                    promise::slot(heap, capability, promise::CAPABILITY_RESOLVE),
-                    promise::slot(heap, capability, promise::CAPABILITY_REJECT),
-                ),
-                Intrinsic::PromiseAllSettled => (
-                    promise::element_function(
-                        heap,
-                        realm,
-                        Intrinsic::PromiseAllSettledFulfilled,
-                        group,
-                        index,
-                    )?,
-                    promise::element_function(
-                        heap,
-                        realm,
-                        Intrinsic::PromiseAllSettledRejected,
-                        group,
-                        index,
-                    )?,
-                ),
-                _ => (
-                    promise::element_function(
-                        heap,
-                        realm,
-                        Intrinsic::PromiseAllElement,
-                        group,
-                        index,
-                    )?,
-                    promise::slot(heap, capability, promise::CAPABILITY_REJECT),
-                ),
-            };
-            // Step 6.q calls `then` of the promise the element resolved to,
-            // which is observable and so must be the one of this Realm.
-            let object = next.as_object().ok_or(VMError::TypeError)?;
-            let key = PropertyKey::String(heap.strings.intern("then")?);
-            let then = match heap.lookup_named(object, key)? {
+        // 22.1.3.34 makes a String iterable, and this Realm has not built it.
+        if argument.is_string() {
+            return Err(VMError::Unsupported("a property of %String.prototype%"));
+        }
+        let Some(object) = argument.as_object() else {
+            return Err(type_error(heap, realm, "the argument is not iterable"));
+        };
+        let method =
+            match heap.lookup_named(object, super::realm::WellKnownSymbol::Iterator.key())? {
                 Some(found) => Self::plain_value(found)?,
                 None => VALUE_UNDEFINED,
             };
-            if !Self::is_intrinsic(then, Intrinsic::PromisePrototypeThen, heap) {
-                return Err(VMError::Unsupported(
-                    "a `then` that is not %Promise.prototype.then%",
-                ));
-            }
-            self.perform_then(
-                next,
-                on_fulfilled,
-                on_rejected,
-                VALUE_UNDEFINED,
-                heap,
-                realm,
-            )?;
+        if method.is_undefined() || method.is_null() {
+            return Err(type_error(heap, realm, "the argument is not iterable"));
         }
-        if intrinsic == Intrinsic::PromiseRace {
-            return Ok(());
+        // 27.2.4.1.1 shares one record between the elements: the values, the
+        // capability and how many are outstanding, which starts at one for the
+        // walk itself.
+        let values = Value::from_object(realm.array(heap, 0)?);
+        let group = promise::record(heap, realm, &[values, capability, Value::from_smi(1)])?;
+        let tag = match intrinsic {
+            Intrinsic::PromiseAllSettled => ITERATOR_WALK_ALL_SETTLED,
+            Intrinsic::PromiseRace => ITERATOR_WALK_RACE,
+            _ => ITERATOR_WALK_ALL,
+        };
+        self.begin_iterator_walk(
+            argument,
+            method,
+            VALUE_UNDEFINED,
+            VALUE_UNDEFINED,
+            IteratorWalkTaker::Combinator { tag, group },
+            call,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )
+    }
+
+    /// Step 6 of 27.2.4.1, 27.2.4.2 and 27.2.4.5 for one element: the element
+    /// is resolved and its handlers are registered with the promise that
+    /// answered.
+    fn start_one_element(
+        &self,
+        tag: i32,
+        group: Value,
+        index: u32,
+        element: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let capability = promise::slot(heap, group, promise::GROUP_CAPABILITY);
+        let values = promise::slot(heap, group, promise::GROUP_VALUES);
+        if tag != ITERATOR_WALK_RACE {
+            promise::set_slot(heap, values, index, VALUE_UNDEFINED)?;
         }
-        let remaining = Self::remaining(heap, group).saturating_sub(1);
         promise::set_slot(
             heap,
             group,
             promise::GROUP_REMAINING,
-            Value::from_smi(remaining),
+            Value::from_smi(Self::remaining(heap, group).saturating_add(1)),
         )?;
-        if remaining == 0 {
-            let resolve = promise::slot(heap, capability, promise::CAPABILITY_RESOLVE);
-            self.settle_through(resolve, values, false, heap, realm)?;
+        let next = self.resolved_promise(element, heap, realm)?;
+        let (on_fulfilled, on_rejected) = if tag == ITERATOR_WALK_RACE {
+            (
+                promise::slot(heap, capability, promise::CAPABILITY_RESOLVE),
+                promise::slot(heap, capability, promise::CAPABILITY_REJECT),
+            )
+        } else if tag == ITERATOR_WALK_ALL_SETTLED {
+            (
+                promise::element_function(
+                    heap,
+                    realm,
+                    Intrinsic::PromiseAllSettledFulfilled,
+                    group,
+                    index,
+                )?,
+                promise::element_function(
+                    heap,
+                    realm,
+                    Intrinsic::PromiseAllSettledRejected,
+                    group,
+                    index,
+                )?,
+            )
+        } else {
+            (
+                promise::element_function(heap, realm, Intrinsic::PromiseAllElement, group, index)?,
+                promise::slot(heap, capability, promise::CAPABILITY_REJECT),
+            )
+        };
+        // Step 6.q calls `then` of the promise the element resolved to, which
+        // is observable and so must be the one of this Realm.
+        let object = next.as_object().ok_or(VMError::TypeError)?;
+        let key = PropertyKey::String(heap.strings.intern("then")?);
+        let then = match heap.lookup_named(object, key)? {
+            Some(found) => Self::plain_value(found)?,
+            None => VALUE_UNDEFINED,
+        };
+        if !Self::is_intrinsic(then, Intrinsic::PromisePrototypeThen, heap) {
+            return Err(VMError::Unsupported(
+                "a `then` that is not %Promise.prototype.then%",
+            ));
         }
-        Ok(())
+        self.perform_then(
+            next,
+            on_fulfilled,
+            on_rejected,
+            VALUE_UNDEFINED,
+            heap,
+            realm,
+        )
     }
 
     /// `[[RemainingElements]]` of the shared record.
@@ -24712,6 +24899,23 @@ impl RegisterVM {
                     {
                         return Ok((self.pending_pc.take().unwrap_or(0), Some(code_id)));
                     }
+                }
+            }
+            // Step 5 of 27.2.4.1, 27.2.4.2 and 27.2.4.5: a call of the Script
+            // the walk of a combinator opened rejects its capability with
+            // what it threw, and the clause answers the promise of that
+            // capability.
+            if let Some(Resume::IteratorWalk { state }) = frame.resume {
+                let record = heap
+                    .root_value(state)
+                    .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+                let tag = promise::slot(heap, record, 9).as_smi().unwrap_or(0);
+                if tag == ITERATOR_WALK_ALL
+                    || tag == ITERATOR_WALK_ALL_SETTLED
+                    || tag == ITERATOR_WALK_RACE
+                {
+                    self.leave_iterator_walk(record, heap, realm, VMError::Thrown(value, native))?;
+                    return Ok((frame.return_pc, frame.caller_code_id));
                 }
             }
             // 27.2.3.1 step 7: the executor of a new Promise rejects it with
