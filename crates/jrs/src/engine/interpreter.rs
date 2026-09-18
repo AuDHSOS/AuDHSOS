@@ -13858,8 +13858,10 @@ impl RegisterVM {
             }
             return self.regexp_split(&text, &pattern, call, heap, realm);
         }
-        // Step 6: a pattern without `g` answers what 22.2.7.2 answers.
-        if !pattern.global {
+        // Step 3 reads the flags off the object, and step 6 answers what
+        // 22.2.7.2 answers where they do not name `g`.
+        let flags = self.regexp_flags_text(call.receiver, heap, realm)?;
+        if !flags.contains(&u16::from(b'g')) {
             let matched = self.regexp_exec(receiver, &pattern, &text, heap, realm)?;
             let Some(matched) = matched else {
                 return Ok(VALUE_NULL);
@@ -18118,7 +18120,11 @@ impl RegisterVM {
             return Err(VMError::Unsupported("an exec of the Script"));
         }
         let replacement = property_name_units(replacement, heap, realm)?;
-        if pattern.global {
+        // Step 6 reads the flags off the object, and step 8 starts a global
+        // replace at the beginning.
+        let flags = self.regexp_flags_text(Value::from_object(receiver), heap, realm)?;
+        let global = flags.contains(&u16::from(b'g'));
+        if global {
             Self::set_last_index(receiver, Value::from_smi(0), heap, realm)?;
         }
         let mut out: Vec<u16> = Vec::new();
@@ -18139,7 +18145,7 @@ impl RegisterVM {
                 .collect();
             Self::append_substitution(&mut out, &matched, text, start, &captures, &replacement);
             taken = end.max(start);
-            if !pattern.global {
+            if !global {
                 break;
             }
             // 22.2.6.11 step 11.c advances over an empty match, which
@@ -18788,6 +18794,37 @@ impl RegisterVM {
             }
         }
         self.allocate_string(heap, &units)
+    }
+
+    /// `ToString(? Get(rx, "flags"))`, which 22.2.6.8 step 3 and 22.2.6.11
+    /// step 6 read off the object rather than out of its pattern.
+    ///
+    /// A `flags` the Script put there answers instead of 22.2.6.4, and a
+    /// getter of the Script needs a frame this native has none of.
+    fn regexp_flags_text(
+        &self,
+        receiver: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Vec<u16>, VMError> {
+        let object = receiver
+            .as_object()
+            .ok_or_else(|| type_error(heap, realm, "this value is not an object"))?;
+        let key = PropertyKey::String(heap.strings.intern("flags")?);
+        let value = match heap.lookup_named(object, key)? {
+            None => VALUE_UNDEFINED,
+            Some(property) if !property.flags.is_accessor => property.value,
+            Some(property) => {
+                let (get, _) = Self::accessor_parts(property.value, heap)?;
+                if !Self::is_intrinsic(get, Intrinsic::RegExpPrototypeFlags, heap) {
+                    return Err(VMError::Unsupported(
+                        "a `flags` that is an accessor of the Script",
+                    ));
+                }
+                self.regexp_flags(receiver, heap, realm)?
+            }
+        };
+        property_name_units(value, heap, realm)
     }
 
     /// `RegExpAlloc` of 22.2.3.2 with the `lastIndex` 22.2.3.3 initializes.
