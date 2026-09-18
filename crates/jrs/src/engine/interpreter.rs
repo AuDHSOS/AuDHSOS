@@ -645,6 +645,14 @@ pub enum Resume {
     },
 }
 
+/// Whether a clause of 22.1.3 found a method of its argument to answer with.
+enum Delegated {
+    /// The method took the call over, and carries the code id of the frame.
+    Entered(Option<u32>),
+    /// The argument holds no such method, and the clause runs on.
+    No,
+}
+
 /// What 23.1.2.1 step 2 found: an `@@iterator` the walk of 7.4.2 is now in,
 /// or none, which leaves the array-like walk of step 7.
 enum IterableStart {
@@ -2143,6 +2151,13 @@ impl RegisterVM {
                     active_feedback
                         .record_call(call.slot, NATIVE_CALL_TARGET | u64::from(id))
                         .ok_or(VMError::InvalidFeedbackVector)?;
+                }
+                // 22.1.3.14, 22.1.3.19, 22.1.3.20 and 22.1.3.23 read a method
+                // off their argument before the `this` value is converted.
+                if let Delegated::Entered(entered) =
+                    self.delegate_of_22_1_3(intrinsic, &call, units, active_feedback, heap, realm)?
+                {
+                    return Ok(entered);
                 }
                 // 22.1.3 converts the `this` value before it reads any
                 // argument, so the receiver leaves first.
@@ -4958,6 +4973,14 @@ impl RegisterVM {
                 heap,
                 realm,
             );
+        }
+        // 22.1.3.14, 22.1.3.15, 22.1.3.19, 22.1.3.20 and 22.1.3.23 read a
+        // method off their argument before the `this` value is converted, and
+        // answer what that method answers.
+        if let Delegated::Entered(entered) =
+            self.delegate_of_22_1_3(intrinsic, &call, units, active_feedback, heap, realm)?
+        {
+            return Ok(entered);
         }
         // 22.1.3 sends the `this` value through ToString before it reads its
         // arguments, which is a method of the Script for an Object.
@@ -14541,6 +14564,142 @@ impl RegisterVM {
             return self.regexp_split(&text, &pattern, call, heap, realm);
         }
         self.string_split(&text, call, heap, realm)
+    }
+
+    /// Step 2 of 22.1.3.14, 22.1.3.15, 22.1.3.19, 22.1.3.20 and 22.1.3.23:
+    /// the clause answers what a method of its argument answers.
+    ///
+    /// Answers `None` where the clause has no such method to call and runs on
+    /// as before, and `Some` where the method took the call over.
+    fn delegate_of_22_1_3(
+        &mut self,
+        intrinsic: Intrinsic,
+        call: &Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Delegated, VMError> {
+        let (symbol, own, passes) = match intrinsic {
+            Intrinsic::StringPrototypeMatch => (
+                super::realm::WellKnownSymbol::Match,
+                Intrinsic::RegExpPrototypeMatch,
+                0,
+            ),
+            Intrinsic::StringPrototypeSearch => (
+                super::realm::WellKnownSymbol::Search,
+                Intrinsic::RegExpPrototypeSearch,
+                0,
+            ),
+            Intrinsic::StringPrototypeSplit => (
+                super::realm::WellKnownSymbol::Split,
+                Intrinsic::RegExpPrototypeSplit,
+                1,
+            ),
+            Intrinsic::StringPrototypeReplace => (
+                super::realm::WellKnownSymbol::Replace,
+                Intrinsic::RegExpPrototypeReplace,
+                1,
+            ),
+            _ => return Ok(Delegated::No),
+        };
+        // Step 1 refuses a `this` value of null or undefined before anything
+        // of the argument is read.
+        if call.receiver.is_undefined() || call.receiver.is_null() {
+            return Err(type_error(
+                heap,
+                realm,
+                "a method of 22.1.3 called on null or undefined",
+            ));
+        }
+        let argument = self.call_argument(call, 0, heap)?;
+        let Some(object) = argument.as_object() else {
+            return Ok(Delegated::No);
+        };
+        // 7.3.11 takes undefined and null as no method and every other value
+        // that is not callable as a TypeError.
+        let method = match heap.lookup_named(object, symbol.key())? {
+            Some(found) => Self::plain_value(found)?,
+            None => VALUE_UNDEFINED,
+        };
+        if method.is_undefined() || method.is_null() {
+            return Ok(Delegated::No);
+        }
+        if !Self::is_callable(method, heap) {
+            return Err(type_error(
+                heap,
+                realm,
+                "the method of 22.1.3 the argument holds is not callable",
+            ));
+        }
+        // The method of this Realm on a `RegExp` is what the clause runs
+        // without a frame, and nothing it does can be told apart from the call.
+        if Self::is_intrinsic(method, own, heap) && Self::regexp_pattern(object, heap).is_some() {
+            return Ok(Delegated::No);
+        }
+        let mut arguments = Vec::with_capacity(passes + 1);
+        arguments.push(call.receiver);
+        for index in 0..passes {
+            let index = u16::try_from(index).unwrap_or(0).saturating_add(1);
+            arguments.push(self.call_argument(call, index, heap)?);
+        }
+        self.answer_with_a_method(
+            method,
+            argument,
+            arguments,
+            *call,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )
+        .map(Delegated::Entered)
+    }
+
+    /// Enters a method of the Script whose answer is the answer of the native
+    /// that called it.
+    ///
+    /// The frame takes the place of the native: it returns where the native
+    /// would have returned, so nothing waits for it and no resume is needed.
+    /// The arguments are a List, because the registers of the caller hold the
+    /// ones the native was given and not the ones the method takes.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a call a native makes runs where a call does, with what a call has"
+    )]
+    fn answer_with_a_method(
+        &mut self,
+        method: Value,
+        receiver: Value,
+        arguments: Vec<Value>,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        // A native the frame would answer into is waiting for something else,
+        // and the answer of the method is not what it is waiting for.
+        if call.resume.is_some() || call.construct.is_some() {
+            return Err(VMError::Unsupported(
+                "a method of the Script a native answers with",
+            ));
+        }
+        let arg_count = u16::try_from(arguments.len()).unwrap_or(u16::MAX);
+        let list = Self::array_of(arguments, heap, realm)?;
+        // The List outlives every frame the call opens, so it is a root of a
+        // scope of its own, which the return leaves.
+        heap.enter_scope();
+        let arguments = heap.push_root(list)?;
+        let next = Call {
+            receiver,
+            arg_count,
+            arg_start: Reg(0),
+            resume: Some(Resume::Spread { arguments }),
+            construct: None,
+            ..call
+        };
+        self.enter_call_value(method, units, active_feedback, heap, realm, next)
     }
 
     /// `RegExp.prototype[@@match]`, `[@@search]` and `[@@split]` of 22.2.6.
