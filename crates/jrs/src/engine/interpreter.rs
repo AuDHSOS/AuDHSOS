@@ -25942,6 +25942,9 @@ impl RegisterVM {
                 | Instruction::Yield
                 | Instruction::YieldResult
                 | Instruction::AsyncYield => {
+                    // 10.2.2 step 13 runs after the body, so a value it
+                    // refuses leaves the frame before it is thrown.
+                    let mut refused = None;
                     // 27.6.3.8: the request at the front of the queue takes
                     // what the body yielded, and the body carries on where
                     // another one waits behind it.
@@ -26024,8 +26027,13 @@ impl RegisterVM {
                     } else if active_code.derived {
                         // 10.2.2 step 13: a derived constructor answers the
                         // object its own `this` binding holds, and refuses
-                        // every other value but undefined.
-                        self.acc = self.derived_result(active_code, heap, realm)?;
+                        // every other value but undefined. 10.2.2 runs after
+                        // the body, so the refusal reaches the caller and not
+                        // a `try` of the constructor.
+                        match self.derived_result(active_code, heap, realm) {
+                            Ok(value) => self.acc = value,
+                            Err(error) => refused = Some(error),
+                        }
                     } else if active_code.async_generator {
                         // 27.6.3.2 step 5: the body ended, so the request at
                         // the front of the queue takes the result that says
@@ -26045,6 +26053,9 @@ impl RegisterVM {
                         self.unit = frame.caller_unit;
                         self.active_binding_count = frame.caller_binding_count;
                         self.current_context = frame.caller_context;
+                        if let Some(error) = refused {
+                            return Err(error);
+                        }
                         // 10.2.2 step 13: a constructor that answers no Object
                         // answers the one its call started from.
                         if let Some(target) = frame.construct
