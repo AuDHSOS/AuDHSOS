@@ -9485,6 +9485,15 @@ impl RegisterVM {
         Ok(property.value)
     }
 
+    /// What 23.1.3.16, 23.1.3.17 and 23.1.3.20 answer for an array-like of
+    /// no elements, which their step 2 answers before anything is converted.
+    const fn empty_scan_answer(intrinsic: Intrinsic) -> Value {
+        match intrinsic {
+            Intrinsic::ArrayPrototypeIncludes => VALUE_FALSE,
+            _ => Value::from_smi(-1),
+        }
+    }
+
     /// 10.4.2.2 step 1 refuses a length past 2^32-1, which 7.1.20 allows and
     /// an Array cannot hold. Only 23.1.3.21 makes an Array of that length.
     fn refuse_long_array(
@@ -9548,6 +9557,10 @@ impl RegisterVM {
 
     /// The checks 23.1.3 makes once it knows the length, and the Array the two
     /// clauses that build one start from.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function keeps each check beside the step it is"
+    )]
     fn begin_array_walk(
         &mut self,
         state: Root,
@@ -9559,6 +9572,13 @@ impl RegisterVM {
     ) -> Result<Option<u32>, VMError> {
         let mut walk = Self::read_iteration(state, heap)?;
         if Self::scans_for_an_element(walk.intrinsic) {
+            // Step 2 of each answers for an array-like of no elements before
+            // step 3 converts the index it was given.
+            if walk.length == 0 {
+                heap.exit_scope();
+                self.acc = Self::empty_scan_answer(walk.intrinsic);
+                return Ok(None);
+            }
             // 7.1.5 converts that argument only after the `length` is read, so
             // an Object there runs its methods here and not before the walk.
             if walk.started && walk.output.is_object() {
