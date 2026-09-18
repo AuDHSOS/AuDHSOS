@@ -19,7 +19,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   are ignored and count as bounded. `clip_box` reads the `ClipList`, `extents`
   unions the outermost clipped outlines, and `Painted::bounded` carries the
   specification's verdict. Rotation and skew use integer Taylor series, so no
-  floating point enters. 29 host tests over synthetic tables and a COLRv1 emoji
+  floating point enters. 33 host tests over synthetic tables and a COLRv1 emoji
   fixture; the `text_font` corpus gains `colr-emoji` and `colr-cycle`.
   D-173 puts this in `text-core` rather than in the rasterizer, and D-176
   specifies it. `CBDT`/`CBLC`, `sbix` and OpenType-SVG stay refused, and a
@@ -36,21 +36,6 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   `user-proto`, default 2.2, because uncorrected coverage moves the apparent
   stroke weight when the appearance switches.
 
-### Changed
-
-- `fonts/`: layer 6 of both chains is `noto/emoji/Noto-COLRv1.ttf`, the COLRv1
-  build of Noto Color Emoji 2.051, in place of the CBDT `NotoColorEmoji.ttf`
-  (D-176, amending D-169). The vector build survives the fractional scaling
-  factors this system allows; a bitmap strike does not. Remeasured over the new
-  file: the layer maps 1499 code points and adds 1030, where the CBDT build
-  mapped 1501, the two extra being U+0000 and U+000D and neither an emoji. Its
-  em is 1024 rather than 2048 and it carries `glyf` outlines, so no font of
-  `fonts/` holds a bitmap table any more. `Noto-COLRv1-noflags.ttf` was not
-  taken, because it drops the 26 regional indicators and ten plane 15 code
-  points, and `Noto-COLRv1-emojicompat.ttf` was not, because its extra table
-  serves Android's downloadable font service.
-
-### Added
 
 - `text-core` T1–T12: borrowed sfnt/TTC, cmap, metrics, TrueType/CFF/CFF2
   outlines and variations; generated Unicode 18.0.0 properties; segmentation,
@@ -850,6 +835,18 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   Catalog 6.6.59 and 6.6.60.
 
 ### Changed
+
+- `fonts/`: layer 6 of both chains is `noto/emoji/Noto-COLRv1.ttf`, the COLRv1
+  build of Noto Color Emoji 2.051, in place of the CBDT `NotoColorEmoji.ttf`
+  (D-176, amending D-169). The vector build survives the fractional scaling
+  factors this system allows; a bitmap strike does not. Remeasured over the new
+  file: the layer maps 1499 code points and adds 1030, where the CBDT build
+  mapped 1501, the two extra being U+0000 and U+000D and neither an emoji. Its
+  em is 1024 rather than 2048 and it carries `glyf` outlines, so no font of
+  `fonts/` holds a bitmap table any more. `Noto-COLRv1-noflags.ttf` was not
+  taken, because it drops the 26 regional indicators and ten plane 15 code
+  points, and `Noto-COLRv1-emojicompat.ttf` was not, because its extra table
+  serves Android's downloadable font service.
 
 - `text-core` drops `Run::baseline` (D-171). The field was `Fixed::ZERO` in
   `Default`, assigned nowhere, and serialized by `layout::encode`, so every

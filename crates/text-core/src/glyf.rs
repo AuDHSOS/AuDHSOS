@@ -110,6 +110,25 @@ impl<'a> Glyf<'a> {
         }
     }
 
+    /// Whether any glyph of this face carries a description.
+    ///
+    /// A face with a bitmap strike and an empty `glyf` has a loca table whose
+    /// entries are all equal, and draws no outline this crate decodes. Work is
+    /// O(glyph count) worst case and stops at the first description.
+    /// # Errors
+    /// Rejects a malformed loca table.
+    pub fn any_outline(&self) -> Result<bool, FontError> {
+        let mut previous = self.offset(0)?;
+        for id in 1..=usize::from(self.metrics.maxp.glyph_count) {
+            let next = self.offset(id)?;
+            if next != previous {
+                return Ok(true);
+            }
+            previous = next;
+        }
+        Ok(false)
+    }
+
     fn record(&self, id: u16) -> Result<&'a [u8], FontError> {
         if id >= self.metrics.maxp.glyph_count {
             return Err(FontError::GlyphIndex);

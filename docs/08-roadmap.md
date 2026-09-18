@@ -785,7 +785,7 @@ rasterizer.
 | T10 | GDEF, GSUB 1–8, GPOS 1–9 | T9 | XL | implemented: all lookup formats, supported-script font oracles, language/variation features, mark/cursive chains and malformed-input limits |
 | T11 | role/script/language resolution | T10 | M | implemented: whole-cluster role fallback, explicit regional language systems, UVS, scale/baseline and weight coordinates |
 | T12 | layout and measure | T11 | L | implemented: fractional lines, bidi cluster carets/selections, reshaping, layout/measure equality, explicit deterministic serialization; 106 host tests and two doctests, 95.99% line / 89.45% branch coverage |
-| T13 | COLRv1 and CPAL | T12 | XL | implemented: CPAL palettes and selection, paint formats 1 to 32 with their `Var*` twins, all three extend modes, all 28 composite modes, COLR version 0 through the same emitter, clip boxes, boundedness and ink extents; 29 host tests over synthetic tables and a COLRv1 emoji fixture, two new fuzz seeds |
+| T13 | COLRv1 and CPAL | T12 | XL | implemented: CPAL palettes and selection, paint formats 1 to 32 with their `Var*` twins, all three extend modes, all 28 composite modes, COLR version 0 through the same emitter, clip boxes, boundedness and ink extents; 33 host tests over synthetic tables and a COLRv1 emoji fixture, two new fuzz seeds |
 | R1 | rasterizer | T13 | XL | unscheduled; outside this task. D-174 fixes the rounding, D-175 the gamma; gradients and 28 blend modes are the price of vector emoji (D-176) |
 | R2 | glyph cache | R1 | M | unscheduled; outside this task |
 | R3 | toolkit/compositor integration | R2 | L | unscheduled; outside this task |

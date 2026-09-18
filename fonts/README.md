@@ -335,7 +335,7 @@ SHA256SUMS`, run here, checks all 187 files.
 |----------|-------|
 | outline table | `glyf` in every font and in both collections; no `CFF `, `CFF2`, `CBDT`, `sbix` or `SVG ` anywhere |
 | `cmap` subtable formats | over the 171 `.ttf` files: 4 and 12 in 114, 4 alone in 53, 0, 4 and 12 in 2, 4, 12 and 14 in Math and in the emoji font; 4, 6, 12 and 14 in the two collections |
-| colour | `COLR` version 1 with `CPAL` in `Noto-COLRv1.ttf`, 3993 base glyphs, 72825 layer list entries, 3993 clip boxes, one palette of 6196 entries and no item variation store; `COLR` version 0 with `CPAL` in `NotoZnamennyMusicalNotation-Regular.ttf` |
+| colour | `COLR` version 1 with `CPAL` in `Noto-COLRv1.ttf`, 3993 base glyphs, 72825 layer list entries, a `ClipList` of 1990 records over 426 distinct `ClipBox` tables covering those 3993 glyphs, one palette of 6196 entries and no item variation store; `COLR` version 0 with `CPAL` in `NotoZnamennyMusicalNotation-Regular.ttf` |
 | variation tables | 56 variable fonts, 48 of them in `noto/scripts/`; `fvar`, `gvar`, `HVAR` and `STAT` in all 56, `avar` in 45, `MVAR` in 18 |
 | collections | two, `ttcf` header, five fonts each, 65535 glyphs each, sharing `glyf` |
 | largest `cmap` | Last Resort, 1114112 code points, 5776 glyphs, through format 12 groups mapping a range to one glyph |

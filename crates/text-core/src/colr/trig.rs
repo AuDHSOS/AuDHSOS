@@ -22,8 +22,10 @@ const TURN_MASK: i64 = (1_i64 << 33) - 1;
 /// Sine and cosine of `turns` half-turns.
 ///
 /// The argument is reduced modulo two half-turns exactly, then to `[0, pi/4]`
-/// by quadrant symmetry. Both series carry every term above `2^-29`, so the
-/// result is within eight Q32.32 units of the real value.
+/// by quadrant symmetry. The truncated tail of each series and the rounding of
+/// the eleven operations that evaluate it keep the result within `2^-28` of
+/// the real value, sixteen Q32.32 units; a dense sweep of both functions found
+/// no error above nine units.
 /// # Errors
 /// Returns `Overflow` when an intermediate exceeds Q32.32.
 pub(crate) fn sin_cos(turns: Fixed) -> Result<(Fixed, Fixed), FontError> {

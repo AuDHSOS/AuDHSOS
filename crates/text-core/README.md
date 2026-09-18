@@ -116,9 +116,11 @@ font units under the accumulated `Affine`. It covers paint formats 1 to 32
 with their `Var*` twins, all three extend modes, and all 28 composite modes;
 version 0 resolves through the same emitter. A path of 64 paint tables and
 65,536 visits bound the traversal, and a paint table that is its own ancestor
-returns `Cycle`. `clip_box` reads the `ClipList`; `extents` unions the
-outermost clipped outlines; `Painted::bounded` carries the specification's
-boundedness verdict. `Cpal` resolves palette entries, the foreground entry
+returns `Cycle`. A `Compose` combines the two groups above it and draws the
+result onto the surface below them with source-over. `clip_box` reads the
+`ClipList`; `extents` unions the outermost clipped outlines, an empty outline
+contributing none; `Painted::bounded` is the specification's answer, a clip
+box bounding the glyph whatever its graph does. `Cpal` resolves palette entries, the foreground entry
 `0xFFFF`, and palette selection by light or dark background.
 
 The box measures advances and line metrics, not rasterized ink. Soft-wrap
@@ -130,4 +132,5 @@ and a vertical one to a whole pixel, and gamma-corrects coverage with the
 compositor's value. Vertical text, dictionary breaking, hinting, `CBDT`,
 `sbix`, SVG glyph painting, and WOFF decompression are refused by this track;
 a face whose only glyph data is one of those covers no cluster, so a fallback
-chain moves to its next layer instead of drawing a blank.
+chain moves to its next layer instead of drawing a blank; an `sbix` face
+states a `glyf` whose every entry is empty, so the loca entries decide.

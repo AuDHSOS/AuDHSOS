@@ -106,9 +106,9 @@ pub struct Painted {
     pub stops: usize,
     /// The `ClipList` box of this glyph, when the font has one.
     pub clip: Option<Extents>,
-    /// Whether the paint graph paints inside a finite box, by the rules of
-    /// each format. An unbounded glyph must not be drawn, and `clip` is then
-    /// the only box there is.
+    /// Whether this colour glyph paints inside a finite box. A `clip` box
+    /// makes it bounded whatever its graph does; without one the rules of
+    /// each format decide. An unbounded glyph must not be drawn.
     pub bounded: bool,
 }
 
@@ -242,11 +242,14 @@ impl<'a> Colr<'a> {
             self.version_zero(glyph, &mut walk)?;
             true
         };
+        // A clip box bounds the glyph whatever the graph does, and the
+        // specification then asks for no inspection of the graph at all.
+        let clip = self.clip_box(glyph, coords)?;
         Ok(Painted {
             ops: walk.op_count,
             stops: walk.stop_count,
-            clip: self.clip_box(glyph, coords)?,
-            bounded,
+            clip,
+            bounded: bounded || clip.is_some(),
         })
     }
 
@@ -310,10 +313,12 @@ impl<'a> Colr<'a> {
         for op in ops {
             match *op {
                 PaintOp::Clip { glyph, transform } => {
-                    if depth == 0 {
-                        let box_ = self
-                            .outline(font, glyph, coords, scratch)?
-                            .under(transform)?;
+                    // An empty outline clips everything away and contributes
+                    // no ink, so it enlarges no box.
+                    if depth == 0
+                        && let Some(box_) = self.outline(font, glyph, coords, scratch)?
+                    {
+                        let box_ = box_.under(transform)?;
                         result = Some(result.map_or(box_, |have: Extents| have.union(box_)));
                     }
                     depth = add(depth, 1)?;
@@ -326,13 +331,14 @@ impl<'a> Colr<'a> {
     }
 
     #[expect(clippy::unused_self, reason = "an outline reader of this table")]
+    /// The control-point box of one glyph, or `None` for an empty outline.
     fn outline(
         &self,
         font: &Font<'_>,
         glyph: u16,
         coords: &[Fixed],
         scratch: &mut Scratch<'_>,
-    ) -> Result<Extents, FontError> {
+    ) -> Result<Option<Extents>, FontError> {
         match font.outline_kind() {
             OutlineKind::TrueType => {
                 let outline = Glyf::parse(font)?.outline_instance(
@@ -347,13 +353,15 @@ impl<'a> Colr<'a> {
                     .get(..outline.points)
                     .ok_or(FontError::BufferTooSmall)?;
                 let Some(first) = points.first() else {
-                    return Ok(Extents::default());
+                    return Ok(None);
                 };
-                Ok(points
-                    .iter()
-                    .fold(Extents::of(first.x, first.y), |box_, point| {
-                        box_.cover(point.x, point.y)
-                    }))
+                Ok(Some(
+                    points
+                        .iter()
+                        .fold(Extents::of(first.x, first.y), |box_, point| {
+                            box_.cover(point.x, point.y)
+                        }),
+                ))
             }
             OutlineKind::PostScript => {
                 let count = Cff::parse(font)?.outline_instance(glyph, coords, scratch.commands)?;
@@ -377,7 +385,7 @@ impl<'a> Colr<'a> {
                         ));
                     }
                 }
-                Ok(box_.unwrap_or_default())
+                Ok(box_)
             }
         }
     }

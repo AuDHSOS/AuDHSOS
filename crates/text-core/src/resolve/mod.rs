@@ -5,6 +5,7 @@
 mod language;
 use crate::{
     Fixed, Font, TextError, bidi,
+    glyf::Glyf,
     shape::{self, Glyph, LayoutTable},
     unicode::{self, Script},
     variation::{Axes, AxisValue},
@@ -308,21 +309,29 @@ fn select(
             }
         }
     }
-    Ok((0, true))
+    // Nothing covered the cluster. The notdef comes from a face that can draw
+    // one, which a face of a refused colour format cannot.
+    let fallback = chain.iter().position(|font| !bitmap_only(font));
+    Ok((fallback.unwrap_or(0), true))
 }
 /// Whether a face's only glyph data is a colour format this track refuses.
 ///
 /// `CBDT`/`CBLC`, `sbix` and OpenType-SVG draw nothing here, so a face that
 /// carries one of them and no outline covers no cluster: the chain moves to
-/// its next layer rather than emitting a blank (D-176).
+/// its next layer rather than emitting a blank (D-176). An `sbix` face states
+/// a `glyf` table whose every entry is empty, so the loca entries decide and
+/// not the presence of the tag.
 fn bitmap_only(font: &Font<'_>) -> bool {
-    let outlines = (font.table(*b"glyf").is_some() && font.table(*b"loca").is_some())
-        || font.table(*b"CFF ").is_some()
-        || font.table(*b"CFF2").is_some();
-    !outlines
-        && (font.table(*b"CBDT").is_some()
-            || font.table(*b"sbix").is_some()
-            || font.table(*b"SVG ").is_some())
+    if font.table(*b"CFF ").is_some() || font.table(*b"CFF2").is_some() {
+        return false;
+    }
+    if font.table(*b"CBDT").is_none()
+        && font.table(*b"sbix").is_none()
+        && font.table(*b"SVG ").is_none()
+    {
+        return false;
+    }
+    !Glyf::parse(font).is_ok_and(|glyf| glyf.any_outline().unwrap_or(true))
 }
 
 pub(crate) const fn control(c: char) -> bool {

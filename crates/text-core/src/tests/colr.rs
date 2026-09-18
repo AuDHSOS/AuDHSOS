@@ -616,7 +616,7 @@ fn affine_paints_compose_the_transform_of_their_subgraph() {
 
 /// A variable transform paint of `format`, its `varIndexBase` naming a store
 /// that holds one delta per field.
-fn var_transform_paint(format: u8, fields: &[i16], deltas: &[i8]) -> Vec<u8> {
+fn var_transform_paint(format: u8, fields: &[i16], deltas: &[i8], base: u32) -> Vec<u8> {
     let mut out = header();
     let (list, slots) = base_list(&mut out, &[5]);
     let root = out.at();
@@ -625,7 +625,7 @@ fn var_transform_paint(format: u8, fields: &[i16], deltas: &[i8]) -> Vec<u8> {
     for field in fields {
         out.i16(*field);
     }
-    out.u32(0);
+    out.u32(base);
     let at = out.at();
     out.link24(child, root, at);
     out.u8(2).u16(0).i16(1 << 14);
@@ -665,7 +665,7 @@ fn every_variable_transform_format_maps_its_fields_to_the_sequence() {
             .map(|(field, delta)| field + i16::from(*delta))
             .collect();
         assert_eq!(
-            varied_transform_of(&var_transform_paint(variable, fields, deltas)),
+            varied_transform_of(&var_transform_paint(variable, fields, deltas, 0)),
             transform_of(&transform_paint(plain, &applied)),
             "format {variable}"
         );
@@ -1453,4 +1453,147 @@ fn a_chain_layer_of_a_refused_colour_format_covers_no_cluster() {
     let view = layout.view();
     assert_eq!(view.glyphs.len(), 1);
     assert_eq!(view.runs[view.glyphs[0].run].face, 1);
+}
+
+#[test]
+fn a_variation_base_near_the_end_of_the_range_fits_its_own_field_count() {
+    // PaintVarTranslate has two variable fields, so a base of 0xFFFFFFFE is
+    // legal: its sequence ends at 0xFFFFFFFF and does not wrap. Indices past
+    // the mapping array use its last entry.
+    let colr = var_translate(0, 0, 0xffff_fffe, &[7, 9], true);
+    assert_eq!(
+        translation_of(&colr, &[Fixed::ONE]),
+        (Fixed::from_i32(7), Fixed::from_i32(7))
+    );
+    // A four-field format at the same base does wrap, and wrapping is refused.
+    let wrapped = var_transform_paint(19, &[1 << 13, 1 << 13, 40, 50], &[1, 1, 1, 1], 0xffff_fffe);
+    assert_eq!(
+        resolve_with(&wrapped, 5, &[Fixed::ONE], 16, 8).unwrap_err(),
+        FontError::InvalidTable
+    );
+}
+
+#[test]
+fn a_clip_box_bounds_a_glyph_whose_graph_alone_does_not() {
+    let mut out = header();
+    let (list, fields) = base_list(&mut out, &[5]);
+    let root = out.at();
+    out.u8(2).u16(0).i16(1 << 14);
+    out.link32(fields[0], list, root);
+    // Without a ClipList the bare solid fill is unbounded.
+    assert!(!resolve(&out.0, 5).expect("colour glyph").0.bounded);
+    let clips = out.at();
+    out.patch32(22, clips);
+    out.u8(1).u32(1);
+    out.u16(5).u16(5);
+    let box_ = out.slot24();
+    let at = out.at();
+    out.link24(box_, clips, at);
+    out.u8(1).i16(0).i16(0).i16(10).i16(10);
+    let (painted, _, _) = resolve(&out.0, 5).expect("colour glyph");
+    assert!(painted.clip.is_some());
+    assert!(painted.bounded);
+}
+
+#[test]
+fn an_empty_clipped_outline_contributes_no_ink() {
+    let font = Font::parse(EMOJI).expect("fixture");
+    let table = Colr::parse(&font).expect("colour tables");
+    let mut points = vec![Point::default(); 1024];
+    let mut contours = vec![0usize; 256];
+    let mut variation = vec![VariationPoint::default(); 1024];
+    let mut commands = vec![Command::Close; 256];
+    let mut scratch = Scratch {
+        points: &mut points,
+        contours: &mut contours,
+        variation: &mut variation,
+        commands: &mut commands,
+    };
+    // A clip on an empty outline far from the origin must not drag the box
+    // back to (0, 0).
+    let far = Affine {
+        dx: Fixed::from_i32(10_000),
+        dy: Fixed::from_i32(10_000),
+        ..Affine::IDENTITY
+    };
+    // Glyphs 1 to 5 of the fixture are the base glyphs; their ink comes from
+    // the layer glyphs, so their own `glyf` entries are empty.
+    let stream = [
+        PaintOp::Clip {
+            glyph: 1,
+            transform: far,
+        },
+        PaintOp::Unclip,
+    ];
+    assert_eq!(
+        table
+            .extents(&font, &[], &stream, &mut scratch)
+            .expect("extents"),
+        None
+    );
+}
+
+/// The same file with its `COLR` tag renamed `CBDT` and every `loca` entry
+/// zeroed: a strike face that states a `glyf` table drawing nothing, which is
+/// the shape an `sbix` font has.
+fn strike_face(font: &[u8]) -> Vec<u8> {
+    let count = usize::from(u16::from_be_bytes([font[4], font[5]]));
+    let mut out = font.to_vec();
+    for index in 0..count {
+        let at = 12 + index * 16;
+        let tag = &font[at..at + 4];
+        if tag == b"COLR" {
+            out[at..at + 4].copy_from_slice(b"CBDT");
+        }
+        if tag == b"loca" {
+            let start = usize::try_from(u32::from_be_bytes([
+                font[at + 8],
+                font[at + 9],
+                font[at + 10],
+                font[at + 11],
+            ]))
+            .expect("small fixture");
+            let len = usize::try_from(u32::from_be_bytes([
+                font[at + 12],
+                font[at + 13],
+                font[at + 14],
+                font[at + 15],
+            ]))
+            .expect("small fixture");
+            out[start..start + len].fill(0);
+        }
+    }
+    out
+}
+
+#[test]
+fn a_strike_face_that_states_an_empty_glyf_covers_no_cluster() {
+    let bytes = strike_face(EMOJI);
+    let strike = Font::parse(&bytes).expect("valid envelope");
+    assert!(strike.table(*b"glyf").is_some());
+    assert!(strike.table(*b"CBDT").is_some());
+    assert!(
+        !crate::glyf::Glyf::parse(&strike)
+            .expect("loca")
+            .any_outline()
+            .expect("loca")
+    );
+    assert_ne!(strike.cmap().expect("cmap").glyph_index('\u{263a}'), 0);
+    let plain = Font::parse(include_bytes!("fixtures/DejaVu-shaping.ttf")).expect("fixture");
+    let chain = [strike, plain];
+    let set = crate::FontSet {
+        ui: &chain,
+        mono: &chain,
+        generation: 0,
+    };
+    let style = crate::TextStyle::default();
+    let layout = crate::layout(&set, &style, "A", None).expect("layout");
+    let view = layout.view();
+    assert_eq!(view.runs[view.glyphs[0].run].face, 1);
+    // A cluster neither face covers takes its notdef from the face that can
+    // draw one, not from the strike.
+    let layout = crate::layout(&set, &style, "\u{4e2d}", None).expect("layout");
+    let view = layout.view();
+    assert!(view.runs[0].missing);
+    assert_eq!(view.runs[0].face, 1);
 }

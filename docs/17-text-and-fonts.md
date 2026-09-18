@@ -262,7 +262,7 @@ byte order; Rust padding and addresses are never compared or transmitted.
 | Glyph cache, R2 | Generation, face, instance, size, glyph, subpixel position, raster policy | Cached pixel data with bounded eviction and generation invalidation. Four horizontal positions per pixel (D7). |
 | Toolkit/compositor integration, R3 | Same font-set snapshot and style | Measurement and drawing commands with checked generation agreement. |
 
-## 17.11 Decision D6: colour glyphs belong to `text-core` (D-173)
+## 17.10 Decision D6: colour glyphs belong to `text-core` (D-173)
 
 **Decision:** `text-core` reads `COLR` and `CPAL`, resolves the paint graph,
 and reports ink extents. The rasterizer turns a resolved paint stream into
@@ -289,7 +289,7 @@ colour. `Colr::paint` writes into caller storage and allocates nothing.
 | `text-core`, T13 | `COLR`, `CPAL`, the outline tables, an explicit palette index and instance | Paint operations in font units, colour stops, the clip box, the boundedness verdict, ink extents |
 | Rasterizer, R1 | That stream, an explicit rendering policy | Pixel coverage; it walks no graph and meets no cycle |
 
-## 17.12 Decision D7: where rounding happens (D-174)
+## 17.11 Decision D7: where rounding happens (D-174)
 
 **Decision:** a horizontal glyph origin is quantized to one of **four**
 subpixel positions per pixel. A vertical glyph origin is a whole pixel. An
@@ -313,7 +313,7 @@ The number four is part of the R2 cache key, so changing it invalidates every
 cached entry. A glyph at a subpixel position is the same outline translated;
 this rounding changes no advance, no line break and no box.
 
-## 17.13 Decision D8: gamma (D-175)
+## 17.12 Decision D8: gamma (D-175)
 
 **Decision:** coverage is gamma-corrected before it becomes alpha. One value
 does it for the whole system. `server-display` owns that value and reports it
@@ -337,7 +337,7 @@ between one window and the window beside it.
 setting (D1). It reaches the rasterizer as a parameter of R1's rendering
 policy, the way the palette index reaches T13.
 
-## 17.14 Decision D9: COLRv1 as the colour format (D-176)
+## 17.13 Decision D9: COLRv1 as the colour format (D-176)
 
 **Decision:** T13 implements COLR version 1 with CPAL, and COLR version 0 as
 the same table's degenerate case through the same emitter. `CBDT`/`CBLC`,
@@ -362,7 +362,7 @@ cluster: T11 skips it and the chain moves to its next layer, so a face this
 track cannot draw never yields a blank. `Colr::parse` returns `MissingTable`
 for such a face.
 
-## 17.15 The order of the steps
+## 17.14 The order of the steps
 
 | Step | Status | Depends on | Size |
 |------|--------|------------|------|
@@ -383,7 +383,7 @@ for such a face.
 | R2 glyph cache | unscheduled, outside task | R1 | M |
 | R3 integration | unscheduled, outside task | R2 | L |
 
-## 17.16 T1: sfnt envelope
+## 17.15 T1: sfnt envelope
 
 **Status:** implemented.
 **Depends on:** decisions D1–D5 above.
@@ -414,7 +414,7 @@ documentation, and QEMU tests. The existing end-to-end run fails after
 its workspace fuzz-regression phase. The separate `text_font` regression
 command exits 0. `text-core` has no system-image consumer in T1.
 
-## 17.17 T2: cmap
+## 17.16 T2: cmap
 
 **Status:** implemented; 28 crate tests, release and bare-target checks, and nine fuzz regression seeds pass.
 **Depends on:** T1 acceptance.
@@ -439,7 +439,7 @@ variation sequences return `None`.
 **Done when:** all six formats pass literal vectors and malformed count,
 range, offset, sentinel, and glyph-bound tests; report acceptance before continuing.
 
-## 17.18 T3: metrics and Fixed
+## 17.17 T3: metrics and Fixed
 
 **Status:** implemented; 34 crate tests and strict Clippy pass; debug/release and bare-target builds pass. Eight installed DejaVu fonts pass the host metrics/cmap probe.
 **Depends on:** T2.
@@ -460,7 +460,7 @@ PostScript glyph names are validated but do not affect layout.
 **Done when:** exact scaled metrics, negative ties, overflow, truncated metric
 arrays, and invalid count relationships pass host tests; report acceptance before continuing.
 
-## 17.19 T4: glyf and loca
+## 17.18 T4: glyf and loca
 
 **Status:** implemented; 41 crate tests and strict Clippy pass in debug/release; bare-target builds pass. Host probes decode all 31,597 glyphs of eight DejaVu fonts.
 **Depends on:** T3.
@@ -484,7 +484,7 @@ O(decoded points + component visits); loca validation is O(glyph count).
 out-of-order offsets, cycles, self-reference, depth exhaustion, and truncated
 coordinates have exact results or typed errors; report acceptance before continuing.
 
-## 17.20 T5: CFF and CFF2
+## 17.19 T5: CFF and CFF2
 
 **Status:** implemented; 50 tests, strict Clippy, release/bare-target builds, and 11 fuzz seeds pass. The full Noto Sans CJK JP host probe decodes 65,535 glyphs and 4,336,282 commands; checked-in fixtures verify literal coordinates and the CFF2 worked example.
 **Depends on:** T4.
@@ -518,7 +518,7 @@ the operation limit. FDSelect lookup is O(range count).
 INDEX offSize/count errors, operand overflow, invalid operators, recursive
 subroutines, stack and depth limits all pass negative tests; report acceptance before continuing.
 
-## 17.21 T6: variations
+## 17.20 T6: variations
 
 **Status:** implemented and accepted (2026-09-17).
 **Depends on:** T5.
@@ -557,7 +557,7 @@ Acceptance: 62 host tests and one doctest pass in debug/release; Clippy,
 probe decodes all 4515 glyphs of Noto Sans at wght=900/wdth=75.
 The full-system E2E failure recorded in T1 remains outside this crate.
 
-## 17.22 T7: Unicode generation
+## 17.21 T7: Unicode generation
 
 **Status:** implemented and accepted (2026-09-17).
 **Depends on:** T6.
@@ -586,7 +586,7 @@ AGPL-3.0-only AND Unicode-3.0 and both copyright notices; xtask checks the exact
 
 Product coverage after T7 is 3461/3639 lines (95.11%) and 975/1116 branches (87.37%).
 
-## 17.23 T8: segmentation
+## 17.22 T8: segmentation
 
 **Status:** implemented and accepted (2026-09-17).
 **Depends on:** T7.
@@ -613,7 +613,7 @@ capacity failures, UTF-8 offsets, and mandatory breaks pass. Clippy, the
 bare-target build, and 13 fuzz seeds pass. Product coverage is 3883/4063 lines
 (95.57%) and 1341/1488 branches (90.12%).
 
-## 17.24 T9: bidirectional algorithm
+## 17.23 T9: bidirectional algorithm
 
 **Status:** implemented and accepted (2026-09-17).
 **Depends on:** T8.
@@ -635,7 +635,7 @@ Clippy, the bare target, and 13 fuzz seeds pass. Product coverage is
 `resolve` retains paragraph levels; `reorder_line` applies L1/L2 independently.
 Both use caller buffers. Runtime is O(N(log R + 126 + 63)); storage is O(N).
 
-## 17.25 T10: shaping
+## 17.24 T10: shaping
 
 **Status:** implemented and accepted (2026-09-17).
 **Depends on:** T9.
@@ -679,7 +679,7 @@ and tone marks. The default stages include legacy Arabic mset substitution.
 Debug/release, Clippy, and bare-target checks pass. Product
 coverage is 5883/6171 lines (95.33%) and 1926/2170 branches (88.76%).
 
-## 17.26 T11: resolution
+## 17.25 T11: resolution
 
 **Status:** implemented and accepted (2026-09-17).
 **Depends on:** T10.
@@ -712,7 +712,7 @@ UVS coverage, missing glyphs, caller capacities, and language extensions pass
 six host tests.
 Debug/release, strict Clippy, and the bare target pass.
 
-## 17.27 T12: layout
+## 17.26 T12: layout
 
 **Status:** implemented and accepted (2026-09-17).
 **Depends on:** T11.
@@ -810,7 +810,7 @@ Review traced the earlier E2E disk timeouts to concurrent BAR size probing by
 startup (D-165); the main E2E run passes with the fix.
 
 
-## 17.28 T13: colour glyphs
+## 17.27 T13: colour glyphs
 
 **Status:** implemented and accepted (2026-09-18).
 **Depends on:** T12.
@@ -841,15 +841,18 @@ count as bounded, which the format's own section requires and which D-167
 already decided for the CFF2 interpreter.
 
 `Colr::paint` writes `PaintOp` into caller storage: `Clip` and `Unclip`
-bracket a clip region, `Group` and `Compose` bracket an offscreen surface,
-and each `Compose` consumes the two groups above it. `Fill` carries the
+bracket a clip region, `Group` and `Compose` bracket an offscreen surface.
+A `Compose` consumes the two groups above it, combines them with its mode,
+and draws the result onto the surface below them with source-over, which is
+what the rendering algorithm of `docs/microsoft/colr.html:3332` does, so the
+ink that surface already held stays under the result. `Fill` carries the
 accumulated transform and either a solid colour or a gradient naming a range
 of the caller's colour stop slice. Stops are written in increasing offset
 order, which a variable font can change, so each is placed by binary search
 into the part already written. Rotation and skew need a sine, a cosine and a
 tangent; `colr::trig` computes them from integer Taylor series after an exact
-reduction to a quarter turn, within eight Q32.32 units of the real value, so
-D2 admits no floating point here either.
+reduction to a quarter turn, within 2⁻²⁸ of the real value, so D2 admits no
+floating point here either.
 
 Variation deltas are integers applied to the stored representation: a `FWORD`
 takes one font unit per delta, an `F2DOT14` one unit of 2⁻¹⁴, a `Fixed` one
@@ -861,8 +864,9 @@ itself, high word outer and low word inner.
 `Colr::clip_box` is O(log N) over the `ClipList`. `Colr::extents` is the
 union of the boxes of the outermost clipped outlines, decoded through T4 or
 T5 into caller scratch; curved segments contribute their control points, so
-the box can exceed the ink. `Painted::bounded` carries the specification's
-verdict, computed per format during the traversal. Resolution is O(P) for P
+the box can exceed the ink. `Painted::bounded` is the specification's answer:
+a clip box bounds the glyph whatever its graph does, and without one the rule
+of each format decides, computed during the traversal. Resolution is O(P) for P
 paint table visits plus O(S²) worst case for S colour stops, a binary search
 and a move of the tail per stop; S is bounded by the caller's stop slice.
 Storage is the caller's two slices and nothing else.
@@ -876,7 +880,7 @@ return typed errors; version 0 and version 1 of one table resolve through one
 emitter; a real COLRv1 face's operation counts, clip boxes and gradient
 geometry match numbers obtained independently; report acceptance.
 
-Acceptance: 29 host tests. Synthetic tables cover CPAL versions 0 and 1,
+Acceptance: 33 host tests. Synthetic tables cover CPAL versions 0 and 1,
 palette selection, foreground entries, alpha multiplication and clamping,
 version 0 layers and their malformed record arrays, version 1 layer lists,
 all three gradients, all three extend modes, the ten non-variable affine
@@ -887,16 +891,21 @@ three shapes of cycle, the depth limit at equality and one beyond, caller
 capacity exhaustion, an undefined paint format, variable paints with and
 without a delta-set index map, a reserved variation base, stop reordering
 under variation, clip boxes of both formats, and overlapping and inverted
-clip ranges. The `NotoEmoji-colr.ttf` fixture, five base glyphs of the build
+clip ranges, a variation base at the end of its range whose sequence fits its
+own field count and one whose sequence does not, a clip box bounding a glyph
+whose graph alone does not, and an empty clipped outline contributing no ink.
+The `NotoEmoji-colr.ttf` fixture, five base glyphs of the build
 D-176 pins, exercises paint formats 1, 2, 4, 6, 10, 12, 14, 16, 18 and 32;
 its operation and stop counts, clip boxes and gradient geometry were read
 from the same file with fontTools. Every truncated prefix of its `COLR` and
 `CPAL` tables is refused or bounded. A face whose only glyph data is a
 refused colour format covers no cluster and the chain falls through to its
-next layer. Debug/release, strict Clippy, the bare target and the
+next layer, both for a face that states no outline table and for a strike
+face that states a `glyf` whose every entry is empty, and the notdef of a
+cluster no face covers comes from a face that can draw one. Debug/release, strict Clippy, the bare target and the
 `text_font` fuzz regression, which gained the seeds `colr-emoji` and
-`colr-cycle`, all pass. Product coverage after T13 is 96.10% of lines and
-89.48% of branches.
+`colr-cycle`, all pass. Product coverage after T13 is 96.09% of lines and
+89.49% of branches.
 
 `sh tools/xtask-check.sh --quiet` on 2026-09-18 passes lint, layering,
 dependency checks, unsafe budgets, host tests, coverage, Miri, documentation
@@ -907,7 +916,7 @@ driver", once "the forwarded port refused" — so the failure is the
 container's network and not this step: no program or server of the image
 depends on `text-core`, which only `fuzz/text_font` links.
 
-## 17.29 R1: rasterizer (outside this task)
+## 17.28 R1: rasterizer (outside this task)
 
 **Status:** unscheduled.
 **Depends on:** T13.
@@ -926,7 +935,7 @@ strike does not survive them. A colour glyph's gradients interpolate in
 linear light, so the rasterizer applies the inverse transfer function of D8
 before it interpolates and the forward one after.
 
-## 17.30 R2: glyph cache (outside this task)
+## 17.29 R2: glyph cache (outside this task)
 
 **Status:** unscheduled.
 **Depends on:** R1.
@@ -937,7 +946,7 @@ before it interpolates and the forward one after.
 **Done when:** cached and uncached pixels agree and changed instances cannot
 reuse stale glyphs.
 
-## 17.31 R3: integration (outside this task)
+## 17.30 R3: integration (outside this task)
 
 **Status:** unscheduled.
 **Depends on:** R2.
@@ -948,7 +957,7 @@ reuse stale glyphs.
 **Done when:** both address spaces agree on serialized geometry; stale
 generation commands are rejected or retried against the current snapshot.
 
-## 17.32 Risks
+## 17.31 Risks
 
 | # | Risk | Effect | Reduction |
 |---|------|--------|-----------|

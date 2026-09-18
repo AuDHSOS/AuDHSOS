@@ -313,8 +313,7 @@ impl CompositeMode {
 /// One step of the resolved drawing stream of a colour glyph.
 ///
 /// The stream carries two stacks. `Clip` and `Unclip` bracket a clip region;
-/// `Group` and `Compose` bracket an offscreen surface. Each `Compose` consumes
-/// the two groups above it and leaves their combination.
+/// `Group` and `Compose` bracket an offscreen surface.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PaintOp {
     /// Intersect the clip region with the outline of `glyph` under `transform`.
@@ -329,7 +328,10 @@ pub enum PaintOp {
     Unclip,
     /// Start an offscreen group.
     Group,
-    /// Combine the two groups above with `mode` and leave one result.
+    /// Combine the two groups above with `mode`, then draw the result onto
+    /// the surface below them with source-over, which is what the rendering
+    /// algorithm of `docs/microsoft/colr.html:3332` does. Both groups are
+    /// consumed; whatever that surface already held stays under the result.
     Compose(CompositeMode),
     /// Cover the clip region with `fill`, whose geometry is in `transform`.
     Fill {
@@ -403,20 +405,34 @@ impl Walk<'_, '_> {
         )
     }
 
-    /// The six delta-set indices of a table whose `varIndexBase` lies at `at`.
+    /// The delta-set indices of the `fields` variable fields of a table whose
+    /// `varIndexBase` lies at `at`.
     ///
     /// A non-variable format, a face without an item variation store, and the
-    /// reserved base `0xFFFFFFFF` each give six absent indices.
-    fn bases(&self, data: &[u8], at: usize, variable: bool) -> Result<[Option<u32>; 6], FontError> {
+    /// reserved base `0xFFFFFFFF` each give absent indices. Only `fields`
+    /// indices are derived, because a base near the end of the range is legal
+    /// for a table whose sequence stays inside it.
+    fn bases(
+        &self,
+        data: &[u8],
+        at: usize,
+        variable: bool,
+        fields: usize,
+    ) -> Result<[Option<u32>; 6], FontError> {
+        let mut out = [None; 6];
         if !variable || self.colr.store.is_none() {
-            return Ok([None; 6]);
+            return Ok(out);
         }
         let base = read::u32(data, at)?;
         if base == 0xffff_ffff {
-            return Ok([None; 6]);
+            return Ok(out);
         }
-        let mut out = [None; 6];
-        for (step, slot) in out.iter_mut().enumerate() {
+        for (step, slot) in out
+            .get_mut(..fields)
+            .ok_or(FontError::InvalidTable)?
+            .iter_mut()
+            .enumerate()
+        {
             let step = u32::try_from(step).map_err(|_| FontError::Overflow)?;
             // The spec forbids the sequence from wrapping past 0xFFFFFFFF.
             *slot = Some(base.checked_add(step).ok_or(FontError::InvalidTable)?);
@@ -465,7 +481,7 @@ impl Walk<'_, '_> {
         let first = self.stop_count;
         for index in 0..count {
             let record = read::bytes(records, mul(index, width)?, width)?;
-            let [offset_var, alpha_var, ..] = self.bases(record, 6, variable)?;
+            let [offset_var, alpha_var, ..] = self.bases(record, 6, variable, 2)?;
             let stop = ColorStop {
                 offset: self.fraction(record, 0, offset_var)?,
                 color: self.colr.cpal.color(
@@ -520,7 +536,7 @@ impl Walk<'_, '_> {
 
     /// The box of one `ClipBox` table, format 1 or the variable format 2.
     pub(super) fn clip_extents(&self, data: &[u8], variable: bool) -> Result<Extents, FontError> {
-        let [b0, b1, b2, b3, ..] = self.bases(data, 9, variable)?;
+        let [b0, b1, b2, b3, ..] = self.bases(data, 9, variable, 4)?;
         Ok(Extents {
             x_min: self.word(data, 1, b0)?,
             y_min: self.word(data, 3, b1)?,
@@ -558,7 +574,7 @@ impl Walk<'_, '_> {
         match read::u8(data, 0)? {
             1 => self.layers(data, next, transform),
             format @ (2 | 3) => {
-                let [alpha, ..] = self.bases(data, 5, format == 3)?;
+                let [alpha, ..] = self.bases(data, 5, format == 3, 1)?;
                 let color = self.colr.cpal.color(
                     self.palette,
                     read::u16(data, 1)?,
@@ -627,7 +643,7 @@ impl Walk<'_, '_> {
 
     fn linear(&mut self, at: usize, transform: Affine, variable: bool) -> Result<bool, FontError> {
         let data = read::tail(self.colr.data, at)?;
-        let [b0, b1, b2, b3, b4, b5] = self.bases(data, 16, variable)?;
+        let [b0, b1, b2, b3, b4, b5] = self.bases(data, 16, variable, 6)?;
         let fill = Fill::Linear {
             x0: self.word(data, 4, b0)?,
             y0: self.word(data, 6, b1)?,
@@ -643,7 +659,7 @@ impl Walk<'_, '_> {
 
     fn radial(&mut self, at: usize, transform: Affine, variable: bool) -> Result<bool, FontError> {
         let data = read::tail(self.colr.data, at)?;
-        let [b0, b1, b2, b3, b4, b5] = self.bases(data, 16, variable)?;
+        let [b0, b1, b2, b3, b4, b5] = self.bases(data, 16, variable, 6)?;
         let fill = Fill::Radial {
             x0: self.word(data, 4, b0)?,
             y0: self.word(data, 6, b1)?,
@@ -659,7 +675,7 @@ impl Walk<'_, '_> {
 
     fn sweep(&mut self, at: usize, transform: Affine, variable: bool) -> Result<bool, FontError> {
         let data = read::tail(self.colr.data, at)?;
-        let [b0, b1, b2, b3, ..] = self.bases(data, 12, variable)?;
+        let [b0, b1, b2, b3, ..] = self.bases(data, 12, variable, 4)?;
         // Sweep angles carry a bias of one half-turn so that a full turn fits.
         let fill = Fill::Sweep {
             x: self.word(data, 4, b0)?,
@@ -679,7 +695,7 @@ impl Walk<'_, '_> {
             12 | 13 => {
                 let table =
                     read::tail(self.colr.data, add(at, read::offset(read::u24(data, 4)?)?)?)?;
-                let [b0, b1, b2, b3, b4, b5] = self.bases(table, 24, variable)?;
+                let [b0, b1, b2, b3, b4, b5] = self.bases(table, 24, variable, 6)?;
                 Ok(Affine {
                     xx: self.scalar(table, 0, b0)?,
                     yx: self.scalar(table, 4, b1)?,
@@ -690,15 +706,19 @@ impl Walk<'_, '_> {
                 })
             }
             14 | 15 => {
-                let [b0, b1, ..] = self.bases(data, 8, variable)?;
+                let [b0, b1, ..] = self.bases(data, 8, variable, 2)?;
                 Ok(Affine::translate(
                     self.word(data, 4, b0)?,
                     self.word(data, 6, b1)?,
                 ))
             }
             16..=19 => {
-                let [b0, b1, b2, b3, ..] =
-                    self.bases(data, if format == 17 { 8 } else { 12 }, variable)?;
+                let [b0, b1, b2, b3, ..] = self.bases(
+                    data,
+                    if format == 17 { 8 } else { 12 },
+                    variable,
+                    if format == 17 { 2 } else { 4 },
+                )?;
                 let scale = Affine {
                     xx: self.fraction(data, 4, b0)?,
                     yy: self.fraction(data, 6, b1)?,
@@ -710,8 +730,12 @@ impl Walk<'_, '_> {
                 scale.around(self.word(data, 8, b2)?, self.word(data, 10, b3)?)
             }
             20..=23 => {
-                let [b0, b1, b2, ..] =
-                    self.bases(data, if format == 21 { 6 } else { 10 }, variable)?;
+                let [b0, b1, b2, ..] = self.bases(
+                    data,
+                    if format == 21 { 6 } else { 10 },
+                    variable,
+                    if format == 21 { 1 } else { 3 },
+                )?;
                 let factor = self.fraction(data, 4, b0)?;
                 let scale = Affine {
                     xx: factor,
@@ -724,8 +748,12 @@ impl Walk<'_, '_> {
                 scale.around(self.word(data, 6, b1)?, self.word(data, 8, b2)?)
             }
             24..=27 => {
-                let [b0, b1, b2, ..] =
-                    self.bases(data, if format == 25 { 6 } else { 10 }, variable)?;
+                let [b0, b1, b2, ..] = self.bases(
+                    data,
+                    if format == 25 { 6 } else { 10 },
+                    variable,
+                    if format == 25 { 1 } else { 3 },
+                )?;
                 let (sine, cosine) = sin_cos(self.fraction(data, 4, b0)?)?;
                 let rotate = Affine {
                     xx: cosine,
@@ -740,8 +768,12 @@ impl Walk<'_, '_> {
                 rotate.around(self.word(data, 6, b1)?, self.word(data, 8, b2)?)
             }
             _ => {
-                let [b0, b1, b2, b3, ..] =
-                    self.bases(data, if format == 29 { 8 } else { 12 }, variable)?;
+                let [b0, b1, b2, b3, ..] = self.bases(
+                    data,
+                    if format == 29 { 8 } else { 12 },
+                    variable,
+                    if format == 29 { 2 } else { 4 },
+                )?;
                 let skew = Affine {
                     xy: tan(self.fraction(data, 4, b0)?)?.checked_neg()?,
                     yx: tan(self.fraction(data, 6, b1)?)?,
