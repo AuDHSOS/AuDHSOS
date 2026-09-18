@@ -268,6 +268,9 @@ fn select(
             continue;
         }
         for (i, font) in chain.iter().enumerate() {
+            if bitmap_only(font) {
+                continue;
+            }
             if strict {
                 let mut suitable = false;
                 for (tag, substitution) in [(*b"GSUB", true), (*b"GPOS", false)] {
@@ -307,6 +310,21 @@ fn select(
     }
     Ok((0, true))
 }
+/// Whether a face's only glyph data is a colour format this track refuses.
+///
+/// `CBDT`/`CBLC`, `sbix` and OpenType-SVG draw nothing here, so a face that
+/// carries one of them and no outline covers no cluster: the chain moves to
+/// its next layer rather than emitting a blank (D-176).
+fn bitmap_only(font: &Font<'_>) -> bool {
+    let outlines = (font.table(*b"glyf").is_some() && font.table(*b"loca").is_some())
+        || font.table(*b"CFF ").is_some()
+        || font.table(*b"CFF2").is_some();
+    !outlines
+        && (font.table(*b"CBDT").is_some()
+            || font.table(*b"sbix").is_some()
+            || font.table(*b"SVG ").is_some())
+}
+
 pub(crate) const fn control(c: char) -> bool {
     matches!(
         c,

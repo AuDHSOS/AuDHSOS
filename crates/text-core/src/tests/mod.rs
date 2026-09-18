@@ -5,6 +5,7 @@ mod sfnt;
 
 mod cff;
 mod cmap;
+mod colr;
 mod glyf;
 mod metrics;
 mod variation;

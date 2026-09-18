@@ -4,7 +4,8 @@ The fonts of the system: two chains of fallback, fetched byte for byte by
 `fetch.sh` from the commit, release or dated archive each of its lines
 names, and pinned in `SHA256SUMS`. Every file is unmodified. D-169 records
 the directory, the chains and the rules of selection; D-172 records Jigmo,
-the one font here that is not under the OFL.
+the one font here that is not under the OFL; D-176 records the COLRv1 emoji
+build, which replaced the CBDT one.
 
 Nothing reads this directory yet. What will is the image build, the way
 `cargo xtask image` reads [`anchors/`](../anchors/README.md) (D-148).
@@ -29,7 +30,7 @@ Nothing reads this directory yet. What will is the image build, the way
 | 3 | Noto Sans CJK, five regions | `noto/cjk/NotoSansCJK-VF.ttf.ttc` | 44810 | 44268 |
 | 4 | one Noto font per script, 155 scripts | `noto/scripts/`, 157 files | 27279 | 26628 |
 | 5 | Noto Sans Symbols, Symbols 2, Math, Music, Znamenny | `noto/symbols/`, 5 files | 6910 | 5675 |
-| 6 | Noto Color Emoji | `noto/emoji/NotoColorEmoji.ttf` | 1501 | 1030 |
+| 6 | Noto Color Emoji, COLRv1 | `noto/emoji/Noto-COLRv1.ttf` | 1499 | 1030 |
 | 7 | Jigmo, Jigmo2, Jigmo3 | `jigmo/`, 3 files | 125786 | 82486 |
 | 8 | Last Resort | `last-resort/LastResort-Regular.ttf` | 1114112 | 950917 |
 
@@ -42,6 +43,14 @@ same four Greek letters and no Cyrillic, so the coverage is the family's
 and not the build's. Layer 1 maps 14 code points layer 2 does not:
 twelve mathematical operators, `◊` and `♪`, each of which layer 5 maps
 as well.
+
+Layer 6 is a vector font: `Noto-COLRv1.ttf` draws each emoji from a `COLR`
+version 1 paint graph over `glyf` outlines and a `CPAL` palette, and carries
+no bitmap strike. The CBDT build of the same release, `NotoColorEmoji.ttf`,
+maps two code points more, U+0000 and U+000D, and neither is an emoji; the
+two builds map the same 1499 emoji code points, and the layer adds the same
+1030 to the chain. D-173 records why `text-core` reads the colour tables and
+D-176 why the build is this one.
 
 Layer 7 is the reason this directory has a font outside the OFL. Measured
 against layer 3 alone, Jigmo adds 82549 code points that Noto Sans CJK
@@ -81,13 +90,15 @@ nonzero advance:
 | 1 | 632 for all 352 glyphs | one cell |
 | 2 | 600 for 3340 glyphs, 1200 for 243, 1800 for 9 | one, two or three cells |
 | 3 | 1000 for 51304 glyphs, 920 for 12744, 500 for 185, and 163 other widths over 548 glyphs | one cell for Han and kana, half a cell for ASCII; Hangul at 920 and the remainder do not fit the grid |
+| 6 | 1275 for all 41825 glyphs, in an em of 1024 | none: 1.245 of a cell |
 | 7 | 1024 for 127019 glyphs, 512 for 400, in an em of 1024 | one cell and half a cell exactly, the only layer here with no third width |
-| 4 to 6, 8 | proportional | none |
+| 4, 5, 8 | proportional | none |
 
 ## What is here
 
 The 30 files outside `noto/scripts/`, with the source each was fetched
-from. The retrieval date of every file is 2026-09-17.
+from. The retrieval date of every file is 2026-09-17, except
+`noto/emoji/Noto-COLRv1.ttf`, which is 2026-09-18.
 
 | File | Font, version | Source | Bytes | SHA-256 |
 |------|---------------|--------|-------|---------|
@@ -109,7 +120,7 @@ from. The retrieval date of every file is 2026-09-17.
 | `noto/symbols/NotoSansMath-Regular.ttf` | Noto Sans Math 3.000 | same commit, `fonts/NotoSansMath/unhinted/ttf/` | 657440 | `b127e84699212b6b2ef50aff58e0ebebeec04ffe6db1b9eb9e209c8c3d97b4aa` |
 | `noto/symbols/NotoMusic-Regular.ttf` | Noto Music 2.003 | same commit, `fonts/NotoMusic/unhinted/ttf/` | 82260 | `0dc5a0e2f2d6cde113607b60141bde4a80966901b4948f5b42363052bef7b06c` |
 | `noto/symbols/NotoZnamennyMusicalNotation-Regular.ttf` | Noto Znamenny Musical Notation 1.003 | same commit, `fonts/NotoZnamennyMusicalNotation/unhinted/ttf/` | 45376 | `b6ed2a11d2a653e14137a35e4c6fdaf5093434ac12964791ee195270828e7508` |
-| `noto/emoji/NotoColorEmoji.ttf` | Noto Color Emoji 2.051 | `googlefonts/noto-emoji` at tag `v2.051`, `fonts/` | 10673480 | `72a635cb3d2f3524c51620cdde406b217204e8a6a06c6a096ff8ed4b5fd6e27b` |
+| `noto/emoji/Noto-COLRv1.ttf` | Noto Color Emoji 2.051, the COLRv1 build | `googlefonts/noto-emoji` at tag `v2.051`, `fonts/` | 4991984 | `0ae57fe58645638523ba35f388d93739d292539a9acb84df5700c81b1e1a28d2` |
 | `noto/emoji/LICENSE` | its licence | same tag, `fonts/LICENSE` | 4301 | `6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2` |
 | `last-resort/LastResort-Regular.ttf` | Last Resort 18.000 for Unicode 18.0.0 | `unicode-org/last-resort-font` release `18.000` | 9592228 | `ca7df8948cec84240f19508a17a74de037c98ba3a54e1aaa50ea6edbbdc37f64` |
 | `last-resort/LICENSE` | its licence | same tag, `LICENSE` | 4335 | `fc8fc512b27846bdb0d6645bed8069ac87ea599548b58a8d04bc3b0ea705a9c4` |
@@ -308,7 +319,9 @@ SHA256SUMS`, run here, checks all 187 files.
 |------|------------------|------------------------------|
 | One family per script: `Noto Sans <Script>` when the index has it, else `Noto Serif <Script>`, else the only family. | Kufi, Naskh and Nastaliq for Arabic; Rashi for Hebrew; Serif for 22 scripts; Looped for Thai and Lao; Unjoined for Adlam and NKo; Eastern and Western for Syriac; Traditional for Nushu; the two Fangsong builds for Khitan; the eleven regional builds for Tifinagh. | Each is a second style of code points the chain already reaches. |
 | The variable font when the family builds one, else the static Regular and Bold of the family's own name. | Every static instance: 36 files for Armenian, 72 for Gujarati. | Weights and widths the variable font carries in one file. |
-| TrueType outlines throughout: the `.ttf.ttc` CJK collections, the CBDT emoji. | `NotoSansCJK-VF.otf.ttc` (CFF2, 32682580 bytes) and `Noto-COLRv1.ttf` (4991984 bytes). | A second outline format, CFF2, and a second colour format, COLRv1, for one rasterizer to carry. |
+| TrueType outlines throughout: the `.ttf.ttc` CJK collections, the COLRv1 emoji over `glyf`. | `NotoSansCJK-VF.otf.ttc` (CFF2, 32682580 bytes). | A second outline format, CFF2, for one rasterizer to carry. |
+| The emoji layer as vector, `Noto-COLRv1.ttf`. | `NotoColorEmoji.ttf` (CBDT, 10673480 bytes). | A bitmap strike at one size, which the fractional scaling factors of this system do not survive; `text-core` reads no bitmap table (D-176). |
+| The full COLRv1 build. | `Noto-COLRv1-noflags.ttf` (2992136 bytes) and `Noto-COLRv1-emojicompat.ttf` (5186052 bytes). | The first drops 36 code points, the 26 regional indicators and U+FE4E5 to U+FE4EE, so flags reach layer 5 or layer 8 instead; the second adds a private metadata table for Android's downloadable font service, which nothing here reads. |
 | Unhinted builds. | `hinted/ttf/`. | Instructions in `fpgm`, `prep` and `glyf` that a rasterizer of this system does not run. |
 | An italic for Atkinson Next, Atkinson Mono and Noto Sans only. | The italics of the script fonts, where they exist. | The fonts a UI sets text in are layers 1 and 2. Noto Sans Mono builds no italic. |
 | `Noto Nastaliq Urdu`, `test`, `old-hungarian-ui` skipped. | | Nastaliq is a style of Arabic; `test` is a test family; `old-hungarian-ui` lists no file. |
@@ -320,15 +333,15 @@ SHA256SUMS`, run here, checks all 187 files.
 
 | Property | Value |
 |----------|-------|
-| outline table | `glyf` in every font, `CBDT` and `CBLC` bitmaps in `NotoColorEmoji.ttf`, which has no outlines |
-| `cmap` subtable formats | over the 171 `.ttf` files: 4 and 12 in 114, 4 alone in 53, 0, 4 and 12 in 2, 4, 12 and 14 in Math, 12 and 14 in the emoji font; 4, 6, 12 and 14 in the two collections |
-| colour | `COLR` version 0 in `NotoZnamennyMusicalNotation-Regular.ttf`; `CBDT` in the emoji font |
+| outline table | `glyf` in every font and in both collections; no `CFF `, `CFF2`, `CBDT`, `sbix` or `SVG ` anywhere |
+| `cmap` subtable formats | over the 171 `.ttf` files: 4 and 12 in 114, 4 alone in 53, 0, 4 and 12 in 2, 4, 12 and 14 in Math and in the emoji font; 4, 6, 12 and 14 in the two collections |
+| colour | `COLR` version 1 with `CPAL` in `Noto-COLRv1.ttf`, 3993 base glyphs, 72825 layer list entries, 3993 clip boxes, one palette of 6196 entries and no item variation store; `COLR` version 0 with `CPAL` in `NotoZnamennyMusicalNotation-Regular.ttf` |
 | variation tables | 56 variable fonts, 48 of them in `noto/scripts/`; `fvar`, `gvar`, `HVAR` and `STAT` in all 56, `avar` in 45, `MVAR` in 18 |
 | collections | two, `ttcf` header, five fonts each, 65535 glyphs each, sharing `glyf` |
 | largest `cmap` | Last Resort, 1114112 code points, 5776 glyphs, through format 12 groups mapping a range to one glyph |
-| units per em | 1000 in 169 of the 174 `.ttf` files and in both collections, 1024 in the three Jigmo files, 2048 in Last Resort and the emoji font |
-| variation sequences | `cmap` format 14 in six files; the three Jigmo files carry 29635 of them, 26958 in Jigmo, 2673 in Jigmo2 and 4 in Jigmo3, which is the Ideographic Variation Database at its 2025-07-14 revision |
-| glyph counts | 50848, 63050 and 13532 in the three Jigmo files, each under the 65536 an sfnt addresses; 65535 in each font of both collections |
+| units per em | 1000 in 169 of the 174 `.ttf` files and in both collections, 1024 in the three Jigmo files and in the emoji font, 2048 in Last Resort |
+| variation sequences | `cmap` format 14 in five `.ttf` files and in every face of both collections; the three Jigmo files carry 29635 of them, 26958 in Jigmo, 2673 in Jigmo2 and 4 in Jigmo3, which is the Ideographic Variation Database at its 2025-07-14 revision |
+| glyph counts | 50848, 63050 and 13532 in the three Jigmo files, each under the 65536 an sfnt addresses; 41863 in the emoji font; 65535 in each font of both collections |
 | licence in the file | name ID 13 carries the OFL notice in 171 of the 174 `.ttf` files and in both collections. The three Jigmo files carry no name ID 13 at all, and their name ID 0 is `Koichi Kamichi`; `jigmo/LICENSE.txt` is the only statement of terms that travels with them |
 
 ## Terms
@@ -429,7 +442,7 @@ tolerable only because the file taken from it is a licence text that
 covers nothing shipped here; if it is ever needed for more, it wants a
 commit.
 
-Refetching everything, 201 MiB in 186 files:
+Refetching everything, 195 MiB in 186 files:
 
 ```sh
 sh fonts/fetch.sh

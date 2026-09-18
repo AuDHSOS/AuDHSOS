@@ -70,6 +70,27 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
             let _ = text_core::shape::finish(&mut buffer, false);
         }
     }
+    {
+        let mut ops = [text_core::colr::PaintOp::default(); 128];
+        let mut stops = [text_core::colr::ColorStop::default(); 64];
+        // The same bytes stand in for both tables, which is the case a font
+        // cannot produce and a fuzzer can.
+        for axes in [0, 1] {
+            if let Ok(colr) = text_core::colr::Colr::parse_tables(bytes, bytes, 64, axes) {
+                let coords = [text_core::Fixed::ZERO; 1];
+                for glyph in 0..8 {
+                    let _ = colr.clip_box(glyph, &coords[..axes]);
+                    if let Ok(painted) =
+                        colr.paint(glyph, 0, &coords[..axes], &mut ops, &mut stops)
+                    {
+                        assert!(painted.ops <= ops.len());
+                        assert!(painted.stops <= stops.len());
+                    }
+                }
+            }
+        }
+        let _ = text_core::colr::Cpal::parse(bytes);
+    }
     for cff2 in [false, true] {
         if let Ok(cff) = text_core::cff::Cff::parse_table(bytes, cff2, 1000) {
             let _ = cff.outline(0, &mut [text_core::cff::Command::Close; 256]);
@@ -102,6 +123,13 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
                             );
                         }
                     }
+                }
+            }
+            if let Ok(colr) = text_core::colr::Colr::parse(&font) {
+                let mut ops = [text_core::colr::PaintOp::default(); 256];
+                let mut stops = [text_core::colr::ColorStop::default(); 64];
+                for glyph in 0..8 {
+                    let _ = colr.paint(glyph, 0, &[], &mut ops, &mut stops);
                 }
             }
             if let Ok(cff) = text_core::cff::Cff::parse(&font) {
