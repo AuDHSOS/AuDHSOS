@@ -1116,10 +1116,6 @@ impl RegisterLowerer {
         self.bind_pattern(value_type, pattern)
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one function names every shape a binding pattern takes"
-    )]
     fn bind_pattern(
         &mut self,
         value_type: RegisterType,
@@ -1223,45 +1219,11 @@ impl RegisterLowerer {
                 self.release_register(source)?;
             }
             parser::BindingPattern::Array(array) => {
-                if !matches!(value_type, RegisterType::Array(_)) {
-                    // 8.6.2 takes the elements from the iterator of the value.
-                    return self
-                        .lower_array_pattern_by_iterator(&RegisterArrayPattern::Binding(array));
-                }
-                let source = self.allocate_register()?;
-                self.code.emit(Instruction::Star(source));
-                for (index, element) in array.elements.iter().enumerate() {
-                    let parser::ArrayBindingElement::Element {
-                        pattern,
-                        initializer,
-                    } = element
-                    else {
-                        continue;
-                    };
-                    let index = u32::try_from(index).ok()?;
-                    let mut element_type =
-                        self.lower_array_index_from_register(source, value_type, index)?;
-                    if let Some(initializer) = initializer {
-                        let bound: Option<Vec<u16>> = pattern
-                            .identifier()
-                            .map(|name| name.encode_utf16().collect());
-                        element_type = self.lower_binding_default_named(
-                            element_type,
-                            initializer,
-                            bound.as_deref(),
-                        )?;
-                    }
-                    self.bind_pattern(element_type, pattern)?;
-                }
-                if let Some(rest) = &array.rest {
-                    let start = u32::try_from(array.elements.len()).ok()?;
-                    let (rest_type, rest_array) =
-                        self.lower_array_rest_from_register(source, value_type, start)?;
-                    self.code.emit(Instruction::Ldar(rest_array));
-                    self.bind_pattern(rest_type, rest)?;
-                    self.release_register(rest_array)?;
-                }
-                self.release_register(source)?;
+                // 8.6.2 takes the elements from the iterator of the value,
+                // which a Script reaches through the `@@iterator` of
+                // `%Array.prototype%` and can replace or delete; reading the
+                // indices instead would answer where 7.4.4 refuses.
+                self.lower_array_pattern_by_iterator(&RegisterArrayPattern::Binding(array))?;
             }
         }
         Some(())
@@ -8209,13 +8171,17 @@ impl RegisterLowerer {
         use crate::engine::bytecode::Instruction;
         let iterable = self.allocate_register()?;
         self.code.emit(Instruction::Star(iterable));
-        let values = self.string_constant(&"values".encode_utf16().collect::<Vec<_>>())?;
         let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
-        self.code.emit(Instruction::GetNamed {
+        self.code.emit(Instruction::GetWellKnown {
             obj: iterable,
-            name: values,
+            symbol: u16::try_from(WELL_KNOWN_ITERATOR).ok()?,
             slot,
         });
+        // 7.4.4 refuses a value whose `@@iterator` is undefined, which a
+        // Script that deleted it from `%Array.prototype%` makes of an Array.
+        self.code.emit(Instruction::Require(
+            crate::engine::bytecode::RequireKind::Iterable,
+        ));
         let method = self.allocate_register()?;
         self.code.emit(Instruction::Star(method));
         let call = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;

@@ -18905,11 +18905,21 @@ impl RegisterVM {
             .lookup_named(reference, next_key)?
             .map(Self::plain_value)
             .transpose()?
-            .and_then(Value::as_object)
+            .unwrap_or(VALUE_UNDEFINED);
+        if !Self::is_callable(next, heap) {
+            return Err(type_error(heap, realm, "iterator next is not callable"));
+        }
+        let kind = next
+            .as_object()
             .and_then(|next| heap.get_object(next))
             .map(|next| next.kind.clone());
-        let Some(ObjectKind::NativeFunction { id, .. }) = next else {
-            return Err(type_error(heap, realm, "iterator next is not callable"));
+        // 23.1.3.40 answers the iterator of 23.1.5, whose `next` is the one
+        // of 23.1.5.2.1; a Script that put another one there needs a frame
+        // this instruction has none of.
+        let Some(ObjectKind::NativeFunction { id, .. }) = kind else {
+            return Err(VMError::Unsupported(
+                "an iterator whose `next` is a function of the Script",
+            ));
         };
         let intrinsic = Intrinsic::from_id(id).ok_or(VMError::TypeError)?;
         let result = self.call_intrinsic(

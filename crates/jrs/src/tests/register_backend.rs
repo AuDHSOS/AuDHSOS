@@ -2254,7 +2254,7 @@ fn iterator_and_dynamic_binding_patterns_stay_on_legacy_backend() -> Result<(), 
 }
 
 #[test]
-fn fresh_array_binding_patterns_use_dense_elements() -> Result<(), Error> {
+fn array_binding_patterns_walk_the_iterator_of_7_4_4() -> Result<(), Error> {
     for source in [
         "let [x]=[42];x",
         "var [x,y]=[20,22];x+y",
@@ -2283,18 +2283,18 @@ fn fresh_array_binding_patterns_use_dense_elements() -> Result<(), Error> {
             .register_code
             .as_ref()
             .ok_or(Error::InvalidBytecode)?;
-        if source != "let [...rest]=[];rest.length" {
-            assert!(
-                core::iter::once(code.as_ref())
-                    .chain(code.functions.iter())
-                    .flat_map(|function| &function.instructions)
-                    .any(|instruction| matches!(
-                        instruction,
-                        crate::engine::bytecode::Instruction::GetByValue { .. }
-                    )),
-                "{source}"
-            );
-        }
+        // 8.6.2 reads `@@iterator` of the value, which a Script can replace
+        // on `%Array.prototype%`, so no pattern reads the indices instead.
+        assert!(
+            core::iter::once(code.as_ref())
+                .chain(code.functions.iter())
+                .flat_map(|function| &function.instructions)
+                .any(|instruction| matches!(
+                    instruction,
+                    crate::engine::bytecode::Instruction::GetWellKnown { .. }
+                )),
+            "{source}"
+        );
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
