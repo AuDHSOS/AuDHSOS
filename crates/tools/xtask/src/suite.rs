@@ -252,7 +252,12 @@ fn configured() -> Configuration {
 /// How long one file may run before the interpreter is ended. A file
 /// that writes more rows than the engine answers for in this long is
 /// scored with what it answered up to there.
-const DEADLINE: Duration = Duration::from_secs(60);
+///
+/// `rowvalue2.test` answers 3834 cases in about two minutes and was
+/// cut at some 2900 under a deadline of one, so the count a run answers
+/// moved by hundreds between runs; three minutes is past every file but
+/// the handful that answer for tens of thousands of rows.
+const DEADLINE: Duration = Duration::from_secs(180);
 
 /// How many cases in a row one file may have refused for the same reason
 /// before the file is ended. A loop whose end a command this harness has

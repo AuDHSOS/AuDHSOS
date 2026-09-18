@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- A file of the suite is ended after three minutes and not after one,
+  so the ten files that answer for tens of thousands of rows run to
+  their end and two runs read the same number. D-302 records it. The
+  suite answers 83 637 cases where it answered 81 726.
+
 - `db-sqlite` holds a row a foreign key action writes to the
   constraints of the table it writes and carries the chain of keys past
   that table, bounded by the depth a trigger's body may reach. D-300
