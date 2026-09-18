@@ -173,12 +173,35 @@ proc literal {name} {
   return "'[string map {' ''} $value]'"
 }
 
+# The methods a connection answers. TCL matches the method of a command
+# by any unambiguous beginning of its name, which SQLite's own files
+# write as `db func` for `db function` and as `db onecolumn` for the
+# same method the shorter `db one` names.
+set ::methods {
+  authorizer backup busy cache changes close collate collation_needed
+  commit_hook complete config copy deserialize enable_load_extension
+  errorcode eval exists function interrupt last_insert_rowid nullvalue
+  one onecolumn preupdate profile progress restore rollback_hook
+  serialize timeout total_changes trace trace_v2 transaction
+  unlock_notify update_hook version wal_hook
+}
+
+# The whole name of a method, where the one written is a beginning of
+# exactly one of them, and the one written otherwise.
+proc whole_method {method} {
+  if {[lsearch -exact $::methods $method] >= 0} { return $method }
+  set found [lsearch -all -inline -glob $::methods "$method*"]
+  if {[llength $found] == 1} { return [lindex $found 0] }
+  return $method
+}
+
 # A connection: the command `sqlite3` makes one and names it.
 proc sqlite3 {name args} {
   set file [lindex $args 0]
   if {$file eq ""} { set file ":memory:" }
   harness_send open $name $file
   proc ::$name {method args} [string map [list %N% $name] {
+    set method [whole_method $method]
     switch -exact -- $method {
       eval {
         set sql [bound [lindex $args 0]]
@@ -236,7 +259,7 @@ proc sqlite3 {name args} {
         set ::collations([lindex $args 0]) [lindex $args 1]
         return [harness_send collate %N% [lindex $args 0]]
       }
-      function - func {
+      function {
         set ::functions([lindex $args 0]) [lindex $args end]
         return [harness_send function %N% [lindex $args 0]]
       }

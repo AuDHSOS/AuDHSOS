@@ -52,8 +52,8 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-83 479 cases of 719 files: 71 878 pass, 2373 answer differently and
-9228 are refused.
+86 302 cases of 725 files: 74 313 pass, 2652 answer differently and
+9337 are refused.
 
 `--configuration` opens every connection of a run under one of nine
 page-size, encoding and journal-mode settings, which D-275 decides.
@@ -61,7 +61,7 @@ What each answers, over the same files:
 
 | Configuration | Passed | Answered differently | Refused |
 |---------------|-------:|---------------------:|--------:|
-| `utf8-4096-delete` | 71 878 | 2373 | 9228 |
+| `utf8-4096-delete` | 74 313 | 2652 | 9337 |
 | `utf16le-4096-delete` | 61 214 | 2392 | 9500 |
 | `utf16be-4096-delete` | 61 229 | 2392 | 9500 |
 | `utf8-512-delete` | 61 073 | 2452 | 9435 |
@@ -202,10 +202,9 @@ Size: M.
    every digit the bits of the double hold, because `testfixture` hands
    the C library the double itself and never the fifteen digits
    `tcl_precision` prints.
-6. A method of the connection is answered under its whole name and
-   under `func`, which TCL matches by any unambiguous beginning of a
-   name and which SQLite's own files write more often than
-   `function`.
+6. A method of the connection is matched by any beginning of its name
+   that names exactly one method, which is what TCL does for every
+   command and which SQLite's own files rely on.
 7. An answer may be preceded by `CALL`, what kind of proc is called, a
    count and that many values, which the tester answers with `RET`, a
    count and that many values; the harness writes one where a collation
