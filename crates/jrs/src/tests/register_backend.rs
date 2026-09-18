@@ -2576,6 +2576,11 @@ fn observable_destructuring_assignments_stay_on_legacy_backend() -> Result<(), E
     assert!(!program.uses_register_backend(), "{source}");
     let _ =
         Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost);
+    // 13.15.5.5 evaluates the target of a rest element before it collects
+    // anything, and the registers of the walk are given back before the
+    // target takes what it collected.
+    differential("var o={};for([...o.ab] of [[1,2]]);''+o.ab.length+o.ab[0]")?;
+    differential("var p={};for([p.x, ...p.r] of [[1,2,3]]);''+p.x+p.r.length")?;
     // 7.1.19 sends the key through 7.1.1, and the access opens a frame for a
     // `toString` of the Script.
     differential("let target={},key={toString(){return 'x'}};[target[key]]=[42];target.x")?;

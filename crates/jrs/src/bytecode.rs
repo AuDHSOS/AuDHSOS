@@ -1552,7 +1552,14 @@ impl RegisterLowerer {
             self.code.emit(Instruction::Star(done));
             let end = self.code.instructions.len();
             self.patch_jump(leave, end)?;
+            // The Array the walk filled travels in the accumulator, so the
+            // registers of the walk are given back before the target takes
+            // it: the target holds registers of its own, which it took before
+            // the walk and gives back after it.
             self.code.emit(Instruction::Ldar(collected));
+            self.release_register(one)?;
+            self.release_register(count)?;
+            self.release_register(collected)?;
             match array {
                 RegisterArrayPattern::Binding(binding) => {
                     self.bind_pattern(RegisterType::Unknown, binding.rest.as_deref()?)?;
@@ -1565,9 +1572,6 @@ impl RegisterLowerer {
                     )?;
                 }
             }
-            self.release_register(one)?;
-            self.release_register(count)?;
-            self.release_register(collected)?;
         }
         let protected_end = self.code.instructions.len();
         // 7.4.11 closes an iterator that is not done, and an iterator with no
