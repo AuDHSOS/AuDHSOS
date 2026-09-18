@@ -657,8 +657,12 @@ enum IterableStart {
 /// Where the walk of 7.4.2 puts each element it takes.
 #[derive(Clone, Copy)]
 enum IteratorWalkTaker {
-    /// 23.1.2.1 keeps it in an Array of its own.
-    Array,
+    /// 23.1.2.1 keeps it in the object step 6.a makes of the `this` value.
+    Array {
+        /// The `this` value step 6.a constructs, and `VALUE_UNINITIALIZED`
+        /// where the clause has none to construct (27.1.3.3.12).
+        constructor: Value,
+    },
     /// 20.1.2.7 makes a property of this object out of it.
     Entries {
         /// The object `Object.fromEntries` answers.
@@ -699,7 +703,7 @@ impl IteratorWalkTaker {
     /// The tag the record holds, which says where an element goes.
     const fn tag(self) -> i32 {
         match self {
-            Self::Array => ITERATOR_WALK_ARRAY,
+            Self::Array { .. } => ITERATOR_WALK_ARRAY,
             Self::Entries { .. } => ITERATOR_WALK_ENTRIES,
             Self::TypedArray { .. } => ITERATOR_WALK_TYPED_ARRAY,
             Self::Each => ITERATOR_WALK_EACH,
@@ -714,10 +718,18 @@ impl IteratorWalkTaker {
         }
     }
 
+    /// The `this` value 23.1.2.1 step 6.a constructs, where the clause has one.
+    const fn constructor(self) -> Value {
+        match self {
+            Self::Array { constructor } => constructor,
+            _ => VALUE_UNINITIALIZED,
+        }
+    }
+
     /// The collection the walk fills, where it fills one.
     const fn collection(self) -> Value {
         match self {
-            Self::Array | Self::Each | Self::Reduce { .. } => VALUE_UNDEFINED,
+            Self::Array { .. } | Self::Each | Self::Reduce { .. } => VALUE_UNDEFINED,
             // 27.1.3.3.10 step 7.b answers false, 27.1.3.3.3 step 7.b answers
             // true and 27.1.3.3.5 step 7.b answers undefined.
             Self::Verdict { tag } => match tag {
@@ -770,6 +782,10 @@ const GENERATOR_COMPLETED: u8 = 3;
 /// hands a `return` and a `throw` on to the inner iterator.
 const GENERATOR_SUSPENDED_DELEGATING: u8 = 4;
 
+/// 23.1.2.1 step 6.a is constructing the `this` value of the clause.
+const ITERATOR_WALK_CONSTRUCTING: i32 = 7;
+/// 23.1.2.1 step 6.c.iv.1 is writing the `length` of its answer.
+const ITERATOR_WALK_LENGTH: i32 = 8;
 /// The walk of 7.4.2 has not called the `@@iterator` yet.
 const ITERATOR_WALK_STARTING: i32 = 0;
 /// It is waiting for the `@@iterator` it called.
@@ -2335,7 +2351,11 @@ impl RegisterVM {
             let record = heap
                 .root_value(state)
                 .ok_or(VMError::Heap(HeapError::InvalidReference))?;
-            if promise::slot(heap, record, 6).as_smi() == Some(ITERATOR_WALK_MAPPING) {
+            // 23.1.2.1 step 6.c.iv.1 passes the length to the setter of it.
+            if promise::slot(heap, record, 6).as_smi() == Some(ITERATOR_WALK_LENGTH) {
+                let length = promise::slot(heap, record, 5);
+                self.place_arguments(next_frame, callee, &[length])?;
+            } else if promise::slot(heap, record, 6).as_smi() == Some(ITERATOR_WALK_MAPPING) {
                 // 27.1.3.3.9 step 8.c passes the accumulator ahead of the two.
                 let arguments = [
                     promise::slot(heap, record, 0),
@@ -5055,7 +5075,9 @@ impl RegisterVM {
         // procedure with each of them and the three of 27.1.3.3 that stop early
         // ask their predicate about each, which a walk of 7.4.2 reaches.
         let taker = match intrinsic {
-            Intrinsic::IteratorPrototypeToArray => Some(IteratorWalkTaker::Array),
+            Intrinsic::IteratorPrototypeToArray => Some(IteratorWalkTaker::Array {
+                constructor: VALUE_UNINITIALIZED,
+            }),
             Intrinsic::IteratorPrototypeForEach => Some(IteratorWalkTaker::Each),
             Intrinsic::IteratorPrototypeSome => Some(IteratorWalkTaker::Verdict {
                 tag: ITERATOR_WALK_SOME,
@@ -5078,7 +5100,7 @@ impl RegisterVM {
             _ => None,
         };
         if let Some(taker) = taker {
-            let procedure = if matches!(taker, IteratorWalkTaker::Array) {
+            let procedure = if matches!(taker, IteratorWalkTaker::Array { .. }) {
                 VALUE_UNDEFINED
             } else {
                 self.call_argument(&call, 0, heap)?
@@ -7954,7 +7976,9 @@ impl RegisterVM {
             method,
             mapper,
             receiver,
-            IteratorWalkTaker::Array,
+            IteratorWalkTaker::Array {
+                constructor: call.receiver,
+            },
             call,
             units,
             active_feedback,
@@ -7999,7 +8023,7 @@ impl RegisterVM {
         };
         // 27.1.3.3.7 step 4 asks for a callable, and undefined is none of
         // them; 27.1.3.3.12 asks for no procedure at all.
-        let wanted = !matches!(taker, IteratorWalkTaker::Array);
+        let wanted = !matches!(taker, IteratorWalkTaker::Array { .. });
         let refused = (wanted || !procedure.is_undefined()) && !Self::is_callable(procedure, heap);
         // 27.1.3.3.7 step 4.b closes the iterator before the `TypeError`
         // leaves, so the walk starts even where the procedure is none.
@@ -8012,6 +8036,7 @@ impl RegisterVM {
             IteratorWalkTaker::Reduce { initial } => initial,
             _ => Value::from_object(realm.array(heap, 0)?),
         };
+        let constructor = taker.constructor();
         let record = promise::record(
             heap,
             realm,
@@ -8027,6 +8052,7 @@ impl RegisterVM {
                 VALUE_UNDEFINED,
                 Value::from_smi(taker.tag()),
                 taker.collection(),
+                constructor,
             ],
         )?;
         // The record outlives every frame the walk opens, so it is a root of a
@@ -8086,13 +8112,100 @@ impl RegisterVM {
                 VALUE_UNDEFINED,
                 Value::from_smi(taker.tag()),
                 taker.collection(),
+                taker.constructor(),
             ],
         )?;
         // The record outlives every frame the walk opens, so it is a root of a
         // scope of its own, which the last step leaves.
         heap.enter_scope();
         let state = heap.push_root(record)?;
+        // 23.1.2.1 step 6.a constructs the `this` value before step 6.b asks
+        // the iterable for its iterator.
+        if taker.constructor() != VALUE_UNINITIALIZED {
+            return self.construct_the_receiver_of_23_1_2_1(
+                state,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
         self.step_iterator_walk(state, call, units, active_feedback, heap, realm)
+    }
+
+    /// 23.1.2.1 step 6.a, which constructs the `this` value of the clause and
+    /// takes its answer as the object the walk fills.
+    ///
+    /// A `this` value that is no constructor reaches step 6.b, where the
+    /// clause keeps the ordinary Array the record already holds.
+    fn construct_the_receiver_of_23_1_2_1(
+        &mut self,
+        state: Root,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let constructor = promise::slot(heap, record, 11);
+        let plain = !Self::constructs(constructor, heap)
+            || constructor.as_object()
+                == realm
+                    .intrinsic(heap, Intrinsic::ArrayConstructor)?
+                    .as_object();
+        if plain {
+            return self.step_iterator_walk(state, call, units, active_feedback, heap, realm);
+        }
+        if !Self::is_script_function(constructor, heap) {
+            let made = match self.construct_a_native_of_23_1_2(
+                constructor,
+                None,
+                call,
+                units,
+                heap,
+                realm,
+            ) {
+                Ok(made) => made,
+                Err(refused) => return Err(Self::leave_iterator_walk(heap, refused)),
+            };
+            let record = heap
+                .root_value(state)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            promise::set_slot(heap, record, 0, made)?;
+            return self.step_iterator_walk(state, call, units, active_feedback, heap, realm);
+        }
+        // 10.2.2 step 5 creates the object for a base constructor and leaves a
+        // derived one to make its own at its super call.
+        let held = heap.push_root(constructor)?;
+        let receiver = if Self::derives(constructor, units, heap) {
+            VALUE_UNINITIALIZED
+        } else {
+            Value::from_object(Self::create_from_rooted_constructor(held, heap, realm)?)
+        };
+        let made = heap.push_root(receiver)?;
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        promise::set_slot(heap, record, 6, Value::from_smi(ITERATOR_WALK_CONSTRUCTING))?;
+        let constructor = heap
+            .root_value(held)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        // 13.3.5.1 gives the call the constructor it named, and nothing
+        // allocates between here and the frame.
+        self.pending_new_target = constructor;
+        let call = Call {
+            receiver,
+            arg_count: 0,
+            arg_start: Reg(0),
+            resume: Some(Resume::IteratorWalk { state }),
+            construct: Some(Construction::Held(made)),
+            ..call
+        };
+        self.enter_call_value(constructor, units, active_feedback, heap, realm, call)
     }
 
     /// The walk of 7.4.2, which runs until a call of the Script opens a frame.
@@ -8105,6 +8218,10 @@ impl RegisterVM {
     /// Returns [`VMError::Thrown`] with a `TypeError` for an iterator that is
     /// no Object, for a `next` that is not callable and for a result of `next`
     /// that is no Object.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function carries every phase of the walk of 7.4.2"
+    )]
     fn step_iterator_walk(
         &mut self,
         state: Root,
@@ -8121,6 +8238,26 @@ impl RegisterVM {
             let phase = promise::slot(heap, record, 6).as_smi().unwrap_or(0);
             let answered = self.acc;
             let called = match phase {
+                // 23.1.2.1 step 6.a has answered, and step 6.b goes on with
+                // the `@@iterator` of the iterable. 10.2.2 step 13 has chosen
+                // between what the constructor answered and the object its
+                // call started from.
+                ITERATOR_WALK_CONSTRUCTING => {
+                    promise::set_slot(heap, record, 0, answered)?;
+                    promise::set_slot(heap, record, 6, Value::from_smi(ITERATOR_WALK_OPENED))?;
+                    Some((
+                        promise::slot(heap, record, 2),
+                        promise::slot(heap, record, 1),
+                    ))
+                }
+                // 7.3.4 discards what a setter answers, and the clause answers
+                // the object it filled.
+                ITERATOR_WALK_LENGTH => {
+                    let output = promise::slot(heap, record, 0);
+                    heap.exit_scope();
+                    self.acc = output;
+                    None
+                }
                 // 7.4.2 step 1 calls the `@@iterator` of the iterable.
                 ITERATOR_WALK_STARTING => {
                     promise::set_slot(heap, record, 6, Value::from_smi(ITERATOR_WALK_OPENED))?;
@@ -8142,10 +8279,14 @@ impl RegisterVM {
                 ITERATOR_WALK_STEPPING => {
                     match self.continue_iterator_step(record, answered, heap, realm) {
                         Ok(Some(called)) => Some(called),
-                        Ok(None) => {
-                            self.answer_iterator_walk(record, heap, realm)?;
-                            None
-                        }
+                        Ok(None) => match Self::set_the_length_of_23_1_2_1(record, heap, realm) {
+                            Ok(Some(called)) => Some(called),
+                            Ok(None) => {
+                                self.answer_iterator_walk(record, heap, realm)?;
+                                None
+                            }
+                            Err(error) => return Err(Self::leave_iterator_walk(heap, error)),
+                        },
                         Err(error) => return Err(Self::leave_iterator_walk(heap, error)),
                     }
                 }
@@ -8204,9 +8345,13 @@ impl RegisterVM {
             let Some((func, receiver)) = called else {
                 return Ok(None);
             };
+            // 23.1.2.1 step 6.c.iv.1 passes the length to the setter; every
+            // other call the loop makes passes what `fill_frame` reads out of
+            // the record.
+            let waiting = promise::slot(heap, record, 6).as_smi().unwrap_or(0);
             let call = Call {
                 receiver,
-                arg_count: 0,
+                arg_count: u16::from(waiting == ITERATOR_WALK_LENGTH),
                 arg_start: Reg(0),
                 resume: Some(Resume::IteratorWalk { state }),
                 construct: None,
@@ -8342,6 +8487,52 @@ impl RegisterVM {
         Ok(())
     }
 
+    /// `Set(array, "length", 𝔽(k), true)` of 23.1.2.1 step 6.c.iv.1, whose
+    /// object may hold the `length` as an accessor.
+    ///
+    /// Answers the setter and its receiver where one runs, and writes the
+    /// `length` itself otherwise. 27.1.3.3.12 has no such step and no `this`
+    /// value to construct, which the record says with an uninitialized one.
+    fn set_the_length_of_23_1_2_1(
+        record: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<(Value, Value)>, VMError> {
+        let tag = promise::slot(heap, record, 9).as_smi().unwrap_or(0);
+        if tag != ITERATOR_WALK_ARRAY || promise::slot(heap, record, 11) == VALUE_UNINITIALIZED {
+            return Ok(None);
+        }
+        let name = PropertyKey::String(heap.strings.intern_units(&LENGTH_NAME)?);
+        let output = promise::slot(heap, record, 0);
+        let object = output
+            .as_object()
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let found = heap.lookup_named(object, name)?;
+        if let Some(property) = found
+            && property.flags.is_accessor
+        {
+            let (_, set) = Self::accessor_parts(property.value, heap)?;
+            // 10.1.9.1 step 4.c: a property with no setter refuses the write.
+            if set.is_undefined() {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "cannot write a property that is not writable",
+                ));
+            }
+            if !Self::is_script_function(set, heap) {
+                return Err(VMError::Unsupported(
+                    "a setter that is not a Script function",
+                ));
+            }
+            promise::set_slot(heap, record, 6, Value::from_smi(ITERATOR_WALK_LENGTH))?;
+            return Ok(Some((set, output)));
+        }
+        let length = promise::slot(heap, record, 5).as_smi().unwrap_or(0);
+        Self::set_array_like_length_wide(object, i64::from(length), heap, realm)?;
+        Ok(None)
+    }
+
     /// The answer a helper of 27.1.3.3 stopped the walk with, and the scope the
     /// record held.
     fn answer_iterator_verdict(&mut self, record: Value, heap: &mut GenerationalHeap) {
@@ -8438,7 +8629,13 @@ impl RegisterVM {
                 .as_object()
                 .ok_or(VMError::TypeError)?;
             let at = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
-            heap.set_array_element(array, at, value)?;
+            if tag == ITERATOR_WALK_ARRAY {
+                // 23.1.2.1 step 6.c.ix and 27.1.3.3.12 step 5.c both write
+                // with 7.3.5.
+                Self::create_element_or_throw(array, at, value, heap, realm)?;
+            } else {
+                heap.set_array_element(array, at, value)?;
+            }
         } else if tag == ITERATOR_WALK_ENTRIES {
             // 20.1.2.7 step 5: each entry is an Object whose `"0"` is a
             // property key and whose `"1"` is its value.
@@ -9871,8 +10068,27 @@ impl RegisterVM {
             );
         }
         if !Self::is_script_function(constructor, heap) {
-            return self.construct_a_native_of_23_1_2(
+            let made = match self.construct_a_native_of_23_1_2(
+                constructor,
+                Some(walk.length),
+                call,
+                units,
+                heap,
+                realm,
+            ) {
+                Ok(made) => made,
+                Err(refused) => {
+                    heap.exit_scope();
+                    return Err(refused);
+                }
+            };
+            let mut walk = Self::read_iteration(state, heap)?;
+            walk.output = made;
+            walk.phase = ARRAY_WALK_RUNNING;
+            Self::write_iteration(state, &walk, heap)?;
+            return self.step_array_iteration(
                 state,
+                None,
                 call,
                 units,
                 active_feedback,
@@ -9882,15 +10098,18 @@ impl RegisterVM {
         }
         // 10.2.2 step 5 creates the object for a base constructor and leaves a
         // derived one to make its own at its super call.
+        let held = heap.push_root(constructor)?;
         let receiver = if Self::derives(constructor, units, heap) {
             VALUE_UNINITIALIZED
         } else {
-            Value::from_object(Self::create_from_walk_constructor(state, heap, realm)?)
+            Value::from_object(Self::create_from_rooted_constructor(held, heap, realm)?)
         };
-        // The allocation above may have moved the constructor, which the state
+        // The allocation above may have moved the constructor, which the root
         // still names.
         let mut walk = Self::read_iteration(state, heap)?;
-        let constructor = walk.output;
+        let constructor = heap
+            .root_value(held)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
         // 13.3.5.1 gives the call the constructor it named, and nothing
         // allocates between here and the frame.
         self.pending_new_target = constructor;
@@ -9909,78 +10128,67 @@ impl RegisterVM {
     }
 
     /// The construct of 23.1.2 for a constructor of the Realm, which makes its
-    /// object without a frame and takes the length as its one argument.
+    /// object without a frame.
     ///
-    /// 27.5.3.1 calls the executor it is given, and 24.1.1.1 and 23.2.5.1 walk
-    /// an iterable; each of those needs a frame, and a construct of 23.1.2
-    /// passes a number that reaches none of them, so the three are gaps.
+    /// 23.1.2.1 step 8.c and 23.1.2.4 step 4 pass the length; step 6.a passes
+    /// nothing. 27.5.3.1 calls the executor it is given, and 24.1.1.1 and
+    /// 23.2.5.1 walk an iterable; each of those needs a frame that a construct
+    /// of 23.1.2 has no call site to open, so the three are gaps.
     fn construct_a_native_of_23_1_2(
         &mut self,
-        state: Root,
+        constructor: Value,
+        passed: Option<u32>,
         call: Call,
         units: CodeUnits<'_>,
-        active_feedback: &mut FeedbackVector,
         heap: &mut GenerationalHeap,
         realm: &Realm,
-    ) -> Result<Option<u32>, VMError> {
-        let walk = Self::read_iteration(state, heap)?;
-        let Some(intrinsic) = Self::native_constructor_of(walk.output, heap) else {
-            heap.exit_scope();
+    ) -> Result<Value, VMError> {
+        let Some(intrinsic) = Self::native_constructor_of(constructor, heap) else {
             return Err(VMError::Unsupported(
                 "a constructor of 23.1.2 written in Rust",
             ));
         };
         if intrinsic == Intrinsic::PromiseConstructor || Self::constructs_a_collection(intrinsic) {
-            heap.exit_scope();
             return Err(VMError::Unsupported(
                 "a constructor of 23.1.2 that walks what it is given",
             ));
         }
-        // 23.1.2.1 step 8.c passes the length; step 6.a passes nothing, which
-        // the walk says with a length it never reaches.
-        let passed = Vec::from([index_value(i64::from(walk.length))]);
-        let list = Self::array_of(passed, heap, realm)?;
+        let arguments = match passed {
+            Some(length) => Vec::from([index_value(i64::from(length))]),
+            None => Vec::new(),
+        };
+        let arg_count = u16::try_from(arguments.len()).unwrap_or(0);
+        let list = Self::array_of(arguments, heap, realm)?;
+        // The List outlives the call, so it is a root of a scope of its own.
         heap.enter_scope();
         let arguments = heap.push_root(list)?;
+        let made = heap.push_root(VALUE_UNDEFINED)?;
         let inner = Call {
             receiver: VALUE_UNDEFINED,
-            arg_count: 1,
+            arg_count,
             arg_start: Reg(0),
             resume: Some(Resume::Spread { arguments }),
-            construct: Some(Construction::Walk(state)),
+            construct: Some(Construction::Held(made)),
             ..call
         };
-        let made = self.call_intrinsic(intrinsic, inner, units, heap, realm);
+        let answer = self.call_intrinsic(intrinsic, inner, units, heap, realm);
         heap.exit_scope();
-        let made = match made {
-            Ok(made) => made,
-            Err(refused) => {
-                heap.exit_scope();
-                return Err(refused);
-            }
-        };
-        let mut walk = Self::read_iteration(state, heap)?;
-        walk.output = made;
-        walk.phase = ARRAY_WALK_RUNNING;
-        Self::write_iteration(state, &walk, heap)?;
-        self.step_array_iteration(state, None, call, units, active_feedback, heap, realm)
+        answer
     }
 
-    /// `OrdinaryCreateFromConstructor` of 10.1.13 for the constructor a walk
-    /// of 23.1.2 holds in `output`.
-    fn create_from_walk_constructor(
-        state: Root,
+    /// `OrdinaryCreateFromConstructor` of 10.1.13 for a constructor a root
+    /// holds, which the allocation of the object may move.
+    fn create_from_rooted_constructor(
+        constructor: Root,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<ObjectRef, VMError> {
         let shape = heap.shapes.root_shape();
         let prototype = realm.object_prototype(heap)?;
         let object = heap.allocate_object(shape, prototype)?;
-        // The state is a root the collector forwards, so it names the same
-        // constructor on the other side of the allocation above.
-        let function = Self::read_iteration(state, heap)?
-            .output
-            .as_object()
+        let function = heap
+            .root_value(constructor)
+            .and_then(Value::as_object)
             .ok_or(VMError::TypeError)?;
         let name = PropertyKey::String(heap.strings.intern("prototype")?);
         let Some(property) = heap.lookup_named(function, name)? else {
