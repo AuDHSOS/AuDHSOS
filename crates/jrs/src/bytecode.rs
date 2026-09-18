@@ -571,10 +571,14 @@ fn compile_parsed(body: &[Stmt], limits: Limits, realm: bool) -> Result<Program,
 
 /// Where `@@iterator` stands in [`crate::engine::realm::WellKnownSymbol::ALL`],
 /// which is the index `GetWellKnown` takes.
-const WELL_KNOWN_ITERATOR: usize = 3;
+const WELL_KNOWN_ITERATOR: u32 = crate::engine::realm::WellKnownSymbol::Iterator
+    .reference()
+    .0;
 
 /// `@@asyncIterator` of table 1, which 7.4.3 reads before `@@iterator`.
-const WELL_KNOWN_ASYNC_ITERATOR: usize = 0;
+const WELL_KNOWN_ASYNC_ITERATOR: u32 = crate::engine::realm::WellKnownSymbol::AsyncIterator
+    .reference()
+    .0;
 
 /// The binding a frame holds its `this` value in.
 ///

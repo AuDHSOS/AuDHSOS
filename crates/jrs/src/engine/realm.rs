@@ -153,8 +153,12 @@ pub fn array_prototype_intrinsic(name: &[u16]) -> Option<Intrinsic> {
 /// each one is its own `SymbolRef`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WellKnownSymbol {
+    /// `@@asyncDispose`.
+    AsyncDispose,
     /// `@@asyncIterator`.
     AsyncIterator,
+    /// `@@dispose`.
+    Dispose,
     /// `@@hasInstance`.
     HasInstance,
     /// `@@isConcatSpreadable`.
@@ -183,8 +187,10 @@ pub enum WellKnownSymbol {
 
 impl WellKnownSymbol {
     /// Every well-known Symbol, in the order of table 1.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 15] = [
+        Self::AsyncDispose,
         Self::AsyncIterator,
+        Self::Dispose,
         Self::HasInstance,
         Self::IsConcatSpreadable,
         Self::Iterator,
@@ -203,7 +209,9 @@ impl WellKnownSymbol {
     #[must_use]
     pub const fn description(self) -> &'static str {
         match self {
+            Self::AsyncDispose => "Symbol.asyncDispose",
             Self::AsyncIterator => "Symbol.asyncIterator",
+            Self::Dispose => "Symbol.dispose",
             Self::HasInstance => "Symbol.hasInstance",
             Self::IsConcatSpreadable => "Symbol.isConcatSpreadable",
             Self::Iterator => "Symbol.iterator",
@@ -224,7 +232,9 @@ impl WellKnownSymbol {
     #[must_use]
     pub const fn property(self) -> &'static str {
         match self {
+            Self::AsyncDispose => "asyncDispose",
             Self::AsyncIterator => "asyncIterator",
+            Self::Dispose => "dispose",
             Self::HasInstance => "hasInstance",
             Self::IsConcatSpreadable => "isConcatSpreadable",
             Self::Iterator => "iterator",
@@ -256,38 +266,42 @@ impl WellKnownSymbol {
     #[must_use]
     pub const fn from_reference(reference: SymbolRef) -> Option<Self> {
         match reference.0 {
-            0 => Some(Self::AsyncIterator),
-            1 => Some(Self::HasInstance),
-            2 => Some(Self::IsConcatSpreadable),
-            3 => Some(Self::Iterator),
-            4 => Some(Self::Match),
-            5 => Some(Self::MatchAll),
-            6 => Some(Self::Replace),
-            7 => Some(Self::Search),
-            8 => Some(Self::Species),
-            9 => Some(Self::Split),
-            10 => Some(Self::ToPrimitive),
-            11 => Some(Self::ToStringTag),
-            12 => Some(Self::Unscopables),
+            0 => Some(Self::AsyncDispose),
+            1 => Some(Self::AsyncIterator),
+            2 => Some(Self::Dispose),
+            3 => Some(Self::HasInstance),
+            4 => Some(Self::IsConcatSpreadable),
+            5 => Some(Self::Iterator),
+            6 => Some(Self::Match),
+            7 => Some(Self::MatchAll),
+            8 => Some(Self::Replace),
+            9 => Some(Self::Search),
+            10 => Some(Self::Species),
+            11 => Some(Self::Split),
+            12 => Some(Self::ToPrimitive),
+            13 => Some(Self::ToStringTag),
+            14 => Some(Self::Unscopables),
             _ => None,
         }
     }
 
     const fn index(self) -> u32 {
         match self {
-            Self::AsyncIterator => 0,
-            Self::HasInstance => 1,
-            Self::IsConcatSpreadable => 2,
-            Self::Iterator => 3,
-            Self::Match => 4,
-            Self::MatchAll => 5,
-            Self::Replace => 6,
-            Self::Search => 7,
-            Self::Species => 8,
-            Self::Split => 9,
-            Self::ToPrimitive => 10,
-            Self::ToStringTag => 11,
-            Self::Unscopables => 12,
+            Self::AsyncDispose => 0,
+            Self::AsyncIterator => 1,
+            Self::Dispose => 2,
+            Self::HasInstance => 3,
+            Self::IsConcatSpreadable => 4,
+            Self::Iterator => 5,
+            Self::Match => 6,
+            Self::MatchAll => 7,
+            Self::Replace => 8,
+            Self::Search => 9,
+            Self::Species => 10,
+            Self::Split => 11,
+            Self::ToPrimitive => 12,
+            Self::ToStringTag => 13,
+            Self::Unscopables => 14,
         }
     }
 }
