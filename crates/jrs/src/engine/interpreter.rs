@@ -4224,10 +4224,18 @@ impl RegisterVM {
             let key = Value::from_string(name);
             let answer = match intrinsic {
                 Intrinsic::ObjectValues | Intrinsic::ObjectEntries => {
+                    let own = PropertyKey::String(name);
                     let held = match Self::typed_array_read(object, key, heap)? {
                         Some(element) => element,
+                        // 10.4.3 gives a String exotic object own indices and
+                        // a `length` out of its `[[StringData]]`, which
+                        // neither a Shape nor an element store holds.
+                        None if Self::owns_string_exotic(object, own, heap)? => {
+                            let indexed = Self::element_index_of(object, own, heap);
+                            Self::own_property_value(object, own, indexed, heap)?
+                        }
                         None => heap
-                            .lookup_named(object, PropertyKey::String(name))?
+                            .lookup_named(object, own)?
                             .map(Self::plain_value)
                             .transpose()?
                             .unwrap_or(VALUE_UNDEFINED),

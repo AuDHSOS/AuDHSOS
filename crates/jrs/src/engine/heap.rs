@@ -1252,17 +1252,18 @@ impl GenerationalHeap {
         for (index, enumerable) in indices {
             keys.push((PropertyKey::String(self.intern_index(index)?), enumerable));
         }
-        keys.extend(named);
-        keys.extend(symbols);
         if array_length.is_some() || self.string_data_length(reference)?.is_some() {
             // 23.1.4 and 10.4.3 give an Array and a String exotic object an own
             // non-enumerable "length", which shadows an inherited one without
-            // being visited.
+            // being visited. 10.4.2.2 and 10.4.3.4 create it with the object,
+            // so 10.1.11.1 lists it ahead of every name added later.
             keys.push((
                 PropertyKey::String(self.strings.intern_units(&LENGTH_UNITS)?),
                 false,
             ));
         }
+        keys.extend(named);
+        keys.extend(symbols);
         Ok(keys)
     }
 
