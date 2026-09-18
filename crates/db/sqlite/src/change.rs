@@ -599,6 +599,15 @@ impl Writer {
         self.random = crate::random::Source::new(seed);
     }
 
+    /// What the next draw follows from, which `save_prng_state` holds
+    /// and hands back to [`Writer::randomness`].
+    ///
+    /// Reading it costs O(1).
+    #[must_use]
+    pub const fn randomness_held(&self) -> u64 {
+        self.random.held()
+    }
+
     /// `PRAGMA journal_mode`, with the nonce every checksum of the
     /// journal begins at and the sector its header takes. The five
     /// modes here are the ones that write the database file itself;
@@ -4637,27 +4646,12 @@ impl Writer {
         Ok(held)
     }
 
-    /// The key of one row, the key the statement gave it, and the
-    /// values an index over the table reads.
+    /// The values an index over the table reads, with `rowid` in place
+    /// of the column the key is another name for.
     ///
-    /// `sqlite3_column_int64`: the key of a table is a whole number
-    /// and nothing else, so a value the affinity of the column left as
-    /// another type is refused. The column the key is another name for
-    /// answers the key to an index and is stored as nothing, because
-    /// the key carries it. Costs O(n) over the columns of the row.
-    fn keying(
-        key: Value,
-        values: &mut [Value],
-        alias: Option<usize>,
-        next: i64,
-    ) -> Result<(i64, Option<i64>, Vec<Value>), Error> {
-        let held = alias.map(|at| values.get(at).cloned().unwrap_or(Value::Null));
-        let given = match (key, held) {
-            (Value::Int(given), _) | (Value::Null, Some(Value::Int(given))) => Some(given),
-            (Value::Null, None | Some(Value::Null)) => None,
-            _ => return Err(Error::Mismatch),
-        };
-        let rowid = given.unwrap_or_else(|| next.saturating_add(1));
+    /// The row itself stores nothing for that column, because the key
+    /// carries the value. Costs O(n) over the columns of the row.
+    fn keying(values: &mut [Value], alias: Option<usize>, rowid: i64) -> Vec<Value> {
         let mut named = values.to_vec();
         for slot in named.iter_mut().skip(alias.unwrap_or(usize::MAX)).take(1) {
             *slot = Value::Int(rowid);
@@ -4665,7 +4659,56 @@ impl Writer {
         for slot in values.iter_mut().skip(alias.unwrap_or(usize::MAX)).take(1) {
             *slot = Value::Null;
         }
-        Ok((rowid, given, named))
+        named
+    }
+
+    /// The key a row of an `INSERT` carries, where the row carries one:
+    /// the key the statement wrote, or the value of the column the key
+    /// is another name for.
+    ///
+    /// Reading it costs O(1).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Mismatch`] where the key is neither an integer nor
+    /// `NULL`.
+    fn given_key(key: Value, values: &[Value], alias: Option<usize>) -> Result<Option<i64>, Error> {
+        let held = alias.map(|at| values.get(at).cloned().unwrap_or(Value::Null));
+        match (key, held) {
+            (Value::Int(given), _) | (Value::Null, Some(Value::Int(given))) => Ok(Some(given)),
+            (Value::Null, None | Some(Value::Null)) => Ok(None),
+            _ => Err(Error::Mismatch),
+        }
+    }
+
+    /// The key a row that carries none is written under, where `next`
+    /// is the largest key the table ever held.
+    ///
+    /// `OP_NewRowid`: one past `next`, except where `next` is the
+    /// largest key an integer holds, and then a table whose key counts
+    /// up refuses and any other table takes a key drawn at random that
+    /// no row holds. The draw is tried 100 times and each try reads the
+    /// tree, so one try costs O(log n).
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Error::Full`] where 100 draws all name a key a row
+    /// holds.
+    fn free_key(&self, root: u32, next: i64, counting: bool) -> Result<i64, Error> {
+        if next != i64::MAX {
+            return Ok(next.saturating_add(1));
+        }
+        if counting {
+            return Err(Error::Image(crate::error::Error::Full));
+        }
+        for _ in 0..100 {
+            let word = i64::from_le_bytes(self.random.word().to_le_bytes());
+            let drawn = (word & (i64::MAX >> 1)).saturating_add(1);
+            if !crate::tree::holds(&self.pages, root, drawn)? {
+                return Ok(drawn);
+            }
+        }
+        Err(Error::Image(crate::error::Error::Full))
     }
 
     /// The key one row of an `UPDATE` is written under and the values
@@ -4758,7 +4801,9 @@ impl Writer {
             if fires {
                 next = next.max(largest(&self.pages, root)?.unwrap_or(0));
             }
-            let (rowid, given, mut named) = Self::keying(key, &mut values, alias, next)?;
+            let given = Self::given_key(key, &values, alias)?;
+            let rowid = given.map_or_else(|| self.free_key(root, next, counted.is_some()), Ok)?;
+            let mut named = Self::keying(&mut values, alias, rowid);
             next = next.max(rowid);
             if fires && !self.fired_early(&before, &table, &named, alias, given)? {
                 continue;

@@ -52,8 +52,8 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-86 302 cases of 725 files: 74 313 pass, 2652 answer differently and
-9337 are refused.
+90 462 cases of 727 files: 76 804 pass, 2667 answer differently and
+10 991 are refused.
 
 `--configuration` opens every connection of a run under one of nine
 page-size, encoding and journal-mode settings, which D-275 decides.
@@ -61,7 +61,7 @@ What each answers, over the same files:
 
 | Configuration | Passed | Answered differently | Refused |
 |---------------|-------:|---------------------:|--------:|
-| `utf8-4096-delete` | 74 313 | 2652 | 9337 |
+| `utf8-4096-delete` | 76 804 | 2667 | 10 991 |
 | `utf16le-4096-delete` | 61 214 | 2392 | 9500 |
 | `utf16be-4096-delete` | 61 229 | 2392 | 9500 |
 | `utf8-512-delete` | 61 073 | 2452 | 9435 |
@@ -73,7 +73,7 @@ What each answers, over the same files:
 
 The counts move by tens between runs of one configuration, because the
 files the deadline ends are counted with the cases they ran. Only the
-first row is a run after D-279 and D-280; the other eight were measured
+first row is a run after D-286 to D-291; the other eight were measured
 before them and are lower than they would read now.
 
 One row is behind the others by more than that: `utf8-4096-wal` refuses
@@ -172,7 +172,7 @@ opens a second one would read nothing.
 | T1 | The line: the harness listens, the runner connects, and a request is answered. | built | nothing | M |
 | T2 | The tester: the commands a file drives. | built | T1 | M |
 | T3 | The engine behind the line: connections, held files, and the answers. | built | T1 | M |
-| T4 | The score: a case is passed, failed or refused, and a file that stops says where. | built | T2, T3 | S |
+| T4 | The score: a case is passed, failed or refused, a file that stops says where, and a file that refuses the same reason 5000 times in a row is ended. | built | T2, T3 | S |
 | T5 | The commands that need the C library's internals answer nothing, and the helper files the suite reads are this repository's own. | built | T2 | S |
 | T6 | The messages the engine refuses with are the ones the C library writes, which a `do_catchsql_test` compares. | open | T3 | M |
 
@@ -297,6 +297,9 @@ Size: S.
 2. A file that stops at a command the tester does not have is counted
    with that command's name, which `--why` answers.
 3. `--show` writes what a case answered and what the file wanted.
+4. A file that refuses 5000 cases in a row for the same reason is ended
+   there, because a loop whose end a command the harness has none of
+   decides runs without bound.
 
 ### Produces
 
@@ -322,6 +325,19 @@ Size: S.
    `lock_common.tcl`, `wal_common.tcl`, `fts3_common.tcl` — are this
    repository's own, under `tools/suite/`, and hold the same kind of
    `proc`.
+3. A command of `testfixture` that reads nothing of the C library but
+   its own code reaches this engine's code instead:
+   `btree_varint_test` reaches `bytes::varint_again`, the
+   `sqlite3_mprintf_*` family reaches `format::format`, and
+   `save_prng_state` and `restore_prng_state` reach the random source of
+   every writer the file holds.
+4. A command of that family hands the format the C type it names, so the
+   harness reads `%x`, `%X`, `%o` and `%u` of an `int` argument as the
+   same 32 bits without the sign and `%c` as the character the number
+   names, which is what `va_arg` of `sqlite3_str_vappendf` reads.
+5. The limits of `src/sqliteLimit.h` are variables of the tester, each
+   this engine's own limit where the engine holds one, so a file that
+   reads `$SQLITE_MAX_LENGTH` to skip a case runs.
 
 ### Produces
 

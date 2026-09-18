@@ -115,3 +115,14 @@ fn every_varint_written_reads_back_as_the_value_it_was_written_from() {
         );
     }
 }
+
+/// `btree_varint_test` of `test3.c`: one call writes a value and reads it
+/// back, and answers what each side took.
+#[test]
+fn a_value_written_as_a_varint_and_read_back_answers_what_each_side_took() {
+    use crate::bytes::{varint_again, varint_len};
+    for value in [0_u64, 127, 128, 16_383, 16_384, u64::MAX] {
+        let took = varint_len(value).min(9);
+        assert_eq!(varint_again(value), Ok((value, took, took)), "{value}");
+    }
+}

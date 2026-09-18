@@ -830,6 +830,8 @@ Size: L.
     term that reads itself inside a subquery is still answered rather
     than refused `circular reference`, and a term with more than one
     recursive reference is not refused for that.
+63. The key an `INSERT` takes where the table holds the largest key an
+    integer holds. Built, which D-286 records.
 
 ### Done when
 
@@ -839,8 +841,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 86 302 cases in 725 files, 74 313
-pass, 2652 answer differently, and 9337 name something the engine
+under the `tclsh` of the machine. Of 90 462 cases in 727 files, 76 804
+pass, 2667 answer differently, and 10 991 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts

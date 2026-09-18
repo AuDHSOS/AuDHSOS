@@ -42,6 +42,15 @@ impl Source {
         word ^ (word >> 31)
     }
 
+    /// What the next draw follows from, which a fixture holds to draw
+    /// the same words again by handing it to [`Source::new`].
+    ///
+    /// Reading it costs O(1).
+    #[must_use]
+    pub const fn held(&self) -> u64 {
+        self.state.get()
+    }
+
     /// `bytes` of them, which costs O(n).
     pub fn bytes(&self, bytes: usize) -> Vec<u8> {
         let mut out = Vec::with_capacity(bytes);

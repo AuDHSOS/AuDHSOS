@@ -7,6 +7,29 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` gives the next row of a table whose largest key is
+  9223372036854775807 a key drawn at random, up to a hundred draws,
+  after which the write is refused `database or disk is full`; a table
+  whose key counts up is refused at that key. D-286 records it.
+  Catalog 6.6.201.
+
+- The suite's own tester reaches the engine for the commands of
+  `testfixture` that read nothing of the C library but its own code:
+  `save_prng_state` and `restore_prng_state` (D-287), the
+  `sqlite3_mprintf_*` family (D-288) and `btree_varint_test` (D-289).
+  `printf.test` answers 1382 cases where it answered none, `varint.test`
+  160 where it answered none, and `rowid.test` 239 where it answered
+  138. Catalog 6.6.202.
+
+- The suite's own tester carries the limits of `src/sqliteLimit.h` and
+  `sqlite_pending_byte` as variables, each this engine's own limit where
+  the engine holds one, so a file that reads one to skip a case runs.
+  D-290 records it.
+
+- The harness ends a file that has 5000 cases in a row refused for the
+  same reason, because a loop whose end a command the harness has none
+  of decides runs without bound. D-291 records it.
+
 - The suite's own tester matches the method of a connection by any
   beginning of its name that names exactly one method, which is what
   TCL does for every command. Twenty-three files that answered no case

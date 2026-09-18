@@ -500,6 +500,67 @@ proc working_64bit_int {} { return 1 }
 proc wal_is_capable {} { return 1 }
 proc presql {args} {}
 proc set_test_counter {args} { return 0 }
+
+# save_prng_state, restore_prng_state: the state random and randomblob
+# draw from next, which a test holds to draw the same words again.
+proc save_prng_state {} { harness_send save_prng }
+proc restore_prng_state {} { harness_send restore_prng }
+# btree_varint_test START MULTIPLIER COUNT INCREMENT of test3.c: every
+# value written as a varint and read back, which raises where one of them
+# does not come back unchanged.
+proc btree_varint_test {start mult count incr} {
+  harness_send varint [expr {$start+0}] [expr {$mult+0}] \
+    [expr {$count+0}] [expr {$incr+0}]
+  return ""
+}
+
+# The sqlite3_mprintf_* commands of test1.c. Each argument carries the C
+# type the command hands the format: i a 32-bit int, l a 64-bit one, r a
+# double, h the hexadecimal digits of one, and s a string.
+proc mprintf_over {format args} {
+  return [lindex [harness_send mprintf $format {*}$args] 0]
+}
+proc printf_int {n} { return i[expr {wide($n)}] }
+proc printf_real {r} { return r[format %.17g [expr {double($r)}]] }
+
+proc sqlite3_mprintf_int {format a b c} {
+  return [mprintf_over $format [printf_int $a] [printf_int $b] [printf_int $c]]
+}
+proc sqlite3_mprintf_int64 {format a b c} {
+  return [mprintf_over $format l[expr {wide($a)}] l[expr {wide($b)}] l[expr {wide($c)}]]
+}
+proc sqlite3_mprintf_long {format a b c} {
+  return [mprintf_over $format l[expr {wide($a)}] l[expr {wide($b)}] l[expr {wide($c)}]]
+}
+proc sqlite3_mprintf_str {format a b args} {
+  set text n
+  if {[llength $args] > 0} { set text s[lindex $args 0] }
+  return [mprintf_over $format [printf_int $a] [printf_int $b] $text]
+}
+proc sqlite3_mprintf_double {format a b r} {
+  return [mprintf_over $format [printf_int $a] [printf_int $b] [printf_real $r]]
+}
+proc sqlite3_mprintf_scaled {format a b} {
+  return [mprintf_over $format [printf_real [expr {double($a)*double($b)}]]]
+}
+proc sqlite3_mprintf_stronly {format text} {
+  return [mprintf_over $format s$text]
+}
+proc sqlite3_mprintf_hexdouble {format hex} {
+  return [mprintf_over $format h$hex]
+}
+# sqlite3_snprintf writes SIZE bytes counting the byte that ends the
+# text, so the answer holds SIZE-1 characters at most.
+proc sqlite3_snprintf_int {size format a} {
+  return [string range [mprintf_over $format [printf_int $a]] 0 [expr {$size-2}]]
+}
+proc sqlite3_snprintf_str {size format a b args} {
+  set text n
+  if {[llength $args] > 0} { set text s[lindex $args 0] }
+  set whole [mprintf_over $format [printf_int $a] [printf_int $b] $text]
+  return [string range $whole 0 [expr {$size-2}]]
+}
+
 proc crashsql {args} { error "this harness does not crash" }
 proc do_faultsim_test {args} {}
 proc do_malloc_test {args} {}
@@ -600,6 +661,29 @@ proc drop_all_indexes {{db db}} {
 
 # `tcl_precision` is what SQLite's own tester sets, so a real a file
 # counts with is written with the digits the file's answers hold.
+# sqlite_pending_byte of test2.c: where the byte-range a lock takes
+# begins, which the format holds one page for.
+set ::sqlite_pending_byte 0x40000000
+
+# The limits of src/sqliteLimit.h, which a test reads to skip a case its
+# build cannot reach. Each one is this engine's own where the engine
+# holds a limit of its own, and the default of the header otherwise.
+set ::SQLITE_MAX_LENGTH 1000000000
+set ::SQLITE_MAX_SQL_LENGTH 1000000000
+set ::SQLITE_MAX_COLUMN 2000
+set ::SQLITE_MAX_EXPR_DEPTH 200
+set ::SQLITE_MAX_COMPOUND_SELECT 500
+set ::SQLITE_MAX_VDBE_OP 250000000
+set ::SQLITE_MAX_FUNCTION_ARG 1000
+set ::SQLITE_MAX_ATTACHED 10
+set ::SQLITE_MAX_VARIABLE_NUMBER 32766
+set ::SQLITE_MAX_PAGE_SIZE 65536
+set ::SQLITE_MAX_PAGE_COUNT 4294967294
+set ::SQLITE_MAX_LIKE_PATTERN_LENGTH 50000
+set ::SQLITE_MAX_TRIGGER_DEPTH 1000
+set ::SQLITE_MAX_MMAP_SIZE 0
+set ::SQLITE_MAX_WORKER_THREADS 0
+
 set ::tcl_precision 15
 
 # The connection every file reads without opening one, which SQLite's

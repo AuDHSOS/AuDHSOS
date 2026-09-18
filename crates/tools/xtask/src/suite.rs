@@ -254,6 +254,12 @@ fn configured() -> Configuration {
 /// scored with what it answered up to there.
 const DEADLINE: Duration = Duration::from_secs(60);
 
+/// How many cases in a row one file may have refused for the same reason
+/// before the file is ended. A loop whose end a command this harness has
+/// none of decides runs without bound, and the file is scored with what
+/// it answered up to there.
+const LOOPING: usize = 5000;
+
 /// The capabilities an `ifcapable` may name that this engine does not
 /// have. Every other name is answered as held.
 const MISSING: [&str; 22] = [
@@ -594,6 +600,13 @@ struct Session {
     /// The functions the tester defined on each connection, beside the
     /// ones this harness holds.
     functions: BTreeMap<String, &'static [Defined]>,
+    /// What `save_prng_state` held, which `restore_prng_state` hands
+    /// back to every writer.
+    prng: u64,
+    /// The reason the cases before this one were refused for and how
+    /// many of them in a row carried it, which stops a file that loops
+    /// until a command this harness has none of answers.
+    repeated: (String, usize),
     /// What the file has scored.
     score: Score,
     /// When the file began, which is what the deadline is counted from.
@@ -612,6 +625,8 @@ impl Session {
             pragmas: BTreeMap::new(),
             collations: BTreeMap::new(),
             functions: BTreeMap::new(),
+            prng: 0,
+            repeated: (String::new(), 0),
             score: Score::default(),
             started: Instant::now(),
         }
@@ -718,9 +733,31 @@ impl Session {
             // reads one of these is refused rather than scored against
             // a number this harness made up.
             "errorcode" => Err(format!("this harness has no {verb}")),
+            // `save_prng_state` and `restore_prng_state`: SQLite draws
+            // for the whole process from one source, so the state one
+            // writer answers is handed to every writer.
+            "save_prng" => {
+                self.prng = self.held.values().next().map_or(0, Writer::randomness_held);
+                Ok(Vec::new())
+            }
+            "restore_prng" => {
+                let state = self.prng;
+                for writer in self.held.values_mut() {
+                    writer.randomness(state);
+                }
+                Ok(Vec::new())
+            }
+            "varint" => varint(args),
+            "mprintf" => mprintf(args),
             "capable" => Ok(vec![usize::from(capable(first)).to_string()]),
             "case" => {
                 self.case(args);
+                if self.repeated.1 > LOOPING {
+                    return Err(format!(
+                        "{} cases in a row were refused for: {}",
+                        self.repeated.1, self.repeated.0
+                    ));
+                }
                 Ok(Vec::new())
             }
             "stopped" => {
@@ -944,15 +981,23 @@ impl Session {
         match args.get(1).map_or("", String::as_str) {
             "passed" => {
                 self.score.passed = self.score.passed.saturating_add(1);
+                self.repeated = (String::new(), 0);
                 say("C passed");
             }
             "refused" => {
                 self.score.refused = self.score.refused.saturating_add(1);
                 say("C refused");
-                say(&format!("W {}", args.get(2).map_or("", String::as_str)));
+                let why = args.get(2).map_or("", String::as_str);
+                say(&format!("W {why}"));
+                if self.repeated.0 == why {
+                    self.repeated.1 = self.repeated.1.saturating_add(1);
+                } else {
+                    self.repeated = (why.to_owned(), 1);
+                }
             }
             _ => {
                 self.score.failed = self.score.failed.saturating_add(1);
+                self.repeated = (String::new(), 0);
                 say("C failed");
                 say(&format!(
                     "F {name}\n  mine {:?}\n  want {:?}",
@@ -1296,6 +1341,189 @@ fn write_error(stream: &mut &TcpStream, message: &str) -> Result<(), Error> {
     stream
         .write_all(&out)
         .map_err(|source| Error::io("writing a refusal", source))
+}
+
+/// `btree_varint_test START MULTIPLIER COUNT INCREMENT`: `count`
+/// values, the first `start * multiplier` and each `increment` past the
+/// one before, written as a varint and read back.
+///
+/// The answer is empty where every value came back unchanged under the
+/// same count of bytes, and names the first value that did not
+/// otherwise. One value costs O(1), so the request costs O(n) in
+/// `count`.
+fn varint(args: &[String]) -> Result<Vec<String>, String> {
+    let number = |at: usize| -> Result<u64, String> {
+        args.get(at)
+            .ok_or_else(|| format!("varint wants four numbers, not {}", args.len()))?
+            .parse::<u64>()
+            .map_err(|source| format!("varint reads numbers: {source}"))
+    };
+    let mut value = number(0)?.wrapping_mul(number(1)?);
+    let count = number(2)?;
+    let step = number(3)?;
+    for _ in 0..count {
+        let (read, written, taken) =
+            db_sqlite::bytes::varint_again(value).map_err(|error| format!("{error}"))?;
+        if read != value {
+            return Err(format!("wrote {value} and read back {read}"));
+        }
+        if written != taken {
+            return Err(format!("{value} wrote {written} bytes and read {taken}"));
+        }
+        value = value.wrapping_add(step);
+    }
+    Ok(Vec::new())
+}
+
+/// The `sqlite3_mprintf_*` commands of `src/test1.c`: the format of the
+/// first argument read over the arguments after it, which is `printf`
+/// of this engine.
+///
+/// Each argument after the format carries the C type the command hands
+/// the format: `i` a 32-bit `int`, `l` a 64-bit one, `r` a double, `h`
+/// the 16 hexadecimal digits of one, `s` a string, and `n` a null
+/// pointer. The request costs O(n) in what the format writes.
+fn mprintf(args: &[String]) -> Result<Vec<String>, String> {
+    let format = args.first().map_or("", String::as_str);
+    let mut values = vec![Value::Text(format.as_bytes().to_vec())];
+    for text in args.iter().skip(1) {
+        values.push(printed(text)?);
+    }
+    for (place, conversion) in conversions(format.as_bytes()) {
+        let at = place.saturating_add(1);
+        if !args.get(at).is_some_and(|text| text.starts_with('i')) {
+            continue;
+        }
+        let Some(&Value::Int(number)) = values.get(at) else {
+            continue;
+        };
+        // A conversion that reads an unsigned int reads the same 32 bits
+        // without the sign, which is 2^32 past the signed number, and
+        // `%c` writes the character the number names.
+        let read = match conversion {
+            b'x' | b'X' | b'o' | b'u' if number < 0 => Value::Int(number.saturating_add(1 << 32)),
+            b'c' => Value::Text(character(number)),
+            _ => continue,
+        };
+        values.splice(at..=at, [read]);
+    }
+    match db_sqlite::format::format(&values) {
+        Ok(Value::Text(bytes)) => Ok(vec![String::from_utf8_lossy(&bytes).into_owned()]),
+        Ok(other) => Err(format!("printf answered {other:?}")),
+        Err(error) => Err(error.message()),
+    }
+}
+
+/// One argument of [`mprintf`], read out of the kind its first byte
+/// names.
+///
+/// Reading one costs O(n) in the text.
+fn printed(text: &str) -> Result<Value, String> {
+    let rest = text.get(1..).unwrap_or_default();
+    let number = |radix: u32| {
+        i64::from_str_radix(rest, radix).map_err(|source| format!("printf reads numbers: {source}"))
+    };
+    match text.as_bytes().first() {
+        // A C `int` is 32 bits wide, so the number the format reads is
+        // what those 32 bits hold as a signed number.
+        Some(b'i') => Ok(Value::Int(i64::from(narrowed(number(10)?)))),
+        Some(b'l') => Ok(Value::Int(number(10)?)),
+        Some(b'r') => rest
+            .parse::<f64>()
+            .map(Value::Real)
+            .map_err(|source| format!("printf reads reals: {source}")),
+        Some(b'h') => u64::from_str_radix(rest, 16)
+            .map(|bits| Value::Real(f64::from_bits(bits)))
+            .map_err(|source| format!("printf reads the bits of a real: {source}")),
+        Some(b's') => Ok(Value::Text(rest.as_bytes().to_vec())),
+        // A command that hands the format no string hands it a null
+        // pointer, which `%s` writes nothing for and `%q` writes
+        // `(NULL)` for.
+        Some(b'n') => Ok(Value::Null),
+        _ => Err(format!("an argument of printf names no kind: {text}")),
+    }
+}
+
+/// Which argument of [`mprintf`] each conversion of the format reads,
+/// counted from the first argument after the format, and the conversion
+/// character.
+///
+/// `sqlite3_str_vappendf` reads `%x`, `%X`, `%o` and `%u` as an
+/// `unsigned int`, `%c` as the character a number names, and every other
+/// whole number as an `int`. Scanning the format costs O(n) in its
+/// bytes.
+fn conversions(format: &[u8]) -> Vec<(usize, u8)> {
+    let mut places = Vec::new();
+    let mut argument = 0_usize;
+    let mut at = 0;
+    while at < format.len() {
+        if format.get(at) != Some(&b'%') {
+            at = at.saturating_add(1);
+            continue;
+        }
+        at = at.saturating_add(1);
+        while format.get(at).is_some_and(|byte| b"-+ 0#,!".contains(byte)) {
+            at = at.saturating_add(1);
+        }
+        at = counted_out(format, at, &mut argument);
+        if format.get(at) == Some(&b'.') {
+            at = counted_out(format, at.saturating_add(1), &mut argument);
+        }
+        while format.get(at) == Some(&b'l') {
+            at = at.saturating_add(1);
+        }
+        match format.get(at) {
+            None => break,
+            // Two per cent signs write one and read no argument.
+            Some(&b'%') => (),
+            Some(&byte) => {
+                places.push((argument, byte));
+                argument = argument.saturating_add(1);
+            }
+        }
+        at = at.saturating_add(1);
+    }
+    places
+}
+
+/// Where the width or precision of one conversion ends, counting the
+/// argument it reads where it is `*`.
+///
+/// Scanning one costs O(n) in its digits.
+fn counted_out(format: &[u8], at: usize, argument: &mut usize) -> usize {
+    if format.get(at) == Some(&b'*') {
+        *argument = argument.saturating_add(1);
+        return at.saturating_add(1);
+    }
+    let mut end = at;
+    while format.get(end).is_some_and(u8::is_ascii_digit) {
+        end = end.saturating_add(1);
+    }
+    end
+}
+
+/// The character a number names, which `%c` of the C library writes.
+///
+/// A number no character names writes nothing, and one past the first
+/// 128 writes the byte it holds, which is what `sqlite3_str_appendchar`
+/// writes. Reading one costs O(1).
+fn character(number: i64) -> Vec<u8> {
+    u32::try_from(number)
+        .ok()
+        .and_then(char::from_u32)
+        .map(|found| found.to_string().into_bytes())
+        .unwrap_or_default()
+}
+
+/// What the low 32 bits of `number` hold as a signed number, which is
+/// the C `int` the tester hands `sqlite3_mprintf`.
+///
+/// Reading it costs O(1).
+fn narrowed(number: i64) -> i32 {
+    let low = number.to_le_bytes();
+    let mut bytes = [0_u8; 4];
+    bytes.copy_from_slice(low.get(..4).unwrap_or(&[0; 4]));
+    i32::from_le_bytes(bytes)
 }
 
 /// Writes out what the engine refused a statement for, keyed by the

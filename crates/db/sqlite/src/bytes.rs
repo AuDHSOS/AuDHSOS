@@ -80,6 +80,23 @@ pub(crate) fn put_varint(out: &mut alloc::vec::Vec<u8>, value: u64) {
     out.extend_from_slice(&groups);
 }
 
+/// A value written as a varint and read back, with how many bytes the
+/// write took and how many the read took.
+///
+/// `btree_varint_test` compares the three against the value it began
+/// with. One value costs O(1).
+///
+/// # Errors
+///
+/// [`Error::Varint`] where the bytes the value wrote do not read back as
+/// a varint.
+pub fn varint_again(value: u64) -> Result<(u64, usize, usize), Error> {
+    let mut out = alloc::vec::Vec::with_capacity(9);
+    put_varint(&mut out, value);
+    let (read, taken) = varint(&out)?;
+    Ok((read, out.len(), taken))
+}
+
 /// How many bytes a varint of this value takes, which is
 /// `sqlite3VarintLen`. It answers ten for a value the ninth byte's own
 /// eight bits would hold, which no caller here writes.

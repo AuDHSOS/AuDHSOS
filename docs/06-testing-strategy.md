@@ -5919,3 +5919,26 @@ Jobs run in this order; a failure stops the pipeline.
 CI runs on Linux runners with QEMU and its UEFI firmware from the
 distribution package. A macOS runner job covers the build only. Docker is
 not used; every step runs directly on the runner.
+
+### 6.6.201 The key an `INSERT` takes at the largest key (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A table whose largest key is 9223372036854775807 gives the next row a
+  key drawn at random that is above nought and below that largest key.
+- A hundred draws that all name a key a row holds refuse the write
+  `database or disk is full`, and the table then holds the hundred rows
+  the draws before them wrote.
+- A key that counts up draws nothing, so a table whose
+  `AUTOINCREMENT` counter reached the largest key an integer holds
+  refuses the write.
+- The state a writer answers draws the same words again, so two
+  statements over one restored state write the same `randomblob`.
+
+### 6.6.202 A varint written and read back (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `bytes::varint_again` answers the value a varint carried, how many
+  bytes the write took and how many the read took, and the three agree
+  for 0, 127, 128, 16383, 16384 and the largest number a `u64` holds.
