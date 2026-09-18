@@ -202,6 +202,47 @@ const CAPABILITY_WAIT_EXECUTOR: u32 = 3;
 /// Index of the constructor the clause was called on.
 const CAPABILITY_WAIT_CONSTRUCTOR: u32 = 4;
 
+/// Index of the stack of open containers in the record of 25.5.2.
+const JSON_STACK: u32 = 0;
+/// Index of the replacer function, and undefined where the call named none.
+const JSON_REPLACER: u32 = 1;
+/// Index of the property list step 4.b makes of a replacer that is an Array.
+const JSON_PROPERTIES: u32 = 2;
+/// Index of the objects on the path, which 25.5.2.5 step 2 refuses a second
+/// time.
+const JSON_SEEN: u32 = 3;
+/// Index of what the call in flight is for.
+const JSON_PHASE: u32 = 4;
+/// Index of the key that call is for.
+const JSON_KEY: u32 = 5;
+/// Index of the value in flight.
+const JSON_VALUE: u32 = 6;
+/// Index of the arguments of the call in flight.
+const JSON_ARGUMENTS: u32 = 7;
+/// The clause is waiting for nothing.
+const JSON_PHASE_IDLE: i32 = 0;
+/// It is waiting for the `toJSON` of 25.5.2.4 step 5.
+const JSON_PHASE_TOJSON: i32 = 1;
+/// It is waiting for the replacer of 25.5.2.4 step 6.
+const JSON_PHASE_REPLACER: i32 = 2;
+
+/// Index of the holder in one frame of that stack.
+const JSON_FRAME_HOLDER: u32 = 0;
+/// Index of the keys the frame writes, in order.
+const JSON_FRAME_KEYS: u32 = 1;
+/// Index of how many of them are done.
+const JSON_FRAME_INDEX: u32 = 2;
+/// Index of the pieces the frame has written.
+const JSON_FRAME_PIECES: u32 = 3;
+/// Index of what kind of container the frame stands for.
+const JSON_FRAME_KIND: u32 = 4;
+/// The frame is the wrapper 25.5.2 step 9 serializes the argument through.
+const JSON_KIND_ROOT: i32 = 0;
+/// It is the Array of 25.5.2.5.
+const JSON_KIND_ARRAY: i32 = 1;
+/// It is the Object of 25.5.2.6.
+const JSON_KIND_OBJECT: i32 = 2;
+
 /// One match of 22.2.6.11 step 11: where it starts, where it ends and the
 /// text of every capture it holds.
 type MatchParts = (usize, usize, Vec<Option<Vec<u16>>>);
@@ -523,6 +564,14 @@ pub enum Resume {
         /// value the call was given, how many arguments it passed, whether
         /// the rejection closes the iterator, and the three the continuation
         /// keeps between its allocations.
+        state: Root,
+    },
+    /// 25.5.2.4 step 5 called a `toJSON`, or step 6 the replacer, and the
+    /// answer is the value the clause writes out.
+    Stringify {
+        /// Root holding the record: the stack of open containers, the
+        /// replacer, the property list, the objects on the path, what the
+        /// call in flight is for and the arguments it was given.
         state: Root,
     },
     /// 22.1.3.19 step 5 or 22.2.6.11 step 14.l called the replace value for
@@ -2881,6 +2930,15 @@ impl RegisterVM {
             if promise::slot(heap, record, 3).as_smi().unwrap_or(0) > 0 {
                 self.place_arguments(next_frame, callee, &[promise::slot(heap, record, 2)])?;
             }
+        } else if let Some(Resume::Stringify { state }) = call.resume {
+            // 25.5.2.4 step 5 passes the key, and step 6 the key and the
+            // value.
+            let record = heap
+                .root_value(state)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let arguments = promise::slot(heap, record, JSON_ARGUMENTS);
+            let passed = Self::record_values(arguments, heap);
+            self.place_arguments(next_frame, callee, &passed)?;
         } else if let Some(Resume::Replace { state }) = call.resume {
             // 22.2.6.11 step 14.l passes the match, its captures, where it
             // stands and the whole text.
@@ -4059,6 +4117,14 @@ impl RegisterVM {
                 .get(usize::from(index))
                 .copied()
                 .unwrap_or(VALUE_UNDEFINED));
+        }
+        // 25.5.2.4 step 5 passes the key, and step 6 the key and the value.
+        if let Some(Resume::Stringify { state }) = call.resume {
+            let record = heap
+                .root_value(state)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let arguments = promise::slot(heap, record, JSON_ARGUMENTS);
+            return Ok(promise::slot(heap, arguments, u32::from(index)));
         }
         // 22.2.6.11 step 14.l passes the match, its captures, where it
         // stands and the whole text.
@@ -5975,6 +6041,25 @@ impl RegisterVM {
             return self.begin_typed_array_construct(
                 kind,
                 source,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
+        // 25.5.2.4 step 5 calls a `toJSON` and step 6 the replacer, both of
+        // which are frames the walk of 25.5.2 opens.
+        if intrinsic == Intrinsic::JsonStringify {
+            let value = self.call_argument(&call, 0, heap)?;
+            let replacer = self.call_argument(&call, 1, heap)?;
+            // Step 5 takes the space, which this Realm has no form of.
+            if !self.call_argument(&call, 2, heap)?.is_undefined() {
+                return Err(VMError::Unsupported("a space of 25.5.2"));
+            }
+            return self.begin_the_stringify(
+                value,
+                replacer,
                 call,
                 units,
                 active_feedback,
@@ -14157,6 +14242,10 @@ impl RegisterVM {
     /// A call of the Script passes registers of the caller; 20.2.3.1 and
     /// 28.1.1 pass a List no register holds, and a walk of 23.1.3 the state
     /// the collector traces.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function carries every way a call was given its arguments"
+    )]
     fn passed_arguments(&self, heap: &GenerationalHeap) -> Result<Vec<Value>, VMError> {
         let frame = *self.frames.last().ok_or(VMError::InvalidRegister)?;
         let arguments = frame.arguments.ok_or(VMError::Unsupported(
@@ -14192,6 +14281,14 @@ impl RegisterVM {
             } else {
                 Vec::from([promise::slot(heap, record, 1)])
             };
+            for index in 0..count.min(passed_in.len()) {
+                passed.push(*passed_in.get(index).unwrap_or(&VALUE_UNDEFINED));
+            }
+        } else if let Some(Resume::Stringify { state }) = frame.resume {
+            let record = heap
+                .root_value(state)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let passed_in = Self::record_values(promise::slot(heap, record, JSON_ARGUMENTS), heap);
             for index in 0..count.min(passed_in.len()) {
                 passed.push(*passed_in.get(index).unwrap_or(&VALUE_UNDEFINED));
             }
@@ -18706,20 +18803,9 @@ impl RegisterVM {
             let text = property_name_units(first, heap, realm)?;
             return self.json_parse(&text, heap, realm);
         }
-        // 25.5.2 step 2 takes a replacer that is a function or an Array of
-        // names; step 4 takes a space; neither is built.
-        if !second.is_undefined() {
-            return Err(VMError::Unsupported("a replacer of 25.5.2"));
-        }
-        let third = self.call_argument(call, 2, heap)?;
-        if !third.is_undefined() {
-            return Err(VMError::Unsupported("a space of 25.5.2"));
-        }
-        let mut out = Vec::new();
-        if !self.json_quote_value(first, &mut out, 0, heap, realm)? {
-            return Ok(VALUE_UNDEFINED);
-        }
-        self.allocate_string(heap, &out)
+        // 25.5.2 opens a frame for the `toJSON` of 25.5.2.4 step 5 and for
+        // the replacer of step 6, which `dispatch_native` answers.
+        Err(VMError::InvalidFeedbackVector)
     }
 
     /// `Encode` of 19.2.6.6 and `Decode` of 19.2.6.7, for the four functions
@@ -22118,35 +22204,501 @@ impl RegisterVM {
         Ok(value)
     }
 
-    /// `SerializeJSONProperty` of 25.5.2.4, answering whether the value has a
-    /// text at all.
-    fn json_quote_value(
+    /// `JSON.stringify` of 25.5.2.
+    ///
+    /// Step 5 of 25.5.2.4 calls a `toJSON` and step 6 the replacer, both of
+    /// which are frames of the Script: the walk keeps the containers it has
+    /// opened on a stack of the heap rather than on the stack of Rust, so a
+    /// call may stand between any two properties.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a call a native makes runs where a call does, with what a call has"
+    )]
+    fn begin_the_stringify(
         &mut self,
         value: Value,
-        out: &mut Vec<u16>,
-        depth: u16,
+        replacer: Value,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
         heap: &mut GenerationalHeap,
         realm: &Realm,
-    ) -> Result<bool, VMError> {
-        if depth > 64 {
-            return Err(VMError::Unsupported(
-                "a JSON text deeper than this engine walks",
-            ));
-        }
-        let mut work = self.fuel;
-        let limit = self.string_units_limit;
-        let appended = |out: &mut Vec<u16>, units: &[u16], work: &mut u64| {
-            audhsos_json::append(out, units, limit, work).map_err(|_| VMError::StringLimit)
+    ) -> Result<Option<u32>, VMError> {
+        // Step 4.a keeps a replacer that is callable, and step 4.b makes the
+        // property list of one that is an Array.
+        let callable = Self::is_callable(replacer, heap);
+        let properties = if !callable && Self::is_array(replacer, heap) {
+            self.json_property_list(replacer, heap, realm)?
+        } else {
+            VALUE_UNDEFINED
         };
-        if value.is_null() {
-            appended(out, &NULL_UNITS, &mut work)?;
-        } else if let Some(boolean) = value.as_boolean() {
-            let text: Vec<u16> = if boolean { "true" } else { "false" }
+        // Step 9 serializes the argument as the one property of a wrapper.
+        let wrapper = realm.ordinary_object(heap)?;
+        let empty = heap.strings.allocate_str("")?;
+        let key = PropertyKey::String(heap.strings.intern("")?);
+        heap.define_own_named(wrapper, key, value, PropertyFlags::ordinary_data())?;
+        let keys = promise::record(heap, realm, &[Value::from_string(empty)])?;
+        let frame = Self::json_frame(
+            Value::from_object(wrapper),
+            keys,
+            JSON_KIND_ROOT,
+            heap,
+            realm,
+        )?;
+        let stack = promise::record(heap, realm, &[frame])?;
+        let seen = Value::from_object(realm.array(heap, 0)?);
+        let record = promise::record(
+            heap,
+            realm,
+            &[
+                stack,
+                if callable { replacer } else { VALUE_UNDEFINED },
+                properties,
+                seen,
+                Value::from_smi(JSON_PHASE_IDLE),
+                VALUE_UNDEFINED,
+                VALUE_UNDEFINED,
+                VALUE_UNDEFINED,
+            ],
+        )?;
+        // The record outlives every frame the walk opens, so it is a root of
+        // a scope of its own, which the last container leaves.
+        heap.enter_scope();
+        let state = heap.push_root(record)?;
+        self.step_the_stringify(state, None, call, units, active_feedback, heap, realm)
+    }
+
+    /// Step 4.b of 25.5.2: the names a replacer that is an Array holds, each
+    /// one once and in the order it stands.
+    fn json_property_list(
+        &self,
+        replacer: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let object = replacer.as_object().ok_or(VMError::TypeError)?;
+        let length = Self::array_like_length(heap, object, realm)?;
+        let list = Value::from_object(realm.array(heap, 0)?);
+        let mut written = 0u32;
+        for index in 0..length {
+            let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+            let element = Self::element_at(heap, object, index)?.unwrap_or(VALUE_UNDEFINED);
+            let Some(name) = self.json_property_name(element, heap)? else {
+                continue;
+            };
+            let text = heap
+                .strings
+                .to_utf16(name)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let held = Self::record_values(list, heap);
+            if held.iter().any(|value| {
+                heap.strings
+                    .to_utf16(*value)
+                    .is_some_and(|other| other == text)
+            }) {
+                continue;
+            }
+            promise::set_slot(heap, list, written, name)?;
+            written = written.saturating_add(1);
+        }
+        Ok(list)
+    }
+
+    /// Step 4.b.ii of 25.5.2: the name one element of the property list
+    /// stands for, and none for an element that is neither a String, a Number
+    /// nor a wrapper of either.
+    ///
+    /// A wrapper reaches 7.1.17, which calls the `toString` of the object: one
+    /// of the Script is a call this clause has no frame to make.
+    fn json_property_name(
+        &self,
+        element: Value,
+        heap: &mut GenerationalHeap,
+    ) -> Result<Option<Value>, VMError> {
+        if element.is_string() {
+            return Ok(Some(element));
+        }
+        if let Some(number) = element.as_f64() {
+            let units: Vec<u16> = crate::number::decimal_string(number)
                 .encode_utf16()
                 .collect();
-            appended(out, &text, &mut work)?;
-        } else if let Some(number) = value.as_f64() {
-            // 25.5.2.4 step 10: a Number that is not finite has no text.
+            return Ok(Some(self.allocate_string(heap, &units)?));
+        }
+        let Some(object) = element.as_object() else {
+            return Ok(None);
+        };
+        let held = match heap.get_object(object).map(|entry| &entry.kind) {
+            Some(&ObjectKind::StringWrapper(text)) => text,
+            Some(&ObjectKind::NumberWrapper(number)) => {
+                let units: Vec<u16> = crate::number::decimal_string(number)
+                    .encode_utf16()
+                    .collect();
+                self.allocate_string(heap, &units)?
+            }
+            _ => return Ok(None),
+        };
+        // 7.1.17 asks `@@toPrimitive` first and `toString` after it.
+        if heap
+            .lookup_named(object, super::realm::WellKnownSymbol::ToPrimitive.key())?
+            .is_some()
+        {
+            return Err(VMError::Unsupported(
+                "the @@toPrimitive of an element of the property list of 25.5.2",
+            ));
+        }
+        let key = PropertyKey::String(heap.strings.intern("toString")?);
+        let method = heap
+            .lookup_named(object, key)?
+            .map(Self::plain_value)
+            .transpose()?
+            .unwrap_or(VALUE_UNDEFINED);
+        if Self::is_script_function(method, heap) {
+            return Err(VMError::Unsupported(
+                "a `toString` of the Script on an element of the property list of 25.5.2",
+            ));
+        }
+        Ok(Some(held))
+    }
+
+    /// One frame of the stack of 25.5.2: what it writes and how far it is.
+    fn json_frame(
+        holder: Value,
+        keys: Value,
+        kind: i32,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let pieces = Value::from_object(realm.array(heap, 0)?);
+        promise::record(
+            heap,
+            realm,
+            &[
+                holder,
+                keys,
+                Value::from_smi(0),
+                pieces,
+                Value::from_smi(kind),
+            ],
+        )
+        .map_err(VMError::Heap)
+    }
+
+    /// One step of the walk of 25.5.2: it takes what the call answered and
+    /// goes on to the next property, or closes the container it is in.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a call a native makes runs where a call does, with what a call has"
+    )]
+    fn step_the_stringify(
+        &mut self,
+        state: Root,
+        answered: Option<Value>,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let mut pending = answered;
+        loop {
+            let record = heap
+                .root_value(state)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            if let Some(value) = pending.take() {
+                let phase = promise::slot(heap, record, JSON_PHASE)
+                    .as_smi()
+                    .unwrap_or(JSON_PHASE_IDLE);
+                promise::set_slot(heap, record, JSON_VALUE, value)?;
+                promise::set_slot(heap, record, JSON_PHASE, Value::from_smi(JSON_PHASE_IDLE))?;
+                // Step 6 calls the replacer once the `toJSON` has answered.
+                let taken = if phase == JSON_PHASE_TOJSON {
+                    match self.ask_the_json_replacer(
+                        state,
+                        call,
+                        units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    ) {
+                        Ok(None) => self.place_the_json_value(state, heap, realm).map(|()| None),
+                        other => other,
+                    }
+                } else {
+                    self.place_the_json_value(state, heap, realm).map(|()| None)
+                };
+                match taken {
+                    Ok(Some(entered)) => return Ok(Some(entered)),
+                    Ok(None) => {
+                        pending = self.json_answered_without_a_frame(state, heap)?;
+                        continue;
+                    }
+                    Err(refused) => {
+                        heap.exit_scope();
+                        return Err(refused);
+                    }
+                }
+            }
+            let stack = promise::slot(heap, record, JSON_STACK);
+            let frames = Self::record_values(stack, heap);
+            let Some(top) = frames.last().copied() else {
+                // The wrapper of step 9 is closed, so the text it took is the
+                // answer; a value with no text answers undefined.
+                let answer = promise::slot(heap, record, JSON_VALUE);
+                heap.exit_scope();
+                self.acc = answer;
+                return Ok(None);
+            };
+            let keys = promise::slot(heap, top, JSON_FRAME_KEYS);
+            let index = promise::slot(heap, top, JSON_FRAME_INDEX)
+                .as_smi()
+                .unwrap_or(0)
+                .max(0);
+            let count = Self::record_values(keys, heap).len();
+            let taken = if usize::try_from(index).unwrap_or(usize::MAX) >= count {
+                self.close_the_json_container(state, heap, realm)
+                    .map(|()| None)
+            } else {
+                self.open_the_next_json_property(state, call, units, active_feedback, heap, realm)
+            };
+            match taken {
+                Ok(Some(entered)) => return Ok(Some(entered)),
+                // A `toJSON` or a replacer of this Realm answered without a
+                // frame, which the phase the record still carries says.
+                Ok(None) => pending = self.json_answered_without_a_frame(state, heap)?,
+                Err(refused) => {
+                    heap.exit_scope();
+                    return Err(refused);
+                }
+            }
+        }
+    }
+
+    /// What a call of the walk answered where it needed no frame, and nothing
+    /// where the walk made no call.
+    fn json_answered_without_a_frame(
+        &self,
+        state: Root,
+        heap: &GenerationalHeap,
+    ) -> Result<Option<Value>, VMError> {
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let phase = promise::slot(heap, record, JSON_PHASE)
+            .as_smi()
+            .unwrap_or(JSON_PHASE_IDLE);
+        Ok((phase != JSON_PHASE_IDLE).then_some(self.acc))
+    }
+
+    /// Steps 2 to 5 of 25.5.2.4 for the next property of the container the
+    /// walk stands in: the value is read and its `toJSON` called.
+    fn open_the_next_json_property(
+        &mut self,
+        state: Root,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let stack = promise::slot(heap, record, JSON_STACK);
+        let frames = Self::record_values(stack, heap);
+        let top = frames.last().copied().ok_or(VMError::TypeError)?;
+        let keys = promise::slot(heap, top, JSON_FRAME_KEYS);
+        let index = promise::slot(heap, top, JSON_FRAME_INDEX)
+            .as_smi()
+            .unwrap_or(0)
+            .max(0);
+        let key = promise::slot(
+            heap,
+            keys,
+            u32::try_from(index).map_err(|_| VMError::PropertyLimit)?,
+        );
+        promise::set_slot(
+            heap,
+            top,
+            JSON_FRAME_INDEX,
+            Value::from_smi(index.saturating_add(1)),
+        )?;
+        let holder = promise::slot(heap, top, JSON_FRAME_HOLDER);
+        promise::set_slot(heap, record, JSON_KEY, key)?;
+        let value = Self::json_property_of(holder, key, heap, realm)?;
+        promise::set_slot(heap, record, JSON_VALUE, value)?;
+        // Step 3 calls a `toJSON` the value carries, which is a frame.
+        if value.is_object() || value.is_bigint() {
+            let method = Self::json_to_json_of(value, heap, realm)?;
+            if Self::is_callable(method, heap) {
+                let arguments = promise::record(heap, realm, &[key])?;
+                promise::set_slot(heap, record, JSON_ARGUMENTS, arguments)?;
+                promise::set_slot(heap, record, JSON_PHASE, Value::from_smi(JSON_PHASE_TOJSON))?;
+                let next = Call {
+                    receiver: value,
+                    arg_count: 1,
+                    arg_start: Reg(0),
+                    resume: Some(Resume::Stringify { state }),
+                    construct: None,
+                    ..call
+                };
+                return self.enter_call_value(method, units, active_feedback, heap, realm, next);
+            }
+        }
+        if let Some(entered) =
+            self.ask_the_json_replacer(state, call, units, active_feedback, heap, realm)?
+        {
+            return Ok(Some(entered));
+        }
+        self.place_the_json_value(state, heap, realm)?;
+        Ok(None)
+    }
+
+    /// Step 2 of 25.5.2.4: the property the holder carries, which a getter of
+    /// the Script answers.
+    fn json_property_of(
+        holder: Value,
+        key: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let object = holder.as_object().ok_or(VMError::TypeError)?;
+        let name = property_key(key, heap, realm)?;
+        if let Some(property) = heap.lookup_named(object, name)? {
+            if property.flags.is_accessor {
+                return Err(VMError::Unsupported("a property that is an accessor"));
+            }
+            return Ok(property.value);
+        }
+        if let Some(element) = Self::typed_array_read(object, key, heap)? {
+            return Ok(element);
+        }
+        if Self::owns_string_exotic(object, name, heap)? {
+            let indexed = Self::element_index_of(object, name, heap);
+            return Self::own_property_value(object, name, indexed, heap);
+        }
+        let Some(text) = heap.strings.to_utf16(key) else {
+            return Ok(VALUE_UNDEFINED);
+        };
+        match array_index_units(&text) {
+            Some(index) => Ok(Self::element_at(heap, object, index)?.unwrap_or(VALUE_UNDEFINED)),
+            None => Ok(VALUE_UNDEFINED),
+        }
+    }
+
+    /// Step 3 of 25.5.2.4: the `toJSON` of the value, which 7.3.2 reads off
+    /// its Prototype Chain; 7.1.18 boxes a `BigInt` in `%BigInt.prototype%`.
+    fn json_to_json_of(
+        value: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let object = match value.as_object() {
+            Some(object) => object,
+            None if value.is_bigint() => realm
+                .bigint_prototype(heap)?
+                .as_object()
+                .ok_or(VMError::TypeError)?,
+            None => return Ok(VALUE_UNDEFINED),
+        };
+        let key = PropertyKey::String(heap.strings.intern("toJSON")?);
+        match heap.lookup_named(object, key)? {
+            Some(property) if property.flags.is_accessor => {
+                Err(VMError::Unsupported("a property that is an accessor"))
+            }
+            Some(property) => Ok(property.value),
+            None => Ok(VALUE_UNDEFINED),
+        }
+    }
+
+    /// Step 6 of 25.5.2.4: the replacer answers in place of the value.
+    fn ask_the_json_replacer(
+        &mut self,
+        state: Root,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let replacer = promise::slot(heap, record, JSON_REPLACER);
+        if !Self::is_callable(replacer, heap) {
+            return Ok(None);
+        }
+        let stack = promise::slot(heap, record, JSON_STACK);
+        let frames = Self::record_values(stack, heap);
+        let top = frames.last().copied().ok_or(VMError::TypeError)?;
+        let holder = promise::slot(heap, top, JSON_FRAME_HOLDER);
+        let key = promise::slot(heap, record, JSON_KEY);
+        let value = promise::slot(heap, record, JSON_VALUE);
+        let arguments = promise::record(heap, realm, &[key, value])?;
+        promise::set_slot(heap, record, JSON_ARGUMENTS, arguments)?;
+        promise::set_slot(
+            heap,
+            record,
+            JSON_PHASE,
+            Value::from_smi(JSON_PHASE_REPLACER),
+        )?;
+        let next = Call {
+            receiver: holder,
+            arg_count: 2,
+            arg_start: Reg(0),
+            resume: Some(Resume::Stringify { state }),
+            construct: None,
+            ..call
+        };
+        self.enter_call_value(replacer, units, active_feedback, heap, realm, next)
+    }
+
+    /// Steps 7 to 13 of 25.5.2.4: the value takes its place in the container
+    /// the walk stands in, or opens one of its own.
+    fn place_the_json_value(
+        &mut self,
+        state: Root,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let mut value = promise::slot(heap, record, JSON_VALUE);
+        // The rawJSON proposal writes the text of such an object out exactly
+        // as it was given, before anything else is read.
+        if let Some(object) = value.as_object()
+            && matches!(
+                heap.get_object(object).map(|entry| &entry.kind),
+                Some(&ObjectKind::RawJson)
+            )
+        {
+            let key = PropertyKey::String(heap.strings.intern("rawJSON")?);
+            let held = heap
+                .lookup_named(object, key)?
+                .map(Self::plain_value)
+                .transpose()?
+                .unwrap_or(VALUE_UNDEFINED);
+            return self.write_the_json_piece(state, Some(held), heap);
+        }
+        // Step 7 takes the primitive a wrapper carries, and step 7.d the
+        // `BigInt` of one, which step 12 refuses.
+        if let Some(object) = value.as_object() {
+            if matches!(
+                heap.get_object(object).map(|entry| &entry.kind),
+                Some(&ObjectKind::BigIntWrapper(_))
+            ) {
+                return Err(type_error(heap, realm, "a BigInt has no JSON text"));
+            }
+            if let Some(held) = Self::json_wrapped_primitive(object, heap)? {
+                value = held;
+            }
+        }
+        // Steps 8 to 10 write a primitive out, and step 12 refuses a BigInt.
+        if value.is_null() || value.as_boolean().is_some() || value.is_string() {
+            let text = self.json_text_of(value, heap)?;
+            return self.write_the_json_piece(state, Some(text), heap);
+        }
+        if let Some(number) = value.as_f64() {
             let text: Vec<u16> = if number.is_finite() {
                 crate::number::decimal_string(number)
                     .encode_utf16()
@@ -22154,61 +22706,253 @@ impl RegisterVM {
             } else {
                 NULL_UNITS.to_vec()
             };
-            appended(out, &text, &mut work)?;
-        } else if value.is_string() {
-            let units = heap
+            let text = self.allocate_string(heap, &text)?;
+            return self.write_the_json_piece(state, Some(text), heap);
+        }
+        if value.is_bigint() {
+            return Err(type_error(heap, realm, "a BigInt has no JSON text"));
+        }
+        // Step 11 gives a callable no text, as step 13 gives undefined and a
+        // Symbol none.
+        let Some(object) = value.as_object() else {
+            return self.write_the_json_piece(state, None, heap);
+        };
+        if Self::is_callable(value, heap) {
+            return self.write_the_json_piece(state, None, heap);
+        }
+        // 25.5.2.5 step 2 and 25.5.2.6 step 2 refuse an object that already
+        // stands on the path.
+        let seen = promise::slot(heap, record, JSON_SEEN);
+        let held = Self::record_values(seen, heap);
+        if held.contains(&value) {
+            return Err(type_error(heap, realm, "a cycle has no JSON text"));
+        }
+        let at = u32::try_from(held.len()).map_err(|_| VMError::PropertyLimit)?;
+        promise::set_slot(heap, seen, at, value)?;
+        let array = Self::is_array(value, heap);
+        let keys = if array {
+            self.json_index_names(object, heap, realm)?
+        } else {
+            let properties = promise::slot(heap, record, JSON_PROPERTIES);
+            if properties.is_undefined() {
+                Self::json_own_keys(object, heap, realm)?
+            } else {
+                properties
+            }
+        };
+        let kind = if array {
+            JSON_KIND_ARRAY
+        } else {
+            JSON_KIND_OBJECT
+        };
+        let frame = Self::json_frame(value, keys, kind, heap, realm)?;
+        let stack = promise::slot(heap, record, JSON_STACK);
+        let at = u32::try_from(Self::record_values(stack, heap).len())
+            .map_err(|_| VMError::PropertyLimit)?;
+        promise::set_slot(heap, stack, at, frame)?;
+        Ok(())
+    }
+
+    /// Step 5 of 25.5.2.5: the index of every element of the Array, as a
+    /// String.
+    fn json_index_names(
+        &self,
+        object: ObjectRef,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let length = Self::array_like_length(heap, object, realm)?;
+        let list = Value::from_object(realm.array(heap, 0)?);
+        for index in 0..length {
+            let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+            if usize::try_from(index).unwrap_or(usize::MAX) >= self.property_limit {
+                return Err(VMError::PropertyLimit);
+            }
+            let name = Value::from_string(heap.intern_index(index)?);
+            promise::set_slot(heap, list, index, name)?;
+        }
+        Ok(list)
+    }
+
+    /// The own enumerable String keys of an object, which 25.5.2.6 step 5
+    /// reads with 7.3.23.
+    fn json_own_keys(
+        object: ObjectRef,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let list = Value::from_object(realm.array(heap, 0)?);
+        let mut written = 0u32;
+        for (key, enumerable) in heap.own_keys(object)? {
+            if !enumerable {
+                continue;
+            }
+            let Some(name) = key.as_string() else {
+                continue;
+            };
+            promise::set_slot(heap, list, written, Value::from_string(name))?;
+            written = written.saturating_add(1);
+        }
+        Ok(list)
+    }
+
+    /// The text of a primitive 25.5.2.4 writes out, quoted where it is a
+    /// String.
+    fn json_text_of(&self, value: Value, heap: &mut GenerationalHeap) -> Result<Value, VMError> {
+        let mut out: Vec<u16> = Vec::new();
+        if value.is_string() {
+            let mut work = self.fuel;
+            let text = heap
                 .strings
                 .to_utf16(value)
                 .ok_or(VMError::Heap(HeapError::InvalidReference))?;
-            audhsos_json::quote(out, &units, limit, &mut work).map_err(|_| VMError::StringLimit)?;
-        } else if let Some(object) = value.as_object() {
-            // The rawJSON proposal writes the text of such an object out
-            // exactly as it was given, before anything else is read.
-            if matches!(
-                heap.get_object(object).map(|entry| &entry.kind),
-                Some(&ObjectKind::RawJson)
-            ) {
-                let key = PropertyKey::String(heap.strings.intern("rawJSON")?);
-                let held = heap
-                    .lookup_named(object, key)?
-                    .map(Self::plain_value)
-                    .transpose()?
-                    .unwrap_or(VALUE_UNDEFINED);
-                let units = heap
-                    .strings
-                    .to_utf16(held)
-                    .ok_or(VMError::Heap(HeapError::InvalidReference))?;
-                appended(out, &units, &mut work)?;
-                self.fuel = work;
-                return Ok(true);
-            }
-            // 25.5.2.4 step 5 calls `toJSON`, and step 11 a callable has no
-            // text at all.
-            let key = PropertyKey::String(heap.strings.intern("toJSON")?);
-            if heap.lookup_named(object, key)?.is_some() {
-                return Err(VMError::Unsupported("a toJSON of 25.5.2.4"));
-            }
-            if Self::is_callable(value, heap) {
-                return Ok(false);
-            }
-            // Step 7 takes the primitive a wrapper carries: 7.1.4 of a
-            // `[[NumberData]]`, 7.1.17 of a `[[StringData]]` and the
-            // `[[BooleanData]]` itself.
-            if let Some(held) = Self::json_wrapped_primitive(object, heap)? {
-                self.fuel = work;
-                return self.json_quote_value(held, out, depth, heap, realm);
-            }
-            self.fuel = work;
-            return self.json_quote_object(object, out, depth, heap, realm);
-        } else if value.is_bigint() {
-            // 25.5.2.4 step 12: a BigInt has no text at all.
-            return Err(type_error(heap, realm, "a BigInt has no JSON text"));
+            audhsos_json::quote(&mut out, &text, self.string_units_limit, &mut work)
+                .map_err(|_| VMError::StringLimit)?;
+        } else if value.is_null() {
+            out.extend_from_slice(&NULL_UNITS);
         } else {
-            // A Symbol and undefined have no text (25.5.2.4 steps 11 and 13).
-            return Ok(false);
+            let text: Vec<u16> = if value == VALUE_TRUE { "true" } else { "false" }
+                .encode_utf16()
+                .collect();
+            out.extend_from_slice(&text);
         }
+        self.allocate_string(heap, &out)
+    }
+
+    /// Writes the text of one value into the container the walk stands in, or
+    /// nothing at all where the value has none.
+    fn write_the_json_piece(
+        &mut self,
+        state: Root,
+        text: Option<Value>,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let stack = promise::slot(heap, record, JSON_STACK);
+        let frames = Self::record_values(stack, heap);
+        let top = frames.last().copied().ok_or(VMError::TypeError)?;
+        let kind = promise::slot(heap, top, JSON_FRAME_KIND)
+            .as_smi()
+            .unwrap_or(JSON_KIND_ROOT);
+        // The wrapper of step 9 answers the one text it was given.
+        if kind == JSON_KIND_ROOT {
+            promise::set_slot(heap, record, JSON_VALUE, text.unwrap_or(VALUE_UNDEFINED))?;
+            return Ok(());
+        }
+        let pieces = promise::slot(heap, top, JSON_FRAME_PIECES);
+        let at = u32::try_from(Self::record_values(pieces, heap).len())
+            .map_err(|_| VMError::PropertyLimit)?;
+        if kind == JSON_KIND_ARRAY {
+            // 25.5.2.5 step 5.b writes `null` where a property has no text.
+            let piece = match text {
+                Some(text) => text,
+                None => self.allocate_string(heap, &NULL_UNITS)?,
+            };
+            promise::set_slot(heap, pieces, at, piece)?;
+            return Ok(());
+        }
+        // 25.5.2.6 step 6.b.ii writes the key and the text; a property with
+        // no text writes nothing at all.
+        let Some(text) = text else {
+            return Ok(());
+        };
+        let key = promise::slot(heap, record, JSON_KEY);
+        let name = heap
+            .strings
+            .to_utf16(key)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let mut out: Vec<u16> = Vec::new();
+        let mut work = self.fuel;
+        audhsos_json::quote(&mut out, &name, self.string_units_limit, &mut work)
+            .map_err(|_| VMError::StringLimit)?;
         self.fuel = work;
-        Ok(true)
+        out.push(0x3A);
+        let body = heap
+            .strings
+            .to_utf16(text)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        out.extend_from_slice(&body);
+        let piece = self.allocate_string(heap, &out)?;
+        promise::set_slot(heap, pieces, at, piece)?;
+        Ok(())
+    }
+
+    /// Step 10 of 25.5.2.5 and step 9 of 25.5.2.6: the container is done, so
+    /// its text takes its place in the one that holds it.
+    fn close_the_json_container(
+        &mut self,
+        state: Root,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let stack = promise::slot(heap, record, JSON_STACK);
+        let frames = Self::record_values(stack, heap);
+        let top = frames.last().copied().ok_or(VMError::TypeError)?;
+        let kind = promise::slot(heap, top, JSON_FRAME_KIND)
+            .as_smi()
+            .unwrap_or(JSON_KIND_ROOT);
+        let holder = promise::slot(heap, top, JSON_FRAME_HOLDER);
+        let pieces = Self::record_values(promise::slot(heap, top, JSON_FRAME_PIECES), heap);
+        let shorter = frames
+            .get(..frames.len().saturating_sub(1))
+            .unwrap_or_default()
+            .to_vec();
+        let stack = promise::record(heap, realm, &shorter)?;
+        promise::set_slot(heap, record, JSON_STACK, stack)?;
+        if kind == JSON_KIND_ROOT {
+            return Ok(());
+        }
+        // The object leaves the path it stood on.
+        let seen = promise::slot(heap, record, JSON_SEEN);
+        let kept: Vec<Value> = Self::record_values(seen, heap)
+            .into_iter()
+            .filter(|value| *value != holder)
+            .collect();
+        let seen = promise::record(heap, realm, &kept)?;
+        promise::set_slot(heap, record, JSON_SEEN, seen)?;
+        let mut out: Vec<u16> = Vec::new();
+        out.push(if kind == JSON_KIND_ARRAY { 0x5B } else { 0x7B });
+        for (at, piece) in pieces.iter().enumerate() {
+            if at > 0 {
+                out.push(0x2C);
+            }
+            let body = heap
+                .strings
+                .to_utf16(*piece)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            out.extend_from_slice(&body);
+            if out.len() > self.string_units_limit {
+                return Err(VMError::StringLimit);
+            }
+        }
+        out.push(if kind == JSON_KIND_ARRAY { 0x5D } else { 0x7D });
+        let text = self.allocate_string(heap, &out)?;
+        // The key the container stood at is the one its holder waits on.
+        let parent = Self::json_key_of_the_open_frame(record, heap);
+        promise::set_slot(heap, record, JSON_KEY, parent)?;
+        self.write_the_json_piece(state, Some(text), heap)
+    }
+
+    /// The key the frame on top of the stack stands at, which the container
+    /// it holds answers into.
+    fn json_key_of_the_open_frame(record: Value, heap: &GenerationalHeap) -> Value {
+        let stack = promise::slot(heap, record, JSON_STACK);
+        let frames = Self::record_values(stack, heap);
+        let Some(top) = frames.last().copied() else {
+            return VALUE_UNDEFINED;
+        };
+        let keys = promise::slot(heap, top, JSON_FRAME_KEYS);
+        let index = promise::slot(heap, top, JSON_FRAME_INDEX)
+            .as_smi()
+            .unwrap_or(0)
+            .max(0)
+            .saturating_sub(1);
+        promise::slot(heap, keys, u32::try_from(index).unwrap_or(0))
     }
 
     /// Step 7 of 25.5.2.4: the primitive a Number, String or Boolean wrapper
@@ -22251,77 +22995,6 @@ impl RegisterVM {
             ));
         }
         Ok(Some(primitive))
-    }
-
-    /// `SerializeJSONArray` of 25.5.2.5 and `SerializeJSONObject` of 25.5.2.6.
-    fn json_quote_object(
-        &mut self,
-        object: ObjectRef,
-        out: &mut Vec<u16>,
-        depth: u16,
-        heap: &mut GenerationalHeap,
-        realm: &Realm,
-    ) -> Result<bool, VMError> {
-        let depth = depth.saturating_add(1);
-        if Self::is_array(Value::from_object(object), heap) {
-            let length = Self::array_like_length(heap, object, realm)?;
-            out.push(0x5B);
-            for index in 0..length {
-                if index > 0 {
-                    out.push(0x2C);
-                }
-                let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
-                let element = Self::element_at(heap, object, index)?.unwrap_or(VALUE_UNDEFINED);
-                if !self.json_quote_value(element, out, depth, heap, realm)? {
-                    out.extend_from_slice(&NULL_UNITS);
-                }
-            }
-            out.push(0x5D);
-            return Ok(true);
-        }
-        out.push(0x7B);
-        let mut written = 0usize;
-        for (key, enumerable) in heap.own_keys(object)? {
-            if !enumerable {
-                continue;
-            }
-            let Some(name) = key.as_string() else {
-                continue;
-            };
-            let units = heap
-                .strings
-                .to_utf16(Value::from_string(name))
-                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
-            let held = match Self::typed_array_read(object, Value::from_string(name), heap)? {
-                Some(element) => element,
-                // 10.4.3 gives a String exotic object own indices no Shape and
-                // no element store carries.
-                None if Self::owns_string_exotic(object, key, heap)? => {
-                    let indexed = Self::element_index_of(object, key, heap);
-                    Self::own_property_value(object, key, indexed, heap)?
-                }
-                None => Self::plain_value(
-                    heap.lookup_named(object, key)?
-                        .ok_or(VMError::Heap(HeapError::InvalidReference))?,
-                )?,
-            };
-            let mut text = Vec::new();
-            if !self.json_quote_value(held, &mut text, depth, heap, realm)? {
-                continue;
-            }
-            if written > 0 {
-                out.push(0x2C);
-            }
-            let mut work = self.fuel;
-            audhsos_json::quote(out, &units, self.string_units_limit, &mut work)
-                .map_err(|_| VMError::StringLimit)?;
-            self.fuel = work;
-            out.push(0x3A);
-            out.extend_from_slice(&text);
-            written = written.saturating_add(1);
-        }
-        out.push(0x7D);
-        Ok(true)
     }
 
     /// `eval` of 19.2.1, through `PerformEval` of 19.2.1.1.
@@ -22802,69 +23475,74 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Option<u32>, VMError> {
-        let record = heap
-            .root_value(state)
-            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
-        let matches = promise::slot(heap, record, REPLACE_MATCHES);
-        let count = Self::record_values(matches, heap).len();
-        if let Some(answer) = answered {
-            match self.take_one_replacement(record, answer, heap, realm) {
-                Ok(()) => {}
-                Err(refused) => {
-                    heap.exit_scope();
-                    return Err(refused);
+        let mut answered = answered;
+        loop {
+            let record = heap
+                .root_value(state)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let matches = promise::slot(heap, record, REPLACE_MATCHES);
+            let count = Self::record_values(matches, heap).len();
+            if let Some(answer) = answered.take() {
+                match self.take_one_replacement(record, answer, heap, realm) {
+                    Ok(()) => {}
+                    Err(refused) => {
+                        heap.exit_scope();
+                        return Err(refused);
+                    }
                 }
             }
-        }
-        let index = usize::try_from(
-            promise::slot(heap, record, REPLACE_INDEX)
-                .as_smi()
-                .unwrap_or(0)
-                .max(0),
-        )
-        .unwrap_or(usize::MAX);
-        if index >= count {
-            let answer = match self.join_the_replacement(record, heap) {
-                Ok(answer) => answer,
+            let index = usize::try_from(
+                promise::slot(heap, record, REPLACE_INDEX)
+                    .as_smi()
+                    .unwrap_or(0)
+                    .max(0),
+            )
+            .unwrap_or(usize::MAX);
+            if index >= count {
+                let answer = match self.join_the_replacement(record, heap) {
+                    Ok(answer) => answer,
+                    Err(refused) => {
+                        heap.exit_scope();
+                        return Err(refused);
+                    }
+                };
+                heap.exit_scope();
+                self.acc = answer;
+                return Ok(None);
+            }
+            // Step 14.l passes the match, then each capture, then where the match
+            // stands and the whole text.
+            let entry = promise::slot(
+                heap,
+                matches,
+                u32::try_from(index).map_err(|_| VMError::PropertyLimit)?,
+            );
+            let parts = Self::record_values(entry, heap);
+            let mut arguments = Vec::with_capacity(parts.len().saturating_add(1));
+            arguments.push(parts.first().copied().unwrap_or(VALUE_UNDEFINED));
+            arguments.extend(parts.iter().skip(2).copied());
+            arguments.push(parts.get(1).copied().unwrap_or(VALUE_UNDEFINED));
+            arguments.push(promise::slot(heap, record, REPLACE_TEXT));
+            let arg_count = u16::try_from(arguments.len()).unwrap_or(u16::MAX);
+            let list = promise::record(heap, realm, &arguments)?;
+            promise::set_slot(heap, record, REPLACE_ARGUMENTS, list)?;
+            let replacer = promise::slot(heap, record, REPLACE_REPLACER);
+            let call = Call {
+                receiver: VALUE_UNDEFINED,
+                arg_count,
+                arg_start: Reg(0),
+                resume: Some(Resume::Replace { state }),
+                construct: None,
+                ..call
+            };
+            match self.enter_call_value(replacer, units, active_feedback, heap, realm, call) {
+                // A replace value of this Realm answered without a frame.
+                Ok(None) => answered = Some(self.acc),
+                Ok(entered) => return Ok(entered),
                 Err(refused) => {
                     heap.exit_scope();
                     return Err(refused);
                 }
-            };
-            heap.exit_scope();
-            self.acc = answer;
-            return Ok(None);
-        }
-        // Step 14.l passes the match, then each capture, then where the match
-        // stands and the whole text.
-        let entry = promise::slot(
-            heap,
-            matches,
-            u32::try_from(index).map_err(|_| VMError::PropertyLimit)?,
-        );
-        let parts = Self::record_values(entry, heap);
-        let mut arguments = Vec::with_capacity(parts.len().saturating_add(1));
-        arguments.push(parts.first().copied().unwrap_or(VALUE_UNDEFINED));
-        arguments.extend(parts.iter().skip(2).copied());
-        arguments.push(parts.get(1).copied().unwrap_or(VALUE_UNDEFINED));
-        arguments.push(promise::slot(heap, record, REPLACE_TEXT));
-        let arg_count = u16::try_from(arguments.len()).unwrap_or(u16::MAX);
-        let list = promise::record(heap, realm, &arguments)?;
-        promise::set_slot(heap, record, REPLACE_ARGUMENTS, list)?;
-        let replacer = promise::slot(heap, record, REPLACE_REPLACER);
-        let call = Call {
-            receiver: VALUE_UNDEFINED,
-            arg_count,
-            arg_start: Reg(0),
-            resume: Some(Resume::Replace { state }),
-            construct: None,
-            ..call
-        };
-        match self.enter_call_value(replacer, units, active_feedback, heap, realm, call) {
-            Ok(entered) => Ok(entered),
-            Err(refused) => {
-                heap.exit_scope();
-                Err(refused)
             }
         }
     }
@@ -26985,7 +27663,17 @@ impl RegisterVM {
             construct: None,
             ..call
         };
-        self.enter_call_value(settler, units, active_feedback, heap, realm, call)
+        match self.enter_call_value(settler, units, active_feedback, heap, realm, call) {
+            // A settler of this Realm answered without a frame, and the
+            // clause answers the promise rather than what it said.
+            Ok(None) => {
+                let answer = heap.root_value(answer).unwrap_or(VALUE_UNDEFINED);
+                heap.exit_scope();
+                self.acc = answer;
+                Ok(None)
+            }
+            other => other,
+        }
     }
 
     /// 27.2.4.7 step 2: a promise whose `constructor` is the one the clause
@@ -27400,6 +28088,7 @@ impl RegisterVM {
                         | Resume::Copy { .. }
                         | Resume::Capability { .. }
                         | Resume::Replace { .. }
+                        | Resume::Stringify { .. }
                         | Resume::Answered { .. }
                 )
             ) {
@@ -30841,6 +31530,7 @@ impl RegisterVM {
                                     Resume::Iteration { .. }
                                     | Resume::Capability { .. }
                                     | Resume::Replace { .. }
+                                    | Resume::Stringify { .. }
                                     | Resume::CollectionWalk { .. }
                                     | Resume::CollectionInsert { .. }
                                     | Resume::IteratorWalk { .. }
@@ -30991,6 +31681,17 @@ impl RegisterVM {
                                         resume,
                                         pc,
                                         current_code_id,
+                                        units,
+                                        feedback,
+                                        heap,
+                                        realm,
+                                    )?,
+                                    // 25.5.2.4 takes the value the `toJSON`
+                                    // or the replacer answered.
+                                    Resume::Stringify { state } => self.step_the_stringify(
+                                        state,
+                                        Some(self.acc),
+                                        call,
                                         units,
                                         feedback,
                                         heap,

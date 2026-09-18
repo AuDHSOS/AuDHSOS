@@ -7050,12 +7050,49 @@ fn json_parses_and_quotes_what_it_reaches() -> Result<(), Error> {
     ] {
         differential_scripts(&[source])?;
     }
-    // 25.5.1 and 25.5.2 take a reviver, a replacer and a space, each of
-    // which this engine has not built.
+    // 25.5.2.4 step 5 calls a `toJSON` and step 6 the replacer, and step 4.b
+    // of 25.5.2 makes the property list of a replacer that is an Array.
+    for source in [
+        "JSON.stringify({toJSON:function(){return 1}})",
+        "JSON.stringify({d:{toJSON:function(k){return 'T'+k}}})",
+        "JSON.stringify([{toJSON:function(){return 7}}])",
+        "JSON.stringify({a:1,b:2},function(k,v){return typeof v==='number'?v*2:v})",
+        "JSON.stringify({a:1,b:2},function(k,v){return k==='a'?undefined:v})",
+        "JSON.stringify([1,2],function(k,v){return typeof v==='number'?v+1:v})",
+        "var l=[];JSON.stringify({a:1,b:{c:2}},function(k,v){l.push(k);return v});l.join('|')",
+        "JSON.stringify({a:1,b:2},['b'])",
+        "JSON.stringify({a:1,b:2},['b','a','b'])",
+        "JSON.stringify({a:1,b:2},[])",
+        "JSON.stringify({3:3,4:4},[new String('3')])",
+        "JSON.stringify({3:3,4:4},[4])",
+        "JSON.stringify([1,2],['0'])",
+        // A replacer that is neither callable nor an Array is no replacer.
+        "JSON.stringify({a:1},5)",
+        // 25.5.2.5 step 2 refuses an object that stands on the path.
+        "var o={};o.self=o;var r;try{JSON.stringify(o)}catch(e){r=e instanceof TypeError};''+r",
+        // What the replacer throws leaves the clause.
+        "var r;try{JSON.stringify({a:1},function(){throw 'b'})}catch(e){r=e};''+r",
+        "var r;try{JSON.stringify({a:{toJSON:function(){throw 'c'}}})}catch(e){r=e};''+r",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // Step 12 refuses a BigInt, which the stack backend writes out as a
+    // Number instead.
+    {
+        let mut host = SilentHost;
+        let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+        assert_eq!(
+            realm.evaluate(
+                "var r;try{JSON.stringify(BigInt(1))}catch(e){r=e instanceof TypeError};''+r"
+            )?,
+            Value::string("true")
+        );
+    }
+    // 25.5.1 takes a reviver and 25.5.2 a space, neither of which this
+    // engine has built.
     for source in [
         "JSON.parse('1',function(k,v){return v})",
         "JSON.stringify({},null,2)",
-        "JSON.stringify({toJSON(){return 1}})",
     ] {
         let mut host = SilentHost;
         let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
