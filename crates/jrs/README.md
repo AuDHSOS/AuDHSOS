@@ -664,6 +664,8 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same, before the three further rows of table 71 (outdated) | focused | `9d12e52` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/TypedArray test/built-ins/TypedArrayConstructors --summary` | 2,184 | 4,322 | 144 (3.33%) | 3,326 (76.96%) | 852 (19.71%) |
 | Generators (focused) | focused | `ed7b0e6` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/generators test/language/expressions/generators --summary` | 556 | 1,056 | 937 (88.73%) | 39 (3.69%) | 80 (7.58%) |
 | The same, on the stack backend, which has no frame that leaves and comes back (focused) | focused | `ed7b0e6` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/generators test/language/expressions/generators --summary` | 556 | 1,056 | 310 (29.36%) | 637 (60.32%) | 109 (10.32%) |
+| Identifiers (focused) | focused | `725bb96` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/identifiers --summary` | 268 | 535 | 233 (43.55%) | 68 (12.71%) | 234 (43.74%) |
+| The same, on the stack backend, which reads the same names (focused) | focused | `725bb96` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/identifiers --summary` | 268 | 535 | 203 (37.94%) | 68 (12.71%) | 264 (49.35%) |
 | Class elements (focused) | focused | `1784e60` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/class/elements test/language/expressions/class/elements --summary` | 2,962 | 5,897 | 2,177 (36.92%) | 48 (0.81%) | 3,672 (62.27%) |
 | The same, before the private accessor of 15.7.1 (outdated) | focused | `1d9478d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/class/elements test/language/expressions/class/elements --summary` | 2,962 | 5,897 | 2,011 (34.10%) | 34 (0.58%) | 3,852 (65.32%) |
 | The same, before the computed name of a field (outdated) | focused | `8e2095d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/class/elements test/language/expressions/class/elements --summary` | 2,962 | 5,897 | 1,789 (30.34%) | 20 (0.34%) | 4,088 (69.32%) |
@@ -881,7 +883,8 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same, before the iterators of 24.1.5 and 24.2.5 (outdated) | focused | `29cc550` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Map test/built-ins/Set --summary` | 587 | 1,169 | 336 (28.74%) | 240 (20.53%) | 593 (50.73%) |
 | The same, on the stack backend (focused) | focused | `29cc550` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Map test/built-ins/Set --summary` | 587 | 1,169 | 0 (0.00%) | 1,051 (89.91%) | 118 (10.09%) |
 | Complete pinned suite, including staging and Intl | full | `bee51e3` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 32,083 (31.17%) | 35,268 (34.26%) |
-| Complete pinned suite on the register engine | full | `1784e60` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 50,132 (48.71%) | 20,233 (19.66%) | 32,560 (31.63%) |
+| Complete pinned suite on the register engine | full | `725bb96` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 50,527 (49.09%) | 20,623 (20.04%) | 31,775 (30.87%) |
+| Complete pinned suite on the register engine, before the Unicode identifier of 12.7.1 (outdated) | full | `1784e60` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 50,132 (48.71%) | 20,233 (19.66%) | 32,560 (31.63%) |
 | Complete pinned suite on the register engine, before the private accessor of 15.7.1 (outdated) | full | `1d9478d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 49,944 (48.52%) | 20,223 (19.65%) | 32,758 (31.83%) |
 | Complete pinned suite on the register engine, before the computed name of a field (outdated) | full | `8e2095d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 49,478 (48.07%) | 20,209 (19.63%) | 33,238 (32.29%) |
 | Complete pinned suite on the register engine, before the field of a derived class (outdated) | full | `0fce6ba` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 49,342 (47.94%) | 20,153 (19.58%) | 33,430 (32.48%) |
@@ -1911,7 +1914,12 @@ full run beside the computed name of a field were measured at tree
 that step gained 466 variants and lost none. The class-element runs and the
 full run beside the private accessor of 15.7.1 were measured at tree
 `dc1a07d90437ddfb7027fc9c1769f35dfbfc2c86`, which is the tree of `1784e60`;
-that step gained 188 variants and lost none.
+that step gained 188 variants and lost none. The identifier runs and the full
+run beside 12.7.1 were measured at tree
+`7f109fb84b762e79ba574f557d3874095441ad71`, which is the tree of `725bb96`;
+that step gained 395 variants and lost none, and moved 396 variants from
+unsupported to failed, 284 of them tests of Temporal whose harness now
+reaches a gap of its own.
 That step gained 167 variants and lost 4: `concat` now keeps an object
 element the receiver used to drop, and a `join` of one is still a gap. That step moved 868 variants from unsupported
 to failed: a Script whose harness the lowering used to refuse now runs and
