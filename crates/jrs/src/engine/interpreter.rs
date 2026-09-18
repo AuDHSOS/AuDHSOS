@@ -23598,6 +23598,10 @@ impl RegisterVM {
         clippy::too_many_arguments,
         reason = "a frame that catches settles a promise, which needs the heap"
     )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function names every frame an abrupt completion leaves"
+    )]
     fn unwind(
         &mut self,
         table: CodeTable<'_>,
@@ -23605,6 +23609,7 @@ impl RegisterVM {
         mut current_code_id: Option<u32>,
         value: Value,
         native: Option<(super::realm::NativeErrorKind, &'static str)>,
+        feedback: &mut [&mut FeedbackVector],
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<(usize, Option<u32>), VMError> {
@@ -23684,6 +23689,49 @@ impl RegisterVM {
                             state: GENERATOR_COMPLETED,
                         },
                     )?;
+                }
+            }
+            // 23.1.2.1 step 6.c.ix and 24.1.1.2 step 4.e: a mapper or an adder
+            // that throws closes the iterator with 7.4.11 before the value it
+            // threw leaves the walk.
+            if let Some(Resume::IteratorWalk { state }) = frame.resume {
+                let record = heap
+                    .root_value(state)
+                    .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+                if promise::slot(heap, record, 6).as_smi().unwrap_or(0) == ITERATOR_WALK_MAPPING
+                    && let Some((method, iterator)) =
+                        Self::request_abrupt_close(record, value, heap, realm)?
+                {
+                    let call = Call {
+                        receiver: iterator,
+                        func: Reg(0),
+                        arg_start: Reg(0),
+                        arg_count: 0,
+                        slot: 0,
+                        resume: Some(Resume::IteratorWalk { state }),
+                        construct: None,
+                        return_pc: frame.return_pc,
+                        caller_code_id: frame.caller_code_id,
+                        coerced: 0,
+                    };
+                    let active = table.root(self.unit).ok_or(VMError::InvalidBytecode(
+                        VerificationError::FunctionOutOfBounds {
+                            pc,
+                            index: self.unit,
+                        },
+                    ))?;
+                    let units = CodeUnits { table, active };
+                    let unit_feedback: &mut FeedbackVector =
+                        feedback
+                            .get_mut(self.unit as usize)
+                            .ok_or(VMError::InvalidFeedbackVector)?;
+                    let active = feedback_unit_mut(unit_feedback, frame.caller_code_id)
+                        .ok_or(VMError::InvalidFeedbackVector)?;
+                    if let Some(code_id) =
+                        self.enter_call_value(method, units, active, heap, realm, call)?
+                    {
+                        return Ok((self.pending_pc.take().unwrap_or(0), Some(code_id)));
+                    }
                 }
             }
             // 27.2.3.1 step 7: the executor of a new Promise rejects it with
@@ -23929,7 +23977,8 @@ impl RegisterVM {
                     let mut at = pc.saturating_sub(1);
                     let mut within = current_code_id;
                     loop {
-                        match self.unwind(units, at, within, thrown, source, heap, realm) {
+                        match self.unwind(units, at, within, thrown, source, feedback, heap, realm)
+                        {
                             Ok((next_pc, next_code_id)) => {
                                 pc = next_pc;
                                 current_code_id = next_code_id;
