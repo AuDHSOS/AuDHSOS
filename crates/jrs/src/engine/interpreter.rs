@@ -22281,6 +22281,27 @@ impl RegisterVM {
                     } else {
                         true
                     };
+                    // 13.15.3: only `+` converts both operands to primitives
+                    // before either becomes a number. Every other operator
+                    // asks `ToNumeric` of the left operand first, and 7.1.4
+                    // refuses a Symbol there before the right one is read.
+                    if matches!(
+                        op,
+                        BinaryOp::Sub
+                            | BinaryOp::Mul
+                            | BinaryOp::Pow
+                            | BinaryOp::Div
+                            | BinaryOp::Mod
+                            | BinaryOp::BitAnd
+                            | BinaryOp::BitOr
+                            | BinaryOp::BitXor
+                            | BinaryOp::ShiftLeft
+                            | BinaryOp::ShiftRight
+                            | BinaryOp::UnsignedShiftRight
+                    ) && left.is_symbol()
+                    {
+                        return Err(type_error(heap, realm, "cannot convert Symbol to a number"));
+                    }
                     let pending = converts
                         .then(|| {
                             left.as_object()
