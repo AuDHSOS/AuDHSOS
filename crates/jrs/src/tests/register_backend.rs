@@ -6430,6 +6430,14 @@ fn the_sort_of_23_1_3_30_asks_the_comparator_about_each_pair() -> Result<(), Err
         // The order of the pairs the comparator is asked about is the order
         // of the merge, which both paths answer alike.
         "var r=[];[1,2,3].sort(function(a,b){r.push(a+':'+b);return a-b});r.join('|')",
+        // Step 3 reads an index that is an accessor through its getter, and
+        // step 7 writes one through its setter.
+        "var o={length:2};var w=[];Object.defineProperty(o,0,{get:function(){return 2},set:function(v){w.push('0='+v)},configurable:true});Object.defineProperty(o,1,{get:function(){return 1},set:function(v){w.push('1='+v)},configurable:true});Array.prototype.sort.call(o,function(x,y){return x-y});w.join('|')",
+        "var a=[3,1];Object.defineProperty(a,0,{get:function(){return 9},set:function(v){this.w=v},configurable:true});a.sort(function(x,y){return x-y});a.w+','+a[1]",
+        // An accessor with no getter reads undefined, and one with no setter
+        // refuses the write of step 7.
+        "var o={length:1};Object.defineProperty(o,0,{set:function(v){},configurable:true});Array.prototype.sort.call(o,function(x,y){return 0});typeof o[0]",
+        "var r='';var o={length:2,1:1};Object.defineProperty(o,0,{get:function(){return 2},configurable:true});try{Array.prototype.sort.call(o,function(x,y){return x-y})}catch(e){r=e.constructor.name}r",
     ] {
         differential_scripts(&[source])?;
     }
