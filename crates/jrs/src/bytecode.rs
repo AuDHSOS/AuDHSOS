@@ -8163,13 +8163,23 @@ impl RegisterLowerer {
             return None;
         }
         let back_edge = self.code.emit(Instruction::Jump(0));
-        // 7.4.9 closes an iterator a `break` left before its end; the normal
+        let body_end = self.code.instructions.len();
+        // 7.4.11 closes an iterator a `break` left before its end; the normal
         // exit reached that end and closes nothing.
         let closing = self.code.instructions.len();
         if let Some((iterator, scratch, awaited)) = loop_head.close
             && !loop_state.breaks.is_empty()
         {
             self.lower_iterator_close(iterator, scratch, awaited)?;
+        }
+        // 14.7.5.7 step 3.j closes the iterator where the binding or the body
+        // threw, and 7.4.11 step 5 keeps that value rather than what the
+        // close itself threw.
+        if let Some((iterator, scratch, awaited)) = loop_head.close {
+            let skip = self.code.emit(Instruction::Jump(0));
+            self.lower_iterator_close_on_throw(iterator, scratch, awaited, body_start, body_end)?;
+            let after = self.code.instructions.len();
+            self.patch_jump(skip, after)?;
         }
         let done = self.code.instructions.len();
         self.code.emit(Instruction::Ldar(loop_head.result));
@@ -8751,6 +8761,69 @@ impl RegisterLowerer {
         ));
         let after = self.code.instructions.len();
         self.patch_jump(skip, after)?;
+        Some(())
+    }
+
+    /// The handler 14.7.5.7 step 3.j gives the body of a `for`-`of`: the
+    /// iterator is closed and the value the body threw is thrown again.
+    ///
+    /// 7.4.11 step 5 keeps that value where the close throws one of its own,
+    /// so the call of `return` stands in a protected range whose handler is
+    /// the rethrow.
+    fn lower_iterator_close_on_throw(
+        &mut self,
+        iterator: crate::engine::bytecode::Reg,
+        scratch: crate::engine::bytecode::Reg,
+        awaited: bool,
+        body_start: usize,
+        body_end: usize,
+    ) -> Option<()> {
+        use crate::engine::bytecode::{ExceptionHandler, FeedbackKind, Instruction};
+        let thrown = self.allocate_register()?;
+        let handler_pc = self.code.instructions.len();
+        let return_name = self.string_constant(&"return".encode_utf16().collect::<Vec<_>>())?;
+        let return_slot = self.feedback_slot(FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetNamed {
+            obj: iterator,
+            name: return_name,
+            slot: return_slot,
+        });
+        self.code.emit(Instruction::Star(scratch));
+        let present = self.code.emit(Instruction::JumpIfNotNullish(0));
+        let absent = self.code.emit(Instruction::Jump(0));
+        let call = self.code.instructions.len();
+        self.patch_jump(present, call)?;
+        let close_slot = self.feedback_slot(FeedbackKind::Call)?;
+        self.code.emit(Instruction::CallMethod {
+            receiver: iterator,
+            func: scratch,
+            arg_start: scratch,
+            arg_count: 0,
+            slot: close_slot,
+        });
+        if awaited {
+            self.code.emit(Instruction::Await);
+        }
+        let close_end = self.code.instructions.len();
+        let rethrow = self.code.instructions.len();
+        self.patch_jump(absent, rethrow)?;
+        self.code.emit(Instruction::Ldar(thrown));
+        self.code.emit(Instruction::Throw);
+        // Step 3 reads `return` inside the protected range too, because step
+        // 4 keeps the value of the body where that read throws as well.
+        self.code.handlers.push(ExceptionHandler {
+            start_pc: u32::try_from(handler_pc).ok()?,
+            end_pc: u32::try_from(close_end).ok()?,
+            handler_pc: u32::try_from(rethrow).ok()?,
+            exception: scratch,
+        });
+        self.code.handlers.push(ExceptionHandler {
+            start_pc: u32::try_from(body_start).ok()?,
+            end_pc: u32::try_from(body_end).ok()?,
+            handler_pc: u32::try_from(handler_pc).ok()?,
+            exception: thrown,
+        });
+        self.release_register(thrown)?;
         Some(())
     }
 
