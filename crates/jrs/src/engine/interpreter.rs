@@ -12076,10 +12076,13 @@ impl RegisterVM {
             // 23.1.3.14: every index of an Array element becomes an index of
             // the answer, as deep as the depth allows.
             Intrinsic::ArrayPrototypeFlat => {
-                let depth = if call.arg_count == 0 {
+                // Step 3 takes the depth as one where the argument is
+                // undefined, and 7.1.5 of every other value where it is not.
+                let given = self.call_argument(&call, 0, heap)?;
+                let depth = if given.is_undefined() {
                     1
                 } else {
-                    integer_argument(self.call_argument(&call, 0, heap)?, heap, realm)?
+                    integer_argument(given, heap, realm)?
                 };
                 let values = self.flatten(object, length, depth, heap, realm)?;
                 // 23.1.3.14 step 4 makes the answer with 23.1.3.4.
