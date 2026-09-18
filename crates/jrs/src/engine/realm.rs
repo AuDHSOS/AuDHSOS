@@ -1146,6 +1146,20 @@ pub enum Intrinsic {
     AsyncGeneratorPrototypeReturn,
     /// `throw`, 27.6.1.4.
     AsyncGeneratorPrototypeThrow,
+    /// `next`, 27.1.4.2.1.
+    AsyncFromSyncIteratorPrototypeNext,
+    /// `return`, 27.1.4.2.2.
+    AsyncFromSyncIteratorPrototypeReturn,
+    /// `throw`, 27.1.4.2.3.
+    AsyncFromSyncIteratorPrototypeThrow,
+    /// The closure 27.1.4.4 step 5 makes, which carries the `done` its step 2
+    /// read and answers the result object of 7.4.10.
+    AsyncFromSyncUnwrap,
+    /// The closure 27.1.4.4 step 13 makes, which closes the sync iterator
+    /// where the value it answered rejects.
+    AsyncFromSyncCloseIterator,
+    /// `[Symbol.asyncIterator]`, 27.1.4.1, which answers the iterator itself.
+    AsyncIteratorPrototypeAsyncIterator,
     /// `get constructor`, 27.1.3.3.1.1.
     IteratorPrototypeConstructorGet,
     /// `set constructor`, 27.1.3.3.1.2.
@@ -1227,6 +1241,11 @@ pub enum IntrinsicHolder {
     GeneratorPrototype,
     /// `%AsyncGeneratorPrototype%`, which 27.6.1 gives every `AsyncGenerator`.
     AsyncGeneratorPrototype,
+    /// `%AsyncFromSyncIteratorPrototype%`, which 27.1.4.2 carries and no
+    /// Script reaches.
+    AsyncFromSyncIteratorPrototype,
+    /// `%AsyncIteratorPrototype%`, which 27.1.4.1 carries.
+    AsyncIteratorPrototype,
     /// The global object, which 19.1 gives the constructors of clause 20 and
     /// after.
     Global,
@@ -1301,7 +1320,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 452] = [
+    pub const ALL: [Self; 458] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1723,6 +1742,12 @@ impl Intrinsic {
         Self::AsyncGeneratorPrototypeNext,
         Self::AsyncGeneratorPrototypeReturn,
         Self::AsyncGeneratorPrototypeThrow,
+        Self::AsyncFromSyncIteratorPrototypeNext,
+        Self::AsyncFromSyncIteratorPrototypeReturn,
+        Self::AsyncFromSyncIteratorPrototypeThrow,
+        Self::AsyncFromSyncUnwrap,
+        Self::AsyncFromSyncCloseIterator,
+        Self::AsyncIteratorPrototypeAsyncIterator,
         Self::IteratorPrototypeConstructorGet,
         Self::IteratorPrototypeConstructorSet,
         Self::IteratorPrototypeToStringTagGet,
@@ -1866,6 +1891,12 @@ impl Intrinsic {
             Self::AsyncGeneratorPrototypeNext
             | Self::AsyncGeneratorPrototypeReturn
             | Self::AsyncGeneratorPrototypeThrow => IntrinsicHolder::AsyncGeneratorPrototype,
+            Self::AsyncFromSyncIteratorPrototypeNext
+            | Self::AsyncFromSyncIteratorPrototypeReturn
+            | Self::AsyncFromSyncIteratorPrototypeThrow => {
+                IntrinsicHolder::AsyncFromSyncIteratorPrototype
+            }
+            Self::AsyncIteratorPrototypeAsyncIterator => IntrinsicHolder::AsyncIteratorPrototype,
             Self::ArrayConstructor | Self::ObjectConstructor | Self::FunctionConstructor => {
                 IntrinsicHolder::Global
             }
@@ -2205,6 +2236,8 @@ impl Intrinsic {
             // caller of the pair it makes.
             | Self::AsyncResume
             | Self::AsyncThrow
+            | Self::AsyncFromSyncUnwrap
+            | Self::AsyncFromSyncCloseIterator
             | Self::Print
             // The host object of the conformance suite carries the two, which
             // the Realm attaches where the embedding asks for it.
@@ -2678,6 +2711,12 @@ impl Intrinsic {
             Self::AsyncGeneratorPrototypeNext => 449,
             Self::AsyncGeneratorPrototypeReturn => 450,
             Self::AsyncGeneratorPrototypeThrow => 451,
+            Self::AsyncFromSyncIteratorPrototypeNext => 452,
+            Self::AsyncFromSyncIteratorPrototypeReturn => 453,
+            Self::AsyncFromSyncIteratorPrototypeThrow => 454,
+            Self::AsyncFromSyncUnwrap => 455,
+            Self::AsyncFromSyncCloseIterator => 456,
+            Self::AsyncIteratorPrototypeAsyncIterator => 457,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3140,6 +3179,12 @@ impl Intrinsic {
             Self::AsyncGeneratorPrototypeNext => 449,
             Self::AsyncGeneratorPrototypeReturn => 450,
             Self::AsyncGeneratorPrototypeThrow => 451,
+            Self::AsyncFromSyncIteratorPrototypeNext => 452,
+            Self::AsyncFromSyncIteratorPrototypeReturn => 453,
+            Self::AsyncFromSyncIteratorPrototypeThrow => 454,
+            Self::AsyncFromSyncUnwrap => 455,
+            Self::AsyncFromSyncCloseIterator => 456,
+            Self::AsyncIteratorPrototypeAsyncIterator => 457,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3603,6 +3648,12 @@ impl Intrinsic {
             449 => Some(Self::AsyncGeneratorPrototypeNext),
             450 => Some(Self::AsyncGeneratorPrototypeReturn),
             451 => Some(Self::AsyncGeneratorPrototypeThrow),
+            452 => Some(Self::AsyncFromSyncIteratorPrototypeNext),
+            453 => Some(Self::AsyncFromSyncIteratorPrototypeReturn),
+            454 => Some(Self::AsyncFromSyncIteratorPrototypeThrow),
+            455 => Some(Self::AsyncFromSyncUnwrap),
+            456 => Some(Self::AsyncFromSyncCloseIterator),
+            457 => Some(Self::AsyncIteratorPrototypeAsyncIterator),
             436 => Some(Self::IteratorPrototypeConstructorGet),
             437 => Some(Self::IteratorPrototypeConstructorSet),
             438 => Some(Self::IteratorPrototypeToStringTagGet),
@@ -3671,7 +3722,9 @@ impl Intrinsic {
             | Self::PromiseAllSettledFulfilled
             | Self::PromiseAllSettledRejected
             | Self::AsyncResume
-            | Self::AsyncThrow => "",
+            | Self::AsyncThrow
+            | Self::AsyncFromSyncUnwrap
+            | Self::AsyncFromSyncCloseIterator => "",
             Self::StringPrototypeAnchor => "anchor",
             Self::StringPrototypeBig => "big",
             Self::StringPrototypeBlink => "blink",
@@ -3984,6 +4037,7 @@ impl Intrinsic {
             | Self::IteratorPrototypeReduce => "reduce",
             Self::ArrayPrototypeReduceRight | Self::TypedArrayPrototypeReduceRight => "reduceRight",
             Self::IteratorPrototypeIterator => "[Symbol.iterator]",
+            Self::AsyncIteratorPrototypeAsyncIterator => "[Symbol.asyncIterator]",
             Self::ObjectPreventExtensions | Self::ReflectPreventExtensions => "preventExtensions",
             Self::ObjectIsExtensible | Self::ReflectIsExtensible => "isExtensible",
             Self::ObjectSeal => "seal",
@@ -4056,9 +4110,14 @@ impl Intrinsic {
             | Self::MapIteratorPrototypeNext
             | Self::SetIteratorPrototypeNext
             | Self::GeneratorPrototypeNext
-            | Self::AsyncGeneratorPrototypeNext => "next",
-            Self::GeneratorPrototypeReturn | Self::AsyncGeneratorPrototypeReturn => "return",
-            Self::GeneratorPrototypeThrow | Self::AsyncGeneratorPrototypeThrow => "throw",
+            | Self::AsyncGeneratorPrototypeNext
+            | Self::AsyncFromSyncIteratorPrototypeNext => "next",
+            Self::GeneratorPrototypeReturn
+            | Self::AsyncGeneratorPrototypeReturn
+            | Self::AsyncFromSyncIteratorPrototypeReturn => "return",
+            Self::GeneratorPrototypeThrow
+            | Self::AsyncGeneratorPrototypeThrow
+            | Self::AsyncFromSyncIteratorPrototypeThrow => "throw",
             Self::ArrayPrototypeJoin | Self::TypedArrayPrototypeJoin => "join",
             Self::ArrayPrototypePop => "pop",
             Self::ArrayPrototypePush => "push",
@@ -4709,6 +4768,7 @@ impl Intrinsic {
             | Self::ArrayPrototypeToString
             | Self::ArrayPrototypeShift
             | Self::IteratorPrototypeIterator
+            | Self::AsyncIteratorPrototypeAsyncIterator
             | Self::ArrayPrototypeFlat
             | Self::ArrayOf
             | Self::StringPrototypeIsWellFormed
@@ -5008,6 +5068,11 @@ impl Intrinsic {
             | Self::AsyncGeneratorPrototypeNext
             | Self::AsyncGeneratorPrototypeReturn
             | Self::AsyncGeneratorPrototypeThrow
+            | Self::AsyncFromSyncIteratorPrototypeNext
+            | Self::AsyncFromSyncIteratorPrototypeReturn
+            | Self::AsyncFromSyncIteratorPrototypeThrow
+            | Self::AsyncFromSyncUnwrap
+            | Self::AsyncFromSyncCloseIterator
             | Self::IteratorPrototypeToStringTagSet
             | Self::HostDetachArrayBuffer
             | Self::TypedArrayPrototypeAt
@@ -6048,6 +6113,9 @@ pub struct Realm {
     async_generator_function_prototype: Root,
     /// `%AsyncIteratorPrototype%` of 27.1.4, which 27.6.1 stands on.
     async_iterator_prototype: Root,
+    /// `%AsyncFromSyncIteratorPrototype%` of 27.1.4.2, which 27.1.4.1 gives
+    /// the object it wraps a sync iterator in.
+    async_from_sync_iterator_prototype: Root,
     error_prototype: Root,
     native_error_prototypes: [Root; NATIVE_ERROR_COUNT],
     intrinsics: [Root; Intrinsic::ALL.len()],
@@ -6124,6 +6192,8 @@ struct Holders {
     iterator_prototype: Root,
     generator_prototype: Root,
     async_generator_prototype: Root,
+    async_from_sync_iterator_prototype: Root,
+    async_iterator_prototype: Root,
 }
 
 /// Global Environment Record of 9.1.1.4.
@@ -6302,6 +6372,12 @@ impl Realm {
             heap.allocate_immortal_object(root_shape, Self::rooted(heap, function_prototype)?)?;
         let async_generator_function_prototype =
             heap.push_root(Value::from_object(async_generator_function_prototype))?;
+        // 27.1.4.2 stands on `%AsyncIteratorPrototype%` and carries the three
+        // methods of the wrapper alone; no Script reaches it.
+        let async_from_sync_iterator_prototype = heap
+            .allocate_immortal_object(root_shape, Self::rooted(heap, async_iterator_prototype)?)?;
+        let async_from_sync_iterator_prototype =
+            heap.push_root(Value::from_object(async_from_sync_iterator_prototype))?;
 
         // 20.5.3: %Error.prototype% is an ordinary object with "message" and
         // "name", not an Error instance.
@@ -6381,6 +6457,8 @@ impl Realm {
                 iterator_prototype: iterator_prototype_root,
                 generator_prototype,
                 async_generator_prototype,
+                async_from_sync_iterator_prototype,
+                async_iterator_prototype,
             },
         )?;
 
@@ -6567,6 +6645,7 @@ impl Realm {
             async_generator_prototype,
             async_generator_function_prototype,
             async_iterator_prototype,
+            async_from_sync_iterator_prototype,
             error_prototype,
             native_error_prototypes,
             intrinsics,
@@ -7880,6 +7959,12 @@ impl Realm {
                 IntrinsicHolder::AsyncGeneratorPrototype => {
                     Self::rooted(heap, holders.async_generator_prototype)?
                 }
+                IntrinsicHolder::AsyncFromSyncIteratorPrototype => {
+                    Self::rooted(heap, holders.async_from_sync_iterator_prototype)?
+                }
+                IntrinsicHolder::AsyncIteratorPrototype => {
+                    Self::rooted(heap, holders.async_iterator_prototype)?
+                }
                 IntrinsicHolder::MapIteratorPrototype => {
                     Self::rooted(heap, holders.map_iterator_prototype)?
                 }
@@ -7940,6 +8025,8 @@ impl Realm {
                     | Intrinsic::PromiseAllElement
                     | Intrinsic::PromiseAllSettledFulfilled
                     | Intrinsic::PromiseAllSettledRejected
+                    | Intrinsic::AsyncFromSyncUnwrap
+                    | Intrinsic::AsyncFromSyncCloseIterator
                     | Intrinsic::FunctionPrototype
                     | Intrinsic::SpeciesGetter
                     | Intrinsic::RegExpPrototypeFlags
@@ -7996,6 +8083,16 @@ impl Realm {
                 heap.define_own_named(
                     holder,
                     WellKnownSymbol::Iterator.key(),
+                    function,
+                    builtin_data(),
+                )?;
+                continue;
+            }
+            // 27.1.4.1 is a Symbol-keyed property too.
+            if intrinsic == Intrinsic::AsyncIteratorPrototypeAsyncIterator {
+                heap.define_own_named(
+                    holder,
+                    WellKnownSymbol::AsyncIterator.key(),
                     function,
                     builtin_data(),
                 )?;
@@ -8386,6 +8483,18 @@ impl Realm {
     /// Returns [`HeapError::InvalidReference`] for a stale root.
     pub fn async_iterator_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
         Self::rooted(heap, self.async_iterator_prototype)
+    }
+
+    /// `%AsyncFromSyncIteratorPrototype%`, 27.1.4.2.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale root.
+    pub fn async_from_sync_iterator_prototype(
+        &self,
+        heap: &GenerationalHeap,
+    ) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.async_from_sync_iterator_prototype)
     }
 
     /// `%BigInt.prototype%`, 21.2.3.

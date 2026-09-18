@@ -334,6 +334,14 @@ pub enum ObjectKind {
         /// it suspended at a `yield`, 2 while it runs and 3 once it is done.
         state: u8,
     },
+    /// The object 27.1.4.1 wraps a sync iterator in, whose
+    /// `[[SyncIteratorRecord]]` is the iterator and its `next`.
+    AsyncFromSyncIterator {
+        /// `[[Iterator]]` of the record.
+        iterator: Value,
+        /// `[[NextMethod]]` of the record, read once by 7.4.2 step 3.
+        next: Value,
+    },
     /// Bound function exotic object, the slots of 10.4.1.
     BoundFunction {
         /// `[[BoundTargetFunction]]`.
@@ -380,6 +388,9 @@ impl ObjectKind {
                 queue,
                 ..
             } => [Some(*continuation), Some(*queue), None, None, None],
+            Self::AsyncFromSyncIterator { iterator, next } => {
+                [Some(*iterator), Some(*next), None, None, None]
+            }
             Self::BoundFunction {
                 target,
                 receiver,
@@ -472,6 +483,15 @@ impl ObjectKind {
                 capability,
                 ..
             } => [Some(registers), Some(capability), None, None, None],
+            Self::Generator { continuation, .. } => [Some(continuation), None, None, None, None],
+            Self::AsyncGenerator {
+                continuation,
+                queue,
+                ..
+            } => [Some(continuation), Some(queue), None, None, None],
+            Self::AsyncFromSyncIterator { iterator, next } => {
+                [Some(iterator), Some(next), None, None, None]
+            }
             Self::BoundFunction {
                 target,
                 receiver,

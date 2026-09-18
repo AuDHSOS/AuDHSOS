@@ -94,6 +94,10 @@ pub enum RequireKind {
     ObjectCoercible,
     /// `GetIterator` of 7.4.2, whose `@@iterator` must not be undefined.
     Iterable,
+    /// 7.4.2 step 2, whose iterator must be an Object.
+    Iterator,
+    /// 7.4.4 step 4, whose result must be an Object.
+    IteratorResult,
 }
 
 /// Structural verification failure in register bytecode.
@@ -706,6 +710,14 @@ pub enum Instruction {
     /// Throws a `TypeError` when `acc` is undefined or null, naming what the
     /// operation that asked needed of it.
     Require(RequireKind),
+    /// 27.1.4.1 wraps the sync iterator in `iterator` and the `next` 7.4.2
+    /// step 3 read in an object whose own `next` answers a promise.
+    AsyncFromSync {
+        /// Register holding the sync iterator.
+        iterator: Reg,
+        /// Register holding its `next`.
+        next: Reg,
+    },
     /// Creates the `RegExp` object of 22.2.4.1 for one pattern of this unit.
     CreateRegExp(u16),
     /// Creates an empty object `{}` in `acc`.
@@ -1207,6 +1219,10 @@ impl BytecodeFunction {
             | Instruction::DefineAccessor { obj, name, .. } => {
                 self.verify_string_constant(pc, name)?;
                 Some(obj)
+            }
+            Instruction::AsyncFromSync { iterator, next } => {
+                self.verify_register(pc, iterator)?;
+                Some(next)
             }
             Instruction::DeleteByValue { obj, key, .. }
             | Instruction::PrivateAccess { obj, key, .. }

@@ -573,6 +573,9 @@ fn compile_parsed(body: &[Stmt], limits: Limits, realm: bool) -> Result<Program,
 /// which is the index `GetWellKnown` takes.
 const WELL_KNOWN_ITERATOR: usize = 3;
 
+/// `@@asyncIterator` of table 1, which 7.4.3 reads before `@@iterator`.
+const WELL_KNOWN_ASYNC_ITERATOR: usize = 0;
+
 /// The binding a frame holds its `this` value in.
 ///
 /// No program can declare it: `this` is a keyword, so the name cannot collide
@@ -788,7 +791,11 @@ struct RegisterLowerer {
     /// The iterators of the enclosing `for`-`of` statements, innermost last,
     /// which 7.4.9 closes where a `return` leaves them. Each pair is the
     /// iterator and the register the close reads its `return` method into.
-    open_iterators: Vec<(crate::engine::bytecode::Reg, crate::engine::bytecode::Reg)>,
+    open_iterators: Vec<(
+        crate::engine::bytecode::Reg,
+        crate::engine::bytecode::Reg,
+        bool,
+    )>,
     /// The binding 10.4.4 made for `arguments`, when this body reads it.
     arguments_binding: Option<RegisterBinding>,
     /// How many formal parameters 10.4.4.7 could map the indices of the
@@ -893,7 +900,11 @@ struct IterationHead<'a> {
     guarded_layout: Option<u32>,
     /// The iterator 7.4.9 closes where a `break` leaves the loop, and a
     /// register the close reads the `return` method into.
-    close: Option<(crate::engine::bytecode::Reg, crate::engine::bytecode::Reg)>,
+    close: Option<(
+        crate::engine::bytecode::Reg,
+        crate::engine::bytecode::Reg,
+        bool,
+    )>,
 }
 
 struct RegisterLoop {
@@ -7410,7 +7421,8 @@ impl RegisterLowerer {
                 target,
                 object,
                 body,
-            } => self.lower_for_of(binding.as_ref(), target.as_ref(), object, body),
+                awaited,
+            } => self.lower_for_of(binding.as_ref(), target.as_ref(), object, body, *awaited),
             Stmt::ForIn {
                 binding,
                 target,
@@ -8154,10 +8166,10 @@ impl RegisterLowerer {
         // 7.4.9 closes an iterator a `break` left before its end; the normal
         // exit reached that end and closes nothing.
         let closing = self.code.instructions.len();
-        if let Some((iterator, scratch)) = loop_head.close
+        if let Some((iterator, scratch, awaited)) = loop_head.close
             && !loop_state.breaks.is_empty()
         {
-            self.lower_iterator_close(iterator, scratch)?;
+            self.lower_iterator_close(iterator, scratch, awaited)?;
         }
         let done = self.code.instructions.len();
         self.code.emit(Instruction::Ldar(loop_head.result));
@@ -8321,7 +8333,7 @@ impl RegisterLowerer {
         // 7.4.9 closes an iterator the loop leaves early. A `break` reaches
         // the close this emits after the body; a `return` leaves the frame, so
         // it emits a close of its own for every loop it leaves.
-        self.open_iterators.push((iterator, next));
+        self.open_iterators.push((iterator, next, false));
         let flow = self.lower_iteration_body(
             body,
             IterationHead {
@@ -8335,7 +8347,7 @@ impl RegisterLowerer {
                 result: result_register,
                 source: None,
                 guarded_layout: None,
-                close: Some((iterator, next)),
+                close: Some((iterator, next, false)),
             },
             &bindings_at_head,
         );
@@ -8346,6 +8358,186 @@ impl RegisterLowerer {
         self.release_register(next)?;
         self.release_register(step)?;
         self.release_register(result_register)?;
+        self.release_register(iterator)?;
+        self.release_register(method)?;
+        self.release_register(iterable)?;
+        Some(match flow {
+            RegisterFlow::Value(value_type) => RegisterType::Undefined.merge(value_type),
+            RegisterFlow::Empty | RegisterFlow::Abrupt => RegisterType::Undefined,
+        })
+    }
+
+    /// Walks the async iterator of 7.4.3 for a `for await` of 14.7.5.
+    ///
+    /// 7.4.3 reads `@@asyncIterator` and, where the value carries none,
+    /// wraps the sync iterator of `@@iterator` in the object of 27.1.4.1.
+    /// Each step of 14.7.5.7 waits for what `next` answered and asks it for
+    /// an Object before it reads `done`.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function emits the whole of a loop head and its close"
+    )]
+    fn lower_async_for_of(
+        &mut self,
+        head_binding: ForInHead<'_>,
+        body: &Stmt,
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        use crate::engine::bytecode::RequireKind;
+        let iterable = self.allocate_register()?;
+        self.code.emit(Instruction::Star(iterable));
+        let method = self.allocate_register()?;
+        let iterator = self.allocate_register()?;
+        let next = self.allocate_register()?;
+        let async_slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetWellKnown {
+            obj: iterable,
+            symbol: u16::try_from(WELL_KNOWN_ASYNC_ITERATOR).ok()?,
+            slot: async_slot,
+        });
+        self.code.emit(Instruction::Star(method));
+        let asynchronous = self.code.emit(Instruction::JumpIfNotNullish(0));
+        // 7.4.3 step 1.b: a value with no `@@asyncIterator` is walked through
+        // its sync iterator, which 27.1.4.1 wraps.
+        let sync_slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetWellKnown {
+            obj: iterable,
+            symbol: u16::try_from(WELL_KNOWN_ITERATOR).ok()?,
+            slot: sync_slot,
+        });
+        self.code.emit(Instruction::Require(RequireKind::Iterable));
+        self.code.emit(Instruction::Star(method));
+        let sync_open = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
+        self.code.emit(Instruction::CallMethod {
+            receiver: iterable,
+            func: method,
+            arg_start: method,
+            arg_count: 0,
+            slot: sync_open,
+        });
+        self.code.emit(Instruction::Require(RequireKind::Iterator));
+        self.code.emit(Instruction::Star(iterator));
+        let sync_next = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        let next_name = self.string_constant(&"next".encode_utf16().collect::<Vec<_>>())?;
+        self.code.emit(Instruction::GetNamed {
+            obj: iterator,
+            name: next_name,
+            slot: sync_next,
+        });
+        self.code.emit(Instruction::Star(next));
+        self.code
+            .emit(Instruction::AsyncFromSync { iterator, next });
+        self.code.emit(Instruction::Star(iterator));
+        let wrapped = self.code.emit(Instruction::Jump(0));
+        let call_async = self.code.instructions.len();
+        self.patch_jump(asynchronous, call_async)?;
+        let open = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
+        self.code.emit(Instruction::CallMethod {
+            receiver: iterable,
+            func: method,
+            arg_start: method,
+            arg_count: 0,
+            slot: open,
+        });
+        self.code.emit(Instruction::Require(RequireKind::Iterator));
+        self.code.emit(Instruction::Star(iterator));
+        let opened = self.code.instructions.len();
+        self.patch_jump(wrapped, opened)?;
+        // 7.4.2 step 3 reads `next` once, whichever of the two iterators the
+        // walk ended up with.
+        let next_slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetNamed {
+            obj: iterator,
+            name: next_name,
+            slot: next_slot,
+        });
+        self.code.emit(Instruction::Star(next));
+
+        self.code.emit(Instruction::LdaUndefined);
+        let result_register = self.allocate_register()?;
+        self.code.emit(Instruction::Star(result_register));
+        let step = self.allocate_register()?;
+        let variable = self.iteration_variable(head_binding, RegisterType::Unknown)?;
+        let head_global = match head_binding {
+            ForInHead::Global { name } => {
+                let units: Vec<u16> = name.encode_utf16().collect();
+                Some(self.string_constant(&units)?)
+            }
+            _ => None,
+        };
+        let head_pattern = match head_binding {
+            ForInHead::Pattern { pattern, .. } => Some(pattern),
+            _ => None,
+        };
+        let head_target = match head_binding {
+            ForInHead::Target(target) => Some(target),
+            _ => None,
+        };
+
+        let mut bindings_at_head = self.bindings.clone();
+        infer_register_var_types_to_fixed_point(
+            body,
+            &mut bindings_at_head,
+            self.loop_head_types != RegisterLoopHead::Declared,
+        )?;
+        self.bindings = bindings_at_head.clone();
+
+        let head = self.code.instructions.len();
+        let step_slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
+        self.code.emit(Instruction::CallMethod {
+            receiver: iterator,
+            func: next,
+            arg_start: next,
+            arg_count: 0,
+            slot: step_slot,
+        });
+        // 14.7.5.7 step 3.e.ii waits for the step and step 3.e.iii asks the
+        // answer for an Object.
+        self.code.emit(Instruction::Await);
+        self.code
+            .emit(Instruction::Require(RequireKind::IteratorResult));
+        self.code.emit(Instruction::Star(step));
+        let done_name = self.string_constant(&"done".encode_utf16().collect::<Vec<_>>())?;
+        let done_slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetNamed {
+            obj: step,
+            name: done_name,
+            slot: done_slot,
+        });
+        let exit = self.code.emit(Instruction::JumpIfTrue(0));
+        let value_name = self.string_constant(&"value".encode_utf16().collect::<Vec<_>>())?;
+        let value_slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetNamed {
+            obj: step,
+            name: value_name,
+            slot: value_slot,
+        });
+        let enter = self.code.emit(Instruction::Jump(0));
+        self.open_iterators.push((iterator, step, true));
+        let flow = self.lower_iteration_body(
+            body,
+            IterationHead {
+                head,
+                enter,
+                exit,
+                variable,
+                global: head_global,
+                pattern: head_pattern,
+                target: head_target,
+                result: result_register,
+                source: None,
+                guarded_layout: None,
+                close: Some((iterator, step, true)),
+            },
+            &bindings_at_head,
+        );
+        self.open_iterators.pop();
+        let flow = flow?;
+        self.bindings = bindings_at_head;
+        self.close_iteration_variable(head_binding, variable, RegisterType::Unknown)?;
+        self.release_register(step)?;
+        self.release_register(result_register)?;
+        self.release_register(next)?;
         self.release_register(iterator)?;
         self.release_register(method)?;
         self.release_register(iterable)?;
@@ -8386,8 +8578,8 @@ impl RegisterLowerer {
         }
         let value = self.allocate_register()?;
         self.code.emit(Instruction::Star(value));
-        for (iterator, scratch) in self.open_iterators.clone().into_iter().rev() {
-            self.lower_iterator_close(iterator, scratch)?;
+        for (iterator, scratch, awaited) in self.open_iterators.clone().into_iter().rev() {
+            self.lower_iterator_close(iterator, scratch, awaited)?;
         }
         self.code.emit(Instruction::Ldar(value));
         self.release_register(value)?;
@@ -8400,6 +8592,7 @@ impl RegisterLowerer {
         &mut self,
         iterator: crate::engine::bytecode::Reg,
         scratch: crate::engine::bytecode::Reg,
+        awaited: bool,
     ) -> Option<()> {
         use crate::engine::bytecode::Instruction;
         let return_name = self.string_constant(&"return".encode_utf16().collect::<Vec<_>>())?;
@@ -8422,6 +8615,13 @@ impl RegisterLowerer {
             arg_count: 0,
             slot: close_slot,
         });
+        // 7.4.11 waits for what `return` answered and asks it for an Object.
+        if awaited {
+            self.code.emit(Instruction::Await);
+            self.code.emit(Instruction::Require(
+                crate::engine::bytecode::RequireKind::IteratorResult,
+            ));
+        }
         let after = self.code.instructions.len();
         self.patch_jump(skip, after)?;
         Some(())
@@ -8514,12 +8714,19 @@ impl RegisterLowerer {
         target: Option<&parser::AssignmentTarget>,
         object: &Expr,
         body: &Stmt,
+        awaited: bool,
     ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         // 14.7.5 makes one binding per iteration for a lexical head and writes
         // the one the declaration made for a `var` head, which is the same
         // difference a `for`-`in` has.
         let head_binding = self.for_in_head_binding(binding, target, body)?;
+        // 14.7.5.7 walks the async iterator of 7.4.3 and waits for each step,
+        // which no Array fast path stands in for.
+        if awaited {
+            self.lower(object)?;
+            return self.lower_async_for_of(head_binding, body);
+        }
         let object_type = self.lower(object)?;
         // An Array is stepped by `IteratorNext`, which needs no call. Every
         // other iterable is walked by the protocol of 7.4 itself, which is
@@ -9810,6 +10017,7 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // 27.1.2.1 answers the receiver, whose layout the call site knows and
         // this table does not.
         | crate::engine::realm::Intrinsic::IteratorPrototypeIterator
+        | crate::engine::realm::Intrinsic::AsyncIteratorPrototypeAsyncIterator
         | crate::engine::realm::Intrinsic::ArrayPrototypeShift
         | crate::engine::realm::Intrinsic::ArrayPrototypeSplice
         | crate::engine::realm::Intrinsic::ArrayPrototypeFill
@@ -9908,6 +10116,12 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::AsyncGeneratorPrototypeNext
         | crate::engine::realm::Intrinsic::AsyncGeneratorPrototypeReturn
         | crate::engine::realm::Intrinsic::AsyncGeneratorPrototypeThrow
+        // 27.1.4.2 answers a promise of its own, which no Script names.
+        | crate::engine::realm::Intrinsic::AsyncFromSyncIteratorPrototypeNext
+        | crate::engine::realm::Intrinsic::AsyncFromSyncIteratorPrototypeReturn
+        | crate::engine::realm::Intrinsic::AsyncFromSyncIteratorPrototypeThrow
+        | crate::engine::realm::Intrinsic::AsyncFromSyncUnwrap
+        | crate::engine::realm::Intrinsic::AsyncFromSyncCloseIterator
         | crate::engine::realm::Intrinsic::GeneratorPrototypeNext
         | crate::engine::realm::Intrinsic::GeneratorPrototypeReturn
         | crate::engine::realm::Intrinsic::GeneratorPrototypeThrow
@@ -10713,6 +10927,7 @@ fn register_scoped_statement_writes_names(
             target,
             object,
             body,
+            ..
         } => {
             // A `var` head writes its binding once per iteration; a lexical
             // head makes one of its own and writes nothing outside the loop.
@@ -11748,6 +11963,7 @@ fn register_scoped_statement_references(
             target,
             object,
             body,
+            ..
         } => {
             // 14.7.5.4: the head's declaration binds only in the loop.
             register_expression_references(object, names, nested_free_names)?;
@@ -12017,6 +12233,7 @@ const fn statement_refusal(statement: &Stmt) -> &'static str {
         Stmt::For(..) => "a for statement",
         Stmt::Switch(..) => "a switch statement",
         Stmt::ForIn { .. } => "a for-in statement",
+        Stmt::ForOf { awaited: true, .. } => "a for-await-of statement",
         Stmt::ForOf { .. } => "a for-of statement",
         Stmt::Break(_) => "break",
         Stmt::Continue(_) => "continue",
@@ -12682,6 +12899,15 @@ impl Compiler {
         Error::Unsupported { feature }
     }
 
+    /// 14.7.5.7 waits for each step of an async iterator, which this backend
+    /// has no frame that leaves and comes back for.
+    const fn refuse_async_iteration(awaited: bool) -> Result<(), Error> {
+        if awaited {
+            return Err(Self::backend_gap("a for-await-of statement"));
+        }
+        Ok(())
+    }
+
     fn statement(&mut self, stmt: &Stmt) -> Result<(), Error> {
         match stmt {
             Stmt::ForOf {
@@ -12689,7 +12915,11 @@ impl Compiler {
                 target,
                 object,
                 body,
-            } => self.for_of(binding.as_ref(), target.as_ref(), object, body)?,
+                awaited,
+            } => {
+                Self::refuse_async_iteration(*awaited)?;
+                self.for_of(binding.as_ref(), target.as_ref(), object, body)?;
+            }
             Stmt::Switch(value, clauses) => self.switch_statement(value, clauses)?,
             Stmt::ForIn {
                 binding,
@@ -12707,9 +12937,7 @@ impl Compiler {
                 finally,
             } => self.try_statement(body, catch.as_ref(), finally.as_deref())?,
             Stmt::Var(bindings) => self.var_statement(bindings)?,
-            Stmt::Return(value) => {
-                self.return_value(value.as_ref())?;
-            }
+            Stmt::Return(value) => self.return_value(value.as_ref())?,
             Stmt::Empty | Stmt::Function(_, _) => {}
             Stmt::Expr(expr) => {
                 self.expression(expr)?;
@@ -12721,9 +12949,7 @@ impl Compiler {
             Stmt::Labelled(..) => return Err(Self::backend_gap("labelled statements")),
             // 15.7.1: the stack backend has no field of a class.
             Stmt::Field(..) => return Err(Self::backend_gap("class fields")),
-            Stmt::Declare(bindings) => {
-                self.initialize_bindings(bindings)?;
-            }
+            Stmt::Declare(bindings) => self.initialize_bindings(bindings)?,
             Stmt::If(cond, yes, no) => {
                 self.emit(Op::Constant(Value::Undefined))?;
                 self.emit(Op::Result)?;

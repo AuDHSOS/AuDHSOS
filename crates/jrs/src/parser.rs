@@ -367,6 +367,9 @@ pub(crate) enum Stmt {
         target: Option<AssignmentTarget>,
         object: Expr,
         body: Box<Stmt>,
+        /// `for await` of 14.7.5.1, which walks the async iterator of 7.4.3
+        /// and awaits each step.
+        awaited: bool,
     },
     /// `break` of 14.9, which names a label where it leaves a statement that
     /// is not the innermost breakable one.
@@ -768,8 +771,14 @@ impl Parser {
             return Ok(Stmt::DoWhile(Box::new(body), condition));
         }
         if self.eat("for") {
-            if self.is("await") {
-                return Err(Self::unsupported("async iteration"));
+            // 14.7.5.1: `for await` stands where `await` stands, and it takes
+            // the `of` form alone.
+            let awaited = self.is("await");
+            if awaited {
+                if !self.async_context {
+                    return Err(self.error("for await outside async function"));
+                }
+                self.at = self.at.saturating_add(1);
             }
             self.need("(")?;
             let declaration = self.is("let") || self.is("const") || self.is("var");
@@ -777,7 +786,7 @@ impl Parser {
                 match self.with_in(false, Self::for_declaration)? {
                     ForDeclaration::Classic(statement) => *statement,
                     ForDeclaration::InOf(pattern, kind) => {
-                        return self.for_in(Some((pattern, kind)), None);
+                        return self.for_in(Some((pattern, kind)), None, awaited);
                     }
                 }
             } else if self.is(";") {
@@ -789,13 +798,16 @@ impl Parser {
                     AssignmentTarget::Reference(self.with_in(false, Self::sequence)?)
                 };
                 if self.is("in") || self.is("of") {
-                    return self.for_in(None, Some(target));
+                    return self.for_in(None, Some(target), awaited);
                 }
                 let AssignmentTarget::Reference(target) = target else {
                     return Err(self.error("destructuring pattern requires in or of"));
                 };
                 Stmt::Expr(target)
             };
+            if awaited {
+                return Err(self.error("for await takes the of form alone"));
+            }
             self.need(";")?;
             let cond = if self.is(";") {
                 None
@@ -962,6 +974,7 @@ impl Parser {
         &mut self,
         binding: Option<(BindingPattern, Option<bool>)>,
         target: Option<AssignmentTarget>,
+        awaited: bool,
     ) -> Result<Stmt, Error> {
         if let Some(AssignmentTarget::Reference(target)) = &target {
             if let Some(name) = target.reference_name() {
@@ -972,6 +985,9 @@ impl Parser {
         }
         let of = self.eat("of");
         if !of {
+            if awaited {
+                return Err(self.error("for await takes the of form alone"));
+            }
             self.need("in")?;
         }
         let object = if of {
@@ -989,6 +1005,7 @@ impl Parser {
                 target,
                 object,
                 body: Box::new(body),
+                awaited,
             });
         }
         Ok(Stmt::ForIn {

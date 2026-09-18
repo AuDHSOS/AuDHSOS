@@ -403,6 +403,15 @@ pub enum Resume {
         /// Root holding the Generator whose body ran.
         state: Root,
     },
+    /// 27.1.4.2 called a method of the sync iterator a wrapper of 27.1.4.1
+    /// holds, and the answer is the result 27.1.4.4 reads.
+    AsyncFromSync {
+        /// Root holding the record: the capability, the sync iterator, the
+        /// value the call was given, how many arguments it passed, whether
+        /// the rejection closes the iterator, and the three the continuation
+        /// keeps between its allocations.
+        state: Root,
+    },
     /// 27.6.1.2 took the body of an `AsyncGenerator` back, and the answer is
     /// the promise of the request the call made.
     AsyncGeneratorStep {
@@ -830,7 +839,10 @@ impl Resume {
     /// Whether a value thrown out of this frame stops here instead of looking
     /// for a handler of the caller.
     const fn catches(self) -> bool {
-        matches!(self, Self::Executor { .. } | Self::Job { .. })
+        matches!(
+            self,
+            Self::Executor { .. } | Self::Job { .. } | Self::AsyncFromSync { .. }
+        )
     }
 }
 
@@ -2303,6 +2315,15 @@ impl RegisterVM {
             };
             let count = if walk { 3 } else { 1 };
             self.place_arguments(next_frame, callee, arguments.get(..count).unwrap_or(&[]))?;
+        } else if let Some(Resume::AsyncFromSync { state }) = call.resume {
+            // 27.1.4.2.1 step 5 passes the value where the call had one and
+            // nothing where it had none.
+            let record = heap
+                .root_value(state)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            if promise::slot(heap, record, 3).as_smi().unwrap_or(0) > 0 {
+                self.place_arguments(next_frame, callee, &[promise::slot(heap, record, 2)])?;
+            }
         } else if let Some(Resume::Iteration { state }) = call.resume {
             self.place_arguments(next_frame, callee, &Self::iteration_arguments(state, heap)?)?;
         } else {
@@ -2602,7 +2623,12 @@ impl RegisterVM {
             | Intrinsic::GeneratorPrototypeThrow
             | Intrinsic::AsyncGeneratorPrototypeNext
             | Intrinsic::AsyncGeneratorPrototypeReturn
-            | Intrinsic::AsyncGeneratorPrototypeThrow => Err(VMError::InvalidFeedbackVector),
+            | Intrinsic::AsyncGeneratorPrototypeThrow
+            | Intrinsic::AsyncFromSyncIteratorPrototypeNext
+            | Intrinsic::AsyncFromSyncIteratorPrototypeReturn
+            | Intrinsic::AsyncFromSyncIteratorPrototypeThrow
+            | Intrinsic::AsyncFromSyncUnwrap
+            | Intrinsic::AsyncFromSyncCloseIterator => Err(VMError::InvalidFeedbackVector),
             // 20.5.3.4 joins the `name` and the `message` the Error holds.
             Intrinsic::ErrorPrototypeToString => self.error_text(call.receiver, heap, realm),
             // 20.2.3 accepts any argument and answers undefined.
@@ -2701,7 +2727,9 @@ impl RegisterVM {
             }
             // 27.1.2.1, 23.1.2.5 and 22.2.5.2 answer the value they were
             // called on.
-            Intrinsic::IteratorPrototypeIterator | Intrinsic::SpeciesGetter => Ok(call.receiver),
+            Intrinsic::IteratorPrototypeIterator
+            | Intrinsic::AsyncIteratorPrototypeAsyncIterator
+            | Intrinsic::SpeciesGetter => Ok(call.receiver),
             // 23.1.2.3 makes an Array of the arguments it was given.
             Intrinsic::ArrayOf => {
                 let mut values = Vec::new();
@@ -4866,6 +4894,23 @@ impl RegisterVM {
                 VALUE_UNDEFINED,
                 VALUE_UNDEFINED,
                 IteratorWalkTaker::Entries { object: answer },
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
+        // 27.1.4.2 calls a method of the sync iterator it wraps, which is a
+        // frame this call pushes, and answers a promise of its own.
+        if matches!(
+            intrinsic,
+            Intrinsic::AsyncFromSyncIteratorPrototypeNext
+                | Intrinsic::AsyncFromSyncIteratorPrototypeReturn
+                | Intrinsic::AsyncFromSyncIteratorPrototypeThrow
+        ) {
+            return self.begin_async_from_sync_step(
+                intrinsic,
                 call,
                 units,
                 active_feedback,
@@ -11932,6 +11977,7 @@ impl RegisterVM {
             | ObjectKind::Continuation { .. }
             | ObjectKind::Generator { .. }
             | ObjectKind::AsyncGenerator { .. }
+            | ObjectKind::AsyncFromSyncIterator { .. }
             | ObjectKind::Accessor { .. }
             | ObjectKind::RegExp { .. }
             // 27.2.5.5 tags a Promise through @@toStringTag, and 24.1.3.13 and
@@ -12848,6 +12894,7 @@ impl RegisterVM {
                 // 27.6.1.5 tags an AsyncGenerator.
                 | ObjectKind::Generator { .. }
                 | ObjectKind::AsyncGenerator { .. }
+                | ObjectKind::AsyncFromSyncIterator { .. }
                 | ObjectKind::DataView { .. }
                 | ObjectKind::TypedArray { .. }
                 | ObjectKind::CollectionIterator { .. }
@@ -19647,6 +19694,238 @@ impl RegisterVM {
         entered
     }
 
+    /// 27.1.4.1: the object whose `next` reads through a sync iterator and
+    /// answers a promise.
+    fn create_async_from_sync_iterator(
+        iterator: Value,
+        next: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let prototype = realm.async_from_sync_iterator_prototype(heap)?;
+        let object = heap.allocate_object(heap.shapes.root_shape(), prototype)?;
+        heap.set_object_kind(object, ObjectKind::AsyncFromSyncIterator { iterator, next })?;
+        Ok(Value::from_object(object))
+    }
+
+    /// 27.1.4.2: `next`, `return` and `throw` of the wrapper, which call the
+    /// method of the sync iterator and answer a promise of their own.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::TypeError`] for a receiver that is no wrapper.
+    fn begin_async_from_sync_step(
+        &mut self,
+        intrinsic: Intrinsic,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let object = call.receiver.as_object().ok_or(VMError::TypeError)?;
+        let Some(&ObjectKind::AsyncFromSyncIterator { iterator, next }) =
+            heap.get_object(object).map(|entry| &entry.kind)
+        else {
+            return Err(VMError::TypeError);
+        };
+        let sent = self.call_argument(&call, 0, heap)?;
+        let capability = promise::capability(heap, realm)?;
+        let method = if intrinsic == Intrinsic::AsyncFromSyncIteratorPrototypeNext {
+            next
+        } else {
+            let throwing = intrinsic == Intrinsic::AsyncFromSyncIteratorPrototypeThrow;
+            let name = if throwing { "throw" } else { "return" };
+            let key = PropertyKey::String(heap.strings.intern(name)?);
+            let target = iterator.as_object().ok_or(VMError::TypeError)?;
+            let found = match heap.lookup_named(target, key)? {
+                Some(found) => Self::plain_value(found)?,
+                None => VALUE_UNDEFINED,
+            };
+            if found.is_undefined() || found.is_null() {
+                // 27.1.4.2.3 step 5 closes the sync iterator before it
+                // rejects, which is a call this native has no frame for.
+                if throwing {
+                    return Err(VMError::Unsupported(
+                        "a throw of a sync iterator that carries none",
+                    ));
+                }
+                // 27.1.4.2.2 step 5.b answers `{ value, done: true }` at once.
+                let result = Self::iterator_result(None, heap, realm)?;
+                let record = result.as_object().ok_or(VMError::TypeError)?;
+                let key = PropertyKey::String(heap.strings.intern("value")?);
+                heap.define_own_named(record, key, sent, PropertyFlags::ordinary_data())?;
+                let resolve = promise::slot(heap, capability, promise::CAPABILITY_RESOLVE);
+                self.settle_through(resolve, result, false, heap, realm)?;
+                self.acc = promise::slot(heap, capability, promise::CAPABILITY_PROMISE);
+                return Ok(None);
+            }
+            found
+        };
+        // 27.1.4.4 step 7 closes the iterator for `next` alone; a `return`
+        // and a `throw` pass false.
+        let close = intrinsic == Intrinsic::AsyncFromSyncIteratorPrototypeNext;
+        let passed = call.arg_count.min(1);
+        let record = promise::record(
+            heap,
+            realm,
+            &[
+                capability,
+                iterator,
+                sent,
+                Value::from_smi(i32::from(passed)),
+                Value::from_bool(close),
+                VALUE_UNDEFINED,
+                VALUE_UNDEFINED,
+                VALUE_UNDEFINED,
+                VALUE_UNDEFINED,
+            ],
+        )?;
+        // The record outlives the frame the method opens, so it is a root of
+        // a scope of its own, which the answer leaves.
+        heap.enter_scope();
+        let state = heap.push_root(record)?;
+        let call = Call {
+            receiver: iterator,
+            arg_count: passed,
+            arg_start: Reg(0),
+            resume: Some(Resume::AsyncFromSync { state }),
+            construct: None,
+            ..call
+        };
+        match self.enter_call_value(method, units, active_feedback, heap, realm, call) {
+            Ok(Some(code_id)) => Ok(Some(code_id)),
+            // A native method answered at once, so no frame carries the
+            // continuation back.
+            Ok(None) => {
+                self.finish_async_from_sync(state, heap, realm)?;
+                Ok(None)
+            }
+            // Step 7 rejects the promise with what the method threw.
+            Err(VMError::Thrown(value, _)) => {
+                let record = heap.root_value(state).unwrap_or(VALUE_UNDEFINED);
+                let capability = promise::slot(heap, record, 0);
+                heap.exit_scope();
+                let reject = promise::slot(heap, capability, promise::CAPABILITY_REJECT);
+                self.settle_through(reject, value, true, heap, realm)?;
+                self.acc = promise::slot(heap, capability, promise::CAPABILITY_PROMISE);
+                Ok(None)
+            }
+            Err(error) => {
+                heap.exit_scope();
+                Err(error)
+            }
+        }
+    }
+
+    /// 27.1.4.4: the result the sync iterator answered becomes the answer of
+    /// the promise, with its value awaited.
+    fn finish_async_from_sync(
+        &mut self,
+        state: Root,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let result = self.acc;
+        let outcome = self.async_from_sync_continuation(state, result, heap, realm);
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let capability = promise::slot(heap, record, 0);
+        heap.exit_scope();
+        match outcome {
+            Ok(()) => {}
+            // Steps 3, 5 and 8 reject the promise rather than throwing.
+            Err(VMError::Thrown(value, _)) => {
+                let reject = promise::slot(heap, capability, promise::CAPABILITY_REJECT);
+                self.settle_through(reject, value, true, heap, realm)?;
+            }
+            Err(error) => return Err(error),
+        }
+        self.acc = promise::slot(heap, capability, promise::CAPABILITY_PROMISE);
+        Ok(())
+    }
+
+    /// Steps 2 to 14 of 27.1.4.4, which read the result and chain the promise
+    /// of its value to the capability the call answered.
+    fn async_from_sync_continuation(
+        &self,
+        state: Root,
+        result: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        // 7.4.4 step 4: a result that is no Object is a TypeError.
+        let Some(object) = result.as_object() else {
+            return Err(type_error(heap, realm, "the result of a step is no Object"));
+        };
+        // Step 2 reads `done` before step 4 reads `value`.
+        let key = PropertyKey::String(heap.strings.intern("done")?);
+        let done = match heap.lookup_named(object, key)? {
+            Some(found) => Self::plain_value(found)?,
+            None => VALUE_UNDEFINED,
+        };
+        let done = Self::to_boolean(done, heap)?;
+        let key = PropertyKey::String(heap.strings.intern("value")?);
+        let value = match heap.lookup_named(object, key)? {
+            Some(found) => Self::plain_value(found)?,
+            None => VALUE_UNDEFINED,
+        };
+        // Step 6 makes a promise of this Realm out of the value.
+        let wrapper = self.promise_of(value, heap, realm)?;
+        // Steps 10 and 13 make the two handlers, each closing over what the
+        // steps above read.
+        let unwrap = promise::element_function(
+            heap,
+            realm,
+            Intrinsic::AsyncFromSyncUnwrap,
+            Value::from_bool(done),
+            0,
+        )?;
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let close = promise::slot(heap, record, 4) == VALUE_TRUE;
+        let on_rejected = if done || !close {
+            VALUE_UNDEFINED
+        } else {
+            let iterator = promise::slot(heap, record, 1);
+            promise::element_function(
+                heap,
+                realm,
+                Intrinsic::AsyncFromSyncCloseIterator,
+                iterator,
+                0,
+            )?
+        };
+        let capability = promise::slot(heap, record, 0);
+        self.perform_then(wrapper, unwrap, on_rejected, capability, heap, realm)
+    }
+
+    /// `PromiseResolve` of 27.2.4.7.1 with `%Promise%`.
+    fn promise_of(
+        &self,
+        value: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if promise::state_of(value, heap).is_some() {
+            let object = value.as_object().ok_or(VMError::TypeError)?;
+            let key = PropertyKey::String(heap.strings.intern("constructor")?);
+            let constructor = match heap.lookup_named(object, key)? {
+                Some(found) => Self::plain_value(found)?,
+                None => VALUE_UNDEFINED,
+            };
+            if Self::is_intrinsic(constructor, Intrinsic::PromiseConstructor, heap) {
+                return Ok(value);
+            }
+        }
+        let capability = promise::capability(heap, realm)?;
+        let resolve = promise::slot(heap, capability, promise::CAPABILITY_RESOLVE);
+        self.settle_through(resolve, value, false, heap, realm)?;
+        Ok(promise::slot(heap, capability, promise::CAPABILITY_PROMISE))
+    }
+
     /// 27.6.3.8: the request at the front of the queue takes what the body
     /// yielded.
     ///
@@ -20284,6 +20563,37 @@ impl RegisterVM {
                 self.settle_element(intrinsic, function, first, heap, realm)?;
                 Ok(VALUE_UNDEFINED)
             }
+            // 27.1.4.4 step 9 answers the result object of 7.4.10 with the
+            // `done` its step 2 read and the value the promise carried.
+            Intrinsic::AsyncFromSyncUnwrap => {
+                let state = Self::native_state(function, heap).ok_or(VMError::TypeError)?;
+                let done = promise::slot(heap, state, 0) == VALUE_TRUE;
+                let result = Self::iterator_result(Some(first), heap, realm)?;
+                if done {
+                    let object = result.as_object().ok_or(VMError::TypeError)?;
+                    let key = PropertyKey::String(heap.strings.intern("done")?);
+                    heap.define_own_named(object, key, VALUE_TRUE, PropertyFlags::ordinary_data())?;
+                }
+                Ok(result)
+            }
+            // 27.1.4.4 step 13 closes the sync iterator, which 7.4.9 does by
+            // rethrowing where the iterator carries no `return`.
+            Intrinsic::AsyncFromSyncCloseIterator => {
+                let state = Self::native_state(function, heap).ok_or(VMError::TypeError)?;
+                let iterator = promise::slot(heap, state, 0);
+                let object = iterator.as_object().ok_or(VMError::TypeError)?;
+                let key = PropertyKey::String(heap.strings.intern("return")?);
+                let method = match heap.lookup_named(object, key)? {
+                    Some(found) => Self::plain_value(found)?,
+                    None => VALUE_UNDEFINED,
+                };
+                if method.is_undefined() || method.is_null() {
+                    return Err(VMError::Thrown(first, None));
+                }
+                Err(VMError::Unsupported(
+                    "the close of a sync iterator whose value rejected",
+                ))
+            }
             _ => Err(gap),
         }
     }
@@ -20702,6 +21012,17 @@ impl RegisterVM {
             if matches!(frame.resume, Some(Resume::Job { .. })) {
                 self.frames.clear();
                 return Err(VMError::Thrown(value, native));
+            }
+            // 27.1.4.2.1 step 7: a method of the sync iterator that throws
+            // rejects the promise the wrapper answered.
+            if let Some(Resume::AsyncFromSync { state }) = frame.resume {
+                let record = heap.root_value(state).unwrap_or(VALUE_UNDEFINED);
+                let capability = promise::slot(heap, record, 0);
+                heap.exit_scope();
+                let reject = promise::slot(heap, capability, promise::CAPABILITY_REJECT);
+                self.settle_through(reject, value, true, heap, realm)?;
+                self.acc = promise::slot(heap, capability, promise::CAPABILITY_PROMISE);
+                return Ok((frame.return_pc, frame.caller_code_id));
             }
             if let Some(Resume::Executor { promise, state, .. }) =
                 frame.resume.filter(|resume| resume.catches())
@@ -22704,15 +23025,38 @@ impl RegisterVM {
                     self.acc = delete_reference(target, name, index, strict, heap, realm)?;
                 }
                 Instruction::Require(kind) => {
-                    if self.acc.is_undefined() || self.acc.is_null() {
+                    let refused = match kind {
+                        super::bytecode::RequireKind::ObjectCoercible
+                        | super::bytecode::RequireKind::Iterable => {
+                            self.acc.is_undefined() || self.acc.is_null()
+                        }
+                        // 7.4.2 step 2 and 7.4.4 step 4 ask for an Object,
+                        // which no primitive is.
+                        super::bytecode::RequireKind::Iterator
+                        | super::bytecode::RequireKind::IteratorResult => {
+                            self.acc.as_object().is_none()
+                        }
+                    };
+                    if refused {
                         let message = match kind {
                             super::bytecode::RequireKind::ObjectCoercible => {
                                 "cannot destructure null or undefined"
                             }
                             super::bytecode::RequireKind::Iterable => "value is not iterable",
+                            super::bytecode::RequireKind::Iterator => {
+                                "the iterator of 7.4.2 is no Object"
+                            }
+                            super::bytecode::RequireKind::IteratorResult => {
+                                "the result of a step is no Object"
+                            }
                         };
                         return Err(type_error(heap, realm, message));
                     }
+                }
+                Instruction::AsyncFromSync { iterator, next } => {
+                    let iterator = self.read_reg(iterator)?;
+                    let next = self.read_reg(next)?;
+                    self.acc = Self::create_async_from_sync_iterator(iterator, next, heap, realm)?;
                 }
                 Instruction::ThisBinding { register } => {
                     let value = self.read_reg(register)?;
@@ -23643,6 +23987,7 @@ impl RegisterVM {
                                 | Resume::Job { .. }
                                 | Resume::GeneratorStep { .. }
                                 | Resume::AsyncGeneratorStep { .. }
+                                | Resume::AsyncFromSync { .. }
                                 | Resume::Setter { .. } => Reg(0),
                             };
                             let call = Call {
@@ -23697,6 +24042,12 @@ impl RegisterVM {
                                     heap.exit_scope();
                                     self.acc =
                                         promise::slot(heap, held, promise::CAPABILITY_PROMISE);
+                                    None
+                                }
+                                // 27.1.4.4 answers the promise of the call,
+                                // with the value of the result awaited.
+                                Resume::AsyncFromSync { state } => {
+                                    self.finish_async_from_sync(state, heap, realm)?;
                                     None
                                 }
                                 Resume::IteratorElement { state } => {

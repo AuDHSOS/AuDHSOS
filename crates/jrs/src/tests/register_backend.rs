@@ -8415,6 +8415,56 @@ fn an_async_generator_of_27_6_answers_the_requests_of_its_queue() -> Result<(), 
 }
 
 #[test]
+fn a_for_await_of_14_7_5_walks_the_async_iterator_of_7_4_3() -> Result<(), Error> {
+    for (source, answer) in [
+        // 7.4.3 step 1.b wraps the sync iterator of an Array in the object of
+        // 27.1.4.1, whose `next` answers a promise.
+        (
+            "var l=[];async function f(){for await(var x of [1,2,3])l.push(x)}f();0",
+            "1|2|3",
+        ),
+        // 27.1.4.4 step 6 waits for the value of a sync step, so a promise in
+        // the Array arrives resolved.
+        (
+            "var l=[];async function f(){for await(var x of [Promise.resolve(7),8])l.push(x)}f();0",
+            "7|8",
+        ),
+        // A value that rejects leaves the loop through the `await` of step
+        // 3.e.ii.
+        (
+            "var l=[];async function f(){try{for await(var x of [Promise.reject('b')])l.push(x)}catch(e){l.push('c'+e)}}f();0",
+            "cb",
+        ),
+        // An async generator carries `@@asyncIterator`, which step 1.a reads
+        // before `@@iterator`.
+        (
+            "var l=[];async function* g(){yield 'a';yield 'b'}async function f(){for await(var x of g())l.push(x)}f();0",
+            "a|b",
+        ),
+        // 7.4.4 step 4 refuses a step that answered no Object.
+        (
+            "var l=[];var i={};i[Symbol.asyncIterator]=function(){return{next:function(){return 1}}};async function f(){try{for await(var x of i)l.push(x)}catch(e){l.push(e instanceof TypeError)}}f();0",
+            "true",
+        ),
+        // 7.4.11 closes the iterator a `break` left before its end.
+        (
+            "var l=[];var i={};i[Symbol.iterator]=function(){var n=0;return{next:function(){n++;return{value:n,done:false}},return:function(){l.push('r');return{}}}};async function f(){for await(var x of i){l.push(x);if(x===2)break}}f();0",
+            "1|2|r",
+        ),
+    ] {
+        let mut host = SilentHost;
+        let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+        realm.evaluate(source)?;
+        assert_eq!(
+            realm.evaluate("l.join('|')")?,
+            Value::string(answer),
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn concat_spreads_what_23_1_3_1_1_says_it_spreads() -> Result<(), Error> {
     for source in [
         // `@@isConcatSpreadable` decides it where the object has one.
