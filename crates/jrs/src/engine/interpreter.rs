@@ -19439,7 +19439,12 @@ impl RegisterVM {
                 // the answer of is a negative value of 21.2.2.2, whose
                 // `2**bits` no limb count this engine holds would carry.
                 if held.keeps_every_bit(bits) {
-                    if !signed && held.is_negative() {
+                    if signed || !held.is_negative() {
+                        return Self::new_bigint(held, heap);
+                    }
+                    // 21.2.2.2 adds `2**bits` to a negative value, so the
+                    // answer is as wide as the call asked for.
+                    if bits > BigIntValue::WIDTH_LIMIT {
                         return Err(raise(
                             heap,
                             realm,
@@ -19447,7 +19452,6 @@ impl RegisterVM {
                             "the width of 21.2.2 is beyond this engine",
                         ));
                     }
-                    return Self::new_bigint(held, heap);
                 }
                 Self::new_bigint(held.as_n(bits, signed), heap)
             }

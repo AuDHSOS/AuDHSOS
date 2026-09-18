@@ -929,10 +929,14 @@ enum ForInHead<'a> {
         /// what makes the environment of an iteration observable.
         captured: bool,
     },
-    /// A `var` head: the one binding the declaration made, in its register.
+    /// A `var` head: the one binding the declaration made, where it stands.
     Var {
+        /// The name the declaration made.
         name: &'a str,
-        register: crate::engine::bytecode::Reg,
+        /// Where that binding stands: a register, or a context slot where a
+        /// nested function reads it.
+        storage: RegisterBindingStorage,
+        /// The type the binding held before the loop.
         declared_type: RegisterType,
     },
     /// A `var` head of a Realm Script, whose binding 16.1.7 made on the
@@ -949,6 +953,17 @@ enum ForInHead<'a> {
     /// A head that declares nothing: 14.7.5.6 step 7.g evaluates the target as
     /// a Reference of its own and writes the value of each step through it.
     Target(&'a parser::AssignmentTarget),
+}
+
+/// Where a head whose binding a nested function reads keeps it.
+#[derive(Clone, Copy)]
+enum IterationScope {
+    /// 14.7.5.7 step 3.e: an environment of its own per iteration, which a
+    /// lexical head makes its binding in.
+    PerIteration(RegisterBinding),
+    /// 14.7.5.6: the one binding the `var` declaration made, which every
+    /// iteration writes.
+    Shared(RegisterBinding),
 }
 
 /// What a `for`-`in` or `for`-`of` head leaves for its body.
@@ -979,7 +994,7 @@ struct IterationHead<'a> {
     guarded_layout: Option<u32>,
     /// The binding of 14.7.5.6 step 7.f, which every iteration makes again:
     /// the step copies the context and writes the value into the slot.
-    scoped: Option<RegisterBinding>,
+    scoped: Option<IterationScope>,
     /// The iterator 7.4.9 closes where a `break` leaves the loop, and a
     /// register the close reads the `return` method into.
     close: Option<(
@@ -8168,9 +8183,6 @@ impl RegisterLowerer {
         let mut nested = BTreeSet::new();
         let mut captured = BTreeSet::new();
         register_statement_references(body, &mut direct, &mut nested, &mut captured)?;
-        if nested.contains(name) {
-            return None;
-        }
         let Some(declared) = self.bindings.get(name).copied() else {
             // 16.1.7 made the binding on the Global Environment Record, so
             // the loop writes it there.
@@ -8182,13 +8194,10 @@ impl RegisterLowerer {
         if !declared.mutability.writable() || declared.stable_function_identity {
             return None;
         }
-        let RegisterBindingStorage::Register(register) = declared.storage else {
-            return None;
-        };
         Some(ForInHead::Var {
             name,
-            register,
-            declared_type: declared.value_type?,
+            storage: declared.storage,
+            declared_type: declared.value_type.unwrap_or(RegisterType::Unknown),
         })
     }
 
@@ -8301,15 +8310,24 @@ impl RegisterLowerer {
     fn scope_the_iteration_binding(
         &mut self,
         head_binding: ForInHead<'_>,
-        scoped: &mut Option<RegisterBinding>,
+        scoped: &mut Option<IterationScope>,
     ) -> Option<()> {
-        let ForInHead::PerIteration {
-            name,
-            captured: true,
-            ..
-        } = head_binding
-        else {
-            return Some(());
+        let name = match head_binding {
+            ForInHead::PerIteration {
+                name,
+                captured: true,
+                ..
+            } => name,
+            // A `var` head writes the one binding the declaration made, and a
+            // context slot is where it stands once a nested function reads it.
+            ForInHead::Var { name, storage, .. } => {
+                if matches!(storage, RegisterBindingStorage::Register(_)) {
+                    return Some(());
+                }
+                *scoped = Some(IterationScope::Shared(*self.bindings.get(name)?));
+                return Some(());
+            }
+            _ => return Some(()),
         };
         // The copy of an iteration carries every slot of the context, so a
         // context that holds anything beside the binding of the head would
@@ -8318,14 +8336,16 @@ impl RegisterLowerer {
             self.refuse("a capture beside the binding of a loop head");
             return None;
         }
-        *scoped = Some(self.capture_binding(name)?);
+        *scoped = Some(IterationScope::PerIteration(self.capture_binding(name)?));
         Some(())
     }
 
     /// Refuses a loop whose body captured anything beside the binding of the
     /// head, which the copy of an iteration would carry with it.
-    fn close_the_iteration_scope(&mut self, scoped: Option<RegisterBinding>) -> Option<()> {
-        if scoped.is_some() && self.code.own_context_slot_count != Some(1) {
+    fn close_the_iteration_scope(&mut self, scoped: Option<IterationScope>) -> Option<()> {
+        if matches!(scoped, Some(IterationScope::PerIteration(_)))
+            && self.code.own_context_slot_count != Some(1)
+        {
             self.refuse("a capture beside the binding of a loop head");
             return None;
         }
@@ -8405,9 +8425,12 @@ impl RegisterLowerer {
             }
             // The declaration already made the binding; the loop only writes
             // it, and inside the body it holds the key.
-            ForInHead::Var { name, register, .. } => {
+            ForInHead::Var { name, storage, .. } => {
                 self.bindings.get_mut(name)?.value_type = Some(RegisterType::String);
-                register
+                match storage {
+                    RegisterBindingStorage::Register(register) => register,
+                    RegisterBindingStorage::Context { .. } => self.allocate_register()?,
+                }
             }
             // The binding is a property of the global object, or the names a
             // pattern binds, and the loop keeps the step in a register of its
@@ -8484,8 +8507,11 @@ impl RegisterLowerer {
             ForInHead::Var {
                 name,
                 declared_type,
-                ..
+                storage,
             } => {
+                if matches!(storage, RegisterBindingStorage::Context { .. }) {
+                    self.release_register(key_register)?;
+                }
                 self.bindings.get_mut(name)?.value_type =
                     Some(declared_type.merge(RegisterType::String));
             }
@@ -8598,11 +8624,18 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Star(loop_head.variable));
         // 14.7.5.6 step 7.f gives the iteration an environment of its own and
         // makes the binding of the head in it, which is where the value the
-        // step produced goes.
-        if let Some(binding) = loop_head.scoped {
-            self.code.emit(Instruction::CopyContext);
-            self.code.emit(Instruction::Ldar(loop_head.variable));
-            self.store_binding_as(binding, true);
+        // step produced goes; a `var` head writes the one binding it has.
+        match loop_head.scoped {
+            Some(IterationScope::PerIteration(binding)) => {
+                self.code.emit(Instruction::CopyContext);
+                self.code.emit(Instruction::Ldar(loop_head.variable));
+                self.store_binding_as(binding, true);
+            }
+            Some(IterationScope::Shared(binding)) => {
+                self.code.emit(Instruction::Ldar(loop_head.variable));
+                self.store_binding_as(binding, false);
+            }
+            None => {}
         }
         // 14.7.5.6 writes the binding the head declared, which for a `var` of
         // a Realm Script is a property of the global object and for a pattern
@@ -9432,9 +9465,12 @@ impl RegisterLowerer {
             }
             // The declaration already made the binding; the loop only writes
             // it, and inside the body it holds the element.
-            ForInHead::Var { name, register, .. } => {
+            ForInHead::Var { name, storage, .. } => {
                 self.bindings.get_mut(name)?.value_type = Some(element_type);
-                Some(register)
+                match storage {
+                    RegisterBindingStorage::Register(register) => Some(register),
+                    RegisterBindingStorage::Context { .. } => self.allocate_register(),
+                }
             }
             // The binding is a property of the global object, or the names a
             // pattern binds, and the loop keeps the element in a register of
@@ -9470,8 +9506,13 @@ impl RegisterLowerer {
             ForInHead::Var {
                 name,
                 declared_type,
-                ..
+                storage,
             } => {
+                // A binding in a context slot took a register of the loop for
+                // the step, which no binding holds after it.
+                if matches!(storage, RegisterBindingStorage::Context { .. }) {
+                    self.release_register(variable)?;
+                }
                 self.bindings.get_mut(name)?.value_type = Some(declared_type.merge(element_type));
             }
             ForInHead::Global { .. } | ForInHead::Target(_) => {
@@ -9569,9 +9610,12 @@ impl RegisterLowerer {
             }
             // The declaration already made the binding; the loop only writes
             // it, and inside the body it holds the element.
-            ForInHead::Var { name, register, .. } => {
+            ForInHead::Var { name, storage, .. } => {
                 self.bindings.get_mut(name)?.value_type = Some(element_type);
-                register
+                match storage {
+                    RegisterBindingStorage::Register(register) => register,
+                    RegisterBindingStorage::Context { .. } => self.allocate_register()?,
+                }
             }
             ForInHead::Global { .. } => self.allocate_register()?,
             ForInHead::Pattern { pattern, lexical } => {
@@ -9646,8 +9690,13 @@ impl RegisterLowerer {
             ForInHead::Var {
                 name,
                 declared_type,
-                ..
+                storage,
             } => {
+                // A binding in a context slot took a register of the loop for
+                // the step, which no binding holds after it.
+                if matches!(storage, RegisterBindingStorage::Context { .. }) {
+                    self.release_register(key_register)?;
+                }
                 self.bindings.get_mut(name)?.value_type = Some(declared_type.merge(element_type));
             }
             // The binding lives on the Global Environment Record, or is the

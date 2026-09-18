@@ -5006,16 +5006,10 @@ fn a_for_in_head_reaches_the_binding_the_declaration_made() -> Result<(), Error>
     differential("let a=[1,2];let s='';for(var i in a){s+=i}s")?;
     // A head the lowering could not name is enumerated at run time.
     differential("let f=function(o){var s='';for(var k in o){s+=k}return s};f([1,2])")?;
-    // A closure holds the binding the head writes, so the body is not lowered.
-    for source in [
-        "var k=9;let g=function(){return k};let o={a:1};for(var k in o){}g()",
-        "var k=9;let g=function(){return k};let o={a:1};for(var k in o){}k",
-    ] {
-        assert!(
-            !compile(source, Limits::default())?.uses_register_backend(),
-            "{source}"
-        );
-    }
+    // A closure holds the one binding the head writes, which stands in a
+    // context slot and carries the last step the loop took.
+    differential("var k=9;let g=function(){return k};let o={a:1};for(var k in o){}g()")?;
+    differential("var k=9;let g=function(){return k};let o={a:1};for(var k in o){}k")?;
     Ok(())
 }
 
@@ -5039,6 +5033,14 @@ fn register_lowering_rejects_for_in_heads_it_cannot_model() -> Result<(), Error>
     differential("let f=[];for(let x of [1,2]){x*=10;f.push(()=>x)}f[0]()+f[1]()")?;
     differential(
         "function g(){let f=[];for(const x of [1,2]){f.push(()=>x)}return f[0]()+f[1]()}g()",
+    )?;
+    // 14.7.5.6 writes the one binding a `var` head declared, which every
+    // closure of the body reads as the step the loop left in it.
+    differential(
+        "function g(){let f=[];for(var x of [1,2]){f.push(()=>x)}return f[0]()+f[1]()}g()",
+    )?;
+    differential(
+        "function g(){let f=[];for(var k in {a:1,b:2}){f.push(()=>k)}return f[0]()+f[1]()}g()",
     )?;
     // A head that shadows a binding of the enclosing scope is not lowered.
     let source = "let x=1;for(const x of [2]){}x";

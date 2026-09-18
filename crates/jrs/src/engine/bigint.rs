@@ -358,13 +358,17 @@ impl BigIntValue {
         self.negate().sub(&Self::from_i64(1))
     }
 
+    /// The widest `BigInt` 21.2.2.2 makes of a negative value, in bits, which
+    /// is what bounds the limbs `as_n` allocates for one.
+    pub const WIDTH_LIMIT: u64 = 1 << 24;
+
     /// Whether a width of 21.2.2 keeps every bit of the value, which is so
     /// for a width above its bit length.
     ///
     /// 21.2.2.1 answers the value itself then, and 21.2.2.2 answers it where
     /// it is not negative; a negative value it adds `2**bits` to.
     #[must_use]
-    pub fn keeps_every_bit(&self, bits: u64) -> bool {
+    pub const fn keeps_every_bit(&self, bits: u64) -> bool {
         bits > (self.limbs.len() as u64).saturating_mul(32)
     }
 
