@@ -601,7 +601,7 @@ nothing wrongly.
 
 The list is the join of the two per-variant runs, without `--summary`:
 
-```
+```text
 ./target/release/jrs --fuel 1000000 --test262 docs/test-ext/test262 --all > stack.txt
 ./target/release/jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all > engine.txt
 ```
