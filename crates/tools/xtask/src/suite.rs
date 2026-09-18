@@ -703,7 +703,14 @@ impl Session {
                 self.held.remove(first);
                 Ok(Vec::new())
             }
-            "exists" => Ok(vec![usize::from(self.held.contains_key(first)).to_string()]),
+            "exists" => Ok(vec![usize::from(self.sized(first).is_some()).to_string()]),
+            // `file size`: the bytes the harness holds under a name,
+            // and minus one where it holds nothing under it.
+            "size" => Ok(vec![
+                self.sized(first)
+                    .map_or(-1, |bytes| i64::try_from(bytes).unwrap_or(i64::MAX))
+                    .to_string(),
+            ]),
             // `sqlite3_complete` reads the text alone, so the
             // connection the request names says nothing about it.
             "complete" => Ok(vec![
@@ -761,11 +768,30 @@ impl Session {
                 Ok(Vec::new())
             }
             "stopped" => {
-                say(&format!("W stopped: {}", first_words(first)));
+                say(&format!("W stopped: {}", first_line(first)));
                 Ok(Vec::new())
             }
             "done" => Ok(Vec::new()),
             other => Err(format!("this harness has no request {other}")),
+        }
+    }
+
+    /// How many bytes the harness holds under `name`: the database
+    /// itself, the log beside it, or the journal beside it.
+    ///
+    /// Nothing where the harness holds no such file, which is what
+    /// `file exists` reads. Writing the database out costs O(n) in its
+    /// pages.
+    fn sized(&self, name: &str) -> Option<usize> {
+        if let Some(writer) = self.held.get(name) {
+            return Some(writer.written().len());
+        }
+        let (base, tail) = name.rsplit_once('-')?;
+        let writer = self.held.get(base)?;
+        match tail {
+            "wal" => writer.log().map(<[u8]>::len),
+            "journal" => writer.journal().map(<[u8]>::len),
+            _ => None,
         }
     }
 
@@ -1532,6 +1558,16 @@ fn narrowed(number: i64) -> i32 {
 fn shape(text: &str, message: String) -> String {
     say(&format!("S {} {message}", first_words(text)));
     message
+}
+
+/// The first line of what a file stopped at, cut to 72 characters,
+/// which names the command the file wanted.
+fn first_line(message: &str) -> String {
+    let line = message.lines().next().unwrap_or_default();
+    match line.char_indices().nth(72) {
+        Some((at, _)) => line.get(..at).unwrap_or_default().to_owned(),
+        None => line.to_owned(),
+    }
 }
 
 /// The first two words of a statement in capitals, which is enough to

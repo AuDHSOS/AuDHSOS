@@ -7,6 +7,18 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- The suite's own tester answers `file size` and `file exists` over a
+  database the harness holds, the log beside it or the journal beside
+  it, which the new `size` request asks for, and `wal_common.tcl` counts
+  the frames of a log from that size. D-293 records it. `wal.test`
+  answers 180 cases where it answered none.
+
+- The suite's own tester runs `do_multiclient_test` with all three
+  connections in this interpreter (D-294), answers rather than raises
+  for the commands that name something this engine holds none of
+  (D-295), and counts a file that stops by the first line of what it
+  stopped at (D-296).
+
 - `db-sqlite` answers `PRAGMA wal_checkpoint`, which writes the pages
   the log holds into the database file and answers how many frames it
   moved; `TRUNCATE` and `RESTART` begin the log again at once and every

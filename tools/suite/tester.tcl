@@ -297,6 +297,23 @@ proc forcecopy {from to} { harness_send copy $from $to }
 proc copy_file {from to} { harness_send copy $from $to }
 proc file_exists {f} { return [lindex [harness_send exists $f] 0] }
 
+# The harness holds the database, the log and the journal, and the
+# machine holds no file of them, so `file size` and `file exists` over
+# one of those names answer out of the harness and every other name
+# reaches TCL's own command.
+if {[info commands ::tcl_file] eq ""} { rename file ::tcl_file }
+proc file {command args} {
+  set name [lindex $args 0]
+  if {$command eq "size"} {
+    set bytes [lindex [harness_send size $name] 0]
+    if {$bytes >= 0} { return $bytes }
+  }
+  if {$command eq "exists"} {
+    if {[lindex [harness_send exists $name] 0]} { return 1 }
+  }
+  return [uplevel 1 [list ::tcl_file $command {*}$args]]
+}
+
 proc reset_db {} {
   catch { db close }
   forcedelete test.db test.db-journal test.db-wal test.db-shm
@@ -444,7 +461,7 @@ proc memdebug_log_sql {args} {}
 # that reads the answer of one of these is refused, because the command
 # raises rather than answering nothing.
 foreach cmd {
-  sqlite3_test_control sqlite3_test_control_pending_byte sqlite3_soft_heap_limit
+  sqlite3_test_control sqlite3_soft_heap_limit
   sqlite3_hard_heap_limit sqlite3_memory_used sqlite3_memory_highwater
   sqlite3_shutdown sqlite3_initialize sqlite3_config sqlite3_db_config
   sqlite3_db_config_lookaside sqlite3_db_status sqlite3_status
@@ -453,14 +470,13 @@ foreach cmd {
   sqlite3_prepare_v2 sqlite3_prepare_v3 sqlite3_finalize sqlite3_step
   sqlite3_column_count sqlite3_errcode sqlite3_errmsg sqlite3_bind_parameter_count
   sqlite3_enable_shared_cache sqlite3_release_memory sqlite3_db_release_memory
-  sqlite3_sourceid sqlite3_libversion sqlite3_libversion_number
   sqlite3_memdebug_vfs_oom_test sqlite3_memdebug_settitle sqlite3_memdebug_fail
   sqlite3_memdebug_pending sqlite3_memdebug_log sqlite3_stmt_status
   testvfs test_syscall test_sqlite3_log optimization_control
   register_wholenumber_module register_echo_module register_tclvar_module
   register_fs_module register_dbstat_vtab register_schema_module
   load_static_extension run_thread_tests test_cli_invocation
-  test_find_cli test_find_sqldiff test_set_config_pagecache
+  test_find_cli test_find_sqldiff
   file_control_chunksize_test file_control_sizehint_test file_control_lockproxy_test
   file_control_persist_wal file_control_powersafe_overwrite file_control_vfsname
   file_control_tempfilename file_control_external_reader
@@ -471,7 +487,7 @@ foreach cmd {
   add_alignment_test_collations add_test_collate add_test_function
   add_test_utf16bin_collate autoinstall_test_functions
   sqlite3_snapshot_get sqlite3_snapshot_open sqlite3_snapshot_free
-  sqlite3_wal_checkpoint_v2 sqlite3_wal_autocheckpoint
+  sqlite3_wal_autocheckpoint
 } {
   proc ::$cmd {args} "error \"this harness has no [set cmd]\""
 }
@@ -500,6 +516,29 @@ proc working_64bit_int {} { return 1 }
 proc wal_is_capable {} { return 1 }
 proc presql {args} {}
 proc set_test_counter {args} { return 0 }
+
+# `test_set_config_pagecache` sizes the page cache the C library keeps,
+# which this engine has none of.
+proc test_set_config_pagecache {args} { return 0 }
+
+# `sqlite3_simulate_device` names the sector size and the properties of
+# the device under the file, which this engine reads none of.
+proc sqlite3_simulate_device {args} { return "" }
+
+# `sqlite3_test_control_pending_byte` moves the byte-range a lock takes,
+# which this engine takes none of.
+proc sqlite3_test_control_pending_byte {args} { return $::sqlite_pending_byte }
+
+# The version this engine writes into every file it makes.
+proc sqlite3_libversion_number {} { return 3053004 }
+proc sqlite3_libversion {} { return "3.53.4" }
+proc sqlite3_sourceid {} { return "3.53.4" }
+
+# `sqlite3_wal_checkpoint_v2 DB MODE ?NAME?`: the pragma of the same
+# name, whose three columns are the three numbers the command answers.
+proc sqlite3_wal_checkpoint_v2 {db {mode passive} args} {
+  return [$db eval "PRAGMA wal_checkpoint = $mode"]
+}
 
 # save_prng_state, restore_prng_state: the state random and randomblob
 # draw from next, which a test holds to draw the same words again.

@@ -52,8 +52,8 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-92 156 cases of 727 files: 79 410 pass, 2673 answer differently and
-10 073 are refused.
+94 195 cases of 744 files: 79 909 pass, 2933 answer differently and
+11 353 are refused.
 
 `--configuration` opens every connection of a run under one of nine
 page-size, encoding and journal-mode settings, which D-275 decides.
@@ -61,11 +61,11 @@ What each answers, over the same files:
 
 | Configuration | Passed | Answered differently | Refused |
 |---------------|-------:|---------------------:|--------:|
-| `utf8-4096-delete` | 79 410 | 2673 | 10 073 |
+| `utf8-4096-delete` | 79 909 | 2933 | 11 353 |
 | `utf16le-4096-delete` | 61 214 | 2392 | 9500 |
 | `utf16be-4096-delete` | 61 229 | 2392 | 9500 |
 | `utf8-512-delete` | 61 073 | 2452 | 9435 |
-| `utf8-1024-delete` | 61 292 | 2637 | 9702 |
+| `utf8-1024-delete` | 79 640 | 3128 | 11 358 |
 | `utf8-65536-delete` | 61 042 | 2358 | 9446 |
 | `utf8-4096-persist` | 61 574 | 2372 | 9504 |
 | `utf8-4096-truncate` | 61 311 | 2370 | 9501 |
@@ -73,8 +73,11 @@ What each answers, over the same files:
 
 The counts move by tens between runs of one configuration, because the
 files the deadline ends are counted with the cases they ran. Only the
-first row is a run after D-286 to D-292; the other eight were measured
-before them and are lower than they would read now.
+first and the fourth rows are runs after D-286 to D-296; the other seven
+were measured before them and are lower than they would read now.
+`testfixture` is built with `SQLITE_DEFAULT_PAGE_SIZE=1024`, which
+`main.mk` line 1784 sets, so the fourth row is the page size the files
+were written for; it scores 269 cases below the first.
 
 One row is behind the others by more than that: `utf8-4096-wal` refuses
 786 more than `utf8-4096-delete`, which a connection in write-ahead
@@ -300,6 +303,8 @@ Size: S.
 4. A file that refuses 5000 cases in a row for the same reason is ended
    there, because a loop whose end a command the harness has none of
    decides runs without bound.
+5. A file that stops is counted by the first line of what it stopped at,
+   cut to 72 characters, which names the command the file wanted.
 
 ### Produces
 
@@ -338,6 +343,17 @@ Size: S.
 5. The limits of `src/sqliteLimit.h` are variables of the tester, each
    this engine's own limit where the engine holds one, so a file that
    reads `$SQLITE_MAX_LENGTH` to skip a case runs.
+6. `file size` and `file exists` over a database the harness holds, the
+   log beside it or the journal beside it answer out of the harness,
+   which the `size` request asks for, and every other name reaches TCL's
+   own `file`.
+7. `do_multiclient_test` runs the round where all three connections
+   stand in this interpreter, because the harness holds one writer per
+   file and as many connections over it as a file opens.
+8. A command that names something this engine holds none of answers
+   rather than raises where the answer changes nothing a case reads:
+   the size of a page cache, the sector under the file, the byte-range a
+   lock takes, and the version of the library.
 
 ### Produces
 
