@@ -1961,16 +1961,24 @@ fn a_delete_takes_the_property_off_the_object() -> Result<(), Error> {
 }
 
 #[test]
-fn a_delete_of_a_global_name_names_the_gap() -> Result<(), Error> {
+fn a_delete_of_a_global_name_asks_the_global_environment_record() -> Result<(), Error> {
     // 13.5.1.2 sends an unresolvable Reference to true and a resolvable one to
-    // the Environment Record it belongs to. A free name belongs to the global
-    // object, which this lowering does not reach.
-    let program = compile("delete zz", Limits::default())?;
-    assert!(!program.uses_register_backend());
+    // the Environment Record it belongs to, which for a free name is the
+    // Global Environment Record of 9.1.1.4.5.
+    differential_scripts(&["delete zz"])?;
+    differential_scripts(&["this.zz=1;delete zz"])?;
+    differential_scripts(&["delete Infinity"])?;
+    differential_scripts(&["let l=1;delete l"])?;
+    differential_scripts(&[
+        "Object.defineProperty(this,'c',{value:1,configurable:true});delete c",
+    ])?;
     // A `var` of a Script is a property of the global object that 16.1.7 makes
     // non-configurable, and every binding of a declaration is one too.
     differential("var q=1;delete q")?;
     differential("let f=function(){var v=1;return delete v};f()")?;
+    // 10.4.4 binds `arguments` in every ordinary function, whatever the body
+    // does with the name.
+    differential("let f=function(){return delete arguments};f()")?;
     Ok(())
 }
 

@@ -25398,6 +25398,28 @@ impl RegisterVM {
                         }
                     };
                 }
+                Instruction::DeleteGlobal(index) => {
+                    let units = active_code
+                        .string_constants
+                        .get(index as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    let key = array_index_units(units);
+                    let name = PropertyKey::String(heap.strings.intern_units(units)?);
+                    let global = realm.global_environment().global_object(heap)?;
+                    // 9.1.1.4.5 step 2 deletes no binding of the Declarative
+                    // Record, step 3 answers the `[[Delete]]` of the global
+                    // object, and step 4 answers true for a name it has not.
+                    self.acc = if realm
+                        .global_environment()
+                        .has_lexical_declaration(heap, name)?
+                    {
+                        VALUE_FALSE
+                    } else if heap.own_named_flags(global, name)?.is_none() {
+                        VALUE_TRUE
+                    } else {
+                        Value::from_bool(delete_property(global, name, key, heap)?)
+                    };
+                }
                 Instruction::LdaGlobalThis => {
                     // 9.1.1.4.11 answers [[GlobalThisValue]], which 9.4.2 gives
                     // `this` wherever no function bound one.

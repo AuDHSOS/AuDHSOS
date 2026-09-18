@@ -5515,10 +5515,22 @@ impl RegisterLowerer {
             return Some(RegisterType::Boolean);
         }
         if let Some(name) = inner.reference_name() {
-            if !self.bindings.contains_key(name) {
+            // 9.1.1.1.5 deletes no binding of a Declarative Environment
+            // Record, so a name the frame holds answers false; 10.4.4 binds
+            // `arguments` in every ordinary function, and the body makes that
+            // binding where it first reads the name.
+            if self.bindings.contains_key(name) || (name == ARGUMENTS && self.allow_return) {
+                self.code.emit(Instruction::LdaFalse);
+                return Some(RegisterType::Boolean);
+            }
+            // 9.1.1.4.5 asks the Global Environment Record, which a Script of
+            // a Realm has and a unit of its own has not.
+            if !self.realm {
                 return None;
             }
-            self.code.emit(Instruction::LdaFalse);
+            let units: Vec<u16> = name.encode_utf16().collect();
+            let index = self.string_constant(&units)?;
+            self.code.emit(Instruction::DeleteGlobal(index));
             return Some(RegisterType::Boolean);
         }
         self.lower(inner)?;

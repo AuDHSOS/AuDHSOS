@@ -231,6 +231,10 @@ pub enum Instruction {
     /// The same read for the operand of `typeof`, which 13.5.3 answers with
     /// undefined for an unresolvable Reference instead of throwing.
     LdaGlobalForTypeOf(u16),
+    /// `acc = DeleteBinding(strings[index])` of 9.1.1.4.5 on the Realm's
+    /// Global Environment Record, which 13.5.1.2 evaluates for `delete` of a
+    /// name no binding of the frame holds.
+    DeleteGlobal(u16),
     /// `SetMutableBinding(strings[index], acc, strict)` of 9.1.1.4.5 on the
     /// Realm's Global Environment Record.
     StaGlobal {
@@ -1374,6 +1378,7 @@ impl BytecodeFunction {
             | Instruction::LdaString(index)
             | Instruction::LdaGlobal(index)
             | Instruction::LdaGlobalForTypeOf(index)
+            | Instruction::DeleteGlobal(index)
             | Instruction::VerifyGlobalVar(index)
             | Instruction::DeclareGlobalVar(index)
             | Instruction::VerifyGlobalFunction(index)
