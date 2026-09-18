@@ -851,6 +851,45 @@ pub type Answering = fn(
     Option<&crate::random::Source>,
 ) -> Result<Value, crate::eval::Error>;
 
+/// One aggregate an application defined on the connection, which is
+/// `sqlite3_create_function` with a step and a final.
+///
+/// The rows are held as they are stepped and the answer is read off all
+/// of them at once, so an aggregate written here keeps no state of its
+/// own between rows.
+#[derive(Clone, Copy, Debug)]
+pub struct Grouped {
+    /// The name it is called under.
+    pub name: &'static [u8],
+    /// How many arguments it takes, and nothing where it takes any
+    /// number, which is `nArg` of `sqlite3_create_function` at -1.
+    pub count: Option<usize>,
+    /// What it answers for its name and the rows the group stepped.
+    pub answer: Grouping,
+}
+
+/// What an aggregate an application defined answers for its name and the
+/// arguments of every row of the group, in the order they were stepped.
+pub type Grouping =
+    fn(&'static [u8], &[alloc::vec::Vec<Value>]) -> Result<Value, crate::eval::Error>;
+
+/// The aggregate `held` holds under `name` for `count` arguments.
+#[must_use]
+pub fn grouped(held: &[Grouped], name: &[u8], count: usize) -> Option<Grouped> {
+    held.iter()
+        .find(|one| {
+            one.count.is_none_or(|takes| takes == count) && name.eq_ignore_ascii_case(one.name)
+        })
+        .copied()
+}
+
+/// Whether `held` holds an aggregate under `name`, whatever arguments it
+/// takes.
+#[must_use]
+pub fn groups(held: &[Grouped], name: &[u8]) -> bool {
+    held.iter().any(|one| name.eq_ignore_ascii_case(one.name))
+}
+
 /// The function `defined` holds under `name` for `count` arguments.
 #[must_use]
 pub fn defined(held: &[Defined], name: &[u8], count: usize) -> Option<Defined> {

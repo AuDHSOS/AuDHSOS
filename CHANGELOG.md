@@ -7,6 +7,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` takes an aggregate an application defines on a
+  connection, which the harness answers `md5sum` with. D-308 records it.
+  Catalog 6.6.207.
+
 - `db-sqlite` answers `VACUUM`, which makes the database again from
   nothing: every table and index of the schema in the order the schema
   holds them, every row under the key it had, and then the views and the

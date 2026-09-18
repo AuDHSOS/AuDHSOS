@@ -794,8 +794,7 @@ Size: L.
     writes one is held to. Built, which D-269 records.
 50. The functions an application defines on a connection, and the count
     of pages `PRAGMA max_page_count` holds the file to. Built, which
-    D-270 records. An aggregate the application defines, which
-    `md5sum` of `testfixture` is, is still open.
+    D-270 records. An aggregate the application defines is item 68.
 51. The journal mode of a connection, and how many columns a statement
     an `IN` looks in answers. Built, which D-271 records.
 52. Whether a text ends a statement, and where the place of the nulls
@@ -844,6 +843,9 @@ Size: L.
 67. `VACUUM`, which makes the database again from nothing. Built, which
     D-305 records. `VACUUM INTO` writes a file this crate hands no
     caller and is refused.
+68. An aggregate the application defines on a connection, which
+    `md5sum` of `testfixture` is. Built, which D-308 records; this is
+    what item 50 left open.
 
 ### Done when
 

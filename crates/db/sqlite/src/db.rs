@@ -1249,6 +1249,8 @@ pub struct Database<'a> {
     naming: Naming,
     /// The functions the application defined on the connection.
     defined: &'static [crate::func::Defined],
+    /// The aggregates the application defined on the connection.
+    grouped: &'static [crate::func::Grouped],
     /// The word the journal mode of the connection is written as,
     /// which `PRAGMA journal_mode` answers.
     journalled: &'static [u8],
@@ -1451,6 +1453,7 @@ impl<'a> Database<'a> {
             counted: crate::func::Counted::default(),
             naming: Naming::default(),
             defined: &[],
+            grouped: &[],
             journalled: b"delete",
             collating,
         };
@@ -1495,6 +1498,17 @@ impl<'a> Database<'a> {
     #[must_use]
     pub const fn counting(mut self, counted: crate::func::Counted) -> Self {
         self.counted = counted;
+        self
+    }
+
+    /// The same database, with the aggregates the application defined on
+    /// the connection that writes.
+    ///
+    /// The aggregates belong to a connection and not to a file, so a
+    /// database that is not told holds none of them.
+    #[must_use]
+    pub const fn grouping(mut self, grouped: &'static [crate::func::Grouped]) -> Self {
+        self.grouped = grouped;
         self
     }
 
@@ -2430,8 +2444,8 @@ impl<'a> Database<'a> {
             Vec::new()
         };
         subqueries(arena, &select)?;
-        let calls = aggregates(arena, &select, sql, &sides)?;
-        let overs = overs(arena, &select, sql)?;
+        let calls = aggregates(arena, &select, sql, &sides, self.grouped)?;
+        let overs = overs(arena, &select, sql, self.grouped)?;
         let mut rows: Vec<Sorted> = Vec::new();
         if !overs.is_empty() {
             // A window function reads the rows a statement has already
@@ -4615,12 +4629,14 @@ fn aggregates(
     select: &Select,
     sql: &[u8],
     sides: &[Side<'_>],
+    grouped: &'static [crate::func::Grouped],
 ) -> Result<Vec<Call>, Error> {
     let walk = Gathering {
         arena,
         sql,
         results: arena.results(select.columns),
         sides,
+        grouped,
     };
     let mut calls = Vec::new();
     for column in walk.results {
@@ -4676,6 +4692,8 @@ struct Gathering<'a> {
     results: &'a [ResultColumn],
     /// The sides of the `FROM`, which hold the names that are columns.
     sides: &'a [Side<'a>],
+    /// The aggregates the application defined on the connection.
+    grouped: &'static [crate::func::Grouped],
 }
 
 impl Gathering<'_> {
@@ -4717,7 +4735,7 @@ impl Gathering<'_> {
                 self.arena.children(args).len()
             };
             let called = dequote(name.text(self.sql));
-            if let Some(which) = agg::lookup(&called, count) {
+            if let Some(which) = agg::lookup_in(self.grouped, &called, count) {
                 if inside {
                     return Err(Error::MisusedAggregate(called));
                 }
@@ -4764,7 +4782,7 @@ impl Gathering<'_> {
             return Ok(());
         }
         let aggregate = aliased(self.results, self.sql, &name)
-            .is_some_and(|expr| aggregating(self.arena, expr, self.sql));
+            .is_some_and(|expr| aggregating(self.arena, expr, self.sql, self.grouped));
         if aggregate {
             return Err(Error::MisusedAlias(name));
         }
@@ -4773,14 +4791,19 @@ impl Gathering<'_> {
 }
 
 /// Whether an expression answers with an aggregate, which is `EP_Agg`.
-fn aggregating(arena: &Arena, id: ExprId, sql: &[u8]) -> bool {
+fn aggregating(
+    arena: &Arena,
+    id: ExprId,
+    sql: &[u8],
+    grouped: &'static [crate::func::Grouped],
+) -> bool {
     arena.node(id).is_some_and(|node| {
         let mut found = match node {
-            Node::Call { name, .. } => agg::named(&dequote(name.text(sql))),
+            Node::Call { name, .. } => agg::named_in(grouped, &dequote(name.text(sql))),
             _ => false,
         };
         arena.under(node, |child| {
-            found = found || aggregating(arena, child, sql);
+            found = found || aggregating(arena, child, sql, grouped);
         });
         found
     })
@@ -6115,6 +6138,10 @@ impl eval::Row for Cursor<'_> {
         self.reach.database.clock.map(crate::date::julian_of)
     }
 
+    fn grouped(&self) -> &'static [crate::func::Grouped] {
+        self.reach.database.grouped
+    }
+
     fn defined(&self, name: &[u8], count: usize) -> Option<crate::func::Defined> {
         crate::func::defined(self.reach.database.defined, name, count)
     }
@@ -6213,24 +6240,35 @@ struct Over {
 }
 
 /// Every window function call a statement answers with.
-fn overs(arena: &Arena, select: &Select, sql: &[u8]) -> Result<Vec<Over>, Error> {
+fn overs(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    grouped: &'static [crate::func::Grouped],
+) -> Result<Vec<Over>, Error> {
     let mut out = Vec::new();
     for column in arena.results(select.columns) {
         if let ResultColumn::Expr { expr, .. } = *column {
-            gather_overs(arena, expr, sql, &mut out)?;
+            gather_overs(arena, expr, sql, &mut out, grouped)?;
         }
     }
     for term in arena.orders(select.order) {
-        gather_overs(arena, term.expr, sql, &mut out)?;
+        gather_overs(arena, term.expr, sql, &mut out, grouped)?;
     }
     Ok(out)
 }
 
 /// The same for one expression and everything under it.
-fn gather_overs(arena: &Arena, id: ExprId, sql: &[u8], out: &mut Vec<Over>) -> Result<(), Error> {
-    arena
-        .node(id)
-        .map_or(Ok(()), |node| gather_one(arena, id, node, sql, out))
+fn gather_overs(
+    arena: &Arena,
+    id: ExprId,
+    sql: &[u8],
+    out: &mut Vec<Over>,
+    grouped: &'static [crate::func::Grouped],
+) -> Result<(), Error> {
+    arena.node(id).map_or(Ok(()), |node| {
+        gather_one(arena, id, node, sql, out, grouped)
+    })
 }
 
 /// The same for one node the arena holds.
@@ -6240,6 +6278,7 @@ fn gather_one(
     node: Node,
     sql: &[u8],
     out: &mut Vec<Over>,
+    grouped: &'static [crate::func::Grouped],
 ) -> Result<(), Error> {
     if let Node::Over {
         name,
@@ -6252,7 +6291,8 @@ fn gather_one(
     {
         let count = if star { 0 } else { arena.children(args).len() };
         let called = dequote(name.text(sql));
-        let which = window::lookup(&called, count).ok_or_else(|| refused_over(&called, count))?;
+        let which = window::lookup_in(grouped, &called, count)
+            .ok_or_else(|| refused_over(&called, count, grouped))?;
         // `sqlite3WindowRewrite` takes a `FILTER` for an aggregate and
         // refuses one for the eleven built-in window functions, and
         // refuses `DISTINCT` for every one of them.
@@ -6273,7 +6313,7 @@ fn gather_one(
     let mut deeper = Ok(());
     arena.under(node, |child| {
         if deeper.is_ok() {
-            deeper = gather_overs(arena, child, sql, out);
+            deeper = gather_overs(arena, child, sql, out, grouped);
         }
     });
     deeper
@@ -6306,8 +6346,8 @@ struct Framed {
 /// refused with: a name the table holds under another number of
 /// arguments is that number, a name the scalars hold is one no window
 /// reads, and any other name is no function at all.
-fn refused_over(called: &[u8], count: usize) -> Error {
-    if window::named(called) || crate::agg::named(called) {
+fn refused_over(called: &[u8], count: usize, grouped: &'static [crate::func::Grouped]) -> Error {
+    if window::named(called) || crate::agg::named_in(grouped, called) {
         return Error::Eval(eval::Error::WrongArguments(called.to_vec()));
     }
     if crate::func::lookup(called, count).is_ok() {

@@ -468,6 +468,8 @@ pub struct Writer {
     refusing: Refusing,
     /// The functions the application defined on this connection.
     defined: &'static [crate::func::Defined],
+    /// The aggregates the application defined on this connection.
+    grouped: &'static [crate::func::Grouped],
     /// The collations the application defined on this connection.
     collating: &'static [crate::value::Collating],
     /// The savepoints open now, the outermost first, each holding the
@@ -529,6 +531,7 @@ impl Writer {
             began: None,
             refusing: Refusing::Abort,
             defined: &[],
+            grouped: &[],
             collating: &[],
             saved: Vec::new(),
             returned: Vec::new(),
@@ -597,6 +600,7 @@ impl Writer {
             began: None,
             refusing: Refusing::Abort,
             defined: &[],
+            grouped: &[],
             collating: &[],
             saved: Vec::new(),
             returned: Vec::new(),
@@ -1175,6 +1179,7 @@ impl Writer {
             clock: self.clock.map(crate::date::julian_of),
             counted: self.counted,
             defined: self.defined,
+            grouped: self.grouped,
             collating: self.collating,
             outer: None,
             reading: None,
@@ -1514,6 +1519,7 @@ impl Writer {
         let size = self.wanted_page.unwrap_or(held.page_size);
         let mut fresh = Writer::new(size, held.reserved, held.encoding)?;
         fresh.defines(self.defined);
+        fresh.groups(self.grouped);
         fresh.collates(self.collating);
         fresh.kept.clone_from(&self.kept);
         // `sqlite3RunVacuum` writes the new file as the old one was: the
@@ -1656,8 +1662,8 @@ impl Writer {
     }
 
     /// The database `bytes` hold, told what this connection was told:
-    /// the collations the application defined on it and the moment its
-    /// clock says.
+    /// the collations, the functions and the aggregates the application
+    /// defined on it, and the moment its clock says.
     ///
     /// Opening one reads the schema, so it costs O(n) in the rows of
     /// `sqlite_schema`.
@@ -1666,7 +1672,9 @@ impl Writer {
     ///
     /// Whatever reading the header or the schema refuses.
     fn reading<'a>(&self, bytes: &'a [u8]) -> Result<Database<'a>, Error> {
-        let database = Database::open_collating(bytes, self.collating)?;
+        let database = Database::open_collating(bytes, self.collating)?
+            .defining(self.defined)
+            .grouping(self.grouped);
         Ok(match self.clock {
             Some(seconds) => database.clocked(seconds),
             None => database,
@@ -2407,7 +2415,6 @@ impl Writer {
             let database = self
                 .reading(&bytes)?
                 .seeded(self.random.word())
-                .defining(self.defined)
                 .counting(self.counted);
             database.answered(arena, select, sql)?
         };
@@ -2652,6 +2659,12 @@ impl Writer {
 
     /// The functions the application defined on this connection, which
     /// a reader built over its file is told by [`Database::defining`].
+    pub const fn groups(&mut self, grouped: &'static [crate::func::Grouped]) {
+        self.grouped = grouped;
+    }
+
+    /// The functions the application defined on the connection, which a
+    /// statement of this connection may call.
     pub const fn defines(&mut self, defined: &'static [crate::func::Defined]) {
         self.defined = defined;
     }
@@ -3278,6 +3291,7 @@ impl Writer {
                         .reading(&bytes)?
                         .seeded(self.random.word())
                         .defining(self.defined)
+                        .grouping(self.grouped)
                         .counting(self.counted);
                     database.rows_under(arena, select, sql, Some(row))?;
                 }
@@ -3741,7 +3755,6 @@ impl Writer {
         let database = self
             .reading(&bytes)?
             .seeded(self.random.word())
-            .defining(self.defined)
             .counting(self.counted);
         let (table, root) = database
             .table(name)
@@ -3886,7 +3899,6 @@ impl Writer {
             let database = self
                 .reading(&bytes)?
                 .seeded(self.random.word())
-                .defining(self.defined)
                 .counting(self.counted);
             let (table, _) = database.viewing(name)?;
             let places = places(&table, &named)?;
@@ -3957,7 +3969,6 @@ impl Writer {
             let database = self
                 .reading(&bytes)?
                 .seeded(self.random.word())
-                .defining(self.defined)
                 .counting(self.counted);
             let (table, held) = database.viewing(name)?;
             let places = set_places(&table, &columns)?;
@@ -3987,6 +3998,7 @@ impl Writer {
                         clock: self.clock.map(crate::date::julian_of),
                         counted: self.counted,
                         defined: self.defined,
+                        grouped: self.grouped,
                         collating: self.collating,
                         outer: aside
                             .as_ref()
@@ -4055,7 +4067,6 @@ impl Writer {
             let database = self
                 .reading(&bytes)?
                 .seeded(self.random.word())
-                .defining(self.defined)
                 .counting(self.counted);
             let (table, held) = database.viewing(name)?;
             let mut taken = Vec::new();
@@ -4069,6 +4080,7 @@ impl Writer {
                     clock: self.clock.map(crate::date::julian_of),
                     counted: self.counted,
                     defined: self.defined,
+                    grouped: self.grouped,
                     collating: self.collating,
                     outer,
                     reading: Some(Reading {
@@ -4138,6 +4150,7 @@ impl Writer {
             clock: self.clock.map(crate::date::julian_of),
             counted: self.counted,
             defined: self.defined,
+            grouped: self.grouped,
             collating: self.collating,
             outer,
             reading: Some(reading),
@@ -4160,10 +4173,7 @@ impl Writer {
     ) -> Result<i64, Error> {
         let (root, rows, kept, table) = {
             let bytes = self.image();
-            let database = self
-                .reading(&bytes)?
-                .counting(self.counted)
-                .defining(self.defined);
+            let database = self.reading(&bytes)?.counting(self.counted);
             // The table was found before this ran, so the refusal
             // carries no name to write into a message.
             let (table, root) = database.table(name).ok_or(Error::NoTable(Vec::new()))?;
@@ -4662,10 +4672,7 @@ impl Writer {
         written_to(name)?;
         let sets = arena.sets(statement.sets);
         let bytes = self.image();
-        let database = self
-            .reading(&bytes)?
-            .counting(self.counted)
-            .defining(self.defined);
+        let database = self.reading(&bytes)?.counting(self.counted);
         // The table was found before this ran, so the refusal carries
         // no name to write into a message.
         let (table, root) = database.table(name).ok_or(Error::NoTable(Vec::new()))?;
@@ -4711,6 +4718,7 @@ impl Writer {
                     clock: self.clock.map(crate::date::julian_of),
                     counted: self.counted,
                     defined: self.defined,
+                    grouped: self.grouped,
                     collating: self.collating,
                     outer: aside
                         .as_ref()
@@ -5715,6 +5723,8 @@ struct Held<'a> {
     counted: crate::func::Counted,
     /// The functions the application defined on the connection.
     defined: &'static [crate::func::Defined],
+    /// The aggregates the application defined on the connection.
+    grouped: &'static [crate::func::Grouped],
     /// The collations the application defined on the connection.
     collating: &'static [crate::value::Collating],
     /// The row a trigger's body reads as `new` and `old`, where this
@@ -5728,6 +5738,10 @@ struct Held<'a> {
 impl crate::eval::Row for Held<'_> {
     fn defined(&self, name: &[u8], count: usize) -> Option<crate::func::Defined> {
         crate::func::defined(self.defined, name, count)
+    }
+
+    fn grouped(&self) -> &'static [crate::func::Grouped] {
+        self.grouped
     }
 
     fn collating(&self) -> &'static [crate::value::Collating] {
@@ -6406,10 +6420,7 @@ impl Writer {
         }
         let (root, keys, kept, table) = {
             let bytes = self.image();
-            let database = self
-                .reading(&bytes)?
-                .counting(self.counted)
-                .defining(self.defined);
+            let database = self.reading(&bytes)?.counting(self.counted);
             let (table, root) = database
                 .table(&name)
                 .ok_or_else(|| Error::NoTable(name.clone()))?;
@@ -6426,6 +6437,7 @@ impl Writer {
                     clock: self.clock.map(crate::date::julian_of),
                     counted: self.counted,
                     defined: self.defined,
+                    grouped: self.grouped,
                     collating: self.collating,
                     outer,
                     reading: Some(Reading {
@@ -6505,10 +6517,7 @@ impl Writer {
         written_to(name)?;
         let sets = arena.sets(statement.sets);
         let bytes = self.image();
-        let database = self
-            .reading(&bytes)?
-            .counting(self.counted)
-            .defining(self.defined);
+        let database = self.reading(&bytes)?.counting(self.counted);
         let (table, root) = database
             .table(name)
             .ok_or_else(|| Error::NoTable(name.to_vec()))?;
@@ -6561,6 +6570,7 @@ impl Writer {
                     clock: self.clock.map(crate::date::julian_of),
                     counted: self.counted,
                     defined: self.defined,
+                    grouped: self.grouped,
                     collating: self.collating,
                     outer: aside
                         .as_ref()
@@ -6980,6 +6990,7 @@ impl Writer {
             clock: self.clock.map(crate::date::julian_of),
             counted: self.counted,
             defined: self.defined,
+            grouped: self.grouped,
             collating: self.collating,
             outer: None,
             reading: None,

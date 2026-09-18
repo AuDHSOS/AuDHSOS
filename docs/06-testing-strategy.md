@@ -6009,3 +6009,17 @@ Document 16 step Q8.
   does not hold, and `VACUUM INTO` are each refused.
 - A pragma no version of the library holds answers no row when read and
   when set, and a name this crate holds nothing for at all is refused.
+
+### 6.6.207 An aggregate the application defined (`db-sqlite`)
+
+Document 16 step Q8.
+
+- An aggregate the application defined reads the arguments of every row
+  of its group, in the order the rows were read.
+- A `GROUP BY` answers one row per group, each holding the rows of that
+  group alone.
+- A group of no row answers the aggregate over no row at all.
+- `DISTINCT` puts the rows through one column before they are stepped.
+- An `OVER` reads the aggregate over the frame, so each row answers the
+  rows up to it.
+- A name the connection was not told of is no function at all.

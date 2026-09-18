@@ -16,7 +16,7 @@ use crate::agg::Aggregate;
 use crate::value::integer_as_real;
 
 /// A window function this engine has.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug)]
 pub enum Which {
     /// An aggregate used as a window function, which reads the frame.
     Aggregate(Aggregate),
@@ -153,12 +153,25 @@ pub fn named(name: &[u8]) -> bool {
 /// where it is neither one of the eleven nor an aggregate.
 #[must_use]
 pub fn lookup(name: &[u8], count: usize) -> Option<Which> {
+    lookup_in(&[], name, count)
+}
+
+/// The same, with the aggregates the application defined on the
+/// connection among the ones an `OVER` may follow.
+///
+/// Reading them costs O(n) in the table and in the ones defined.
+#[must_use]
+pub fn lookup_in(
+    grouped: &'static [crate::func::Grouped],
+    name: &[u8],
+    count: usize,
+) -> Option<Which> {
     let found = TABLE.iter().find(|entry| {
         name.eq_ignore_ascii_case(entry.name) && count >= entry.least && count <= entry.most
     });
     match found {
         Some(entry) => Some(entry.which),
-        None => crate::agg::lookup(name, count).map(Which::Aggregate),
+        None => crate::agg::lookup_in(grouped, name, count).map(Which::Aggregate),
     }
 }
 

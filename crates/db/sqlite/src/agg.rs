@@ -44,7 +44,7 @@ enum Running {
 }
 
 /// An aggregate this engine has.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug)]
 pub enum Aggregate {
     /// `count(*)` and `count(X)`.
     Count,
@@ -77,6 +77,10 @@ pub enum Aggregate {
     /// `percentile_disc(Y,P)`, which answers a value the group holds
     /// rather than one between two of them.
     PercentileDisc,
+    /// An aggregate the application defined on the connection, with the
+    /// name it defined it under and what it answers for the rows of a
+    /// group.
+    Defined(&'static [u8], crate::func::Grouping),
 }
 
 impl Aggregate {
@@ -243,6 +247,31 @@ pub fn lookup(name: &[u8], count: usize) -> Option<Aggregate> {
         .map(|entry| entry.aggregate)
 }
 
+/// The aggregate of that name and that many arguments, the ones the
+/// application defined on the connection among them.
+///
+/// Reading them costs O(n) in the table and in the ones defined.
+#[must_use]
+pub fn lookup_in(
+    grouped: &'static [crate::func::Grouped],
+    name: &[u8],
+    count: usize,
+) -> Option<Aggregate> {
+    lookup(name, count).or_else(|| {
+        crate::func::grouped(grouped, name, count)
+            .map(|held| Aggregate::Defined(held.name, held.answer))
+    })
+}
+
+/// Whether the table or the ones the application defined hold an
+/// aggregate of that name.
+///
+/// Reading them costs O(n) in the table and in the ones defined.
+#[must_use]
+pub fn named_in(grouped: &'static [crate::func::Grouped], name: &[u8]) -> bool {
+    named(name) || crate::func::groups(grouped, name)
+}
+
 /// Whether the table holds an aggregate of that name, whatever number
 /// of arguments it takes.
 ///
@@ -288,6 +317,9 @@ pub struct Accumulator {
     /// The fraction the first row of the group wrote, which every row
     /// after it writes again.
     fraction: Option<f64>,
+    /// The arguments of every row an aggregate the application defined
+    /// has stepped, in the order they were stepped.
+    stepped: Vec<Vec<Value>>,
 }
 
 impl Accumulator {
@@ -309,6 +341,7 @@ impl Accumulator {
             skipped: false,
             reals: Vec::new(),
             fraction: None,
+            stepped: Vec::new(),
         }
     }
 
@@ -370,6 +403,9 @@ impl Accumulator {
             | Aggregate::Percentile
             | Aggregate::PercentileCont
             | Aggregate::PercentileDisc => self.percentile(args)?,
+            // An aggregate the application defined reads the rows of
+            // the group at its end, so the step holds them.
+            Aggregate::Defined(_, _) => self.stepped.push(args.to_vec()),
         }
         Ok(())
     }
@@ -391,7 +427,7 @@ impl Accumulator {
         let shown = self.which.largest_shown().to_vec();
         // `median(Y)` is `percentile(Y,50)`, which writes the fraction
         // itself.
-        let fraction = if self.which == Aggregate::Median {
+        let fraction = if matches!(self.which, Aggregate::Median) {
             0.5
         } else {
             let mut given = args.get(1).cloned().unwrap_or(Value::Null);
@@ -550,7 +586,7 @@ impl Accumulator {
             return;
         };
         let order = compare(best, &value, collation);
-        let take = if self.which == Aggregate::Max {
+        let take = if matches!(self.which, Aggregate::Max) {
             order == core::cmp::Ordering::Less
         } else {
             order == core::cmp::Ordering::Greater
@@ -653,6 +689,9 @@ impl Accumulator {
     /// JSON.
     pub fn finish(&self) -> Result<Value, Error> {
         Ok(match self.which {
+            // An aggregate the application defined reads the rows of the
+            // group at once.
+            Aggregate::Defined(name, answer) => return answer(name, &self.stepped),
             Aggregate::Median
             | Aggregate::Percentile
             | Aggregate::PercentileCont

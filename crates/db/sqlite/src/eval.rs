@@ -297,6 +297,12 @@ pub trait Row {
         None
     }
 
+    /// The aggregates the application defined on the connection, which
+    /// a caller that defined none answers an empty list for.
+    fn grouped(&self) -> &'static [crate::func::Grouped] {
+        &[]
+    }
+
     /// What the clock says, as the julian day number times 86 400 000,
     /// which `now` names.
     ///
@@ -697,8 +703,8 @@ fn called(
             }
             return Err(Error::NoWindow(called));
         }
-        Err(Error::NoFunction(_)) if crate::agg::named(&called) => {
-            if crate::agg::lookup(&called, values.len()).is_none() {
+        Err(Error::NoFunction(_)) if crate::agg::named_in(row.grouped(), &called) => {
+            if crate::agg::lookup_in(row.grouped(), &called, values.len()).is_none() {
                 return Err(Error::WrongArguments(called));
             }
             return Err(Error::MisusedAggregate(called));

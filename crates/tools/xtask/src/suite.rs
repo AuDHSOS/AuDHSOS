@@ -879,6 +879,7 @@ impl Session {
         }
         let mut writer = Writer::opened(&bytes).map_err(|error| error.message())?;
         writer.defines(DEFINED);
+        writer.groups(GROUPED);
         self.held.insert(name.to_owned(), writer);
         Ok(vec![written.len().to_string()])
     }
@@ -992,6 +993,7 @@ impl Session {
             && let Ok(mut writer) = Writer::new(under.page, 0, under.encoding)
         {
             writer.defines(DEFINED);
+            writer.groups(GROUPED);
             ticked(&mut writer, self.clock);
             if let Some(journal) = under.journal {
                 let mut sql = b"PRAGMA journal_mode=".to_vec();
@@ -1073,6 +1075,7 @@ impl Session {
         let bytes = held.written();
         let mut writer = Writer::opened(&bytes).map_err(|error| error.message())?;
         writer.defines(DEFINED);
+        writer.groups(GROUPED);
         self.held.insert(to.to_owned(), writer);
         Ok(Vec::new())
     }
@@ -1162,6 +1165,7 @@ impl Session {
                 let database = database
                     .naming(writer.naming())
                     .defining(defines)
+                    .grouping(GROUPED)
                     .journalling(writer.journalled());
                 match held {
                     Some(seconds) => database.clocked(seconds),
@@ -1324,6 +1328,34 @@ static DEFINED: &[Defined] = &[Defined {
     answer: randstr,
 }];
 
+/// The aggregates `testfixture` defines that this harness answers.
+static GROUPED: &[db_sqlite::func::Grouped] = &[db_sqlite::func::Grouped {
+    name: b"md5sum",
+    count: None,
+    answer: md5sum,
+}];
+
+/// `md5sum(X,...)` of `src/test_md5.c`: the digest of the text of every
+/// argument of every row of the group, in the order the rows were
+/// stepped, with a null argument writing nothing.
+///
+/// It costs O(n) in the bytes it digests.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the shape every aggregate the application defines answers in"
+)]
+fn md5sum(_: &'static [u8], rows: &[Vec<Value>]) -> Result<Value, db_sqlite::eval::Error> {
+    let mut held = Vec::new();
+    for row in rows {
+        for value in row {
+            held.extend_from_slice(&value.text().unwrap_or_default());
+        }
+    }
+    Ok(Value::Text(
+        crate::md5::digest(&held).to_lowercase().into_bytes(),
+    ))
+}
+
 /// The letters, digits and marks `randStr` of `src/test_func.c` draws
 /// its bytes from.
 const LETTERS: &[u8] =
@@ -1396,6 +1428,7 @@ fn run_one(
                     .counting(counted)
                     .naming(naming)
                     .defining(defines)
+                    .grouping(GROUPED)
                     .journalling(journalled);
                 match held {
                     Some(seconds) => database.clocked(seconds),
