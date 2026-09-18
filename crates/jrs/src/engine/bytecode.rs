@@ -623,6 +623,20 @@ pub enum Instruction {
         /// Feedback vector slot for the call.
         slot: u16,
     },
+    /// The same for a super call whose argument list holds a spread element,
+    /// whose arguments travel as the List of 13.3.8 rather than in registers.
+    SuperCallSpread {
+        /// Register holding what 13.3.7.2 answered, read before the
+        /// arguments were evaluated.
+        func: Reg,
+        /// Register the object of the construct waits in where 13.3.7.1 step
+        /// 9 refuses to bind it.
+        made: Reg,
+        /// Register holding the Array of arguments.
+        list: Reg,
+        /// Feedback vector slot for the call.
+        slot: u16,
+    },
     /// `CreatePerIterationEnvironment` of 14.7.4.4: the frame takes a context
     /// of its own that holds what the one it had holds, and every closure the
     /// iteration makes captures that one.
@@ -1320,6 +1334,17 @@ impl BytecodeFunction {
                     }
                     Some(arg_start)
                 }
+            }
+            Instruction::SuperCallSpread {
+                func,
+                made,
+                list,
+                slot,
+            } => {
+                self.verify_feedback(pc, slot, FeedbackKind::Call)?;
+                self.verify_register(pc, func)?;
+                self.verify_register(pc, made)?;
+                Some(list)
             }
             Instruction::GetSuper { base, name } => {
                 self.verify_string_constant(pc, name)?;

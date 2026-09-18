@@ -5107,6 +5107,9 @@ impl RegisterLowerer {
         self.code
             .emit(Instruction::SuperConstructor { target: func });
         let made = self.allocate_register()?;
+        if Self::holds_a_spread(arguments) {
+            return self.lower_spread_super_construct(this_register, func, made, arguments);
+        }
         let mut argument_registers = Vec::new();
         let mut argument_types = Vec::new();
         for argument in arguments {
@@ -5145,6 +5148,34 @@ impl RegisterLowerer {
         self.release_register(made)?;
         self.release_register(func)?;
         self.escape(&argument_types);
+        Some(RegisterType::Unknown)
+    }
+
+    /// 13.3.7.1 step 4 for an argument list that holds a spread element,
+    /// whose arguments travel as the List of 13.3.8.
+    fn lower_spread_super_construct(
+        &mut self,
+        this_register: crate::engine::bytecode::Reg,
+        func: crate::engine::bytecode::Reg,
+        made: crate::engine::bytecode::Reg,
+        arguments: &[Expr],
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let (array, index, one) = self.lower_argument_list(arguments)?;
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
+        self.code.emit(Instruction::SuperCallSpread {
+            func,
+            made,
+            list: array,
+            slot,
+        });
+        self.code.emit(Instruction::Star(this_register));
+        self.release_register(one)?;
+        self.release_register(index)?;
+        self.release_register(array)?;
+        self.release_register(made)?;
+        self.release_register(func)?;
+        self.escape(&[RegisterType::Unknown]);
         Some(RegisterType::Unknown)
     }
 

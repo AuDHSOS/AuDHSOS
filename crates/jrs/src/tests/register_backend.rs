@@ -693,6 +693,19 @@ fn a_class_derives_from_another_and_super_binds_its_this() -> Result<(), Error> 
         "(function(){class A extends Array{}return new A(3).length})()",
         "(function(){class A extends Array{}return Object.getPrototypeOf(new A())===A.prototype})()",
         "(function(){class O extends Object{}return typeof new O()})()",
+        // 13.3.7.1 step 4 takes an argument list that holds a spread element
+        // through 13.3.8, which walks the iterator of the operand.
+        "(function(){class A{constructor(a,b){this.s=''+a+b}}class B extends A{constructor(){super(...[1,2])}}return new B().s})()",
+        "(function(){class A{constructor(){this.n=arguments.length}}class B extends A{constructor(){super(...[])}}return new B().n})()",
+        "(function(){class A{constructor(a,b,c){this.s=''+a+b+c}}class B extends A{constructor(){super(1,...[2,3])}}return new B().s})()",
+        "(function(){class A{constructor(a,b,c){this.s=''+a+b+c}}class B extends A{constructor(){super(...[1],2,...[3])}}return new B().s})()",
+        "(function(){class A{constructor(){this.n=arguments.length}}class B extends A{constructor(){super(...'ab')}}return new B().n})()",
+        // Step 5 asks of the Prototype whether it constructs after 13.3.8 has
+        // walked the operand.
+        "(function(){class A{}class B extends A{constructor(){super(...{})}}try{new B()}catch(e){return e instanceof TypeError}})()",
+        // 9.4.5 refuses the binding a second time here too.
+        "(function(){class A{}class B extends A{constructor(){super(...[]);super(...[])}}try{new B()}catch(e){return e instanceof ReferenceError}})()",
+        "(function(){class E extends Error{constructor(){super(...['m'])}}return new E().message})()",
     ] {
         differential(source)?;
     }

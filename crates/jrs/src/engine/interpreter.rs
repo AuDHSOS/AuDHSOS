@@ -13580,6 +13580,7 @@ impl RegisterVM {
         arg_start: Reg,
         arg_count: u16,
         forwarded: bool,
+        spread_list: Option<Reg>,
         slot: u16,
         return_pc: usize,
         caller_code_id: Option<u32>,
@@ -13617,6 +13618,13 @@ impl RegisterVM {
             let passed = self.passed_arguments(heap)?;
             let count = u16::try_from(passed.len()).map_err(|_| VMError::TypeError)?;
             let list = Self::array_of(passed, heap, realm)?;
+            heap.enter_scope();
+            let list = heap.push_root(list)?;
+            (Reg(0), count, Some(Resume::Spread { arguments: list }))
+        } else if let Some(register) = spread_list {
+            // 13.3.8 built the List before step 5 asked whether the Prototype
+            // constructs, and the frame reads it out of the root.
+            let (list, count) = Self::spread_arguments(self.read_reg(register)?, heap)?;
             heap.enter_scope();
             let list = heap.push_root(list)?;
             (Reg(0), count, Some(Resume::Spread { arguments: list }))
@@ -28532,6 +28540,33 @@ impl RegisterVM {
                         arg_start,
                         arg_count,
                         forwarded,
+                        None,
+                        slot,
+                        pc,
+                        current_code_id,
+                        active_code,
+                        units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    )? {
+                        current_code_id = Some(code_id);
+                        pc = self.pending_pc.take().unwrap_or(0);
+                    }
+                }
+                Instruction::SuperCallSpread {
+                    func,
+                    made,
+                    list,
+                    slot,
+                } => {
+                    if let Some(code_id) = self.super_call(
+                        func,
+                        made,
+                        Reg(0),
+                        0,
+                        false,
+                        Some(list),
                         slot,
                         pc,
                         current_code_id,
