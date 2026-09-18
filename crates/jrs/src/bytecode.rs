@@ -2323,7 +2323,11 @@ impl RegisterLowerer {
                             // A function with no formal parameter has an empty
                             // mapping, so its object carries nothing that could
                             // be observed anywhere.
+                            // 10.4.4 step 20 makes the unmapped object of
+                            // 10.4.4.6 for a parameter list that is not
+                            // simple, which maps nothing to observe.
                             let unmapped = self.code.strict
+                                || !self.maps_arguments
                                 || self.mapped_parameters == 0
                                 || self.code.arguments_map.is_some();
                             let binding = self
@@ -4008,8 +4012,10 @@ impl RegisterLowerer {
         );
         child.allow_return = true;
         // The body is lowered before the unit is finished, and 10.4.4 reads
-        // the strictness while it runs.
+        // the strictness and the shape of the parameter list while it runs.
         child.code.strict = function.strict;
+        child.code.unmapped_arguments =
+            function.strict || !register_has_a_simple_parameter_list(function);
         child.realm = self.realm;
         child.function_returns = self.function_returns.clone();
         child.function_parameters = self.function_parameters.clone();
@@ -11960,6 +11966,16 @@ fn register_initializer_reads_a_later_parameter(function: &Function) -> bool {
 /// The clause maps a simple parameter list, and this lowering maps one whose
 /// names are distinct, so that each parameter holds a slot of its own, and no
 /// more than the 64 the object carries one bit each for.
+/// `IsSimpleParameterList` of 8.6.1, which 10.4.4 step 20 asks before it makes
+/// the mapped object of 10.4.4.7.
+fn register_has_a_simple_parameter_list(function: &Function) -> bool {
+    function.parameters.iter().all(|parameter| {
+        matches!(parameter.pattern, parser::BindingPattern::Name(_))
+            && parameter.default.is_none()
+            && !parameter.rest
+    })
+}
+
 fn register_maps_its_parameters(function: &Function) -> bool {
     if function.parameters.len() > 64 {
         return false;

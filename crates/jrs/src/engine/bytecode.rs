@@ -926,6 +926,10 @@ pub struct BytecodeFunction {
     /// Whether this function is strict, which 10.2.1.2 reads to decide what a
     /// call without a receiver binds `this` to.
     pub strict: bool,
+    /// Whether 10.4.4 step 20 makes the unmapped object of 10.4.4.6 for this
+    /// function, which is so for a strict one and for a parameter list 8.6.1
+    /// calls anything but simple.
+    pub unmapped_arguments: bool,
     /// Whether this function is the constructor of a class, which 15.7.14
     /// gives a `[[Call]]` that throws.
     pub class_constructor: bool,
@@ -996,6 +1000,7 @@ impl BytecodeFunction {
             derived: false,
             constructible: false,
             strict: false,
+            unmapped_arguments: false,
             class_constructor: false,
             asynchronous: false,
             promise_register: None,

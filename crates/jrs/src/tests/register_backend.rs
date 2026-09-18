@@ -6420,6 +6420,22 @@ fn the_arguments_object_of_a_strict_function_is_a_value() -> Result<(), Error> {
     // 10.4.4.7 maps the indices of a sloppy function's object onto its
     // parameters, so a write to one is read through the other.
     differential_scripts(&["function f(p){p=2;var a=arguments;return a[0]}f(1)"])?;
+    // 10.4.4 step 20 makes the unmapped object of 10.4.4.6 for a parameter
+    // list that is not simple, which maps nothing onto a parameter.
+    for source in [
+        "function f(a,b=0){arguments[0]=2;return a}f(1)",
+        "function f(a,...r){arguments[0]=2;return a}f(1)",
+        "function f(a,b=0){var x=arguments;x[0]=5;return a+','+x[0]}f(1)",
+        "function f(a,[b]=[0]){return arguments.length}f(1)",
+        // 10.4.4.6 step 6 gives the unmapped object the accessor of 10.2.4.1
+        // for `callee`, where the mapped one of 10.4.4.7 holds the function.
+        "function f(a=0){return arguments}typeof Object.getOwnPropertyDescriptor(f(),'callee').get",
+        "function f(...a){return arguments}typeof Object.getOwnPropertyDescriptor(f(1),'callee').get",
+        "function f(a){return arguments}typeof Object.getOwnPropertyDescriptor(f(1),'callee').value",
+        "function f(){return arguments}typeof Object.getOwnPropertyDescriptor(f(),'callee').value",
+    ] {
+        differential_scripts(&[source])?;
+    }
     // 23.1.5.2.1 reads the length of the array-like again at every step, so
     // an object that is no Array is walked the same way.
     for source in [

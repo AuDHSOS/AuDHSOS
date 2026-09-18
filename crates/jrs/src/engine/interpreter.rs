@@ -22501,9 +22501,11 @@ impl RegisterVM {
             values,
             heap,
         )?;
-        // 10.4.4 step 7: a strict function's `callee` is the accessor of
-        // 10.2.4.1 on both halves, and nothing else can be read out of it.
-        if code.strict {
+        // 10.4.4.6 step 6: the `callee` of an unmapped object is the accessor
+        // of 10.2.4.1 on both halves, and nothing else can be read out of it;
+        // 10.4.4 step 20 makes that object for a strict function and for a
+        // parameter list 8.6.1 calls anything but simple.
+        if code.strict || code.unmapped_arguments {
             let throws = realm.intrinsic(heap, Intrinsic::ThrowTypeError)?;
             let pair = Self::make_accessor(throws, throws, heap)?;
             let key = PropertyKey::String(heap.strings.intern_units(&CALLEE_NAME)?);
