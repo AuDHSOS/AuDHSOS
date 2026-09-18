@@ -615,6 +615,12 @@ pub enum Resume {
         /// keeps between its allocations.
         state: Root,
     },
+    /// 23.1.3.4 step 7 constructed the species of a clause that had its
+    /// values in hand, and the answer is the object they go into.
+    Species {
+        /// Root holding the values, in the order they take.
+        values: Root,
+    },
     /// 25.5.1.1 called the reviver for one name, and the answer takes the
     /// place of the value it was given.
     Reviver {
@@ -1494,6 +1500,9 @@ pub struct RegisterVM {
     /// The setter a clause of 23.1.3 found for the `length` it writes last,
     /// with the receiver and the value it takes.
     pending_setter: Option<(Value, Value, Value)>,
+    /// The species 23.1.3.4 step 7 constructs once the clause has its values,
+    /// and those values in the order they take.
+    pending_species: Option<(Value, Value)>,
     /// Whether the unit this run entered is the Script of a Realm, which is
     /// what 19.2.1.1 evaluates a nested Script against.
     entry_is_realm_script: bool,
@@ -1650,6 +1659,7 @@ impl RegisterVM {
             accessor_resume: None,
             accessor_answer: None,
             pending_setter: None,
+            pending_species: None,
             entry_is_realm_script: false,
             direct_eval: false,
             direct_eval_strict: false,
@@ -2986,6 +2996,13 @@ impl RegisterVM {
             if promise::slot(heap, record, 3).as_smi().unwrap_or(0) > 0 {
                 self.place_arguments(next_frame, callee, &[promise::slot(heap, record, 2)])?;
             }
+        } else if let Some(Resume::Species { values }) = call.resume {
+            // 23.1.3.4 step 7 passes the count the clause asked for.
+            let record = heap
+                .root_value(values)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let wanted = promise::slot(heap, record, 2);
+            self.place_arguments(next_frame, callee, &[wanted])?;
         } else if let Some(Resume::Reviver { state }) = call.resume {
             // 25.5.1.1 step 3 passes the name and the value.
             let record = heap
@@ -4181,6 +4198,17 @@ impl RegisterVM {
                 .get(usize::from(index))
                 .copied()
                 .unwrap_or(VALUE_UNDEFINED));
+        }
+        // 23.1.3.4 step 7 passes the count the clause asked for.
+        if let Some(Resume::Species { values }) = call.resume {
+            let record = heap
+                .root_value(values)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            return Ok(if index == 0 {
+                promise::slot(heap, record, 2)
+            } else {
+                VALUE_UNDEFINED
+            });
         }
         // 25.5.1.1 step 3 passes the name and the value.
         if let Some(Resume::Reviver { state }) = call.resume {
@@ -6424,6 +6452,19 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Option<u32>, VMError> {
+        // 23.1.3.4 step 7 constructs a species of the Script, whose answer
+        // takes the values the clause gathered.
+        if let Some((species, values)) = self.pending_species.take() {
+            return self.construct_the_species_of_a_copy(
+                species,
+                values,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
         if let Some((pair, receiver, assigned)) = self.pending_setter.take() {
             self.accessor_answer = Some(answer);
             let entered = self.enter_accessor(
@@ -6449,6 +6490,99 @@ impl RegisterVM {
             self.write_construction(target, self.acc, heap)?;
         }
         Ok(None)
+    }
+
+    /// Step 7 of 23.1.3.4 for a clause that has its values in hand: the
+    /// species is constructed, and the values go into what it answered.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a construct a native makes runs where a call does, with what a call has"
+    )]
+    fn construct_the_species_of_a_copy(
+        &mut self,
+        species: Value,
+        values: Value,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        if !Self::is_script_function(species, heap) {
+            return Err(VMError::Unsupported(
+                "a species of 23.1.3.4 written in Rust",
+            ));
+        }
+        // The values and the object outlive the frame the construct opens, so
+        // they are roots of a scope of their own, which the return leaves.
+        heap.enter_scope();
+        let held = heap.push_root(values)?;
+        let constructor = heap.push_root(species)?;
+        // 10.2.2 step 5 creates the object for a base constructor and leaves
+        // a derived one to make its own at its super call.
+        let receiver = if Self::derives(species, units, heap) {
+            VALUE_UNINITIALIZED
+        } else {
+            Value::from_object(Self::create_from_rooted_constructor(
+                constructor,
+                heap,
+                realm,
+            )?)
+        };
+        let made = heap.push_root(receiver)?;
+        let species = heap
+            .root_value(constructor)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        self.pending_new_target = species;
+        let next = Call {
+            receiver,
+            arg_count: 1,
+            arg_start: Reg(0),
+            resume: Some(Resume::Species { values: held }),
+            construct: Some(Construction::Held(made)),
+            ..call
+        };
+        match self.enter_call_value(species, units, active_feedback, heap, realm, next) {
+            Ok(entered) => Ok(entered),
+            Err(refused) => {
+                heap.exit_scope();
+                Err(refused)
+            }
+        }
+    }
+
+    /// Steps 6 and 7 of 23.1.3.1 and step 4 of 23.1.3.14: the values the
+    /// clause gathered take their place in what the species answered.
+    fn fill_the_species_of_a_copy(
+        values: Root,
+        made: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let record = heap
+            .root_value(values)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let held = promise::slot(heap, record, 0);
+        let object = made.as_object().ok_or(VMError::TypeError)?;
+        for (index, value) in Self::record_values(held, heap).into_iter().enumerate() {
+            let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+            if value == VALUE_UNINITIALIZED {
+                continue;
+            }
+            Self::create_element_or_throw(object, index, value, heap, realm)?;
+        }
+        // Step 6 of 23.1.3.1 writes the `length` with 7.3.4; 23.1.3.14 has no
+        // such step and leaves the one the writes made.
+        let tail = promise::slot(heap, record, 1);
+        if let Some(count) = tail.as_smi() {
+            if Self::length_setter(object, heap, realm)?.is_some() {
+                return Err(VMError::Unsupported(
+                    "a `length` of 23.1.3.1 that is a setter of the Script",
+                ));
+            }
+            Self::set_array_like_length_wide(object, i64::from(count), heap, realm)?;
+        }
+        Ok(made)
     }
 
     /// Opens the record a clause of 22.2.6 keeps its reads in and runs it.
@@ -14465,6 +14599,13 @@ impl RegisterVM {
             for index in 0..count.min(passed_in.len()) {
                 passed.push(*passed_in.get(index).unwrap_or(&VALUE_UNDEFINED));
             }
+        } else if let Some(Resume::Species { values }) = frame.resume {
+            let record = heap
+                .root_value(values)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            if count > 0 {
+                passed.push(promise::slot(heap, record, 2));
+            }
         } else if let Some(Resume::Reviver { state }) = frame.resume {
             let record = heap
                 .root_value(state)
@@ -15236,7 +15377,7 @@ impl RegisterVM {
                     }
                 }
                 // 23.1.3.1 step 2 makes the answer with 23.1.3.4.
-                Self::array_species_of_holes(object, values, heap, realm)
+                self.array_species_of_holes(object, values, 0, true, heap, realm)
             }
             // 23.1.3.14: every index of an Array element becomes an index of
             // the answer, as deep as the depth allows.
@@ -15251,7 +15392,7 @@ impl RegisterVM {
                 };
                 let values = self.flatten(object, length, depth, heap, realm)?;
                 // 23.1.3.14 step 4 makes the answer with 23.1.3.4.
-                Self::array_species_of_holes(object, values, heap, realm)
+                self.array_species_of_holes(object, values, 0, false, heap, realm)
             }
             // 23.1.3.35: a copy with one range replaced, which reads every
             // index it passes and so answers no hole.
@@ -15885,13 +16026,42 @@ impl RegisterVM {
 
     /// The Array 23.1.3.4 makes for this receiver, holding these values.
     fn array_species_of_holes(
+        &mut self,
         original: ObjectRef,
         values: Vec<Option<Value>>,
+        wanted: u32,
+        sets_length: bool,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
         let count = u32::try_from(values.len()).map_err(|_| VMError::PropertyLimit)?;
-        let array = Self::array_species_create(original, count, heap, realm)?;
+        // Step 2 of 23.1.3.1 and step 4 of 23.1.3.14 ask for no element at
+        // all, and step 7 of 23.1.3.28 for the count of the range: the Array
+        // of this Realm takes the count either way, so a trailing hole keeps
+        // its place, and a species of the Script is given what its clause
+        // says.
+        let made = Self::array_species_or_constructor(original, count, heap, realm)?;
+        // Step 7 constructs a species of the Script, which the clause leaves
+        // to the caller: it has a frame and this has none.
+        let Ok(array) = made else {
+            let Err(species) = made else {
+                return Err(VMError::TypeError);
+            };
+            let held = Value::from_object(realm.array(heap, 0)?);
+            for (index, value) in values.into_iter().enumerate() {
+                let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+                promise::set_slot(heap, held, index, value.unwrap_or(VALUE_UNINITIALIZED))?;
+            }
+            let tail = if sets_length {
+                index_value(i64::from(count))
+            } else {
+                VALUE_UNDEFINED
+            };
+            let record =
+                promise::record(heap, realm, &[held, tail, index_value(i64::from(wanted))])?;
+            self.pending_species = Some((species, record));
+            return Ok(VALUE_UNDEFINED);
+        };
         for (index, value) in values.into_iter().enumerate() {
             let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
             if let Some(value) = value {
@@ -16266,18 +16436,19 @@ impl RegisterVM {
                     absolute_index(integer_argument(last, heap, realm)?, length).clamp(0, length)
                 };
                 let count = end.saturating_sub(start).max(0);
-                let result = Self::array_species_create_wide(object, count, heap, realm)?;
-                let mut target = 0u32;
+                Self::refuse_long_copy(count, heap, realm)?;
+                let mut values = Vec::new();
                 let mut index = start;
                 while index < end {
-                    self.charge_for_step(i64::from(target))?;
-                    if let Some(value) = Self::element_at_wide(heap, object, index)? {
-                        heap.set_array_element(result, target, value)?;
-                    }
-                    target = target.saturating_add(1);
+                    let taken = i64::try_from(values.len()).unwrap_or(i64::MAX);
+                    self.charge_for_step(taken)?;
+                    values.push(Self::element_at_wide(heap, object, index)?);
                     index = index.saturating_add(1);
                 }
-                Ok(Value::from_object(result))
+                // 23.1.3.28 step 7 makes the answer with 23.1.3.4, which for
+                // a species of the Script is a frame the caller opens.
+                let wanted = u32::try_from(count).map_err(|_| VMError::PropertyLimit)?;
+                self.array_species_of_holes(object, values, wanted, true, heap, realm)
             }
             // 23.1.3.20: the same in descending order, from the last index
             // when no second argument is present.
@@ -28770,6 +28941,7 @@ impl RegisterVM {
                         | Resume::Replace { .. }
                         | Resume::Stringify { .. }
                         | Resume::Reviver { .. }
+                        | Resume::Species { .. }
                         | Resume::Answered { .. }
                 )
             ) {
@@ -32213,6 +32385,7 @@ impl RegisterVM {
                                     | Resume::Replace { .. }
                                     | Resume::Stringify { .. }
                                     | Resume::Reviver { .. }
+                                    | Resume::Species { .. }
                                     | Resume::CollectionWalk { .. }
                                     | Resume::CollectionInsert { .. }
                                     | Resume::IteratorWalk { .. }
@@ -32368,6 +32541,16 @@ impl RegisterVM {
                                         heap,
                                         realm,
                                     )?,
+                                    // 23.1.3.4 step 7 answered the object the
+                                    // values of the clause go into.
+                                    Resume::Species { values } => {
+                                        let answer = Self::fill_the_species_of_a_copy(
+                                            values, self.acc, heap, realm,
+                                        );
+                                        heap.exit_scope();
+                                        self.acc = answer?;
+                                        None
+                                    }
                                     // 25.5.1.1 step 3 takes what the reviver
                                     // answered for one name.
                                     Resume::Reviver { state } => self.step_the_reviver(

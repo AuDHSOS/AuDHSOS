@@ -9412,6 +9412,14 @@ fn a_species_of_23_1_3_4_that_is_a_constructor_of_the_script() -> Result<(), Err
         "function T(){throw new RangeError('s')}var a=[1];Object.defineProperty(a,'constructor',{value:{}});a.constructor[Symbol.species]=T;var r;try{a.map(function(v){return v})}catch(e){r=e.message};r",
         // 7.3.5 writes a property of its own, whatever the species made.
         "function F(){var q=[];Object.defineProperty(q,0,{value:0,writable:false,configurable:true,enumerable:false});return q}var a=[1];Object.defineProperty(a,'constructor',{value:{}});a.constructor[Symbol.species]=F;var r=a.map(function(){return 2});var d=Object.getOwnPropertyDescriptor(r,0);''+d.value+d.writable+d.enumerable+d.configurable",
+        // 23.1.3.1 and 23.1.3.14 ask 23.1.3.4 for no element at all, and
+        // 23.1.3.28 for the count of the range.
+        "var a=[1,2];Object.defineProperty(a,'constructor',{value:E});var c=a.concat([3,4]);''+(c instanceof D)+c.n+c[0]+c[1]+c[2]+c[3]+c.length",
+        "var a=[[1],[2]];Object.defineProperty(a,'constructor',{value:E});var f=a.flat();''+(f instanceof D)+f.n+f[0]+f[1]",
+        "var a=[1,2,3,4,5];Object.defineProperty(a,'constructor',{value:E});var c=a.slice(1,-1);''+(c instanceof D)+c.n+c[0]+c[1]+c[2]+c.length",
+        // 10.2.2 step 13 takes the Object the constructor answered.
+        "var made=[];function F(){return made}var a=[1];Object.defineProperty(a,'constructor',{value:{}});a.constructor[Symbol.species]=F;''+(a.slice(0)===made)",
+        "var a=[1];Object.defineProperty(a,'constructor',{value:E});''+a.concat().length",
     ] {
         let source = alloc::format!("{made}{source}");
         differential(&source)?;
