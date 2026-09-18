@@ -793,8 +793,9 @@ impl Execution<'_> {
         let Ok(text) = alloc::string::String::from_utf16(source) else {
             return crate::engine::interpreter::Compiled::Refused;
         };
-        let Ok(program) = crate::bytecode::compile_eval(&text, self.limits, strict_caller) else {
-            return crate::engine::interpreter::Compiled::Refused;
+        let program = match crate::bytecode::compile_eval(&text, self.limits, strict_caller) {
+            Ok(program) => program,
+            Err(error) => return Self::refused_source(&error),
         };
         let Some(code) = program.register_code.as_ref() else {
             return crate::engine::interpreter::Compiled::Unlowered;
@@ -814,8 +815,9 @@ impl Execution<'_> {
         let Ok(text) = alloc::string::String::from_utf16(source) else {
             return crate::engine::interpreter::Compiled::Refused;
         };
-        let Ok(program) = crate::bytecode::compile_dynamic_expression(&text, self.limits) else {
-            return crate::engine::interpreter::Compiled::Refused;
+        let program = match crate::bytecode::compile_dynamic_expression(&text, self.limits) {
+            Ok(program) => program,
+            Err(error) => return Self::refused_source(&error),
         };
         let Some(code) = program.register_code.as_ref() else {
             return crate::engine::interpreter::Compiled::Unlowered;
@@ -824,6 +826,16 @@ impl Execution<'_> {
             crate::engine::interpreter::Compiled::Unlowered,
             crate::engine::interpreter::Compiled::Unit,
         )
+    }
+
+    /// What a text the compiler refused answers: the gap of the migration for
+    /// syntax this compiler recognizes and has not built, and the
+    /// `SyntaxError` the Script sees for every other rejection.
+    const fn refused_source(error: &Error) -> crate::engine::interpreter::Compiled {
+        match error {
+            Error::Unsupported { .. } => crate::engine::interpreter::Compiled::Unlowered,
+            _ => crate::engine::interpreter::Compiled::Refused,
+        }
     }
 
     fn register_unit(

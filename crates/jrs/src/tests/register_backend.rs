@@ -8041,6 +8041,15 @@ fn the_function_constructor_compiles_a_body_at_run_time() -> Result<(), Error> {
     ] {
         differential_scripts(&[source])?;
     }
+    // Syntax the compiler has not built is a gap of the migration, which the
+    // body of 20.2.1.1 names rather than answering the `SyntaxError` of its
+    // step 12.
+    let program = compile("Function('a?.b')", Limits::default())?;
+    assert!(program.uses_register_backend());
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
     Ok(())
 }
 
