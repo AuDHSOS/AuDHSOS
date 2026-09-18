@@ -15385,7 +15385,10 @@ impl RegisterVM {
             };
             return self.match_array(&text, &matched, pattern.indices, heap, realm);
         }
-        self.global_match(receiver, &pattern, &text, heap, realm)
+        // 22.2.6.8 step 6.e.iv reads `fullUnicode` out of the flags step 3
+        // read off the object.
+        let unicode = flags.contains(&u16::from(b'u')) || flags.contains(&u16::from(b'v'));
+        self.global_match(receiver, &pattern, &text, unicode, heap, realm)
     }
 
     /// `RegExp.prototype[@@split]` of 22.2.6.14.
@@ -19821,6 +19824,8 @@ impl RegisterVM {
         // replace at the beginning.
         let flags = self.regexp_flags_text(Value::from_object(receiver), heap, realm)?;
         let global = flags.contains(&u16::from(b'g'));
+        // Step 10 keeps whether the flags name `u`, which 22.2.7.3 reads.
+        let unicode = flags.contains(&u16::from(b'u')) || flags.contains(&u16::from(b'v'));
         if global {
             Self::set_last_index(receiver, Value::from_smi(0), heap, realm)?;
         }
@@ -19848,7 +19853,7 @@ impl RegisterVM {
             // 22.2.6.11 step 11.c advances over an empty match, which
             // otherwise matches at the same index for ever.
             if start == end {
-                let next = end.saturating_add(1);
+                let next = Self::advance_string_index(text, end, unicode);
                 if next > text.len() {
                     break;
                 }
@@ -20056,7 +20061,10 @@ impl RegisterVM {
             };
             return self.match_array(&text, &matched, pattern.indices, heap, realm);
         }
-        self.global_match(receiver, &pattern, &text, heap, realm)
+        // 22.2.6.8 step 6.e.iv reads `fullUnicode` out of the flags step 4
+        // read; the pattern of 22.1.3.14 carries the same text.
+        let unicode = pattern.flags.contains('u') || pattern.flags.contains('v');
+        self.global_match(receiver, &pattern, &text, unicode, heap, realm)
     }
 
     /// Step 8 of 22.2.6.8: a global pattern walks the whole text from index
@@ -20069,6 +20077,7 @@ impl RegisterVM {
         receiver: ObjectRef,
         pattern: &crate::regexp::RegExp,
         text: &[u16],
+        unicode: bool,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
@@ -20089,8 +20098,8 @@ impl RegisterVM {
             // Step 8.f.iii: an empty match advances by one code unit, which
             // `AdvanceStringIndex` of 22.2.7.3 does.
             if matched.range.is_empty() {
-                let next = i32::try_from(matched.range.end.saturating_add(1))
-                    .map_err(|_| VMError::StringLimit)?;
+                let next = Self::advance_string_index(text, matched.range.end, unicode);
+                let next = i32::try_from(next).map_err(|_| VMError::StringLimit)?;
                 Self::set_last_index(receiver, Value::from_smi(next), heap, realm)?;
             }
         }
@@ -20098,6 +20107,21 @@ impl RegisterVM {
             return Ok(VALUE_NULL);
         }
         self.split_result(&parts, heap, realm)
+    }
+
+    /// `AdvanceStringIndex` of 22.2.7.3: one code unit, or the code point at
+    /// the index where the flags name `u` and a surrogate pair stands there.
+    fn advance_string_index(text: &[u16], index: usize, unicode: bool) -> usize {
+        let next = index.saturating_add(1);
+        if !unicode {
+            return next;
+        }
+        let leading = text.get(index).copied().unwrap_or(0);
+        let paired = (0xD800..0xDC00).contains(&leading)
+            && text
+                .get(next)
+                .is_some_and(|unit| (0xDC00..0xE000).contains(unit));
+        if paired { next.saturating_add(1) } else { next }
     }
 
     /// Writes `lastIndex`, which 22.2.6.1 keeps writable and neither
