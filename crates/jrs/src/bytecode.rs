@@ -798,6 +798,10 @@ struct RegisterLowerer {
     )>,
     /// The binding 10.4.4 made for `arguments`, when this body reads it.
     arguments_binding: Option<RegisterBinding>,
+    /// The names the body of this function declares with `var` and no
+    /// enclosing scope binds. 10.2.11 step 28 keeps them out of the
+    /// environment the Initializers of the parameters run in.
+    body_var_names: Vec<String>,
     /// How many formal parameters 10.4.4.7 could map the indices of the
     /// arguments object onto.
     mapped_parameters: usize,
@@ -1020,6 +1024,7 @@ impl RegisterLowerer {
             finallies: Vec::new(),
             open_iterators: Vec::new(),
             arguments_binding: None,
+            body_var_names: Vec::new(),
             mapped_parameters: 0,
             maps_arguments: false,
             assignment_strict: false,
@@ -1763,6 +1768,9 @@ impl RegisterLowerer {
             if !self.bindings.contains_key(name) {
                 self.declare(name, true)?;
                 self.bindings.get_mut(name)?.value_type = Some(RegisterType::Undefined);
+                // No enclosing scope binds this name, so it is one of the
+                // names 10.2.11 step 28 puts in the var environment alone.
+                self.body_var_names.push(name.clone());
             } else if self
                 .bindings
                 .get(name)
@@ -4165,6 +4173,29 @@ impl RegisterLowerer {
                 }
             }
             child.bindings.get_mut(name)?.value_type = Some(RegisterType::Unknown);
+        }
+        // 10.2.11 steps 27 and 28: a function with parameter expressions runs
+        // the Initializers in an environment of its own, and the names its
+        // body declares with `var` belong to a second one that is made after
+        // them. This lowering gives the frame one environment, so a name an
+        // Initializer reads and the body declares would answer the body's
+        // binding where the clause answers the one around the function.
+        if register_has_parameter_expressions(function) {
+            let separated: BTreeSet<&String> = child.body_var_names.iter().collect();
+            let mut read = BTreeSet::new();
+            let mut nested = BTreeSet::new();
+            for parameter in &function.parameters {
+                if let Some(default) = &parameter.default {
+                    register_expression_references(default, &mut read, &mut nested)?;
+                }
+            }
+            if read
+                .union(&nested)
+                .any(|name| separated.contains(&name.clone()))
+            {
+                child.refuse("a var of a body an Initializer of a parameter reads");
+                return None;
+            }
         }
         child.initialize_parameter_defaults(function)?;
         // 27.5.1.1: 10.2.11 binds the parameters before the Generator is made,
@@ -14604,6 +14635,14 @@ impl Compiler {
         }
         Ok(())
     }
+}
+
+/// Whether 10.2.11 step 17 answers true: a parameter list with an Initializer
+/// or a pattern runs in an environment of its own.
+fn register_has_parameter_expressions(function: &Function) -> bool {
+    function.parameters.iter().any(|parameter| {
+        parameter.default.is_some() || !matches!(parameter.pattern, parser::BindingPattern::Name(_))
+    })
 }
 
 fn var_names(stmt: &Stmt, names: &mut Vec<String>) {
