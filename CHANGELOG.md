@@ -911,9 +911,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   value, its default of 2.2 and the rule that `text-core` never holds it are
   unchanged.
 
-- `text-demo` joins the workspace policy table as a host crate, gains the SPDX
-  header and `#![forbid(unsafe_code)]` its crate root was missing, and drops
-  two Clippy findings. It stays the throwaway D-177 to D-184 replace.
+- `text-demo` stays the throwaway D-177 to D-184 replace. Bringing it under the
+  workspace checks — the policy table, the SPDX headers, `forbid(unsafe_code)`
+  and two Clippy findings — was done on `main` in parallel by 05bf4e6, and the
+  merge keeps that version.
 
 - `fonts/`: layer 6 of both chains is `noto/emoji/Noto-COLRv1.ttf`, the COLRv1
   build of Noto Color Emoji 2.051, in place of the CBDT `NotoColorEmoji.ttf`

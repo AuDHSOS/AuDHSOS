@@ -212,8 +212,11 @@ fn contour(points: &[Point], place: &dyn Fn(f64, f64) -> (f64, f64)) -> Vec<(f64
     out
 }
 
+/// Closed contours in device space.
+type Polygons = Vec<Vec<(f64, f64)>>;
+
 /// CFF / CFF2 cubic path commands.
-fn cff_polys(commands: &[Command], place: &dyn Fn(f64, f64) -> (f64, f64)) -> Vec<Vec<(f64, f64)>> {
+fn cff_polys(commands: &[Command], place: &dyn Fn(f64, f64) -> (f64, f64)) -> Polygons {
     let d = |p: text_core::cff::Position| place(f(p.x), f(p.y));
     let mut polys = Vec::new();
     let mut cur: Vec<(f64, f64)> = Vec::new();
@@ -248,9 +251,6 @@ fn cff_polys(commands: &[Command], place: &dyn Fn(f64, f64) -> (f64, f64)) -> Ve
     polys
 }
 
-/// Device-space polygons of one glyph.
-type Polys = Vec<Vec<(f64, f64)>>;
-
 /// One glyph's outline as device-space polygons.
 #[allow(clippy::too_many_arguments)]
 fn glyph_polys(
@@ -262,7 +262,7 @@ fn glyph_polys(
     scratch: &mut [VariationPoint],
     commands: &mut [Command],
     place: &dyn Fn(f64, f64) -> (f64, f64),
-) -> Result<Polys, Box<dyn Error>> {
+) -> Result<Polygons, Box<dyn Error>> {
     Ok(match face.outline_kind() {
         OutlineKind::TrueType => {
             let glyf = Glyf::parse(face)?;
@@ -850,5 +850,5 @@ fn two_point_conical(
     let root = disc.sqrt();
     [(b + root) / a, (b - root) / a]
         .into_iter()
-        .find(|t| r0 + t * dr >= 0.0)
+        .find(|&t| r0 + t * dr >= 0.0)
 }

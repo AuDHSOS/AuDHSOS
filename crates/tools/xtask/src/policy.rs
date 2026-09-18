@@ -1031,18 +1031,19 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
-        name: "text-demo",
-        path: "crates/text-demo",
-        kind: Kind::Host,
-        deps: &["text-core"],
-        coverage_gate: false,
-        target: Target::Host,
-    },
-    Crate {
         name: "membench",
         path: "crates/tools/membench",
         kind: Kind::Host,
         deps: &[],
+        coverage_gate: false,
+        target: Target::Host,
+    },
+    Crate {
+        // A throwaway rasterizer that makes `text-core`'s numbers visible.
+        name: "text-demo",
+        path: "crates/text-demo",
+        kind: Kind::Host,
+        deps: &["text-core"],
         coverage_gate: false,
         target: Target::Host,
     },
