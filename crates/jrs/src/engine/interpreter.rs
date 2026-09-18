@@ -15542,6 +15542,11 @@ impl RegisterVM {
                 "next called on a value that is not a String Iterator",
             ));
         };
+        // Step 5 of 22.1.5.1.1: an iterator that reached the end of its
+        // String carries none, and every later step answers done.
+        if target.is_undefined() {
+            return Self::iterator_result(None, heap, realm);
+        }
         let text = heap
             .strings
             .to_utf16(target)
