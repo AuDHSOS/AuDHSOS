@@ -138,6 +138,15 @@ impl Call {
     const fn passed_undefined(&self, index: u16, value: Value) -> bool {
         value.is_undefined() && self.coerced & 1u16.wrapping_shl(index as u32) == 0
     }
+
+    /// Whether the call passed a Symbol at `index`.
+    ///
+    /// 22.1.1.1 step 2.a answers the text of a Symbol the call passed; a
+    /// Symbol that 7.1.1 answered for an Object is no argument of the call,
+    /// and 7.1.17 step 2 refuses it.
+    const fn passed_a_symbol(&self, index: u16, value: Value) -> bool {
+        value.is_symbol() && self.coerced & 1u16.wrapping_shl(index as u32) == 0
+    }
 }
 
 /// What the engine writes after the name of an unresolvable binding.
@@ -3296,14 +3305,19 @@ impl RegisterVM {
                 Err(VMError::InvalidFeedbackVector)
             }
             Intrinsic::ArrayConstructor => self.construct_array(call, heap, realm),
-            Intrinsic::StringConstructor => Self::call_string_constructor(
-                call.construct.is_some(),
-                (call.arg_count > 0)
+            Intrinsic::StringConstructor => {
+                let argument = (call.arg_count > 0)
                     .then(|| self.call_argument(&call, 0, heap))
-                    .transpose()?,
-                heap,
-                realm,
-            ),
+                    .transpose()?;
+                let symbol = argument.is_some_and(|value| call.passed_a_symbol(0, value));
+                Self::call_string_constructor(
+                    call.construct.is_some(),
+                    argument,
+                    symbol,
+                    heap,
+                    realm,
+                )
+            }
             // 21.1.1.1: a call with no argument is +0, and every other value
             // goes through ToNumber. `new` makes the Number exotic object of
             // 21.1.3, which this engine has not built.
@@ -4287,6 +4301,7 @@ impl RegisterVM {
     fn call_string_constructor(
         construct: bool,
         target: Option<Value>,
+        symbol: bool,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
@@ -4296,7 +4311,7 @@ impl RegisterVM {
             None => alloc::vec::Vec::new(),
             // Step 2.a answers the text 20.4.3.3.1 gives a Symbol, where every
             // other conversion of one is a `TypeError`.
-            Some(target) => match target.as_symbol().filter(|_| !construct) {
+            Some(target) => match target.as_symbol().filter(|_| !construct && symbol) {
                 Some(symbol) => Self::symbol_descriptive_string(symbol, heap),
                 None => property_name_units(target, heap, realm)?,
             },
@@ -25141,6 +25156,27 @@ impl RegisterVM {
         self.run_loop(units, feedback, heap, realm, pc, code_id)
     }
 
+    /// One step of the run, with the `TypeError` of 7.1.4 step 2 raised where
+    /// the conversion that met the Symbol had no Realm to raise it with.
+    fn run_step(
+        &mut self,
+        units: CodeTable<'_>,
+        feedback: &mut [&mut FeedbackVector],
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+        pc: &mut usize,
+        current_code_id: &mut Option<u32>,
+    ) -> Result<Option<Value>, VMError> {
+        match self.step(units, feedback, heap, realm, pc, current_code_id) {
+            Err(VMError::Unsupported(SYMBOL_TO_NUMBER)) => Err(type_error(
+                heap,
+                realm,
+                "a Symbol where 7.1.4 asks for a Number",
+            )),
+            stepped => stepped,
+        }
+    }
+
     /// Runs instructions until the unit answers or asks for a compilation.
     fn run_loop(
         &mut self,
@@ -25152,7 +25188,7 @@ impl RegisterVM {
         mut current_code_id: Option<u32>,
     ) -> Result<Outcome, VMError> {
         loop {
-            match self.step(units, feedback, heap, realm, &mut pc, &mut current_code_id) {
+            match self.run_step(units, feedback, heap, realm, &mut pc, &mut current_code_id) {
                 Ok(None) => {
                     // 20.2.1.1 stopped the run where the call stands, and the
                     // instruction runs again once the unit exists.
@@ -28457,6 +28493,11 @@ fn numeric_value(value: Value) -> Option<f64> {
 const NUMERIC_CONVERSION_GAP: VMError =
     VMError::Unsupported("ToPrimitive of an Object outside a call");
 
+/// What 7.1.4 step 2 refuses, which the conversion itself has no Realm to
+/// raise the `TypeError` of; the run loop raises it where the value reaches
+/// it.
+const SYMBOL_TO_NUMBER: &str = "ToNumber of a Symbol";
+
 /// `StringToBigInt` of 7.1.14: the value a text names, and none for a text
 /// that names no `BigInt`.
 ///
@@ -28534,7 +28575,7 @@ fn primitive_number(value: Value, heap: &GenerationalHeap) -> Result<f64, VMErro
     if value.is_symbol() {
         // 7.1.4 step 2 is a `TypeError`, which this function has no Realm to
         // raise.
-        return Err(VMError::Unsupported("ToNumber of a Symbol"));
+        return Err(VMError::Unsupported(SYMBOL_TO_NUMBER));
     }
     Err(VMError::TypeError)
 }
@@ -29363,11 +29404,25 @@ mod tests {
             .allocate_object(heap.shapes.root_shape(), VALUE_NULL)
             .unwrap();
 
-        for (value, expected) in [
-            (
-                Value::from_symbol(super::super::value::SymbolRef(0)),
-                VMError::Unsupported("ToNumber of a Symbol"),
+        // 7.1.4 step 2 refuses a Symbol with a `TypeError` of the Realm, which
+        // the run raises where the conversion answered the gap.
+        let mut feedback = FeedbackVector::for_code(&code);
+        let mut vm = RegisterVM::new(100);
+        assert!(matches!(
+            vm.run_with_arguments(
+                &code,
+                &[Value::from_symbol(super::super::value::SymbolRef(0))],
+                &mut feedback,
+                &mut heap,
+                &realm,
             ),
+            Err(VMError::Thrown(
+                _,
+                Some((crate::engine::realm::NativeErrorKind::TypeError, _))
+            ))
+        ));
+
+        for (value, expected) in [
             (
                 Value::from_bigint(super::super::value::BigIntRef(0)),
                 VMError::TypeError,

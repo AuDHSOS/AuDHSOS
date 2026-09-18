@@ -9110,6 +9110,17 @@ fn a_symbol_where_7_1_17_wants_a_string_is_a_type_error() -> Result<(), Error> {
         "var r;try{['a'].join(Symbol())}catch(e){r=e instanceof TypeError}r",
         "var r;try{'ab'.split(Symbol())}catch(e){r=e instanceof TypeError}r",
         "var r;try{'ab'.startsWith(Symbol())}catch(e){r=e instanceof TypeError}r",
+        // 7.1.4 step 2 refuses a Symbol the same way, wherever the value
+        // reaches a conversion to a Number.
+        "var r;try{Number(Symbol())}catch(e){r=e instanceof TypeError}r",
+        "var r;try{+Symbol()}catch(e){r=e instanceof TypeError}r",
+        "var r;try{Symbol()*2}catch(e){r=e instanceof TypeError}r",
+        "var r;try{isNaN(Symbol())}catch(e){r=e instanceof TypeError}r",
+        "var r;try{''.repeat(Symbol())}catch(e){r=e instanceof TypeError}r",
+        // 22.1.1.1 step 2.a answers the text of a Symbol the call passed; the
+        // Symbol 7.1.1 answers for its wrapper is no argument of the call.
+        "var r;try{String(Object(Symbol()))}catch(e){r=e instanceof TypeError}r",
+        "String(Symbol('d'))",
         // 7.1.19 keeps a Symbol as the key it is, so a property read of one
         // reaches no conversion at all.
         "var o={};o[Symbol.iterator]=1;typeof o[Symbol.iterator]",
