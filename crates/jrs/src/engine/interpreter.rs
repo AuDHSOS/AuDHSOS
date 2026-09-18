@@ -2152,6 +2152,17 @@ impl RegisterVM {
                 "a class constructor cannot be called without new",
             ));
         }
+        // 27.6.3, 27.7.3 and 27.10.3 give a generator function, an async
+        // generator function and an async function no `[[Construct]]`.
+        if call.construct.is_some()
+            && (callee.generator || callee.async_generator || callee.asynchronous)
+        {
+            return Err(type_error(
+                heap,
+                realm,
+                "a generator or an async function cannot be constructed",
+            ));
+        }
         if self.frames.len() >= self.call_frame_limit || self.frames.len() == self.frames.capacity()
         {
             return Err(VMError::CallStackOverflow);
@@ -6219,6 +6230,59 @@ impl RegisterVM {
     /// A function a Script wrote carries one where 10.2.5 gave it a
     /// `prototype`; an arrow and a method have none. A native has one where
     /// the Realm builds the object it would make.
+    /// 27.6.3 and 27.7.3 give a generator function and an async generator
+    /// function no `[[Construct]]`, which the Prototype of the object names.
+    fn has_no_construct(
+        value: Value,
+        heap: &GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<bool, VMError> {
+        let Some(object) = value.as_object() else {
+            return Ok(false);
+        };
+        let prototype = heap
+            .get_object(object)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?
+            .prototype;
+        Ok(prototype == realm.generator_function_prototype(heap)?
+            || prototype == realm.async_generator_function_prototype(heap)?)
+    }
+
+    /// `IsRegExp` of 22.2.7.2, which 22.1.3.7, 22.1.3.8 and 22.1.3.22 refuse
+    /// as their search string.
+    ///
+    /// A `@@match` that is an accessor is a call of the Script these natives
+    /// have no frame to make.
+    fn refuse_a_regexp(
+        value: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let Some(object) = value.as_object() else {
+            return Ok(());
+        };
+        let matcher = match heap.lookup_named(object, super::realm::WellKnownSymbol::Match.key())? {
+            Some(found) => Self::plain_value(found)?,
+            None => VALUE_UNDEFINED,
+        };
+        let is_regexp = if matcher.is_undefined() {
+            matches!(
+                heap.get_object(object).map(|entry| &entry.kind),
+                Some(&ObjectKind::RegExp { .. })
+            )
+        } else {
+            Self::to_boolean(matcher, heap)?
+        };
+        if is_regexp {
+            return Err(type_error(
+                heap,
+                realm,
+                "the search string of 22.1.3 is a RegExp",
+            ));
+        }
+        Ok(())
+    }
+
     fn constructs(value: Value, heap: &GenerationalHeap) -> bool {
         let Some(object) = value.as_object() else {
             return false;
@@ -9910,15 +9974,42 @@ impl RegisterVM {
     /// `CreateMethodProperty` of 7.3.5, which 15.7.14 relies on: the method
     /// in the accumulator becomes a writable and configurable property that is
     /// not enumerable.
+    /// 7.3.7 through 10.1.6.3: a property that is not configurable takes no
+    /// new value, unless it is a writable data property and stays one.
+    ///
+    /// 15.7.14 defines a static element on the constructor, whose `prototype`
+    /// 10.2.5 made neither writable nor configurable.
+    fn refuse_redefinition(
+        target: ObjectRef,
+        name: PropertyKey,
+        accessor: bool,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let Some(flags) = heap.own_named_flags(target, name)? else {
+            return Ok(());
+        };
+        if flags.configurable || (!accessor && !flags.is_accessor && flags.writable) {
+            return Ok(());
+        }
+        Err(type_error(
+            heap,
+            realm,
+            "cannot redefine a property that is not configurable",
+        ))
+    }
+
     fn define_method(
         &self,
         obj: Reg,
         name: PropertyKey,
         enumerable: bool,
         heap: &mut GenerationalHeap,
+        realm: &Realm,
     ) -> Result<(), VMError> {
         let method = self.acc;
         let target = self.read_reg(obj)?.as_object().ok_or(VMError::TypeError)?;
+        Self::refuse_redefinition(target, name, false, heap, realm)?;
         Self::make_method(method, target, heap)?;
         heap.define_own_named(
             target,
@@ -10028,7 +10119,7 @@ impl RegisterVM {
         let (proto_parent, class_parent) = if value.is_null() {
             (VALUE_NULL, realm.function_prototype(heap)?)
         } else {
-            if !Self::constructs(value, heap) {
+            if !Self::constructs(value, heap) || Self::has_no_construct(value, heap, realm)? {
                 return Err(type_error(heap, realm, "class extends a non-constructor"));
             }
             let parent = value.as_object().ok_or(VMError::TypeError)?;
@@ -10388,8 +10479,10 @@ impl RegisterVM {
         setter: bool,
         enumerable: bool,
         heap: &mut GenerationalHeap,
+        realm: &Realm,
     ) -> Result<(), VMError> {
         let oref = self.read_reg(obj)?.as_object().ok_or(VMError::TypeError)?;
+        Self::refuse_redefinition(oref, name, true, heap, realm)?;
         Self::make_method(self.acc, oref, heap)?;
         let (get, set) = match heap.own_named_flags(oref, name)? {
             Some(flags) if flags.is_accessor => {
@@ -13337,6 +13430,8 @@ impl RegisterVM {
             }
             // 22.1.3.7: the search ends at the clamped position.
             Intrinsic::StringPrototypeEndsWith => {
+                // Step 3 refuses a RegExp before it converts the argument.
+                Self::refuse_a_regexp(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 let search = property_name_units(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 let end = match self.call_argument(&call, 1, heap)? {
                     value if value.is_undefined() => units.len(),
@@ -13349,6 +13444,8 @@ impl RegisterVM {
             }
             // 22.1.3.8: the search starts at the clamped position.
             Intrinsic::StringPrototypeIncludes => {
+                // Step 3 refuses a RegExp before it converts the argument.
+                Self::refuse_a_regexp(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 let search = property_name_units(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 let start = clamped_index(
                     integer_argument(self.call_argument(&call, 1, heap)?, heap, realm)?,
@@ -13422,6 +13519,8 @@ impl RegisterVM {
             }
             // 22.1.3.24: the search starts at the clamped position.
             Intrinsic::StringPrototypeStartsWith => {
+                // Step 3 refuses a RegExp before it converts the argument.
+                Self::refuse_a_regexp(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 let search = property_name_units(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 let start = clamped_index(
                     integer_argument(self.call_argument(&call, 1, heap)?, heap, realm)?,
@@ -15657,6 +15756,18 @@ impl RegisterVM {
                     "the array of 25.4.13 looks into no SharedArrayBuffer",
                 ));
             }
+            return Ok(());
+        }
+        // Step 3 of 22.1.3.7, 22.1.3.8 and 22.1.3.22 refuses a RegExp as the
+        // search string, before 7.1.17 converts it.
+        if matches!(
+            intrinsic,
+            Intrinsic::StringPrototypeEndsWith
+                | Intrinsic::StringPrototypeIncludes
+                | Intrinsic::StringPrototypeStartsWith
+        ) {
+            let search = self.call_argument(call, 0, heap)?;
+            Self::refuse_a_regexp(search, heap, realm)?;
             return Ok(());
         }
         // Steps 1 and 2 of 25.3.3.1 refuse a call without `new` and a first
@@ -23497,7 +23608,7 @@ impl RegisterVM {
                         .get(name as usize)
                         .ok_or(VMError::InvalidRegister)?;
                     let name = PropertyKey::String(heap.strings.intern_units(units)?);
-                    self.define_method(obj, name, false, heap)?;
+                    self.define_method(obj, name, false, heap, realm)?;
                 }
                 Instruction::DefineMethodByValue {
                     obj,
@@ -23508,7 +23619,7 @@ impl RegisterVM {
                     // 15.7.14 and 13.2.5.5 name a method after the key only
                     // the run time knows, which 10.2.10 does here.
                     self.name_from_key(name, None, heap)?;
-                    self.define_method(obj, name, enumerable, heap)?;
+                    self.define_method(obj, name, enumerable, heap, realm)?;
                 }
                 Instruction::DefineAccessorByValue {
                     obj,
@@ -23518,7 +23629,7 @@ impl RegisterVM {
                 } => {
                     let name = property_key(self.read_reg(key)?, heap, realm)?;
                     self.name_from_key(name, Some(setter), heap)?;
-                    self.define_accessor(obj, name, setter, enumerable, heap)?;
+                    self.define_accessor(obj, name, setter, enumerable, heap, realm)?;
                 }
                 Instruction::DefineAccessor {
                     obj,
@@ -23531,7 +23642,7 @@ impl RegisterVM {
                         .get(name as usize)
                         .ok_or(VMError::InvalidRegister)?;
                     let name = PropertyKey::String(heap.strings.intern_units(units)?);
-                    self.define_accessor(obj, name, setter, enumerable, heap)?;
+                    self.define_accessor(obj, name, setter, enumerable, heap, realm)?;
                 }
                 Instruction::GetArrayLength { obj } => {
                     let target = self.read_reg(obj)?;

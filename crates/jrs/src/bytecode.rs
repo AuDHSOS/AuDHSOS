@@ -1526,6 +1526,10 @@ impl RegisterLowerer {
             arg_count: 0,
             slot: close_slot,
         });
+        // 7.4.11 step 6 asks what `return` answered for an Object.
+        self.code.emit(Instruction::Require(
+            crate::engine::bytecode::RequireKind::IteratorResult,
+        ));
         let end = self.code.instructions.len();
         self.patch_jump(closed, end)?;
         self.patch_jump(skip, end)?;
@@ -8740,13 +8744,14 @@ impl RegisterLowerer {
             arg_count: 0,
             slot: close_slot,
         });
-        // 7.4.11 waits for what `return` answered and asks it for an Object.
+        // 7.4.15 waits for what `return` answered; 7.4.11 step 6 and 7.4.15
+        // step 7 ask it for an Object.
         if awaited {
             self.code.emit(Instruction::Await);
-            self.code.emit(Instruction::Require(
-                crate::engine::bytecode::RequireKind::IteratorResult,
-            ));
         }
+        self.code.emit(Instruction::Require(
+            crate::engine::bytecode::RequireKind::IteratorResult,
+        ));
         let after = self.code.instructions.len();
         self.patch_jump(skip, after)?;
         Some(())
