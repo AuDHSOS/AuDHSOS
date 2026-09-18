@@ -836,6 +836,8 @@ Size: L.
     database file. Built, which D-292 records. A second connection that
     holds the log back is still one this crate has none of, so the first
     column is always nought.
+65. What a foreign key action is held to, and how far a chain of them
+    reaches. Built, which D-300 records.
 
 ### Done when
 
@@ -845,8 +847,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 96 590 cases in 777 files, 81 892
-pass, 3338 answer differently, and 11 360 name something the engine
+under the `tclsh` of the machine. Of 96 349 cases in 777 files, 81 726
+pass, 3263 answer differently, and 11 360 name something the engine
 refuses or a command that needs the C library's internals. Twenty files
 reach the sixty-second deadline and are counted with the cases they ran
 by then, four of them cut at a different case each run, so the counts

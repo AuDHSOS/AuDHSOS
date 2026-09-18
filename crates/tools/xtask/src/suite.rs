@@ -693,6 +693,7 @@ impl Session {
             }
             "close" => {
                 self.connections.remove(first);
+                self.nulls.remove(first);
                 self.counters.remove(first);
                 self.pragmas.remove(first);
                 self.collations.remove(first);
@@ -738,6 +739,8 @@ impl Session {
                 self.nulls.insert(first.to_owned(), second.to_owned());
                 Ok(Vec::new())
             }
+            // `sqlite3_table_column_metadata DB SCHEMA TABLE COLUMN`.
+            "columnmeta" => self.column_meta(first, second, args.get(2).map_or("", String::as_str)),
             "eval" => self.eval(first, second),
             "names" => self.names(first, second),
             "changes" | "total_changes" | "rowid" => self.counted(verb, first),
@@ -844,6 +847,64 @@ impl Session {
         Ok(vec![written.len().to_string()])
     }
 
+    /// `sqlite3_table_column_metadata`: what the schema says about one
+    /// column — the type it was declared with, the collation it compares
+    /// under, whether it may be nothing, whether it stands in the
+    /// primary key, and whether that key counts up.
+    ///
+    /// `rowid`, `oid` and `_rowid_` name the key of a table that holds
+    /// its rows under one, unless a column of the table carries that
+    /// name. Reading the schema costs O(n) in its bytes.
+    fn column_meta(&self, name: &str, table: &str, column: &str) -> Result<Vec<String>, String> {
+        let missing = || format!("no such table column: {table}.{column}");
+        let path = self
+            .connections
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("no such connection: {name}"))?;
+        let writer = self
+            .held
+            .get(&path)
+            .ok_or_else(|| format!("no such database: {path}"))?;
+        let bytes = writer.written();
+        let collating = self.collations.get(name).copied().unwrap_or_default();
+        let database =
+            Database::open_collating(&bytes, collating).map_err(|error| error.message())?;
+        let (held, _) = database.table(table.as_bytes()).ok_or_else(missing)?;
+        let keyed = !held.without_rowid;
+        let at = held
+            .columns
+            .iter()
+            .position(|one| one.name.eq_ignore_ascii_case(column.as_bytes()));
+        let found = at.and_then(|at| held.columns.get(at));
+        let Some(found) = found else {
+            // The key of a table that holds its rows under one answers
+            // to three names, and every one of them is a column the
+            // schema does not carry.
+            let rowid = ["rowid", "oid", "_rowid_"]
+                .iter()
+                .any(|held| column.eq_ignore_ascii_case(held));
+            if !rowid || !keyed {
+                return Err(missing());
+            }
+            return Ok(vec![
+                "INTEGER".to_owned(),
+                "BINARY".to_owned(),
+                "0".to_owned(),
+                "1".to_owned(),
+                usize::from(held.autoincrement).to_string(),
+            ]);
+        };
+        let alias = held.rowid_alias.is_some() && held.rowid_alias == at;
+        Ok(vec![
+            String::from_utf8_lossy(&found.declared).into_owned(),
+            collation_named(found.collation),
+            usize::from(found.not_null).to_string(),
+            usize::from(found.key != 0 || alias).to_string(),
+            usize::from(alias && held.autoincrement).to_string(),
+        ])
+    }
+
     /// The bytes the harness holds under `name`: the database itself,
     /// the log beside it, or the journal beside it.
     ///
@@ -893,7 +954,7 @@ impl Session {
             self.held.insert(path.to_owned(), writer);
         }
         self.connections.insert(name.to_owned(), path.to_owned());
-        self.nulls.entry(name.to_owned()).or_default();
+        self.nulls.insert(name.to_owned(), String::new());
         // A connection that is opened again counts from nought and was
         // told no pragma, which is what `sqlite3 db test.db` in a file
         // relies on.
@@ -1624,6 +1685,18 @@ fn narrowed(number: i64) -> i32 {
 fn shape(text: &str, message: String) -> String {
     say(&format!("S {} {message}", first_words(text)));
     message
+}
+
+/// The name a collation answers to, which
+/// `sqlite3_table_column_metadata` writes in capitals for the three the
+/// library holds.
+fn collation_named(collation: db_sqlite::value::Collation) -> String {
+    match collation {
+        db_sqlite::value::Collation::NoCase => "NOCASE".to_owned(),
+        db_sqlite::value::Collation::Rtrim => "RTRIM".to_owned(),
+        db_sqlite::value::Collation::Defined(name, _) => String::from_utf8_lossy(name).into_owned(),
+        _ => "BINARY".to_owned(),
+    }
 }
 
 /// A whole number a request carries, which every request that names a

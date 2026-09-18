@@ -52,7 +52,7 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-96 590 cases of 777 files: 81 892 pass, 3338 answer differently and
+96 349 cases of 777 files: 81 726 pass, 3263 answer differently and
 11 360 are refused.
 
 `--configuration` opens every connection of a run under one of nine
@@ -61,7 +61,7 @@ What each answers, over the same files:
 
 | Configuration | Passed | Answered differently | Refused |
 |---------------|-------:|---------------------:|--------:|
-| `utf8-4096-delete` | 81 892 | 3338 | 11 360 |
+| `utf8-4096-delete` | 81 726 | 3263 | 11 360 |
 | `utf16le-4096-delete` | 61 214 | 2392 | 9500 |
 | `utf16be-4096-delete` | 61 229 | 2392 | 9500 |
 | `utf8-512-delete` | 61 073 | 2452 | 9435 |
@@ -73,7 +73,7 @@ What each answers, over the same files:
 
 The counts move by tens between runs of one configuration, because the
 files the deadline ends are counted with the cases they ran. Only the
-first row is a run after D-286 to D-299, the fourth one after D-296; the other seven
+first row is a run after D-286 to D-301, the fourth one after D-296; the other seven
 were measured before them and are lower than they would read now.
 `testfixture` is built with `SQLITE_DEFAULT_PAGE_SIZE=1024`, which
 `main.mk` line 1784 sets, so the fourth row is the page size the files
@@ -363,6 +363,9 @@ Size: S.
     the suite's own tester.
 11. `testfixture` runs the script it was given in this interpreter, and
     `launch_testfixture` names no channel.
+12. `sqlite3_table_column_metadata` answers out of the schema the
+    harness holds, and a connection that opens again writes `NULL` as
+    the empty string.
 
 ### Produces
 

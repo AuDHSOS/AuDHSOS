@@ -774,3 +774,51 @@ fn what_order_the_columns_a_key_points_at_stand_in() {
     writer.run(b"INSERT INTO parent VALUES(1, 2)").unwrap();
     writer.run(b"INSERT INTO c1 VALUES(1, 2)").unwrap();
 }
+
+/// `fkey2-3.1.3` of `test/fkey2.test`: a row an `ON UPDATE CASCADE`
+/// writes is held to the `CHECK` of its table and carries the chain of
+/// keys past the table it wrote.
+#[test]
+fn a_row_a_cascade_writes_is_held_to_the_constraints_of_its_table() {
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE ab(a PRIMARY KEY, b)",
+        "CREATE TABLE cd(c PRIMARY KEY REFERENCES ab ON UPDATE CASCADE ON DELETE CASCADE, d)",
+        "CREATE TABLE ef(e REFERENCES cd ON UPDATE CASCADE, f, CHECK (e!=5))",
+        "INSERT INTO ab VALUES(1, 'b')",
+        "INSERT INTO cd VALUES(1, 'd')",
+        "INSERT INTO ef VALUES(1, 'e')",
+    ])
+    .unwrap();
+    // The chain reaches `ef`, whose `CHECK` refuses the value.
+    assert!(writer.run(b"UPDATE ab SET a = 5").is_err());
+    assert_eq!(answered(&writer, "SELECT a FROM ab"), ["1"]);
+    // A value the `CHECK` holds carries the whole chain.
+    writer.run(b"UPDATE ab SET a = 6").unwrap();
+    assert_eq!(answered(&writer, "SELECT c FROM cd"), ["6"]);
+    assert_eq!(answered(&writer, "SELECT e FROM ef"), ["6"]);
+    // `fkey2-3.2.1`: a row `ef` points at goes with the row `cd`
+    // points at, and `ef` names no action, so the delete is refused.
+    assert_eq!(writer.run(b"DELETE FROM ab"), Err(Error::Foreign));
+}
+
+/// `SQLITE_MAX_TRIGGER_DEPTH`: a chain of keys that reaches deeper than
+/// a trigger's body may is refused.
+#[test]
+fn a_chain_of_cascades_deeper_than_a_trigger_may_reach_is_refused() {
+    let mut statements = alloc::vec![
+        String::from("PRAGMA foreign_keys=ON"),
+        String::from("CREATE TABLE t0(a PRIMARY KEY)"),
+        String::from("INSERT INTO t0 VALUES(1)"),
+    ];
+    for at in 1..40 {
+        statements.push(alloc::format!(
+            "CREATE TABLE t{at}(a PRIMARY KEY REFERENCES t{} ON UPDATE CASCADE)",
+            at - 1
+        ));
+        statements.push(alloc::format!("INSERT INTO t{at} VALUES(1)"));
+    }
+    let borrowed: alloc::vec::Vec<&str> = statements.iter().map(String::as_str).collect();
+    let (mut writer, _) = ran(&borrowed).unwrap();
+    assert_eq!(writer.run(b"UPDATE t0 SET a = 2"), Err(Error::Unsupported));
+}

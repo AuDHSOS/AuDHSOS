@@ -7,6 +7,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` holds a row a foreign key action writes to the
+  constraints of the table it writes and carries the chain of keys past
+  that table, bounded by the depth a trigger's body may reach. D-300
+  records it. Catalog 6.6.204.
+
+- The suite's own tester answers `sqlite3_table_column_metadata` out of
+  the schema the harness holds, and a connection that opens again
+  writes `NULL` as the empty string. D-301 records it. `colmeta.test`
+  answers 48 cases where it answered 2.
+
 - The suite's own tester runs a `testfixture` script in this
   interpreter, carries `$::cmdlinearg`, and answers rather than raises
   for six more commands. D-299 records it. Twenty more files answer a

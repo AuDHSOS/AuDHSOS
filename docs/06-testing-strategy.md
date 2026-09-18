@@ -5960,3 +5960,17 @@ Document 16 step Q8.
   the checkpoint after it answers `0 0 0`.
 - `TRUNCATE` answers `0 0 0` whatever the log held, and the rows stand in
   the file it wrote.
+
+### 6.6.204 What a foreign key action is held to (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A row an `ON UPDATE CASCADE` writes is held to the `CHECK` of the
+  table it writes, so `UPDATE ab SET a=5` over a chain that reaches a
+  `CHECK (e!=5)` is refused and the table keeps the key it had.
+- A value the `CHECK` holds carries the chain to its end, so both tables
+  after the one the statement named hold the new key.
+- A row the chain wrote is a row other rows point at, so a `DELETE` that
+  reaches a key naming no action is refused.
+- A chain of 40 tables each pointing at the one before it is refused
+  rather than reaching the end of the stack.

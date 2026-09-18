@@ -2738,19 +2738,26 @@ impl Writer {
         }
         match action {
             crate::ast::Action::Cascade => {
+                // `sqlite3FkActions` writes the rows that point through
+                // a trigger of its own, so the depth a trigger's body
+                // reaches bounds the actions a chain of keys reaches.
+                let held = self.deepened()?;
                 for (key, values) in rows {
                     match after {
                         None => self.taken_away(&points.child, &key)?,
                         Some(after) => self.written_over(points, &key, &values, after)?,
                     }
                 }
+                self.running.truncate(held);
                 Ok(())
             }
             crate::ast::Action::SetNull | crate::ast::Action::SetDefault => {
                 let fallback = matches!(action, crate::ast::Action::SetDefault);
+                let held = self.deepened()?;
                 for (key, values) in rows {
                     self.written_back(points, &key, &values, fallback)?;
                 }
+                self.running.truncate(held);
                 Ok(())
             }
             // `RESTRICT` is held where the row is written whatever the
@@ -2764,6 +2771,26 @@ impl Writer {
                 Ok(())
             }
         }
+    }
+
+    /// One step deeper, which is what a foreign key action takes before
+    /// it writes the rows that point, and how deep the writer stood
+    /// before that step.
+    ///
+    /// The name pushed carries a byte no identifier holds, so no
+    /// trigger of the schema is taken for it. Costs O(1).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unsupported`] where the chain of keys reaches deeper
+    /// than a trigger's body may.
+    fn deepened(&mut self) -> Result<usize, Error> {
+        if self.running.len() >= TRIGGER_DEPTH {
+            return Err(Error::Unsupported);
+        }
+        let held = self.running.len();
+        self.running.push(b"\0foreign key".to_vec());
+        Ok(held)
     }
 
     /// The rows of the table that points whose key is `wanted`.
@@ -2864,8 +2891,26 @@ impl Writer {
     }
 
     /// One row of a table, written again with the values given.
+    ///
+    /// `sqlite3FkActions` writes the row through a trigger, so the row
+    /// is held to the constraints of its table and the rows that point
+    /// at it are acted on in turn, which is what carries a chain of
+    /// keys past the first of them.
     fn rewrite(&mut self, name: &[u8], key: &[Value], values: &[Value]) -> Result<(), Error> {
+        let (_, _, table, old) = self.one_row(name, key)?;
+        let rowid = keyed_rowid(key);
+        let mut named = values.to_vec();
+        // `Conflict::Abort` refuses a row rather than passing it over,
+        // so the row is held or the action raises.
+        self.constrained(&table, &mut named, rowid, Conflict::Abort)?;
+        // The row the action writes points at the row that changed,
+        // which is written after the action runs, so the key it points
+        // through is held by construction and not read again here.
+        self.orphaned(name, &table, &old, rowid, Some((&named, rowid)))?;
+        // The chain the action carried may have written this row as
+        // well, so the row it stands at now is read again.
         let (root, kept, table, held) = self.one_row(name, key)?;
+        let values = named.as_slice();
         self.unindex_row(&kept, &table, &held, key)?;
         self.index_row(&kept, &table, values, key)?;
         if table.without_rowid {

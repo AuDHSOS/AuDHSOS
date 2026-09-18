@@ -482,7 +482,7 @@ foreach cmd {
   speed_trial speed_trial_init speed_trial_summary
   tcl_variable_type
   sqlite3_db_filename sqlite3_next_stmt sqlite3_stmt_readonly
-  sqlite3_table_column_metadata vfs_unlink_test vfs_shared_errors
+  vfs_unlink_test vfs_shared_errors
   add_alignment_test_collations add_test_collate add_test_function
   add_test_utf16bin_collate autoinstall_test_functions
   sqlite3_snapshot_get sqlite3_snapshot_open sqlite3_snapshot_free
@@ -596,6 +596,13 @@ proc sqlite3_multiplex_initialize {args} { return 0 }
 # the connection at, which the commands that take one are stand-ins
 # for here, so the name of the connection stands for it.
 proc sqlite3_connection_pointer {name} { return $name }
+
+# `sqlite3_table_column_metadata DB SCHEMA TABLE COLUMN`: what the
+# schema says about one column. The connection stands for the pointer,
+# and the schema is always `main` here.
+proc sqlite3_table_column_metadata {db schema table column} {
+  return [harness_send columnmeta $db $table $column]
+}
 
 # `load_static_extension` links a module of the C library into the
 # connection, which this engine holds none of, so the functions the
