@@ -25125,6 +25125,19 @@ impl RegisterVM {
                     Self::make_method(self.acc, target, heap)?;
                 }
                 Instruction::SuperBase { target } => {
+                    // 13.3.7.3 step 3 reads the `this` of the environment,
+                    // which a derived constructor has only after its super
+                    // call.
+                    if let Some(register) = active_code.this_register
+                        && self.read_reg(register)? == VALUE_UNINITIALIZED
+                    {
+                        return Err(raise(
+                            heap,
+                            realm,
+                            super::realm::NativeErrorKind::ReferenceError,
+                            "this is not initialized",
+                        ));
+                    }
                     let home = self
                         .home_of(active_code)?
                         .as_object()
