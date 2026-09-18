@@ -1,0 +1,11 @@
+[package]
+name = "text-demo"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Deliberately not `[lints] workspace = true`: this crate is a throwaway and
+# uses indexing, f64 and unchecked arithmetic that text-core forbids.
+
+[dependencies]
+text-core = { path = "../text-core" }

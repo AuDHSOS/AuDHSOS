@@ -5,6 +5,7 @@
 resolver = "3"
 members = [
     "crates/text-core",
+    "crates/text-demo",
     "crates/regex-bt",
     "crates/utf16",
     "crates/math",
