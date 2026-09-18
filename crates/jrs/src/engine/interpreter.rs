@@ -2941,8 +2941,11 @@ impl RegisterVM {
             }
             // 20.2.1.1 builds the source text of a function and asks the
             // embedding for a unit of it.
-            Intrinsic::FunctionConstructor => {
-                self.create_dynamic_function(&call, units, heap, realm)
+            Intrinsic::FunctionConstructor
+            | Intrinsic::GeneratorFunctionConstructor
+            | Intrinsic::AsyncGeneratorFunctionConstructor
+            | Intrinsic::AsyncFunctionConstructor => {
+                self.create_dynamic_function(intrinsic, &call, units, heap, realm)
             }
             // 19.2.1 evaluates a Script, which the embedding runs.
             Intrinsic::Eval => self.perform_eval(&call, heap, realm),
@@ -3833,6 +3836,9 @@ impl RegisterVM {
                     | Intrinsic::NumberConstructor
                     | Intrinsic::BooleanConstructor
                     | Intrinsic::FunctionConstructor
+                    | Intrinsic::GeneratorFunctionConstructor
+                    | Intrinsic::AsyncGeneratorFunctionConstructor
+                    | Intrinsic::AsyncFunctionConstructor
                     | Intrinsic::PromiseConstructor
                     | Intrinsic::MapConstructor
                     | Intrinsic::SetConstructor
@@ -18970,11 +18976,21 @@ impl RegisterVM {
     /// of the unit it was given.
     fn create_dynamic_function(
         &mut self,
+        intrinsic: Intrinsic,
         call: &Call,
         units: CodeUnits<'_>,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
+        // 20.2.1.1 step 2 names the four kinds and the text each one writes.
+        let (opening, generator, awaits) = match intrinsic {
+            Intrinsic::GeneratorFunctionConstructor => ("(function* anonymous(", true, false),
+            Intrinsic::AsyncGeneratorFunctionConstructor => {
+                ("(async function* anonymous(", true, true)
+            }
+            Intrinsic::AsyncFunctionConstructor => ("(async function anonymous(", false, true),
+            _ => ("(function anonymous(", false, false),
+        };
         if let Some(compiled) = self.compiled_unit.take() {
             // Step 12: a text no Script accepts is a `SyntaxError`; a body the
             // lowering does not take is a gap and no error of the Script.
@@ -18999,7 +19015,17 @@ impl RegisterVM {
                     VerificationError::FunctionOutOfBounds { pc: 0, index: unit },
                 ))?
                 .expected_arguments;
-            let prototype = realm.function_prototype(heap)?;
+            // 27.3.4, 27.4.4 and 27.7.4 give the function the prototype of
+            // the constructor it was made by.
+            let prototype = if generator && awaits {
+                realm.async_generator_function_prototype(heap)?
+            } else if generator {
+                realm.generator_function_prototype(heap)?
+            } else if awaits {
+                realm.async_function_prototype(heap)?
+            } else {
+                realm.function_prototype(heap)?
+            };
             let function = heap.allocate_function(unit, 0, None)?;
             heap.set_object_prototype(function, prototype)?;
             self.acc = Value::from_object(function);
@@ -19012,13 +19038,19 @@ impl RegisterVM {
                 Value::from_string(name),
                 super::realm::builtin_metadata(),
             )?;
-            // 10.2.5 gives it the `prototype` every ordinary function has.
-            self.make_constructor(units.active, heap, realm)?;
+            // 10.2.5 gives it the `prototype` every ordinary function has;
+            // 27.5.1.1 gives a generator function one whose Prototype is
+            // `%GeneratorPrototype%`, and 27.7 gives an async function none.
+            if generator {
+                self.make_generator_function(units.active, awaits, heap, realm)?;
+            } else if !awaits {
+                self.make_constructor(units.active, heap, realm)?;
+            }
             return Ok(self.acc);
         }
         // Steps 3 to 11 join every argument but the last with commas and take
         // the last as the body.
-        let mut text: Vec<u16> = "(function anonymous(".encode_utf16().collect();
+        let mut text: Vec<u16> = opening.encode_utf16().collect();
         let parameters = call.arg_count.saturating_sub(1);
         for index in 0..parameters {
             if index > 0 {
@@ -25276,6 +25308,7 @@ impl RegisterVM {
                     let constructible = target.constructible;
                     let generator = target.generator;
                     let asynchronous = target.async_generator;
+                    let awaits = target.asynchronous;
                     let expected_arguments = target.expected_arguments;
                     let function = self.allocate_function(
                         active_code,
@@ -25302,6 +25335,12 @@ impl RegisterVM {
                     // gives every Generator it makes.
                     if generator {
                         self.make_generator_function(active_code, asynchronous, heap, realm)?;
+                    } else if awaits {
+                        // 27.7.4 gives an async function that is no generator
+                        // `%AsyncFunction.prototype%` and no `prototype` of
+                        // its own.
+                        let inherited = realm.async_function_prototype(heap)?;
+                        heap.set_object_prototype(function, inherited)?;
                     }
                 }
                 Instruction::Construct {
