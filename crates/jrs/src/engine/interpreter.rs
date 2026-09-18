@@ -25660,6 +25660,23 @@ fn delete_property(
     index: Option<u32>,
     heap: &mut GenerationalHeap,
 ) -> Result<bool, VMError> {
+    let deleted = delete_own_property(object, name, index, heap)?;
+    // 10.4.4.4 step 4 drops the entry of the map for an index it deleted, so
+    // the name no longer stands for the parameter.
+    if deleted && heap.has_parameter_map(object) {
+        heap.unmap_parameter(object, name)?;
+    }
+    Ok(deleted)
+}
+
+/// `OrdinaryDelete` of 10.1.10 and the clauses of 10.4 that answer for a name
+/// of their own.
+fn delete_own_property(
+    object: ObjectRef,
+    name: PropertyKey,
+    index: Option<u32>,
+    heap: &mut GenerationalHeap,
+) -> Result<bool, VMError> {
     let entry = heap.get_object(object).ok_or(VMError::TypeError)?;
     let elements = entry.elements;
     let shape = entry.shape_id;

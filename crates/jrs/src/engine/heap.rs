@@ -964,7 +964,7 @@ impl GenerationalHeap {
     /// # Errors
     ///
     /// Returns [`HeapError::InvalidReference`] for a stale object.
-    fn unmap_parameter(
+    pub fn unmap_parameter(
         &mut self,
         reference: ObjectRef,
         name: PropertyKey,
@@ -1584,13 +1584,17 @@ impl GenerationalHeap {
         value: Value,
         flags: PropertyFlags,
     ) -> Result<u32, HeapError> {
-        // 10.4.4.2 steps 5 and 6: a descriptor that makes the property an
-        // accessor or takes its writability drops the entry of the map, and
-        // every other one writes the parameter the entry names.
-        if flags.is_accessor || !flags.writable {
+        // 10.4.4.2 step 7: an accessor drops the entry of the map; a data
+        // property writes the parameter the entry names first and drops the
+        // entry after, so a descriptor that carries both a value and a
+        // writable of false is seen by the parameter.
+        if flags.is_accessor {
             self.unmap_parameter(reference, name)?;
         } else {
             self.write_parameter(reference, name, value)?;
+            if !flags.writable {
+                self.unmap_parameter(reference, name)?;
+            }
         }
         let shape_id = self
             .get_object(reference)
