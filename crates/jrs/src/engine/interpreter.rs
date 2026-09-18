@@ -5017,6 +5017,17 @@ impl RegisterVM {
             {
                 return Ok(None);
             }
+            // Step 2 of 22.1.3.23 answers with the `@@split` of a RegExp,
+            // which runs without a frame, so step 5 converts no separator.
+            if intrinsic == Intrinsic::StringPrototypeSplit
+                && *index == 0
+                && self
+                    .call_argument(call, 0, heap)?
+                    .as_object()
+                    .is_some_and(|object| Self::regexp_pattern(object, heap).is_some())
+            {
+                continue;
+            }
             return Ok(Some((*index, *hint)));
         }
         Ok(None)
@@ -15436,15 +15447,18 @@ impl RegisterVM {
         } else {
             crate::value::number_uint32(primitive_number(limit, heap)?)
         };
-        // 22.1.3.23 answers an empty Array for a limit of zero before it reads
-        // the separator's text at all.
-        if limit == 0 {
-            return self.split_result(&[], heap, realm);
-        }
+        // Step 5 reads the text of the separator before step 6 answers an
+        // empty Array for a limit of zero.
         if separator.is_undefined() {
+            if limit == 0 {
+                return self.split_result(&[], heap, realm);
+            }
             return self.split_result(&[Some(units)], heap, realm);
         }
         let pattern = property_name_units(separator, heap, realm)?;
+        if limit == 0 {
+            return self.split_result(&[], heap, realm);
+        }
         let limit = usize::try_from(limit).unwrap_or(usize::MAX);
         // An empty separator matches no empty substring, so it answers the code
         // units themselves, at most `limit` of them.

@@ -4472,10 +4472,13 @@ impl Intrinsic {
             // it is, and only the index is converted.
             Self::ArrayPrototypeIndexOf
             | Self::ArrayPrototypeLastIndexOf
-            | Self::ArrayPrototypeIncludes
-            // 22.1.3.23 step 6 applies `ToUint32` to the limit; the separator
-            // reaches `@@split`, which is a call of its own.
-            | Self::StringPrototypeSplit => &[(1, PrimitiveHint::Number)],
+            | Self::ArrayPrototypeIncludes => &[(1, PrimitiveHint::Number)],
+            // 22.1.3.23 step 4 applies `ToUint32` to the limit and step 5
+            // `ToString` to the separator, in that order; a separator that
+            // carries `@@split` reaches step 2 and neither of them.
+            Self::StringPrototypeSplit => {
+                &[(1, PrimitiveHint::Number), (0, PrimitiveHint::String)]
+            }
             Self::DatePrototypeSetMinutes
             | Self::DatePrototypeSetUtcMinutes
             | Self::DatePrototypeSetDate
