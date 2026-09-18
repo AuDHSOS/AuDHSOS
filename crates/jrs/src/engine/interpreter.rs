@@ -803,6 +803,9 @@ const GENERATOR_SUSPENDED_DELEGATING: u8 = 4;
 const ITERATOR_WALK_CONSTRUCTING: i32 = 7;
 /// 23.1.2.1 step 6.c.iv.1 is writing the `length` of its answer.
 const ITERATOR_WALK_LENGTH: i32 = 8;
+/// 7.4.11 is closing the iterator for a step of the walk that threw, whose
+/// value the record keeps and the close leaves with.
+const ITERATOR_WALK_ABRUPT: i32 = 9;
 /// The walk of 7.4.2 has not called the `@@iterator` yet.
 const ITERATOR_WALK_STARTING: i32 = 0;
 /// It is waiting for the `@@iterator` it called.
@@ -5332,6 +5335,21 @@ impl RegisterVM {
                 realm,
             );
         }
+        // 23.1.3.30 step 1 and 23.1.3.34 step 1 refuse a comparator that is
+        // neither undefined nor callable before 7.3.18 reads the `length`.
+        if matches!(
+            intrinsic,
+            Intrinsic::ArrayPrototypeSort | Intrinsic::ArrayPrototypeToSorted
+        ) {
+            let comparator = self.call_argument(&call, 0, heap)?;
+            if !comparator.is_undefined() && !Self::is_callable(comparator, heap) {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "the comparator of 23.1.3.30 is not callable",
+                ));
+            }
+        }
         // 7.3.18 reads the `length` before the clause does anything else. A
         // getter there runs a method of the Script, and so does 7.1.20 of an
         // Object the read answered.
@@ -8308,6 +8326,7 @@ impl RegisterVM {
                 Value::from_smi(taker.tag()),
                 taker.collection(),
                 constructor,
+                VALUE_UNDEFINED,
             ],
         )?;
         // The record outlives every frame the walk opens, so it is a root of a
@@ -8368,6 +8387,7 @@ impl RegisterVM {
                 Value::from_smi(taker.tag()),
                 taker.collection(),
                 taker.constructor(),
+                VALUE_UNDEFINED,
             ],
         )?;
         // The record outlives every frame the walk opens, so it is a root of a
@@ -8532,6 +8552,10 @@ impl RegisterVM {
                 // 7.4.4 step 3 reads the result, and a `done` that is true
                 // ends the walk with the Array it filled.
                 ITERATOR_WALK_STEPPING => {
+                    // 7.4.9 steps 5 and 7 leave with what `next` or the result
+                    // of it threw and close nothing; only the steps after the
+                    // value is in hand close with 7.4.10.
+                    let stepped = answered.as_object().is_some();
                     match self.continue_iterator_step(record, answered, heap, realm) {
                         Ok(Some(called)) => Some(called),
                         Ok(None) => match Self::set_the_length_of_23_1_2_1(record, heap, realm) {
@@ -8542,6 +8566,19 @@ impl RegisterVM {
                             }
                             Err(error) => return Err(Self::leave_iterator_walk(heap, error)),
                         },
+                        // 7.4.10 closes the iterator before the value a step
+                        // threw leaves the walk.
+                        Err(VMError::Thrown(thrown, native)) if stepped => {
+                            match Self::request_abrupt_close(record, thrown, heap, realm) {
+                                Ok(Some(called)) => Some(called),
+                                _ => {
+                                    return Err(Self::leave_iterator_walk(
+                                        heap,
+                                        VMError::Thrown(thrown, native),
+                                    ));
+                                }
+                            }
+                        }
                         Err(error) => return Err(Self::leave_iterator_walk(heap, error)),
                     }
                 }
@@ -8556,6 +8593,13 @@ impl RegisterVM {
                         }
                         Err(error) => return Err(Self::leave_iterator_walk(heap, error)),
                     }
+                }
+                // 7.4.11 step 6 keeps the value the step threw, whatever the
+                // close answered.
+                ITERATOR_WALK_ABRUPT => {
+                    let thrown = promise::slot(heap, record, 12);
+                    heap.exit_scope();
+                    return Err(VMError::Thrown(thrown, None));
                 }
                 // 7.4.9 step 5 keeps the error the close was given.
                 ITERATOR_WALK_REFUSED => {
@@ -8592,6 +8636,20 @@ impl RegisterVM {
                         .and_then(|()| Self::request_iterator_step(record, heap, realm));
                     match taken {
                         Ok(called) => Some(called),
+                        // 23.1.2.1 step 6.c.ix and 24.1.1.2 step 4.e close the
+                        // iterator with 7.4.11 before the value they threw
+                        // leaves the walk.
+                        Err(VMError::Thrown(thrown, native)) => {
+                            match Self::request_abrupt_close(record, thrown, heap, realm) {
+                                Ok(Some(called)) => Some(called),
+                                _ => {
+                                    return Err(Self::leave_iterator_walk(
+                                        heap,
+                                        VMError::Thrown(thrown, native),
+                                    ));
+                                }
+                            }
+                        }
                         Err(error) => return Err(Self::leave_iterator_walk(heap, error)),
                     }
                 }
@@ -8885,6 +8943,18 @@ impl RegisterVM {
         }
         promise::set_slot(heap, record, 6, Value::from_smi(phase))?;
         Ok(Some((method, iterator)))
+    }
+
+    /// `IfAbruptCloseIterator` of 7.4.10: the walk keeps the value it threw
+    /// and calls the `return` of the iterator before leaving with it.
+    fn request_abrupt_close(
+        record: Value,
+        thrown: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<(Value, Value)>, VMError> {
+        promise::set_slot(heap, record, 12, thrown)?;
+        Self::request_iterator_close(record, ITERATOR_WALK_ABRUPT, heap, realm)
     }
 
     /// Takes one element: 23.1.2.1 keeps it in the Array it fills, and step 8
