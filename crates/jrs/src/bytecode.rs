@@ -966,6 +966,9 @@ struct IterationHead<'a> {
     /// Layout the loop variable's type was read from, which the body may not
     /// change.
     guarded_layout: Option<u32>,
+    /// The binding of 14.7.5.6 step 7.f, which every iteration makes again:
+    /// the step copies the context and writes the value into the slot.
+    scoped: Option<RegisterBinding>,
     /// The iterator 7.4.9 closes where a `break` leaves the loop, and a
     /// register the close reads the `return` method into.
     close: Option<(
@@ -8240,11 +8243,27 @@ impl RegisterLowerer {
     ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         let head_binding = self.for_in_head_binding(binding, target, body)?;
+        // 14.7.5.6 step 2 declares the name of the head before the expression
+        // runs and leaves it uninitialized there, so a closure the expression
+        // makes reads it in its Temporal Dead Zone for ever.
+        let shadowed = match head_binding {
+            ForInHead::PerIteration { name, mutable }
+                if Self::head_expression_reads(name, object) =>
+            {
+                Some(self.open_head_scope(name, mutable)?)
+            }
+            _ => None,
+        };
         // 14.7.5.6 decides at run time what the head is: undefined and null
         // enumerate nothing, an Object enumerates its chain, and a primitive
         // needs the ToObject this engine cannot build. The instruction names
         // that where it happens, so any head is lowered.
         self.lower(object)?;
+        // Step 4 leaves that environment behind, so the binding of the head
+        // is made again for the iterations.
+        if let Some(shadowed) = shadowed {
+            self.close_head_scope(shadowed)?;
+        }
 
         let [state, keys, index, visited] = self.allocate_register_window()?;
         self.code.emit(Instruction::Star(state));
@@ -8337,6 +8356,7 @@ impl RegisterLowerer {
                 result: result_register,
                 source: None,
                 guarded_layout: None,
+                scoped: None,
                 close: None,
             },
             &bindings_at_head,
@@ -8380,6 +8400,65 @@ impl RegisterLowerer {
         })
     }
 
+    /// Whether the head expression of a `for`-`in` or `for`-`of` makes a
+    /// closure that reads the name the head binds.
+    fn head_expression_reads(name: &str, object: &Expr) -> bool {
+        let mut direct = BTreeSet::new();
+        let mut nested = BTreeSet::new();
+        if register_expression_references(object, &mut direct, &mut nested).is_none() {
+            return false;
+        }
+        nested.contains(name)
+    }
+
+    /// Opens the environment of 14.7.5.6 step 2, where the name the head binds
+    /// stands uninitialized; answers the binding it shadows.
+    fn open_head_scope(
+        &mut self,
+        name: &str,
+        mutable: bool,
+    ) -> Option<(
+        String,
+        Option<RegisterBinding>,
+        crate::engine::bytecode::Reg,
+    )> {
+        let register = self.allocate_register()?;
+        self.active_binding_count = self.active_binding_count.checked_add(1)?;
+        self.max_binding_count = self.max_binding_count.max(self.active_binding_count);
+        let shadowed = self.bindings.insert(
+            String::from(name),
+            RegisterBinding {
+                storage: RegisterBindingStorage::Register(register),
+                value_type: Some(RegisterType::Unknown),
+                mutability: Mutability::of(mutable),
+                stable_function_identity: false,
+                initialized: false,
+            },
+        );
+        // The slot of the context is what a closure of the expression reads,
+        // and 9.1.1.1.6 answers a read of it with a ReferenceError.
+        self.capture_binding(name)?;
+        Some((String::from(name), shadowed, register))
+    }
+
+    /// Closes it again, leaving the slot as the dead zone of the head.
+    fn close_head_scope(
+        &mut self,
+        opened: (
+            String,
+            Option<RegisterBinding>,
+            crate::engine::bytecode::Reg,
+        ),
+    ) -> Option<()> {
+        let (name, shadowed, register) = opened;
+        match shadowed {
+            Some(binding) => self.bindings.insert(name, binding),
+            None => self.bindings.remove(&name),
+        };
+        self.active_binding_count = self.active_binding_count.checked_sub(1)?;
+        self.release_register(register)
+    }
+
     /// Lowers the body of a `for`-`in` or `for`-`of` loop and patches the jumps
     /// around it.
     ///
@@ -8387,6 +8466,10 @@ impl RegisterLowerer {
     /// `enter` is taken when the step produced a value and `exit` when it did
     /// not. The loop variable is written from `source`, or from the
     /// accumulator when there is none.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function emits the whole of a loop body and the writes of its head"
+    )]
     fn lower_iteration_body(
         &mut self,
         body: &Stmt,
@@ -8402,6 +8485,14 @@ impl RegisterLowerer {
             self.code.emit(Instruction::Ldar(source));
         }
         self.code.emit(Instruction::Star(loop_head.variable));
+        // 14.7.5.6 step 7.f gives the iteration an environment of its own and
+        // makes the binding of the head in it, which is where the value the
+        // step produced goes.
+        if let Some(binding) = loop_head.scoped {
+            self.code.emit(Instruction::CopyContext);
+            self.code.emit(Instruction::Ldar(loop_head.variable));
+            self.store_binding_as(binding, true);
+        }
         // 14.7.5.6 writes the binding the head declared, which for a `var` of
         // a Realm Script is a property of the global object and for a pattern
         // is whatever 8.6.2 binds out of the value.
@@ -8672,6 +8763,7 @@ impl RegisterLowerer {
                 result: result_register,
                 source: None,
                 guarded_layout: None,
+                scoped: None,
                 close: Some((iterator, next, false)),
             },
             &bindings_at_head,
@@ -8974,6 +9066,7 @@ impl RegisterLowerer {
                 result: result_register,
                 source: None,
                 guarded_layout: None,
+                scoped: None,
                 close: Some((iterator, step, true)),
             },
             &bindings_at_head,
@@ -9292,13 +9385,32 @@ impl RegisterLowerer {
         // the one the declaration made for a `var` head, which is the same
         // difference a `for`-`in` has.
         let head_binding = self.for_in_head_binding(binding, target, body)?;
+        // 14.7.5.6 step 2 declares the name of the head before the expression
+        // runs and leaves it uninitialized there, so a closure the expression
+        // makes reads it in its Temporal Dead Zone for ever.
+        let shadowed = match head_binding {
+            ForInHead::PerIteration { name, mutable }
+                if Self::head_expression_reads(name, object) =>
+            {
+                Some(self.open_head_scope(name, mutable)?)
+            }
+            _ => None,
+        };
         // 14.7.5.7 walks the async iterator of 7.4.3 and waits for each step,
         // which no Array fast path stands in for.
         if awaited {
             self.lower(object)?;
+            if let Some(shadowed) = shadowed {
+                self.close_head_scope(shadowed)?;
+            }
             return self.lower_async_for_of(head_binding, body);
         }
         let object_type = self.lower(object)?;
+        // Step 4 leaves that environment behind, so the binding of the head
+        // is made again for the iterations.
+        if let Some(shadowed) = shadowed {
+            self.close_head_scope(shadowed)?;
+        }
         // An Array is stepped by `IteratorNext`, which needs no call. Every
         // other iterable is walked by the protocol of 7.4 itself, which is
         // calls and property reads the lowering already emits.
@@ -9397,6 +9509,7 @@ impl RegisterLowerer {
                 result: result_register,
                 source: Some(value),
                 guarded_layout: Some(object_id),
+                scoped: None,
                 close: None,
             },
             &bindings_at_head,
