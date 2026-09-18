@@ -584,8 +584,8 @@ negative-test passes. Other parser/builtin completeness gaps remain open.
 The engine is the target of the migration and the stack backend the
 source (architecture, section 17.1). What gates the switch is not the
 count either path reaches but the set of variants the stack path passes
-and the engine does not. At `bac237e` that set holds 3,390 variants:
-43 of them the engine fails, and 3,347 it names as gaps. The engine
+and the engine does not. At `d3181ac` that set holds 3,386 variants:
+39 of them the engine fails, and 3,347 it names as gaps. The engine
 passes 23,458 variants the stack path does not. Only the failures are
 breaches of the equality duty; a gap costs coverage and answers nothing
 wrongly.
@@ -655,6 +655,7 @@ wrongly.
 | `90cfb9c` | 3,416 | 55 | 3,361 |
 | `3dd9831` | 3,408 | 47 | 3,361 |
 | `bac237e` | 3,390 | 43 | 3,347 |
+| `d3181ac` | 3,386 | 39 | 3,347 |
 
 The list is the join of the two per-variant runs, without `--summary`:
 
@@ -978,7 +979,8 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same, before the iterators of 24.1.5 and 24.2.5 (outdated) | focused | `29cc550` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Map test/built-ins/Set --summary` | 587 | 1,169 | 336 (28.74%) | 240 (20.53%) | 593 (50.73%) |
 | The same, on the stack backend (focused) | focused | `29cc550` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Map test/built-ins/Set --summary` | 587 | 1,169 | 0 (0.00%) | 1,051 (89.91%) | 118 (10.09%) |
 | Complete pinned suite on the register engine, before the close of 14.7.5.7 step 3.j (outdated) | full | `33ffe90` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 58,747 (57.08%) | 20,543 (19.96%) | 23,635 (22.96%) |
-| Complete pinned suite on the register engine | full | `bac237e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 59,438 (57.75%) | 19,527 (18.97%) | 23,960 (23.28%) |
+| Complete pinned suite on the register engine | full | `d3181ac` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 59,442 (57.75%) | 19,523 (18.97%) | 23,960 (23.28%) |
+| Complete pinned suite on the register engine, before the name 9.1.1.4.15 refuses (outdated) | full | `bac237e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 59,438 (57.75%) | 19,527 (18.97%) | 23,960 (23.28%) |
 | Complete pinned suite on the register engine, before the key of 13.2.5.5 (outdated) | full | `3dd9831` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 59,420 (57.73%) | 19,531 (18.98%) | 23,974 (23.29%) |
 | Complete pinned suite on the register engine, before the argument 7.1.1 converted (outdated) | full | `90cfb9c` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 59,412 (57.72%) | 19,539 (18.98%) | 23,974 (23.29%) |
 | Complete pinned suite on the register engine, before the dead zone of the class name (outdated) | full | `4680308` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 59,406 (57.72%) | 19,545 (18.99%) | 23,974 (23.29%) |
