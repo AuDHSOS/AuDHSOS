@@ -191,6 +191,15 @@ const ARRAY_WALK_CONSTRUCTING: u8 = 1;
 /// answer, which 7.3.4 sends through a setter the object may have.
 const ARRAY_WALK_LENGTH: u8 = 2;
 
+/// Index of the capability of 27.2.1.1 in the record a clause waits in.
+const CAPABILITY_WAIT_CAPABILITY: u32 = 0;
+/// Index of the clause that asked for the capability, by [`Intrinsic::id`].
+const CAPABILITY_WAIT_CLAUSE: u32 = 1;
+/// Index of the value that clause was given.
+const CAPABILITY_WAIT_ARGUMENT: u32 = 2;
+/// Index of the executor 27.2.1.5.1 made, which the construct is given.
+const CAPABILITY_WAIT_EXECUTOR: u32 = 3;
+
 /// The state of one walk of 23.1.3, read out of the object that holds it.
 ///
 /// A plain record, so the walk can be reasoned about in one place; it is
@@ -487,6 +496,14 @@ pub enum Resume {
         /// value the call was given, how many arguments it passed, whether
         /// the rejection closes the iterator, and the three the continuation
         /// keeps between its allocations.
+        state: Root,
+    },
+    /// 27.2.1.5 step 4 constructed a constructor of the Script, and the
+    /// answer is the promise the capability carries.
+    Capability {
+        /// Root holding the record: the capability of 27.2.1.1, the clause
+        /// that asked, the value it was given, the constructor and the
+        /// executor 27.2.1.5.1 made.
         state: Root,
     },
     /// 27.6.1.2 took the body of an `AsyncGenerator` back, and the answer is
@@ -2818,6 +2835,13 @@ impl RegisterVM {
             if promise::slot(heap, record, 3).as_smi().unwrap_or(0) > 0 {
                 self.place_arguments(next_frame, callee, &[promise::slot(heap, record, 2)])?;
             }
+        } else if let Some(Resume::Capability { state }) = call.resume {
+            // 27.2.1.5 step 4 passes the executor of 27.2.1.5.1 alone.
+            let record = heap
+                .root_value(state)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let executor = promise::slot(heap, record, CAPABILITY_WAIT_EXECUTOR);
+            self.place_arguments(next_frame, callee, &[executor])?;
         } else if let Some(Resume::Iteration { state }) = call.resume {
             self.place_arguments(next_frame, callee, &Self::iteration_arguments(state, heap)?)?;
         } else {
@@ -2949,6 +2973,27 @@ impl RegisterVM {
                     realm,
                     "Promise cannot be called without new",
                 ))
+            }
+            // 27.2.1.5.1: the constructor of the Script gave the capability
+            // its two functions, and neither may be given twice.
+            Intrinsic::CapabilitiesExecutor => {
+                let function = self.read_reg(call.func)?;
+                let capability = Self::native_state(function, heap).ok_or(VMError::TypeError)?;
+                let held = promise::slot(heap, capability, promise::CAPABILITY_RESOLVE);
+                let refused = !held.is_undefined()
+                    || !promise::slot(heap, capability, promise::CAPABILITY_REJECT).is_undefined();
+                if refused {
+                    return Err(type_error(
+                        heap,
+                        realm,
+                        "the capability already has its functions",
+                    ));
+                }
+                let resolve = self.call_argument(&call, 0, heap)?;
+                let reject = self.call_argument(&call, 1, heap)?;
+                promise::set_slot(heap, capability, promise::CAPABILITY_RESOLVE, resolve)?;
+                promise::set_slot(heap, capability, promise::CAPABILITY_REJECT, reject)?;
+                Ok(VALUE_UNDEFINED)
             }
             Intrinsic::PromiseResolveFunction | Intrinsic::PromiseRejectFunction => {
                 let function = self.read_reg(call.func)?;
@@ -3957,6 +4002,17 @@ impl RegisterVM {
                 .get(usize::from(index))
                 .copied()
                 .unwrap_or(VALUE_UNDEFINED));
+        }
+        // 27.2.1.5 step 4 passes the executor out of the record the clause
+        // waits in.
+        if let Some(Resume::Capability { state }) = call.resume {
+            let record = heap
+                .root_value(state)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            if index == 0 {
+                return Ok(promise::slot(heap, record, CAPABILITY_WAIT_EXECUTOR));
+            }
+            return Ok(VALUE_UNDEFINED);
         }
         // 23.1.3.30.1 passes the two values it compares the same way.
         if let Some(Resume::Sort { state }) = call.resume {
@@ -5853,6 +5909,34 @@ impl RegisterVM {
             return self.begin_typed_array_construct(
                 kind,
                 source,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
+        // 27.2.4.6 and 27.2.4.7 make the capability of 27.2.1.5, which for a
+        // constructor the Realm did not make is a construct of the Script.
+        if matches!(
+            intrinsic,
+            Intrinsic::PromiseResolve | Intrinsic::PromiseReject
+        ) && !Self::is_intrinsic(call.receiver, Intrinsic::PromiseConstructor, heap)
+            && call.receiver.as_object().is_some()
+        {
+            let value = self.call_argument(&call, 0, heap)?;
+            // 27.2.4.7 step 2 answers a promise of this constructor unchanged.
+            if intrinsic == Intrinsic::PromiseResolve
+                && let Some(answer) = Self::promise_of_the_constructor(value, call.receiver, heap)?
+            {
+                self.acc = answer;
+                return Ok(None);
+            }
+            let constructor = call.receiver;
+            return self.begin_capability(
+                constructor,
+                intrinsic,
+                value,
                 call,
                 units,
                 active_feedback,
@@ -25355,7 +25439,12 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<(), VMError> {
-        let state = Self::native_state(function, heap).ok_or(VMError::TypeError)?;
+        // 27.2.1.3 makes the pair a capability of `%Promise%` carries; a
+        // constructor of the Script may give its capability two functions of
+        // its own, which this call has no frame to enter.
+        let state = Self::native_state(function, heap).ok_or(VMError::Unsupported(
+            "a resolve of 27.2.1.1 that is a function of the Script",
+        ))?;
         if promise::take_resolution(heap, state)? {
             return Ok(());
         }
@@ -25791,6 +25880,163 @@ impl RegisterVM {
         Ok(())
     }
 
+    /// `NewPromiseCapability` of 27.2.1.5 for a constructor the Realm did not
+    /// make.
+    ///
+    /// Step 4 constructs it with the executor of 27.2.1.5.1, which is a frame
+    /// of the Script: the clause that asked waits in the record the resume
+    /// names, and reads the two functions off the capability once the
+    /// construct has answered.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a construct a native makes runs where a call does, with what a call has"
+    )]
+    fn begin_capability(
+        &mut self,
+        constructor: Value,
+        clause: Intrinsic,
+        argument: Value,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        // Step 1 refuses a value that constructs nothing.
+        if !Self::constructs(constructor, heap) {
+            return Err(type_error(
+                heap,
+                realm,
+                "the constructor of 27.2.1.5 is no constructor",
+            ));
+        }
+        // A constructor of this Realm written in Rust takes no executor it
+        // would call, so the two functions would stay undefined.
+        if !Self::is_script_function(constructor, heap) {
+            return Err(VMError::Unsupported(
+                "a capability of a constructor written in Rust",
+            ));
+        }
+        let (capability, executor) = promise::capability_executor(heap, realm)?;
+        let clause = i32::try_from(clause.id()).map_err(|_| VMError::TypeError)?;
+        let record = promise::record(
+            heap,
+            realm,
+            &[capability, Value::from_smi(clause), argument, executor],
+        )?;
+        // The record outlives the frame the construct opens, so it is a root
+        // of a scope of its own, which every exit leaves.
+        heap.enter_scope();
+        let state = heap.push_root(record)?;
+        let held = heap.push_root(constructor)?;
+        // 10.2.2 step 5 creates the object for a base constructor and leaves
+        // a derived one to make its own at its super call.
+        let receiver = if Self::derives(constructor, units, heap) {
+            VALUE_UNINITIALIZED
+        } else {
+            Value::from_object(Self::create_from_rooted_constructor(held, heap, realm)?)
+        };
+        let made = heap.push_root(receiver)?;
+        // The allocation above may have moved the constructor, which the root
+        // still names.
+        let constructor = heap
+            .root_value(held)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        self.pending_new_target = constructor;
+        let call = Call {
+            receiver,
+            arg_count: 1,
+            arg_start: Reg(0),
+            resume: Some(Resume::Capability { state }),
+            construct: Some(Construction::Held(made)),
+            ..call
+        };
+        self.enter_call_value(constructor, units, active_feedback, heap, realm, call)
+    }
+
+    /// Steps 5 to 8 of 27.2.1.5, and the clause that waited for them.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a call a native makes runs where a call does, with what a call has"
+    )]
+    fn continue_with_capability(
+        &mut self,
+        state: Root,
+        promise: Value,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let capability = promise::slot(heap, record, CAPABILITY_WAIT_CAPABILITY);
+        let clause = promise::slot(heap, record, CAPABILITY_WAIT_CLAUSE)
+            .as_smi()
+            .and_then(|id| u32::try_from(id).ok())
+            .and_then(Intrinsic::from_id)
+            .ok_or(VMError::TypeError)?;
+        let argument = promise::slot(heap, record, CAPABILITY_WAIT_ARGUMENT);
+        heap.exit_scope();
+        // Steps 5 and 6 refuse a constructor that gave the executor anything
+        // but two functions.
+        let resolve = promise::slot(heap, capability, promise::CAPABILITY_RESOLVE);
+        let reject = promise::slot(heap, capability, promise::CAPABILITY_REJECT);
+        if !Self::is_callable(resolve, heap) || !Self::is_callable(reject, heap) {
+            return Err(type_error(
+                heap,
+                realm,
+                "the constructor of 27.2.1.5 gave no resolve and reject",
+            ));
+        }
+        // Step 7 holds the object the construct answered.
+        promise::set_slot(heap, capability, promise::CAPABILITY_PROMISE, promise)?;
+        let rejects = clause == Intrinsic::PromiseReject;
+        let settler = if rejects { reject } else { resolve };
+        // 27.2.4.6 step 3 and 27.2.4.7.1 step 2 call the function the
+        // capability carries; one of this Realm settles without a frame.
+        if Self::native_state(settler, heap).is_some() {
+            self.settle_through(settler, argument, rejects, heap, realm)?;
+            self.acc = promise;
+            return Ok(None);
+        }
+        // The two outlive the frame the call opens, so they are roots of a
+        // scope of their own, which the return and the catch both leave.
+        heap.enter_scope();
+        let value = heap.push_root(argument)?;
+        let answer = heap.push_root(promise)?;
+        let call = Call {
+            receiver: VALUE_UNDEFINED,
+            arg_count: 1,
+            arg_start: Reg(0),
+            resume: Some(Resume::Answered { value, answer }),
+            construct: None,
+            ..call
+        };
+        self.enter_call_value(settler, units, active_feedback, heap, realm, call)
+    }
+
+    /// 27.2.4.7 step 2: a promise whose `constructor` is the one the clause
+    /// was called on is the answer itself.
+    fn promise_of_the_constructor(
+        value: Value,
+        receiver: Value,
+        heap: &mut GenerationalHeap,
+    ) -> Result<Option<Value>, VMError> {
+        if promise::state_of(value, heap).is_none() {
+            return Ok(None);
+        }
+        let object = value.as_object().ok_or(VMError::TypeError)?;
+        let key = PropertyKey::String(heap.strings.intern("constructor")?);
+        let constructor = match heap.lookup_named(object, key)? {
+            Some(found) => Self::plain_value(found)?,
+            None => VALUE_UNDEFINED,
+        };
+        Ok((constructor == receiver).then_some(value))
+    }
+
     /// 27.2.4.7: `Promise.resolve`.
     fn promise_resolve(
         &self,
@@ -25811,17 +26057,8 @@ impl RegisterVM {
             ));
         }
         let value = self.call_argument(&call, 0, heap)?;
-        // Step 2: a promise of this constructor is answered unchanged.
-        if promise::state_of(value, heap).is_some() {
-            let object = value.as_object().ok_or(VMError::TypeError)?;
-            let key = PropertyKey::String(heap.strings.intern("constructor")?);
-            let constructor = match heap.lookup_named(object, key)? {
-                Some(found) => Self::plain_value(found)?,
-                None => VALUE_UNDEFINED,
-            };
-            if constructor == call.receiver {
-                return Ok(value);
-            }
+        if let Some(answer) = Self::promise_of_the_constructor(value, call.receiver, heap)? {
+            return Ok(answer);
         }
         let capability = promise::capability(heap, realm)?;
         let resolve = promise::slot(heap, capability, promise::CAPABILITY_RESOLVE);
@@ -26184,9 +26421,16 @@ impl RegisterVM {
             // 23.1.3.30.1: a comparator that throws leaves the merge, and
             // 7.3.25 step 4.c.ii a getter that throws leaves the copy; the
             // record each waited in gives its scope back.
+            // 27.2.1.5 step 4: a constructor of the Script that throws leaves
+            // the capability the clause waited in.
             if matches!(
                 frame.resume,
-                Some(Resume::Sort { .. } | Resume::Copy { .. })
+                Some(
+                    Resume::Sort { .. }
+                        | Resume::Copy { .. }
+                        | Resume::Capability { .. }
+                        | Resume::Answered { .. }
+                )
             ) {
                 heap.exit_scope();
             }
@@ -29578,6 +29822,7 @@ impl RegisterVM {
                                     Resume::Primitive { register, .. }
                                     | Resume::Coercion { register, .. } => register,
                                     Resume::Iteration { .. }
+                                    | Resume::Capability { .. }
                                     | Resume::CollectionWalk { .. }
                                     | Resume::CollectionInsert { .. }
                                     | Resume::IteratorWalk { .. }
@@ -29732,6 +29977,11 @@ impl RegisterVM {
                                         feedback,
                                         heap,
                                         realm,
+                                    )?,
+                                    // 27.2.1.5 step 4 answered the promise the
+                                    // capability carries.
+                                    Resume::Capability { state } => self.continue_with_capability(
+                                        state, self.acc, call, units, feedback, heap, realm,
                                     )?,
                                     // The getter answered the value of the
                                     // property, and the accumulator holds it. The

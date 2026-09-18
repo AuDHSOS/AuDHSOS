@@ -210,6 +210,37 @@ pub fn resolving_functions(
     Ok((Value::from_object(resolve), Value::from_object(reject)))
 }
 
+/// 27.2.1.5 for a constructor that is not `%Promise%`: the empty capability
+/// record of 27.2.1.1 and the executor of 27.2.1.5.1 that fills it.
+///
+/// The constructor takes the executor and calls it with the two functions it
+/// settles its own promise through, which the executor writes into the
+/// record; the caller reads them off it once the construct has answered.
+///
+/// # Errors
+///
+/// The errors of the allocation.
+pub fn capability_executor(
+    heap: &mut GenerationalHeap,
+    realm: &Realm,
+) -> Result<(Value, Value), HeapError> {
+    let capability = record(
+        heap,
+        realm,
+        &[VALUE_UNDEFINED, VALUE_UNDEFINED, VALUE_UNDEFINED],
+    )?;
+    let parent = realm.function_prototype(heap)?;
+    let executor =
+        heap.allocate_native(parent, Intrinsic::CapabilitiesExecutor.id(), 2, capability)?;
+    let flags = super::realm::builtin_metadata();
+    let key = super::value::PropertyKey::String(heap.strings.intern("length")?);
+    heap.define_own_named(executor, key, Value::from_smi(2), flags)?;
+    let empty = heap.strings.allocate_str("")?;
+    let key = super::value::PropertyKey::String(heap.strings.intern("name")?);
+    heap.define_own_named(executor, key, Value::from_string(empty), flags)?;
+    Ok((capability, Value::from_object(executor)))
+}
+
 /// The `length` and `name` 10.3.3 gives an anonymous built-in function, in the
 /// order it creates them.
 fn name_the_function(

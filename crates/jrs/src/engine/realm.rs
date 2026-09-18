@@ -723,6 +723,10 @@ pub enum Intrinsic {
     PromiseValueThunk,
     /// The thrower 27.2.5.3.2 step 7 makes, which throws the reason.
     PromiseThrower,
+    /// `GetCapabilitiesExecutor` of 27.2.1.5.1, which writes the two
+    /// functions a constructor of the Script gives it into the capability
+    /// record it holds.
+    CapabilitiesExecutor,
     /// The resolve element function of 27.2.4.1.3.
     PromiseAllElement,
     /// The fulfil element function of 27.2.4.2.2.
@@ -1393,7 +1397,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 483] = [
+    pub const ALL: [Self; 484] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1596,6 +1600,7 @@ impl Intrinsic {
         Self::PromiseCatchFinally,
         Self::PromiseValueThunk,
         Self::PromiseThrower,
+        Self::CapabilitiesExecutor,
         Self::PromiseAllElement,
         Self::PromiseAllSettledFulfilled,
         Self::PromiseAllSettledRejected,
@@ -2351,6 +2356,7 @@ impl Intrinsic {
             | Self::PromiseCatchFinally
             | Self::PromiseValueThunk
             | Self::PromiseThrower
+            | Self::CapabilitiesExecutor
             | Self::PromiseAllElement
             | Self::PromiseAllSettledFulfilled
             | Self::PromiseAllSettledRejected
@@ -2865,6 +2871,7 @@ impl Intrinsic {
             Self::PromiseCatchFinally => 480,
             Self::PromiseValueThunk => 481,
             Self::PromiseThrower => 482,
+            Self::CapabilitiesExecutor => 483,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3358,6 +3365,7 @@ impl Intrinsic {
             Self::PromiseCatchFinally => 480,
             Self::PromiseValueThunk => 481,
             Self::PromiseThrower => 482,
+            Self::CapabilitiesExecutor => 483,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3852,6 +3860,7 @@ impl Intrinsic {
             480 => Some(Self::PromiseCatchFinally),
             481 => Some(Self::PromiseValueThunk),
             482 => Some(Self::PromiseThrower),
+            483 => Some(Self::CapabilitiesExecutor),
             436 => Some(Self::IteratorPrototypeConstructorGet),
             437 => Some(Self::IteratorPrototypeConstructorSet),
             438 => Some(Self::IteratorPrototypeToStringTagGet),
@@ -3920,6 +3929,7 @@ impl Intrinsic {
             | Self::PromiseCatchFinally
             | Self::PromiseValueThunk
             | Self::PromiseThrower
+            | Self::CapabilitiesExecutor
             | Self::PromiseAllElement
             | Self::PromiseAllSettledFulfilled
             | Self::PromiseAllSettledRejected
@@ -5511,7 +5521,9 @@ impl Intrinsic {
             // 20.5.7.1 takes the errors and the message.
             | Self::AggregateErrorConstructor
             // 28.2.1.1 takes the target and the handler.
-            | Self::ProxyConstructor => 2,
+            | Self::ProxyConstructor
+            // 27.2.1.5.1 takes the resolve and the reject of the capability.
+            | Self::CapabilitiesExecutor => 2,
             // 21.4.2.1 and 21.4.3.4 take a year, a month, a day, an hour, a
             // minute, a second and a millisecond.
             Self::DatePrototypeSetHours
@@ -8551,6 +8563,7 @@ impl Realm {
                     | Intrinsic::PromiseCatchFinally
                     | Intrinsic::PromiseValueThunk
                     | Intrinsic::PromiseThrower
+                    | Intrinsic::CapabilitiesExecutor
                     | Intrinsic::PromiseAllElement
                     | Intrinsic::PromiseAllSettledFulfilled
                     | Intrinsic::PromiseAllSettledRejected

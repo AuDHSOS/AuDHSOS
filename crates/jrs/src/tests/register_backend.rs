@@ -9322,6 +9322,38 @@ fn the_combinators_of_27_2_4_settle_one_promise_for_many() -> Result<(), Error> 
 }
 
 #[test]
+fn a_capability_of_27_2_1_5_constructs_a_constructor_of_the_script() -> Result<(), Error> {
+    // 27.2.4.7 and 27.2.4.6 make the capability with the constructor they
+    // were called on, which for one of the Script is a frame that takes the
+    // executor of 27.2.1.5.1.
+    for source in [
+        "function C(e){var s=this;e(function(v){s.v=v},function(r){s.r=r})};Promise.resolve.call(C,3).v",
+        "function C(e){var s=this;e(function(v){s.v=v},function(r){s.r=r})};Promise.reject.call(C,'x').r",
+        "function C(e){var s=this;e(function(v){s.v=v},function(r){s.r=r})};Promise.resolve.call(C,1) instanceof C",
+        // 10.3.3 gives the executor a `length` of two and an empty `name`.
+        "var f;function C(e){f=e;e(function(){},function(){})};Promise.resolve.call(C,1);''+f.length+'/'+f.name+'/'+(typeof f)",
+        "var f;function C(e){f=e;e(function(){},function(){})};Promise.resolve.call(C,1);Object.getPrototypeOf(f)===Function.prototype",
+        // Steps 5 and 6 refuse a constructor that gave the executor anything
+        // but two functions.
+        "function C(e){e(1,2)};var r;try{Promise.resolve.call(C,1)}catch(e){r=e instanceof TypeError};''+r",
+        "function C(e){};var r;try{Promise.resolve.call(C,1)}catch(e){r=e instanceof TypeError};''+r",
+        // 27.2.1.5.1 step 4 refuses a second pair.
+        "function C(e){e(function(){},function(){});e(function(){},function(){})};var r;try{Promise.resolve.call(C,1)}catch(e){r=e instanceof TypeError};''+r",
+        // Step 4 lets what the constructor throws reach the caller.
+        "function C(){throw new RangeError('b')};var r;try{Promise.resolve.call(C,1)}catch(e){r=e.message};r",
+        // Step 1 refuses a value that constructs nothing.
+        "var r;try{Promise.resolve.call(5,1)}catch(e){r=e instanceof TypeError};''+r",
+        "var r;try{Promise.resolve.call(Math.max,1)}catch(e){r=e instanceof TypeError};''+r",
+        // 27.2.4.7 step 2 answers a promise whose `constructor` is the one it
+        // was called on.
+        "var p=Promise.resolve(1);Promise.resolve(p)===p",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn the_engine_names_the_parts_of_clause_27_it_has_not_built() -> Result<(), Error> {
     // 27.2.4 gives `%Promise%` five combinators and 27.2.5.3 gives the
     // prototype `finally`; a read of one of them is a gap and not undefined.
