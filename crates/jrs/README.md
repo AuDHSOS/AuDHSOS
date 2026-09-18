@@ -586,9 +586,36 @@ source (architecture, section 17.1). What gates the switch is not the
 count either path reaches but the set of variants the stack path passes
 and the engine does not. At `e7752ab` that set holds 3,311 variants:
 2 of them the engine fails, and 3,309 it names as gaps. The engine
-passes 23,458 variants the stack path does not. Only the failures are
+passes 23,476 variants the stack path does not. Only the failures are
 breaches of the equality duty; a gap costs coverage and answers nothing
 wrongly.
+
+The two failures that are left are one file,
+`test/staging/sm/extensions/proxy-enumeration.js`: it reads
+`Object.getOwnPropertyNames(globalThis)` and asks for `Proxy` among the
+names. This Realm builds no `Proxy`, so the list is one name short. The
+engine names `Proxy` as a gap wherever a Script reads it, which 228
+variants of the blocker set do; the list of the global object is the one
+place where the absence reaches a Script as a value.
+
+What a switch would cost is those gaps, by the reason the engine names:
+
+| Variants | Gap |
+|---:|---|
+| 334 | a property that is an accessor |
+| 306 | a direct eval inside a function |
+| 228 | `Proxy` |
+| 130 | `ToString` of an Object |
+| 128 | a `for`-`of` statement |
+| 128 | a combinator of 27.2.4 on a constructor that is not `%Promise%` |
+| 96 | a parameter Initializer that reads a parameter of its dead zone |
+| 92 | `ToPrimitive` of an Object outside a call |
+| 90 | an iterable that is no Array of this Realm |
+| 82 | an eval of a Script the lowering does not take |
+| 80 | a replacer of 25.5.2 |
+| 80 | an `exec` of the Script |
+| 72 | a species constructor of the Script |
+| 1,493 | 86 further reasons, none above 52 variants |
 
 | Commit | Blockers | Failures | Gaps |
 |---|---:|---:|---:|
