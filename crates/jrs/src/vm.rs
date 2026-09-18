@@ -241,6 +241,34 @@ fn thrown_description(
     }
 }
 
+/// `constructor.name` of an object the embedding cannot hold.
+///
+/// Only a data property is read, for the reason `thrown_description` names.
+/// This is the name the embedding gives the class an error was made by, which
+/// an error of the Script carries nowhere else.
+fn thrown_constructor_name(
+    object: crate::engine::value::ObjectRef,
+    agent: &crate::engine::agent::Agent,
+) -> Option<alloc::string::String> {
+    let read = |object, name: &str| {
+        agent
+            .heap
+            .strings
+            .lookup_interned_units(&Value::string(name).units())
+            .map(crate::engine::value::PropertyKey::String)
+            .and_then(|key| agent.heap.lookup_named(object, key).ok().flatten())
+            .filter(|property| !property.flags.is_accessor)
+            .map(|property| property.value)
+    };
+    let constructor = read(object, "constructor")?.as_object()?;
+    let name = read(constructor, "name")?;
+    agent
+        .heap
+        .strings
+        .to_utf16(name)
+        .map(|units| alloc::string::String::from_utf16_lossy(&units))
+}
+
 /// Converts a register-backend value into the legacy value the embedding sees.
 ///
 /// Objects, Symbols and `BigInt`s of the new engine have no legacy identity, so
@@ -584,6 +612,7 @@ impl Execution<'_> {
         let Some(object) = value.as_object() else {
             return Error::ThrownUnrepresentable {
                 description: alloc::string::String::new(),
+                constructor: None,
             };
         };
         let Some(kind) = agent.realm.native_error_kind(&agent.heap, object) else {
@@ -592,6 +621,7 @@ impl Execution<'_> {
             // is read, which is what an error of the Script carries.
             return Error::ThrownUnrepresentable {
                 description: thrown_description(object, agent),
+                constructor: thrown_constructor_name(object, agent),
             };
         };
         let message = agent

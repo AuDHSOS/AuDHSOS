@@ -72,6 +72,9 @@ pub enum Error {
         /// `name: message` of the thrown object, empty where it holds neither
         /// as a String of its own.
         description: String,
+        /// `constructor.name` of the thrown object, which names the class it
+        /// was made by where neither name is a String of its own.
+        constructor: Option<String>,
     },
 }
 
@@ -90,10 +93,10 @@ impl fmt::Display for Error {
             Self::Type { message } => write!(f, "TypeError: {message}"),
             Self::Range { message } => write!(f, "RangeError: {message}"),
             Self::Limit { resource } => write!(f, "resource limit: {resource}"),
-            Self::ThrownUnrepresentable { description } if description.is_empty() => {
+            Self::ThrownUnrepresentable { description, .. } if description.is_empty() => {
                 write!(f, "threw a value the embedding cannot hold")
             }
-            Self::ThrownUnrepresentable { description } => {
+            Self::ThrownUnrepresentable { description, .. } => {
                 write!(f, "threw a value the embedding cannot hold: {description}")
             }
             Self::Unsupported { feature } => write!(f, "unsupported feature: {feature}"),

@@ -521,6 +521,9 @@ fn error_name(realm: &mut Realm<'_>, error: &Error) -> Option<String> {
         Error::Type { .. } => Some("TypeError".into()),
         Error::Reference { .. } => Some("ReferenceError".into()),
         Error::Range { .. } => Some("RangeError".into()),
+        // A value of the engine cannot cross, so the boundary reads the name
+        // of the class it was made by there and the runner takes it here.
+        Error::ThrownUnrepresentable { constructor, .. } => constructor.clone(),
         Error::Thrown { value } if matches!(value, Value::Object(_) | Value::Function(_)) => {
             let ctor = realm.get(value, &Value::string("constructor")).ok()?;
             let name = realm.get(&ctor, &Value::string("name")).ok()?;

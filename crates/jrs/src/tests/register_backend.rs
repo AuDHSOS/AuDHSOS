@@ -9087,12 +9087,12 @@ fn a_thrown_object_the_embedding_cannot_hold_names_itself() -> Result<(), Error>
     // 20.5.3.4 reads the two names of the object, which an error of the Script
     // carries as data properties of its Prototype and of itself.
     let source = "function E(m){this.message=m}E.prototype.name='E';throw new E('two')";
-    let Err(Error::ThrownUnrepresentable { description }) = realm.evaluate(source) else {
+    let Err(Error::ThrownUnrepresentable { description, .. }) = realm.evaluate(source) else {
         panic!("{source}");
     };
     assert_eq!(description, "E: two");
     // An object that holds neither name answers the empty text.
-    let Err(Error::ThrownUnrepresentable { description }) = realm.evaluate("throw {}") else {
+    let Err(Error::ThrownUnrepresentable { description, .. }) = realm.evaluate("throw {}") else {
         panic!("throw {{}}");
     };
     assert_eq!(description, "");
