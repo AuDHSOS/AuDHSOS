@@ -24508,6 +24508,14 @@ impl RegisterVM {
                     }
                     // Check if property exists in current shape
                     if let Some(loc) = heap.shapes.lookup(current_shape, name) {
+                        // 13.2.5.5 defines a data property over one the same
+                        // literal made an accessor, which 10.1.6.3 gives the
+                        // attributes of 7.3.5 rather than the ones it had.
+                        if define && loc.flags != PropertyFlags::ordinary_data() {
+                            let val = self.acc;
+                            heap.define_own_named(oref, name, val, PropertyFlags::ordinary_data())?;
+                            return Ok(None);
+                        }
                         let val = self.acc;
                         // 10.4.4.4 writes a mapped index through to the
                         // parameter it maps to, and the Shape keeps a copy.
