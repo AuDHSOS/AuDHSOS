@@ -452,27 +452,19 @@ impl State {
         Ok(())
     }
 
-    /// The centre of one pixel of the box, in device coordinates.
+    /// The centre of one pixel, in the box's own coordinates, which is the
+    /// space the gradient's placement was built against: `paint` moves the
+    /// box's corner out of the transform, so the two must agree.
     fn centre(&self, index: usize) -> Result<(Fixed, Fixed), RasterError> {
         let width = usize::try_from(self.bounds.width).map_err(|_| RasterError::Overflow)?;
         let column = index.checked_rem(width).ok_or(RasterError::Overflow)?;
         let row = index.checked_div(width).ok_or(RasterError::Overflow)?;
         let half = Fixed::from_bits(1 << 31);
         Ok((
-            Fixed::from_i32(
-                i32::try_from(column)
-                    .map_err(|_| RasterError::Overflow)?
-                    .checked_add(self.bounds.x)
-                    .ok_or(RasterError::Overflow)?,
-            )
-            .checked_add(half)?,
-            Fixed::from_i32(
-                i32::try_from(row)
-                    .map_err(|_| RasterError::Overflow)?
-                    .checked_add(self.bounds.y)
-                    .ok_or(RasterError::Overflow)?,
-            )
-            .checked_add(half)?,
+            Fixed::from_i32(i32::try_from(column).map_err(|_| RasterError::Overflow)?)
+                .checked_add(half)?,
+            Fixed::from_i32(i32::try_from(row).map_err(|_| RasterError::Overflow)?)
+                .checked_add(half)?,
         ))
     }
 

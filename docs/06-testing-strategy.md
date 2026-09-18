@@ -3317,13 +3317,17 @@ alone:
   segment, at 8, 16, 64 and 256 pixels, for a quadratic and for a cubic;
   the count doubling when the size quadruples; the clamp at 256; a contour
   of one point and a curve whose control points coincide giving no edge;
-  contour ends that do not partition the points refused.
+  a curve whose control points are further apart than the arithmetic
+  reaches taking the clamp rather than failing; contour ends that do not
+  partition the points refused.
 - R3 coverage: literal values for a rectangle inset by a quarter, a half
   and three quarters of a pixel on each side; the non-zero rule over nested
   contours of one direction and of opposite directions; a doubly wound
   contour not exceeding one; a triangle's coverage summing to its area;
   five degenerate contours that draw without panicking; geometry
-  overhanging or entirely outside the mask; padding bytes untouched.
+  overhanging or entirely outside the mask; padding bytes untouched; a
+  slanted shape and its mirror covering mirrored pixels, which is what a
+  rounding rule that depended on a sign would break.
 - R4 positions: the four positions at every eighth of a pixel across two
   pixels, in both signs; ties to even in both signs, horizontally and
   vertically; a whole vertical pixel; the offset of each position.
@@ -3354,7 +3358,9 @@ alone:
   negative; a sweep at the four axis directions; all three extend modes at
   seven positions; a line of one stop and two stops at one offset; a
   singular placement; interpolation on linear light checked against the
-  display-space midpoint it differs from by 58 of 255.
+  display-space midpoint it differs from by 58 of 255; and a linear and a
+  radial gradient stated in font units, which is what every COLR gradient
+  is, read at five positions of their ramp.
 - R10 clips: a clip limiting a fill to its outline; nested clips as the
   product of the two coverages; a restored region; an unmatched `Unclip`
   and a clip left open both refused; a stack deeper than its storage
@@ -3370,13 +3376,18 @@ alone:
 - R12 streams: the five base glyphs of the COLRv1 fixture as golden
   images; groups composing onto what was under them; a `Compose` retaining
   that ink; a `Compose` with fewer than two groups refused; an unbounded
-  glyph drawing nothing; an empty stream; the foreground resolved.
+  glyph drawing nothing; an empty stream; the foreground resolved; one
+  gradient drawn into boxes at three device offsets giving one set of
+  pixels.
 - R13 drawing: Latin, Arabic, bidirectional and wrapped text as golden
   images; ink inside the box `measure` reported, checked pixel by pixel; a
-  colour face taking the colour path; the cache changing no pixel; the
-  four subpixel positions each drawing different pixels; a surface too
-  small drawing what fits; a missing face and a coverage buffer too small
-  refused.
+  `COLR` face taking the colour path and a CFF face taking the second
+  outline decoder; the cache changing no pixel and placing a cached glyph
+  where the fresh one was; the four subpixel positions each drawing
+  different pixels; a surface too small drawing what fits; a box entirely
+  outside the surface; a face whose outline table is not there; a hidden
+  glyph; a size below one pixel; a missing face and a coverage buffer too
+  small refused; an affine whose inverse leaves the arithmetic.
 - Determinism: every step checks that the same input twice gives identical
   bytes. Golden images are a gate on this crate and on no other, which
   D-177 allows: no product path has floating point, so one input gives one

@@ -881,6 +881,25 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   it, and reports the bit it woke with when the image raises the vector.
   Catalog 6.6.59 and 6.6.60.
 
+### Fixed
+
+- `text-raster`: four defects a review of the new crate found, each with a
+  regression test that fails without its fix. The normalization of a gradient
+  compared the largest coordinate against a limit that halved with every shift
+  instead of doubling, so any geometry above 128 units drove the shift to its
+  maximum and every pixel to the last stop; COLR states a gradient in font
+  units, so that was every real gradient. A gradient was built against a
+  transform with the glyph box's corner taken out of it but evaluated at device
+  coordinates, so a colour glyph whose box did not start at the surface origin
+  read the gradient at the wrong place. The interpolation of an edge's x at a
+  row boundary biased a half-tie by the sign of the denominator as well as the
+  numerator, so an edge running one way rounded differently from the same edge
+  running the other. The length of a second difference used checked products,
+  so a curve beyond the arithmetic returned an error rather than taking the
+  clamp D-181 states. The first two moved the golden images: the fifth base
+  glyph of the COLRv1 fixture went from 139 inked pixels to 460, which is the
+  difference between a scattering of edge pixels and the whole emoji.
+
 ### Changed
 
 - D-183 supersedes D-175 in its mechanism: the gamma value corrects the colour

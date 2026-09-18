@@ -561,3 +561,108 @@ fn a_pixel_of_the_gradient_is_premultiplied() {
     assert!(alpha.abs_diff(LINEAR_ONE / 2) <= 2, "{alpha}");
     assert!(red.abs_diff(LINEAR_ONE / 2) <= 2, "{red}");
 }
+
+#[test]
+fn a_gradient_in_font_units_still_reads_its_ramp() {
+    // Regression: the normalization of `Gradient::new` compared the largest
+    // coordinate against a limit that halved with every shift instead of
+    // doubling, so any geometry above 128 units drove the shift to 32, the
+    // geometry to zero and every pixel to the last stop. COLR states a
+    // gradient in font units, so that was every real gradient.
+    for span in [128_i32, 130, 1024, 2048, 16_384] {
+        let (stops, colours) = ramp(Extend::Pad);
+        let fill = Fill::Linear {
+            x0: whole(0),
+            y0: whole(0),
+            x1: whole(span),
+            y1: whole(0),
+            x2: whole(0),
+            y2: whole(span),
+            line: colours,
+        };
+        let gradient = Gradient::new(fill, &stops, Affine::IDENTITY)
+            .unwrap()
+            .unwrap();
+        let mut previous = None;
+        for step in 0..=4_i32 {
+            let level = red_at(&gradient, span * step / 4, 0).unwrap();
+            let expected =
+                u32::try_from(u64::from(LINEAR_ONE) * u64::try_from(step).unwrap() / 4).unwrap();
+            assert!(
+                level.abs_diff(expected) <= 256,
+                "span {span} at {step}/4: {level} of {expected}"
+            );
+            if let Some(previous) = previous {
+                assert!(level > previous, "span {span} is not increasing");
+            }
+            previous = Some(level);
+        }
+    }
+}
+
+#[test]
+fn a_radial_gradient_in_font_units_keeps_its_two_circles() {
+    let (stops, colours) = ramp(Extend::Pad);
+    let fill = Fill::Radial {
+        x0: whole(512),
+        y0: whole(512),
+        r0: whole(0),
+        x1: whole(512),
+        y1: whole(512),
+        r1: whole(512),
+        line: colours,
+    };
+    let gradient = Gradient::new(fill, &stops, Affine::IDENTITY)
+        .unwrap()
+        .unwrap();
+    assert_eq!(red_at(&gradient, 512, 512), Some(0));
+    let half = red_at(&gradient, 768, 512).unwrap();
+    assert!(half.abs_diff(LINEAR_ONE / 2) <= 256, "{half}");
+    assert_eq!(red_at(&gradient, 1024, 512), Some(LINEAR_ONE));
+}
+
+#[test]
+fn a_radial_family_whose_circles_share_one_apex_still_resolves() {
+    // When the distance between the centres equals the difference of the
+    // radii the quadratic degenerates to a linear equation, which is a
+    // separate branch of the two-circle form.
+    let (stops, colours) = ramp(Extend::Pad);
+    let fill = Fill::Radial {
+        x0: whole(0),
+        y0: whole(0),
+        r0: whole(0),
+        x1: whole(4),
+        y1: whole(0),
+        r1: whole(4),
+        line: colours,
+    };
+    let gradient = Gradient::new(fill, &stops, Affine::IDENTITY)
+        .unwrap()
+        .unwrap();
+    // On the axis the parameter is the distance over the growth of the family.
+    let quarter = red_at(&gradient, 2, 0).unwrap();
+    assert!(quarter.abs_diff(LINEAR_ONE / 4) <= 256, "{quarter}");
+    // At the apex the linear term vanishes as well and no circle passes.
+    assert!(red_at(&gradient, 0, 2).is_none(), "the apex resolved");
+}
+
+#[test]
+fn a_gradient_of_the_largest_geometry_takes_the_last_shift() {
+    // The normalization runs out of shifts rather than looping; what it then
+    // gives is a gradient that still reads in one direction.
+    let (stops, colours) = ramp(Extend::Pad);
+    let huge = Fixed::from_bits(i64::MAX / 4);
+    let fill = Fill::Linear {
+        x0: Fixed::ZERO,
+        y0: Fixed::ZERO,
+        x1: huge,
+        y1: Fixed::ZERO,
+        x2: Fixed::ZERO,
+        y2: huge,
+        line: colours,
+    };
+    let gradient = Gradient::new(fill, &stops, Affine::IDENTITY)
+        .unwrap()
+        .unwrap();
+    assert_eq!(red_at(&gradient, 0, 0), Some(0));
+}

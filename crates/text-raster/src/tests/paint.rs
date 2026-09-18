@@ -757,3 +757,93 @@ fn a_gradient_with_a_singular_transform_draws_nothing() {
     let bytes = drawn(box_of(4, 4), &ops, &stops, Affine::IDENTITY, 1, 1).unwrap();
     assert_eq!(reds(&bytes), vec![0_u8; 16]);
 }
+
+#[test]
+fn a_gradient_gives_the_same_pixels_wherever_the_box_sits() {
+    // Regression: the gradient was built against a transform with the box's
+    // corner taken out of it, but evaluated at device coordinates, so every
+    // colour glyph whose box did not start at the surface origin read the
+    // gradient at the wrong place.
+    let stops = [
+        ColorStop {
+            offset: Fixed::ZERO,
+            color: Color {
+                source: ColorSource::Palette {
+                    red: 0,
+                    green: 0,
+                    blue: 0,
+                },
+                alpha: Fixed::ONE,
+            },
+        },
+        ColorStop {
+            offset: Fixed::ONE,
+            color: Color {
+                source: ColorSource::Palette {
+                    red: 255,
+                    green: 255,
+                    blue: 255,
+                },
+                alpha: Fixed::ONE,
+            },
+        },
+    ];
+    let line = text_core::colr::ColorLine {
+        extend: text_core::colr::Extend::Pad,
+        first: 0,
+        count: 2,
+    };
+    let font = Font::parse(EMOJI).unwrap();
+    let gamma = Gamma::default_value().unwrap();
+    let mut rows = Vec::new();
+    for offset in [0_i32, 8, 24] {
+        let ops = [PaintOp::Fill {
+            transform: Affine {
+                dx: Fixed::from_i32(offset),
+                ..Affine::IDENTITY
+            },
+            fill: Fill::Linear {
+                x0: Fixed::ZERO,
+                y0: Fixed::ZERO,
+                x1: Fixed::from_i32(8),
+                y1: Fixed::ZERO,
+                x2: Fixed::ZERO,
+                y2: Fixed::from_i32(8),
+                line,
+            },
+        }];
+        let bounds = Bounds {
+            x: offset,
+            y: 0,
+            width: 8,
+            height: 1,
+        };
+        let mut storage = Storage::new(bounds, 1, 1);
+        let mut bytes = vec![0_u8; 32 * 4];
+        {
+            let mut destination = Surface::new(&mut bytes, 32, 1, 128, Format::Rgbx8888).unwrap();
+            destination.clear();
+            draw_color_glyph(
+                &mut destination,
+                bounds,
+                Affine::IDENTITY,
+                &font,
+                &[],
+                &ops,
+                &stops,
+                bounded(1),
+                Paint::opaque(255, 255, 255),
+                &gamma,
+                &mut storage.scratch(),
+            )
+            .unwrap();
+        }
+        let width = usize::try_from(offset).unwrap();
+        rows.push(reds(&bytes)[width..width + 8].to_vec());
+    }
+    let first = rows.first().unwrap();
+    assert!(first[0] < first[7], "{first:?} is not a ramp");
+    for (index, row) in rows.iter().enumerate().skip(1) {
+        assert_eq!(row, first, "the box at offset {index} read another place");
+    }
+}

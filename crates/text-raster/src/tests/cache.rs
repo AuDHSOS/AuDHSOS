@@ -289,3 +289,41 @@ fn coordinates_are_stored_beside_the_coverage() {
     ];
     assert!(cache.get(key(1), &moved).is_none());
 }
+
+#[test]
+fn a_ring_that_cannot_fit_the_block_after_evicting_everything_stores_nothing() {
+    // The block fits the ring only when nothing else is in it, so an entry
+    // table that cannot be emptied any further ends the search.
+    let mut ring = [0_u8; 6];
+    let mut entries = [Entry::default(); 2];
+    let mut cache = GlyphCache::new(&mut ring, &mut entries);
+    cache.insert(key(1), &[], image(&[1, 2, 3])).unwrap();
+    cache.insert(key(2), &[], image(&[4, 5, 6])).unwrap();
+    assert_eq!(cache.len(), 2);
+    // Six bytes with two three-byte blocks live: the next three evict one.
+    cache.insert(key(3), &[], image(&[7, 8, 9])).unwrap();
+    assert_eq!(cache.get(key(3), &[]).unwrap().coverage, &[7, 8, 9]);
+    assert!(cache.get(key(1), &[]).is_none());
+}
+
+#[test]
+fn a_lookup_over_an_empty_cache_answers_nothing() {
+    let mut ring = [0_u8; 32];
+    let mut entries = [Entry::default(); 4];
+    let cache = GlyphCache::new(&mut ring, &mut entries);
+    assert!(cache.get(key(1), &[]).is_none());
+    assert!(cache.get(key(1), &[Fixed::ONE]).is_none());
+    assert_eq!(cache.len(), 0);
+}
+
+#[test]
+fn an_entry_whose_digest_agrees_but_whose_key_differs_misses() {
+    let mut ring = [0_u8; 64];
+    let mut entries = [Entry::default(); 4];
+    let mut cache = GlyphCache::new(&mut ring, &mut entries);
+    cache.insert(key(1), &[Fixed::ONE], image(&[1])).unwrap();
+    // A different axis count with the same key is a different instance.
+    assert!(cache.get(key(1), &[Fixed::ONE, Fixed::ONE]).is_none());
+    assert!(cache.get(key(1), &[]).is_none());
+    assert!(cache.get(key(1), &[Fixed::ONE]).is_some());
+}

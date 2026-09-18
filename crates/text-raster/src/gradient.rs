@@ -446,7 +446,9 @@ fn shift_for(values: &[Fixed]) -> u32 {
     let mut limit = NORMAL.saturating_mul(Fixed::ONE.bits());
     let mut shift = 0_u32;
     while shift < 32 && largest > limit {
-        limit >>= 1;
+        // The limit is what `largest` is compared against before the shift, so
+        // it doubles with every bit the shift takes off.
+        limit = limit.saturating_mul(2);
         shift = shift.saturating_add(1);
     }
     shift

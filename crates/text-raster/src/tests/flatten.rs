@@ -412,3 +412,17 @@ fn the_same_outline_flattens_to_identical_edges() {
     assert_eq!(a, b);
     assert_eq!(first[..a], second[..b]);
 }
+
+#[test]
+fn a_curve_beyond_the_arithmetic_takes_the_clamp() {
+    // Regression: the length of the second difference was computed with
+    // checked products, so a curve whose control points are further apart
+    // than the square root of Q32.32 returned an error rather than taking the
+    // clamp D-181 states.
+    let far = i32::try_from(1_i64 << 20).unwrap();
+    let points = [point(0, 0, true), point(far, far, false), point(1, 1, true)];
+    let mut edges = vec![Edge::default(); 1024];
+    let count = flatten_glyf(&points, &[2], scaled(1, 1), &mut edges).unwrap();
+    // The clamp gives 256 segments, and the closing edge makes one more.
+    assert_eq!(count, usize::try_from(MAX_SEGMENTS).unwrap() + 1);
+}

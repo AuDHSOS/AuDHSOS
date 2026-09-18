@@ -367,3 +367,46 @@ fn a_surface_texel_reads_back_the_coverage() {
     assert_eq!(mask.texel(0, 0), Some(Texel::Coverage(255)));
     assert_eq!(mask.texel(1, 0), Some(Texel::Coverage(0)));
 }
+
+#[test]
+fn a_shape_and_its_mirror_cover_mirrored_pixels() {
+    // Regression: the interpolation of an edge's x at a row boundary biased
+    // a half-tie by the sign of the denominator as well as the numerator, so
+    // an edge running one way rounded differently from the same edge running
+    // the other. Mirroring a shape must mirror its coverage exactly.
+    let slant = |flip: bool| {
+        let sign = if flip { -1 } else { 1 };
+        let at = |x: i32| whole(4).checked_add(whole(sign * x)).unwrap();
+        vec![
+            Edge {
+                x0: at(-3),
+                y0: whole(0),
+                x1: at(3),
+                y1: whole(6),
+            },
+            Edge {
+                x0: at(3),
+                y0: whole(6),
+                x1: at(3),
+                y1: whole(0),
+            },
+            Edge {
+                x0: at(3),
+                y0: whole(0),
+                x1: at(-3),
+                y1: whole(0),
+            },
+        ]
+    };
+    let forward = coverage(&mut slant(false), 8, 6);
+    let mirrored = coverage(&mut slant(true), 8, 6);
+    for row in 0..6_usize {
+        let left = &forward[row * 8..row * 8 + 8];
+        let right: Vec<u8> = mirrored[row * 8..row * 8 + 8]
+            .iter()
+            .rev()
+            .copied()
+            .collect();
+        assert_eq!(left, &right[..], "row {row} is not mirrored");
+    }
+}

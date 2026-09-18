@@ -653,3 +653,75 @@ fn a_tab_draws_nothing_because_layout_hides_its_glyph() {
     assert_eq!(inked(&bytes), 0);
     assert!(extent.0 > Fixed::ZERO, "the tab advanced nothing");
 }
+
+#[test]
+fn an_inverse_that_leaves_the_arithmetic_is_no_inverse() {
+    use crate::{Affine, Invertible};
+    // A determinant of one Q32.32 unit makes the reciprocal 2^32, which is
+    // beyond the range, so the transform has no inverse this crate can state.
+    let steep = Affine {
+        xx: Fixed::from_bits(1),
+        yx: Fixed::ZERO,
+        xy: Fixed::ZERO,
+        yy: Fixed::ONE,
+        dx: Fixed::ZERO,
+        dy: Fixed::ZERO,
+    };
+    assert!(steep.inverse().unwrap().is_none());
+    let other = Affine {
+        xx: Fixed::ONE,
+        yy: Fixed::from_bits(1),
+        ..Affine::IDENTITY
+    };
+    assert!(other.inverse().unwrap().is_none());
+}
+
+#[test]
+fn a_glyph_the_face_does_not_state_draws_nothing() {
+    // The emoji fixture maps no character, so every cluster falls to glyph
+    // zero, whose own outline the subset does state; the CJK subset has no
+    // notdef ink at all. Both draw without error.
+    const CJK: &[u8] = include_bytes!("fixtures/noto-cjk-subset.otf");
+    for bytes in [CJK, EMOJI] {
+        let (surface, _) = render(bytes, "\u{10FFFD}", 16, 32, 32, None, false);
+        assert_eq!(surface.len(), 32 * 32 * 4);
+    }
+}
+
+#[test]
+fn a_size_below_one_pixel_draws_almost_nothing() {
+    // `text-core` refuses a size of zero, so the smallest a caller can ask
+    // for is one unit; the glyph's box then rounds to the margin alone.
+    let fonts = [Font::parse(TEXT).unwrap()];
+    let set = FontSet {
+        ui: &fonts,
+        mono: &fonts,
+        generation: 1,
+    };
+    let style = TextStyle {
+        size: Fixed::from_bits(1),
+        ..TextStyle::default()
+    };
+    let mut memory = Memory::new();
+    let mut output = Output::new();
+    let mut surface = vec![0_u8; 32 * 32 * 4];
+    let mut storage = Storage::new(32 * 32, 2);
+    let gamma = Gamma::default_value().unwrap();
+    {
+        let mut buffers = output.buffers();
+        let mut workspace = memory.workspace();
+        let view = layout_into(&set, &style, "AV", None, &mut workspace, &mut buffers).unwrap();
+        let mut destination = Surface::new(&mut surface, 32, 32, 128, Format::Rgbx8888).unwrap();
+        destination.clear();
+        let mut context = storage.context(&gamma, None);
+        draw(
+            &mut destination,
+            &view,
+            &fonts,
+            (Fixed::from_i32(4), Fixed::from_i32(8)),
+            &mut context,
+        )
+        .unwrap();
+    }
+    assert_eq!(inked(&surface), 0);
+}

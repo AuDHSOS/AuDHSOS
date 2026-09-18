@@ -179,7 +179,7 @@ fn second_difference(
     p2: (Fixed, Fixed),
     p3: (Fixed, Fixed),
 ) -> Result<Fixed, RasterError> {
-    Ok(length(difference(p0, p1, p2)?)?.max(length(difference(p1, p2, p3)?)?))
+    Ok(length(difference(p0, p1, p2)?).max(length(difference(p1, p2, p3)?)))
 }
 
 /// `a - 2*b + c`, per component.
@@ -194,13 +194,21 @@ fn difference(
     ))
 }
 
-/// The Euclidean length of a vector.
-fn length(vector: (Fixed, Fixed)) -> Result<Fixed, RasterError> {
+/// The Euclidean length of a vector, saturating rather than failing.
+///
+/// A vector whose square leaves Q32.32 is longer than 46340 device pixels,
+/// which no glyph of a display reaches; D-181 says such a segment takes the
+/// clamp, and the largest representable length is what makes `segments` take
+/// it.
+fn length(vector: (Fixed, Fixed)) -> Fixed {
     let square = vector
         .0
-        .checked_mul(vector.0)?
-        .checked_add(vector.1.checked_mul(vector.1)?)?;
-    sqrt(square)
+        .checked_mul(vector.0)
+        .and_then(|first| first.checked_add(vector.1.checked_mul(vector.1)?));
+    match square.map_err(RasterError::from).and_then(sqrt) {
+        Ok(value) => value,
+        Err(_) => Fixed::from_bits(i64::MAX),
+    }
 }
 
 /// The Bernstein combination `rest^2*start + 2*rest*step*control + step^2*end`

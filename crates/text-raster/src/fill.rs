@@ -134,16 +134,16 @@ fn along(a: i64, b: i64, numerator: i64, denominator: i64) -> Result<i64, Raster
         .ok_or(RasterError::Overflow)?;
     let divisor = i128::from(denominator);
     let half = divisor.abs().checked_div(2).ok_or(RasterError::Overflow)?;
+    // Adding `b` to the numerator moves the quotient by `b / divisor`, so a
+    // bias of half the divisor's magnitude with the numerator's sign moves it
+    // half a unit away from zero whichever sign the divisor has.
     let bias = if scaled < 0 {
         half.checked_neg().ok_or(RasterError::Overflow)?
     } else {
         half
     };
-    let signed = bias
-        .checked_mul(divisor.signum())
-        .ok_or(RasterError::Overflow)?;
     let quotient = scaled
-        .checked_add(signed)
+        .checked_add(bias)
         .ok_or(RasterError::Overflow)?
         .checked_div(divisor)
         .ok_or(RasterError::Overflow)?;
