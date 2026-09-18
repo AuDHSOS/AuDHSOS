@@ -6330,26 +6330,12 @@ impl RegisterVM {
                         .flatten()
                 })
                 .is_some(),
-            ObjectKind::NativeFunction { id, .. } => matches!(
-                Intrinsic::from_id(id),
-                Some(
-                    Intrinsic::ArrayConstructor
-                        | Intrinsic::ObjectConstructor
-                        | Intrinsic::ErrorConstructor
-                        | Intrinsic::EvalErrorConstructor
-                        | Intrinsic::RangeErrorConstructor
-                        | Intrinsic::ReferenceErrorConstructor
-                        | Intrinsic::SyntaxErrorConstructor
-                        | Intrinsic::TypeErrorConstructor
-                        | Intrinsic::UriErrorConstructor
-                        | Intrinsic::StringConstructor
-                        | Intrinsic::NumberConstructor
-                        | Intrinsic::BooleanConstructor
-                        | Intrinsic::RegExpConstructor
-                        | Intrinsic::PromiseConstructor
-                        | Intrinsic::FunctionConstructor
-                )
-            ),
+            // 10.4.1.2: a bound function carries the `[[Construct]]` of the
+            // target it was bound from.
+            ObjectKind::BoundFunction { target, .. } => Self::constructs(target, heap),
+            ObjectKind::NativeFunction { id, .. } => {
+                Intrinsic::from_id(id).is_some_and(Intrinsic::is_a_constructor)
+            }
             _ => false,
         }
     }

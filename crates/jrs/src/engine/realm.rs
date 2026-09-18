@@ -4749,6 +4749,55 @@ impl Intrinsic {
         )
     }
 
+    /// `IsConstructor` of 7.2.4: whether this intrinsic carries a
+    /// `[[Construct]]`.
+    ///
+    /// 20.4.1.1 and 21.2.1.1 refuse `new`, and every other function of a
+    /// clause that is no constructor carries none either.
+    #[must_use]
+    pub const fn is_a_constructor(self) -> bool {
+        matches!(
+            self,
+            Self::ArrayConstructor
+                | Self::ObjectConstructor
+                | Self::RegExpConstructor
+                | Self::ErrorConstructor
+                | Self::EvalErrorConstructor
+                | Self::RangeErrorConstructor
+                | Self::ReferenceErrorConstructor
+                | Self::SyntaxErrorConstructor
+                | Self::TypeErrorConstructor
+                | Self::UriErrorConstructor
+                | Self::StringConstructor
+                | Self::NumberConstructor
+                | Self::BooleanConstructor
+                | Self::PromiseConstructor
+                | Self::FunctionConstructor
+                | Self::MapConstructor
+                | Self::SetConstructor
+                | Self::WeakMapConstructor
+                | Self::WeakSetConstructor
+                | Self::DateConstructor
+                | Self::ArrayBufferConstructor
+                | Self::SharedArrayBufferConstructor
+                | Self::DataViewConstructor
+                | Self::IteratorConstructor
+                | Self::TypedArrayBase
+                | Self::TypedArrayInt8Constructor
+                | Self::TypedArrayUint8Constructor
+                | Self::TypedArrayUint8ClampedConstructor
+                | Self::TypedArrayInt16Constructor
+                | Self::TypedArrayUint16Constructor
+                | Self::TypedArrayInt32Constructor
+                | Self::TypedArrayUint32Constructor
+                | Self::TypedArrayFloat16Constructor
+                | Self::TypedArrayFloat32Constructor
+                | Self::TypedArrayFloat64Constructor
+                | Self::TypedArrayBigInt64Constructor
+                | Self::TypedArrayBigUint64Constructor
+        )
+    }
+
     /// The `length` property of the function object (17).
     #[must_use]
     #[expect(
