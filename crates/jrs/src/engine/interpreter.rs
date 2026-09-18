@@ -18594,6 +18594,10 @@ impl RegisterVM {
     /// 21.4.4, 23.2.3, 25.3.4 and 25.4 each raise a `TypeError` for a receiver
     /// of the wrong kind before they reach the `ToNumber` of an argument, and
     /// the conversion of 7.1.1 is observable, so it may not run first.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function names every clause that checks before it converts"
+    )]
     fn validate_before_coercion(
         &self,
         intrinsic: Intrinsic,
@@ -18629,6 +18633,33 @@ impl RegisterVM {
                     realm,
                     "the array of 25.4.13 looks into no SharedArrayBuffer",
                 ));
+            }
+            return Ok(());
+        }
+        // Step 1 of 22.2.6.2 and step 1 of every Symbol-keyed clause of 22.2.6
+        // refuse a receiver of the wrong kind before the String is converted.
+        if matches!(
+            intrinsic,
+            Intrinsic::RegExpPrototypeExec
+                | Intrinsic::RegExpPrototypeTest
+                | Intrinsic::RegExpPrototypeMatch
+                | Intrinsic::RegExpPrototypeSearch
+                | Intrinsic::RegExpPrototypeSplit
+                | Intrinsic::RegExpPrototypeReplace
+        ) {
+            let Some(receiver) = call.receiver.as_object() else {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "a method of 22.2.6 called on a value that is no Object",
+                ));
+            };
+            // 22.2.6.2 asks for the `[[RegExpMatcher]]` itself; a clause that
+            // reads `exec` takes any Object.
+            if intrinsic == Intrinsic::RegExpPrototypeExec
+                && Self::regexp_pattern(receiver, heap).is_none()
+            {
+                return Err(type_error(heap, realm, "this value is not a RegExp"));
             }
             return Ok(());
         }
