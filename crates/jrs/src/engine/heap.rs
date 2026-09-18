@@ -59,6 +59,10 @@ pub enum HeapError {
     ReferenceSpaceExhausted,
     /// String arena operation failed.
     String(StringError),
+    /// 10.5 answers the operation out of the handler of a Proxy, which only a
+    /// frame of the Script can call. The engine has not built that yet, so
+    /// the operation is a gap and never an answer.
+    Proxy,
 }
 
 impl From<StringError> for HeapError {
@@ -1075,6 +1079,9 @@ impl GenerationalHeap {
         reference: ObjectRef,
         prototype: Value,
     ) -> Result<(), HeapError> {
+        if self.is_a_proxy(reference) {
+            return Err(HeapError::Proxy);
+        }
         if !prototype.is_null() && !prototype.is_object() {
             return Err(HeapError::InvalidPrototype);
         }
@@ -1196,6 +1203,9 @@ impl GenerationalHeap {
         &mut self,
         reference: ObjectRef,
     ) -> Result<Vec<(PropertyKey, bool)>, HeapError> {
+        if self.is_a_proxy(reference) {
+            return Err(HeapError::Proxy);
+        }
         let object = self
             .get_object(reference)
             .ok_or(HeapError::InvalidReference)?;
@@ -1283,6 +1293,9 @@ impl GenerationalHeap {
         reference: ObjectRef,
         name: PropertyKey,
     ) -> Result<Option<PropertyFlags>, HeapError> {
+        if self.is_a_proxy(reference) {
+            return Err(HeapError::Proxy);
+        }
         // 10.4.5.1 gives an index of an array of 23.2 the attributes of an
         // ordinary data property.
         if self.typed_array_owns_index(reference, name)? {
@@ -1359,6 +1372,18 @@ impl GenerationalHeap {
             .length_of(data)
             .ok_or(HeapError::InvalidReference)?;
         Ok(Some(u32::try_from(length).unwrap_or(u32::MAX)))
+    }
+
+    /// Whether the object is a Proxy, whose internal methods 10.5 answers out
+    /// of its handler.
+    ///
+    /// The engine has not built those calls, so every operation that would
+    /// reach one names a gap instead of answering as though the Proxy were an
+    /// ordinary object.
+    #[must_use]
+    pub fn is_a_proxy(&self, reference: ObjectRef) -> bool {
+        self.get_object(reference)
+            .is_some_and(|object| matches!(object.kind, super::object::ObjectKind::Proxy { .. }))
     }
 
     /// Whether any object holds an index as an accessor property.
@@ -1460,6 +1485,9 @@ impl GenerationalHeap {
         loop {
             if !visited.insert(current) {
                 return Err(HeapError::PrototypeCycle);
+            }
+            if self.is_a_proxy(current) {
+                return Err(HeapError::Proxy);
             }
             let object = self
                 .get_object(current)
@@ -1601,6 +1629,9 @@ impl GenerationalHeap {
         value: Value,
         flags: PropertyFlags,
     ) -> Result<u32, HeapError> {
+        if self.is_a_proxy(reference) {
+            return Err(HeapError::Proxy);
+        }
         // 10.4.4.2 step 7: an accessor drops the entry of the map; a data
         // property writes the parameter the entry names first and drops the
         // entry after, so a descriptor that carries both a value and a
@@ -1704,6 +1735,9 @@ impl GenerationalHeap {
     ///
     /// Returns [`HeapError::InvalidReference`] for a stale or invalid object.
     pub fn prevent_extensions(&mut self, reference: ObjectRef) -> Result<(), HeapError> {
+        if self.is_a_proxy(reference) {
+            return Err(HeapError::Proxy);
+        }
         self.object_mut(reference)?.extensible = false;
         Ok(())
     }

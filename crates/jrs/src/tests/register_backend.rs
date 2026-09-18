@@ -25,15 +25,19 @@ fn a_realm_on_the_engine_backend_refuses_what_it_cannot_lower() -> Result<(), Er
     // A name clause 19 gives every Realm but this one has not built is a gap,
     // never an answer. It shows only once the Script has run, which is fatal
     // like every other unsupported feature.
-    // 13.4.4.1 writes the binding of the head, which 6.2.6.1 refuses for a
-    // `const`.
-    differential("var m='';try{for(const i=0;i<2;i++){}}catch(e){m=e.constructor.name}m")?;
     assert!(matches!(
-        realm.evaluate("typeof Proxy"),
+        realm.evaluate("typeof WeakRef"),
         Err(Error::Unsupported { .. })
     ));
     assert!(realm.evaluate("1").is_err());
     Ok(())
+}
+
+#[test]
+fn a_write_to_a_const_of_a_for_head_answers_a_type_error() -> Result<(), Error> {
+    // 13.4.4.1 writes the binding of the head, which 6.2.6.1 refuses for a
+    // `const`.
+    differential("var m='';try{for(const i=0;i<2;i++){}}catch(e){m=e.constructor.name}m")
 }
 
 #[test]

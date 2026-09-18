@@ -74,6 +74,11 @@ pub enum VMError {
 
 impl From<HeapError> for VMError {
     fn from(error: HeapError) -> Self {
+        // 10.5 answers out of the handler of a Proxy, which the engine has
+        // not built: the operation is a gap and never an answer.
+        if matches!(error, HeapError::Proxy) {
+            return Self::Unsupported("an internal method of a Proxy");
+        }
         Self::Heap(error)
     }
 }
@@ -1534,6 +1539,15 @@ impl RegisterVM {
                 "right-hand side of instanceof is not an object",
             ));
         };
+        // 10.5.1 and 10.5.13 answer the Prototype and the callability of a
+        // Proxy out of its handler.
+        if heap.is_a_proxy(function)
+            || value
+                .as_object()
+                .is_some_and(|object| heap.is_a_proxy(object))
+        {
+            return Err(VMError::Unsupported("an internal method of a Proxy"));
+        }
         // 13.10.2 step 5: an object that is not callable carries no
         // `[[HasInstance]]` of any kind, which is a TypeError and not a false.
         if !Self::is_callable(constructor, heap) {
@@ -1596,6 +1610,11 @@ impl RegisterVM {
         let Some(function) = self.read_reg(func)?.as_object() else {
             return Err(type_error(heap, realm, "value is not a constructor"));
         };
+        // 10.5.14 answers the construct of a Proxy out of its handler, which
+        // the engine has not built.
+        if heap.is_a_proxy(function) {
+            return Err(VMError::Unsupported("an internal method of a Proxy"));
+        }
         // 10.4.1.2 step 4: `new` of a bound function makes the object from
         // the target, because the bound function is its own `newTarget`.
         let bound = matches!(
@@ -1778,6 +1797,15 @@ impl RegisterVM {
     }
 
     fn type_of(&self, heap: &mut GenerationalHeap) -> Result<Value, VMError> {
+        // 13.5.3.1 answers "function" for a Proxy whose target is callable,
+        // which 10.5.13 reads out of the target.
+        if self
+            .acc
+            .as_object()
+            .is_some_and(|object| heap.is_a_proxy(object))
+        {
+            return Err(VMError::Unsupported("an internal method of a Proxy"));
+        }
         let name: &[u8] = if self.acc.is_undefined() {
             b"undefined"
         } else if self.acc.is_null() {
@@ -2703,6 +2731,32 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Value, VMError> {
         match intrinsic {
+            // 28.2.1.1 makes the Proxy exotic object of 10.5.15, whose two
+            // arguments are both Objects.
+            Intrinsic::ProxyConstructor => {
+                if call.construct.is_none() {
+                    return Err(type_error(
+                        heap,
+                        realm,
+                        "Proxy is a constructor and no ordinary call of it answers",
+                    ));
+                }
+                let target = self.call_argument(&call, 0, heap)?;
+                let handler = self.call_argument(&call, 1, heap)?;
+                if target.as_object().is_none() || handler.as_object().is_none() {
+                    return Err(type_error(
+                        heap,
+                        realm,
+                        "the target and the handler of a Proxy are Objects",
+                    ));
+                }
+                // 10.5.15 gives the object no Prototype of its own: every
+                // internal method of it answers out of the handler.
+                let shape = heap.shapes.root_shape();
+                let proxy = heap.allocate_object(shape, VALUE_NULL)?;
+                heap.set_object_kind(proxy, ObjectKind::Proxy { target, handler })?;
+                Ok(Value::from_object(proxy))
+            }
             // 27.2.3.1 step 6 calls the executor, which only a frame the
             // instruction opens can do.
             Intrinsic::PromiseConstructor => {
@@ -3931,6 +3985,28 @@ impl RegisterVM {
     /// arguments lie in neighbouring registers, so the shift is where the
     /// list starts and how long it is, and forwarding again drops one more
     /// argument, which is why a chain of them ends.
+    /// Whether the `this` value or an argument of the call is a Proxy, whose
+    /// internal methods 10.5 answers out of its handler.
+    fn meets_a_proxy(&self, call: &Call, heap: &GenerationalHeap) -> Result<bool, VMError> {
+        if call
+            .receiver
+            .as_object()
+            .is_some_and(|object| heap.is_a_proxy(object))
+        {
+            return Ok(true);
+        }
+        for index in 0..call.arg_count {
+            if self
+                .call_argument(call, index, heap)?
+                .as_object()
+                .is_some_and(|object| heap.is_a_proxy(object))
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn resolve_callee(
         &self,
         function: Value,
@@ -3945,6 +4021,11 @@ impl RegisterVM {
             let Some(function_ref) = function.as_object() else {
                 return Err(type_error(heap, realm, "value is not callable"));
             };
+            // 10.5.13 and 10.5.14 answer the call of a Proxy out of its
+            // handler, which the engine has not built.
+            if heap.is_a_proxy(function_ref) {
+                return Err(VMError::Unsupported("an internal method of a Proxy"));
+            }
             let forwards = matches!(
                 heap.get_object(function_ref)
                     .ok_or(VMError::Heap(HeapError::InvalidReference))?
@@ -4034,6 +4115,7 @@ impl RegisterVM {
                     | Intrinsic::SetConstructor
                     | Intrinsic::WeakMapConstructor
                     | Intrinsic::WeakSetConstructor
+                    | Intrinsic::ProxyConstructor
                     | Intrinsic::DateConstructor
                     | Intrinsic::ArrayBufferConstructor
                     | Intrinsic::DataViewConstructor
@@ -5207,6 +5289,12 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Option<u32>, VMError> {
+        // 10.5 answers every internal method of a Proxy out of its handler,
+        // which the engine has not built: a clause that reads one names the
+        // gap rather than answering as though the object were ordinary.
+        if self.meets_a_proxy(&call, heap)? {
+            return Err(VMError::Unsupported("an internal method of a Proxy"));
+        }
         // 23.2.3 walks the array of 23.2 the way 23.1.3 walks an Array, once
         // 23.2.4.1 has checked the receiver, so the walk of the Array clause
         // answers for both.
@@ -12321,6 +12409,14 @@ impl RegisterVM {
             .as_object()
             .ok_or(VMError::TypeError)?;
         let value = self.read_reg(heritage)?;
+        // 10.5.13 answers the construct of a Proxy out of its handler, which
+        // the engine has not built, so a class cannot derive from one either.
+        if value
+            .as_object()
+            .is_some_and(|object| heap.is_a_proxy(object))
+        {
+            return Err(VMError::Unsupported("an internal method of a Proxy"));
+        }
         // Step 6.a: a class of `extends null` inherits nothing and is
         // constructed like any other ordinary function.
         let (proto_parent, class_parent) = if value.is_null() {
@@ -14663,6 +14759,9 @@ impl RegisterVM {
             | ObjectKind::CollectionIterator { .. }
             | ObjectKind::Json
             | ObjectKind::Reflect => None,
+            // 10.5.1 answers the Prototype of a Proxy out of its handler, so
+            // even the walk 20.1.3.6 makes is a call of the Script.
+            ObjectKind::Proxy { .. } => Some("an internal method of a Proxy"),
         }
     }
 
@@ -14686,8 +14785,13 @@ impl RegisterVM {
         }
         for (prototype, owns, owner) in [
             (
+                realm.object_prototype(heap)?,
+                super::realm::object_prototype_owns as fn(&[u16]) -> bool,
+                "a property of %Object.prototype%",
+            ),
+            (
                 realm.string_prototype(heap)?,
-                super::realm::string_prototype_owns as fn(&[u16]) -> bool,
+                super::realm::string_prototype_owns,
                 "a property of %String.prototype%",
             ),
             (
@@ -14860,6 +14964,14 @@ impl RegisterVM {
                     && super::realm::string_constructor_owns(name) =>
             {
                 Err(VMError::Unsupported("a property of %String%"))
+            }
+            // 28.2.2 gives `%Proxy%` the `revocable` of 28.2.2.1, which this
+            // Realm has not built.
+            Some(ObjectKind::NativeFunction { id, .. })
+                if id == Intrinsic::ProxyConstructor.id()
+                    && super::realm::proxy_constructor_owns(name) =>
+            {
+                Err(VMError::Unsupported("a property of %Proxy%"))
             }
             // 27.2.4 gives `%Promise%` five combinators and the pair of
             // 27.2.4.9, none of which this Realm builds.
@@ -15560,6 +15672,11 @@ impl RegisterVM {
             boxed = Some(object);
             match heap.get_object(object).ok_or(VMError::TypeError)?.kind {
                 ObjectKind::Array { .. } => "Array",
+                // 10.5.12 answers for a Proxy what its target is, which asks
+                // the handler.
+                ObjectKind::Proxy { .. } => {
+                    return Err(VMError::Unsupported("an internal method of a Proxy"));
+                }
                 // 20.1.3.6 step 8 names the object 21.4.4 gives a time value.
                 ObjectKind::Date(_) => "Date",
                 ObjectKind::Function { .. }
@@ -25728,6 +25845,11 @@ impl RegisterVM {
                     let Some(oref) = target.as_object() else {
                         return Err(property_store_error(target, heap, realm));
                     };
+                    // 10.5.9 and 10.5.6 answer the write of a Proxy out of its
+                    // handler, which the engine has not built.
+                    if heap.is_a_proxy(oref) {
+                        return Err(VMError::Unsupported("an internal method of a Proxy"));
+                    }
                     // 10.4.2: an Array keeps its indices in an element store,
                     // so a name that is one is written there and not as a
                     // property of its own.
@@ -26278,6 +26400,11 @@ impl RegisterVM {
                     let Some(oref) = target.as_object() else {
                         return Err(property_store_error(target, heap, realm));
                     };
+                    // 10.5.9 and 10.5.6 answer the write of a Proxy out of its
+                    // handler, which the engine has not built.
+                    if heap.is_a_proxy(oref) {
+                        return Err(VMError::Unsupported("an internal method of a Proxy"));
+                    }
                     let val = self.acc;
                     // 10.4.5.5: an index of an array of 23.2 is written into the
                     // block, and one outside it is dropped.
@@ -28046,6 +28173,14 @@ fn delete_reference(
     heap: &mut GenerationalHeap,
     realm: &Realm,
 ) -> Result<Value, VMError> {
+    // 10.5.10 answers the delete of a Proxy out of its handler, which the
+    // engine has not built.
+    if base
+        .as_object()
+        .is_some_and(|object| heap.is_a_proxy(object))
+    {
+        return Err(VMError::Unsupported("an internal method of a Proxy"));
+    }
     let Some(object) = base.as_object() else {
         return Err(property_base_error(base, heap, realm));
     };

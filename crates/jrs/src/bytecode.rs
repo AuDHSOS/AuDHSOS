@@ -10805,6 +10805,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::WeakMapPrototypeGet
         | crate::engine::realm::Intrinsic::WeakMapPrototypeSet
         | crate::engine::realm::Intrinsic::WeakSetConstructor
+        // 28.2.1.1 answers the Proxy exotic object 10.5.15 makes.
+        | crate::engine::realm::Intrinsic::ProxyConstructor
         | crate::engine::realm::Intrinsic::WeakSetPrototypeAdd
         // 24.1.3.7, 24.1.3.8, 24.3.3.4 and 24.3.3.5 answer the value of the
         // entry, which is the argument or what the callback said.

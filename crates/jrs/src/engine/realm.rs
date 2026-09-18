@@ -1197,6 +1197,8 @@ pub enum Intrinsic {
     StringPrototypeIterator,
     /// `%StringIteratorPrototype%.next`, 22.1.5.1.
     StringIteratorPrototypeNext,
+    /// `%Proxy%`, 28.2.1.1.
+    ProxyConstructor,
     /// `get constructor`, 27.1.3.3.1.1.
     IteratorPrototypeConstructorGet,
     /// `set constructor`, 27.1.3.3.1.2.
@@ -1362,7 +1364,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 468] = [
+    pub const ALL: [Self; 469] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1800,6 +1802,7 @@ impl Intrinsic {
         Self::AsyncFunctionConstructor,
         Self::StringPrototypeIterator,
         Self::StringIteratorPrototypeNext,
+        Self::ProxyConstructor,
         Self::IteratorPrototypeConstructorGet,
         Self::IteratorPrototypeConstructorSet,
         Self::IteratorPrototypeToStringTagGet,
@@ -2304,6 +2307,7 @@ impl Intrinsic {
             // The host object of the conformance suite carries the two, which
             // the Realm attaches where the embedding asks for it.
             | Self::IteratorConstructor
+            | Self::ProxyConstructor
             | Self::HostDetachArrayBuffer
             | Self::HostGc => IntrinsicHolder::Global,
             Self::ArrayIsArray | Self::ArrayOf | Self::ArrayFrom => {
@@ -2789,6 +2793,7 @@ impl Intrinsic {
             Self::AsyncFunctionConstructor => 465,
             Self::StringPrototypeIterator => 466,
             Self::StringIteratorPrototypeNext => 467,
+            Self::ProxyConstructor => 468,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3267,6 +3272,7 @@ impl Intrinsic {
             Self::AsyncFunctionConstructor => 465,
             Self::StringPrototypeIterator => 466,
             Self::StringIteratorPrototypeNext => 467,
+            Self::ProxyConstructor => 468,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3746,6 +3752,7 @@ impl Intrinsic {
             465 => Some(Self::AsyncFunctionConstructor),
             466 => Some(Self::StringPrototypeIterator),
             467 => Some(Self::StringIteratorPrototypeNext),
+            468 => Some(Self::ProxyConstructor),
             436 => Some(Self::IteratorPrototypeConstructorGet),
             437 => Some(Self::IteratorPrototypeConstructorSet),
             438 => Some(Self::IteratorPrototypeToStringTagGet),
@@ -3997,6 +4004,7 @@ impl Intrinsic {
                 "getOrInsertComputed"
             }
             Self::WeakSetConstructor => "WeakSet",
+            Self::ProxyConstructor => "Proxy",
             Self::MapPrototypeDelete
             | Self::SetPrototypeDelete
             | Self::WeakMapPrototypeDelete
@@ -4865,6 +4873,7 @@ impl Intrinsic {
                 | Self::SetConstructor
                 | Self::WeakMapConstructor
                 | Self::WeakSetConstructor
+                | Self::ProxyConstructor
                 | Self::DateConstructor
                 | Self::ArrayBufferConstructor
                 | Self::SharedArrayBufferConstructor
@@ -5365,7 +5374,9 @@ impl Intrinsic {
             | Self::TypedArrayPrototypeSubarray
             | Self::TypedArrayPrototypeWith
             // 20.5.7.1 takes the errors and the message.
-            | Self::AggregateErrorConstructor => 2,
+            | Self::AggregateErrorConstructor
+            // 28.2.1.1 takes the target and the handler.
+            | Self::ProxyConstructor => 2,
             // 21.4.2.1 and 21.4.3.4 take a year, a month, a day, an hour, a
             // minute, a second and a millisecond.
             Self::DatePrototypeSetHours
@@ -5553,6 +5564,13 @@ pub const FUNCTION_PROPERTIES: [&str; 7] = [
 /// does not have it.
 pub const ARRAY_CONSTRUCTOR_PROPERTIES: [&str; 5] =
     ["from", "fromAsync", "isArray", "of", "prototype"];
+
+/// The property names 28.2.2 gives `%Proxy%`, beside the ones 17 gives every
+/// built-in function.
+///
+/// This Realm builds none of them: a read of one is a gap, because answering
+/// undefined would say the constructor does not have it.
+pub const PROXY_CONSTRUCTOR_PROPERTIES: [&str; 1] = ["revocable"];
 
 /// The property names 20.1.2 gives `%Object%`, beside the ones 17 gives every
 /// built-in function.
@@ -6134,6 +6152,15 @@ pub fn math_owns(name: &[u16]) -> bool {
 pub fn object_constructor_owns(name: &[u16]) -> bool {
     function_prototype_owns(name)
         || OBJECT_CONSTRUCTOR_PROPERTIES
+            .into_iter()
+            .any(|owned| owned.encode_utf16().eq(name.iter().copied()))
+}
+
+/// Whether `%Proxy%` owns a property of this name.
+#[must_use]
+pub fn proxy_constructor_owns(name: &[u16]) -> bool {
+    function_prototype_owns(name)
+        || PROXY_CONSTRUCTOR_PROPERTIES
             .into_iter()
             .any(|owned| owned.encode_utf16().eq(name.iter().copied()))
 }

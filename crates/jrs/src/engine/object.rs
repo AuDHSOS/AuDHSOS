@@ -256,6 +256,17 @@ pub enum ObjectKind {
         /// `toString`. The object being converted waits in `element`.
         convert_step: u8,
     },
+    /// A Proxy exotic object of 10.5, which answers every internal method out
+    /// of its handler.
+    ///
+    /// The engine has not built those calls: an operation that reaches one
+    /// names a gap rather than answering as though the object were ordinary.
+    Proxy {
+        /// The `[[ProxyTarget]]` of 10.5, or null once 28.2.2.1 revoked it.
+        target: Value,
+        /// The `[[ProxyHandler]]` of 10.5, or null once it was revoked.
+        handler: Value,
+    },
     /// The `%Reflect%` namespace object of 28.1, which is ordinary in every
     /// way but one: a name it should own and this Realm has not built is a
     /// gap rather than the undefined an ordinary object answers.
@@ -413,6 +424,10 @@ impl ObjectKind {
             Self::Accessor {
                 get: target,
                 set: receiver,
+            }
+            | Self::Proxy {
+                target,
+                handler: receiver,
             } => [Some(*target), Some(*receiver), None, None, None],
             Self::ArrayIteration {
                 target,
@@ -515,6 +530,10 @@ impl ObjectKind {
             Self::Accessor {
                 get: target,
                 set: receiver,
+            }
+            | Self::Proxy {
+                target,
+                handler: receiver,
             } => [Some(target), Some(receiver), None, None, None],
             Self::ArrayIteration {
                 target,
