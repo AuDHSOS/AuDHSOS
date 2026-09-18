@@ -9515,6 +9515,12 @@ impl RegisterLowerer {
     /// The string constant of an identifier this Script resolves on the Global
     /// Environment Record, if `expression` is one.
     fn global_name(&mut self, expression: &Expr) -> Option<u16> {
+        // 13.1.2 evaluates a parenthesised name to the same Reference the name
+        // itself is, so `typeof (x)` reads it the way `typeof x` does.
+        let mut expression = expression;
+        while let ExprKind::Group(inner) = &expression.kind {
+            expression = inner;
+        }
         let ExprKind::Name(name) = &expression.kind else {
             return None;
         };
