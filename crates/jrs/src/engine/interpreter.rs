@@ -2346,30 +2346,8 @@ impl RegisterVM {
                     .ok_or(VMError::StackOverflow)? = argument;
             }
         } else if let Some(Resume::IteratorWalk { state }) = call.resume {
-            // 23.1.2.1 step 6.c.vii passes the element and its index; the two
-            // other calls of the walk pass nothing.
-            let record = heap
-                .root_value(state)
-                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
-            // 23.1.2.1 step 6.c.iv.1 passes the length to the setter of it.
-            if promise::slot(heap, record, 6).as_smi() == Some(ITERATOR_WALK_LENGTH) {
-                let length = promise::slot(heap, record, 5);
-                self.place_arguments(next_frame, callee, &[length])?;
-            } else if promise::slot(heap, record, 6).as_smi() == Some(ITERATOR_WALK_MAPPING) {
-                // 27.1.3.3.9 step 8.c passes the accumulator ahead of the two.
-                let arguments = [
-                    promise::slot(heap, record, 0),
-                    promise::slot(heap, record, 7),
-                    promise::slot(heap, record, 8),
-                ];
-                let reduce = promise::slot(heap, record, 9).as_smi() == Some(ITERATOR_WALK_REDUCE);
-                let passed = if reduce {
-                    &arguments[..]
-                } else {
-                    &arguments[1..]
-                };
-                self.place_arguments(next_frame, callee, passed)?;
-            }
+            let passed = Self::iterator_walk_arguments(state, heap)?;
+            self.place_arguments(next_frame, callee, &passed)?;
         } else if let Some((state, walk)) = call.resume.and_then(Resume::collection_record) {
             // 24.1.3.5 step 4.b.i passes the value, the key and the
             // collection, and 24.1.3.8 step 6 the key alone.
@@ -3455,6 +3433,22 @@ impl RegisterVM {
     ) -> Result<Value, VMError> {
         if index >= call.arg_count {
             return Ok(VALUE_UNDEFINED);
+        }
+        // A walk of 7.4.2 passes the arguments out of its record the same way.
+        if let Some(Resume::IteratorWalk { state }) = call.resume {
+            return Ok(Self::iterator_walk_arguments(state, heap)?
+                .get(usize::from(index))
+                .copied()
+                .unwrap_or(VALUE_UNDEFINED));
+        }
+        // A walk of 23.1.3 passes the arguments out of its state, which is
+        // what the frame of a callback of the Script takes them from too; a
+        // callback of the Realm reads them here.
+        if let Some(Resume::Iteration { state }) = call.resume {
+            return Ok(Self::iteration_arguments(state, heap)?
+                .get(usize::from(index))
+                .copied()
+                .unwrap_or(VALUE_UNDEFINED));
         }
         // 7.3.15 and 20.2.3.1 pass a List, which no register of the caller
         // holds; the Array the root names holds it instead.
@@ -8345,13 +8339,11 @@ impl RegisterVM {
             let Some((func, receiver)) = called else {
                 return Ok(None);
             };
-            // 23.1.2.1 step 6.c.iv.1 passes the length to the setter; every
-            // other call the loop makes passes what `fill_frame` reads out of
-            // the record.
-            let waiting = promise::slot(heap, record, 6).as_smi().unwrap_or(0);
+            let passed = u16::try_from(Self::iterator_walk_arguments(state, heap)?.len())
+                .unwrap_or(u16::MAX);
             let call = Call {
                 receiver,
-                arg_count: u16::from(waiting == ITERATOR_WALK_LENGTH),
+                arg_count: passed,
                 arg_start: Reg(0),
                 resume: Some(Resume::IteratorWalk { state }),
                 construct: None,
@@ -8485,6 +8477,36 @@ impl RegisterVM {
         heap.exit_scope();
         self.acc = output;
         Ok(())
+    }
+
+    /// The arguments the walk of 7.4.2 passes the call it is waiting for.
+    ///
+    /// 23.1.2.1 step 6.c.vii passes the element and its index, 27.1.3.3.9 step
+    /// 8.c the accumulator ahead of the two, and 23.1.2.1 step 6.c.iv.1 the
+    /// length; every other call of the walk passes nothing.
+    fn iterator_walk_arguments(
+        state: Root,
+        heap: &GenerationalHeap,
+    ) -> Result<Vec<Value>, VMError> {
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let phase = promise::slot(heap, record, 6).as_smi().unwrap_or(0);
+        if phase == ITERATOR_WALK_LENGTH {
+            return Ok(Vec::from([promise::slot(heap, record, 5)]));
+        }
+        if phase != ITERATOR_WALK_MAPPING {
+            return Ok(Vec::new());
+        }
+        let arguments = [
+            promise::slot(heap, record, 0),
+            promise::slot(heap, record, 7),
+            promise::slot(heap, record, 8),
+        ];
+        if promise::slot(heap, record, 9).as_smi() == Some(ITERATOR_WALK_REDUCE) {
+            return Ok(Vec::from(arguments));
+        }
+        Ok(Vec::from(&arguments[1..]))
     }
 
     /// `Set(array, "length", 𝔽(k), true)` of 23.1.2.1 step 6.c.iv.1, whose
@@ -10538,7 +10560,17 @@ impl RegisterVM {
             call.receiver = walk.receiver;
             call.resume = Some(Resume::Iteration { state });
             call.construct = None;
-            return self.enter_call_value(callback, units, active_feedback, heap, realm, call);
+            match self.enter_call_value(callback, units, active_feedback, heap, realm, call) {
+                // The Script answers through the frame it opened, which takes
+                // the walk on; a callback of the Realm has answered into the
+                // accumulator and the walk goes on with it here.
+                Ok(Some(code_id)) => return Ok(Some(code_id)),
+                Ok(None) => answered = Some(self.acc),
+                Err(refused) => {
+                    heap.exit_scope();
+                    return Err(refused);
+                }
+            }
         }
     }
 
