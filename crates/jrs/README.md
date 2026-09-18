@@ -586,7 +586,7 @@ source (architecture, section 17.1). What gates the switch is not the
 count either path reaches but the set of variants the stack path passes
 and the engine does not. At `a9390df` that set holds 2,710 variants:
 none of them the engine fails, and 2,710 it names as gaps. The engine
-passes 24,967 variants the stack path does not. Only the failures are
+passes 24,929 variants the stack path does not. Only the failures are
 breaches of the equality duty; a gap costs coverage and answers nothing
 wrongly.
 
