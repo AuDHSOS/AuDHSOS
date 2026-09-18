@@ -680,6 +680,37 @@ pub enum Resume {
         /// Root holding the value written.
         value: Root,
     },
+    /// 23.1.3.23 wrote an element through a setter of the Script, and takes
+    /// the walk back at the argument after it.
+    ///
+    /// The receiver and the value the setter takes wait in roots of one scope
+    /// the return leaves; the arguments are still in the registers of the
+    /// caller the call names.
+    Element {
+        /// Root holding the `this` value of the call.
+        receiver: Root,
+        /// Root holding the value the setter is called with.
+        value: Root,
+        /// First argument register of the call.
+        arg_start: Reg,
+        /// Number of arguments the call passed.
+        arg_count: u16,
+        /// The argument the walk writes next.
+        next: u16,
+        /// The index it writes that argument to.
+        index: i64,
+    },
+    /// A clause of 23.1.3 wrote the `length` it answers with through a setter
+    /// of the Script.
+    ///
+    /// The setter takes the length, and the clause answers what it had
+    /// already made, so both wait in roots of one scope the return leaves.
+    Answered {
+        /// Root holding the value the setter is called with.
+        value: Root,
+        /// Root holding what the clause answers.
+        answer: Root,
+    },
 }
 
 /// Whether a clause of 22.1.3 found a method of its argument to answer with.
@@ -1058,6 +1089,12 @@ pub struct RegisterVM {
     /// What the next accessor call answers back into, where the read is not
     /// the plain one of 10.1.8.1.
     accessor_resume: Option<Resume>,
+    /// What the clause answers once the setter [`Self::pending_setter`] names
+    /// has run.
+    accessor_answer: Option<Value>,
+    /// The setter a clause of 23.1.3 found for the `length` it writes last,
+    /// with the receiver and the value it takes.
+    pending_setter: Option<(Value, Value, Value)>,
     /// Whether the unit this run entered is the Script of a Realm, which is
     /// what 19.2.1.1 evaluates a nested Script against.
     entry_is_realm_script: bool,
@@ -1208,6 +1245,8 @@ impl RegisterVM {
             pending_source: None,
             pending_script: false,
             accessor_resume: None,
+            accessor_answer: None,
+            pending_setter: None,
             entry_is_realm_script: false,
             direct_eval: false,
             direct_eval_strict: false,
@@ -2432,7 +2471,12 @@ impl RegisterVM {
         call: Call,
         heap: &GenerationalHeap,
     ) -> Result<(), VMError> {
-        if let Some(Resume::Setter { value }) = call.resume {
+        if let Some(
+            Resume::Setter { value }
+            | Resume::Answered { value, .. }
+            | Resume::Element { value, .. },
+        ) = call.resume
+        {
             // A setter has no frame to take its argument from either, so the
             // value written comes out of the root that held it across the
             // allocation `bind_this` may have made.
@@ -5482,6 +5526,207 @@ impl RegisterVM {
         Ok(None)
     }
 
+    /// The setter 7.3.4 calls for the `length` a clause of 23.1.3 writes,
+    /// where the object holds one; `None` where the write is a define.
+    ///
+    /// 10.1.9.2 reads the Prototype Chain, so a setter of any object of it
+    /// takes the write.
+    fn length_setter(
+        object: ObjectRef,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<Value>, VMError> {
+        // 10.4.2.4 writes the `length` of an Array exotic object itself.
+        if heap.array_length(object).is_some() {
+            return Ok(None);
+        }
+        let name = PropertyKey::String(heap.strings.intern_units(&LENGTH_NAME)?);
+        let found = heap.lookup_named(object, name)?;
+        let Some(found) = found.filter(|property| property.flags.is_accessor) else {
+            return Ok(None);
+        };
+        let (_, set) = Self::accessor_parts(found.value, heap)?;
+        if set.is_undefined() {
+            // 10.1.9.2 step 7 with `Throw` true.
+            return Err(type_error(
+                heap,
+                realm,
+                "cannot write a property whose accessor has no setter",
+            ));
+        }
+        Ok(Some(found.value))
+    }
+
+    /// Answers with what a clause of 23.1.3 made, after the setter of its
+    /// `length` has run where it found one.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a setter opens a frame, which needs what a call needs"
+    )]
+    fn finish_array_like_clause(
+        &mut self,
+        answer: Value,
+        construct: Option<Construction>,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        if let Some((pair, receiver, assigned)) = self.pending_setter.take() {
+            self.accessor_answer = Some(answer);
+            let entered = self.enter_accessor(
+                pair,
+                receiver,
+                Some((assigned, true)),
+                call.return_pc,
+                call.caller_code_id,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            )?;
+            if entered.is_some() {
+                return Ok(entered);
+            }
+            self.accessor_answer = None;
+            self.acc = answer;
+        } else {
+            self.acc = answer;
+        }
+        if let Some(target) = construct {
+            self.write_construction(target, self.acc, heap)?;
+        }
+        Ok(None)
+    }
+
+    /// The setter 10.1.9.2 finds for an index the object does not hold
+    /// itself, where the write reaches one of the Prototype Chain.
+    ///
+    /// The heap says whether any object holds an index as an accessor at all,
+    /// so the walk of a clause pays for the lookup only where one was made.
+    fn element_setter(
+        object: ObjectRef,
+        index: i64,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<Value>, VMError> {
+        if !heap.holds_indexed_accessors() {
+            return Ok(None);
+        }
+        let key = PropertyKey::String(heap.intern_index_wide(Self::wide_index(index))?);
+        if heap.own_named_flags(object, key)?.is_some() {
+            return Ok(None);
+        }
+        if Self::narrow_index(index).is_some_and(|index| {
+            Self::element_at(heap, object, index)
+                .unwrap_or(None)
+                .is_some()
+        }) {
+            return Ok(None);
+        }
+        let Some(found) = heap
+            .lookup_named(object, key)?
+            .filter(|property| property.flags.is_accessor)
+        else {
+            return Ok(None);
+        };
+        let (_, set) = Self::accessor_parts(found.value, heap)?;
+        if set.is_undefined() {
+            return Err(type_error(
+                heap,
+                realm,
+                "cannot write a property whose accessor has no setter",
+            ));
+        }
+        Ok(Some(found.value))
+    }
+
+    /// `Array.prototype.push` of 23.1.3.23 from the argument `next` on.
+    ///
+    /// Step 5 writes each element with 7.3.4, which reaches a setter of the
+    /// Script where the Prototype Chain holds the index as an accessor: the
+    /// walk leaves for the frame it opens and takes the next argument once
+    /// the setter has returned.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the walk opens a frame, which needs what a call needs"
+    )]
+    fn run_push_clause(
+        &mut self,
+        call: Call,
+        next: u16,
+        index: i64,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let object = Self::coerce_object(call.receiver, heap, realm)?;
+        let mut index = index;
+        let mut offset = next;
+        while offset < call.arg_count {
+            self.charge_for_step(i64::from(offset))?;
+            let value = self.call_argument(&call, offset, heap)?;
+            if let Some(pair) = Self::element_setter(object, index, heap, realm)? {
+                let (_, set) = Self::accessor_parts(pair, heap)?;
+                if !Self::is_script_function(set, heap) {
+                    return Err(VMError::Unsupported(
+                        "a setter that is not a Script function",
+                    ));
+                }
+                // The receiver and the value outlive the frame the setter
+                // opens, so they are roots of a scope of its own.
+                heap.enter_scope();
+                let receiver = heap.push_root(call.receiver)?;
+                let held = heap.push_root(value)?;
+                let resume = Resume::Element {
+                    receiver,
+                    value: held,
+                    arg_start: call.arg_start,
+                    arg_count: call.arg_count,
+                    next: offset.saturating_add(1),
+                    index: index.saturating_add(1),
+                };
+                let setter_call = Call {
+                    receiver: call.receiver,
+                    arg_count: 1,
+                    resume: Some(resume),
+                    construct: None,
+                    ..call
+                };
+                return self.enter_call_value(
+                    set,
+                    units,
+                    active_feedback,
+                    heap,
+                    realm,
+                    setter_call,
+                );
+            }
+            Self::set_element_wide(object, index, value, heap, realm)?;
+            index = index.saturating_add(1);
+            offset = offset.saturating_add(1);
+        }
+        // Step 6 sets the length with 7.3.4, which throws where 10.4.2.4
+        // refuses it and reaches a setter of the Script where one stands.
+        let answer = index_value(index);
+        if let Some(pair) = Self::length_setter(object, heap, realm)? {
+            self.pending_setter = Some((pair, call.receiver, answer));
+        } else {
+            Self::set_array_like_length_wide(object, index, heap, realm)?;
+        }
+        self.finish_array_like_clause(
+            answer,
+            call.construct,
+            call,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )
+    }
+
     /// Runs a clause of 23.1.3 that has the `length` 7.3.18 gave it.
     ///
     /// 7.1.1 of an Object argument runs a method of the Script, which the
@@ -5521,16 +5766,27 @@ impl RegisterVM {
                 realm,
             );
         }
+        // 23.1.3.23 writes each of its arguments with 7.3.4, which may reach
+        // a setter of the Script, so the walk carries its own state.
+        if intrinsic == Intrinsic::ArrayPrototypePush {
+            // Step 4 refuses a length the arguments would push past 2^53-1
+            // before it writes any of them.
+            if length.saturating_add(i64::from(call.arg_count)) > INDEX_LIMIT {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "the length of an array-like cannot exceed 2^53-1",
+                ));
+            }
+            return self.run_push_clause(call, 0, length, units, active_feedback, heap, realm);
+        }
         let construct = call.construct;
-        self.acc = if Self::edits_an_array(intrinsic) {
+        let answer = if Self::edits_an_array(intrinsic) {
             self.call_array_edit_intrinsic(intrinsic, call, Some(length), heap, realm)?
         } else {
             self.call_array_intrinsic(intrinsic, call, Some(length), units, heap, realm)?
         };
-        if let Some(target) = construct {
-            self.write_construction(target, self.acc, heap)?;
-        }
-        Ok(None)
+        self.finish_array_like_clause(answer, construct, call, units, active_feedback, heap, realm)
     }
 
     /// Whether the clause begins with `LengthOfArrayLike` of 7.3.18, which a
@@ -5669,6 +5925,10 @@ impl RegisterVM {
     /// The object waits in a root, which the collector traces. A method of the
     /// Realm answers without a frame, so the loop takes that answer and goes
     /// on rather than leaving.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function carries the conversion of a length to every clause that reads one"
+    )]
     fn convert_array_like_length(
         &mut self,
         resume: Resume,
@@ -5763,15 +6023,38 @@ impl RegisterVM {
                 heap.exit_scope();
                 let intrinsic = Intrinsic::from_id(intrinsic).ok_or(VMError::TypeError)?;
                 let length = integer_argument(answered, heap, realm)?.max(0);
-                self.acc = if Self::edits_an_array(intrinsic) {
+                if intrinsic == Intrinsic::ArrayPrototypePush {
+                    if length.saturating_add(i64::from(call.arg_count)) > INDEX_LIMIT {
+                        return Err(type_error(
+                            heap,
+                            realm,
+                            "the length of an array-like cannot exceed 2^53-1",
+                        ));
+                    }
+                    return self.run_push_clause(
+                        call,
+                        0,
+                        length,
+                        units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    );
+                }
+                let answer = if Self::edits_an_array(intrinsic) {
                     self.call_array_edit_intrinsic(intrinsic, call, Some(length), heap, realm)?
                 } else {
                     self.call_array_intrinsic(intrinsic, call, Some(length), units, heap, realm)?
                 };
-                if let Some(target) = construct {
-                    self.write_construction(target, self.acc, heap)?;
-                }
-                return Ok(None);
+                return self.finish_array_like_clause(
+                    answer,
+                    construct,
+                    call,
+                    units,
+                    active_feedback,
+                    heap,
+                    realm,
+                );
             }
             held = heap.push_root(answered)?;
         }
@@ -6919,9 +7202,16 @@ impl RegisterVM {
         // scope of its own, which the return leaves.
         heap.enter_scope();
         let held = heap.push_root(assigned)?;
+        let resume = match self.accessor_answer.take() {
+            Some(answer) => Resume::Answered {
+                value: held,
+                answer: heap.push_root(answer)?,
+            },
+            None => Resume::Setter { value: held },
+        };
         let call = Call {
             arg_count: 1,
-            resume: Some(Resume::Setter { value: held }),
+            resume: Some(resume),
             ..call
         };
         self.enter_call_value(set, code, active_feedback, heap, realm, call)
@@ -11582,7 +11872,12 @@ impl RegisterVM {
             for index in 0..count.min(passed_in.len()) {
                 passed.push(*passed_in.get(index).unwrap_or(&VALUE_UNDEFINED));
             }
-        } else if let Some(Resume::Setter { value }) = frame.resume {
+        } else if let Some(
+            Resume::Setter { value }
+            | Resume::Answered { value, .. }
+            | Resume::Element { value, .. },
+        ) = frame.resume
+        {
             if count > 0 {
                 passed.push(heap.root_value(value).unwrap_or(VALUE_UNDEFINED));
             }
@@ -12231,6 +12526,12 @@ impl RegisterVM {
                     )?;
                 }
                 let final_length = length.saturating_sub(removed).saturating_add(inserted);
+                // Step 24 writes the `length` with 7.3.4, which a setter of
+                // the Script takes: the clause answers once it has run.
+                if let Some(pair) = Self::length_setter(object, heap, realm)? {
+                    self.pending_setter = Some((pair, call.receiver, index_value(final_length)));
+                    return Ok(Value::from_object(result));
+                }
                 Self::set_array_like_length_wide(object, final_length, heap, realm)?;
                 Ok(Value::from_object(result))
             }
@@ -13296,33 +13597,6 @@ impl RegisterVM {
             }
             // 23.1.3.23: each argument is written at the length reached so
             // far, and the new length is the answer.
-            Intrinsic::ArrayPrototypePush => {
-                // Step 4 refuses a length the arguments would push past
-                // 2^53-1 before it writes any of them.
-                if length.saturating_add(i64::from(call.arg_count)) > INDEX_LIMIT {
-                    return Err(type_error(
-                        heap,
-                        realm,
-                        "the length of an array-like cannot exceed 2^53-1",
-                    ));
-                }
-                let mut next = length;
-                for offset in 0..call.arg_count {
-                    self.charge_for_step(i64::from(offset))?;
-                    Self::set_element_wide(
-                        object,
-                        next,
-                        self.call_argument(&call, offset, heap)?,
-                        heap,
-                        realm,
-                    )?;
-                    next = next.saturating_add(1);
-                }
-                // Step 5 sets the length with 7.3.4, which throws where
-                // 10.4.2.4 refuses it.
-                Self::set_array_like_length_wide(object, next, heap, realm)?;
-                Ok(index_value(next))
-            }
             // 23.1.3.22: the last element leaves the Array, which is then one
             // shorter; an empty Array only has its length set again.
             Intrinsic::ArrayPrototypePop => {
@@ -26644,7 +26918,9 @@ impl RegisterVM {
                                     | Resume::GeneratorStep { .. }
                                     | Resume::AsyncGeneratorStep { .. }
                                     | Resume::AsyncFromSync { .. }
-                                    | Resume::Setter { .. } => Reg(0),
+                                    | Resume::Setter { .. }
+                                    | Resume::Answered { .. }
+                                    | Resume::Element { .. } => Reg(0),
                                 };
                                 let call = Call {
                                     receiver: VALUE_UNDEFINED,
@@ -26715,6 +26991,31 @@ impl RegisterVM {
                                         self.finish_iterator_result(state, heap, realm)?;
                                         None
                                     }
+                                    // 23.1.3.23 step 5 takes the walk back at
+                                    // the argument after the one the setter
+                                    // took.
+                                    Resume::Element {
+                                        receiver,
+                                        arg_start,
+                                        arg_count,
+                                        next,
+                                        index,
+                                        ..
+                                    } => {
+                                        let receiver =
+                                            heap.root_value(receiver).unwrap_or(VALUE_UNDEFINED);
+                                        heap.exit_scope();
+                                        let call = Call {
+                                            receiver,
+                                            func: arg_start,
+                                            arg_start,
+                                            arg_count,
+                                            ..call
+                                        };
+                                        self.run_push_clause(
+                                            call, next, index, units, feedback, heap, realm,
+                                        )?
+                                    }
                                     Resume::Length { .. } => self.finish_array_like_length(
                                         resume,
                                         pc,
@@ -26765,6 +27066,14 @@ impl RegisterVM {
                                     Resume::Setter { value } => {
                                         self.acc =
                                             heap.root_value(value).unwrap_or(VALUE_UNDEFINED);
+                                        heap.exit_scope();
+                                        None
+                                    }
+                                    // The clause of 23.1.3 answers what it made
+                                    // before it wrote the `length`.
+                                    Resume::Answered { answer, .. } => {
+                                        self.acc =
+                                            heap.root_value(answer).unwrap_or(VALUE_UNDEFINED);
                                         heap.exit_scope();
                                         None
                                     }

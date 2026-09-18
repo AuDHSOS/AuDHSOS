@@ -321,6 +321,11 @@ pub struct GenerationalHeap {
     /// Every `BigInt` the arena holds, keyed by its value, so that a value it
     /// already holds takes no second entry.
     bigint_registry: BTreeMap<(bool, Vec<u32>), u32>,
+    /// Whether any object of this heap holds an index as an accessor, which
+    /// 10.1.9.2 reads the Prototype Chain for. The flag stays set once one
+    /// was made: a clause of 23.1.3 reads it to decide whether the chain can
+    /// answer differently than the element store.
+    indexed_accessors: bool,
 }
 
 impl Default for GenerationalHeap {
@@ -356,6 +361,7 @@ impl GenerationalHeap {
             symbol_registry: BTreeMap::new(),
             bigints: Vec::new(),
             bigint_registry: BTreeMap::new(),
+            indexed_accessors: false,
         }
     }
 
@@ -1355,6 +1361,12 @@ impl GenerationalHeap {
         Ok(Some(u32::try_from(length).unwrap_or(u32::MAX)))
     }
 
+    /// Whether any object holds an index as an accessor property.
+    #[must_use]
+    pub const fn holds_indexed_accessors(&self) -> bool {
+        self.indexed_accessors
+    }
+
     /// The canonical array index a property key denotes, if it denotes one.
     ///
     /// # Errors
@@ -1594,6 +1606,15 @@ impl GenerationalHeap {
         // entry after, so a descriptor that carries both a value and a
         // writable of false is seen by the parameter.
         if flags.is_accessor {
+            // 10.1.9.2 reads the Prototype Chain for the index it writes, and
+            // only an accessor under an index of some object makes that read
+            // answer differently than the store does.
+            if name
+                .as_string()
+                .is_some_and(|name| self.array_index_of(name).unwrap_or(None).is_some())
+            {
+                self.indexed_accessors = true;
+            }
             self.unmap_parameter(reference, name)?;
         } else {
             self.write_parameter(reference, name, value)?;
