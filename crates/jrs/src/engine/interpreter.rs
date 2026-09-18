@@ -1525,11 +1525,19 @@ impl RegisterVM {
             PropertyFlags::constructor_data(),
         )?;
         let name = PropertyKey::String(heap.strings.intern("prototype")?);
+        // 10.2.5 step 6 gives the `prototype` of a constructor a descriptor
+        // that is writable and neither enumerable nor configurable; step 5
+        // gives the `constructor` of the object the three of 7.3.6.
         heap.define_own_named(
             function,
             name,
             Value::from_object(prototype),
-            PropertyFlags::constructor_data(),
+            PropertyFlags {
+                writable: true,
+                enumerable: false,
+                configurable: false,
+                is_accessor: false,
+            },
         )?;
         Ok(())
     }
@@ -4326,21 +4334,17 @@ impl RegisterVM {
             let answer = match intrinsic {
                 Intrinsic::ObjectValues | Intrinsic::ObjectEntries => {
                     let own = PropertyKey::String(name);
-                    let held = match Self::typed_array_read(object, key, heap)? {
-                        Some(element) => element,
-                        // 10.4.3 gives a String exotic object own indices and
-                        // a `length` out of its `[[StringData]]`, which
-                        // neither a Shape nor an element store holds.
-                        None if Self::owns_string_exotic(object, own, heap)? => {
-                            let indexed = Self::element_index_of(object, own, heap);
-                            Self::own_property_value(object, own, indexed, heap)?
-                        }
-                        None => heap
-                            .lookup_named(object, own)?
-                            .map(Self::plain_value)
-                            .transpose()?
-                            .unwrap_or(VALUE_UNDEFINED),
-                    };
+                    // 10.4.2, 10.4.3 and 10.4.5 hold an own index in an
+                    // element store, in a `[[StringData]]` and in a block,
+                    // none of which a Shape carries.
+                    let indexed = Self::element_index_of(object, own, heap);
+                    let held = Self::own_property_value(object, own, indexed, heap)?;
+                    if heap
+                        .own_named_flags(object, own)?
+                        .is_some_and(|flags| flags.is_accessor)
+                    {
+                        return Err(VMError::Unsupported("a property that is an accessor"));
+                    }
                     if intrinsic == Intrinsic::ObjectValues {
                         held
                     } else {
