@@ -5,6 +5,7 @@
 resolver = "3"
 members = [
     "crates/text-core",
+    "crates/text-raster",
     "crates/text-demo",
     "crates/regex-bt",
     "crates/utf16",
@@ -107,6 +108,7 @@ exclude = ["fuzz"]
 
 [workspace.dependencies]
 text-core = { path = "crates/text-core" }
+text-raster = { path = "crates/text-raster" }
 audhsos-json = { path = "crates/json" }
 audhsos-math = { path = "crates/math" }
 audhsos-utf16 = { path = "crates/utf16" }

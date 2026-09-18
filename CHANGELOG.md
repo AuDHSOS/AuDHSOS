@@ -7,6 +7,38 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `docs/18-rasterization.md`: the design of `text-raster`, the crate that turns
+  what `text-core` computes into pixels, in thirteen steps and eight decisions.
+  D-177 makes the crate deterministic the way `text-core` is, with no floating
+  point, so a golden image is a gate and asserts exact bytes. D-178 fixes four
+  pixel formats: `A8` coverage, `Rgba16` premultiplied linear light for every
+  blend and every group, and the two opaque display-space formats of `gfx`.
+  D-179 forbids allocation and any `alloc` feature. D-180 refuses hinting,
+  subpixel antialiasing over RGB stripes, vertical layout and faux-bold
+  dilation, and states what each draws instead; the four non-separable blend
+  modes are not refused. D-181 flattens to an eighth of a device pixel with a
+  segment count computed from the control points. D-182 computes coverage by
+  exact area accumulation with the non-zero winding rule, and states what each
+  of five degenerate contours draws. D-184 states the glyph cache key, its
+  first-in first-out ring and its memory bound. Track R of the roadmap carries
+  the thirteen steps; sections 17.28 to 17.30 of document 17 become one table
+  pointing at them.
+
+- `text-raster` R1: the surface. Width, height, a stride in bytes, one of the
+  four formats of D-178, and a borrowed mutable byte slice, with bounds-checked
+  access by texel and by row. Construction refuses a zero width or height, a
+  stride below the row, a row whose bytes leave `u32`, and a slice shorter than
+  the shape; a read outside the surface is `None`, a write outside it or of a
+  texel the format does not carry is an error. The bytes of a row past its last
+  visible column are never written. 19 host tests and one doctest over `Vec`
+  surfaces, no display and no running system.
+
+- `docs/w3c/compositing-1.html`: *Compositing and Blending Level 1*, the W3C
+  Candidate Recommendation Draft of 21 March 2024, with its 43 figure files
+  under `examples/`. `docs/microsoft/colr.html` defines a colour glyph's
+  composite mode by naming that document's operators rather than restating
+  them, so the twenty-eight formulas R11 implements are read from it.
+
 - `text-core` T13: colour glyphs. `colr::Colr` reads `COLR` versions 0 and 1
   over `CPAL` and resolves one glyph's paint graph into a flat stream of paint
   operations in font units, written into caller storage: clip and group
@@ -835,6 +867,19 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   Catalog 6.6.59 and 6.6.60.
 
 ### Changed
+
+- D-183 supersedes D-175 in its mechanism: the gamma value corrects the colour
+  channels around every blend rather than the coverage before it, because at
+  γ = 2.2 and coverage 0.5 a blend in display space needs an alpha of 0.27 for
+  black on white and 0.73 for white on black to reach the same result, so one
+  coverage value would have to become two alphas, while a blend in linear light
+  with alpha equal to coverage reaches it in both directions. The owner of the
+  value, its default of 2.2 and the rule that `text-core` never holds it are
+  unchanged.
+
+- `text-demo` joins the workspace policy table as a host crate, gains the SPDX
+  header and `#![forbid(unsafe_code)]` its crate root was missing, and drops
+  two Clippy findings. It stays the throwaway D-177 to D-184 replace.
 
 - `fonts/`: layer 6 of both chains is `noto/emoji/Noto-COLRv1.ttf`, the COLRv1
   build of Noto Color Emoji 2.051, in place of the CBDT `NotoColorEmoji.ttf`
