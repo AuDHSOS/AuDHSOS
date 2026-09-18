@@ -8178,16 +8178,6 @@ fn replace_substitutes_the_first_match_or_every_global_one() -> Result<(), Error
     ] {
         differential_scripts(&[source])?;
     }
-    // Step 8 calls a replace value that is callable, which needs a frame.
-    let program = compile(
-        "'abc'.replace('b',function(){return 'x'})",
-        Limits::default(),
-    )?;
-    assert!(program.uses_register_backend());
-    assert!(matches!(
-        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
-        Err(Error::Unsupported { .. })
-    ));
     Ok(())
 }
 
@@ -9347,6 +9337,34 @@ fn a_capability_of_27_2_1_5_constructs_a_constructor_of_the_script() -> Result<(
         // 27.2.4.7 step 2 answers a promise whose `constructor` is the one it
         // was called on.
         "var p=Promise.resolve(1);Promise.resolve(p)===p",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn a_replace_value_that_is_callable_runs_for_every_match() -> Result<(), Error> {
+    // 22.1.3.19 step 5 and 22.2.6.11 step 14.l call the replace value with
+    // the match, its captures, where it stands and the whole text, and take
+    // what it answers through `ToString`.
+    for source in [
+        "'hello'.replace('l',function(m,p,s){return '<'+m+p+s.length+'>'})",
+        "'hello'.replace('z',function(){return 'Q'})",
+        "'abc'.replace('',function(m,p){return '#'+p})",
+        "'aaa'.replace(/a/,function(m){return 'X'})",
+        "'xayabz'.replace(/a(b)?/g,function(m,c,p,s){return '['+m+'|'+c+'|'+p+'|'+s.length+']'})",
+        "'abc12 def34'.replace(/([a-z]+)([0-9]+)/,function(){return arguments[2]+arguments[1]})",
+        "'abc'.replace(/b/,function(){})",
+        "'abc'.replace(/b/,function(){return 5})",
+        // 22.2.6.11 step 11 takes every match before the first call, so a
+        // `lastIndex` the call writes changes none of them.
+        "var r=/a/g;'aaa'.replace(r,function(){r.lastIndex=0;return 'X'})",
+        // A call that throws leaves the clause with what it threw.
+        "var t;try{'aa'.replace(/a/g,function(){throw 'b'})}catch(e){t=e};t",
+        // 22.2.6.11 answers through `@@replace` of the search value.
+        "/a/[Symbol.replace]('aaa',function(m){return m+m})",
+        "/(a)(b)/[Symbol.replace]('zabz',function(m,a,b,p){return a+b+p})",
     ] {
         differential(source)?;
     }

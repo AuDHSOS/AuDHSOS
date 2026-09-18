@@ -202,6 +202,31 @@ const CAPABILITY_WAIT_EXECUTOR: u32 = 3;
 /// Index of the constructor the clause was called on.
 const CAPABILITY_WAIT_CONSTRUCTOR: u32 = 4;
 
+/// One match of 22.2.6.11 step 11: where it starts, where it ends and the
+/// text of every capture it holds.
+type MatchParts = (usize, usize, Vec<Option<Vec<u16>>>);
+
+/// Index of the text of 22.1.3.19 in the record its replace value waits in.
+const REPLACE_TEXT: u32 = 0;
+/// Index of the replace value.
+const REPLACE_REPLACER: u32 = 1;
+/// Index of the matches, taken before the first call.
+const REPLACE_MATCHES: u32 = 2;
+/// Index of how many of the matches are done.
+const REPLACE_INDEX: u32 = 3;
+/// Index of the pieces of the answer, in the order they are joined.
+const REPLACE_PIECES: u32 = 4;
+/// Index of how much of the text those pieces cover.
+const REPLACE_TAKEN: u32 = 5;
+/// Index of the arguments of the call in flight.
+const REPLACE_ARGUMENTS: u32 = 6;
+/// Index of the whole match in one match record.
+const REPLACE_MATCH_TEXT: u32 = 0;
+/// Index of where it starts in the text.
+const REPLACE_MATCH_POSITION: u32 = 1;
+/// Index of its first capture.
+const REPLACE_MATCH_CAPTURES: u32 = 2;
+
 /// The state of one walk of 23.1.3, read out of the object that holds it.
 ///
 /// A plain record, so the walk can be reasoned about in one place; it is
@@ -498,6 +523,15 @@ pub enum Resume {
         /// value the call was given, how many arguments it passed, whether
         /// the rejection closes the iterator, and the three the continuation
         /// keeps between its allocations.
+        state: Root,
+    },
+    /// 22.1.3.19 step 5 or 22.2.6.11 step 14.l called the replace value for
+    /// one match, and the answer is the text that takes its place.
+    Replace {
+        /// Root holding the record: the text, the replace value, the matches
+        /// taken before any of them ran, how many of them are done, the
+        /// pieces of the answer, how much of the text they cover and the
+        /// arguments of the call in flight.
         state: Root,
     },
     /// 27.2.1.5 step 4 constructed a constructor of the Script, and the
@@ -2753,6 +2787,10 @@ impl RegisterVM {
     ///
     /// They are read after `bind_this` has run, because that may allocate and
     /// a value taken before it would name a moved object.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function carries every way a frame is given its arguments"
+    )]
     fn fill_frame(
         &mut self,
         next_frame: usize,
@@ -2843,6 +2881,15 @@ impl RegisterVM {
             if promise::slot(heap, record, 3).as_smi().unwrap_or(0) > 0 {
                 self.place_arguments(next_frame, callee, &[promise::slot(heap, record, 2)])?;
             }
+        } else if let Some(Resume::Replace { state }) = call.resume {
+            // 22.2.6.11 step 14.l passes the match, its captures, where it
+            // stands and the whole text.
+            let record = heap
+                .root_value(state)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let arguments = promise::slot(heap, record, REPLACE_ARGUMENTS);
+            let passed = Self::record_values(arguments, heap);
+            self.place_arguments(next_frame, callee, &passed)?;
         } else if let Some(Resume::Capability { state }) = call.resume {
             // 27.2.1.5 step 4 passes the executor of 27.2.1.5.1 alone.
             let record = heap
@@ -4012,6 +4059,15 @@ impl RegisterVM {
                 .get(usize::from(index))
                 .copied()
                 .unwrap_or(VALUE_UNDEFINED));
+        }
+        // 22.2.6.11 step 14.l passes the match, its captures, where it
+        // stands and the whole text.
+        if let Some(Resume::Replace { state }) = call.resume {
+            let record = heap
+                .root_value(state)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let arguments = promise::slot(heap, record, REPLACE_ARGUMENTS);
+            return Ok(promise::slot(heap, arguments, u32::from(index)));
         }
         // 27.2.1.5 step 4 passes the executor out of the record the clause
         // waits in.
@@ -5926,6 +5982,13 @@ impl RegisterVM {
                 realm,
             );
         }
+        // Step 5 of 22.1.3.19 calls a replace value that is callable, once
+        // for the occurrence a text names and once per match of a `RegExp`.
+        if intrinsic == Intrinsic::StringPrototypeReplace
+            && Self::is_callable(self.call_argument(&call, 1, heap)?, heap)
+        {
+            return self.string_replace_with_a_function(call, units, active_feedback, heap, realm);
+        }
         // Step 4.d.iii of 27.2.4.1.1 resolves the capability once the last
         // element has settled, which for one of the Script is a frame.
         if matches!(
@@ -6301,12 +6364,16 @@ impl RegisterVM {
         let text =
             property_name_units(promise::slot(heap, record, REGEXP_RECORD_TEXT), heap, realm)?;
         let replaces = intrinsic == Intrinsic::RegExpPrototypeReplace;
-        let replacement = if replaces {
-            let replacement = promise::slot(heap, record, REGEXP_RECORD_SECOND);
-            if Self::is_callable(replacement, heap) {
-                return Err(VMError::Unsupported("a replace value that is callable"));
-            }
-            property_name_units(replacement, heap, realm)?
+        // Step 5 keeps a replace value that is callable as it is, and sends
+        // every other one through `ToString`.
+        let functional =
+            replaces && Self::is_callable(promise::slot(heap, record, REGEXP_RECORD_SECOND), heap);
+        let replacement = if replaces && !functional {
+            property_name_units(
+                promise::slot(heap, record, REGEXP_RECORD_SECOND),
+                heap,
+                realm,
+            )?
         } else {
             Vec::new()
         };
@@ -6440,6 +6507,23 @@ impl RegisterVM {
         let pattern = Self::regexp_pattern(object, heap)
             .ok_or_else(|| type_error(heap, realm, "this value is not a RegExp"))?;
         let unicode = flags.contains(&u16::from(b'u')) || flags.contains(&u16::from(b'v'));
+        // Step 14.l calls a replace value that is callable once for every
+        // match, which the walk of its own carries.
+        if functional {
+            let matches =
+                self.collect_the_matches(object, &pattern, &text, global, unicode, heap, realm)?;
+            let taker = promise::slot(heap, record, REGEXP_RECORD_SECOND);
+            return self.begin_the_replace(
+                &text,
+                taker,
+                &matches,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
         self.acc = if intrinsic == Intrinsic::RegExpPrototypeTest {
             // 22.2.6.16 step 4 answers whether 22.2.7.2 found a match.
             let matched = self.regexp_exec(object, &pattern, &text, heap, realm)?;
@@ -14110,6 +14194,22 @@ impl RegisterVM {
             };
             for index in 0..count.min(passed_in.len()) {
                 passed.push(*passed_in.get(index).unwrap_or(&VALUE_UNDEFINED));
+            }
+        } else if let Some(Resume::Replace { state }) = frame.resume {
+            let record = heap
+                .root_value(state)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let passed_in =
+                Self::record_values(promise::slot(heap, record, REPLACE_ARGUMENTS), heap);
+            for index in 0..count.min(passed_in.len()) {
+                passed.push(*passed_in.get(index).unwrap_or(&VALUE_UNDEFINED));
+            }
+        } else if let Some(Resume::Capability { state }) = frame.resume {
+            let record = heap
+                .root_value(state)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            if count > 0 {
+                passed.push(promise::slot(heap, record, CAPABILITY_WAIT_EXECUTOR));
             }
         } else if let Some(
             Resume::Setter { value }
@@ -22606,6 +22706,363 @@ impl RegisterVM {
         self.allocate_string(heap, &out)
     }
 
+    /// The values of a record of the heap, in order.
+    fn record_values(record: Value, heap: &GenerationalHeap) -> Vec<Value> {
+        let Some(object) = record.as_object() else {
+            return Vec::new();
+        };
+        let Some(&ObjectKind::Array { length, .. }) =
+            heap.get_object(object).map(|entry| &entry.kind)
+        else {
+            return Vec::new();
+        };
+        (0..length)
+            .map(|index| promise::slot(heap, record, index))
+            .collect()
+    }
+
+    /// 22.1.3.19 step 5 and 22.2.6.11 step 14.l: a replace value that is
+    /// callable runs once for every match, in the order the matches stand.
+    ///
+    /// Every match is taken before the first call, which is the order
+    /// 22.2.6.11 reads and writes `lastIndex` in; the record holds them and
+    /// the pieces of the answer, because a call of the Script stands between
+    /// any two of them.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a call a native makes runs where a call does, with what a call has"
+    )]
+    fn begin_the_replace(
+        &mut self,
+        text: &[u16],
+        replacer: Value,
+        found: &[MatchParts],
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let whole = self.allocate_string(heap, text)?;
+        let taken = Value::from_object(realm.array(heap, 0)?);
+        for (at, (start, end, captures)) in found.iter().enumerate() {
+            let matched = self.allocate_string(heap, text.get(*start..*end).unwrap_or_default())?;
+            let position = i32::try_from(*start).map_err(|_| VMError::StringLimit)?;
+            let entry = promise::record(heap, realm, &[matched, Value::from_smi(position)])?;
+            for (slot, capture) in captures.iter().enumerate() {
+                let value = match capture {
+                    Some(capture) => self.allocate_string(heap, capture)?,
+                    None => VALUE_UNDEFINED,
+                };
+                let slot = u32::try_from(slot).map_err(|_| VMError::PropertyLimit)?;
+                promise::set_slot(
+                    heap,
+                    entry,
+                    REPLACE_MATCH_CAPTURES.saturating_add(slot),
+                    value,
+                )?;
+            }
+            let at = u32::try_from(at).map_err(|_| VMError::PropertyLimit)?;
+            promise::set_slot(heap, taken, at, entry)?;
+        }
+        let pieces = Value::from_object(realm.array(heap, 0)?);
+        let record = promise::record(
+            heap,
+            realm,
+            &[
+                whole,
+                replacer,
+                taken,
+                Value::from_smi(0),
+                pieces,
+                Value::from_smi(0),
+                VALUE_UNDEFINED,
+            ],
+        )?;
+        // The record outlives every frame the clause opens, so it is a root
+        // of a scope of its own, which the last match leaves.
+        heap.enter_scope();
+        let state = heap.push_root(record)?;
+        self.step_the_replace(state, None, call, units, active_feedback, heap, realm)
+    }
+
+    /// One step of that walk: it takes the text the last call answered and
+    /// calls the replace value for the next match, or joins the pieces.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a call a native makes runs where a call does, with what a call has"
+    )]
+    fn step_the_replace(
+        &mut self,
+        state: Root,
+        answered: Option<Value>,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let matches = promise::slot(heap, record, REPLACE_MATCHES);
+        let count = Self::record_values(matches, heap).len();
+        if let Some(answer) = answered {
+            match self.take_one_replacement(record, answer, heap, realm) {
+                Ok(()) => {}
+                Err(refused) => {
+                    heap.exit_scope();
+                    return Err(refused);
+                }
+            }
+        }
+        let index = usize::try_from(
+            promise::slot(heap, record, REPLACE_INDEX)
+                .as_smi()
+                .unwrap_or(0)
+                .max(0),
+        )
+        .unwrap_or(usize::MAX);
+        if index >= count {
+            let answer = match self.join_the_replacement(record, heap) {
+                Ok(answer) => answer,
+                Err(refused) => {
+                    heap.exit_scope();
+                    return Err(refused);
+                }
+            };
+            heap.exit_scope();
+            self.acc = answer;
+            return Ok(None);
+        }
+        // Step 14.l passes the match, then each capture, then where the match
+        // stands and the whole text.
+        let entry = promise::slot(
+            heap,
+            matches,
+            u32::try_from(index).map_err(|_| VMError::PropertyLimit)?,
+        );
+        let parts = Self::record_values(entry, heap);
+        let mut arguments = Vec::with_capacity(parts.len().saturating_add(1));
+        arguments.push(parts.first().copied().unwrap_or(VALUE_UNDEFINED));
+        arguments.extend(parts.iter().skip(2).copied());
+        arguments.push(parts.get(1).copied().unwrap_or(VALUE_UNDEFINED));
+        arguments.push(promise::slot(heap, record, REPLACE_TEXT));
+        let arg_count = u16::try_from(arguments.len()).unwrap_or(u16::MAX);
+        let list = promise::record(heap, realm, &arguments)?;
+        promise::set_slot(heap, record, REPLACE_ARGUMENTS, list)?;
+        let replacer = promise::slot(heap, record, REPLACE_REPLACER);
+        let call = Call {
+            receiver: VALUE_UNDEFINED,
+            arg_count,
+            arg_start: Reg(0),
+            resume: Some(Resume::Replace { state }),
+            construct: None,
+            ..call
+        };
+        match self.enter_call_value(replacer, units, active_feedback, heap, realm, call) {
+            Ok(entered) => Ok(entered),
+            Err(refused) => {
+                heap.exit_scope();
+                Err(refused)
+            }
+        }
+    }
+
+    /// Step 14.m: the text the call answered takes the place of the match it
+    /// was given, with the text between the last match and this one in front.
+    fn take_one_replacement(
+        &self,
+        record: Value,
+        answer: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let index = promise::slot(heap, record, REPLACE_INDEX)
+            .as_smi()
+            .unwrap_or(0)
+            .max(0);
+        let list = promise::slot(heap, record, REPLACE_MATCHES);
+        let entry = promise::slot(
+            heap,
+            list,
+            u32::try_from(index).map_err(|_| VMError::PropertyLimit)?,
+        );
+        let matched = promise::slot(heap, entry, REPLACE_MATCH_TEXT);
+        let position = usize::try_from(
+            promise::slot(heap, entry, REPLACE_MATCH_POSITION)
+                .as_smi()
+                .unwrap_or(0)
+                .max(0),
+        )
+        .unwrap_or(0);
+        let taken = usize::try_from(
+            promise::slot(heap, record, REPLACE_TAKEN)
+                .as_smi()
+                .unwrap_or(0)
+                .max(0),
+        )
+        .unwrap_or(0);
+        let text = promise::slot(heap, record, REPLACE_TEXT);
+        let whole = heap
+            .strings
+            .to_utf16(text)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let front = whole
+            .get(taken.min(whole.len())..position.min(whole.len()))
+            .unwrap_or_default()
+            .to_vec();
+        let front = self.allocate_string(heap, &front)?;
+        // Step 14.m sends what the call answered through `ToString`.
+        let replacement = property_name_units(answer, heap, realm)?;
+        let replacement = self.allocate_string(heap, &replacement)?;
+        let pieces = promise::slot(heap, record, REPLACE_PIECES);
+        let at = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+        promise::set_slot(heap, pieces, at.saturating_mul(2), front)?;
+        promise::set_slot(
+            heap,
+            pieces,
+            at.saturating_mul(2).saturating_add(1),
+            replacement,
+        )?;
+        let length = heap
+            .strings
+            .length_of(matched)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let end = position.saturating_add(length);
+        promise::set_slot(
+            heap,
+            record,
+            REPLACE_TAKEN,
+            Value::from_smi(i32::try_from(end).map_err(|_| VMError::StringLimit)?),
+        )?;
+        promise::set_slot(
+            heap,
+            record,
+            REPLACE_INDEX,
+            Value::from_smi(index.saturating_add(1)),
+        )?;
+        Ok(())
+    }
+
+    /// The answer of 22.1.3.19: the pieces the calls made, with the text
+    /// behind the last match at the end.
+    fn join_the_replacement(
+        &self,
+        record: Value,
+        heap: &mut GenerationalHeap,
+    ) -> Result<Value, VMError> {
+        let text = promise::slot(heap, record, REPLACE_TEXT);
+        let units = heap
+            .strings
+            .to_utf16(text)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let taken = usize::try_from(
+            promise::slot(heap, record, REPLACE_TAKEN)
+                .as_smi()
+                .unwrap_or(0)
+                .max(0),
+        )
+        .unwrap_or(0);
+        let pieces = promise::slot(heap, record, REPLACE_PIECES);
+        let mut out: Vec<u16> = Vec::new();
+        for piece in Self::record_values(pieces, heap) {
+            let piece = heap
+                .strings
+                .to_utf16(piece)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            out.extend_from_slice(&piece);
+            if out.len() > self.string_units_limit {
+                return Err(VMError::StringLimit);
+            }
+        }
+        out.extend_from_slice(units.get(taken.min(units.len())..).unwrap_or_default());
+        self.allocate_string(heap, &out)
+    }
+
+    /// 22.1.3.19 for a replace value that is callable.
+    ///
+    /// Step 2 gives the search value its own say through `@@replace`, and the
+    /// one of this Realm on a `RegExp` collects every match before the first
+    /// call; a search value that is a text has the one occurrence step 6
+    /// finds.
+    fn string_replace_with_a_function(
+        &mut self,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let search = self.call_argument(&call, 0, heap)?;
+        let replacer = self.call_argument(&call, 1, heap)?;
+        if let Some(object) = search.as_object() {
+            let method = heap
+                .lookup_named(object, super::realm::WellKnownSymbol::Replace.key())?
+                .map(Self::plain_value)
+                .transpose()?
+                .unwrap_or(VALUE_UNDEFINED);
+            if method.is_undefined() {
+                return Err(VMError::Unsupported("ToString of an Object"));
+            }
+            if !Self::is_intrinsic(method, Intrinsic::RegExpPrototypeReplace, heap) {
+                return Err(VMError::Unsupported("a @@replace of the Script"));
+            }
+            let text = self.receiver_units(call.receiver, units, heap, realm)?;
+            let pattern = Self::regexp_pattern(object, heap)
+                .ok_or_else(|| type_error(heap, realm, "this value is not a RegExp"))?;
+            // 22.2.7.1 uses an `exec` the object carries where that is
+            // callable, which runs a method of the Script.
+            let key = PropertyKey::String(heap.strings.intern("exec")?);
+            if heap.own_named_flags(object, key)?.is_some() {
+                return Err(VMError::Unsupported("an exec of the Script"));
+            }
+            let flags = self.regexp_flags_text(Value::from_object(object), heap, realm)?;
+            let global = flags.contains(&u16::from(b'g'));
+            let unicode = flags.contains(&u16::from(b'u')) || flags.contains(&u16::from(b'v'));
+            if global {
+                Self::set_last_index(object, Value::from_smi(0), heap, realm)?;
+            }
+            let matches =
+                self.collect_the_matches(object, &pattern, &text, global, unicode, heap, realm)?;
+            return self.begin_the_replace(
+                &text,
+                replacer,
+                &matches,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
+        let text = self.receiver_units(call.receiver, units, heap, realm)?;
+        let search = property_name_units(search, heap, realm)?;
+        // Steps 6 and 7: the first occurrence alone, and the String itself
+        // where there is none.
+        let found = text
+            .windows(search.len().max(1))
+            .position(|window| search.is_empty() || window == search.as_slice())
+            .filter(|_| search.len() <= text.len())
+            .or_else(|| search.is_empty().then_some(0));
+        let matches = match found {
+            Some(position) => {
+                Vec::from([(position, position.saturating_add(search.len()), Vec::new())])
+            }
+            None => Vec::new(),
+        };
+        self.begin_the_replace(
+            &text,
+            replacer,
+            &matches,
+            call,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )
+    }
+
     /// `%RegExp.prototype%[@@replace]` of 22.2.6.11.
     ///
     /// The matches are taken before anything is built, which is the order the
@@ -22670,13 +23127,40 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
+        let found =
+            self.collect_the_matches(receiver, pattern, text, global, unicode, heap, realm)?;
         let mut out: Vec<u16> = Vec::new();
         let mut taken = 0usize;
+        for (start, end, captures) in &found {
+            out.extend_from_slice(text.get(taken..*start).unwrap_or_default());
+            let matched = text.get(*start..*end).unwrap_or_default().to_vec();
+            Self::append_substitution(&mut out, &matched, text, *start, captures, replacement);
+            taken = (*end).max(*start);
+        }
+        out.extend_from_slice(text.get(taken..).unwrap_or_default());
+        self.allocate_string(heap, &out)
+    }
+
+    /// Step 11 of 22.2.6.11: every match 22.2.7.1 finds, taken before
+    /// anything is built.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the walk carries what steps 6 to 11 of 22.2.6.11 read"
+    )]
+    fn collect_the_matches(
+        &mut self,
+        receiver: ObjectRef,
+        pattern: &crate::regexp::RegExp,
+        text: &[u16],
+        global: bool,
+        unicode: bool,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Vec<MatchParts>, VMError> {
+        let mut matches = Vec::new();
         while let Some(found) = self.regexp_exec(receiver, pattern, text, heap, realm)? {
             let start = found.range.start.min(text.len());
             let end = found.range.end.min(text.len());
-            out.extend_from_slice(text.get(taken..start).unwrap_or_default());
-            let matched = text.get(start..end).unwrap_or_default().to_vec();
             let captures: Vec<Option<Vec<u16>>> = found
                 .captures
                 .iter()
@@ -22686,8 +23170,7 @@ impl RegisterVM {
                         .map(|range| text.get(range.clone()).unwrap_or_default().to_vec())
                 })
                 .collect();
-            Self::append_substitution(&mut out, &matched, text, start, &captures, replacement);
-            taken = end.max(start);
+            matches.push((start, end.max(start), captures));
             if !global {
                 break;
             }
@@ -22707,8 +23190,7 @@ impl RegisterVM {
             }
             self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
         }
-        out.extend_from_slice(text.get(taken..).unwrap_or_default());
-        self.allocate_string(heap, &out)
+        Ok(matches)
     }
 
     /// `toLowercase` and `toUppercase` of the Unicode Default Case Conversion,
@@ -26917,6 +27399,7 @@ impl RegisterVM {
                     Resume::Sort { .. }
                         | Resume::Copy { .. }
                         | Resume::Capability { .. }
+                        | Resume::Replace { .. }
                         | Resume::Answered { .. }
                 )
             ) {
@@ -30357,6 +30840,7 @@ impl RegisterVM {
                                     | Resume::Coercion { register, .. } => register,
                                     Resume::Iteration { .. }
                                     | Resume::Capability { .. }
+                                    | Resume::Replace { .. }
                                     | Resume::CollectionWalk { .. }
                                     | Resume::CollectionInsert { .. }
                                     | Resume::IteratorWalk { .. }
@@ -30507,6 +30991,17 @@ impl RegisterVM {
                                         resume,
                                         pc,
                                         current_code_id,
+                                        units,
+                                        feedback,
+                                        heap,
+                                        realm,
+                                    )?,
+                                    // 22.2.6.11 step 14.m takes the text the
+                                    // replace value answered.
+                                    Resume::Replace { state } => self.step_the_replace(
+                                        state,
+                                        Some(self.acc),
+                                        call,
                                         units,
                                         feedback,
                                         heap,
