@@ -2278,7 +2278,10 @@ impl RegisterLowerer {
             }
             // 15.5: the body leaves with the value the operand answers and
             // comes back with the one 27.5.1.2 was given.
-            ExprKind::Yield(value) => {
+            ExprKind::Yield(value, each) => {
+                if *each {
+                    return self.lower_yield_each(value.as_deref()?);
+                }
                 let value_type = if let Some(value) = value {
                     self.lower(value)?
                 } else {
@@ -8367,71 +8370,99 @@ impl RegisterLowerer {
         })
     }
 
-    /// Walks the async iterator of 7.4.3 for a `for await` of 14.7.5.
+    /// Opens the iterator of 7.4.2 or of 7.4.3, leaving it and its `next` in
+    /// the registers the caller named.
     ///
-    /// 7.4.3 reads `@@asyncIterator` and, where the value carries none,
-    /// wraps the sync iterator of `@@iterator` in the object of 27.1.4.1.
-    /// Each step of 14.7.5.7 waits for what `next` answered and asks it for
-    /// an Object before it reads `done`.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one function emits the whole of a loop head and its close"
-    )]
-    fn lower_async_for_of(
+    /// The async form reads `@@asyncIterator` and, where the value carries
+    /// none, wraps the sync iterator of `@@iterator` in the object of
+    /// 27.1.4.1. The accumulator holds the value on entry.
+    fn emit_open_iterator(
         &mut self,
-        head_binding: ForInHead<'_>,
-        body: &Stmt,
-    ) -> Option<RegisterType> {
+        iterable: crate::engine::bytecode::Reg,
+        method: crate::engine::bytecode::Reg,
+        iterator: crate::engine::bytecode::Reg,
+        next: crate::engine::bytecode::Reg,
+        asynchronous: bool,
+    ) -> Option<()> {
+        use crate::engine::bytecode::FeedbackKind;
         use crate::engine::bytecode::Instruction;
         use crate::engine::bytecode::RequireKind;
-        let iterable = self.allocate_register()?;
         self.code.emit(Instruction::Star(iterable));
-        let method = self.allocate_register()?;
-        let iterator = self.allocate_register()?;
-        let next = self.allocate_register()?;
-        let async_slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
-        self.code.emit(Instruction::GetWellKnown {
-            obj: iterable,
-            symbol: u16::try_from(WELL_KNOWN_ASYNC_ITERATOR).ok()?,
-            slot: async_slot,
-        });
-        self.code.emit(Instruction::Star(method));
-        let asynchronous = self.code.emit(Instruction::JumpIfNotNullish(0));
-        // 7.4.3 step 1.b: a value with no `@@asyncIterator` is walked through
-        // its sync iterator, which 27.1.4.1 wraps.
-        let sync_slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
-        self.code.emit(Instruction::GetWellKnown {
-            obj: iterable,
-            symbol: u16::try_from(WELL_KNOWN_ITERATOR).ok()?,
-            slot: sync_slot,
-        });
-        self.code.emit(Instruction::Require(RequireKind::Iterable));
-        self.code.emit(Instruction::Star(method));
-        let sync_open = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
-        self.code.emit(Instruction::CallMethod {
-            receiver: iterable,
-            func: method,
-            arg_start: method,
-            arg_count: 0,
-            slot: sync_open,
-        });
-        self.code.emit(Instruction::Require(RequireKind::Iterator));
-        self.code.emit(Instruction::Star(iterator));
-        let sync_next = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
         let next_name = self.string_constant(&"next".encode_utf16().collect::<Vec<_>>())?;
+        let mut wrapped = None;
+        if asynchronous {
+            let async_slot = self.feedback_slot(FeedbackKind::NamedAccess)?;
+            self.code.emit(Instruction::GetWellKnown {
+                obj: iterable,
+                symbol: u16::try_from(WELL_KNOWN_ASYNC_ITERATOR).ok()?,
+                slot: async_slot,
+            });
+            self.code.emit(Instruction::Star(method));
+            let present = self.code.emit(Instruction::JumpIfNotNullish(0));
+            // 7.4.3 step 1.b walks the sync iterator instead, wrapped.
+            self.emit_open_sync_iterator(iterable, method, iterator, RequireKind::Iterable)?;
+            let sync_next = self.feedback_slot(FeedbackKind::NamedAccess)?;
+            self.code.emit(Instruction::GetNamed {
+                obj: iterator,
+                name: next_name,
+                slot: sync_next,
+            });
+            self.code.emit(Instruction::Star(next));
+            self.code
+                .emit(Instruction::AsyncFromSync { iterator, next });
+            self.code.emit(Instruction::Star(iterator));
+            wrapped = Some(self.code.emit(Instruction::Jump(0)));
+            let call_async = self.code.instructions.len();
+            self.patch_jump(present, call_async)?;
+            let open = self.feedback_slot(FeedbackKind::Call)?;
+            self.code.emit(Instruction::CallMethod {
+                receiver: iterable,
+                func: method,
+                arg_start: method,
+                arg_count: 0,
+                slot: open,
+            });
+            self.code.emit(Instruction::Require(RequireKind::Iterator));
+            self.code.emit(Instruction::Star(iterator));
+        } else {
+            self.emit_open_sync_iterator(iterable, method, iterator, RequireKind::Iterable)?;
+        }
+        if let Some(wrapped) = wrapped {
+            let opened = self.code.instructions.len();
+            self.patch_jump(wrapped, opened)?;
+        }
+        // 7.4.2 step 3 reads `next` once, whichever iterator the walk has.
+        let next_slot = self.feedback_slot(FeedbackKind::NamedAccess)?;
         self.code.emit(Instruction::GetNamed {
             obj: iterator,
             name: next_name,
-            slot: sync_next,
+            slot: next_slot,
         });
         self.code.emit(Instruction::Star(next));
-        self.code
-            .emit(Instruction::AsyncFromSync { iterator, next });
-        self.code.emit(Instruction::Star(iterator));
-        let wrapped = self.code.emit(Instruction::Jump(0));
-        let call_async = self.code.instructions.len();
-        self.patch_jump(asynchronous, call_async)?;
-        let open = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
+        Some(())
+    }
+
+    /// Reads `@@iterator` of the value in `iterable` and calls it, leaving the
+    /// iterator of 7.4.2 in its register.
+    fn emit_open_sync_iterator(
+        &mut self,
+        iterable: crate::engine::bytecode::Reg,
+        method: crate::engine::bytecode::Reg,
+        iterator: crate::engine::bytecode::Reg,
+        refusal: crate::engine::bytecode::RequireKind,
+    ) -> Option<()> {
+        use crate::engine::bytecode::FeedbackKind;
+        use crate::engine::bytecode::Instruction;
+        use crate::engine::bytecode::RequireKind;
+        let slot = self.feedback_slot(FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetWellKnown {
+            obj: iterable,
+            symbol: u16::try_from(WELL_KNOWN_ITERATOR).ok()?,
+            slot,
+        });
+        self.code.emit(Instruction::Require(refusal));
+        self.code.emit(Instruction::Star(method));
+        let open = self.feedback_slot(FeedbackKind::Call)?;
         self.code.emit(Instruction::CallMethod {
             receiver: iterable,
             func: method,
@@ -8441,17 +8472,111 @@ impl RegisterLowerer {
         });
         self.code.emit(Instruction::Require(RequireKind::Iterator));
         self.code.emit(Instruction::Star(iterator));
-        let opened = self.code.instructions.len();
-        self.patch_jump(wrapped, opened)?;
-        // 7.4.2 step 3 reads `next` once, whichever of the two iterators the
-        // walk ended up with.
-        let next_slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
-        self.code.emit(Instruction::GetNamed {
-            obj: iterator,
-            name: next_name,
-            slot: next_slot,
+        Some(())
+    }
+
+    /// Lowers `yield *` of 15.5.5, which walks the iterator of its operand and
+    /// yields every element it answers.
+    ///
+    /// Step 6.a calls `next` with what the last resumption carried, asks the
+    /// answer for an Object and ends the walk where it says `done`, with its
+    /// `value` as the value of the expression. A sync generator yields the
+    /// result object itself; an async one awaits the step and yields its
+    /// value. A resumption that is a `throw` or a `return` takes the body back
+    /// abruptly, which this lowering has no form of and names as a gap.
+    fn lower_yield_each(&mut self, value: &Expr) -> Option<RegisterType> {
+        use crate::engine::bytecode::FeedbackKind;
+        use crate::engine::bytecode::Instruction;
+        use crate::engine::bytecode::RequireKind;
+        let asynchronous = self.code.async_generator;
+        let iterable_type = self.lower(value)?;
+        // The iterator and everything it answers leave with the caller of
+        // `next`, which is a Script this lowering does not see.
+        self.escape(&[iterable_type]);
+        let iterable = self.allocate_register()?;
+        let method = self.allocate_register()?;
+        let iterator = self.allocate_register()?;
+        let [next, sent] = self.allocate_register_window()?;
+        let step = self.allocate_register()?;
+        self.emit_open_iterator(iterable, method, iterator, next, asynchronous)?;
+        // Step 5 starts the walk with an undefined resumption value.
+        self.code.emit(Instruction::LdaUndefined);
+        self.code.emit(Instruction::Star(sent));
+        let head = self.code.instructions.len();
+        let step_slot = self.feedback_slot(FeedbackKind::Call)?;
+        self.code.emit(Instruction::CallMethod {
+            receiver: iterator,
+            func: next,
+            arg_start: sent,
+            arg_count: 1,
+            slot: step_slot,
         });
-        self.code.emit(Instruction::Star(next));
+        if asynchronous {
+            self.code.emit(Instruction::Await);
+        }
+        self.code
+            .emit(Instruction::Require(RequireKind::IteratorResult));
+        self.code.emit(Instruction::Star(step));
+        let done_name = self.string_constant(&"done".encode_utf16().collect::<Vec<_>>())?;
+        let done_slot = self.feedback_slot(FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetNamed {
+            obj: step,
+            name: done_name,
+            slot: done_slot,
+        });
+        let finished = self.code.emit(Instruction::JumpIfTrue(0));
+        let value_name = self.string_constant(&"value".encode_utf16().collect::<Vec<_>>())?;
+        if asynchronous {
+            let slot = self.feedback_slot(FeedbackKind::NamedAccess)?;
+            self.code.emit(Instruction::GetNamed {
+                obj: step,
+                name: value_name,
+                slot,
+            });
+            self.code.emit(Instruction::AsyncYield);
+        } else {
+            self.code.emit(Instruction::Ldar(step));
+            self.code.emit(Instruction::YieldResult);
+        }
+        self.code.emit(Instruction::Star(sent));
+        let back = self.code.emit(Instruction::Jump(0));
+        let done_at = self.code.instructions.len();
+        self.patch_jump(finished, done_at)?;
+        self.patch_jump(back, head)?;
+        // Step 6.a.v answers the `value` of the result that said `done`.
+        let slot = self.feedback_slot(FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetNamed {
+            obj: step,
+            name: value_name,
+            slot,
+        });
+        self.release_register(step)?;
+        self.release_register(sent)?;
+        self.release_register(next)?;
+        self.release_register(iterator)?;
+        self.release_register(method)?;
+        self.release_register(iterable)?;
+        Some(RegisterType::Unknown)
+    }
+
+    /// Walks the async iterator of 7.4.3 for a `for await` of 14.7.5.
+    ///
+    /// 7.4.3 reads `@@asyncIterator` and, where the value carries none,
+    /// wraps the sync iterator of `@@iterator` in the object of 27.1.4.1.
+    /// Each step of 14.7.5.7 waits for what `next` answered and asks it for
+    /// an Object before it reads `done`.
+    fn lower_async_for_of(
+        &mut self,
+        head_binding: ForInHead<'_>,
+        body: &Stmt,
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        use crate::engine::bytecode::RequireKind;
+        let iterable = self.allocate_register()?;
+        let method = self.allocate_register()?;
+        let iterator = self.allocate_register()?;
+        let next = self.allocate_register()?;
+        self.emit_open_iterator(iterable, method, iterator, next, true)?;
 
         self.code.emit(Instruction::LdaUndefined);
         let result_register = self.allocate_register()?;
@@ -11185,7 +11310,7 @@ fn register_expression_reads(expression: &Expr, what: Reads) -> bool {
         | ExprKind::PrivateName(_)
         | ExprKind::Regex(_, _)
         | ExprKind::Update(..) => false,
-        ExprKind::Yield(value) => value
+        ExprKind::Yield(value, _) => value
             .as_deref()
             .is_some_and(|value| register_expression_reads(value, what)),
         ExprKind::Group(inner)
@@ -11325,7 +11450,7 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
         | ExprKind::NewTarget
         | ExprKind::PrivateName(_)
         | ExprKind::Regex(_, _) => false,
-        ExprKind::Yield(value) => match value {
+        ExprKind::Yield(value, _) => match value {
             Some(value) => register_expression_writes_names(value, names)?,
             None => false,
         },
@@ -11636,7 +11761,7 @@ fn register_expression_references(
         | ExprKind::Spread(inner) => {
             register_expression_references(inner, names, nested_free_names)?;
         }
-        ExprKind::Yield(value) => {
+        ExprKind::Yield(value, _) => {
             if let Some(value) = value {
                 register_expression_references(value, names, nested_free_names)?;
             }
@@ -13756,7 +13881,7 @@ impl Compiler {
             // 6.2.13: the stack backend has no Private Environment.
             ExprKind::PrivateName(_) => return Err(Self::backend_gap("private identifiers")),
             // 27.5: the stack backend has no frame that leaves and comes back.
-            ExprKind::Yield(_) => return Err(Self::backend_gap("generator functions")),
+            ExprKind::Yield(..) => return Err(Self::backend_gap("generator functions")),
             ExprKind::Regex(pattern, flags) => self.regexp(pattern, flags)?,
             ExprKind::Array(items) => self.array(items)?,
             ExprKind::This => {

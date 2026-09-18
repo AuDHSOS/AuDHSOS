@@ -669,6 +669,9 @@ pub enum Instruction {
     /// `YieldExpression` of 15.5: the body leaves with the accumulator, and
     /// 27.5.1.2 takes it back here with what the call of `next` was given.
     Yield,
+    /// `yield *` of 15.5.5, which hands the result object of the inner
+    /// iterator to the caller instead of making one out of a value.
+    YieldResult,
     /// The same in an async generator of 27.6: 27.6.3.8 answers the request
     /// at the front of the queue with the accumulator, and the body carries on
     /// where another request waits behind it.
@@ -1388,6 +1391,7 @@ impl BytecodeFunction {
             | Instruction::Await
             | Instruction::GeneratorStart
             | Instruction::Yield
+            | Instruction::YieldResult
             | Instruction::AsyncYield
             | Instruction::Return => None,
             Instruction::CopyDataProperties {

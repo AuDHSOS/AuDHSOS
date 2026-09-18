@@ -346,6 +346,11 @@ pub struct FrameHeader {
     /// Set when this call was opened by an operation rather than by a call
     /// instruction, and says what the operation does with the answer.
     pub resume: Option<Resume>,
+    /// The operation that was waiting for this call before a native of the
+    /// callee took the frame for one of its own, which runs once that one has
+    /// answered. 27.5.1.2 takes a suspended body back this way, so a walk
+    /// whose `next` is a Generator still reaches its own continuation.
+    pub after: Option<Resume>,
     /// Where the arguments of this call sit in the caller frame, which 10.4.4
     /// needs after the frame has been entered. Only registers are held, never
     /// values: the collector sees registers, not the fields of a header.
@@ -731,6 +736,9 @@ const GENERATOR_SUSPENDED_YIELD: u8 = 1;
 const GENERATOR_RUNNING: u8 = 2;
 /// The same, once the body is done.
 const GENERATOR_COMPLETED: u8 = 3;
+/// The same as `GENERATOR_SUSPENDED_YIELD`, at the `yield *` of 15.5.5, which
+/// hands a `return` and a `throw` on to the inner iterator.
+const GENERATOR_SUSPENDED_DELEGATING: u8 = 4;
 
 /// The walk of 7.4.2 has not called the `@@iterator` yet.
 const ITERATOR_WALK_STARTING: i32 = 0;
@@ -932,6 +940,11 @@ pub struct RegisterVM {
     /// the offset the body of a Generator suspended at. Every other call
     /// starts at the first instruction.
     pending_pc: Option<usize>,
+    /// Whether the `yield` the body just left through was the one of 15.5.5
+    /// step 6.a.vi, which hands the result object of the inner iterator on
+    /// instead of a value. It is set as the frame leaves and read as the
+    /// call answers, with nothing between.
+    yield_result: bool,
     /// `[[NewTarget]]` of the call about to be entered (9.4.3).
     ///
     /// It is set where the frame is opened and read where the frame is
@@ -1085,6 +1098,7 @@ impl RegisterVM {
             context_roots: Vec::with_capacity(register_capacity.saturating_add(1)),
             conversion_depth: 0,
             pending_pc: None,
+            yield_result: false,
             pending_new_target: VALUE_UNDEFINED,
             pending_source: None,
             pending_script: false,
@@ -2173,6 +2187,7 @@ impl RegisterVM {
             caller_binding_count: self.active_binding_count,
             caller_context: self.current_context,
             resume: call.resume,
+            after: None,
             construct: call.construct,
             arguments: Some(FrameArguments {
                 start: call.arg_start,
@@ -19292,6 +19307,13 @@ impl RegisterVM {
             // the `yield` and the end of the body. A body that carries none
             // ends where it stands, which is what this does; every other one
             // names the gap.
+            // 15.5.5 steps 6.b and 6.c hand the completion to the inner
+            // iterator, which is a call this lowering has no form of.
+            if state == GENERATOR_SUSPENDED_DELEGATING {
+                return Err(VMError::Unsupported(
+                    "a return or a throw of a Generator that delegates",
+                ));
+            }
             if state != GENERATOR_COMPLETED
                 && !continuation.is_undefined()
                 && Self::continuation_handles(continuation, units, heap)
@@ -19465,6 +19487,9 @@ impl RegisterVM {
             caller_binding_count: self.active_binding_count,
             caller_context: self.current_context,
             resume: Some(resume),
+            // The operation that opened this call waits behind the step of
+            // the body, which answers first.
+            after: call.resume,
             construct: None,
             arguments: None,
         });
@@ -19511,7 +19536,10 @@ impl RegisterVM {
         };
         // The body suspended at a `yield` where it holds a continuation of its
         // own again; every other state says it ran to its end.
-        let done = held != GENERATOR_SUSPENDED_YIELD;
+        let done = !matches!(
+            held,
+            GENERATOR_SUSPENDED_YIELD | GENERATOR_SUSPENDED_DELEGATING
+        );
         if done {
             heap.set_object_kind(
                 generator,
@@ -19522,6 +19550,10 @@ impl RegisterVM {
             )?;
         }
         let value = self.acc;
+        // 15.5.5 step 6.a.vi already has the object of the inner iterator.
+        if core::mem::take(&mut self.yield_result) && !done {
+            return Ok(());
+        }
         // 7.4.1 makes the object out of the value and the flag, which the
         // shape of `iterator_result` says by the value it was given.
         self.acc = Self::iterator_result((!done).then_some(value), heap, realm)?;
@@ -21015,7 +21047,12 @@ impl RegisterVM {
             }
             // 27.1.4.2.1 step 7: a method of the sync iterator that throws
             // rejects the promise the wrapper answered.
-            if let Some(Resume::AsyncFromSync { state }) = frame.resume {
+            let from_sync = match (frame.resume, frame.after) {
+                (Some(Resume::AsyncFromSync { state }), _)
+                | (_, Some(Resume::AsyncFromSync { state })) => Some(state),
+                _ => None,
+            };
+            if let Some(state) = from_sync {
                 let record = heap.root_value(state).unwrap_or(VALUE_UNDEFINED);
                 let capability = promise::slot(heap, record, 0);
                 heap.exit_scope();
@@ -21196,10 +21233,6 @@ impl RegisterVM {
     }
 
     /// Runs instructions until the unit answers or asks for a compilation.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one loop keeps the run, the unwinding and the drain of 9.5 together"
-    )]
     fn run_loop(
         &mut self,
         units: CodeTable<'_>,
@@ -21228,93 +21261,89 @@ impl RegisterVM {
                 // 14.15: a thrown value looks for a handler from the throwing
                 // instruction outwards before it leaves the outermost frame.
                 Err(VMError::Thrown(value, native)) => {
-                    match self.unwind(
-                        units,
-                        pc.saturating_sub(1),
-                        current_code_id,
-                        value,
-                        native,
-                        heap,
-                        realm,
-                    ) {
-                        Ok((next_pc, next_code_id)) => {
-                            pc = next_pc;
-                            current_code_id = next_code_id;
-                        }
-                        // 27.2.2.1 step 5: a handler that throws rejects the
-                        // capability of its job, and the drain goes on. Every
-                        // other value that reaches an empty frame stack leaves
-                        // the run.
-                        Err(VMError::Thrown(value, native)) => {
-                            let settled = core::mem::take(&mut self.settled_async_body);
-                            if !settled
-                                && self.running_job.is_none_or(|root| {
-                                    heap.root_value(root)
-                                        .unwrap_or(VALUE_UNDEFINED)
-                                        .is_undefined()
-                                })
-                            {
-                                return Err(VMError::Thrown(value, native));
+                    // A value that leaves the outermost frame may still settle
+                    // a capability, and the job that takes a frame back may
+                    // throw in turn, so the unwind runs again on what it left.
+                    let mut thrown = value;
+                    let mut source = native;
+                    let mut at = pc.saturating_sub(1);
+                    let mut within = current_code_id;
+                    loop {
+                        match self.unwind(units, at, within, thrown, source, heap, realm) {
+                            Ok((next_pc, next_code_id)) => {
+                                pc = next_pc;
+                                current_code_id = next_code_id;
+                                break;
                             }
-                            let code = units.root(self.unit).ok_or(VMError::InvalidBytecode(
-                                VerificationError::FunctionOutOfBounds {
-                                    pc,
-                                    index: self.unit,
-                                },
-                            ))?;
-                            let unit_feedback: &mut FeedbackVector = feedback
-                                .get_mut(self.unit as usize)
-                                .ok_or(VMError::InvalidFeedbackVector)?;
-                            let next = self.continue_jobs(
-                                (!settled).then_some(value),
-                                CodeUnits {
-                                    table: units,
-                                    active: code,
-                                },
-                                unit_feedback,
-                                heap,
-                                realm,
-                            )?;
-                            match next {
-                                Resumption::Idle => {
-                                    self.fp = 0;
-                                    self.active_binding_count = 0;
-                                    self.current_context = None;
-                                    return Ok(Outcome::Done(
-                                        self.completion
-                                            .and_then(|root| heap.root_value(root))
-                                            .unwrap_or(VALUE_UNDEFINED),
-                                    ));
+                            // 27.2.2.1 step 5: a handler that throws rejects
+                            // the capability of its job, and the drain goes
+                            // on. Every other value that reaches an empty
+                            // frame stack leaves the run.
+                            Err(VMError::Thrown(value, native)) => {
+                                let settled = core::mem::take(&mut self.settled_async_body);
+                                if !settled
+                                    && self.running_job.is_none_or(|root| {
+                                        heap.root_value(root)
+                                            .unwrap_or(VALUE_UNDEFINED)
+                                            .is_undefined()
+                                    })
+                                {
+                                    return Err(VMError::Thrown(value, native));
                                 }
-                                Resumption::At {
-                                    code_id,
-                                    pc: resumed,
-                                } => {
-                                    current_code_id = code_id;
-                                    pc = resumed;
-                                }
-                                Resumption::Throwing {
-                                    code_id,
-                                    pc: resumed,
-                                    value: thrown,
-                                } => {
-                                    current_code_id = code_id;
-                                    pc = resumed;
-                                    let (next_pc, next_code_id) = self.unwind(
-                                        units,
-                                        pc.saturating_sub(1),
-                                        current_code_id,
-                                        thrown,
-                                        None,
-                                        heap,
-                                        realm,
-                                    )?;
-                                    pc = next_pc;
-                                    current_code_id = next_code_id;
+                                let code =
+                                    units.root(self.unit).ok_or(VMError::InvalidBytecode(
+                                        VerificationError::FunctionOutOfBounds {
+                                            pc,
+                                            index: self.unit,
+                                        },
+                                    ))?;
+                                let unit_feedback: &mut FeedbackVector = feedback
+                                    .get_mut(self.unit as usize)
+                                    .ok_or(VMError::InvalidFeedbackVector)?;
+                                let next = self.continue_jobs(
+                                    (!settled).then_some(value),
+                                    CodeUnits {
+                                        table: units,
+                                        active: code,
+                                    },
+                                    unit_feedback,
+                                    heap,
+                                    realm,
+                                )?;
+                                match next {
+                                    Resumption::Idle => {
+                                        self.fp = 0;
+                                        self.active_binding_count = 0;
+                                        self.current_context = None;
+                                        return Ok(Outcome::Done(
+                                            self.completion
+                                                .and_then(|root| heap.root_value(root))
+                                                .unwrap_or(VALUE_UNDEFINED),
+                                        ));
+                                    }
+                                    Resumption::At {
+                                        code_id,
+                                        pc: resumed,
+                                    } => {
+                                        current_code_id = code_id;
+                                        pc = resumed;
+                                        break;
+                                    }
+                                    Resumption::Throwing {
+                                        code_id,
+                                        pc: resumed,
+                                        value: again,
+                                    } => {
+                                        pc = resumed;
+                                        at = pc.saturating_sub(1);
+                                        within = code_id;
+                                        thrown = again;
+                                        source = None;
+                                    }
                                 }
                             }
+                            Err(error) => return Err(error),
                         }
-                        Err(error) => return Err(error),
                     }
                 }
                 Err(error) => return Err(error),
@@ -23804,6 +23833,7 @@ impl RegisterVM {
                 | Instruction::Return
                 | Instruction::GeneratorStart
                 | Instruction::Yield
+                | Instruction::YieldResult
                 | Instruction::AsyncYield => {
                     // 27.6.3.8: the request at the front of the queue takes
                     // what the body yielded, and the body carries on where
@@ -23838,7 +23868,10 @@ impl RegisterVM {
                     // 27.5.1.1 and 15.5: the body of a Generator leaves with
                     // the frame it stands in, which its own object holds until
                     // 27.5.1.2 takes it back.
-                    else if matches!(inst, Instruction::GeneratorStart | Instruction::Yield) {
+                    else if matches!(
+                        inst,
+                        Instruction::GeneratorStart | Instruction::Yield | Instruction::YieldResult
+                    ) {
                         let register = active_code
                             .generator_register
                             .ok_or(VMError::InvalidRegister)?;
@@ -23854,10 +23887,10 @@ impl RegisterVM {
                             .read_reg(register)?
                             .as_object()
                             .ok_or(VMError::TypeError)?;
-                        let state = if matches!(inst, Instruction::GeneratorStart) {
-                            GENERATOR_SUSPENDED_START
-                        } else {
-                            GENERATOR_SUSPENDED_YIELD
+                        let state = match inst {
+                            Instruction::GeneratorStart => GENERATOR_SUSPENDED_START,
+                            Instruction::YieldResult => GENERATOR_SUSPENDED_DELEGATING,
+                            _ => GENERATOR_SUSPENDED_YIELD,
                         };
                         if active_code.async_generator {
                             Self::set_async_generator(generator, Some(continuation), state, heap)?;
@@ -23873,6 +23906,9 @@ impl RegisterVM {
                         if matches!(inst, Instruction::GeneratorStart) {
                             self.acc = Value::from_object(generator);
                         }
+                        // 15.5.5 step 6.a.vi yields the result object of the
+                        // inner iterator, which 27.5.1.2 answers unchanged.
+                        self.yield_result = matches!(inst, Instruction::YieldResult);
                     } else if matches!(inst, Instruction::Await) {
                         // 27.7.5.3: the frame leaves with the promise of the
                         // body and comes back through the pair it registered.
@@ -23946,165 +23982,179 @@ impl RegisterVM {
                                     return Err(VMError::Thrown(value, None));
                                 }
                             }
-                        } else if let Some(resume) = frame.resume {
-                            // An operation of the caller is waiting for this
-                            // answer, and runs again once it has one. It belongs
-                            // to the caller's unit, which the frame restored.
-                            let caller_root = table.root(self.unit).ok_or(
-                                VMError::InvalidBytecode(VerificationError::FunctionOutOfBounds {
-                                    pc,
-                                    index: self.unit,
-                                }),
-                            )?;
-                            let caller = code_unit(caller_root, current_code_id).ok_or(
-                                VMError::InvalidBytecode(VerificationError::FunctionOutOfBounds {
-                                    pc,
-                                    index: current_code_id.unwrap_or(u32::MAX),
-                                }),
-                            )?;
-                            let unit_feedback: &mut FeedbackVector = feedback
-                                .get_mut(self.unit as usize)
-                                .ok_or(VMError::InvalidFeedbackVector)?;
-                            let feedback = feedback_unit_mut(unit_feedback, current_code_id)
-                                .ok_or(VMError::InvalidFeedbackVector)?;
-                            // A conversion names a register of the caller; a
-                            // walk of 23.1.3 names a root instead, so it has
-                            // no register of the caller to name here.
-                            let register = match resume {
-                                Resume::Primitive { register, .. }
-                                | Resume::Coercion { register, .. } => register,
-                                Resume::Iteration { .. }
-                                | Resume::CollectionWalk { .. }
-                                | Resume::CollectionInsert { .. }
-                                | Resume::IteratorWalk { .. }
-                                | Resume::IteratorElement { .. }
-                                | Resume::IteratorResult { .. }
-                                | Resume::Length { .. }
-                                | Resume::Descriptor { .. }
-                                | Resume::Getter
-                                | Resume::Spread { .. }
-                                | Resume::Executor { .. }
-                                | Resume::Job { .. }
-                                | Resume::GeneratorStep { .. }
-                                | Resume::AsyncGeneratorStep { .. }
-                                | Resume::AsyncFromSync { .. }
-                                | Resume::Setter { .. } => Reg(0),
-                            };
-                            let call = Call {
-                                receiver: VALUE_UNDEFINED,
-                                func: register,
-                                arg_start: register,
-                                arg_count: 0,
-                                slot: 0,
-                                resume: Some(resume),
-                                construct: None,
-                                return_pc: pc,
-                                caller_code_id: current_code_id,
-                            };
-                            let units = CodeUnits {
-                                table,
-                                active: caller,
-                            };
-                            let resumed = match resume {
-                                Resume::Primitive { .. } | Resume::Coercion { .. } => {
-                                    self.finish_conversion(call, units, feedback, heap, realm)?
+                        } else if frame.resume.is_some() {
+                            // 27.5.1.2 may have taken the frame for a step of
+                            // its own, so the operation that opened the call
+                            // waits behind that step and runs after it.
+                            let mut waiting = frame.resume;
+                            let mut behind = frame.after;
+                            while let Some(resume) = waiting.take() {
+                                // An operation of the caller is waiting for this
+                                // answer, and runs again once it has one. It belongs
+                                // to the caller's unit, which the frame restored.
+                                let caller_root =
+                                    table.root(self.unit).ok_or(VMError::InvalidBytecode(
+                                        VerificationError::FunctionOutOfBounds {
+                                            pc,
+                                            index: self.unit,
+                                        },
+                                    ))?;
+                                let caller = code_unit(caller_root, current_code_id).ok_or(
+                                    VMError::InvalidBytecode(
+                                        VerificationError::FunctionOutOfBounds {
+                                            pc,
+                                            index: current_code_id.unwrap_or(u32::MAX),
+                                        },
+                                    ),
+                                )?;
+                                let unit_feedback: &mut FeedbackVector = feedback
+                                    .get_mut(self.unit as usize)
+                                    .ok_or(VMError::InvalidFeedbackVector)?;
+                                let feedback = feedback_unit_mut(unit_feedback, current_code_id)
+                                    .ok_or(VMError::InvalidFeedbackVector)?;
+                                // A conversion names a register of the caller; a
+                                // walk of 23.1.3 names a root instead, so it has
+                                // no register of the caller to name here.
+                                let register = match resume {
+                                    Resume::Primitive { register, .. }
+                                    | Resume::Coercion { register, .. } => register,
+                                    Resume::Iteration { .. }
+                                    | Resume::CollectionWalk { .. }
+                                    | Resume::CollectionInsert { .. }
+                                    | Resume::IteratorWalk { .. }
+                                    | Resume::IteratorElement { .. }
+                                    | Resume::IteratorResult { .. }
+                                    | Resume::Length { .. }
+                                    | Resume::Descriptor { .. }
+                                    | Resume::Getter
+                                    | Resume::Spread { .. }
+                                    | Resume::Executor { .. }
+                                    | Resume::Job { .. }
+                                    | Resume::GeneratorStep { .. }
+                                    | Resume::AsyncGeneratorStep { .. }
+                                    | Resume::AsyncFromSync { .. }
+                                    | Resume::Setter { .. } => Reg(0),
+                                };
+                                let call = Call {
+                                    receiver: VALUE_UNDEFINED,
+                                    func: register,
+                                    arg_start: register,
+                                    arg_count: 0,
+                                    slot: 0,
+                                    resume: Some(resume),
+                                    construct: None,
+                                    return_pc: pc,
+                                    caller_code_id: current_code_id,
+                                };
+                                let units = CodeUnits {
+                                    table,
+                                    active: caller,
+                                };
+                                let resumed = match resume {
+                                    Resume::Primitive { .. } | Resume::Coercion { .. } => {
+                                        self.finish_conversion(call, units, feedback, heap, realm)?
+                                    }
+                                    Resume::Iteration { state } => self.step_array_iteration(
+                                        state,
+                                        Some(self.acc),
+                                        call,
+                                        units,
+                                        feedback,
+                                        heap,
+                                        realm,
+                                    )?,
+                                    Resume::CollectionWalk { state } => self.step_collection_walk(
+                                        state, call, units, feedback, heap, realm,
+                                    )?,
+                                    Resume::CollectionInsert { state } => {
+                                        self.finish_collection_insert(state, heap, realm)?
+                                    }
+                                    Resume::IteratorWalk { state } => self.step_iterator_walk(
+                                        state, call, units, feedback, heap, realm,
+                                    )?,
+                                    // 27.5.1.2 step 8: the body left, and the
+                                    // answer says whether it is done.
+                                    Resume::GeneratorStep { state } => {
+                                        self.finish_generator_step(state, heap, realm)?;
+                                        None
+                                    }
+                                    // 27.6.1.2 step 9 answers the promise of the
+                                    // request, whatever the body did with it.
+                                    Resume::AsyncGeneratorStep { capability } => {
+                                        let held = heap
+                                            .root_value(capability)
+                                            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+                                        heap.exit_scope();
+                                        self.acc =
+                                            promise::slot(heap, held, promise::CAPABILITY_PROMISE);
+                                        None
+                                    }
+                                    // 27.1.4.4 answers the promise of the call,
+                                    // with the value of the result awaited.
+                                    Resume::AsyncFromSync { state } => {
+                                        self.finish_async_from_sync(state, heap, realm)?;
+                                        None
+                                    }
+                                    Resume::IteratorElement { state } => {
+                                        self.finish_iterator_element(state, heap)?;
+                                        None
+                                    }
+                                    Resume::IteratorResult { state } => {
+                                        self.finish_iterator_result(state, heap, realm)?;
+                                        None
+                                    }
+                                    Resume::Length { .. } => self.finish_array_like_length(
+                                        resume,
+                                        pc,
+                                        current_code_id,
+                                        units,
+                                        feedback,
+                                        heap,
+                                        realm,
+                                    )?,
+                                    Resume::Descriptor { .. } => self.continue_descriptor(
+                                        resume,
+                                        pc,
+                                        current_code_id,
+                                        units,
+                                        feedback,
+                                        heap,
+                                        realm,
+                                    )?,
+                                    // The getter answered the value of the
+                                    // property, and the accumulator holds it. The
+                                    // job branch above answers every job, so the
+                                    // dispatcher reaches none of those.
+                                    Resume::Getter | Resume::Job { .. } => None,
+                                    // The call answered, and the List its
+                                    // arguments were is no longer reachable.
+                                    Resume::Spread { .. } => {
+                                        heap.exit_scope();
+                                        None
+                                    }
+                                    // 27.2.3.1 step 8 answers the promise, not
+                                    // what the executor answered.
+                                    Resume::Executor { promise, .. } => {
+                                        self.acc =
+                                            heap.root_value(promise).unwrap_or(VALUE_UNDEFINED);
+                                        heap.exit_scope();
+                                        None
+                                    }
+                                    // 13.15.2 answers the value assigned, not what
+                                    // the setter answered.
+                                    Resume::Setter { value } => {
+                                        self.acc =
+                                            heap.root_value(value).unwrap_or(VALUE_UNDEFINED);
+                                        heap.exit_scope();
+                                        None
+                                    }
+                                };
+                                if let Some(code_id) = resumed {
+                                    current_code_id = Some(code_id);
+                                    pc = self.pending_pc.take().unwrap_or(0);
+                                    break;
                                 }
-                                Resume::Iteration { state } => self.step_array_iteration(
-                                    state,
-                                    Some(self.acc),
-                                    call,
-                                    units,
-                                    feedback,
-                                    heap,
-                                    realm,
-                                )?,
-                                Resume::CollectionWalk { state } => self.step_collection_walk(
-                                    state, call, units, feedback, heap, realm,
-                                )?,
-                                Resume::CollectionInsert { state } => {
-                                    self.finish_collection_insert(state, heap, realm)?
-                                }
-                                Resume::IteratorWalk { state } => self.step_iterator_walk(
-                                    state, call, units, feedback, heap, realm,
-                                )?,
-                                // 27.5.1.2 step 8: the body left, and the
-                                // answer says whether it is done.
-                                Resume::GeneratorStep { state } => {
-                                    self.finish_generator_step(state, heap, realm)?;
-                                    None
-                                }
-                                // 27.6.1.2 step 9 answers the promise of the
-                                // request, whatever the body did with it.
-                                Resume::AsyncGeneratorStep { capability } => {
-                                    let held = heap
-                                        .root_value(capability)
-                                        .ok_or(VMError::Heap(HeapError::InvalidReference))?;
-                                    heap.exit_scope();
-                                    self.acc =
-                                        promise::slot(heap, held, promise::CAPABILITY_PROMISE);
-                                    None
-                                }
-                                // 27.1.4.4 answers the promise of the call,
-                                // with the value of the result awaited.
-                                Resume::AsyncFromSync { state } => {
-                                    self.finish_async_from_sync(state, heap, realm)?;
-                                    None
-                                }
-                                Resume::IteratorElement { state } => {
-                                    self.finish_iterator_element(state, heap)?;
-                                    None
-                                }
-                                Resume::IteratorResult { state } => {
-                                    self.finish_iterator_result(state, heap, realm)?;
-                                    None
-                                }
-                                Resume::Length { .. } => self.finish_array_like_length(
-                                    resume,
-                                    pc,
-                                    current_code_id,
-                                    units,
-                                    feedback,
-                                    heap,
-                                    realm,
-                                )?,
-                                Resume::Descriptor { .. } => self.continue_descriptor(
-                                    resume,
-                                    pc,
-                                    current_code_id,
-                                    units,
-                                    feedback,
-                                    heap,
-                                    realm,
-                                )?,
-                                // The getter answered the value of the
-                                // property, and the accumulator holds it. The
-                                // job branch above answers every job, so the
-                                // dispatcher reaches none of those.
-                                Resume::Getter | Resume::Job { .. } => None,
-                                // The call answered, and the List its
-                                // arguments were is no longer reachable.
-                                Resume::Spread { .. } => {
-                                    heap.exit_scope();
-                                    None
-                                }
-                                // 27.2.3.1 step 8 answers the promise, not
-                                // what the executor answered.
-                                Resume::Executor { promise, .. } => {
-                                    self.acc = heap.root_value(promise).unwrap_or(VALUE_UNDEFINED);
-                                    heap.exit_scope();
-                                    None
-                                }
-                                // 13.15.2 answers the value assigned, not what
-                                // the setter answered.
-                                Resume::Setter { value } => {
-                                    self.acc = heap.root_value(value).unwrap_or(VALUE_UNDEFINED);
-                                    heap.exit_scope();
-                                    None
-                                }
-                            };
-                            if let Some(code_id) = resumed {
-                                current_code_id = Some(code_id);
-                                pc = self.pending_pc.take().unwrap_or(0);
+                                waiting = behind.take();
                             }
                         }
                     } else {

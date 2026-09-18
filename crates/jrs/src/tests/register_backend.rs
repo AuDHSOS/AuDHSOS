@@ -8465,6 +8465,51 @@ fn a_for_await_of_14_7_5_walks_the_async_iterator_of_7_4_3() -> Result<(), Error
 }
 
 #[test]
+fn a_yield_of_an_iterable_walks_it_and_answers_its_return() -> Result<(), Error> {
+    for (source, answer) in [
+        // 15.5.5 step 6.a.v answers the `value` of the result that said
+        // `done`, which is what the inner body returned.
+        (
+            "function* i(){yield 1;yield 2;return 'r'}function* o(){var v=yield* i();yield 'g'+v}var t=o();var l=[];for(var k=0;k<4;k++){var s=t.next();l.push(s.done?'done':s.value)}l.join('|')",
+            "1|2|gr|done",
+        ),
+        // Step 6.a.i passes the resumption value to the inner `next`.
+        (
+            "function* i(){var x=yield 'a';yield 'x='+x}function* o(){yield* i()}var t=o();t.next();t.next(9).value",
+            "x=9",
+        ),
+        // 7.4.2 opens the iterator of any iterable, not only of a Generator.
+        (
+            "function* g(){yield* [10,20]}var t=g();var l=[];for(var k=0;k<3;k++){var s=t.next();l.push(s.done?'done':s.value)}l.join('|')",
+            "10|20|done",
+        ),
+        // Step 6.a.vi hands the result object of the inner iterator on, so
+        // the caller of `next` reads the very object the inner one answered.
+        (
+            "var r={value:1,done:false};var i={};i[Symbol.iterator]=function(){return{next:function(){r.done=r.value>1;r.value++;return r}}};function* g(){yield* i}''+(g().next()===r)",
+            "true",
+        ),
+        // 7.4.4 step 4 refuses a step that answered no Object.
+        (
+            "var i={};i[Symbol.iterator]=function(){return{next:function(){return 1}}};function* g(){yield* i}try{g().next()}catch(e){''+(e instanceof TypeError)}",
+            "true",
+        ),
+    ] {
+        let mut host = SilentHost;
+        let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    // 15.5.5 in an async generator awaits the step and yields its value.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    realm.evaluate(
+        "var l=[];async function* i(){yield 1;yield 2}async function* o(){yield* i();yield 3}async function f(){for await(var v of o())l.push(v)}f();0",
+    )?;
+    assert_eq!(realm.evaluate("l.join('|')")?, Value::string("1|2|3"));
+    Ok(())
+}
+
+#[test]
 fn concat_spreads_what_23_1_3_1_1_says_it_spreads() -> Result<(), Error> {
     for source in [
         // `@@isConcatSpreadable` decides it where the object has one.

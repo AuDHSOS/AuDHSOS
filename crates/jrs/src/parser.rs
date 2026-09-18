@@ -62,7 +62,9 @@ pub(crate) enum ExprKind {
     PrivateName(String),
     /// `YieldExpression` of 15.5, which leaves the body with the value it
     /// answers and takes it back where 27.5.1.2 resumes it.
-    Yield(Option<Box<Expr>>),
+    /// `yield` of 15.5, whose flag says the operand is an iterable the body
+    /// yields every element of.
+    Yield(Option<Box<Expr>>, bool),
     Template(Value, Vec<(Expr, Value)>),
     Await(Box<Expr>),
     Name(String),
@@ -1549,6 +1551,15 @@ impl Parser {
             return self.arrow();
         }
         let mut left = self.prefix()?;
+        // 15.5: a YieldExpression is a whole AssignmentExpression, so it is
+        // the operand of no operator and stands nowhere a tighter expression
+        // is required.
+        if matches!(left.kind, ExprKind::Yield(..)) {
+            if min > 0 {
+                return Err(self.error("yield stands where no AssignmentExpression does"));
+            }
+            return Ok(left);
+        }
         loop {
             let offset = left.offset;
             if min == 0 && self.is("?") {
@@ -1759,19 +1770,20 @@ impl Parser {
             // the body; outside one it names a binding where the code is not
             // strict.
             Kind::Word(word) if word == "yield" && self.generator_context => {
-                if self.is("*") {
-                    return Err(Self::unsupported("a yield of an iterable"));
-                }
+                // 15.5.1: `yield *` takes an operand, and a line terminator
+                // stands between neither the `*` nor it and the keyword.
+                let each = !self.token()?.newline && self.eat("*");
                 // 15.5.1: a line terminator ends the expression before its
                 // operand, and so does every token that starts none.
-                let operand = !self.token()?.newline
-                    && !matches!(
-                        &self.token()?.kind,
-                        Kind::End
-                            | Kind::Punct(
-                                ")" | "]" | "}" | "," | ";" | ":" | "=" | "?" | "+=" | "-="
-                            )
-                    );
+                let operand = each
+                    || !self.token()?.newline
+                        && !matches!(
+                            &self.token()?.kind,
+                            Kind::End
+                                | Kind::Punct(
+                                    ")" | "]" | "}" | "," | ";" | ":" | "=" | "?" | "+=" | "-="
+                                )
+                        );
                 let value = if operand {
                     Some(Box::new(self.expression(0)?))
                 } else {
@@ -1780,7 +1792,7 @@ impl Parser {
                 let depth = value
                     .as_ref()
                     .map_or(1, |value| value.depth.saturating_add(1));
-                self.make(ExprKind::Yield(value), depth, token.offset)?
+                self.make(ExprKind::Yield(value, each), depth, token.offset)?
             }
             Kind::Word(word) if word == "yield" && !self.strict => {
                 self.make(ExprKind::Name(word), 1, token.offset)?
