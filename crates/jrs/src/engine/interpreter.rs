@@ -26236,6 +26236,11 @@ impl RegisterVM {
                     self.acc = self.for_in_next(active_code, state, heap, realm)?;
                 }
                 Instruction::Throw => return Err(VMError::Thrown(self.acc, None)),
+                Instruction::ThrowImmutable => {
+                    // 6.2.6.1 step 3 with S true, which every write to a
+                    // binding 14.3.1 made immutable carries.
+                    return Err(type_error(heap, realm, "assignment to a constant binding"));
+                }
 
                 Instruction::Await
                 | Instruction::Return

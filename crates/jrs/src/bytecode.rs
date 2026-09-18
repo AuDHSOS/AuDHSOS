@@ -711,11 +711,45 @@ enum RegisterObjectLayout {
     },
 }
 
+/// What 6.2.6.1 does with a write to the binding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mutability {
+    /// 9.1.1.1.2 made the binding, and a write changes it.
+    Mutable,
+    /// 14.3.1 and 15.7.14 create their binding with `S` true, so every write
+    /// to one throws a `TypeError`.
+    Immutable,
+    /// 15.2.5 creates the self binding of a named function expression with
+    /// `S` false, where a write outside strict code does nothing.
+    SelfName,
+}
+
+impl Mutability {
+    /// Whether a write changes the binding.
+    const fn writable(self) -> bool {
+        matches!(self, Self::Mutable)
+    }
+
+    /// Whether a write the Script makes here throws.
+    const fn refuses(self, strict: bool) -> bool {
+        matches!(self, Self::Immutable) || (matches!(self, Self::SelfName) && strict)
+    }
+
+    /// The binding 9.1.1.1.2 or 9.1.1.1.3 makes for a declaration.
+    const fn of(mutable: bool) -> Self {
+        if mutable {
+            Self::Mutable
+        } else {
+            Self::Immutable
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct RegisterBinding {
     storage: RegisterBindingStorage,
     value_type: Option<RegisterType>,
-    mutable: bool,
+    mutability: Mutability,
     stable_function_identity: bool,
     /// Whether 9.1.1.1.1 has initialized the binding; a Block binding of
     /// 14.3.1 is declared before its statement runs and is not.
@@ -1059,7 +1093,7 @@ impl RegisterLowerer {
             RegisterBinding {
                 storage: RegisterBindingStorage::Register(register),
                 value_type: None,
-                mutable,
+                mutability: Mutability::of(mutable),
                 stable_function_identity: false,
                 initialized: true,
             },
@@ -1821,7 +1855,7 @@ impl RegisterLowerer {
                     RegisterBinding {
                         storage: RegisterBindingStorage::Register(register),
                         value_type: Some(RegisterType::Unknown),
-                        mutable: true,
+                        mutability: Mutability::Mutable,
                         stable_function_identity: false,
                         initialized: true,
                     },
@@ -1837,14 +1871,12 @@ impl RegisterLowerer {
             } else if self
                 .bindings
                 .get(name)
-                .is_some_and(|binding| !binding.mutable)
+                .is_some_and(|binding| !binding.mutability.writable())
             {
                 return None;
-            } else if self
-                .bindings
-                .get(name)
-                .is_some_and(|binding| binding.mutable && binding.value_type.is_none())
-            {
+            } else if self.bindings.get(name).is_some_and(|binding| {
+                binding.mutability.writable() && binding.value_type.is_none()
+            }) {
                 self.bindings.get_mut(name)?.value_type = Some(RegisterType::Undefined);
             }
         }
@@ -1929,6 +1961,15 @@ impl RegisterLowerer {
                 initialize,
             },
         });
+    }
+
+    /// Emits the `TypeError` of 6.2.6.1 for a write to an immutable binding,
+    /// which 13.15.2 asks for once the right side has been evaluated.
+    fn refuse_write(&mut self, binding: RegisterBinding, strict: bool) {
+        if binding.mutability.refuses(strict) {
+            self.code
+                .emit(crate::engine::bytecode::Instruction::ThrowImmutable);
+        }
     }
 
     fn capture_binding(&mut self, name: &str) -> Option<RegisterBinding> {
@@ -2365,7 +2406,9 @@ impl RegisterLowerer {
             ExprKind::Destructure(pattern, right) => {
                 self.lower_destructuring_assignment(pattern, right)?
             }
-            ExprKind::Update(name, add, prefix) => self.lower_update(name, *add, *prefix)?,
+            ExprKind::Update(name, add, prefix) => {
+                self.lower_update(name, *add, *prefix, expression.strict)?
+            }
             ExprKind::Conditional(condition, yes, no) => {
                 self.lower_conditional(condition, yes, no)?
             }
@@ -2651,8 +2694,12 @@ impl RegisterLowerer {
             self.escape(&[value_type]);
             return Some(());
         };
-        if !binding.mutable || binding.value_type.is_none() || binding.stable_function_identity {
+        if binding.value_type.is_none() || binding.stable_function_identity {
             return None;
+        }
+        if !binding.mutability.writable() {
+            self.refuse_write(binding, target.strict);
+            return Some(());
         }
         self.store_binding(binding);
         self.bindings.get_mut(name)?.value_type = Some(value_type);
@@ -3464,7 +3511,7 @@ impl RegisterLowerer {
                     RegisterBinding {
                         storage: RegisterBindingStorage::Register(register),
                         value_type: Some(RegisterType::Unknown),
-                        mutable: false,
+                        mutability: Mutability::Immutable,
                         stable_function_identity: false,
                         initialized: true,
                     },
@@ -3491,7 +3538,7 @@ impl RegisterLowerer {
                 RegisterBinding {
                     storage: RegisterBindingStorage::Register(register),
                     value_type: Some(RegisterType::Unknown),
-                    mutable: false,
+                    mutability: Mutability::Immutable,
                     stable_function_identity: false,
                     initialized: true,
                 },
@@ -3529,7 +3576,7 @@ impl RegisterLowerer {
                 RegisterBinding {
                     storage: RegisterBindingStorage::Register(register),
                     value_type: Some(RegisterType::Unknown),
-                    mutable: false,
+                    mutability: Mutability::Immutable,
                     stable_function_identity: false,
                     initialized: true,
                 },
@@ -3554,7 +3601,7 @@ impl RegisterLowerer {
                 RegisterBinding {
                     storage: RegisterBindingStorage::Register(register),
                     value_type: Some(RegisterType::Unknown),
-                    mutable: false,
+                    mutability: Mutability::Immutable,
                     stable_function_identity: false,
                     initialized: true,
                 },
@@ -3771,7 +3818,7 @@ impl RegisterLowerer {
         let scope = register_function_scope(function)?;
         if scope.free_names.contains(name) {
             let binding = self.bindings.get_mut(name)?;
-            if !binding.mutable {
+            if !binding.mutability.writable() {
                 return None;
             }
             binding.value_type = Some(RegisterType::Function(code_id));
@@ -3959,6 +4006,9 @@ impl RegisterLowerer {
                 return None;
             }
             child.declare(name, false)?;
+            // 15.2.5 creates the self binding with `S` false, so a write to it
+            // outside strict code does nothing at all.
+            child.bindings.get_mut(name)?.mutability = Mutability::SelfName;
             let RegisterBindingStorage::Register(register) = child.bindings.get(name)?.storage
             else {
                 return None;
@@ -6833,7 +6883,7 @@ impl RegisterLowerer {
                     RegisterBinding {
                         storage: RegisterBindingStorage::Register(exception_register),
                         value_type: Some(value_type),
-                        mutable: true,
+                        mutability: Mutability::Mutable,
                         stable_function_identity: false,
                         initialized: true,
                     },
@@ -6857,7 +6907,7 @@ impl RegisterLowerer {
                         RegisterBinding {
                             storage: RegisterBindingStorage::Register(register),
                             value_type: Some(RegisterType::Unknown),
-                            mutable: true,
+                            mutability: Mutability::Mutable,
                             stable_function_identity: false,
                             initialized: true,
                         },
@@ -7187,7 +7237,7 @@ impl RegisterLowerer {
                 RegisterBinding {
                     storage: RegisterBindingStorage::Register(register),
                     value_type: None,
-                    mutable,
+                    mutability: Mutability::of(mutable),
                     stable_function_identity: false,
                     initialized: true,
                 },
@@ -7736,7 +7786,7 @@ impl RegisterLowerer {
                             RegisterBinding {
                                 storage: RegisterBindingStorage::Register(register),
                                 value_type: None,
-                                mutable: *mutable,
+                                mutability: Mutability::of(*mutable),
                                 stable_function_identity: false,
                                 initialized: true,
                             },
@@ -7905,7 +7955,7 @@ impl RegisterLowerer {
             }
             return Some(ForInHead::Global { name });
         };
-        if !declared.mutable || declared.stable_function_identity {
+        if !declared.mutability.writable() || declared.stable_function_identity {
             return None;
         }
         let RegisterBindingStorage::Register(register) = declared.storage else {
@@ -7948,7 +7998,7 @@ impl RegisterLowerer {
                 RegisterBinding {
                     storage: RegisterBindingStorage::Register(register),
                     value_type: Some(RegisterType::Unknown),
-                    mutable,
+                    mutability: Mutability::of(mutable),
                     stable_function_identity: false,
                     initialized: true,
                 },
@@ -8068,7 +8118,7 @@ impl RegisterLowerer {
                     RegisterBinding {
                         storage: RegisterBindingStorage::Register(key_register),
                         value_type: Some(RegisterType::String),
-                        mutable,
+                        mutability: Mutability::of(mutable),
                         stable_function_identity: false,
                         initialized: true,
                     },
@@ -9012,7 +9062,7 @@ impl RegisterLowerer {
                     RegisterBinding {
                         storage: RegisterBindingStorage::Register(register),
                         value_type: Some(element_type),
-                        mutable,
+                        mutability: Mutability::of(mutable),
                         stable_function_identity: false,
                         initialized: true,
                     },
@@ -9130,7 +9180,7 @@ impl RegisterLowerer {
                     RegisterBinding {
                         storage: RegisterBindingStorage::Register(key_register),
                         value_type: Some(element_type),
-                        mutable,
+                        mutability: Mutability::of(mutable),
                         stable_function_identity: false,
                         initialized: true,
                     },
@@ -9661,7 +9711,7 @@ impl RegisterLowerer {
                 value_type
             });
         };
-        if !binding.mutable || binding.value_type.is_none() || binding.stable_function_identity {
+        if binding.value_type.is_none() || binding.stable_function_identity {
             return None;
         }
         let result_type = if let Some(operator) = operator {
@@ -9674,6 +9724,12 @@ impl RegisterLowerer {
         } else {
             self.lower(right)?
         };
+        // 13.15.2 writes through 6.2.6.1, which refuses an immutable binding
+        // after everything the expression does has run.
+        if !binding.mutability.writable() {
+            self.refuse_write(binding, strict);
+            return Some(result_type);
+        }
         self.store_binding(binding);
         self.bindings.get_mut(name)?.value_type = Some(result_type);
         Some(result_type)
@@ -9707,7 +9763,9 @@ impl RegisterLowerer {
         // Global Environment Record, where a later Script may have put
         // anything, so the read has no type of its own.
         let constant = if let Some(binding) = binding {
-            if !binding.mutable || binding.value_type.is_none() || binding.stable_function_identity
+            if !binding.mutability.writable()
+                || binding.value_type.is_none()
+                || binding.stable_function_identity
             {
                 return None;
             }
@@ -9906,7 +9964,13 @@ impl RegisterLowerer {
         }
     }
 
-    fn lower_update(&mut self, name: &str, add: bool, prefix: bool) -> Option<RegisterType> {
+    fn lower_update(
+        &mut self,
+        name: &str,
+        add: bool,
+        prefix: bool,
+        strict: bool,
+    ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         // 9.1.1.4 resolves a name this Script does not bind on the Global
         // Environment Record, which 13.4.4.1 reads and writes the same way.
@@ -9916,9 +9980,6 @@ impl RegisterLowerer {
             }
             return self.lower_global_update(name, add, prefix);
         };
-        if !binding.mutable {
-            return None;
-        }
         // 13.4.4.1 takes `ToNumeric` of the old value first, so the operand of
         // the addition is a Number whatever the binding held, and the answer a
         // postfix update gives is that Number and not what was there before.
@@ -9934,6 +9995,16 @@ impl RegisterLowerer {
         } else {
             Instruction::Decrement
         });
+        // 13.4.4.1 writes through 6.2.6.1, which refuses an immutable binding
+        // once 7.1.4 has converted the value that was there.
+        if !binding.mutability.writable() {
+            self.refuse_write(binding, strict);
+            if !prefix {
+                self.code.emit(Instruction::Ldar(numeric));
+            }
+            self.release_register(numeric)?;
+            return Some(RegisterType::Unknown);
+        }
         self.store_binding(binding);
         // 13.4.4.1 answers a BigInt for a BigInt operand, so only an operand
         // the lowering knows to be a Number leaves a Number behind.
@@ -10782,7 +10853,7 @@ fn merge_register_bindings(
         .map(|(name, left)| {
             let right = right.get(name)?;
             if left.storage != right.storage
-                || left.mutable != right.mutable
+                || left.mutability != right.mutability
                 || left.stable_function_identity != right.stable_function_identity
             {
                 return None;
@@ -10823,7 +10894,7 @@ fn register_bindings_reach(
     expected.iter().all(|(name, expected)| {
         actual.get(name).is_some_and(|actual| {
             actual.storage == expected.storage
-                && actual.mutable == expected.mutable
+                && actual.mutability == expected.mutability
                 && actual.stable_function_identity == expected.stable_function_identity
                 && match (actual.value_type, expected.value_type) {
                     (Some(actual), Some(expected)) => actual.merge(expected) == expected,

@@ -25,6 +25,9 @@ fn a_realm_on_the_engine_backend_refuses_what_it_cannot_lower() -> Result<(), Er
     // A name clause 19 gives every Realm but this one has not built is a gap,
     // never an answer. It shows only once the Script has run, which is fatal
     // like every other unsupported feature.
+    // 13.4.4.1 writes the binding of the head, which 6.2.6.1 refuses for a
+    // `const`.
+    differential("var m='';try{for(const i=0;i<2;i++){}}catch(e){m=e.constructor.name}m")?;
     assert!(matches!(
         realm.evaluate("typeof Proxy"),
         Err(Error::Unsupported { .. })
@@ -2563,15 +2566,12 @@ fn observable_destructuring_assignments_stay_on_legacy_backend() -> Result<(), E
     // 13.15.5.5 takes the elements from the iterator of the value, so a
     // pattern over an object without one throws where it used to be refused.
     differential("let x=0;[x]={0:42,length:1}")?;
-    for source in [
-        "const x=0;[x]=[1]",
-        "let target={x:1},key='y',x=0,rest={};target[key]=2;({x,...rest}=target);rest.y",
-    ] {
-        let program = compile(source, Limits::default())?;
-        assert!(!program.uses_register_backend(), "{source}");
-        let _ = Runtime::with_backend(Limits::default(), Backend::Engine)
-            .run(&program, &mut SilentHost);
-    }
+    differential("const x=0;var m='';try{[x]=[1]}catch(e){m=e.constructor.name}m")?;
+    let source = "let target={x:1},key='y',x=0,rest={};target[key]=2;({x,...rest}=target);rest.y";
+    let program = compile(source, Limits::default())?;
+    assert!(!program.uses_register_backend(), "{source}");
+    let _ =
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost);
     // 7.1.19 sends the key through 7.1.1, and the access opens a frame for a
     // `toString` of the Script.
     differential("let target={},key={toString(){return 'x'}};[target[key]]=[42];target.x")?;
@@ -3734,13 +3734,17 @@ fn local_bindings_and_assignments_match_legacy_execution() -> Result<(), Error> 
 }
 
 #[test]
-fn local_binding_lowering_preserves_tdz_and_const_guards_by_staying_legacy() -> Result<(), Error> {
-    for source in ["let x=x;x", "let x=y,y=1;x", "const x=1;x=2"] {
+fn local_binding_lowering_preserves_the_dead_zone_by_staying_legacy() -> Result<(), Error> {
+    for source in ["let x=x;x", "let x=y,y=1;x"] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
             "{source}"
         );
     }
+    // 6.2.6.1 answers the write to a `const` with a TypeError of the same
+    // text on either backend.
+    differential("const x=1;var m='';try{x=2}catch(e){m=e.constructor.name+':'+e.message}m")?;
+    differential("const x=1;var m='';try{x++}catch(e){m=e.constructor.name+':'+e.message}m")?;
     Ok(())
 }
 
@@ -3872,13 +3876,14 @@ fn a_block_scope_is_taken_or_names_what_stops_it() -> Result<(), Error> {
         // context of the enclosing function.
         "let f;{let x=42;f=()=>x}f()",
         "function f(){ {let x=7; return (function(){return x})()} }f()",
+        // 6.2.6.1 refuses the write to a `const` of the block where it stands.
+        "{const x=1;var m='';try{x=2}catch(e){m=e.constructor.name}m}",
     ] {
         differential(source)?;
     }
     for source in [
         "{let x=x;x}",
         "{let x=y,y=1;x}",
-        "{const x=1;x=2}",
         "{function f(){return 42}f()}",
         // 14.7.4.8 copies a Block binding of a loop per iteration.
         "var r=[];for(var i=0;i<2;i=i+1){let a=i;r.push(function(){return a})}r[0]()",
@@ -4445,7 +4450,6 @@ fn register_for_lowering_rejects_unstable_or_observable_lexical_cases() -> Resul
     for source in [
         "let i=1;for(let i=0;i<2;i++){}i",
         "let x=1;for(let {x}={x:2};x<3;x++){}x",
-        "for(const i=0;i<2;i++){}",
         "for(let i=0;i<2;i++){(()=>i)}",
         "for(let {i}={i:0};i<2;i++){(()=>i)}",
     ] {
@@ -8547,14 +8551,11 @@ fn a_class_body_reaches_the_class_through_a_binding_of_its_own() -> Result<(), E
             "{source}"
         );
     }
-    // 15.7.14 step 3 makes the binding immutable, which the lowering has no
-    // instruction to refuse at run time.
-    let mut host = SilentHost;
-    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
-    assert!(matches!(
-        realm.evaluate("class C{m(){C=1}}"),
-        Err(Error::Unsupported { .. })
-    ));
+    // 15.7.14 step 3 makes the binding immutable, and 6.2.6.1 answers a write
+    // to it with a TypeError.
+    differential_scripts(&[
+        "class C{m(){C=1}}var m='';try{new C().m()}catch(e){m=e.constructor.name}m",
+    ])?;
     Ok(())
 }
 

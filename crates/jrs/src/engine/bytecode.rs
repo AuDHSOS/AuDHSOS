@@ -810,6 +810,9 @@ pub enum Instruction {
     },
     /// Throws `acc` as an exception (14.14.1).
     Throw,
+    /// Throws the `TypeError` 6.2.6.1 raises for a write to an immutable
+    /// binding.
+    ThrowImmutable,
     /// Return `acc` to caller.
     Return,
 }
@@ -1395,6 +1398,7 @@ impl BytecodeFunction {
             | Instruction::CreateRegExp(_)
             | Instruction::CreateArray(_)
             | Instruction::Throw
+            | Instruction::ThrowImmutable
             | Instruction::Await
             | Instruction::GeneratorStart
             | Instruction::Yield
