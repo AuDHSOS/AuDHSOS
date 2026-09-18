@@ -451,6 +451,9 @@ pub struct FrameArguments {
 pub enum Resume {
     /// A conversion of 7.1.1 asked a method of the object for a primitive.
     Primitive {
+        /// Whether the frame is the getter of the method 7.1.1 reads, rather
+        /// than the method itself.
+        reading: bool,
         /// Register of the caller frame the answer is written to.
         register: Reg,
         /// The method of 7.1.1 whose answer this is.
@@ -491,6 +494,9 @@ pub enum Resume {
     /// beginning once the argument they name is a primitive. Only an
     /// operation that converts before it changes anything asks this way.
     Coercion {
+        /// Whether the frame is the getter of the method 7.1.1 reads, rather
+        /// than the method itself.
+        reading: bool,
         /// The intrinsic that asked, by [`Intrinsic::id`].
         intrinsic: u32,
         /// Root holding the `this` value of the call.
@@ -971,6 +977,62 @@ impl Resume {
         }
     }
 
+    /// Whether the frame is the getter of the method 7.1.1 reads.
+    const fn reads_a_method(self) -> bool {
+        matches!(
+            self,
+            Self::Primitive { reading: true, .. } | Self::Coercion { reading: true, .. }
+        )
+    }
+
+    /// The same conversion, with the frame it opens reading the method rather
+    /// than calling it.
+    const fn reading(self, reads: bool) -> Self {
+        match self {
+            Self::Primitive {
+                register,
+                step,
+                hint,
+                held,
+                ..
+            } => Self::Primitive {
+                reading: reads,
+                register,
+                step,
+                hint,
+                held,
+            },
+            Self::Coercion {
+                intrinsic,
+                receiver,
+                register,
+                arg_start,
+                arg_count,
+                construct,
+                step,
+                hint,
+                of_receiver,
+                length,
+                coerced,
+                ..
+            } => Self::Coercion {
+                reading: reads,
+                intrinsic,
+                receiver,
+                register,
+                arg_start,
+                arg_count,
+                construct,
+                step,
+                hint,
+                of_receiver,
+                length,
+                coerced,
+            },
+            other => other,
+        }
+    }
+
     /// The same conversion, waiting for the next method of 7.1.1.
     const fn with_step(self, next: PrimitiveStep) -> Self {
         match self {
@@ -980,6 +1042,7 @@ impl Resume {
                 held,
                 ..
             } => Self::Primitive {
+                reading: false,
                 register,
                 step: next,
                 hint,
@@ -998,6 +1061,7 @@ impl Resume {
                 coerced,
                 ..
             } => Self::Coercion {
+                reading: false,
                 intrinsic,
                 receiver,
                 register,
@@ -7234,6 +7298,7 @@ impl RegisterVM {
         let receiver = heap.push_root(call.receiver)?;
         let length = length.map(|value| heap.push_root(value)).transpose()?;
         let resume = Resume::Coercion {
+            reading: false,
             intrinsic: intrinsic.id(),
             receiver,
             register,
@@ -7291,6 +7356,7 @@ impl RegisterVM {
         heap.enter_scope();
         let receiver = heap.push_root(call.receiver)?;
         let resume = Resume::Coercion {
+            reading: false,
             intrinsic: intrinsic.id(),
             receiver,
             register: call.arg_start,
@@ -14434,12 +14500,27 @@ impl RegisterVM {
     /// object answers a primitive.
     fn convert_to_primitive(
         &mut self,
-        mut call: Call,
+        call: Call,
         units: CodeUnits<'_>,
         active_feedback: &mut FeedbackVector,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Conversion, VMError> {
+        self.convert_with_method(call, None, units, active_feedback, heap, realm)
+    }
+
+    /// The same, with the method of the step in hand where a getter of the
+    /// Script has just answered it.
+    fn convert_with_method(
+        &mut self,
+        mut call: Call,
+        read: Option<Value>,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Conversion, VMError> {
+        let mut read = read;
         let object = call.receiver.as_object().ok_or(VMError::TypeError)?;
         let Some(resume) = call.resume else {
             return Err(VMError::TypeError);
@@ -14462,11 +14543,42 @@ impl RegisterVM {
                 PrimitiveStep::ValueOf => PropertyKey::String(heap.strings.intern("valueOf")?),
                 PrimitiveStep::ToString => PropertyKey::String(heap.strings.intern("toString")?),
             };
-            let found = heap
-                .lookup_named(object, key)?
-                .map(Self::plain_value)
-                .transpose()?
-                .unwrap_or(VALUE_UNDEFINED);
+            let found = if let Some(value) = read.take() {
+                value
+            } else {
+                {
+                    let property = heap.lookup_named(object, key)?;
+                    // 7.3.11 reads the property, and a getter of the Script
+                    // answers it in a frame of its own; the conversion takes
+                    // the method back once it has run.
+                    match property {
+                        Some(property) if property.flags.is_accessor => {
+                            // The read stands at the step the loop reached,
+                            // which is where it takes the method back.
+                            self.accessor_resume = Some(resume.with_step(step).reading(true));
+                            let entered = self.enter_accessor(
+                                property.value,
+                                call.receiver,
+                                None,
+                                call.return_pc,
+                                call.caller_code_id,
+                                units,
+                                active_feedback,
+                                heap,
+                                realm,
+                            )?;
+                            if let Some(code_id) = entered {
+                                return Ok(Conversion::Suspended(code_id));
+                            }
+                            // A getter of this Realm answered in place.
+                            self.accessor_resume = None;
+                            self.acc
+                        }
+                        Some(property) => property.value,
+                        None => VALUE_UNDEFINED,
+                    }
+                }
+            };
             // 7.3.11 step 3: `@@toPrimitive` that is neither undefined nor
             // null takes a callable and no other value; 7.1.1.1 passes over a
             // `valueOf` or a `toString` that is none.
@@ -14510,6 +14622,26 @@ impl RegisterVM {
         }
     }
 
+    /// Puts the primitive a conversion answered where the operation reads it.
+    fn write_conversion(
+        &mut self,
+        resume: Resume,
+        register: Reg,
+        value: Value,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        if let Resume::Coercion {
+            receiver,
+            of_receiver: true,
+            ..
+        } = resume
+        {
+            heap.set_root(receiver, value).map_err(VMError::Heap)?;
+            return Ok(());
+        }
+        self.write_reg(register, value)
+    }
+
     /// Continues the conversion of 7.1.1 with the answer a method gave.
     ///
     /// Answers the bytecode unit of the next method when one has to run, and
@@ -14519,6 +14651,10 @@ impl RegisterVM {
     ///
     /// Returns [`VMError::Thrown`] with a `TypeError` when no method of the
     /// object answers a primitive.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function carries the conversion from each of its methods to the next"
+    )]
     fn finish_conversion(
         &mut self,
         call: Call,
@@ -14533,6 +14669,47 @@ impl RegisterVM {
         let Some((register, step, hint)) = resume.conversion() else {
             return Err(VMError::TypeError);
         };
+        // 7.3.11 read the method through a getter of the Script, so what the
+        // frame answered is the method and not a primitive.
+        if resume.reads_a_method() {
+            let method = self.acc;
+            let held = match resume {
+                Resume::Coercion {
+                    receiver,
+                    of_receiver: true,
+                    ..
+                } => heap.root_value(receiver).unwrap_or(VALUE_UNDEFINED),
+                _ => self.read_reg(register)?,
+            };
+            let object = held.as_object().ok_or(VMError::TypeError)?;
+            let taken = Call {
+                receiver: Value::from_object(object),
+                resume: Some(resume.reading(false)),
+                ..call
+            };
+            return match self.convert_with_method(
+                taken,
+                Some(method),
+                units,
+                active_feedback,
+                heap,
+                realm,
+            )? {
+                Conversion::Done(value) => {
+                    self.write_conversion(resume, register, value, heap)?;
+                    self.finish_coerced(
+                        resume.reading(false),
+                        call.return_pc,
+                        call.caller_code_id,
+                        units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    )
+                }
+                Conversion::Suspended(code_id) => Ok(Some(code_id)),
+            };
+        }
         if let Some(value) = Self::primitive_answer(self.acc, step, heap, realm)? {
             if let Resume::Coercion {
                 receiver,
@@ -20657,6 +20834,7 @@ impl RegisterVM {
             arg_count: 0,
             slot: 0,
             resume: Some(Resume::Primitive {
+                reading: false,
                 register: key,
                 step: PrimitiveStep::Exotic,
                 hint: PrimitiveHint::String,
@@ -25135,6 +25313,7 @@ impl RegisterVM {
                             arg_count: 0,
                             slot: 0,
                             resume: Some(Resume::Primitive {
+                                reading: false,
                                 register,
                                 step: PrimitiveStep::Exotic,
                                 hint: PrimitiveHint::Number,
@@ -25202,6 +25381,7 @@ impl RegisterVM {
                             arg_count: 0,
                             slot: 0,
                             resume: Some(Resume::Primitive {
+                                reading: false,
                                 register,
                                 step: PrimitiveStep::Exotic,
                                 hint: PrimitiveHint::String,
@@ -25435,6 +25615,7 @@ impl RegisterVM {
                             arg_count: 0,
                             slot: 0,
                             resume: Some(Resume::Primitive {
+                                reading: false,
                                 register,
                                 step: PrimitiveStep::Exotic,
                                 // 13.15.3 and 7.1.3 take no hint.
