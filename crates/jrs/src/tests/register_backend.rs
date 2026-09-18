@@ -5361,16 +5361,19 @@ fn the_top_level_this_of_a_script_is_the_global_object() -> Result<(), Error> {
     ] {
         differential_scripts(&[source])?;
     }
-    // 19.1 gives the global object properties this Realm reaches through the
-    // Global Environment Record, so reading one off the object is a gap and
-    // not the undefined of an object that does not have it.
-    for source in ["this.undefined", "this.Infinity", "this.NaN"] {
+    // 19.1.2 to 19.1.4 give the global object the three value properties,
+    // each of them neither writable nor configurable.
+    for (source, answer) in [
+        ("''+this.undefined", "undefined"),
+        ("''+this.Infinity", "Infinity"),
+        ("''+this.NaN", "NaN"),
+        // 6.2.5.6 step 6.e: a write that 10.1.9.2 refuses is a TypeError
+        // under strict evaluation and nothing at all otherwise.
+        ("NaN = 1; ''+NaN", "NaN"),
+    ] {
         let mut host = SilentHost;
         let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
-        assert!(
-            matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
-            "{source}"
-        );
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
     }
     Ok(())
 }
