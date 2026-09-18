@@ -9306,17 +9306,29 @@ fn an_initializer_of_8_6_2_reads_an_earlier_parameter() -> Result<(), Error> {
         differential_scripts(&[source])?;
     }
     // 10.2.11 leaves the parameter an Initializer binds, and every one the
-    // list binds after it, in a temporal dead zone. The registers of the frame
-    // hold undefined there and say nothing of the two apart.
+    // list binds after it, in a temporal dead zone, which the context slot of
+    // the binding holds.
     for source in [
-        "function f(x=x){return 1}f()",
-        "function f(x=y,y){return 1}f()",
+        "function f(x=x){return 1}var m='';try{f()}catch(e){m=e.constructor.name}m",
+        "function f(x=y,y){return 1}var m='';try{f()}catch(e){m=e.constructor.name}m",
+        "function f(x=y,y){return ''+x+y}f(1,2)",
+        "function f(x=1,y=x+1){return ''+x+y}f()",
+        "var y=5;function f(x=y,y){return 1}var m='';try{f()}catch(e){m=e.constructor.name}m",
+        "var f=function*(x=y,y){};var m='';try{f()}catch(e){m=e.constructor.name}m",
     ] {
-        assert!(
-            !compile(source, Limits::default())?.uses_register_backend(),
-            "{source}"
-        );
+        differential_scripts(&[source])?;
     }
+    // 27.6.3.1 makes the Generator after 10.2.11 has bound the parameters, so
+    // a value an Initializer throws leaves the call rather than rejecting a
+    // request the Generator has not got.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    assert!(same_value(
+        &realm.evaluate(
+            "var f=async function*(x=y,y){};var m='';try{f()}catch(e){m=e.constructor.name}m"
+        )?,
+        &Value::string("ReferenceError"),
+    ));
     Ok(())
 }
 

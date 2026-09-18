@@ -872,6 +872,9 @@ struct RegisterLowerer {
     /// Whether 10.4.4.7 builds the map of this function, which the body
     /// prologue puts the parameters in the own context for.
     maps_arguments: bool,
+    /// The parameters 10.2.11 leaves in their Temporal Dead Zone until their
+    /// turn, with the register the frame put the argument in.
+    dead_parameters: Vec<(String, crate::engine::bytecode::Reg)>,
     /// Strictness of the Reference the assignment being lowered names, which
     /// 10.1.9.1 reads to decide whether a write it refuses throws.
     assignment_strict: bool,
@@ -1094,6 +1097,7 @@ impl RegisterLowerer {
             body_var_names: Vec::new(),
             mapped_parameters: 0,
             maps_arguments: false,
+            dead_parameters: Vec::new(),
             assignment_strict: false,
             initializing_global_lexical: false,
             reading_member_base: false,
@@ -3949,10 +3953,11 @@ impl RegisterLowerer {
         }
         // 10.2.11 initializes the parameters in order, so an Initializer that
         // reads the parameter it binds, or one the list binds after it, reads
-        // a binding of its temporal dead zone. The registers of the frame hold
-        // undefined there and say nothing of the two apart.
-        register_initializer_reads_a_later_parameter(function)
-            .then_some("a parameter Initializer that reads a parameter of its dead zone")
+        // a binding of its temporal dead zone. The lowering holds that zone in
+        // a context slot, which it has only for a parameter that is a name.
+        (register_initializer_reads_a_later_parameter(function)
+            && register_parameters_in_a_dead_zone(function).is_none())
+        .then_some("a parameter Initializer that reads a parameter of its dead zone")
     }
 
     #[expect(
@@ -4219,6 +4224,22 @@ impl RegisterLowerer {
         }
         child.prepare_var_bindings(&function.body)?;
         child.infer_binding_type_hints(&function.body);
+        // 10.2.11 initializes the parameters in order, so one an Initializer
+        // before it reads stands in its Temporal Dead Zone until its turn:
+        // the binding moves into a context slot, which 9.1.1.1.6 answers a
+        // read of with a ReferenceError, and the argument waits in the
+        // register the frame put it in.
+        for name in register_parameters_in_a_dead_zone(function)? {
+            let Some(binding) = child.bindings.get(&name) else {
+                continue;
+            };
+            let RegisterBindingStorage::Register(register) = binding.storage else {
+                continue;
+            };
+            child.bindings.get_mut(&name)?.initialized = false;
+            child.capture_binding(&name)?;
+            child.dead_parameters.push((name, register));
+        }
         // The map names consecutive slots, so the parameters take the first
         // ones the context has.
         if child.maps_arguments {
@@ -4290,28 +4311,61 @@ impl RegisterLowerer {
     /// They run left to right, so a later one reads what an earlier one bound.
     fn initialize_parameter_defaults(&mut self, function: &Function) -> Option<()> {
         use crate::engine::bytecode::Instruction;
+        // 10.2.11 initializes the parameters in order, so one an Initializer
+        // before it reads stands in its Temporal Dead Zone until its turn: the
+        // binding moves into a context slot, which 9.1.1.1.6 answers a read of
+        // with a ReferenceError, and the argument waits in the register the
+        // frame put it in.
+        let dead = core::mem::take(&mut self.dead_parameters);
         for (index, parameter) in function.parameters.iter().enumerate() {
             let named = matches!(parameter.pattern, parser::BindingPattern::Name(_));
-            // A parameter that is a name and takes no Initializer holds the
-            // argument as it arrived, wherever its binding lives.
-            if named && parameter.default.is_none() {
-                continue;
-            }
             let name = match &parameter.pattern {
                 parser::BindingPattern::Name(name) => name.clone(),
                 _ => register_argument_name(index),
             };
+            let source = dead
+                .iter()
+                .find(|(held, _)| *held == name)
+                .map(|(_, register)| *register);
+            // A parameter that is a name and takes no Initializer holds the
+            // argument as it arrived, wherever its binding lives; one of the
+            // dead zone takes it into its slot here.
+            if named && parameter.default.is_none() {
+                if let Some(register) = source {
+                    let binding = *self.bindings.get(&name)?;
+                    self.code.emit(Instruction::Ldar(register));
+                    self.store_binding_as(binding, true);
+                    self.bindings.get_mut(&name)?.initialized = true;
+                }
+                continue;
+            }
             // An Initializer of a later parameter reads this one, which makes
             // it a captured name of 10.2.11, so the binding may live in the
             // own context rather than in a register.
             let binding = *self.bindings.get(&name)?;
             if let Some(default) = &parameter.default {
-                self.load_binding(binding);
+                // The argument is read out of the register, because the
+                // binding of the dead zone answers no read yet.
+                if let Some(register) = source {
+                    self.code.emit(Instruction::Ldar(register));
+                } else {
+                    self.load_binding(binding);
+                }
                 let present = self.code.emit(Instruction::JumpIfNotUndefined(0));
                 let value_type = self.lower(default)?;
-                self.store_binding(binding);
+                self.store_binding_as(binding, source.is_some());
+                let skip = source.map(|_| self.code.emit(Instruction::Jump(0)));
+                let at = self.code.instructions.len();
+                self.patch_jump(present, at)?;
+                if let Some(register) = source {
+                    self.code.emit(Instruction::Ldar(register));
+                    self.store_binding_as(binding, true);
+                }
                 let after = self.code.instructions.len();
-                self.patch_jump(present, after)?;
+                if let Some(skip) = skip {
+                    self.patch_jump(skip, after)?;
+                }
+                self.bindings.get_mut(&name)?.initialized = true;
                 // The parameter holds either the argument, whose type the
                 // lowering cannot name, or the Initializer's answer.
                 self.bindings.get_mut(&name)?.value_type =
@@ -11709,6 +11763,44 @@ fn register_body_reads_arguments(body: &[Stmt]) -> Option<bool> {
 
 /// Whether an Initializer of 8.6.2 reads the parameter it binds or one the
 /// list binds after it, which 10.2.11 leaves in its temporal dead zone.
+/// The parameters an Initializer of 10.2.11 reads before the list has bound
+/// them, which stand in their Temporal Dead Zone until their turn.
+///
+/// Answers `None` where a pattern binds one of them: the lowering has one
+/// binding per name and no place to keep the dead zone of a pattern.
+fn register_parameters_in_a_dead_zone(function: &Function) -> Option<BTreeSet<String>> {
+    let mut bound: Vec<BTreeSet<String>> = Vec::with_capacity(function.parameters.len());
+    for parameter in &function.parameters {
+        let mut names = Vec::new();
+        parameter.pattern.names(&mut names);
+        bound.push(names.into_iter().collect());
+    }
+    let mut dead = BTreeSet::new();
+    for (index, parameter) in function.parameters.iter().enumerate() {
+        let Some(default) = &parameter.default else {
+            continue;
+        };
+        let mut direct = BTreeSet::new();
+        let mut nested = BTreeSet::new();
+        register_expression_references(default, &mut direct, &mut nested)?;
+        for (at, names) in bound.iter().enumerate().skip(index) {
+            for name in names {
+                if !direct.contains(name) {
+                    continue;
+                }
+                // Only a parameter that is a name of its own has a binding
+                // the lowering can leave uninitialized.
+                let parameter = function.parameters.get(at)?;
+                if parameter.pattern.identifier().is_none() || parameter.rest {
+                    return None;
+                }
+                dead.insert(name.clone());
+            }
+        }
+    }
+    Some(dead)
+}
+
 fn register_initializer_reads_a_later_parameter(function: &Function) -> bool {
     let mut bound: Vec<BTreeSet<String>> = Vec::with_capacity(function.parameters.len());
     for parameter in &function.parameters {
