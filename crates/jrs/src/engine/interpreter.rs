@@ -1063,6 +1063,11 @@ pub struct RegisterVM {
     entry_is_realm_script: bool,
     /// Whether the call now entering is the direct eval of 13.3.6.1.
     direct_eval: bool,
+    /// Whether the frame that called `eval` is strict, which 19.2.1.1 step 10
+    /// gives the Script it evaluates.
+    direct_eval_strict: bool,
+    /// The same, for the Script the embedding is about to evaluate.
+    pending_strict: bool,
     /// Whether that text is a line the embedding was asked to write.
     pending_print: bool,
     /// Where the run continues once that unit exists.
@@ -1151,8 +1156,9 @@ pub enum Outcome {
     /// stopped once [`RegisterVM::resume_unit`] is given the unit.
     Compile(alloc::rc::Rc<[u16]>),
     /// 19.2.1 evaluates a Script of the same Realm, which the embedding runs
-    /// on the heap and Realm this one is using.
-    Evaluate(alloc::rc::Rc<[u16]>),
+    /// on the heap and Realm this one is using. The flag is `strictCaller` of
+    /// 19.2.1.1.
+    Evaluate(alloc::rc::Rc<[u16]>, bool),
     /// The Script called `print`, which only the embedding can answer: it
     /// writes the line and the call instruction runs again.
     Print(alloc::rc::Rc<[u16]>),
@@ -1204,6 +1210,8 @@ impl RegisterVM {
             accessor_resume: None,
             entry_is_realm_script: false,
             direct_eval: false,
+            direct_eval_strict: false,
+            pending_strict: false,
             pending_print: false,
             resume_pc: 0,
             resume_code_id: None,
@@ -19461,9 +19469,13 @@ impl RegisterVM {
                 "an eval of a Script that has no Realm",
             ));
         }
-        if core::mem::take(&mut self.direct_eval) && call.caller_code_id.is_some() {
+        let direct = core::mem::take(&mut self.direct_eval);
+        if direct && call.caller_code_id.is_some() {
             return Err(VMError::Unsupported("a direct eval inside a function"));
         }
+        // Step 10: a direct eval of a strict caller evaluates strict text,
+        // whatever the text itself says.
+        self.pending_strict = direct && core::mem::take(&mut self.direct_eval_strict);
         let text = heap
             .strings
             .to_utf16(source)
@@ -23489,7 +23501,7 @@ impl RegisterVM {
             realm,
         )? {
             Outcome::Done(value) => Ok(value),
-            Outcome::Compile(_) | Outcome::Evaluate(_) | Outcome::Print(_) => Err(
+            Outcome::Compile(_) | Outcome::Evaluate(..) | Outcome::Print(_) => Err(
                 VMError::Unsupported("a call only the embedding of a Realm can answer"),
             ),
         }
@@ -23623,7 +23635,10 @@ impl RegisterVM {
                             return Ok(Outcome::Print(source));
                         }
                         if core::mem::take(&mut self.pending_script) {
-                            return Ok(Outcome::Evaluate(source));
+                            return Ok(Outcome::Evaluate(
+                                source,
+                                core::mem::take(&mut self.pending_strict),
+                            ));
                         }
                         return Ok(Outcome::Compile(source));
                     }
@@ -26181,6 +26196,7 @@ impl RegisterVM {
                     // 13.3.6.1 tells the two apart, and 19.2.1.1 step 4 gives
                     // a direct eval the variable environment of the frame.
                     self.direct_eval = matches!(inst, Instruction::CallDirectEval { .. });
+                    self.direct_eval_strict = active_code.strict;
                     if let Some(code_id) = self.enter_call(
                         units,
                         active_feedback,

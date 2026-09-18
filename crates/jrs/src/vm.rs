@@ -728,9 +728,9 @@ impl Execution<'_> {
                     }
                     compiled = Some(crate::engine::interpreter::Compiled::Printed);
                 }
-                Ok(crate::engine::interpreter::Outcome::Evaluate(source)) => {
+                Ok(crate::engine::interpreter::Outcome::Evaluate(source, strict)) => {
                     self.fuel = vm.fuel;
-                    let answer = self.evaluate_nested_script(agent, &source, depth);
+                    let answer = self.evaluate_nested_script(agent, &source, strict, depth);
                     vm.fuel = self.fuel;
                     compiled = Some(answer);
                 }
@@ -749,6 +749,7 @@ impl Execution<'_> {
         &mut self,
         agent: &mut crate::engine::agent::Agent,
         source: &[u16],
+        strict_caller: bool,
         depth: usize,
     ) -> crate::engine::interpreter::Compiled {
         /// How deep one run nests evals before the budget is the answer.
@@ -758,7 +759,7 @@ impl Execution<'_> {
                 crate::engine::interpreter::VMError::CallStackOverflow,
             ));
         }
-        let compiled = self.compile_eval_unit(source);
+        let compiled = self.compile_eval_unit(source, strict_caller);
         let crate::engine::interpreter::Compiled::Unit(unit) = compiled else {
             return compiled;
         };
@@ -781,14 +782,18 @@ impl Execution<'_> {
     ///
     /// The Script is compiled the way 16.1.7 compiles one, so a top-level
     /// `var` of it is a binding of the Global Environment Record.
-    fn compile_eval_unit(&mut self, source: &[u16]) -> crate::engine::interpreter::Compiled {
+    fn compile_eval_unit(
+        &mut self,
+        source: &[u16],
+        strict_caller: bool,
+    ) -> crate::engine::interpreter::Compiled {
         // A text no Script accepts is the `SyntaxError` of 19.2.1.1 step 8; a
         // Script the register lowering does not take is a gap of the migration
         // and no error of the Script, so the two answer apart.
         let Ok(text) = alloc::string::String::from_utf16(source) else {
             return crate::engine::interpreter::Compiled::Refused;
         };
-        let Ok(program) = crate::bytecode::compile_eval(&text, self.limits, false) else {
+        let Ok(program) = crate::bytecode::compile_eval(&text, self.limits, strict_caller) else {
             return crate::engine::interpreter::Compiled::Refused;
         };
         let Some(code) = program.register_code.as_ref() else {
