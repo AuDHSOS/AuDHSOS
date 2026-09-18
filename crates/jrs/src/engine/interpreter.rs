@@ -24601,8 +24601,20 @@ impl RegisterVM {
             }
             // 27.6.3.2: no handler of the body took the value, so the request
             // at the front of the queue is rejected with it and the Generator
-            // is done.
-            if active_code.async_generator {
+            // is done. 27.6.3.1 makes that Generator after 10.2.11 has bound
+            // the parameters, so a value an Initializer throws has none to
+            // reject and leaves the call as any other throw does.
+            if active_code.async_generator
+                && active_code.generator_register.is_some_and(|register| {
+                    self.read_reg(register)
+                        .ok()
+                        .and_then(super::value::Value::as_object)
+                        .and_then(|object| heap.get_object(object))
+                        .is_some_and(|entry| {
+                            matches!(entry.kind, ObjectKind::AsyncGenerator { .. })
+                        })
+                })
+            {
                 return self.unwind_async_generator(active_code, value, native, heap, realm);
             }
             // 27.7.5.2 step 4: no handler of the body took the value, so the
