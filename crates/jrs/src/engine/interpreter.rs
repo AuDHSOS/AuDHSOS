@@ -171,9 +171,9 @@ struct ArrayWalk {
     receiver: Value,
     output: Value,
     element: Value,
-    element_index: u32,
-    index: u32,
-    length: u32,
+    element_index: i64,
+    index: i64,
+    length: i64,
     started: bool,
     /// Whether the call in flight is the getter of an accessor element
     /// rather than the callback of the clause.
@@ -199,7 +199,7 @@ impl ArrayWalk {
     }
 
     /// The next index to ask about, or none when the walk is done.
-    const fn next_index(&self) -> Option<u32> {
+    const fn next_index(&self) -> Option<i64> {
         if self.backwards() {
             if self.index == 0 {
                 return None;
@@ -213,7 +213,7 @@ impl ArrayWalk {
     }
 
     /// Moves past the index just taken.
-    const fn advance(&mut self, element_index: u32) {
+    const fn advance(&mut self, element_index: i64) {
         self.index = if self.backwards() {
             element_index
         } else {
@@ -9836,11 +9836,11 @@ impl RegisterVM {
         } else {
             Self::array_like_length_value(heap, target, realm)?
         };
-        let mut length = 0;
+        let mut length = 0i64;
         if pending.is_none() && !unconverted.is_object() {
             let read = integer_argument(unconverted, heap, realm)?.max(0);
             Self::refuse_long_array(intrinsic, read, heap, realm)?;
-            length = u32::try_from(read).unwrap_or(u32::MAX);
+            length = read.min(INDEX_LIMIT);
         }
         let converts = pending.is_none() && unconverted.is_object();
         let prototype = realm.object_prototype(heap)?;
@@ -9995,7 +9995,7 @@ impl RegisterVM {
             heap.exit_scope();
             return Err(refused);
         }
-        walk.length = u32::try_from(length).unwrap_or(u32::MAX);
+        walk.length = length.min(INDEX_LIMIT);
         if walk.backwards() {
             walk.index = walk.length;
         }
@@ -10153,7 +10153,7 @@ impl RegisterVM {
             // 23.1.3.16, 23.1.3.17 and 23.1.3.20 take the index they start
             // from out of the argument they were given, against the length
             // they have just read.
-            let length = i64::from(walk.length);
+            let length = walk.length;
             let start = if walk.intrinsic == Intrinsic::ArrayPrototypeLastIndexOf {
                 let from = if walk.started {
                     integer_argument(walk.output, heap, realm)?
@@ -10169,7 +10169,7 @@ impl RegisterVM {
                 let from = integer_argument(walk.output, heap, realm)?;
                 absolute_index(from, length).clamp(0, length)
             };
-            walk.index = u32::try_from(start).unwrap_or(u32::MAX);
+            walk.index = start;
             walk.output = VALUE_UNDEFINED;
             Self::write_iteration(state, &walk, heap)?;
             return self.step_array_iteration(
@@ -10233,6 +10233,7 @@ impl RegisterVM {
                 .target
                 .as_object()
                 .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let wanted = u32::try_from(wanted).map_err(|_| VMError::PropertyLimit)?;
             let created = match Self::array_species_create(object, wanted, heap, realm) {
                 Ok(created) => created,
                 Err(refused) => {
@@ -10263,7 +10264,7 @@ impl RegisterVM {
         for index in 0..call.arg_count {
             values.push(self.call_argument(&call, index, heap)?);
         }
-        let length = u32::from(call.arg_count);
+        let length = i64::from(call.arg_count);
         let items = Self::array_of(values, heap, realm)?;
         let constructor = call.receiver;
         let prototype = realm.object_prototype(heap)?;
@@ -10323,7 +10324,8 @@ impl RegisterVM {
                     .intrinsic(heap, Intrinsic::ArrayConstructor)?
                     .as_object();
         if plain {
-            let created = realm.array(heap, walk.length)?;
+            let wanted = u32::try_from(walk.length).map_err(|_| VMError::PropertyLimit)?;
+            let created = realm.array(heap, wanted)?;
             let mut walk = Self::read_iteration(state, heap)?;
             walk.output = Value::from_object(created);
             walk.phase = ARRAY_WALK_RUNNING;
@@ -10341,7 +10343,7 @@ impl RegisterVM {
         if !Self::is_script_function(constructor, heap) {
             let made = match self.construct_a_native_of_23_1_2(
                 constructor,
-                Some(walk.length),
+                Some(u32::try_from(walk.length).map_err(|_| VMError::PropertyLimit)?),
                 call,
                 units,
                 heap,
@@ -10522,9 +10524,7 @@ impl RegisterVM {
             };
             return self.enter_call_value(set, units, active_feedback, heap, realm, call);
         }
-        if let Err(refused) =
-            Self::set_array_like_length_wide(object, i64::from(walk.length), heap, realm)
-        {
+        if let Err(refused) = Self::set_array_like_length_wide(object, walk.length, heap, realm) {
             heap.exit_scope();
             return Err(refused);
         }
@@ -10709,7 +10709,7 @@ impl RegisterVM {
                 walk.advance(element_index);
                 // 23.1.3 walks the indices the object has, so a hole never
                 // reaches the callback.
-                let found = Self::element_slot_at(heap, object, element_index)?;
+                let found = Self::element_slot_at_wide(heap, object, element_index)?;
                 let Some((slot, accessor)) = found.or_else(|| {
                     // 23.1.3.9, 23.1.3.10, 23.1.3.12 and 23.1.3.13 read every
                     // index with 7.3.2, so a hole reaches the callback as
@@ -10770,7 +10770,7 @@ impl RegisterVM {
                     self.acc = if walk.intrinsic == Intrinsic::ArrayPrototypeIncludes {
                         VALUE_TRUE
                     } else {
-                        index_value(i64::from(walk.element_index))
+                        index_value(walk.element_index)
                     };
                     return Ok(None);
                 }
@@ -10784,8 +10784,10 @@ impl RegisterVM {
                     .output
                     .as_object()
                     .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+                let narrow =
+                    u32::try_from(walk.element_index).map_err(|_| VMError::PropertyLimit)?;
                 if let Err(refused) =
-                    Self::create_element_or_throw(array, walk.element_index, element, heap, realm)
+                    Self::create_element_or_throw(array, narrow, element, heap, realm)
                 {
                     heap.exit_scope();
                     return Err(refused);
@@ -10922,14 +10924,18 @@ impl RegisterVM {
                     .output
                     .as_object()
                     .ok_or(VMError::Heap(HeapError::InvalidReference))?;
-                heap.set_array_element(array, walk.element_index, answer)?;
+                let index =
+                    u32::try_from(walk.element_index).map_err(|_| VMError::PropertyLimit)?;
+                heap.set_array_element(array, index, answer)?;
             }
             Intrinsic::ArrayFrom => {
                 let array = walk
                     .output
                     .as_object()
                     .ok_or(VMError::Heap(HeapError::InvalidReference))?;
-                Self::create_element_or_throw(array, walk.element_index, answer, heap, realm)?;
+                let index =
+                    u32::try_from(walk.element_index).map_err(|_| VMError::PropertyLimit)?;
+                Self::create_element_or_throw(array, index, answer, heap, realm)?;
             }
             // 23.1.3.13 appends the elements of an answer that is an Array
             // and the answer itself otherwise, which is 23.1.3.13.1 with the
@@ -10988,7 +10994,7 @@ impl RegisterVM {
             }
             Intrinsic::ArrayPrototypeFindIndex | Intrinsic::ArrayPrototypeFindLastIndex => {
                 if truthy {
-                    return Ok(Some(index_value(i64::from(walk.element_index))));
+                    return Ok(Some(index_value(walk.element_index)));
                 }
             }
             // 23.1.3.24 and 23.1.3.25 carry the answer to the next element.
@@ -11733,12 +11739,12 @@ impl RegisterVM {
         else {
             return Err(VMError::Heap(HeapError::InvalidReference));
         };
-        let index = index_value(i64::from(element_index));
+        let index = index_value(element_index);
         // 23.1.2 gives the construct of its `this` value and the setter of the
         // `length` the same one argument.
         if phase != ARRAY_WALK_RUNNING {
             return Ok([
-                index_value(i64::from(length)),
+                index_value(length),
                 VALUE_UNDEFINED,
                 VALUE_UNDEFINED,
                 VALUE_UNDEFINED,
@@ -14027,6 +14033,22 @@ impl RegisterVM {
 
     /// The same index, with the pair of 6.1.7.1 where the property is an
     /// accessor rather than the gap a native names for one.
+    fn element_slot_at_wide(
+        heap: &mut GenerationalHeap,
+        object: ObjectRef,
+        index: i64,
+    ) -> Result<Option<(Value, bool)>, VMError> {
+        let Some(index) = Self::narrow_index(index) else {
+            // An index past 2^32-2 is an ordinary name, which no Elements
+            // store holds.
+            let key = PropertyKey::String(heap.intern_index_wide(Self::wide_index(index))?);
+            let named = heap.lookup_named(object, key)?;
+            return Ok(named.map(|found| (found.value, found.flags.is_accessor)));
+        };
+        Self::element_slot_at(heap, object, index)
+    }
+
+    /// The same for an index an Elements store could hold.
     fn element_slot_at(
         heap: &mut GenerationalHeap,
         object: ObjectRef,

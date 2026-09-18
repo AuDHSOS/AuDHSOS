@@ -231,12 +231,14 @@ pub enum ObjectKind {
         output: Value,
         /// The element the callback that is in flight was given.
         element: Value,
-        /// Its index, which is the second argument of the callback.
-        element_index: u32,
+        /// Its index, which is the second argument of the callback. 7.3.18
+        /// reads a `length` up to 2^53-1, so an index of the walk is no
+        /// narrower than that.
+        element_index: i64,
         /// The index the next callback is for.
-        index: u32,
+        index: i64,
         /// Where the walk stops, taken once as 23.1.3 takes it.
-        length: u32,
+        length: i64,
         /// Whether an accumulator has been taken yet (23.1.3.24 step 6).
         started: bool,
         /// Whether the call in flight is the getter of an accessor element
