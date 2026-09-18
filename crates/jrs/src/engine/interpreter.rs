@@ -2342,8 +2342,13 @@ impl RegisterVM {
         self.active_binding_count = callee_bindings;
         self.current_context = context;
         if let Some(slot_count) = callee.own_context_slot_count {
-            self.current_context =
-                Some(self.allocate_context(callee, heap, self.current_context, slot_count)?);
+            let context = self.allocate_context(callee, heap, self.current_context, slot_count)?;
+            // 9.1.1.1.1 leaves a Block binding of 14.3.1 uninitialized until
+            // its declaration runs, which a read of it before then refuses.
+            for slot in &callee.lexical_context_slots {
+                heap.set_context_slot(context, 0, *slot, VALUE_UNINITIALIZED)?;
+            }
+            self.current_context = Some(context);
         }
         // 27.7.5.2 step 2 makes the capability before the body runs, and the
         // frame keeps it in a register of its own.
@@ -24030,21 +24035,44 @@ impl RegisterVM {
                     self.write_reg(dst, val)?;
                 }
                 Instruction::LoadContext { depth, slot } => {
-                    self.acc = heap
+                    let held = heap
                         .context_slot(
                             self.current_context.ok_or(VMError::InvalidRegister)?,
                             depth,
                             slot,
                         )
                         .ok_or(VMError::InvalidRegister)?;
+                    // 9.1.1.1.6 refuses a binding 9.1.1.1.1 has not
+                    // initialized.
+                    if held == VALUE_UNINITIALIZED {
+                        return Err(raise(
+                            heap,
+                            realm,
+                            super::realm::NativeErrorKind::ReferenceError,
+                            "a binding read before its declaration",
+                        ));
+                    }
+                    self.acc = held;
                 }
-                Instruction::StoreContext { depth, slot } => {
-                    heap.set_context_slot(
-                        self.current_context.ok_or(VMError::InvalidRegister)?,
-                        depth,
-                        slot,
-                        self.acc,
-                    )?;
+                Instruction::StoreContext {
+                    depth,
+                    slot,
+                    initialize,
+                } => {
+                    let context = self.current_context.ok_or(VMError::InvalidRegister)?;
+                    // 9.1.1.1.5 refuses a write to a binding 9.1.1.1.1 has not
+                    // initialized; 9.1.1.1.4 is the write that initializes it.
+                    if !initialize
+                        && heap.context_slot(context, depth, slot) == Some(VALUE_UNINITIALIZED)
+                    {
+                        return Err(raise(
+                            heap,
+                            realm,
+                            super::realm::NativeErrorKind::ReferenceError,
+                            "a binding written before its declaration",
+                        ));
+                    }
+                    heap.set_context_slot(context, depth, slot, self.acc)?;
                 }
                 Instruction::Add(reg) => {
                     let rhs = self.read_reg(reg)?;
@@ -27930,7 +27958,11 @@ mod tests {
         increment.emit(Instruction::Star(Reg(1)));
         increment.emit(Instruction::Ldar(Reg(0)));
         increment.emit(Instruction::Add(Reg(1)));
-        increment.emit(Instruction::StoreContext { depth: 0, slot: 0 });
+        increment.emit(Instruction::StoreContext {
+            depth: 0,
+            slot: 0,
+            initialize: false,
+        });
         increment.emit(Instruction::Return);
 
         let mut root = BytecodeFunction::new(2, 0);
@@ -27939,7 +27971,11 @@ mod tests {
         let first_call = root.allocate_feedback_slot(FeedbackKind::Call);
         let second_call = root.allocate_feedback_slot(FeedbackKind::Call);
         root.emit(Instruction::LdaSmi(40));
-        root.emit(Instruction::StoreContext { depth: 0, slot: 0 });
+        root.emit(Instruction::StoreContext {
+            depth: 0,
+            slot: 0,
+            initialize: false,
+        });
         root.emit(Instruction::CreateClosure(0));
         root.emit(Instruction::Star(Reg(0)));
         root.emit(Instruction::Call {

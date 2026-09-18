@@ -717,6 +717,9 @@ struct RegisterBinding {
     value_type: Option<RegisterType>,
     mutable: bool,
     stable_function_identity: bool,
+    /// Whether 9.1.1.1.1 has initialized the binding; a Block binding of
+    /// 14.3.1 is declared before its statement runs and is not.
+    initialized: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1058,6 +1061,7 @@ impl RegisterLowerer {
                 value_type: None,
                 mutable,
                 stable_function_identity: false,
+                initialized: true,
             },
         );
         Some(())
@@ -1072,8 +1076,10 @@ impl RegisterLowerer {
             RegisterType::Undefined
         };
         let binding = *self.bindings.get(name)?;
-        self.store_binding(binding);
-        self.bindings.get_mut(name)?.value_type = Some(value_type);
+        self.store_binding_as(binding, !binding.initialized);
+        let entry = self.bindings.get_mut(name)?;
+        entry.value_type = Some(value_type);
+        entry.initialized = true;
         Some(())
     }
 
@@ -1117,8 +1123,10 @@ impl RegisterLowerer {
             }
             let units: Vec<u16> = name.encode_utf16().collect();
             let value_type = self.lower_named(expression, &units)?;
-            self.store_binding(binding);
-            self.bindings.get_mut(name)?.value_type = Some(value_type);
+            self.store_binding_as(binding, !binding.initialized);
+            let entry = self.bindings.get_mut(name)?;
+            entry.value_type = Some(value_type);
+            entry.initialized = true;
             return Some(());
         }
         let value_type = self.lower(expression)?;
@@ -1159,8 +1167,10 @@ impl RegisterLowerer {
                 if binding.stable_function_identity {
                     return None;
                 }
-                self.store_binding(binding);
-                self.bindings.get_mut(name)?.value_type = Some(value_type);
+                self.store_binding_as(binding, !binding.initialized);
+                let entry = self.bindings.get_mut(name)?;
+                entry.value_type = Some(value_type);
+                entry.initialized = true;
             }
             parser::BindingPattern::Object(object) => {
                 // A layout the lowering tracks answers each property from
@@ -1813,6 +1823,7 @@ impl RegisterLowerer {
                         value_type: Some(RegisterType::Unknown),
                         mutable: true,
                         stable_function_identity: false,
+                        initialized: true,
                     },
                 );
                 continue;
@@ -1903,12 +1914,20 @@ impl RegisterLowerer {
     }
 
     fn store_binding(&mut self, binding: RegisterBinding) {
+        self.store_binding_as(binding, false);
+    }
+
+    /// The same, for the write 9.1.1.1.4 makes when the declaration of the
+    /// name runs.
+    fn store_binding_as(&mut self, binding: RegisterBinding, initialize: bool) {
         use crate::engine::bytecode::Instruction;
         self.code.emit(match binding.storage {
             RegisterBindingStorage::Register(register) => Instruction::Star(register),
-            RegisterBindingStorage::Context { depth, slot } => {
-                Instruction::StoreContext { depth, slot }
-            }
+            RegisterBindingStorage::Context { depth, slot } => Instruction::StoreContext {
+                depth,
+                slot,
+                initialize,
+            },
         });
     }
 
@@ -1944,13 +1963,21 @@ impl RegisterLowerer {
         let slot_count = self.code.own_context_slot_count.unwrap_or(0);
         let next = slot_count.checked_add(1)?;
         self.code.own_context_slot_count = Some(next);
-        self.code
-            .emit(crate::engine::bytecode::Instruction::Ldar(register));
-        self.code
-            .emit(crate::engine::bytecode::Instruction::StoreContext {
-                depth: 0,
-                slot: slot_count,
-            });
+        if binding.initialized {
+            self.code
+                .emit(crate::engine::bytecode::Instruction::Ldar(register));
+            self.code
+                .emit(crate::engine::bytecode::Instruction::StoreContext {
+                    depth: 0,
+                    slot: slot_count,
+                    initialize: false,
+                });
+        } else {
+            // 9.1.1.1.1 leaves the slot uninitialized until the declaration
+            // of the name runs, which the frame writes when it creates the
+            // context.
+            self.code.lexical_context_slots.push(slot_count);
+        }
         let captured = RegisterBinding {
             storage: RegisterBindingStorage::Context {
                 depth: 0,
@@ -3439,6 +3466,7 @@ impl RegisterLowerer {
                         value_type: Some(RegisterType::Unknown),
                         mutable: false,
                         stable_function_identity: false,
+                        initialized: true,
                     },
                 );
                 Some((inner.clone(), register, shadowed))
@@ -3465,6 +3493,7 @@ impl RegisterLowerer {
                     value_type: Some(RegisterType::Unknown),
                     mutable: false,
                     stable_function_identity: false,
+                    initialized: true,
                 },
             );
             // 6.2.13 gives a class body inside another one a Private Name of
@@ -3502,6 +3531,7 @@ impl RegisterLowerer {
                     value_type: Some(RegisterType::Unknown),
                     mutable: false,
                     stable_function_identity: false,
+                    initialized: true,
                 },
             );
             if shadowed.is_some() {
@@ -3526,6 +3556,7 @@ impl RegisterLowerer {
                     value_type: Some(RegisterType::Unknown),
                     mutable: false,
                     stable_function_identity: false,
+                    initialized: true,
                 },
             );
             if shadowed.is_some() {
@@ -4061,6 +4092,10 @@ impl RegisterLowerer {
                         pattern.names(&mut names);
                         for name in names {
                             child.declare(&name, *mutable)?;
+                            // 14.3.1 declares the name before its statement
+                            // runs, and 9.1.1.1.1 leaves it uninitialized
+                            // until then.
+                            child.bindings.get_mut(&name)?.initialized = false;
                         }
                     }
                 }
@@ -6787,6 +6822,7 @@ impl RegisterLowerer {
                         value_type: Some(value_type),
                         mutable: true,
                         stable_function_identity: false,
+                        initialized: true,
                     },
                 )
             });
@@ -6810,6 +6846,7 @@ impl RegisterLowerer {
                             value_type: Some(RegisterType::Unknown),
                             mutable: true,
                             stable_function_identity: false,
+                            initialized: true,
                         },
                     );
                     shadowed.push((bound, previous));
@@ -7139,6 +7176,7 @@ impl RegisterLowerer {
                     value_type: None,
                     mutable,
                     stable_function_identity: false,
+                    initialized: true,
                 },
             );
             scoped.push((name, register, previous));
@@ -7687,6 +7725,7 @@ impl RegisterLowerer {
                                 value_type: None,
                                 mutable: *mutable,
                                 stable_function_identity: false,
+                                initialized: true,
                             },
                         );
                         scoped_registers.push((name, register));
@@ -7898,6 +7937,7 @@ impl RegisterLowerer {
                     value_type: Some(RegisterType::Unknown),
                     mutable,
                     stable_function_identity: false,
+                    initialized: true,
                 },
             );
         }
@@ -8017,6 +8057,7 @@ impl RegisterLowerer {
                         value_type: Some(RegisterType::String),
                         mutable,
                         stable_function_identity: false,
+                        initialized: true,
                     },
                 );
                 key_register
@@ -8960,6 +9001,7 @@ impl RegisterLowerer {
                         value_type: Some(element_type),
                         mutable,
                         stable_function_identity: false,
+                        initialized: true,
                     },
                 );
                 Some(register)
@@ -9077,6 +9119,7 @@ impl RegisterLowerer {
                         value_type: Some(element_type),
                         mutable,
                         stable_function_identity: false,
+                        initialized: true,
                     },
                 );
                 key_register

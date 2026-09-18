@@ -380,6 +380,9 @@ pub enum Instruction {
         depth: u16,
         /// Binding slot.
         slot: u16,
+        /// Whether this is the write 9.1.1.1.4 makes, which is the only one a
+        /// binding 9.1.1.1.1 has not initialized takes.
+        initialize: bool,
     },
     /// `acc = acc + reg`
     Add(Reg),
@@ -924,6 +927,9 @@ pub struct BytecodeFunction {
     pub source: Option<u16>,
     /// Own heap-context slot count, when this frame creates a lexical context.
     pub own_context_slot_count: Option<u16>,
+    /// Slots of the own context a Block binding of 14.3.1 took before its
+    /// declaration ran, which 9.1.1.1.1 leaves uninitialized until it does.
+    pub lexical_context_slots: Vec<u16>,
     /// Slot counts expected in each captured outer lexical context.
     pub outer_context_slot_counts: Vec<u16>,
     /// Static category of every feedback vector slot.
@@ -974,6 +980,7 @@ impl BytecodeFunction {
             source: None,
             realm_script: false,
             own_context_slot_count: None,
+            lexical_context_slots: Vec::new(),
             outer_context_slot_counts: Vec::new(),
             feedback_slots: Vec::new(),
             entry_fuel_cost: 1,
@@ -1187,7 +1194,7 @@ impl BytecodeFunction {
                 Some(dst)
             }
             Instruction::LoadContext { depth, slot }
-            | Instruction::StoreContext { depth, slot } => {
+            | Instruction::StoreContext { depth, slot, .. } => {
                 self.verify_context_access(pc, depth, slot)?;
                 None
             }
