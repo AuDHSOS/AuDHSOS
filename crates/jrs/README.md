@@ -581,8 +581,8 @@ negative-test passes. Other parser/builtin completeness gaps remain open.
 
 ### Current Test262 result
 
-The latest measurements were run on 2026-09-14, 2026-09-15, 2026-09-16,
-2026-09-17 and 2026-09-18 against Test262
+The latest measurements were run between 2026-09-14 and 2026-09-18
+against Test262
 revision
 `419d3e0a2273ba01a3bfcbec423f2801425b8e93`; the rows carry the implementation
 commit each one measured, and the compound-assignment rows and the full runs
@@ -893,8 +893,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The same, before the iterable of 24.1.1.1 (outdated) | focused | `48b1816` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Map test/built-ins/Set --summary` | 587 | 1,169 | 458 (39.18%) | 192 (16.42%) | 519 (44.40%) |
 | The same, before the iterators of 24.1.5 and 24.2.5 (outdated) | focused | `29cc550` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Map test/built-ins/Set --summary` | 587 | 1,169 | 336 (28.74%) | 240 (20.53%) | 593 (50.73%) |
 | The same, on the stack backend (focused) | focused | `29cc550` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Map test/built-ins/Set --summary` | 587 | 1,169 | 0 (0.00%) | 1,051 (89.91%) | 118 (10.09%) |
-| Complete pinned suite, including staging and Intl | full | `98ff8ed` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 39,216 (38.10%) | 38,623 (37.53%) | 25,086 (24.37%) |
-| Complete pinned suite on the register engine | full | `98ff8ed` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 56,212 (54.61%) | 21,620 (21.00%) | 25,093 (24.38%) |
+| Complete pinned suite, including staging and Intl | full | `32351fe` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 39,354 (38.24%) | 38,573 (37.48%) | 24,998 (24.29%) |
+| Complete pinned suite on the register engine | full | `32351fe` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 58,430 (56.77%) | 21,483 (20.87%) | 23,012 (22.36%) |
+| Complete pinned suite, including staging and Intl, before the yield of an iterable of 15.5.5 (outdated) | full | `98ff8ed` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 39,216 (38.10%) | 38,623 (37.53%) | 25,086 (24.37%) |
+| Complete pinned suite on the register engine, before the yield of an iterable of 15.5.5 (outdated) | full | `98ff8ed` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 56,212 (54.61%) | 21,620 (21.00%) | 25,093 (24.38%) |
 | Complete pinned suite, including staging and Intl, before the parser read the grammar of clauses 14, 15 and 27 (outdated) | full | `bee51e3` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 32,083 (31.17%) | 35,268 (34.26%) |
 | Complete pinned suite on the register engine, before the async iteration of 14.7.5 (outdated) | full | `6929ec5` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 54,603 (53.05%) | 21,596 (20.98%) | 26,726 (25.97%) |
 | Complete pinned suite on the register engine, before the async generator of 27.6 (outdated) | full | `725bb96` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 50,527 (49.09%) | 20,623 (20.04%) | 31,775 (30.87%) |
