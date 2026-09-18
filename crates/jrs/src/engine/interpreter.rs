@@ -115,6 +115,24 @@ struct Call {
     resume: Option<Resume>,
     /// Set when 7.3.15 opened this call; see [`FrameHeader::construct`].
     construct: Option<Construction>,
+    /// Which arguments 7.1.1 has converted for this call, by index.
+    ///
+    /// A clause that asks whether its argument is undefined asks it of the
+    /// value the call passed, and an Object that answers undefined is not
+    /// that value; the bit says which register no longer holds what the call
+    /// passed.
+    coerced: u16,
+}
+
+impl Call {
+    /// Whether the call passed undefined at `index`.
+    ///
+    /// A clause that branches on "if the argument is undefined" reads the
+    /// value the call passed; an argument 7.1.1 converted was an Object
+    /// there, whatever the conversion answered.
+    const fn passed_undefined(&self, index: u16, value: Value) -> bool {
+        value.is_undefined() && self.coerced & 1u16.wrapping_shl(index as u32) == 0
+    }
 }
 
 /// What the engine writes after the name of an unresolvable binding.
@@ -485,6 +503,9 @@ pub enum Resume {
         /// clause of 23.1.3 that reads it first; the clause takes it back
         /// rather than reading it again.
         length: Option<Root>,
+        /// The arguments 7.1.1 has converted for the call, this one included,
+        /// which the call takes back when the native runs again.
+        coerced: u16,
     },
     /// 6.2.6.5 is reading the fields of a descriptor, and one of them is a
     /// getter of the Script.
@@ -878,6 +899,7 @@ impl Resume {
                 hint,
                 of_receiver,
                 length,
+                coerced,
                 ..
             } => Self::Coercion {
                 intrinsic,
@@ -890,6 +912,7 @@ impl Resume {
                 hint,
                 of_receiver,
                 length,
+                coerced,
             },
             other => other,
         }
@@ -5585,6 +5608,7 @@ impl RegisterVM {
             construct,
             return_pc,
             caller_code_id,
+            coerced: 0,
         };
         let answered = self.acc;
         // 7.1.1 asks the next method when the one that answered gave an
@@ -6095,6 +6119,7 @@ impl RegisterVM {
             construct,
             return_pc,
             caller_code_id,
+            coerced: 0,
         };
         let copy = heap.root_value(copy).unwrap_or(VALUE_UNDEFINED);
         heap.exit_scope();
@@ -6121,6 +6146,7 @@ impl RegisterVM {
             construct: None,
             return_pc,
             caller_code_id,
+            coerced: 0,
         }
     }
 
@@ -6194,6 +6220,7 @@ impl RegisterVM {
             hint,
             of_receiver: false,
             length,
+            coerced: call.coerced | 1u16.checked_shl(u32::from(index)).unwrap_or(0),
         };
         let conversion = Call {
             receiver: argument,
@@ -6250,6 +6277,7 @@ impl RegisterVM {
             hint,
             of_receiver: true,
             length: None,
+            coerced: call.coerced,
         };
         let conversion = Call {
             receiver: call.receiver,
@@ -6817,6 +6845,7 @@ impl RegisterVM {
             construct: None,
             return_pc,
             caller_code_id,
+            coerced: 0,
         };
         let Some((assigned, strict)) = assigned else {
             // 10.1.8.1 step 3.b: a property with no getter reads undefined.
@@ -11472,6 +11501,7 @@ impl RegisterVM {
             construct: Some(Construction::Register(this_register)),
             return_pc,
             caller_code_id,
+            coerced: 0,
         };
         // 10.1.13: every constructor of this Realm written in Rust makes its
         // object with `OrdinaryCreateFromConstructor`, so the object it
@@ -13578,6 +13608,7 @@ impl RegisterVM {
             arg_start,
             arg_count,
             construct,
+            coerced,
             ..
         } = resume
         else {
@@ -13594,6 +13625,7 @@ impl RegisterVM {
             construct,
             return_pc,
             caller_code_id,
+            coerced,
         };
         // A clause that read the `length` before the conversion carries it,
         // so 7.3.18 answers once however many arguments it converts.
@@ -14775,7 +14807,7 @@ impl RegisterVM {
                 Self::refuse_a_regexp(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 let search = property_name_units(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 let end = match self.call_argument(&call, 1, heap)? {
-                    value if value.is_undefined() => units.len(),
+                    value if call.passed_undefined(1, value) => units.len(),
                     value => clamped_index(integer_argument(value, heap, realm)?, units.len()),
                 };
                 let start = end.checked_sub(search.len());
@@ -14852,7 +14884,7 @@ impl RegisterVM {
                     units.len(),
                 );
                 let end = match self.call_argument(&call, 1, heap)? {
-                    value if value.is_undefined() => units.len(),
+                    value if call.passed_undefined(1, value) => units.len(),
                     value => relative_index(integer_argument(value, heap, realm)?, units.len()),
                 };
                 let slice = units.get(start..end.max(start)).unwrap_or_default();
@@ -14879,7 +14911,7 @@ impl RegisterVM {
                     units.len(),
                 );
                 let second = match self.call_argument(&call, 1, heap)? {
-                    value if value.is_undefined() => units.len(),
+                    value if call.passed_undefined(1, value) => units.len(),
                     value => clamped_index(integer_argument(value, heap, realm)?, units.len()),
                 };
                 let slice = units
@@ -14905,7 +14937,7 @@ impl RegisterVM {
                 let width = integer_argument(self.call_argument(&call, 0, heap)?, heap, realm)?;
                 let width = usize::try_from(width).unwrap_or(0);
                 let filler = match self.call_argument(&call, 1, heap)? {
-                    value if value.is_undefined() => alloc::vec![0x20],
+                    value if call.passed_undefined(1, value) => alloc::vec![0x20],
                     value => property_name_units(value, heap, realm)?,
                 };
                 if width <= units.len() || filler.is_empty() {
@@ -15457,7 +15489,7 @@ impl RegisterVM {
     ) -> Result<Value, VMError> {
         let separator = self.call_argument(call, 0, heap)?;
         let limit = self.call_argument(call, 1, heap)?;
-        let limit = if limit.is_undefined() {
+        let limit = if call.passed_undefined(1, limit) {
             u32::MAX
         } else {
             crate::value::number_uint32(primitive_number(limit, heap)?)
@@ -15683,6 +15715,7 @@ impl RegisterVM {
                     construct: None,
                     return_pc: 0,
                     caller_code_id: None,
+                    coerced: 0,
                 };
                 self.wrapped_value(intrinsic, &call, heap, realm)?
             }
@@ -19604,6 +19637,7 @@ impl RegisterVM {
             return_pc: pc.saturating_sub(1),
             caller_code_id: *current_code_id,
             construct: None,
+            coerced: 0,
         };
         match self.convert_to_primitive(call, units, active_feedback, heap, realm)? {
             Conversion::Done(value) => {
@@ -19680,6 +19714,7 @@ impl RegisterVM {
                 resume: None,
                 construct: None,
                 caller_code_id: None,
+                coerced: 0,
             };
             self.conversion_depth = self.conversion_depth.saturating_add(1);
             let answered = self.call_intrinsic(intrinsic, call, units, heap, realm);
@@ -20798,6 +20833,7 @@ impl RegisterVM {
                 resume: None,
                 construct: None,
                 caller_code_id: None,
+                coerced: 0,
             },
             units,
             heap,
@@ -22715,6 +22751,7 @@ impl RegisterVM {
             construct: None,
             return_pc: call.return_pc,
             caller_code_id: call.caller_code_id,
+            coerced: 0,
         };
         self.enter_call_value(executor, units, active_feedback, heap, realm, call)
     }
@@ -23189,6 +23226,7 @@ impl RegisterVM {
                 construct: None,
                 return_pc: 0,
                 caller_code_id: None,
+                coerced: 0,
             };
             if let Some(code_id) =
                 self.enter_call_value(function, units, active_feedback, heap, realm, call)?
@@ -23946,6 +23984,7 @@ impl RegisterVM {
                             return_pc: pc.saturating_sub(1),
                             caller_code_id: current_code_id,
                             construct: None,
+                            coerced: 0,
                         };
                         match self.convert_to_primitive(
                             call,
@@ -24012,6 +24051,7 @@ impl RegisterVM {
                             return_pc: pc.saturating_sub(1),
                             caller_code_id: current_code_id,
                             construct: None,
+                            coerced: 0,
                         };
                         match self.convert_to_primitive(
                             call,
@@ -24245,6 +24285,7 @@ impl RegisterVM {
                             return_pc: pc.saturating_sub(1),
                             caller_code_id: current_code_id,
                             construct: None,
+                            coerced: 0,
                         };
                         match self.convert_to_primitive(
                             call,
@@ -24343,6 +24384,7 @@ impl RegisterVM {
                             caller_code_id: current_code_id,
                             resume: None,
                             construct: None,
+                            coerced: 0,
                         };
                         if let Some(code_id) = self.answer_with_a_method(
                             method,
@@ -25929,6 +25971,7 @@ impl RegisterVM {
                             resume: None,
                             caller_code_id: current_code_id,
                             construct: Some(Construction::Register(target)),
+                            coerced: 0,
                         };
                         // The same conversion a call of the native asks for,
                         // after the check the clause makes before it.
@@ -26035,6 +26078,7 @@ impl RegisterVM {
                             resume: None,
                             caller_code_id: current_code_id,
                             construct: Some(Construction::Register(target)),
+                            coerced: 0,
                         },
                     )? {
                         current_code_id = Some(code_id);
@@ -26071,6 +26115,7 @@ impl RegisterVM {
                             resume: None,
                             construct: None,
                             caller_code_id: current_code_id,
+                            coerced: 0,
                         },
                     )? {
                         current_code_id = Some(code_id);
@@ -26100,6 +26145,7 @@ impl RegisterVM {
                             resume: None,
                             construct: None,
                             caller_code_id: current_code_id,
+                            coerced: 0,
                         },
                     )? {
                         current_code_id = Some(code_id);
@@ -26128,6 +26174,7 @@ impl RegisterVM {
                         construct: None,
                         return_pc: pc,
                         caller_code_id: current_code_id,
+                        coerced: 0,
                     };
                     let callee = self.read_reg(func)?;
                     match self.enter_call_value(
@@ -26168,6 +26215,7 @@ impl RegisterVM {
                         construct: Some(Construction::Register(target)),
                         return_pc: pc,
                         caller_code_id: current_code_id,
+                        coerced: 0,
                     };
                     // 23.1.1.1 answers an Array of its own whichever way it
                     // was reached, so a native constructor takes the arguments
@@ -26500,6 +26548,7 @@ impl RegisterVM {
                                     construct: None,
                                     return_pc: pc,
                                     caller_code_id: current_code_id,
+                                    coerced: 0,
                                 };
                                 let units = CodeUnits {
                                     table,
@@ -28397,6 +28446,7 @@ mod tests {
             resume: None,
             caller_code_id: None,
             construct: None,
+            coerced: 0,
         };
         assert_eq!(
             RegisterVM::call_iterator_intrinsic(
