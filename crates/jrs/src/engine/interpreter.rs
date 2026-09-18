@@ -22673,19 +22673,21 @@ impl RegisterVM {
             .as_smi()
             .unwrap_or(0)
             .max(0);
-        let held = promise::slot(heap, arena, JSON_ARENA_CHILDREN);
+        let holds = promise::slot(heap, arena, JSON_ARENA_CHILDREN);
         let keyed = Self::json_node_slot(arena, node, JSON_NODE_NAMED, heap) == VALUE_TRUE;
         if !keyed {
             if index >= count {
                 return VALUE_UNDEFINED;
             }
             let at = u32::try_from(first.saturating_add(index)).unwrap_or(u32::MAX);
-            return promise::slot(heap, held, at);
+            return promise::slot(heap, holds, at);
         }
         let names = promise::slot(heap, arena, JSON_ARENA_NAMES);
         let Some(text) = heap.strings.to_utf16(name) else {
             return VALUE_UNDEFINED;
         };
+        // 25.5.1.1 takes the last entry of that name, which is the one the
+        // object kept.
         let mut at = count;
         while at > 0 {
             at = at.saturating_sub(1);
@@ -22696,7 +22698,7 @@ impl RegisterVM {
                 .to_utf16(held)
                 .is_some_and(|other| other == text)
             {
-                return promise::slot(heap, held, slot);
+                return promise::slot(heap, holds, slot);
             }
         }
         VALUE_UNDEFINED
