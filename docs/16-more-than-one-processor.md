@@ -80,7 +80,7 @@ implements it rather than reopening it.
 | 9 | A second idle thread. The idle thread stands on the boot stack, and the machine has one boot stack. | `crates/kernel/bin/src/task.rs`, line 40 | S8 |
 | 10 | Run queues per processor. `Machine` holds one `Scheduler`, and eighteen signatures take `&mut Scheduler`. | `crates/kernel/core/src/machine.rs`, line 23; `crates/kernel/syscall/src/dispatch.rs`, line 38 | S9 |
 | 11 | Remote invalidation. `LocalTlb` invalidates on the calling processor and nowhere else. | `crates/kernel/hal-x86_64/src/paging.rs`, line 24 | S10 |
-| 12 | A clock that counts once. `TICKS` is one counter and every processor's timer would raise it. | `crates/kernel/hal-x86_64/src/timer.rs`, line 81 | S6 |
+| 12 | A clock that counts once. `TICKS` is one counter, and `acknowledge` raises it through `record_tick` for a timer vector, whichever processor took it. | `crates/kernel/hal-x86_64/src/timer.rs`, line 81; `crates/kernel/hal-x86_64/src/interrupts.rs`, line 195 | S6 |
 
 ## 16.5 Decision D1: how a processor finds its own data
 
@@ -202,9 +202,13 @@ processor expiring deadlines is enough; `kernel_ipc::expire` already walks
 the deadline list to the first entry that has not passed, O(woken).
 Reason 3: a time slice is a share of a processor, so each processor has to
 charge its own.
-Result: `on_timer_tick` splits in two. The boot processor runs what it
-runs today. An application processor charges its own current thread and
-switches when the slice is spent.
+Result: two paths split, not one. `interrupts::acknowledge` calls
+`timer::record_tick` for a timer vector
+(`crates/kernel/hal-x86_64/src/interrupts.rs`, line 195), and that call
+happens on the boot processor alone. `on_timer_tick`
+(`crates/kernel/bin/src/main.rs`, line 241) keeps on the boot processor
+what it does today; on an application processor it charges that
+processor's own current thread and switches when the slice is spent.
 
 **The option not taken: one processor sends a tick IPI to the others.** It
 keeps one timer and makes the slice exact across processors. It costs one
@@ -416,8 +420,8 @@ Size: S.
 
 The redistribution question D-124 asks is answered in the manual's own
 notices page: "you may publish an unmodified copy". The file is 26.6 MB
-against a packed repository of 38 MB, which is the cost of the step and
-the reason it is a step and not a line of another one.
+against a packed repository of 160 MB, a sixth of it, which is the cost of
+the step and the reason it is a step and not a line of another one.
 
 ### Produces
 
@@ -699,7 +703,9 @@ Size: L.
    (`crates/kernel/bin/src/main.rs`, line 146), so an end-of-interrupt on
    another processor would wait for a system call to finish, and a local
    APIC that is not acknowledged delivers nothing after that.
-10. Split `on_timer_tick` as D3 says.
+10. Split both tick paths as D3 says: `acknowledge` raises `TICKS` on
+    the boot processor alone, and `on_timer_tick` charges the calling
+    processor's own current thread.
 
 ### Produces
 
