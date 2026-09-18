@@ -52,8 +52,8 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-98 903 cases of 785 files: 84 046 pass, 3311 answer differently and
-11 546 are refused.
+99 216 cases of 785 files: 84 499 pass, 3319 answer differently and
+11 398 are refused.
 
 `--configuration` opens every connection of a run under one of nine
 page-size, encoding and journal-mode settings, which D-275 decides.
@@ -61,7 +61,7 @@ What each answers, over the same files:
 
 | Configuration | Passed | Answered differently | Refused |
 |---------------|-------:|---------------------:|--------:|
-| `utf8-4096-delete` | 84 046 | 3311 | 11 546 |
+| `utf8-4096-delete` | 84 499 | 3319 | 11 398 |
 | `utf16le-4096-delete` | 61 214 | 2392 | 9500 |
 | `utf16be-4096-delete` | 61 229 | 2392 | 9500 |
 | `utf8-512-delete` | 61 073 | 2452 | 9435 |
@@ -73,7 +73,7 @@ What each answers, over the same files:
 
 The counts move between runs of one configuration only where a file
 reaches the deadline, which D-302 sets at three minutes. Only the
-first row is a run after D-286 to D-307, the fourth one after D-296; the other seven
+first row is a run after D-286 to D-308, the fourth one after D-296; the other seven
 were measured before them and are lower than they would read now.
 `testfixture` is built with `SQLITE_DEFAULT_PAGE_SIZE=1024`, which
 `main.mk` line 1784 sets, so the fourth row is the page size the files
