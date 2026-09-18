@@ -6951,19 +6951,29 @@ impl RegisterVM {
         {
             return Ok(false);
         }
-        // Step 2: a descriptor that asks for a writable the property no longer
-        // has is refused, and one that asks for the writable it has is not.
-        if !writable && (descriptor.writable == Some(true) || descriptor.value.is_some()) {
-            return Ok(false);
-        }
         let Some(value) = descriptor.value else {
+            // Step 1: a descriptor with no value is 10.1.6.3 on the property
+            // as it stands, which refuses a writable it no longer has.
+            if !writable && descriptor.writable == Some(true) {
+                return Ok(false);
+            }
             if descriptor.writable == Some(false) {
                 heap.freeze_array_length(object)?;
             }
             return Ok(true);
         };
+        // Steps 3 to 5 convert the value and refuse one that is no length,
+        // before step 11 reads the writable the property has.
         let wanted = Self::array_length_of(value, heap, realm)?;
         let current = heap.array_length(object).ok_or(VMError::TypeError)?;
+        // Steps 10 and 11: a length that is not writable takes no new value,
+        // and 10.1.6.3 answers true for the one it already holds.
+        if !writable {
+            if descriptor.writable == Some(true) {
+                return Ok(false);
+            }
+            return Ok(wanted == current);
+        }
         let stopped = if wanted < current {
             Self::shorten_array(object, wanted, heap)?
         } else {
