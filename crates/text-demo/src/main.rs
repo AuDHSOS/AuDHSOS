@@ -729,8 +729,7 @@ fn paint_stream(
                                 y2,
                                 line,
                             } => {
-                                let (p0, p1, p2) =
-                                    ((f(x0), f(y0)), (f(x1), f(y1)), (f(x2), f(y2)));
+                                let (p0, p1, p2) = ((f(x0), f(y0)), (f(x1), f(y1)), (f(x2), f(y2)));
                                 // p3 = p0 + projection of p0p1 onto the line
                                 // perpendicular to p0p2, through p0.
                                 let n = (p2.0 - p0.0, p2.1 - p0.1);
@@ -781,8 +780,7 @@ fn paint_stream(
                                 line,
                             } => {
                                 // Angle in half-turns, counter-clockwise.
-                                let ang = (gy - f(y)).atan2(gx - f(x))
-                                    / std::f64::consts::PI;
+                                let ang = (gy - f(y)).atan2(gx - f(x)) / std::f64::consts::PI;
                                 let ang = if ang < 0.0 { ang + 2.0 } else { ang };
                                 let (s0, s1) = (f(start), f(end));
                                 let t = if (s1 - s0).abs() < 1e-12 {
