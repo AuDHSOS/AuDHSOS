@@ -1798,6 +1798,25 @@ impl RegisterLowerer {
             }
         }
         for name in &names {
+            // 10.2.11 step 28 passes over a name the steps before it have
+            // bound already, and step 22 binds `arguments` to the object
+            // 10.4.4 makes, which a `var` of that name does not replace: the
+            // name keeps the register the object stands in.
+            if name == ARGUMENTS
+                && let Some(register) = self.code.arguments_register
+                && !self.bindings.contains_key(name)
+            {
+                self.bindings.insert(
+                    String::from(ARGUMENTS),
+                    RegisterBinding {
+                        storage: RegisterBindingStorage::Register(register),
+                        value_type: Some(RegisterType::Unknown),
+                        mutable: true,
+                        stable_function_identity: false,
+                    },
+                );
+                continue;
+            }
             if !self.bindings.contains_key(name) {
                 self.declare(name, true)?;
                 self.bindings.get_mut(name)?.value_type = Some(RegisterType::Undefined);
