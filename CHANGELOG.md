@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- The suite's own tester runs a `testfixture` script in this
+  interpreter, carries `$::cmdlinearg`, and answers rather than raises
+  for six more commands. D-299 records it. Twenty more files answer a
+  case, `pragma.test` going from none to 48.
+
 - The suite's own tester reaches the bytes the harness holds for
   `hexio_read` and `hexio_write`, which the new `read` and `write`
   requests carry as hexadecimal digits. D-297 records it. `corruptF.test`

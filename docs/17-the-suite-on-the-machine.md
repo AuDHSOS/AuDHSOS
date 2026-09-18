@@ -52,8 +52,8 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-96 338 cases of 757 files: 81 710 pass, 3134 answer differently and
-11 494 are refused.
+96 590 cases of 777 files: 81 892 pass, 3338 answer differently and
+11 360 are refused.
 
 `--configuration` opens every connection of a run under one of nine
 page-size, encoding and journal-mode settings, which D-275 decides.
@@ -61,7 +61,7 @@ What each answers, over the same files:
 
 | Configuration | Passed | Answered differently | Refused |
 |---------------|-------:|---------------------:|--------:|
-| `utf8-4096-delete` | 81 710 | 3134 | 11 494 |
+| `utf8-4096-delete` | 81 892 | 3338 | 11 360 |
 | `utf16le-4096-delete` | 61 214 | 2392 | 9500 |
 | `utf16be-4096-delete` | 61 229 | 2392 | 9500 |
 | `utf8-512-delete` | 61 073 | 2452 | 9435 |
@@ -73,7 +73,7 @@ What each answers, over the same files:
 
 The counts move by tens between runs of one configuration, because the
 files the deadline ends are counted with the cases they ran. Only the
-first row is a run after D-286 to D-298, the fourth one after D-296; the other seven
+first row is a run after D-286 to D-299, the fourth one after D-296; the other seven
 were measured before them and are lower than they would read now.
 `testfixture` is built with `SQLITE_DEFAULT_PAGE_SIZE=1024`, which
 `main.mk` line 1784 sets, so the fourth row is the page size the files
@@ -359,7 +359,10 @@ Size: S.
    write reads the database again from what it left.
 10. The compile options a file reads as `$::sqlite_options(name)` are an
     array of the tester, each nought where `ifcapable` answers that this
-    engine has none of it.
+    engine has none of it, and `$::cmdlinearg` carries the defaults of
+    the suite's own tester.
+11. `testfixture` runs the script it was given in this interpreter, and
+    `launch_testfixture` names no channel.
 
 ### Produces
 

@@ -7,6 +7,17 @@
 # holds one writer per file and as many connections over it as a file
 # opens, so only the second round runs here.
 
+# `launch_testfixture` starts another `testfixture` and `testfixture`
+# runs a script in it over a channel. This harness holds one
+# interpreter and one writer per file, so the script runs here and the
+# channel names nothing.
+proc launch_testfixture {args} { return "" }
+
+proc testfixture {chan script args} {
+  if {[llength $args] > 0} { return "" }
+  return [uplevel #0 $script]
+}
+
 proc do_multiclient_test {varname script} {
   faultsim_delete_and_reopen
   proc code1 {tcl} { uplevel #0 $tcl }

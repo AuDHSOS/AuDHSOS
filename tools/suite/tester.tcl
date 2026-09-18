@@ -465,7 +465,7 @@ foreach cmd {
   sqlite3_config sqlite3_db_config
   sqlite3_db_status sqlite3_status
   sqlite3_reset_auto_extension sqlite3_create_function sqlite3_limit
-  sqlite3_extended_result_codes sqlite3_connection_pointer sqlite3_prepare
+  sqlite3_extended_result_codes sqlite3_prepare
   sqlite3_prepare_v2 sqlite3_prepare_v3 sqlite3_finalize sqlite3_step
   sqlite3_column_count sqlite3_errcode sqlite3_errmsg sqlite3_bind_parameter_count
   sqlite3_enable_shared_cache sqlite3_release_memory sqlite3_db_release_memory
@@ -474,7 +474,7 @@ foreach cmd {
   testvfs test_syscall test_sqlite3_log
   register_wholenumber_module register_echo_module register_tclvar_module
   register_fs_module register_dbstat_vtab register_schema_module
-  load_static_extension run_thread_tests test_cli_invocation
+  run_thread_tests test_cli_invocation
   test_find_cli test_find_sqldiff
   file_control_chunksize_test file_control_sizehint_test file_control_lockproxy_test
   file_control_persist_wal file_control_powersafe_overwrite file_control_vfsname
@@ -587,6 +587,20 @@ proc optimization_control {args} { return "" }
 # them, so a case that reads one of those answers differently rather
 # than ending the file.
 proc sqlite3_test_control {args} { return 0 }
+proc sqlite3_soft_heap_limit64 {args} { return 0 }
+proc sqlite3_config_uri {args} { return 0 }
+proc sqlite3_register_cksumvfs {args} { return 0 }
+proc sqlite3_multiplex_initialize {args} { return 0 }
+
+# `sqlite3_connection_pointer` answers the pointer the C library holds
+# the connection at, which the commands that take one are stand-ins
+# for here, so the name of the connection stands for it.
+proc sqlite3_connection_pointer {name} { return $name }
+
+# `load_static_extension` links a module of the C library into the
+# connection, which this engine holds none of, so the functions the
+# module carries stay missing.
+proc load_static_extension {args} { return "" }
 proc extra_schema_checks {args} { return 1 }
 proc test_restore_config_pagecache {args} { return 0 }
 proc unregister_devsim {args} { return "" }
@@ -791,6 +805,25 @@ foreach option {
   cast check conflict datetime floatingpoint or_opt stat4 update_delete_limit
 } { set ::sqlite_options($option) 1 }
 set ::sqlite_options(default_autovacuum) 0
+
+# What the suite's own tester takes off the command line, which this
+# harness takes none of: the defaults of `tester.tcl` lines 378 to 391.
+array set ::cmdlinearg {
+  soft-heap-limit 0
+  hard-heap-limit 0
+  maxerror 1000
+  malloctrace 0
+  backtrace 10
+  binarylog 0
+  soak 0
+  file-retries 0
+  file-retry-delay 0
+  start {}
+  match {}
+  verbose {}
+  output {}
+  testdir testdir
+}
 set ::SQLITE_MAX_WORKER_THREADS 0
 
 set ::tcl_precision 15
