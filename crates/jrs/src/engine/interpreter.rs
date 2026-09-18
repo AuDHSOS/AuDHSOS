@@ -5846,34 +5846,6 @@ impl RegisterVM {
                 realm,
             );
         }
-        // 23.1.3.30 and 23.1.3.34 ask a comparator of the Script about each
-        // pair, which is a frame this call opens.
-        if matches!(
-            intrinsic,
-            Intrinsic::ArrayPrototypeSort | Intrinsic::ArrayPrototypeToSorted
-        ) {
-            let comparator = self.call_argument(&call, 0, heap)?;
-            if !comparator.is_undefined() {
-                // Step 1 refuses a comparator that is not callable before it
-                // looks at the receiver.
-                if !Self::is_callable(comparator, heap) {
-                    return Err(type_error(heap, realm, "comparator is not callable"));
-                }
-                let object = Self::coerce_object(call.receiver, heap, realm)?;
-                let length = Self::array_like_length(heap, object, realm)?;
-                return self.begin_the_sort(
-                    intrinsic,
-                    object,
-                    length,
-                    comparator,
-                    call,
-                    units,
-                    active_feedback,
-                    heap,
-                    realm,
-                );
-            }
-        }
         // Step 8 of 24.1.1.1 and step 5 of 24.3.1.1 add every element the
         // iterable answers, which a walk of 7.4.2 reaches.
         if Self::constructs_a_collection(intrinsic) {
@@ -6782,6 +6754,27 @@ impl RegisterVM {
                 index,
                 hint,
                 Some(index_value(length)),
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
+        // 23.1.3.30 and 23.1.3.34 read every index, ask a comparator of the
+        // Script about each pair and write the order back: three calls this
+        // clause opens a frame for, so the sort carries its own state.
+        if matches!(
+            intrinsic,
+            Intrinsic::ArrayPrototypeSort | Intrinsic::ArrayPrototypeToSorted
+        ) {
+            let object = Self::coerce_object(call.receiver, heap, realm)?;
+            let comparator = self.call_argument(&call, 0, heap)?;
+            return self.begin_the_sort(
+                intrinsic,
+                object,
+                length,
+                comparator,
                 call,
                 units,
                 active_feedback,
@@ -9849,6 +9842,11 @@ impl RegisterVM {
     ) -> Result<Option<u32>, VMError> {
         Self::refuse_a_sort_of_23_2(object, heap)?;
         let in_place = intrinsic == Intrinsic::ArrayPrototypeSort;
+        // 23.1.3.34 step 3 makes the Array before it reads an index, and
+        // 10.4.2.2 refuses one longer than 2^32-1.
+        if !in_place {
+            Self::refuse_long_copy(length, heap, realm)?;
+        }
         let items = realm.array(heap, 0)?;
         let copy = realm.array(heap, 0)?;
         let record = promise::record(
@@ -9903,7 +9901,7 @@ impl RegisterVM {
             let called = match phase {
                 SORT_SCANNING | SORT_TAKING => self.scan_for_the_sort(record, phase, heap)?,
                 SORT_WRITING | SORT_WROTE => self.write_for_the_sort(record, phase, heap, realm)?,
-                _ => self.merge_for_the_sort(record, phase, heap)?,
+                _ => self.merge_for_the_sort(record, phase, heap, realm)?,
             };
             let Some((function, receiver, arguments)) = called else {
                 // The phase is done and named the next one, or the clause has
@@ -10021,6 +10019,7 @@ impl RegisterVM {
         record: Value,
         phase: i32,
         heap: &mut GenerationalHeap,
+        realm: &Realm,
     ) -> Result<Option<(Value, Value, u16)>, VMError> {
         let count = promise::slot(heap, record, SORT_COUNT)
             .as_smi()
@@ -10078,27 +10077,31 @@ impl RegisterVM {
             // 23.1.3.30.1 steps 1 to 3 order undefined last without asking
             // the comparator at all.
             if left_value.is_undefined() || right_value.is_undefined() {
-                let takes_the_first = !left_value.is_undefined();
-                let (value, next_first, next_second) = if takes_the_first {
-                    (left_value, first.saturating_add(1), second)
-                } else {
-                    (right_value, first, second.saturating_add(1))
-                };
-                Self::place_sorted(copy, target, value, heap)?;
-                promise::set_slot(heap, record, SORT_FIRST, Value::from_smi(next_first))?;
-                promise::set_slot(heap, record, SORT_SECOND, Value::from_smi(next_second))?;
-                promise::set_slot(
-                    heap,
+                Self::take_one_of_the_pair(
                     record,
-                    SORT_TARGET,
-                    Value::from_smi(target.saturating_add(1)),
+                    !left_value.is_undefined(),
+                    (left_value, right_value),
+                    copy,
+                    heap,
+                )?;
+                return Ok(None);
+            }
+            let comparator = promise::slot(heap, record, SORT_COMPARATOR);
+            if comparator.is_undefined() {
+                let left_key = Self::sort_key(left_value, heap, realm)?;
+                let right_key = Self::sort_key(right_value, heap, realm)?;
+                Self::take_one_of_the_pair(
+                    record,
+                    left_key <= right_key,
+                    (left_value, right_value),
+                    copy,
+                    heap,
                 )?;
                 return Ok(None);
             }
             promise::set_slot(heap, record, SORT_LEFT_VALUE, left_value)?;
             promise::set_slot(heap, record, SORT_RIGHT_VALUE, right_value)?;
             promise::set_slot(heap, record, SORT_PHASE, Value::from_smi(SORT_COMPARING))?;
-            let comparator = promise::slot(heap, record, SORT_COMPARATOR);
             return Ok(Some((comparator, VALUE_UNDEFINED, 2)));
         }
         // The rest of whichever run is left goes over as it stands.
@@ -10116,6 +10119,41 @@ impl RegisterVM {
         }
         // The next pair of runs, and the next pass once none is left.
         Self::open_the_next_run(record, right, count, items, copy, heap)
+    }
+
+    /// Takes one value of the pair the merge is at into the copy, and moves
+    /// the run it came from one place on.
+    fn take_one_of_the_pair(
+        record: Value,
+        takes_the_first: bool,
+        pair: (Value, Value),
+        copy: ObjectRef,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        let first = promise::slot(heap, record, SORT_FIRST)
+            .as_smi()
+            .unwrap_or(0);
+        let second = promise::slot(heap, record, SORT_SECOND)
+            .as_smi()
+            .unwrap_or(0);
+        let target = promise::slot(heap, record, SORT_TARGET)
+            .as_smi()
+            .unwrap_or(0);
+        let (value, next_first, next_second) = if takes_the_first {
+            (pair.0, first.saturating_add(1), second)
+        } else {
+            (pair.1, first, second.saturating_add(1))
+        };
+        Self::place_sorted(copy, target, value, heap)?;
+        promise::set_slot(heap, record, SORT_FIRST, Value::from_smi(next_first))?;
+        promise::set_slot(heap, record, SORT_SECOND, Value::from_smi(next_second))?;
+        promise::set_slot(
+            heap,
+            record,
+            SORT_TARGET,
+            Value::from_smi(target.saturating_add(1)),
+        )?;
+        Ok(())
     }
 
     /// The runs the merge takes next: the pair after the one it finished, the
@@ -14303,55 +14341,6 @@ impl RegisterVM {
                     position = position.saturating_add(1);
                 }
                 Self::array_from_holes(values, heap, realm)
-            }
-            // 23.1.3.30 and 23.1.3.34: the elements in the order 23.1.3.30.1
-            // compares them, written back over the receiver or into a copy.
-            Intrinsic::ArrayPrototypeSort | Intrinsic::ArrayPrototypeToSorted => {
-                Self::refuse_a_sort_of_23_2(object, heap)?;
-                let comparator = self.call_argument(&call, 0, heap)?;
-                if !comparator.is_undefined() {
-                    if !Self::is_callable(comparator, heap) {
-                        return Err(type_error(heap, realm, "comparator is not callable"));
-                    }
-                    return Err(VMError::Unsupported("a sort with a comparator"));
-                }
-                let sorts_in_place = intrinsic == Intrinsic::ArrayPrototypeSort;
-                // 23.1.3.30 step 5 passes over a hole; 23.1.3.34 step 5 reads
-                // it as undefined and keeps the length.
-                let mut sorted = Vec::new();
-                for position in Self::scan_range(0, length) {
-                    self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
-                    let found = Self::element_at(heap, object, position)?;
-                    match found {
-                        Some(value) => sorted.push(value),
-                        None if !sorts_in_place => sorted.push(VALUE_UNDEFINED),
-                        None => {}
-                    }
-                }
-                // 23.1.3.30.1 puts undefined last and orders the rest by the
-                // code units of their `ToString`, which a key holds so the
-                // comparison itself allocates nothing.
-                let mut keyed = Vec::with_capacity(sorted.len());
-                for value in sorted {
-                    keyed.push((Self::sort_key(value, heap, realm)?, value));
-                }
-                self.charge_for_scan(length)?;
-                keyed.sort_by(|left, right| left.0.cmp(&right.0));
-                let values: Vec<Option<Value>> =
-                    keyed.into_iter().map(|(_, value)| Some(value)).collect();
-                if !sorts_in_place {
-                    return Self::array_from_holes(values, heap, realm);
-                }
-                let count = i64::try_from(values.len()).unwrap_or(i64::MAX);
-                for (offset, value) in values.into_iter().enumerate() {
-                    let index = u32::try_from(offset).map_err(|_| VMError::PropertyLimit)?;
-                    Self::place_element(heap, object, index, value, realm)?;
-                }
-                // Step 8 deletes the indices the holes left behind.
-                for position in Self::scan_range(count, length) {
-                    Self::delete_element_or_throw(object, position, heap, realm)?;
-                }
-                Ok(Value::from_object(object))
             }
             // 23.1.3.39: a copy with one index replaced, which 23.1.3.39 step
             // 5 refuses for an index outside the Array.

@@ -6455,6 +6455,12 @@ fn the_sort_of_23_1_3_30_asks_the_comparator_about_each_pair() -> Result<(), Err
         // step 7 writes one through its setter.
         "var o={length:2};var w=[];Object.defineProperty(o,0,{get:function(){return 2},set:function(v){w.push('0='+v)},configurable:true});Object.defineProperty(o,1,{get:function(){return 1},set:function(v){w.push('1='+v)},configurable:true});Array.prototype.sort.call(o,function(x,y){return x-y});w.join('|')",
         "var a=[3,1];Object.defineProperty(a,0,{get:function(){return 9},set:function(v){this.w=v},configurable:true});a.sort(function(x,y){return x-y});a.w+','+a[1]",
+        // 23.1.3.30.1 step 5 orders the values the call named no comparator
+        // for by the code units of their `ToString`.
+        "['b','a',undefined,'c'].sort().join(',')",
+        "[10,9,1].sort().join(',')",
+        "var a=[1,,3];a.sort();a.length+','+(1 in a)+','+(2 in a)",
+        "var a=[undefined,'c',,'b',undefined,,'a','d'];Object.defineProperty(a,'2',{get:function(){a.push('x');return this.foo},set:function(v){this.foo=v}});a.sort();a[0]+','+a[1]+','+('2' in a)+','+a[3]",
         // An accessor with no getter reads undefined, and one with no setter
         // refuses the write of step 7.
         "var o={length:1};Object.defineProperty(o,0,{set:function(v){},configurable:true});Array.prototype.sort.call(o,function(x,y){return 0});typeof o[0]",
