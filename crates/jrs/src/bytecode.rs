@@ -1280,6 +1280,9 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Star(done));
         let step = self.allocate_register()?;
         let next = self.allocate_register()?;
+        // 8.6.2 and 13.15.5.5 close an iterator that is not done where an
+        // element throws, and 7.4.11 step 5 keeps that value.
+        let protected = self.code.instructions.len();
         for index in 0..array.len() {
             // 13.15.5.5 evaluates the target of an element before the
             // iterator steps, which 8.6.2 has no reference to evaluate.
@@ -1304,6 +1307,10 @@ impl RegisterLowerer {
                 slot: next_slot,
             });
             self.code.emit(Instruction::Star(next));
+            // 7.4.6 step 2 and 7.4.7 step 2 set `[[Done]]` where the step
+            // throws, so 8.6.2 closes nothing after one that did.
+            self.code.emit(Instruction::LdaTrue);
+            self.code.emit(Instruction::Star(done));
             let step_slot = self.feedback_slot(FeedbackKind::Call)?;
             self.code.emit(Instruction::CallMethod {
                 receiver: iterator,
@@ -1328,6 +1335,14 @@ impl RegisterLowerer {
                 name: value_name,
                 slot: value_slot,
             });
+            // The step answered, so the record is not done and an element
+            // that throws below closes the iterator.
+            let held = self.allocate_register()?;
+            self.code.emit(Instruction::Star(held));
+            self.code.emit(Instruction::LdaFalse);
+            self.code.emit(Instruction::Star(done));
+            self.code.emit(Instruction::Ldar(held));
+            self.release_register(held)?;
             let bound = self.code.emit(Instruction::Jump(0));
             // The iterator answered done, so the record says so and the
             // element is undefined, which is also where a pattern that was
@@ -1409,6 +1424,10 @@ impl RegisterLowerer {
                 slot: next_slot,
             });
             self.code.emit(Instruction::Star(next));
+            // 7.4.6 step 2 sets `[[Done]]` where the step throws, so the
+            // rest element closes nothing after one that did.
+            self.code.emit(Instruction::LdaTrue);
+            self.code.emit(Instruction::Star(done));
             let step_slot = self.feedback_slot(FeedbackKind::Call)?;
             self.code.emit(Instruction::CallMethod {
                 receiver: iterator,
@@ -1426,6 +1445,9 @@ impl RegisterLowerer {
                 slot: done_slot,
             });
             let exhausted = self.code.emit(Instruction::JumpIfTrue(0));
+            // The step answered, so the record is not done again.
+            self.code.emit(Instruction::LdaFalse);
+            self.code.emit(Instruction::Star(done));
             let value_name = self.string_constant(&"value".encode_utf16().collect::<Vec<_>>())?;
             let value_slot = self.feedback_slot(FeedbackKind::NamedAccess)?;
             self.code.emit(Instruction::GetNamed {
@@ -1469,7 +1491,8 @@ impl RegisterLowerer {
             self.release_register(count)?;
             self.release_register(collected)?;
         }
-        // 7.4.9 closes an iterator that is not done, and an iterator with no
+        let protected_end = self.code.instructions.len();
+        // 7.4.11 closes an iterator that is not done, and an iterator with no
         // `return` is closed by doing nothing.
         self.code.emit(Instruction::Ldar(done));
         let closed = self.code.emit(Instruction::JumpIfTrue(0));
@@ -1500,6 +1523,12 @@ impl RegisterLowerer {
         let end = self.code.instructions.len();
         self.patch_jump(closed, end)?;
         self.patch_jump(skip, end)?;
+        if protected < protected_end {
+            let over = self.code.emit(Instruction::Jump(0));
+            self.lower_pattern_close_on_throw(iterator, next, done, protected, protected_end)?;
+            let after = self.code.instructions.len();
+            self.patch_jump(over, after)?;
+        }
         self.release_register(next)?;
         self.release_register(step)?;
         self.release_register(done)?;
@@ -8761,6 +8790,65 @@ impl RegisterLowerer {
         ));
         let after = self.code.instructions.len();
         self.patch_jump(skip, after)?;
+        Some(())
+    }
+
+    /// The handler 8.6.2 and 13.15.5.5 give an array pattern: an iterator
+    /// that is not done is closed and the value the element threw is thrown
+    /// again.
+    fn lower_pattern_close_on_throw(
+        &mut self,
+        iterator: crate::engine::bytecode::Reg,
+        scratch: crate::engine::bytecode::Reg,
+        done: crate::engine::bytecode::Reg,
+        protected: usize,
+        protected_end: usize,
+    ) -> Option<()> {
+        use crate::engine::bytecode::{ExceptionHandler, FeedbackKind, Instruction};
+        let thrown = self.allocate_register()?;
+        let handler_pc = self.code.instructions.len();
+        self.code.emit(Instruction::Ldar(done));
+        let finished = self.code.emit(Instruction::JumpIfTrue(0));
+        let close_start = self.code.instructions.len();
+        let return_name = self.string_constant(&"return".encode_utf16().collect::<Vec<_>>())?;
+        let return_slot = self.feedback_slot(FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetNamed {
+            obj: iterator,
+            name: return_name,
+            slot: return_slot,
+        });
+        self.code.emit(Instruction::Star(scratch));
+        let present = self.code.emit(Instruction::JumpIfNotNullish(0));
+        let absent = self.code.emit(Instruction::Jump(0));
+        let call = self.code.instructions.len();
+        self.patch_jump(present, call)?;
+        let close_slot = self.feedback_slot(FeedbackKind::Call)?;
+        self.code.emit(Instruction::CallMethod {
+            receiver: iterator,
+            func: scratch,
+            arg_start: scratch,
+            arg_count: 0,
+            slot: close_slot,
+        });
+        let close_end = self.code.instructions.len();
+        let rethrow = self.code.instructions.len();
+        self.patch_jump(finished, rethrow)?;
+        self.patch_jump(absent, rethrow)?;
+        self.code.emit(Instruction::Ldar(thrown));
+        self.code.emit(Instruction::Throw);
+        self.code.handlers.push(ExceptionHandler {
+            start_pc: u32::try_from(close_start).ok()?,
+            end_pc: u32::try_from(close_end).ok()?,
+            handler_pc: u32::try_from(rethrow).ok()?,
+            exception: scratch,
+        });
+        self.code.handlers.push(ExceptionHandler {
+            start_pc: u32::try_from(protected).ok()?,
+            end_pc: u32::try_from(protected_end).ok()?,
+            handler_pc: u32::try_from(handler_pc).ok()?,
+            exception: thrown,
+        });
+        self.release_register(thrown)?;
         Some(())
     }
 
