@@ -12407,12 +12407,12 @@ impl RegisterVM {
         value: Value,
         heap: &mut GenerationalHeap,
         realm: &Realm,
-    ) -> Result<(), VMError> {
+    ) -> Result<bool, VMError> {
         let wanted = Self::array_length_of(value, heap, realm)?;
         // 10.4.2.4 step 2: a `length` that is no longer writable takes no
         // value at all, which 10.1.9.1 answers false for.
         if heap.array_length_is_writable(object) != Some(true) {
-            return Ok(());
+            return Ok(false);
         }
         let current = heap.array_length(object).ok_or(VMError::TypeError)?;
         let stopped = if wanted < current {
@@ -12426,7 +12426,7 @@ impl RegisterVM {
             object,
             stopped.map_or(wanted, |index| index.saturating_add(1)),
         )?;
-        Ok(())
+        Ok(stopped.is_none())
     }
 
     fn set_array_like_length(
@@ -24075,7 +24075,16 @@ impl RegisterVM {
                     // index at or above the new one.
                     if units.as_slice() == LENGTH_NAME && heap.array_length(oref).is_some() {
                         let wanted = self.acc;
-                        Self::set_array_length(oref, wanted, heap, realm)?;
+                        // 10.1.9.1 step 4.d: a define that answers false is a
+                        // TypeError for a strict write and nothing for any
+                        // other.
+                        if !Self::set_array_length(oref, wanted, heap, realm)? && strict {
+                            return Err(type_error(
+                                heap,
+                                realm,
+                                "cannot write a property that is not writable",
+                            ));
+                        }
                         return Ok(None);
                     }
                     let name = PropertyKey::String(heap.strings.intern_units(units)?);
