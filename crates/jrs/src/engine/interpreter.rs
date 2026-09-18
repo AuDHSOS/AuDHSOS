@@ -680,6 +680,21 @@ pub enum Resume {
         /// Root holding the value written.
         value: Root,
     },
+    /// A clause of 22.2.6 read a property whose value a getter of the Script
+    /// answers, and runs again once it has answered.
+    ///
+    /// The record holds the receiver and every value the clause has read, so
+    /// each property is read once however often the clause runs.
+    Property {
+        /// The intrinsic that asked, by [`Intrinsic::id`].
+        intrinsic: u32,
+        /// Root holding the record of the reads.
+        state: Root,
+        /// First argument register of the call.
+        arg_start: Reg,
+        /// Number of arguments the call passed.
+        arg_count: u16,
+    },
     /// 23.1.3.23 wrote an element through a setter of the Script, and takes
     /// the walk back at the argument after it.
     ///
@@ -711,6 +726,15 @@ pub enum Resume {
         /// Root holding what the clause answers.
         answer: Root,
     },
+}
+
+/// What a read of a property of 22.2.6 answered.
+enum Cached {
+    /// The value, which the record now holds.
+    Value(Value),
+    /// A getter of the Script took the read over, and carries the code id of
+    /// the frame it opened.
+    Entered(Option<u32>),
 }
 
 /// Whether a clause of 22.1.3 found a method of its argument to answer with.
@@ -865,6 +889,19 @@ const ITERATOR_WALK_LENGTH: i32 = 8;
 /// 7.4.11 is closing the iterator for a step of the walk that threw, whose
 /// value the record keeps and the close leaves with.
 const ITERATOR_WALK_ABRUPT: i32 = 9;
+
+/// The `this` value of a clause of 22.2.6, in its record.
+const REGEXP_RECORD_RECEIVER: u32 = 0;
+/// The slot the getter the clause left for answers into.
+const REGEXP_RECORD_PENDING: u32 = 1;
+/// The step the clause has reached.
+const REGEXP_RECORD_PHASE: u32 = 2;
+/// What `Get(rx, "flags")` answered.
+const REGEXP_RECORD_FLAGS: u32 = 3;
+/// What `Get(rx, "exec")` answered.
+const REGEXP_RECORD_EXEC: u32 = 4;
+/// How many slots the record of a clause of 22.2.6 holds.
+const REGEXP_RECORD_SLOTS: usize = 5;
 /// The walk of 7.4.2 has not called the `@@iterator` yet.
 const ITERATOR_WALK_STARTING: i32 = 0;
 /// It is waiting for the `@@iterator` it called.
@@ -2831,6 +2868,7 @@ impl RegisterVM {
             // answers here.
             // The dispatch that can open a frame reaches these before this.
             Intrinsic::ReflectConstruct
+            | Intrinsic::RegExpPrototypeReplace
             | Intrinsic::IteratorPrototypeToArray
             | Intrinsic::IteratorPrototypeForEach
             | Intrinsic::IteratorPrototypeSome
@@ -2934,15 +2972,6 @@ impl RegisterVM {
             | Intrinsic::RegExpPrototypeSearch
             | Intrinsic::RegExpPrototypeSplit => {
                 self.call_regexp_symbol_intrinsic(intrinsic, &call, heap, realm)
-            }
-            Intrinsic::RegExpPrototypeReplace => {
-                let text = property_name_units(self.call_argument(&call, 0, heap)?, heap, realm)?;
-                let receiver = call
-                    .receiver
-                    .as_object()
-                    .ok_or_else(|| type_error(heap, realm, "this value is not a RegExp"))?;
-                let replacement = self.call_argument(&call, 1, heap)?;
-                self.regexp_replace(receiver, &text, replacement, heap, realm)
             }
             // 27.1.2.1, 23.1.2.5 and 22.2.5.2 answer the value they were
             // called on.
@@ -5195,6 +5224,11 @@ impl RegisterVM {
                 realm,
             );
         }
+        // 22.2.6.11 reads the `flags` and the `exec` of its receiver, either
+        // of which a getter of the Script answers.
+        if intrinsic == Intrinsic::RegExpPrototypeReplace {
+            return self.begin_regexp_clause(intrinsic, call, units, active_feedback, heap, realm);
+        }
         // 22.1.3.14, 22.1.3.15, 22.1.3.19, 22.1.3.20 and 22.1.3.23 read a
         // method off their argument before the `this` value is converted, and
         // answer what that method answers.
@@ -5598,6 +5632,264 @@ impl RegisterVM {
             self.write_construction(target, self.acc, heap)?;
         }
         Ok(None)
+    }
+
+    /// Opens the record a clause of 22.2.6 keeps its reads in and runs it.
+    fn begin_regexp_clause(
+        &mut self,
+        intrinsic: Intrinsic,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        // Step 1 refuses a `this` value that is no Object before anything of
+        // the arguments is read.
+        if !call.receiver.is_object() {
+            return Err(type_error(
+                heap,
+                realm,
+                "a method of 22.2.6 called on a value that is no Object",
+            ));
+        }
+        let mut slots = [VALUE_UNINITIALIZED; REGEXP_RECORD_SLOTS];
+        for (index, slot) in slots.iter_mut().enumerate() {
+            let index = u32::try_from(index).unwrap_or(u32::MAX);
+            if index == REGEXP_RECORD_RECEIVER {
+                *slot = call.receiver;
+            } else if index == REGEXP_RECORD_PENDING || index == REGEXP_RECORD_PHASE {
+                *slot = Value::from_smi(0);
+            }
+        }
+        let record = promise::record(heap, realm, &slots)?;
+        heap.enter_scope();
+        let state = heap.push_root(record)?;
+        let answered =
+            self.run_regexp_clause(intrinsic, call, state, units, active_feedback, heap, realm);
+        match answered {
+            // The clause left for a frame, which takes the scope back.
+            Ok(Some(code_id)) => Ok(Some(code_id)),
+            other => {
+                heap.exit_scope();
+                other
+            }
+        }
+    }
+
+    /// `RegExp.prototype[@@replace]` of 22.2.6.11 from the step the record
+    /// names.
+    ///
+    /// Steps 6 and 22.2.7.1 step 1 read a property of the receiver, which a
+    /// getter of the Script answers: the clause leaves for the frame and runs
+    /// again with the answer in the record.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a clause of 22.2.6 runs where a call does, with what a call has"
+    )]
+    fn run_regexp_clause(
+        &mut self,
+        intrinsic: Intrinsic,
+        call: Call,
+        state: Root,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let receiver = promise::slot(heap, record, REGEXP_RECORD_RECEIVER);
+        let object = receiver.as_object().ok_or(VMError::TypeError)?;
+        // Steps 2 and 5 convert the two arguments, before step 6 reads the
+        // flags; an Object in either place is a gap and not an answer.
+        let text = property_name_units(self.call_argument(&call, 0, heap)?, heap, realm)?;
+        let replacement = self.call_argument(&call, 1, heap)?;
+        if Self::is_callable(replacement, heap) {
+            return Err(VMError::Unsupported("a replace value that is callable"));
+        }
+        let replacement = property_name_units(replacement, heap, realm)?;
+        let key = PropertyKey::String(heap.strings.intern("flags")?);
+        let flags = match self.cached_property(
+            record,
+            REGEXP_RECORD_FLAGS,
+            key,
+            intrinsic,
+            state,
+            &call,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )? {
+            Cached::Value(value) => value,
+            Cached::Entered(entered) => return Ok(entered),
+        };
+        let flags = property_name_units(flags, heap, realm)?;
+        let global = flags.contains(&u16::from(b'g'));
+        // Step 8 sets `lastIndex` before 22.2.7.1 reads `exec`, and runs once
+        // however often the clause runs.
+        if promise::slot(heap, record, REGEXP_RECORD_PHASE)
+            .as_smi()
+            .unwrap_or(0)
+            == 0
+        {
+            if global {
+                Self::set_last_index(object, Value::from_smi(0), heap, realm)?;
+            }
+            promise::set_slot(heap, record, REGEXP_RECORD_PHASE, Value::from_smi(1))?;
+        }
+        // 22.2.7.1 step 1 reads `exec` off the object, and step 2 calls it
+        // where it is callable.
+        let key = PropertyKey::String(heap.strings.intern("exec")?);
+        let exec = match self.cached_property(
+            record,
+            REGEXP_RECORD_EXEC,
+            key,
+            intrinsic,
+            state,
+            &call,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )? {
+            Cached::Value(value) => value,
+            Cached::Entered(entered) => return Ok(entered),
+        };
+        if !Self::is_intrinsic(exec, Intrinsic::RegExpPrototypeExec, heap) {
+            return Err(VMError::Unsupported("an exec of the Script"));
+        }
+        // Step 2 of 22.2.7.1: the `exec` of this Realm answers for the
+        // pattern the object carries, which every step after this one reads.
+        let pattern = Self::regexp_pattern(object, heap)
+            .ok_or_else(|| type_error(heap, realm, "this value is not a RegExp"))?;
+        let unicode = flags.contains(&u16::from(b'u')) || flags.contains(&u16::from(b'v'));
+        self.acc = self.replace_matches(
+            object,
+            &pattern,
+            &text,
+            &replacement,
+            global,
+            unicode,
+            heap,
+            realm,
+        )?;
+        if let Some(target) = call.construct {
+            self.write_construction(target, self.acc, heap)?;
+        }
+        Ok(None)
+    }
+
+    /// `Get(rx, name)` for a clause of 22.2.6 that keeps what it read.
+    ///
+    /// Answers `None` where the value is a getter of the Script: the clause
+    /// leaves for the frame it opened and runs again with the answer in the
+    /// record.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a getter opens a frame, which needs what a call needs"
+    )]
+    fn cached_property(
+        &mut self,
+        record: Value,
+        slot: u32,
+        key: PropertyKey,
+        intrinsic: Intrinsic,
+        state: Root,
+        call: &Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Cached, VMError> {
+        let held = promise::slot(heap, record, slot);
+        if held != VALUE_UNINITIALIZED {
+            return Ok(Cached::Value(held));
+        }
+        let receiver = promise::slot(heap, record, REGEXP_RECORD_RECEIVER);
+        let object = receiver
+            .as_object()
+            .ok_or_else(|| type_error(heap, realm, "this value is not an object"))?;
+        let found = heap.lookup_named(object, key)?;
+        let Some(found) = found.filter(|property| property.flags.is_accessor) else {
+            let value = found.map_or(VALUE_UNDEFINED, |property| property.value);
+            promise::set_slot(heap, record, slot, value)?;
+            return Ok(Cached::Value(value));
+        };
+        // The slot the answer goes into travels in the record, because the
+        // frame answers into the accumulator and names nothing else.
+        promise::set_slot(
+            heap,
+            record,
+            REGEXP_RECORD_PENDING,
+            Value::from_smi(i32::try_from(slot).unwrap_or(0)),
+        )?;
+        self.accessor_resume = Some(Resume::Property {
+            intrinsic: intrinsic.id(),
+            state,
+            arg_start: call.arg_start,
+            arg_count: call.arg_count,
+        });
+        let entered = self.enter_accessor(
+            found.value,
+            receiver,
+            None,
+            call.return_pc,
+            call.caller_code_id,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )?;
+        if entered.is_some() {
+            return Ok(Cached::Entered(entered));
+        }
+        // A getter of this Realm answered in place, so the clause goes on.
+        self.accessor_resume = None;
+        let value = self.acc;
+        promise::set_slot(heap, record, slot, value)?;
+        Ok(Cached::Value(value))
+    }
+
+    /// Takes a clause of 22.2.6 back once a getter of the Script answered.
+    fn continue_regexp_clause(
+        &mut self,
+        resume: Resume,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let Resume::Property {
+            intrinsic,
+            state,
+            arg_start,
+            arg_count,
+        } = resume
+        else {
+            return Ok(None);
+        };
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let slot = promise::slot(heap, record, REGEXP_RECORD_PENDING)
+            .as_smi()
+            .unwrap_or(0);
+        promise::set_slot(heap, record, u32::try_from(slot).unwrap_or(0), self.acc)?;
+        let receiver = promise::slot(heap, record, REGEXP_RECORD_RECEIVER);
+        let intrinsic = Intrinsic::from_id(intrinsic).ok_or(VMError::TypeError)?;
+        let call = Call {
+            receiver,
+            func: arg_start,
+            arg_start,
+            arg_count,
+            resume: None,
+            ..call
+        };
+        self.run_regexp_clause(intrinsic, call, state, units, active_feedback, heap, realm)
     }
 
     /// The setter 10.1.9.2 finds for an index the object does not hold
@@ -20086,6 +20378,8 @@ impl RegisterVM {
     ///
     /// The matches are taken before anything is built, which is the order the
     /// clause reads and writes `lastIndex` in.
+    /// `RegExp.prototype[@@replace]` of 22.2.6.11 for the `RegExp` 22.1.3.19
+    /// step 2 found, whose `exec` and `flags` are the ones of this Realm.
     fn regexp_replace(
         &mut self,
         receiver: ObjectRef,
@@ -20115,9 +20409,38 @@ impl RegisterVM {
         if global {
             Self::set_last_index(receiver, Value::from_smi(0), heap, realm)?;
         }
+        self.replace_matches(
+            receiver,
+            &pattern,
+            text,
+            &replacement,
+            global,
+            unicode,
+            heap,
+            realm,
+        )
+    }
+
+    /// Steps 11 to 16 of 22.2.6.11: every match the pattern finds is replaced
+    /// with the text 22.1.3.19.1 makes of the replacement.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the walk carries what steps 6 to 14 of 22.2.6.11 read"
+    )]
+    fn replace_matches(
+        &mut self,
+        receiver: ObjectRef,
+        pattern: &crate::regexp::RegExp,
+        text: &[u16],
+        replacement: &[u16],
+        global: bool,
+        unicode: bool,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
         let mut out: Vec<u16> = Vec::new();
         let mut taken = 0usize;
-        while let Some(found) = self.regexp_exec(receiver, &pattern, text, heap, realm)? {
+        while let Some(found) = self.regexp_exec(receiver, pattern, text, heap, realm)? {
             let start = found.range.start.min(text.len());
             let end = found.range.end.min(text.len());
             out.extend_from_slice(text.get(taken..start).unwrap_or_default());
@@ -20131,7 +20454,7 @@ impl RegisterVM {
                         .map(|range| text.get(range.clone()).unwrap_or_default().to_vec())
                 })
                 .collect();
-            Self::append_substitution(&mut out, &matched, text, start, &captures, &replacement);
+            Self::append_substitution(&mut out, &matched, text, start, &captures, replacement);
             taken = end.max(start);
             if !global {
                 break;
@@ -26969,7 +27292,8 @@ impl RegisterVM {
                                     | Resume::AsyncFromSync { .. }
                                     | Resume::Setter { .. }
                                     | Resume::Answered { .. }
-                                    | Resume::Element { .. } => Reg(0),
+                                    | Resume::Element { .. }
+                                    | Resume::Property { .. } => Reg(0),
                                 };
                                 let call = Call {
                                     receiver: VALUE_UNDEFINED,
@@ -27040,6 +27364,11 @@ impl RegisterVM {
                                         self.finish_iterator_result(state, heap, realm)?;
                                         None
                                     }
+                                    // 22.2.6.11 takes the clause back with the
+                                    // value the getter answered.
+                                    Resume::Property { .. } => self.continue_regexp_clause(
+                                        resume, call, units, feedback, heap, realm,
+                                    )?,
                                     // 23.1.3.23 step 5 takes the walk back at
                                     // the argument after the one the setter
                                     // took.
