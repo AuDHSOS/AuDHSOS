@@ -7,6 +7,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- The suite's own tester answers `db func` as well as `db function`,
+  which SQLite's own files write in 214 places against 80. Seventeen
+  files that answered no case at all now run. D-285 records it.
+
 - `db-sqlite` answers a `WITH` term that reads a term written after it,
   refuses terms that read each other with `circular reference: X` where
   the statement reads one of them and leaves them unanswered where it

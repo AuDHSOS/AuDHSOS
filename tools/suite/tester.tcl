@@ -236,7 +236,7 @@ proc sqlite3 {name args} {
         set ::collations([lindex $args 0]) [lindex $args 1]
         return [harness_send collate %N% [lindex $args 0]]
       }
-      function {
+      function - func {
         set ::functions([lindex $args 0]) [lindex $args end]
         return [harness_send function %N% [lindex $args 0]]
       }

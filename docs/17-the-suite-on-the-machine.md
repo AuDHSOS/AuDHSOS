@@ -52,8 +52,8 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-81 884 cases of 702 files: 70 567 pass, 2298 answer differently and
-9019 are refused.
+83 479 cases of 719 files: 71 878 pass, 2373 answer differently and
+9228 are refused.
 
 `--configuration` opens every connection of a run under one of nine
 page-size, encoding and journal-mode settings, which D-275 decides.
@@ -61,7 +61,7 @@ What each answers, over the same files:
 
 | Configuration | Passed | Answered differently | Refused |
 |---------------|-------:|---------------------:|--------:|
-| `utf8-4096-delete` | 70 567 | 2298 | 9019 |
+| `utf8-4096-delete` | 71 878 | 2373 | 9228 |
 | `utf16le-4096-delete` | 61 214 | 2392 | 9500 |
 | `utf16be-4096-delete` | 61 229 | 2392 | 9500 |
 | `utf8-512-delete` | 61 073 | 2452 | 9435 |
@@ -202,14 +202,18 @@ Size: M.
    every digit the bits of the double hold, because `testfixture` hands
    the C library the double itself and never the fifteen digits
    `tcl_precision` prints.
-6. An answer may be preceded by `CALL`, what kind of proc is called, a
+6. A method of the connection is answered under its whole name and
+   under `func`, which TCL matches by any unambiguous beginning of a
+   name and which SQLite's own files write more often than
+   `function`.
+7. An answer may be preceded by `CALL`, what kind of proc is called, a
    count and that many values, which the tester answers with `RET`, a
    count and that many values; the harness writes one where a collation
    or a function the tester defined is reached from inside a statement.
-7. A proc the tester runs for a `CALL` may write no request of its own,
+8. A proc the tester runs for a `CALL` may write no request of its own,
    because the answer to the call is read from that line, so the tester
    refuses one.
-8. The harness stops reading when the runner closes the line or the
+9. The harness stops reading when the runner closes the line or the
    deadline passes, and ends the interpreter either way.
 
 ### Produces
