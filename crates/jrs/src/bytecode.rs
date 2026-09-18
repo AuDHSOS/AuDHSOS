@@ -10105,6 +10105,7 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::SyntaxErrorConstructor
         | crate::engine::realm::Intrinsic::TypeErrorConstructor
         | crate::engine::realm::Intrinsic::UriErrorConstructor
+        | crate::engine::realm::Intrinsic::AggregateErrorConstructor
         | crate::engine::realm::Intrinsic::ArrayPrototypeValues
         | crate::engine::realm::Intrinsic::ArrayPrototypeKeys
         | crate::engine::realm::Intrinsic::ArrayPrototypeEntries

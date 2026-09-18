@@ -567,7 +567,10 @@ impl Execution<'_> {
                 crate::engine::realm::NativeErrorKind::EvalError
                 | crate::engine::realm::NativeErrorKind::ReferenceError
                 | crate::engine::realm::NativeErrorKind::SyntaxError
-                | crate::engine::realm::NativeErrorKind::UriError => {}
+                | crate::engine::realm::NativeErrorKind::UriError
+                // 20.5.7 is constructed by a Script and never raised by an
+                // operation, so it crosses as the object it is.
+                | crate::engine::realm::NativeErrorKind::AggregateError => {}
             }
         }
         if let Some(value) = register_primitive(value, &agent.heap) {
@@ -618,6 +621,12 @@ impl Execution<'_> {
             crate::engine::realm::NativeErrorKind::SyntaxError => Builtin::SyntaxError,
             crate::engine::realm::NativeErrorKind::TypeError => Builtin::TypeError,
             crate::engine::realm::NativeErrorKind::UriError => Builtin::URIError,
+            // No operation raises one, so this backend builds none either.
+            crate::engine::realm::NativeErrorKind::AggregateError => {
+                return Error::Unsupported {
+                    feature: "an AggregateError of the engine",
+                };
+            }
         };
         match self.new_error(builtin, &[message]) {
             Ok(value) => Error::Thrown { value },

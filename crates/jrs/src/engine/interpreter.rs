@@ -3342,6 +3342,7 @@ impl RegisterVM {
             | Intrinsic::SyntaxErrorConstructor
             | Intrinsic::TypeErrorConstructor
             | Intrinsic::UriErrorConstructor
+            | Intrinsic::AggregateErrorConstructor
             | Intrinsic::ObjectConstructor
             | Intrinsic::ObjectDefineProperty
             | Intrinsic::ObjectGetOwnPropertyDescriptor
@@ -3707,6 +3708,7 @@ impl RegisterVM {
                     | Intrinsic::SyntaxErrorConstructor
                     | Intrinsic::TypeErrorConstructor
                     | Intrinsic::UriErrorConstructor
+                    | Intrinsic::AggregateErrorConstructor
                     | Intrinsic::StringConstructor
                     | Intrinsic::NumberConstructor
                     | Intrinsic::BooleanConstructor
@@ -4395,6 +4397,16 @@ impl RegisterVM {
             | Intrinsic::TypeErrorConstructor
             | Intrinsic::UriErrorConstructor => {
                 Self::construct_error(intrinsic, target, heap, realm)
+            }
+            // 20.5.7.1 takes the errors before the message, and step 6 gives
+            // the error an `errors` property of the List it made of them.
+            Intrinsic::AggregateErrorConstructor => {
+                let list = Self::aggregated_errors(target, heap, realm)?;
+                let error = Self::construct_error(intrinsic, key, heap, realm)?;
+                let object = error.as_object().ok_or(VMError::TypeError)?;
+                let name = PropertyKey::String(heap.strings.intern("errors")?);
+                heap.define_own_named(object, name, list, PropertyFlags::ordinary_data())?;
+                Ok(error)
             }
             // 20.1.1.1: undefined and null make an ordinary object, and every
             // other value goes through ToObject.
@@ -7309,6 +7321,30 @@ impl RegisterVM {
     /// Prototype belongs to the constructor that was called, and give it an
     /// own `message` when one was passed. `new` reaches the same function,
     /// because a native constructor answers an object of its own.
+    /// `IteratorToList` of 7.4.19 for the errors of 20.5.7.1, as the Array
+    /// step 6 defines.
+    ///
+    /// An iterable that is no Array needs a frame this native has none of.
+    fn aggregated_errors(
+        errors: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let source = errors
+            .as_object()
+            .filter(|object| heap.array_length(*object).is_some())
+            .ok_or(VMError::Unsupported(
+                "the errors of 20.5.7.1 that are no Array",
+            ))?;
+        let length = heap.array_length(source).unwrap_or(0);
+        let list = realm.array(heap, length)?;
+        for index in 0..length {
+            let value = Self::element_at(heap, source, index)?.unwrap_or(VALUE_UNDEFINED);
+            heap.set_array_element(list, index, value)?;
+        }
+        Ok(Value::from_object(list))
+    }
+
     fn construct_error(
         intrinsic: Intrinsic,
         message: Value,

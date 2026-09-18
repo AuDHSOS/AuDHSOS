@@ -32,6 +32,8 @@ pub enum NativeErrorKind {
     TypeError,
     /// `URIError`, 20.5.5.6.
     UriError,
+    /// `AggregateError`, 20.5.7.
+    AggregateError,
 }
 
 /// The implemented intrinsic of one holder that has this name.
@@ -1167,6 +1169,8 @@ pub enum Intrinsic {
     /// `Error.isError`, 20.5.2.1, which answers whether a value carries
     /// `[[ErrorData]]`.
     ErrorIsError,
+    /// `AggregateError`, 20.5.7.1, which takes the errors before the message.
+    AggregateErrorConstructor,
     /// `get constructor`, 27.1.3.3.1.1.
     IteratorPrototypeConstructorGet,
     /// `set constructor`, 27.1.3.3.1.2.
@@ -1329,7 +1333,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 461] = [
+    pub const ALL: [Self; 462] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1760,6 +1764,7 @@ impl Intrinsic {
         Self::FunctionPrototypeHasInstance,
         Self::SymbolPrototypeToPrimitive,
         Self::ErrorIsError,
+        Self::AggregateErrorConstructor,
         Self::IteratorPrototypeConstructorGet,
         Self::IteratorPrototypeConstructorSet,
         Self::IteratorPrototypeToStringTagGet,
@@ -2185,6 +2190,7 @@ impl Intrinsic {
             | Self::SyntaxErrorConstructor
             | Self::TypeErrorConstructor
             | Self::UriErrorConstructor
+            | Self::AggregateErrorConstructor
             | Self::StringConstructor
             | Self::NumberConstructor
             | Self::BooleanConstructor
@@ -2735,6 +2741,7 @@ impl Intrinsic {
             Self::FunctionPrototypeHasInstance => 458,
             Self::SymbolPrototypeToPrimitive => 459,
             Self::ErrorIsError => 460,
+            Self::AggregateErrorConstructor => 461,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3206,6 +3213,7 @@ impl Intrinsic {
             Self::FunctionPrototypeHasInstance => 458,
             Self::SymbolPrototypeToPrimitive => 459,
             Self::ErrorIsError => 460,
+            Self::AggregateErrorConstructor => 461,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3678,6 +3686,7 @@ impl Intrinsic {
             458 => Some(Self::FunctionPrototypeHasInstance),
             459 => Some(Self::SymbolPrototypeToPrimitive),
             460 => Some(Self::ErrorIsError),
+            461 => Some(Self::AggregateErrorConstructor),
             436 => Some(Self::IteratorPrototypeConstructorGet),
             437 => Some(Self::IteratorPrototypeConstructorSet),
             438 => Some(Self::IteratorPrototypeToStringTagGet),
@@ -4065,6 +4074,7 @@ impl Intrinsic {
             Self::FunctionPrototypeHasInstance => "[Symbol.hasInstance]",
             Self::SymbolPrototypeToPrimitive => "[Symbol.toPrimitive]",
             Self::ErrorIsError => "isError",
+            Self::AggregateErrorConstructor => "AggregateError",
             Self::ObjectPreventExtensions | Self::ReflectPreventExtensions => "preventExtensions",
             Self::ObjectIsExtensible | Self::ReflectIsExtensible => "isExtensible",
             Self::ObjectSeal => "seal",
@@ -4178,6 +4188,9 @@ impl Intrinsic {
             &[(0, PrimitiveHint::Number), (1, PrimitiveHint::Number)];
         /// One text, converted by `ToString`.
         const TEXT: &[(u16, PrimitiveHint)] = &[(0, PrimitiveHint::String)];
+        /// The second argument alone, converted by `ToString`, which 20.5.7.1
+        /// applies to the message it takes after the errors.
+        const SECOND_TEXT: &[(u16, PrimitiveHint)] = &[(1, PrimitiveHint::String)];
         /// A text to search for, then where to start.
         const TEXT_THEN_NUMBER: &[(u16, PrimitiveHint)] =
             &[(0, PrimitiveHint::String), (1, PrimitiveHint::Number)];
@@ -4244,6 +4257,9 @@ impl Intrinsic {
             | Self::StringPrototypeFontcolor
             | Self::StringPrototypeFontsize
             | Self::StringPrototypeLink => TEXT,
+            // 20.5.7.1 step 4 applies `ToString` to the message, which it
+            // takes after the errors.
+            Self::AggregateErrorConstructor => SECOND_TEXT,
             // 22.1.3: one position, which `ToIntegerOrInfinity` converts.
             Self::StringPrototypeCharAt
             | Self::StringPrototypeCharCodeAt
@@ -4742,6 +4758,7 @@ impl Intrinsic {
                 | Self::SyntaxErrorConstructor
                 | Self::TypeErrorConstructor
                 | Self::UriErrorConstructor
+                | Self::AggregateErrorConstructor
                 | Self::StringConstructor
                 | Self::NumberConstructor
                 | Self::BooleanConstructor
@@ -4768,6 +4785,7 @@ impl Intrinsic {
                 | Self::SyntaxErrorConstructor
                 | Self::TypeErrorConstructor
                 | Self::UriErrorConstructor
+                | Self::AggregateErrorConstructor
                 | Self::StringConstructor
                 | Self::NumberConstructor
                 | Self::BooleanConstructor
@@ -5265,7 +5283,9 @@ impl Intrinsic {
             | Self::TypedArrayPrototypeCopyWithin
             | Self::TypedArrayPrototypeSlice
             | Self::TypedArrayPrototypeSubarray
-            | Self::TypedArrayPrototypeWith => 2,
+            | Self::TypedArrayPrototypeWith
+            // 20.5.7.1 takes the errors and the message.
+            | Self::AggregateErrorConstructor => 2,
             // 21.4.2.1 and 21.4.3.4 take a year, a month, a day, an hour, a
             // minute, a second and a millisecond.
             Self::DatePrototypeSetHours
@@ -6066,7 +6086,7 @@ pub fn object_prototype_owns(name: &[u16]) -> bool {
 }
 
 /// Number of native error types of 20.5.5.
-pub const NATIVE_ERROR_COUNT: usize = 6;
+pub const NATIVE_ERROR_COUNT: usize = 7;
 
 impl NativeErrorKind {
     /// Every native error type, in the order of 20.5.5.
@@ -6077,6 +6097,7 @@ impl NativeErrorKind {
         Self::SyntaxError,
         Self::TypeError,
         Self::UriError,
+        Self::AggregateError,
     ];
 
     /// The constructor 20.5.6.1 gives this kind.
@@ -6089,6 +6110,7 @@ impl NativeErrorKind {
             Self::SyntaxError => Intrinsic::SyntaxErrorConstructor,
             Self::TypeError => Intrinsic::TypeErrorConstructor,
             Self::UriError => Intrinsic::UriErrorConstructor,
+            Self::AggregateError => Intrinsic::AggregateErrorConstructor,
         }
     }
 
@@ -6102,6 +6124,7 @@ impl NativeErrorKind {
             Intrinsic::SyntaxErrorConstructor => Some(Self::SyntaxError),
             Intrinsic::TypeErrorConstructor => Some(Self::TypeError),
             Intrinsic::UriErrorConstructor => Some(Self::UriError),
+            Intrinsic::AggregateErrorConstructor => Some(Self::AggregateError),
             _ => None,
         }
     }
@@ -6116,6 +6139,7 @@ impl NativeErrorKind {
             Self::SyntaxError => "SyntaxError",
             Self::TypeError => "TypeError",
             Self::UriError => "URIError",
+            Self::AggregateError => "AggregateError",
         }
     }
 
@@ -6127,6 +6151,7 @@ impl NativeErrorKind {
             Self::SyntaxError => 3,
             Self::TypeError => 4,
             Self::UriError => 5,
+            Self::AggregateError => 6,
         }
     }
 }
