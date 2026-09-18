@@ -544,3 +544,119 @@ fn a_call_that_asks_for_the_clock_answers_nothing() {
         assert_eq!(quoted(sql), "NULL", "{sql}");
     }
 }
+
+/// What one statement answers over a database the clock was set on.
+fn ticked(seconds: i64, sql: &str) -> Result<String, crate::db::Error> {
+    let writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    let bytes = writer.written();
+    let database = Database::open(&bytes).unwrap().clocked(seconds);
+    let answered = database.query(sql.as_bytes())?;
+    let value = answered
+        .rows
+        .first()
+        .and_then(|row| row.first())
+        .cloned()
+        .unwrap_or(Value::Null);
+    Ok(String::from_utf8_lossy(&value.text().unwrap_or_default()).into_owned())
+}
+
+/// `date-2.40` and `date-4.1` of `test/date.test`: `now` is the moment
+/// the caller told the connection, and a call that names no moment
+/// reads the same clock.
+#[test]
+fn now_is_the_moment_the_caller_told_the_connection() {
+    assert_eq!(
+        ticked(1_199_243_045, "SELECT datetime()").unwrap(),
+        "2008-01-02 03:04:05"
+    );
+    assert_eq!(
+        ticked(1_157_124_367, "SELECT date('now')").unwrap(),
+        "2006-09-01"
+    );
+    assert_eq!(
+        ticked(1_157_124_367, "SELECT datetime('NOW','+1 day')").unwrap(),
+        "2006-09-02 15:26:07"
+    );
+    assert_eq!(
+        ticked(1_157_124_367, "SELECT strftime('%Y')").unwrap(),
+        "2006"
+    );
+    assert_eq!(
+        ticked(1_157_124_367, "SELECT unixepoch()").unwrap(),
+        "1157124367"
+    );
+    // The three clock literals are `time`, `date` and `datetime` of the
+    // same moment.
+    assert_eq!(
+        ticked(1_157_124_367, "SELECT CURRENT_TIMESTAMP").unwrap(),
+        "2006-09-01 15:26:07"
+    );
+    assert_eq!(
+        ticked(1_157_124_367, "SELECT CURRENT_DATE").unwrap(),
+        "2006-09-01"
+    );
+    assert_eq!(
+        ticked(1_157_124_367, "SELECT CURRENT_TIME").unwrap(),
+        "15:26:07"
+    );
+}
+
+/// A connection the caller told no clock refuses the three clock
+/// literals and answers nothing for `now`.
+#[test]
+fn a_connection_told_no_clock_reads_none() {
+    let writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    let bytes = writer.written();
+    let database = Database::open(&bytes).unwrap();
+    assert_eq!(
+        database.query(b"SELECT CURRENT_TIMESTAMP").err(),
+        Some(crate::db::Error::Eval(crate::eval::Error::Unsupported))
+    );
+    assert_eq!(
+        database
+            .query(b"SELECT quote(datetime('now'))")
+            .unwrap()
+            .rows,
+        [alloc::vec![Value::Text(b"NULL".to_vec())]]
+    );
+    assert_eq!(
+        database.query(b"SELECT quote(date())").unwrap().rows,
+        [alloc::vec![Value::Text(b"NULL".to_vec())]]
+    );
+}
+
+/// `e_createtable`: a column that falls back to `CURRENT_TIMESTAMP`
+/// holds the moment the caller told the connection that writes.
+#[test]
+fn a_column_that_falls_back_to_the_clock_holds_what_the_writer_was_told() {
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    assert_eq!(writer.clock(), None);
+    writer.clocking(1_157_124_367);
+    assert_eq!(writer.clock(), Some(1_157_124_367));
+    writer
+        .run(b"CREATE TABLE t(a, b DEFAULT CURRENT_TIMESTAMP)")
+        .unwrap();
+    writer.run(b"INSERT INTO t(a) VALUES(1)").unwrap();
+    let rows = writer.run(b"SELECT b FROM t").unwrap_or_default();
+    assert!(rows.is_empty(), "a writer answers no row for a read");
+    let bytes = writer.written();
+    let database = Database::open(&bytes).unwrap().clocked(1_157_124_367);
+    assert_eq!(
+        database.query(b"SELECT b FROM t").unwrap().rows,
+        [alloc::vec![Value::Text(b"2006-09-01 15:26:07".to_vec())]]
+    );
+    // The clock a statement of a trigger's body reads is the same one.
+    writer
+        .run(b"CREATE TRIGGER r AFTER INSERT ON t BEGIN INSERT INTO t(a) VALUES(2); END")
+        .unwrap();
+    writer.run(b"INSERT INTO t(a) VALUES(3)").unwrap();
+    let bytes = writer.written();
+    let database = Database::open(&bytes).unwrap();
+    assert_eq!(
+        database
+            .query(b"SELECT count(DISTINCT b) FROM t")
+            .unwrap()
+            .rows,
+        [alloc::vec![Value::Int(1)]]
+    );
+}

@@ -52,8 +52,11 @@ fn shown(value: &Value) -> (Vec<u8>, Vec<u8>) {
             &[],
             Collation::Binary,
             crate::header::Encoding::Utf8,
-            None,
-            crate::func::Counted::default(),
+            crate::func::Given {
+                random: None,
+                counted: crate::func::Counted::default(),
+                clock: None,
+            },
         )
         .expect("a function that always answers")
         .0
@@ -67,7 +70,7 @@ fn shown(value: &Value) -> (Vec<u8>, Vec<u8>) {
 /// refuses it.
 fn answer(sql: &str) -> Option<(Vec<u8>, Vec<u8>)> {
     let (arena, root) = expression(sql.as_bytes()).ok()?;
-    let value = evaluate(&arena, root, sql.as_bytes()).ok()?;
+    let value = evaluate(&arena, root, sql.as_bytes(), None).ok()?;
     Some(shown(&value))
 }
 
@@ -96,7 +99,7 @@ fn every_expression_answers_what_the_c_library_answers() {
 /// What this engine refuses an expression with.
 fn refusal(sql: &str) -> Error {
     let (arena, root) = expression(sql.as_bytes()).unwrap();
-    evaluate(&arena, root, sql.as_bytes()).unwrap_err()
+    evaluate(&arena, root, sql.as_bytes(), None).unwrap_err()
 }
 
 #[test]
@@ -162,7 +165,7 @@ fn what_is_not_written_yet_refuses_rather_than_guessing() {
 fn a_node_the_arena_does_not_hold_is_refused() {
     let (small, _) = expression(b"1").unwrap();
     let (_, deep) = expression(b"1+2").unwrap();
-    assert_eq!(evaluate(&small, deep, b"1"), Err(Error::Malformed));
+    assert_eq!(evaluate(&small, deep, b"1", None), Err(Error::Malformed));
 }
 
 #[test]
@@ -179,7 +182,7 @@ fn a_tree_deeper_than_the_walk_is_refused() {
             operand: id,
         });
     }
-    assert_eq!(evaluate(&arena, id, b"1"), Err(Error::TooDeep));
+    assert_eq!(evaluate(&arena, id, b"1", None), Err(Error::TooDeep));
 }
 
 #[test]

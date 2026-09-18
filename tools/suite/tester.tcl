@@ -613,6 +613,14 @@ proc test_restore_config_pagecache {args} { return 0 }
 proc unregister_devsim {args} { return "" }
 proc translate_selftest {args} { return "" }
 
+# sqlite_current_time of test1.c: the moment `now` names, as the
+# seconds since 1970. Nought is the clock of the machine, which this
+# harness has none of, so a statement that names `now` under it is
+# refused.
+set ::sqlite_current_time 0
+trace add variable ::sqlite_current_time write harness_clock
+proc harness_clock {args} { harness_send clock $::sqlite_current_time }
+
 # save_prng_state, restore_prng_state: the state random and randomblob
 # draw from next, which a test holds to draw the same words again.
 proc save_prng_state {} { harness_send save_prng }

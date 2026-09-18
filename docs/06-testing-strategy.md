@@ -5974,3 +5974,19 @@ Document 16 step Q8.
   reaches a key naming no action is refused.
 - A chain of 40 tables each pointing at the one before it is refused
   rather than reaching the end of the stack.
+
+### 6.6.205 The moment `now` names (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `datetime()` over a connection told the clock answers the moment the
+  clock says, and so does `date('now')`, whatever case `now` is written
+  in.
+- A modifier after `now` moves that moment, so `datetime('NOW','+1 day')`
+  answers the day after.
+- `strftime` and `unixepoch` read the same clock where they name no
+  moment.
+- `CURRENT_TIME`, `CURRENT_DATE` and `CURRENT_TIMESTAMP` are `time`,
+  `date` and `datetime` of the clock.
+- A connection told no clock refuses the three literals and answers
+  nothing for `now`.

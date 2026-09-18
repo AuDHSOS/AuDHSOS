@@ -26,7 +26,7 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
     let Ok((arena, root)) = expression(bytes) else {
         return;
     };
-    let Ok(value) = evaluate(&arena, root, bytes) else {
+    let Ok(value) = evaluate(&arena, root, bytes, None) else {
         return;
     };
     // A value is equal to itself under every collation, which is the one

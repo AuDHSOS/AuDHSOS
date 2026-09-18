@@ -297,6 +297,15 @@ pub trait Row {
         None
     }
 
+    /// What the clock says, as the julian day number times 86 400 000,
+    /// which `now` names.
+    ///
+    /// A connection told no clock answers nothing, and a statement that
+    /// names `now` then answers nothing as well.
+    fn clock(&self) -> Option<i64> {
+        None
+    }
+
     /// The first row the statement `select` answers, each value with
     /// the affinity and the collation a comparison against it uses,
     /// which is what a row compared against `(SELECT a, b)` compares
@@ -310,12 +319,28 @@ pub trait Row {
     }
 }
 
-/// A row with no columns, which is what a constant expression is read
-/// against.
+/// What a function reads beside its arguments, taken off the row it is
+/// read against.
+///
+/// Reading it costs O(1).
+fn given_of(row: &dyn Row) -> func::Given<'_> {
+    func::Given {
+        random: row.random(),
+        counted: row.counted(),
+        clock: row.clock(),
+    }
+}
+
+/// A row with no columns, carrying the moment its connection's clock
+/// says, which is what a constant expression is read against.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct NoRow;
+pub struct NoRow(pub Option<i64>);
 
 impl Row for NoRow {
+    fn clock(&self) -> Option<i64> {
+        self.0
+    }
+
     fn column(
         &self,
         _schema: Option<&[u8]>,
@@ -332,8 +357,8 @@ impl Row for NoRow {
 /// # Errors
 ///
 /// [`Error`] names what it could not answer and why.
-pub fn evaluate(arena: &Arena, id: ExprId, sql: &[u8]) -> Result<Value, Error> {
-    evaluate_row(arena, id, sql, &NoRow)
+pub fn evaluate(arena: &Arena, id: ExprId, sql: &[u8], clock: Option<i64>) -> Result<Value, Error> {
+    evaluate_row(arena, id, sql, &NoRow(clock))
 }
 
 /// The same, against a row whose columns the expression may name.
@@ -471,7 +496,7 @@ fn answer(
     let node = arena.node(id).ok_or(Error::Malformed)?;
     let deeper = depth.saturating_add(1);
     match node {
-        Node::Literal(literal) => literal_value(literal, sql, false).map(Answer::plain),
+        Node::Literal(literal) => plain_literal(literal, sql, row),
         Node::Unary { op, operand } => unary(arena, op, operand, sql, row, deeper),
         Node::Binary { op, left, right } => binary(arena, op, left, right, sql, row, deeper),
         Node::Between {
@@ -698,8 +723,7 @@ fn called(
         &carried,
         inside.unwrap_or(row.collation()),
         row.encoding(),
-        row.random(),
-        row.counted(),
+        given_of(row),
     )?;
     Ok(Answer {
         value,
@@ -710,9 +734,22 @@ fn called(
     })
 }
 
+/// A constant read against `row`, which the three clock literals read
+/// for the moment the caller told the connection.
+///
+/// Reading one costs O(n) in the bytes it was written with.
+fn plain_literal(literal: Literal, sql: &[u8], row: &dyn Row) -> Result<Answer, Error> {
+    literal_value(literal, sql, false, row.clock()).map(Answer::plain)
+}
+
 /// A constant, with `negated` for the minus sign the parser leaves as a
 /// node of its own and SQLite folds into the number.
-fn literal_value(literal: Literal, sql: &[u8], negated: bool) -> Result<Value, Error> {
+fn literal_value(
+    literal: Literal,
+    sql: &[u8],
+    negated: bool,
+    clock: Option<i64>,
+) -> Result<Value, Error> {
     match literal {
         Literal::Null => Ok(Value::Null),
         Literal::Integer(span) => integer_literal(&dequote(span.text(sql)), negated),
@@ -722,7 +759,19 @@ fn literal_value(literal: Literal, sql: &[u8], negated: bool) -> Result<Value, E
         }
         Literal::Text(span) => Ok(Value::Text(unquote(span.text(sql)))),
         Literal::Blob(span) => Ok(Value::Blob(hex(span.text(sql)))),
-        Literal::CurrentTime(_) => Err(Error::Unsupported),
+        // `CURRENT_TIME`, `CURRENT_DATE` and `CURRENT_TIMESTAMP` are
+        // `time`, `date` and `datetime` of the clock, which
+        // `currentTimeFunc` writes in the same shapes.
+        Literal::CurrentTime(which) => {
+            if clock.is_none() {
+                return Err(Error::Unsupported);
+            }
+            Ok(match which {
+                crate::ast::CurrentTime::Time => crate::date::time(&[], clock),
+                crate::ast::CurrentTime::Date => crate::date::date(&[], clock),
+                crate::ast::CurrentTime::Timestamp => crate::date::datetime(&[], clock),
+            })
+        }
     }
 }
 
@@ -854,7 +903,7 @@ fn unary(
         if let Some(Node::Literal(literal)) = arena.node(operand)
             && matches!(literal, Literal::Integer(_) | Literal::Float(_))
         {
-            return literal_value(literal, sql, true).map(Answer::plain);
+            return literal_value(literal, sql, true, row.clock()).map(Answer::plain);
         }
     }
     let inner = answer(arena, operand, sql, row, depth)?;
@@ -1573,8 +1622,7 @@ fn like(
         &[],
         row.collation(),
         row.encoding(),
-        row.random(),
-        row.counted(),
+        given_of(row),
     )?;
     Ok(Answer::plain(match (negated, logic(&answered)) {
         (_, None) => Value::Null,

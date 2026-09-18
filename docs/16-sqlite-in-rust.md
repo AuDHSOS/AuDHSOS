@@ -838,6 +838,9 @@ Size: L.
     column is always nought.
 65. What a foreign key action is held to, and how far a chain of them
     reaches. Built, which D-300 records.
+66. The moment `now` names, which the caller tells the connection.
+    Built, which D-303 records. `localtime` is still refused, because
+    the rules of a time zone are what it needs.
 
 ### Done when
 

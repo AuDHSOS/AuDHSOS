@@ -608,6 +608,10 @@ struct Session {
     /// What `save_prng_state` held, which `restore_prng_state` hands
     /// back to every writer.
     prng: u64,
+    /// The moment `now` names, as the seconds since 1970, and nothing
+    /// where the file set none: `sqlite_current_time` at nought is the
+    /// clock of the machine, which this harness has none of.
+    clock: Option<i64>,
     /// The reason the cases before this one were refused for and how
     /// many of them in a row carried it, which stops a file that loops
     /// until a command this harness has none of answers.
@@ -631,6 +635,7 @@ impl Session {
             collations: BTreeMap::new(),
             functions: BTreeMap::new(),
             prng: 0,
+            clock: None,
             repeated: (String::new(), 0),
             score: Score::default(),
             started: Instant::now(),
@@ -742,6 +747,20 @@ impl Session {
             }
             "null" => {
                 self.nulls.insert(first.to_owned(), second.to_owned());
+                Ok(Vec::new())
+            }
+            // `sqlite_current_time` of `test1.c`: the moment `now`
+            // names, as the seconds since 1970, and nought for the
+            // clock of the machine, which this harness has none of.
+            "clock" => {
+                self.clock = first
+                    .parse::<i64>()
+                    .map_err(|source| format!("a moment is a whole number: {source}"))
+                    .map(|seconds| (seconds != 0).then_some(seconds))?;
+                let held = self.clock;
+                for writer in self.held.values_mut() {
+                    ticked(writer, held);
+                }
                 Ok(Vec::new())
             }
             // `sqlite3_table_column_metadata DB SCHEMA TABLE COLUMN`.
@@ -951,6 +970,7 @@ impl Session {
             && let Ok(mut writer) = Writer::new(under.page, 0, under.encoding)
         {
             writer.defines(DEFINED);
+            ticked(&mut writer, self.clock);
             if let Some(journal) = under.journal {
                 let mut sql = b"PRAGMA journal_mode=".to_vec();
                 sql.extend_from_slice(journal);
@@ -1114,12 +1134,17 @@ impl Session {
             Some(Err(error)) => return Err(format!("{error}")),
             None => Database::open_collating(&bytes, collating),
         };
+        let held = self.clock;
         let database = opened
             .map(|database| {
-                database
+                let database = database
                     .naming(writer.naming())
                     .defining(defines)
-                    .journalling(writer.journalled())
+                    .journalling(writer.journalled());
+                match held {
+                    Some(seconds) => database.clocked(seconds),
+                    None => database,
+                }
             })
             .map_err(|error| error.message())?;
         let answered = database
@@ -1342,13 +1367,18 @@ fn run_one(
         let counted = writer.counts();
         let naming = writer.naming();
         let journalled = writer.journalled();
+        let held = writer.clock();
         let answered = opened
             .map(|database| {
-                database
+                let database = database
                     .counting(counted)
                     .naming(naming)
                     .defining(defines)
-                    .journalling(journalled)
+                    .journalling(journalled);
+                match held {
+                    Some(seconds) => database.clocked(seconds),
+                    None => database,
+                }
             })
             .and_then(|database| database.query(text.as_bytes()))
             .map_err(|error| shape(text, error.message()))?;
@@ -1701,6 +1731,15 @@ fn collation_named(collation: db_sqlite::value::Collation) -> String {
         db_sqlite::value::Collation::Rtrim => "RTRIM".to_owned(),
         db_sqlite::value::Collation::Defined(name, _) => String::from_utf8_lossy(name).into_owned(),
         _ => "BINARY".to_owned(),
+    }
+}
+
+/// Tells a writer what the clock says, or leaves it told none.
+///
+/// Telling one costs O(1).
+const fn ticked(writer: &mut Writer, clock: Option<i64>) {
+    if let Some(seconds) = clock {
+        writer.clocking(seconds);
     }
 }
 

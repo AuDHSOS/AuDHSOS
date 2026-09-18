@@ -196,7 +196,7 @@ fn a_row_compared_against_a_statement_needs_a_connection_to_answer_it() {
     let sql = b"(1,2)=(SELECT 1,2)";
     let (arena, root) = crate::parse::expression(sql).unwrap();
     assert_eq!(
-        crate::eval::evaluate(&arena, root, sql),
+        crate::eval::evaluate(&arena, root, sql, None),
         Err(crate::eval::Error::Unsupported)
     );
 }

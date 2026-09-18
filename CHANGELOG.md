@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` answers `now`, `CURRENT_TIME`, `CURRENT_DATE` and
+  `CURRENT_TIMESTAMP` from the moment the caller tells the connection,
+  which the harness takes from `sqlite_current_time`. D-303 records it.
+  Catalog 6.6.205. `date.test` answers 1395 cases where it answered
+  1371.
+
 - A file of the suite is ended after three minutes and not after one,
   so the ten files that answer for tens of thousands of rows run to
   their end and two runs read the same number. D-302 records it. The

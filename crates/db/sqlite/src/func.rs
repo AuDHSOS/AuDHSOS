@@ -879,6 +879,22 @@ pub struct Counted {
     pub rowid: i64,
 }
 
+/// What a function reads beside its arguments: where the bytes of
+/// `random` and `randomblob` come from, what the counters of the
+/// connection stand at, and what the clock says.
+///
+/// The clock is the moment `now` names, as the julian day number times
+/// 86 400 000, and is nothing where the connection was told none.
+#[derive(Clone, Copy, Debug)]
+pub struct Given<'a> {
+    /// Where the bytes of `random` and `randomblob` come from.
+    pub random: Option<&'a crate::random::Source>,
+    /// What the three counters of the connection stand at.
+    pub counted: Counted,
+    /// What the clock says, which `now` names.
+    pub clock: Option<i64>,
+}
+
 /// What `function` answers for `args`, under `collation` where it
 /// compares.
 ///
@@ -895,20 +911,24 @@ pub fn call(
     carried: &[bool],
     collation: Collation,
     encoding: Encoding,
-    random: Option<&crate::random::Source>,
-    counted: Counted,
+    given: Given<'_>,
 ) -> Result<(Value, bool), Error> {
+    let Given {
+        random,
+        counted,
+        clock,
+    } = given;
     let arg = |at: usize| args.get(at).cloned().unwrap_or(Value::Null);
     let first = arg(0);
     Ok((
         match function {
-            Function::Date => crate::date::date(args),
-            Function::Time => crate::date::time(args),
-            Function::Datetime => crate::date::datetime(args),
-            Function::Julianday => crate::date::julianday(args),
-            Function::Unixepoch => crate::date::unixepoch(args),
-            Function::Strftime => crate::date::strftime(args),
-            Function::Timediff => crate::date::timediff(args),
+            Function::Date => crate::date::date(args, clock),
+            Function::Time => crate::date::time(args, clock),
+            Function::Datetime => crate::date::datetime(args, clock),
+            Function::Julianday => crate::date::julianday(args, clock),
+            Function::Unixepoch => crate::date::unixepoch(args, clock),
+            Function::Strftime => crate::date::strftime(args, clock),
+            Function::Timediff => crate::date::timediff(args, clock),
             Function::Typeof => Value::Text(type_name(&first).to_vec()),
             Function::Length => match &first {
                 Value::Null => Value::Null,

@@ -10,8 +10,12 @@
 //! writes the moment out in its own shape. Reading one moment costs
 //! O(m) in the modifiers.
 //!
-//! What is not here: `now` and `localtime`, which need a clock this
-//! crate is given none of, so a statement that names either refuses.
+//! `now` reads the clock the caller hands the connection, which is
+//! `setDateTimeToCurrent`; a connection told no clock answers nothing
+//! for a statement that names it.
+//!
+//! What is not here: `localtime`, which needs the rules of a time zone
+//! this crate is given none of, so a statement that names it refuses.
 
 use alloc::vec::Vec;
 
@@ -415,17 +419,32 @@ fn read_number(moment: &mut Moment, number: f64) {
     }
 }
 
-/// The moment a text says, which is a date, a time or a number.
-fn read_moment(text: &[u8], moment: &mut Moment) -> Option<()> {
+/// The moment the clock says, which is `setDateTimeToCurrent`.
+///
+/// A connection told no clock answers nothing, so a statement that
+/// names `now` answers nothing as well. Reading it costs O(1).
+fn read_now(moment: &mut Moment, now: Option<i64>) -> Option<()> {
+    moment.jd = now?;
+    moment.has_jd = true;
+    moment.utc = true;
+    Some(())
+}
+
+/// The moment a text says, which is a date, a time, `now` or a number.
+fn read_moment(text: &[u8], moment: &mut Moment, now: Option<i64>) -> Option<()> {
     if read_date(text, moment).is_some() {
         return Some(());
     }
     if read_time(text, moment).is_some() {
         return Some(());
     }
-    // `now` and `subsec` without a moment before them both ask for the
-    // clock, which this crate is given none of, so neither is read
-    // here.
+    // `parseDateOrTimeString` reads `now` where the fields read
+    // neither a date nor a time.
+    if text.eq_ignore_ascii_case(b"now") {
+        return read_now(moment, now);
+    }
+    // `subsec` without a moment before it asks for the clock as well,
+    // which this crate does not read here.
     // `sqlite3AtoF` answers the whole text or nothing, so a date the
     // fields refused is not read as the number it begins with.
     let held = crate::number::real(text);
@@ -782,14 +801,16 @@ fn time_moved(moment: &mut Moment, text: &[u8], sign: u8) -> Option<()> {
 
 /// The moment the arguments say: the first of them read as a moment,
 /// and the ones after it as modifiers, which is `isDate`.
-fn moment_of(args: &[Value]) -> Option<Moment> {
+fn moment_of(args: &[Value], now: Option<i64>) -> Option<Moment> {
     let mut moment = Moment::default();
-    let first = args.first()?;
-    match first {
-        Value::Int(number) => read_number(&mut moment, integer_as_real(*number)),
-        Value::Real(number) => read_number(&mut moment, *number),
-        Value::Text(text) | Value::Blob(text) => read_moment(text, &mut moment)?,
-        Value::Null => return None,
+    match args.first() {
+        // `isDate` reads the clock where the call names no moment, so
+        // `datetime()` is `datetime('now')`.
+        None => read_now(&mut moment, now)?,
+        Some(Value::Int(number)) => read_number(&mut moment, integer_as_real(*number)),
+        Some(Value::Real(number)) => read_number(&mut moment, *number),
+        Some(Value::Text(text) | Value::Blob(text)) => read_moment(text, &mut moment, now)?,
+        Some(Value::Null) => return None,
     }
     for (at, held) in args.iter().enumerate().skip(1) {
         let text = match held {
@@ -883,6 +904,15 @@ fn written_time(moment: &Moment) -> Vec<u8> {
     out
 }
 
+/// The moment `seconds` since 1970 names, as the julian day number
+/// times 86 400 000, which a connection holds for `now`.
+///
+/// Reading it costs O(1).
+#[must_use]
+pub const fn julian_of(seconds: i64) -> i64 {
+    seconds.saturating_mul(1000).saturating_add(EPOCH)
+}
+
 /// The seconds since 1970, which `unixepoch` and `%s` both write.
 const fn unix_seconds(moment: &Moment) -> i64 {
     moment
@@ -893,8 +923,8 @@ const fn unix_seconds(moment: &Moment) -> i64 {
 
 /// `date(TIME, MOD, ...)`.
 #[must_use]
-pub fn date(args: &[Value]) -> Value {
-    let Some(mut moment) = moment_of(args) else {
+pub fn date(args: &[Value], now: Option<i64>) -> Value {
+    let Some(mut moment) = moment_of(args, now) else {
         return Value::Null;
     };
     moment.compute_ymd();
@@ -903,8 +933,8 @@ pub fn date(args: &[Value]) -> Value {
 
 /// `time(TIME, MOD, ...)`.
 #[must_use]
-pub fn time(args: &[Value]) -> Value {
-    let Some(mut moment) = moment_of(args) else {
+pub fn time(args: &[Value], now: Option<i64>) -> Value {
+    let Some(mut moment) = moment_of(args, now) else {
         return Value::Null;
     };
     moment.compute_hms();
@@ -913,8 +943,8 @@ pub fn time(args: &[Value]) -> Value {
 
 /// `datetime(TIME, MOD, ...)`.
 #[must_use]
-pub fn datetime(args: &[Value]) -> Value {
-    let Some(mut moment) = moment_of(args) else {
+pub fn datetime(args: &[Value], now: Option<i64>) -> Value {
+    let Some(mut moment) = moment_of(args, now) else {
         return Value::Null;
     };
     moment.compute_both();
@@ -926,8 +956,8 @@ pub fn datetime(args: &[Value]) -> Value {
 
 /// `julianday(TIME, MOD, ...)`.
 #[must_use]
-pub fn julianday(args: &[Value]) -> Value {
-    let Some(mut moment) = moment_of(args) else {
+pub fn julianday(args: &[Value], now: Option<i64>) -> Value {
+    let Some(mut moment) = moment_of(args, now) else {
         return Value::Null;
     };
     moment.compute_jd();
@@ -936,8 +966,8 @@ pub fn julianday(args: &[Value]) -> Value {
 
 /// `unixepoch(TIME, MOD, ...)`.
 #[must_use]
-pub fn unixepoch(args: &[Value]) -> Value {
-    let Some(mut moment) = moment_of(args) else {
+pub fn unixepoch(args: &[Value], now: Option<i64>) -> Value {
+    let Some(mut moment) = moment_of(args, now) else {
         return Value::Null;
     };
     moment.compute_jd();
@@ -995,11 +1025,11 @@ fn thursday(moment: &Moment) -> Moment {
 
 /// `strftime(FORMAT, TIME, MOD, ...)`.
 #[must_use]
-pub fn strftime(args: &[Value]) -> Value {
+pub fn strftime(args: &[Value], now: Option<i64>) -> Value {
     let Some(format) = args.first().and_then(Value::text) else {
         return Value::Null;
     };
-    let Some(mut moment) = moment_of(args.get(1..).unwrap_or_default()) else {
+    let Some(mut moment) = moment_of(args.get(1..).unwrap_or_default(), now) else {
         return Value::Null;
     };
     moment.compute_jd();
@@ -1133,10 +1163,10 @@ const NOUGHT: i64 = 148_699_540_800_000;
 ///
 /// Walking the months costs O(n) in them.
 #[must_use]
-pub fn timediff(args: &[Value]) -> Value {
+pub fn timediff(args: &[Value], now: Option<i64>) -> Value {
     let (Some(mut one), Some(mut other)) = (
-        moment_of(args.get(..1).unwrap_or_default()),
-        moment_of(args.get(1..2).unwrap_or_default()),
+        moment_of(args.get(..1).unwrap_or_default(), now),
+        moment_of(args.get(1..2).unwrap_or_default(), now),
     ) else {
         return Value::Null;
     };

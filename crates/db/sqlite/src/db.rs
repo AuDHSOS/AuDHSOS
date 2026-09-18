@@ -1231,6 +1231,9 @@ pub struct Database<'a> {
     encoding: Encoding,
     /// Where `random` and `randomblob` take their bytes from.
     random: crate::random::Source,
+    /// The moment `now` names, as the seconds since 1970, and nothing
+    /// where the caller told the connection none.
+    clock: Option<i64>,
     /// What the connection has written, which `changes()`,
     /// `total_changes()` and `last_insert_rowid()` answer.
     counted: crate::func::Counted,
@@ -1436,6 +1439,7 @@ impl<'a> Database<'a> {
             triggers: Vec::new(),
             encoding,
             random: crate::random::Source::default(),
+            clock: None,
             counted: crate::func::Counted::default(),
             naming: Naming::default(),
             defined: &[],
@@ -1458,6 +1462,19 @@ impl<'a> Database<'a> {
     #[must_use]
     pub const fn seeded(mut self, seed: u64) -> Self {
         self.random = crate::random::Source::new(seed);
+        self
+    }
+
+    /// The same database, with `now` naming the moment `seconds` since
+    /// 1970 says.
+    ///
+    /// SQLite reads the clock of the operating system, which this crate
+    /// has none of, so the caller says what the clock says and a
+    /// database that is not told refuses a statement naming `now`,
+    /// `CURRENT_TIME`, `CURRENT_DATE` or `CURRENT_TIMESTAMP`.
+    #[must_use]
+    pub const fn clocked(mut self, seconds: i64) -> Self {
+        self.clock = Some(seconds);
         self
     }
 
@@ -1974,15 +1991,15 @@ impl<'a> Database<'a> {
         else {
             return Ok(Vec::new());
         };
-        stored
-            .table
-            .columns
-            .iter()
-            .map(|column| match column.falls_back {
-                Some(expr) => Ok(crate::eval::evaluate(&stored.arena, expr, &stored.sql)?),
-                None => Ok(Value::Null),
-            })
-            .collect()
+        let clock = self.clock.map(crate::date::julian_of);
+        let mut out = Vec::with_capacity(stored.table.columns.len());
+        for column in &stored.table.columns {
+            out.push(match column.falls_back {
+                Some(id) => eval::evaluate(&stored.arena, id, &stored.sql, clock)?,
+                None => Value::Null,
+            });
+        }
+        Ok(out)
     }
 
     /// The name of the first `CHECK` of the table that does not hold
@@ -3476,7 +3493,7 @@ fn terms_of(arena: &Arena, filter: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Ve
             // A term that names a column is a term about the row, and
             // the row is what is being planned for, so only a value the
             // walk needs no row to read is one it can be held to.
-            let Ok(value) = evaluate_row(arena, value, sql, &eval::NoRow) else {
+            let Ok(value) = evaluate_row(arena, value, sql, &eval::NoRow(None)) else {
                 continue;
             };
             out.push(Bound {
@@ -5738,7 +5755,10 @@ fn values_of(
         if record.value(place)?.is_none()
             && let Some(expr) = column.falls_back
         {
-            let value = crate::eval::evaluate(&stored.arena, expr, &stored.sql)?;
+            // `sqlite3AlterFinishAddColumn` refuses a column added with
+            // a fallback that is not a constant, so no fallback read
+            // here names the clock.
+            let value = crate::eval::evaluate(&stored.arena, expr, &stored.sql, None)?;
             out.push(Some(value));
             continue;
         }
@@ -6081,6 +6101,10 @@ impl eval::Row for Cursor<'_> {
 
     fn random(&self) -> Option<&crate::random::Source> {
         Some(&self.reach.database.random)
+    }
+
+    fn clock(&self) -> Option<i64> {
+        self.reach.database.clock.map(crate::date::julian_of)
     }
 
     fn defined(&self, name: &[u8], count: usize) -> Option<crate::func::Defined> {
