@@ -14615,7 +14615,7 @@ impl RegisterVM {
             let Some(matched) = matched else {
                 return Ok(VALUE_NULL);
             };
-            return self.match_array(&text, &matched, heap, realm);
+            return self.match_array(&text, &matched, pattern.indices, heap, realm);
         }
         self.global_match(receiver, &pattern, &text, heap, realm)
     }
@@ -19081,7 +19081,7 @@ impl RegisterVM {
         let Some(matched) = matched else {
             return Ok(VALUE_NULL);
         };
-        self.match_array(&text, &matched, heap, realm)
+        self.match_array(&text, &matched, pattern.indices, heap, realm)
     }
 
     /// `String.prototype.match` of 22.1.3.14 and `String.prototype.search` of
@@ -19150,7 +19150,7 @@ impl RegisterVM {
             let Some(matched) = matched else {
                 return Ok(VALUE_NULL);
             };
-            return self.match_array(&text, &matched, heap, realm);
+            return self.match_array(&text, &matched, pattern.indices, heap, realm);
         }
         self.global_match(receiver, &pattern, &text, heap, realm)
     }
@@ -19335,6 +19335,7 @@ impl RegisterVM {
         &self,
         text: &[u16],
         found: &audhsos_regex::Match,
+        indices: bool,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
@@ -19373,6 +19374,52 @@ impl RegisterVM {
         let input = self.allocate_string(heap, text)?;
         let key = PropertyKey::String(heap.strings.intern("input")?);
         heap.define_own_named(array, key, input, PropertyFlags::ordinary_data())?;
+        // Step 31: the result carries `groups` whether or not the pattern has
+        // named captures, which this engine does not compile.
+        let key = PropertyKey::String(heap.strings.intern("groups")?);
+        heap.define_own_named(array, key, VALUE_UNDEFINED, PropertyFlags::ordinary_data())?;
+        // Steps 33 and 34: a pattern with `d` carries the pairs 22.2.7.8
+        // makes of the ranges the match holds.
+        if indices {
+            let pairs = Self::match_indices_array(found, heap, realm)?;
+            let key = PropertyKey::String(heap.strings.intern("indices")?);
+            heap.define_own_named(array, key, pairs, PropertyFlags::ordinary_data())?;
+        }
+        Ok(Value::from_object(array))
+    }
+
+    /// `MakeMatchIndicesIndexPairArray` of 22.2.7.8: one pair per capture, in
+    /// the order of the result, and undefined where a capture did not match.
+    fn match_indices_array(
+        found: &audhsos_regex::Match,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let pair = |range: &core::ops::Range<usize>, heap: &mut GenerationalHeap| {
+            let start = i32::try_from(range.start).map_err(|_| VMError::StringLimit)?;
+            let end = i32::try_from(range.end).map_err(|_| VMError::StringLimit)?;
+            let pair = realm.array(heap, 2)?;
+            heap.set_array_element(pair, 0, Value::from_smi(start))?;
+            heap.set_array_element(pair, 1, Value::from_smi(end))?;
+            Ok::<Value, VMError>(Value::from_object(pair))
+        };
+        let count = u32::try_from(found.captures.len().saturating_add(1))
+            .map_err(|_| VMError::PropertyLimit)?;
+        let array = realm.array(heap, count)?;
+        let whole = pair(&found.range, heap)?;
+        heap.set_array_element(array, 0, whole)?;
+        for (position, capture) in found.captures.iter().enumerate() {
+            let index =
+                u32::try_from(position.saturating_add(1)).map_err(|_| VMError::PropertyLimit)?;
+            let Some(range) = capture else {
+                continue;
+            };
+            let value = pair(range, heap)?;
+            heap.set_array_element(array, index, value)?;
+        }
+        // Step 9: the pairs carry `groups` as the result does.
+        let key = PropertyKey::String(heap.strings.intern("groups")?);
+        heap.define_own_named(array, key, VALUE_UNDEFINED, PropertyFlags::ordinary_data())?;
         Ok(Value::from_object(array))
     }
 
