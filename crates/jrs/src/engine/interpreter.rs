@@ -2344,16 +2344,11 @@ impl RegisterVM {
             let capability = promise::capability(heap, realm)?;
             self.write_reg(register, capability)?;
         }
-        // 27.5.1.1 makes the Generator of the call before the body runs, with
-        // the `prototype` the function carries, and the frame keeps it in a
-        // register of its own.
+        // 27.5.1.1 and 27.6.1.1 make the Generator after 10.2.11 has bound the
+        // parameters, so the register keeps the function until the body
+        // reaches its first instruction and makes it there.
         if let Some(register) = callee.generator_register {
-            let generator = if callee.async_generator {
-                Self::allocate_async_generator(function_ref, heap, realm)?
-            } else {
-                Self::allocate_generator(function_ref, heap, realm)?
-            };
-            self.write_reg(register, generator)?;
+            self.write_reg(register, Value::from_object(function_ref))?;
         }
         self.acc = VALUE_UNDEFINED;
         Ok(Some(code_id))
@@ -22275,11 +22270,11 @@ impl RegisterVM {
     /// 27.5.1.1: the Generator a call of a generator function answers, whose
     /// Prototype is the `prototype` the function carries.
     fn allocate_generator(
+        key: PropertyKey,
         function: ObjectRef,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        let key = PropertyKey::String(heap.strings.intern("prototype")?);
         let carried = heap
             .own_named_flags(function, key)?
             .filter(|flags| !flags.is_accessor)
@@ -22303,11 +22298,11 @@ impl RegisterVM {
     /// 27.6.1.1: the `AsyncGenerator` a call of an async generator function
     /// answers, whose Prototype is the `prototype` the function carries.
     fn allocate_async_generator(
+        key: PropertyKey,
         function: ObjectRef,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        let key = PropertyKey::String(heap.strings.intern("prototype")?);
         let carried = heap
             .own_named_flags(function, key)?
             .filter(|flags| !flags.is_accessor)
@@ -26130,6 +26125,25 @@ impl RegisterVM {
                         let register = active_code
                             .generator_register
                             .ok_or(VMError::InvalidRegister)?;
+                        // 27.5.1.1 reads the `prototype` the function carries
+                        // now, which an Initializer of a parameter may have
+                        // changed.
+                        if matches!(inst, Instruction::GeneratorStart) {
+                            // The register is a root the collector forwards,
+                            // so the function is read after the interning the
+                            // two allocations below begin with.
+                            let key = PropertyKey::String(heap.strings.intern("prototype")?);
+                            let function = self
+                                .read_reg(register)?
+                                .as_object()
+                                .ok_or(VMError::TypeError)?;
+                            let made = if active_code.async_generator {
+                                Self::allocate_async_generator(key, function, heap, realm)?
+                            } else {
+                                Self::allocate_generator(key, function, heap, realm)?
+                            };
+                            self.write_reg(register, made)?;
+                        }
                         let continuation = self.suspend_frame(
                             active_code,
                             pc,
