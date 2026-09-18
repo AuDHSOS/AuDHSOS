@@ -6399,6 +6399,42 @@ fn a_function_carries_the_name_it_was_given() -> Result<(), Error> {
 }
 
 #[test]
+fn the_normal_form_of_22_1_3_15_stands_for_basic_latin() -> Result<(), Error> {
+    // 22.1.3.15 answers the String in the form the call named, which every
+    // code point of Basic Latin already stands in.
+    for (source, expected) in [
+        ("'abc'.normalize()", "abc"),
+        ("'abc'.normalize('NFKD')", "abc"),
+        ("String(String.prototype.normalize.length)", "0"),
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let answer = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
+        let Value::String(text) = &answer else {
+            panic!("{source}: {answer:?}");
+        };
+        let held: alloc::vec::Vec<u16> = expected.encode_utf16().collect();
+        assert_eq!(&**text, held.as_slice(), "{source}");
+    }
+    // Step 4 names the four forms and refuses every other text.
+    let program = compile("'a'.normalize('X')", Limits::default())?;
+    assert!(program.uses_register_backend());
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Range { .. } | Error::Thrown { .. })
+    ));
+    // The tables of every other code point are not built.
+    let program = compile("'\\u00e9'.normalize()", Limits::default())?;
+    assert!(program.uses_register_backend());
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
+    Ok(())
+}
+
+#[test]
 fn the_notations_of_21_1_3_write_the_digits_of_the_exact_value() -> Result<(), Error> {
     // 21.1.3.2, 21.1.3.3 and 21.1.3.5 pick the integer closest to the value
     // and the larger one of a tie, which only the exact decimal expansion of

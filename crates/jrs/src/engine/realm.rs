@@ -350,6 +350,8 @@ pub enum Intrinsic {
     StringPrototypePadEnd,
     /// `String.prototype.padStart` (22.1.3.16).
     StringPrototypePadStart,
+    /// `String.prototype.normalize` (22.1.3.15).
+    StringPrototypeNormalize,
     /// `String.prototype.toLowerCase` (22.1.3.29).
     StringPrototypeToLowerCase,
     /// `String.prototype.toUpperCase` (22.1.3.32).
@@ -1378,7 +1380,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 476] = [
+    pub const ALL: [Self; 477] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1398,6 +1400,7 @@ impl Intrinsic {
         Self::StringPrototypeCodePointAt,
         Self::StringPrototypePadEnd,
         Self::StringPrototypePadStart,
+        Self::StringPrototypeNormalize,
         Self::StringPrototypeToLowerCase,
         Self::StringPrototypeToUpperCase,
         Self::StringPrototypeToLocaleLowerCase,
@@ -1890,6 +1893,7 @@ impl Intrinsic {
             | Self::StringPrototypeCodePointAt
             | Self::StringPrototypePadEnd
             | Self::StringPrototypePadStart
+            | Self::StringPrototypeNormalize
             | Self::StringPrototypeToLowerCase
             | Self::StringPrototypeToUpperCase
             | Self::StringPrototypeToLocaleLowerCase
@@ -2828,6 +2832,7 @@ impl Intrinsic {
             Self::NumberPrototypeToFixed => 473,
             Self::NumberPrototypeToExponential => 474,
             Self::NumberPrototypeToPrecision => 475,
+            Self::StringPrototypeNormalize => 476,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3314,6 +3319,7 @@ impl Intrinsic {
             Self::NumberPrototypeToFixed => 473,
             Self::NumberPrototypeToExponential => 474,
             Self::NumberPrototypeToPrecision => 475,
+            Self::StringPrototypeNormalize => 476,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3801,6 +3807,7 @@ impl Intrinsic {
             473 => Some(Self::NumberPrototypeToFixed),
             474 => Some(Self::NumberPrototypeToExponential),
             475 => Some(Self::NumberPrototypeToPrecision),
+            476 => Some(Self::StringPrototypeNormalize),
             436 => Some(Self::IteratorPrototypeConstructorGet),
             437 => Some(Self::IteratorPrototypeConstructorSet),
             438 => Some(Self::IteratorPrototypeToStringTagGet),
@@ -4248,6 +4255,7 @@ impl Intrinsic {
             Self::NumberPrototypeToFixed => "toFixed",
             Self::NumberPrototypeToExponential => "toExponential",
             Self::NumberPrototypeToPrecision => "toPrecision",
+            Self::StringPrototypeNormalize => "normalize",
             Self::StringPrototypeToLowerCase => "toLowerCase",
             Self::StringPrototypeToUpperCase => "toUpperCase",
             Self::StringPrototypeToLocaleLowerCase => "toLocaleLowerCase",
@@ -4991,6 +4999,7 @@ impl Intrinsic {
             | Self::StringPrototypeToUpperCase
             | Self::StringPrototypeToLocaleLowerCase
             | Self::StringPrototypeToLocaleUpperCase
+            | Self::StringPrototypeNormalize
             | Self::StringPrototypeTrim
             | Self::StringPrototypeTrimEnd
             | Self::StringPrototypeTrimStart

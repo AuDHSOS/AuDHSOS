@@ -3085,6 +3085,7 @@ impl RegisterVM {
             | Intrinsic::StringPrototypeCodePointAt
             | Intrinsic::StringPrototypePadEnd
             | Intrinsic::StringPrototypePadStart
+            | Intrinsic::StringPrototypeNormalize
             | Intrinsic::StringPrototypeToLowerCase
             | Intrinsic::StringPrototypeToUpperCase
             | Intrinsic::StringPrototypeToLocaleLowerCase
@@ -16448,6 +16449,33 @@ impl RegisterVM {
                     core::cmp::Ordering::Greater => 1,
                 };
                 Ok(Value::from_smi(order))
+            }
+            // 22.1.3.15 answers the String in the normal form the call named,
+            // which for a text of Basic Latin alone is the text itself.
+            Intrinsic::StringPrototypeNormalize => {
+                let form = self.call_argument(&call, 0, heap)?;
+                let named = if form.is_undefined() {
+                    alloc::vec::Vec::from(b"NFC".map(u16::from))
+                } else {
+                    property_name_units(form, heap, realm)?
+                };
+                let known = ["NFC", "NFD", "NFKC", "NFKD"]
+                    .into_iter()
+                    .any(|form| form.encode_utf16().eq(named.iter().copied()));
+                if !known {
+                    return Err(raise(
+                        heap,
+                        realm,
+                        super::realm::NativeErrorKind::RangeError,
+                        "a form 22.1.3.15 does not name",
+                    ));
+                }
+                // Every code point of Basic Latin stands alone in all four
+                // forms; the tables of every other one are not built.
+                if units.iter().any(|unit| *unit >= 0x80) {
+                    return Err(VMError::Unsupported("a normalization of 22.1.3.15"));
+                }
+                self.allocate_string(heap, &units)
             }
             // 22.1.3.29 to 22.1.3.32 map every code point with the Unicode
             // Default Case Conversion, which has no locale to refine.
