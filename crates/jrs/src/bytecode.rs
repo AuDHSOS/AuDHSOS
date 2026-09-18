@@ -10979,6 +10979,11 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::PromiseRace
         | crate::engine::realm::Intrinsic::PromiseAllSettled
         | crate::engine::realm::Intrinsic::PromiseWithResolvers
+        | crate::engine::realm::Intrinsic::PromisePrototypeFinally
+        | crate::engine::realm::Intrinsic::PromiseThenFinally
+        | crate::engine::realm::Intrinsic::PromiseCatchFinally
+        | crate::engine::realm::Intrinsic::PromiseValueThunk
+        | crate::engine::realm::Intrinsic::PromiseThrower
         | crate::engine::realm::Intrinsic::PromiseAllElement
         | crate::engine::realm::Intrinsic::PromiseAllSettledFulfilled
         | crate::engine::realm::Intrinsic::PromiseAllSettledRejected

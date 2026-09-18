@@ -1270,6 +1270,10 @@ pub struct RegisterVM {
     /// Root of the job record whose handler holds a frame, which settles when
     /// that frame returns or throws.
     running_job: Option<Root>,
+    /// Root of the record 27.2.5.3.1 keeps while the callback of a `finally`
+    /// holds a frame: the value the reaction was given and which of the two
+    /// closures it came from.
+    finally_of_the_job: Option<Root>,
     /// Whether 27.7.5.2 step 4 rejected the capability of an async body that
     /// stood on no caller, so the throw that reached it is settled and the
     /// drain of 9.5 goes on rather than the run ending.
@@ -1408,6 +1412,7 @@ impl RegisterVM {
             compiled_unit: None,
             jobs: None,
             running_job: None,
+            finally_of_the_job: None,
             settled_async_body: false,
             job_arguments: None,
             completion: None,
@@ -3020,6 +3025,7 @@ impl RegisterVM {
             Intrinsic::PromiseReject => self.promise_reject(call, heap, realm),
             Intrinsic::PromisePrototypeThen => self.promise_then(call, heap, realm),
             Intrinsic::PromisePrototypeCatch => self.promise_catch(call, heap, realm),
+            Intrinsic::PromisePrototypeFinally => self.promise_finally(&call, heap, realm),
             Intrinsic::ObjectPrototypeIsPrototypeOf => Self::is_prototype_of(
                 self.call_argument(&call, 0, heap)?,
                 call.receiver,
@@ -3058,7 +3064,13 @@ impl RegisterVM {
             // 28.1.2 leaves to the constructor it was given, so it never
             // answers here.
             // The dispatch that can open a frame reaches these before this.
-            Intrinsic::ReflectConstruct
+            // 27.2.5.3.1 and 27.2.5.3.2 stand on no object: the drain of 9.5
+            // is the only caller of the closures 27.2.5.3 makes.
+            Intrinsic::PromiseThenFinally
+            | Intrinsic::PromiseCatchFinally
+            | Intrinsic::PromiseValueThunk
+            | Intrinsic::PromiseThrower
+            | Intrinsic::ReflectConstruct
             | Intrinsic::PromiseAll
             | Intrinsic::PromiseAllSettled
             | Intrinsic::PromiseRace
@@ -24672,6 +24684,17 @@ impl RegisterVM {
             Intrinsic::PromisePrototypeCatch => {
                 self.then_of(receiver, VALUE_UNDEFINED, first, heap, realm)
             }
+            // 27.2.5.3.1 step 7 and 27.2.5.3.2 step 7 answer the value the
+            // reaction was given, whatever the promise of the callback said.
+            Intrinsic::PromiseValueThunk | Intrinsic::PromiseThrower => {
+                let state = Self::native_state(function, heap).ok_or(VMError::TypeError)?;
+                let held = promise::slot(heap, state, 0);
+                let value = promise::slot(heap, held, 0);
+                if intrinsic == Intrinsic::PromiseThrower {
+                    return Err(VMError::Thrown(value, None));
+                }
+                Ok(value)
+            }
             Intrinsic::PromiseResolveFunction | Intrinsic::PromiseRejectFunction => {
                 self.settle_through(
                     function,
@@ -24757,6 +24780,168 @@ impl RegisterVM {
         }
         let on_rejected = self.call_argument(&call, 0, heap)?;
         self.then_of(call.receiver, VALUE_UNDEFINED, on_rejected, heap, realm)
+    }
+
+    /// `Promise.prototype.finally` of 27.2.5.3.
+    ///
+    /// Step 6 invokes the `then` of the receiver, which must be the one of
+    /// this Realm, and the two halves of step 4 are the closures 27.2.5.3.1
+    /// and 27.2.5.3.2 name.
+    fn promise_finally(
+        &self,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let promise = call.receiver;
+        let Some(object) = promise.as_object() else {
+            return Err(type_error(
+                heap,
+                realm,
+                "Promise.prototype.finally called on a value that is no Object",
+            ));
+        };
+        let key = PropertyKey::String(heap.strings.intern("then")?);
+        let then = match heap.lookup_named(object, key)? {
+            Some(found) => Self::plain_value(found)?,
+            None => VALUE_UNDEFINED,
+        };
+        if !Self::is_intrinsic(then, Intrinsic::PromisePrototypeThen, heap) {
+            return Err(VMError::Unsupported(
+                "a `then` that is not %Promise.prototype.then%",
+            ));
+        }
+        let on_finally = self.call_argument(call, 0, heap)?;
+        // Step 4: a callback that is not callable stands on both halves.
+        if !Self::is_callable(on_finally, heap) {
+            return self.then_of(promise, on_finally, on_finally, heap, realm);
+        }
+        let held = promise::record(heap, realm, &[on_finally])?;
+        let then_finally =
+            promise::element_function(heap, realm, Intrinsic::PromiseThenFinally, held, 0)?;
+        let catch_finally =
+            promise::element_function(heap, realm, Intrinsic::PromiseCatchFinally, held, 0)?;
+        self.then_of(promise, then_finally, catch_finally, heap, realm)
+    }
+
+    /// The callback a closure of 27.2.5.3 carries and whether it is the one of
+    /// 27.2.5.3.2, for a function that is one of the two.
+    fn finally_callback(function: Value, heap: &GenerationalHeap) -> Option<(Value, bool)> {
+        let state = Self::native_state(function, heap)?;
+        let intrinsic = match heap.get_object(function.as_object()?)?.kind {
+            ObjectKind::NativeFunction { id, .. } => Intrinsic::from_id(id)?,
+            _ => return None,
+        };
+        let catching = match intrinsic {
+            Intrinsic::PromiseThenFinally => false,
+            Intrinsic::PromiseCatchFinally => true,
+            _ => return None,
+        };
+        let held = promise::slot(heap, state, 0);
+        Some((promise::slot(heap, held, 0), catching))
+    }
+
+    /// 27.2.5.3.1 step 1: the drain calls the callback of a `finally` in a
+    /// frame of its own, and answers where the run goes on where it opened
+    /// one.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the drain passes what a call of the job needs"
+    )]
+    fn begin_the_finally(
+        &mut self,
+        job: Value,
+        on_finally: Value,
+        catching: bool,
+        given: Value,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<Resumption>, VMError> {
+        let state = promise::record(heap, realm, &[given, Value::from_bool(catching)])?;
+        heap.enter_scope();
+        let held = heap.push_root(state)?;
+        self.finally_of_the_job = Some(held);
+        let call = Call {
+            receiver: VALUE_UNDEFINED,
+            func: Reg(0),
+            arg_start: Reg(0),
+            arg_count: 0,
+            slot: 0,
+            resume: Some(Resume::Job { arguments: held }),
+            construct: None,
+            return_pc: 0,
+            caller_code_id: None,
+            coerced: 0,
+        };
+        match self.enter_call_value(on_finally, units, active_feedback, heap, realm, call) {
+            Ok(Some(code_id)) => {
+                return Ok(Some(Resumption::At {
+                    code_id: Some(code_id),
+                    pc: 0,
+                }));
+            }
+            Ok(None) => {
+                self.finally_of_the_job = None;
+                self.finish_the_finally(held, heap, realm)?;
+                self.settle_job(job, self.acc, false, heap, realm)?;
+            }
+            Err(VMError::Thrown(value, _)) => {
+                self.finally_of_the_job = None;
+                heap.exit_scope();
+                self.settle_job(job, value, true, heap, realm)?;
+            }
+            Err(error) => return Err(error),
+        }
+        Ok(None)
+    }
+
+    /// 27.2.5.3.1 step 2 and 27.2.5.3.2 step 2: the callback has answered, so
+    /// the promise of that answer carries the value or the reason the
+    /// reaction was given.
+    fn finish_the_finally(
+        &mut self,
+        state: Root,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let value = promise::slot(heap, record, 0);
+        let catching = promise::slot(heap, record, 1) == VALUE_TRUE;
+        let promise = self.resolved_promise(self.acc, heap, realm)?;
+        let held = promise::record(heap, realm, &[value])?;
+        let thunk = promise::element_function(
+            heap,
+            realm,
+            if catching {
+                Intrinsic::PromiseThrower
+            } else {
+                Intrinsic::PromiseValueThunk
+            },
+            held,
+            0,
+        )?;
+        // Step 8 invokes the `then` of that promise, which is observable and
+        // so must be the one of this Realm.
+        let object = promise.as_object().ok_or(VMError::TypeError)?;
+        let key = PropertyKey::String(heap.strings.intern("then")?);
+        let then = match heap.lookup_named(object, key)? {
+            Some(found) => Self::plain_value(found)?,
+            None => VALUE_UNDEFINED,
+        };
+        if !Self::is_intrinsic(then, Intrinsic::PromisePrototypeThen, heap) {
+            heap.exit_scope();
+            return Err(VMError::Unsupported(
+                "a `then` that is not %Promise.prototype.then%",
+            ));
+        }
+        let answer = self.then_of(promise, thunk, VALUE_UNDEFINED, heap, realm)?;
+        heap.exit_scope();
+        self.acc = answer;
+        Ok(())
     }
 
     /// 27.2.5.4.1: a handler that is not callable is empty, and a settled
@@ -24949,6 +25134,24 @@ impl RegisterVM {
                     heap,
                 );
             }
+            // 27.2.5.3.1 step 1 calls the callback of a `finally`, which is a
+            // frame this drain opens; step 2 runs where it returns.
+            if let Some((on_finally, catching)) = Self::finally_callback(function, heap) {
+                if let Some(resumed) = self.begin_the_finally(
+                    job,
+                    on_finally,
+                    catching,
+                    first,
+                    units,
+                    active_feedback,
+                    heap,
+                    realm,
+                )? {
+                    return Ok(resumed);
+                }
+                self.clear_job(heap)?;
+                continue;
+            }
             if !Self::is_script_function(function, heap) {
                 let receiver = promise::slot(heap, job, promise::JOB_RECEIVER);
                 let second = promise::slot(heap, job, promise::JOB_SECOND);
@@ -25018,6 +25221,17 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Resumption, VMError> {
+        // 27.2.5.3.1 step 2: the callback of a `finally` has answered, and the
+        // clause resolves the promise of that answer before the job settles;
+        // a callback that threw leaves the value it threw and the scope the
+        // call opened.
+        if let Some(state) = self.finally_of_the_job.take() {
+            if threw.is_some() {
+                heap.exit_scope();
+            } else {
+                self.finish_the_finally(state, heap, realm)?;
+            }
+        }
         let running = self
             .running_job
             .and_then(|root| heap.root_value(root))

@@ -712,6 +712,17 @@ pub enum Intrinsic {
     PromiseAllSettled,
     /// `Promise.withResolvers`, 27.2.4.9.
     PromiseWithResolvers,
+    /// `Promise.prototype.finally`, 27.2.5.3.
+    PromisePrototypeFinally,
+    /// The then finally function of 27.2.5.3.1.
+    PromiseThenFinally,
+    /// The catch finally function of 27.2.5.3.2.
+    PromiseCatchFinally,
+    /// The thunk 27.2.5.3.1 step 7 makes, which answers the value the
+    /// reaction was given.
+    PromiseValueThunk,
+    /// The thrower 27.2.5.3.2 step 7 makes, which throws the reason.
+    PromiseThrower,
     /// The resolve element function of 27.2.4.1.3.
     PromiseAllElement,
     /// The fulfil element function of 27.2.4.2.2.
@@ -1382,7 +1393,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 478] = [
+    pub const ALL: [Self; 483] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1580,6 +1591,11 @@ impl Intrinsic {
         Self::PromiseRace,
         Self::PromiseAllSettled,
         Self::PromiseWithResolvers,
+        Self::PromisePrototypeFinally,
+        Self::PromiseThenFinally,
+        Self::PromiseCatchFinally,
+        Self::PromiseValueThunk,
+        Self::PromiseThrower,
         Self::PromiseAllElement,
         Self::PromiseAllSettledFulfilled,
         Self::PromiseAllSettledRejected,
@@ -2229,7 +2245,9 @@ impl Intrinsic {
             | Self::DatePrototypeToLocaleString
             | Self::DatePrototypeToLocaleDateString
             | Self::DatePrototypeToLocaleTimeString => IntrinsicHolder::DatePrototype,
-            Self::PromisePrototypeThen | Self::PromisePrototypeCatch => {
+            Self::PromisePrototypeThen
+            | Self::PromisePrototypeCatch
+            | Self::PromisePrototypeFinally => {
                 IntrinsicHolder::PromisePrototype
             }
             Self::PromiseResolve
@@ -2329,6 +2347,10 @@ impl Intrinsic {
             | Self::PromiseRejectFunction
             // 27.2.4.1.3, 27.2.4.2.2 and 27.2.4.2.3 stand on no object
             // either: the combinator that made one is the only caller.
+            | Self::PromiseThenFinally
+            | Self::PromiseCatchFinally
+            | Self::PromiseValueThunk
+            | Self::PromiseThrower
             | Self::PromiseAllElement
             | Self::PromiseAllSettledFulfilled
             | Self::PromiseAllSettledRejected
@@ -2838,6 +2860,11 @@ impl Intrinsic {
             Self::NumberPrototypeToPrecision => 475,
             Self::StringPrototypeNormalize => 476,
             Self::NumberPrototypeToLocaleString => 477,
+            Self::PromisePrototypeFinally => 478,
+            Self::PromiseThenFinally => 479,
+            Self::PromiseCatchFinally => 480,
+            Self::PromiseValueThunk => 481,
+            Self::PromiseThrower => 482,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3326,6 +3353,11 @@ impl Intrinsic {
             Self::NumberPrototypeToPrecision => 475,
             Self::StringPrototypeNormalize => 476,
             Self::NumberPrototypeToLocaleString => 477,
+            Self::PromisePrototypeFinally => 478,
+            Self::PromiseThenFinally => 479,
+            Self::PromiseCatchFinally => 480,
+            Self::PromiseValueThunk => 481,
+            Self::PromiseThrower => 482,
             Self::IteratorPrototypeConstructorGet => 436,
             Self::IteratorPrototypeConstructorSet => 437,
             Self::IteratorPrototypeToStringTagGet => 438,
@@ -3815,6 +3847,11 @@ impl Intrinsic {
             475 => Some(Self::NumberPrototypeToPrecision),
             476 => Some(Self::StringPrototypeNormalize),
             477 => Some(Self::NumberPrototypeToLocaleString),
+            478 => Some(Self::PromisePrototypeFinally),
+            479 => Some(Self::PromiseThenFinally),
+            480 => Some(Self::PromiseCatchFinally),
+            481 => Some(Self::PromiseValueThunk),
+            482 => Some(Self::PromiseThrower),
             436 => Some(Self::IteratorPrototypeConstructorGet),
             437 => Some(Self::IteratorPrototypeConstructorSet),
             438 => Some(Self::IteratorPrototypeToStringTagGet),
@@ -3879,6 +3916,10 @@ impl Intrinsic {
             | Self::FunctionPrototype
             | Self::PromiseResolveFunction
             | Self::PromiseRejectFunction
+            | Self::PromiseThenFinally
+            | Self::PromiseCatchFinally
+            | Self::PromiseValueThunk
+            | Self::PromiseThrower
             | Self::PromiseAllElement
             | Self::PromiseAllSettledFulfilled
             | Self::PromiseAllSettledRejected
@@ -4115,6 +4156,7 @@ impl Intrinsic {
             Self::PromiseReject => "reject",
             Self::PromisePrototypeThen => "then",
             Self::PromisePrototypeCatch => "catch",
+            Self::PromisePrototypeFinally => "finally",
 
             Self::Print => "print",
             Self::PromiseAll => "all",
@@ -5008,6 +5050,8 @@ impl Intrinsic {
             | Self::StringPrototypeToLocaleUpperCase
             | Self::StringPrototypeNormalize
             | Self::NumberPrototypeToLocaleString
+            | Self::PromiseValueThunk
+            | Self::PromiseThrower
             | Self::StringPrototypeTrim
             | Self::StringPrototypeTrimEnd
             | Self::StringPrototypeTrimStart
@@ -5293,6 +5337,9 @@ impl Intrinsic {
             | Self::PromiseAll
             | Self::PromiseRace
             | Self::PromiseAllSettled
+            | Self::PromisePrototypeFinally
+            | Self::PromiseThenFinally
+            | Self::PromiseCatchFinally
             | Self::PromiseAllElement
             | Self::PromiseAllSettledFulfilled
             | Self::PromiseAllSettledRejected
@@ -8493,6 +8540,10 @@ impl Realm {
                     | Intrinsic::AsyncThrow
                     | Intrinsic::PromiseResolveFunction
                     | Intrinsic::PromiseRejectFunction
+                    | Intrinsic::PromiseThenFinally
+                    | Intrinsic::PromiseCatchFinally
+                    | Intrinsic::PromiseValueThunk
+                    | Intrinsic::PromiseThrower
                     | Intrinsic::PromiseAllElement
                     | Intrinsic::PromiseAllSettledFulfilled
                     | Intrinsic::PromiseAllSettledRejected

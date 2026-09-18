@@ -154,7 +154,8 @@ pub fn element_function(
         &[group, Value::from_smi(index_as_smi(index)), VALUE_FALSE],
     )?;
     let parent = realm.function_prototype(heap)?;
-    let function = heap.allocate_native(parent, intrinsic.id(), 1, state)?;
+    // 17 gives each of these closures the `length` its own clause names.
+    let function = heap.allocate_native(parent, intrinsic.id(), intrinsic.length(), state)?;
     name_the_function(heap, function)?;
     Ok(Value::from_object(function))
 }

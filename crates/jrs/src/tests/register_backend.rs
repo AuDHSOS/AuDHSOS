@@ -6402,6 +6402,41 @@ fn a_function_carries_the_name_it_was_given() -> Result<(), Error> {
 }
 
 #[test]
+fn the_finally_of_27_2_5_3_calls_its_callback_and_keeps_the_settlement() -> Result<(), Error> {
+    // 27.2.5.3 registers the two closures of 27.2.5.3.1 and 27.2.5.3.2 with
+    // `then`: each calls the callback and answers the value or the reason the
+    // reaction was given, whatever the callback said.
+    for source in [
+        "var l='';Promise.resolve(1).finally(function(){l=l+'f'}).then(function(v){l=l+v});l",
+        "var l='';Promise.reject(2).finally(function(){l=l+'f'}).catch(function(e){l=l+e});l",
+        // A callback that is not callable stands on both halves.
+        "var l='';Promise.resolve(3).finally(4).then(function(v){l=l+v});l",
+        // 27.2.5.3.1 step 2 keeps the value, not what the callback answered.
+        "var l='';Promise.resolve(5).finally(function(){return 9}).then(function(v){l=l+v});l",
+        // A callback that throws rejects the promise the clause answered.
+        "var l='';Promise.resolve(6).finally(function(){throw 7}).catch(function(e){l=l+e});l",
+        "typeof Promise.prototype.finally",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // 17 counts the one parameter of the heading, which the stack backend
+    // does not, and 20.2.10 gives the function its name.
+    let program = compile(
+        "Promise.prototype.finally.length+','+Promise.prototype.finally.name",
+        Limits::default(),
+    )?;
+    assert!(program.uses_register_backend());
+    let answer =
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost)?;
+    let Value::String(text) = &answer else {
+        panic!("{answer:?}");
+    };
+    let held: alloc::vec::Vec<u16> = "1,finally".encode_utf16().collect();
+    assert_eq!(&**text, held.as_slice());
+    Ok(())
+}
+
+#[test]
 fn the_to_locale_string_of_21_1_3_4_answers_what_to_string_answers() -> Result<(), Error> {
     // 21.1.3.4 answers what 21.1.3.6 answers with no radix, because this
     // Realm holds the data of no locale. 20.1.3.5 stays a gap: it would
