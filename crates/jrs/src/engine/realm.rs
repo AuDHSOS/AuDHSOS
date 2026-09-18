@@ -4328,7 +4328,9 @@ impl Intrinsic {
             | Self::StringPrototypeAnchor
             | Self::StringPrototypeFontcolor
             | Self::StringPrototypeFontsize
-            | Self::StringPrototypeLink => TEXT,
+            | Self::StringPrototypeLink
+            // 22.2.6.11 step 2 converts the String it replaces in.
+            | Self::RegExpPrototypeReplace => TEXT,
             // 20.5.7.1 step 4 applies `ToString` to the message, which it
             // takes after the errors.
             Self::AggregateErrorConstructor => SECOND_TEXT,
