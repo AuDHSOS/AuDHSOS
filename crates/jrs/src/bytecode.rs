@@ -7814,16 +7814,77 @@ impl RegisterLowerer {
         })
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "for lowering keeps lexical scope, completion and object-shape state atomic"
-    )]
     fn lower_for(
         &mut self,
         initializer: &Stmt,
         condition: Option<&Expr>,
         step: Option<&Expr>,
         body: &Stmt,
+    ) -> Option<RegisterType> {
+        // 14.7.4.4 gives every iteration a copy of the environment of the
+        // head, which only a closure that reads a binding of the head can
+        // tell apart. The lowering takes the loop once to find out whether
+        // one does.
+        let mut names = Vec::new();
+        if let Stmt::Declare(bindings) = initializer {
+            for (pattern, _, _) in bindings {
+                pattern.names(&mut names);
+            }
+        }
+        let mut captured = 0usize;
+        if names.is_empty() {
+            return self.lower_for_body(initializer, condition, step, body, false, &mut captured);
+        }
+        let before = self.snapshot();
+        let taken = self.lower_for_body(initializer, condition, step, body, false, &mut captured);
+        // A loop the lowering refused left its bindings where they stood, and
+        // one it took has taken them back out again.
+        let held = if captured == 0 {
+            names
+                .iter()
+                .filter(|name| {
+                    self.bindings.get(*name).is_some_and(|binding| {
+                        matches!(binding.storage, RegisterBindingStorage::Context { .. })
+                    })
+                })
+                .count()
+        } else {
+            captured
+        };
+        if held == 0 {
+            return taken;
+        }
+        let own = self.code.own_context_slot_count;
+        self.restore(before);
+        // A context of the frame that holds anything but the bindings of the
+        // head would be copied with them, and the copy would take the writes
+        // of every closure that captured a binding before the loop.
+        if self.code.own_context_slot_count.is_some() || own != u16::try_from(held).ok() {
+            self.refuse("a binding of a `for` head that a nested function reads");
+            return None;
+        }
+        let mut again = 0usize;
+        self.lower_for_body(initializer, condition, step, body, true, &mut again)
+    }
+
+    /// Lowers the loop, with the per-iteration environments of 14.7.4.4 where
+    /// `copies` asks for them.
+    ///
+    /// `captured` answers whether a binding of the head reached the context of
+    /// the frame, which is what makes the environment of an iteration
+    /// observable.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "for lowering keeps lexical scope, completion and object-shape state atomic"
+    )]
+    fn lower_for_body(
+        &mut self,
+        initializer: &Stmt,
+        condition: Option<&Expr>,
+        step: Option<&Expr>,
+        body: &Stmt,
+        copies: bool,
+        captured: &mut usize,
     ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         let mut scoped_registers = Vec::new();
@@ -7858,6 +7919,15 @@ impl RegisterLowerer {
                 if register_lexical_dead_zone_read(bindings)? {
                     return None;
                 }
+                // The copies of 14.7.4.4 hold what the context holds, so
+                // every binding of the head stands there before the
+                // Initializer writes it.
+                if copies {
+                    for (name, _) in &scoped_registers {
+                        let name = name.clone();
+                        self.capture_binding(&name)?;
+                    }
+                }
                 for (pattern, _, expression) in bindings {
                     if let Some(expression) = expression {
                         self.initialize_pattern(pattern, expression)?;
@@ -7876,6 +7946,11 @@ impl RegisterLowerer {
             _ => return None,
         }
 
+        // 14.7.4.3 step 2 makes the environment of the first iteration once
+        // the Initializer has run.
+        if copies {
+            self.code.emit(Instruction::CopyContext);
+        }
         self.code.emit(Instruction::LdaUndefined);
         let result_register = self.allocate_register()?;
         self.code.emit(Instruction::Star(result_register));
@@ -7929,6 +8004,11 @@ impl RegisterLowerer {
         for jump in loop_state.continues {
             self.patch_jump(jump, step_start)?;
         }
+        // 14.7.4.3 step 3.e makes the environment of the next iteration
+        // before the Increment runs in it, and `continue` reaches it too.
+        if copies {
+            self.code.emit(Instruction::CopyContext);
+        }
         self.bindings = bindings_at_head.clone();
         if let Some(step) = step {
             self.lower(step)?;
@@ -7948,6 +8028,16 @@ impl RegisterLowerer {
         }
         self.bindings = bindings_at_head;
         self.release_register(result_register)?;
+        // A binding of the head that reached the context is what makes the
+        // environment of an iteration observable.
+        *captured = scoped_registers
+            .iter()
+            .filter(|(name, _)| {
+                self.bindings.get(name).is_some_and(|binding| {
+                    matches!(binding.storage, RegisterBindingStorage::Context { .. })
+                })
+            })
+            .count();
         for (name, register) in scoped_registers.into_iter().rev() {
             self.bindings.remove(&name)?;
             self.release_register(register)?;

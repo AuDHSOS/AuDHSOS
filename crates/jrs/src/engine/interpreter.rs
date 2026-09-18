@@ -27357,6 +27357,29 @@ impl RegisterVM {
                     self.acc = self.for_in_next(active_code, state, heap, realm)?;
                 }
                 Instruction::Throw => return Err(VMError::Thrown(self.acc, None)),
+                Instruction::CopyContext => {
+                    // 14.7.4.4 gives the iteration a context of its own that
+                    // holds what the one before it held.
+                    if let Some(context) = self.current_context {
+                        let held = heap
+                            .get_context(context)
+                            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+                        let parent = held.parent;
+                        let slots = u16::try_from(held.slots.len()).unwrap_or(u16::MAX);
+                        // The instruction stands at a Safe Point, which left
+                        // the Nursery room for what a native takes, so the
+                        // context is made without a collection that would
+                        // move the one it copies.
+                        let made = heap.allocate_context(parent, usize::from(slots))?;
+                        for slot in 0..slots {
+                            let value = heap
+                                .context_slot(context, 0, slot)
+                                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+                            heap.set_context_slot(made, 0, slot, value)?;
+                        }
+                        self.current_context = Some(made);
+                    }
+                }
                 Instruction::ThrowImmutable => {
                     // 6.2.6.1 step 3 with S true, which every write to a
                     // binding 14.3.1 made immutable carries.

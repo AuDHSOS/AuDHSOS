@@ -4455,14 +4455,17 @@ fn register_for_lowering_rejects_unstable_or_observable_lexical_cases() -> Resul
     for source in [
         "let i=1;for(let i=0;i<2;i++){}i",
         "let x=1;for(let {x}={x:2};x<3;x++){}x",
-        "for(let i=0;i<2;i++){(()=>i)}",
-        "for(let {i}={i:0};i<2;i++){(()=>i)}",
     ] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
             "{source}"
         );
     }
+    // 14.7.4.4 gives every iteration a copy of the environment of the head,
+    // which the closures of the body read apart.
+    differential("var r=[];for(let i=0;i<3;i++){r.push(()=>i)}''+r[0]()+r[1]()+r[2]()")?;
+    differential("var f;for(let i=0,g=()=>i;i<3;++i){f=g}''+f()")?;
+    differential("var r=[];for(let {i}={i:0};i<2;i++){r.push(()=>i)}''+r[0]()+r[1]()")?;
     assert!(matches!(
         compile("for(let {x}={x:1},x=2;x<3;x++){}", Limits::default()),
         Err(Error::Syntax { .. })

@@ -619,6 +619,13 @@ pub enum Instruction {
         /// Feedback vector slot for the call.
         slot: u16,
     },
+    /// `CreatePerIterationEnvironment` of 14.7.4.4: the frame takes a context
+    /// of its own that holds what the one it had holds, and every closure the
+    /// iteration makes captures that one.
+    ///
+    /// The new context has the parent and the slot count of the old, so every
+    /// address a closure was compiled with names the same binding.
+    CopyContext,
     /// `GetSuperConstructor` of 13.3.7.2: the Prototype of the running
     /// function, which 13.3.7.1 step 3 reads before the arguments.
     SuperConstructor {
@@ -1416,6 +1423,7 @@ impl BytecodeFunction {
             | Instruction::CreateRegExp(_)
             | Instruction::CreateArray(_)
             | Instruction::Throw
+            | Instruction::CopyContext
             | Instruction::ThrowImmutable
             | Instruction::Await
             | Instruction::GeneratorStart
