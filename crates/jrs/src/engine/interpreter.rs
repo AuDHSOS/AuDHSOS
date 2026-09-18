@@ -190,6 +190,9 @@ const ARRAY_WALK_CONSTRUCTING: u8 = 1;
 /// 23.1.2.1 step 8.f and 23.1.2.4 step 6 are writing the `length` of the
 /// answer, which 7.3.4 sends through a setter the object may have.
 const ARRAY_WALK_LENGTH: u8 = 2;
+/// 23.1.3.4 step 7 is constructing the species of the receiver, whose answer
+/// is the object the clause fills.
+const ARRAY_WALK_SPECIES: u8 = 3;
 
 /// Index of the capability of 27.2.1.1 in the record a clause waits in.
 const CAPABILITY_WAIT_CAPABILITY: u32 = 0;
@@ -337,6 +340,8 @@ struct ArrayWalk {
     convert_step: u8,
     /// Which part of 23.1.2 the walk stands in.
     phase: u8,
+    /// How many elements the clause has written into its answer.
+    written: i64,
 }
 
 impl ArrayWalk {
@@ -12768,6 +12773,10 @@ impl RegisterVM {
     /// Returns [`VMError::Thrown`] with a `TypeError` for a callback that is
     /// not callable, which is step 3 of each clause, and for the empty Array
     /// of 23.1.3.24 step 6 that was given no initial value.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function opens every clause of 23.1.3 that walks"
+    )]
     fn begin_array_iteration(
         &mut self,
         intrinsic: Intrinsic,
@@ -12873,6 +12882,7 @@ impl RegisterVM {
                 },
                 convert_step: 0,
                 phase: ARRAY_WALK_RUNNING,
+                written: 0,
             },
         )?;
         // The state outlives every frame the walk opens, so it is a root of a
@@ -13240,11 +13250,30 @@ impl RegisterVM {
                 .as_object()
                 .ok_or(VMError::Heap(HeapError::InvalidReference))?;
             let wanted = u32::try_from(wanted).map_err(|_| VMError::PropertyLimit)?;
-            let created = match Self::array_species_create(object, wanted, heap, realm) {
+            let created = match Self::array_species_or_constructor(object, wanted, heap, realm) {
                 Ok(created) => created,
                 Err(refused) => {
                     heap.exit_scope();
                     return Err(refused);
+                }
+            };
+            // Step 7 of 23.1.3.4 constructs a species of the Script, which is
+            // a frame the walk waits in.
+            let created = match created {
+                Ok(created) => created,
+                Err(species) => {
+                    walk.phase = ARRAY_WALK_SPECIES;
+                    walk.element_index = i64::from(wanted);
+                    Self::write_iteration(state, &walk, heap)?;
+                    return self.construct_the_species_of_23_1_3_4(
+                        state,
+                        species,
+                        call,
+                        units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    );
                 }
             };
             walk.output = Value::from_object(created);
@@ -13293,6 +13322,7 @@ impl RegisterVM {
                 converting: CONVERTING_NOTHING,
                 convert_step: 0,
                 phase: ARRAY_WALK_RUNNING,
+                written: 0,
             },
         )?;
         // The state outlives every frame the walk opens, so it is a root of a
@@ -13404,6 +13434,56 @@ impl RegisterVM {
             ..call
         };
         self.enter_call_value(constructor, units, active_feedback, heap, realm, call)
+    }
+
+    /// Step 7 of 23.1.3.4 for a species of the Script: the walk waits in the
+    /// construct, whose answer is the object the clause fills.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a construct a native makes runs where a call does, with what a call has"
+    )]
+    fn construct_the_species_of_23_1_3_4(
+        &mut self,
+        state: Root,
+        species: Value,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        if !Self::is_script_function(species, heap) {
+            heap.exit_scope();
+            return Err(VMError::Unsupported(
+                "a species of 23.1.3.4 written in Rust",
+            ));
+        }
+        // 10.2.2 step 5 creates the object for a base constructor and leaves a
+        // derived one to make its own at its super call.
+        let held = heap.push_root(species)?;
+        let receiver = if Self::derives(species, units, heap) {
+            VALUE_UNINITIALIZED
+        } else {
+            Value::from_object(Self::create_from_rooted_constructor(held, heap, realm)?)
+        };
+        // The allocation above may have moved the species, which the root
+        // still names.
+        let species = heap
+            .root_value(held)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let mut walk = Self::read_iteration(state, heap)?;
+        walk.output = receiver;
+        Self::write_iteration(state, &walk, heap)?;
+        self.pending_new_target = species;
+        let call = Call {
+            receiver,
+            arg_count: 1,
+            arg_start: Reg(0),
+            resume: Some(Resume::Iteration { state }),
+            construct: Some(Construction::Walk(state)),
+            ..call
+        };
+        self.enter_call_value(species, units, active_feedback, heap, realm, call)
     }
 
     /// The construct of 23.1.2 for a constructor of the Realm, which makes its
@@ -13551,11 +13631,19 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<(), VMError> {
-        if heap.array_length(object).is_some() && heap.is_extensible(object).unwrap_or(true) {
+        let key = PropertyKey::String(heap.intern_index_wide(u64::from(index))?);
+        // 10.4.2 keeps an index of an Array in the Elements store, whose
+        // entries carry the flags 7.3.5 writes; an index the Shape holds
+        // carries its own and takes the descriptor of 10.1.6.3.
+        if heap.array_length(object).is_some()
+            && heap.is_extensible(object).unwrap_or(true)
+            && heap.own_named_flags(object, key)?.is_none_or(|flags| {
+                flags.writable && flags.enumerable && flags.configurable && !flags.is_accessor
+            })
+        {
             heap.set_array_element(object, index, value)?;
             return Ok(());
         }
-        let key = PropertyKey::String(heap.intern_index_wide(u64::from(index))?);
         match heap.own_named_flags(object, key)? {
             // 10.1.6.3 step 4: a property that is not configurable takes no
             // descriptor of 7.3.5, which is configurable in every field.
@@ -13614,7 +13702,7 @@ impl RegisterVM {
         // from the checks 23.1.3 makes once it knows it.
         if let Some(answer) = answered {
             let mut walk = Self::read_iteration(state, heap)?;
-            if walk.phase == ARRAY_WALK_CONSTRUCTING {
+            if walk.phase == ARRAY_WALK_CONSTRUCTING || walk.phase == ARRAY_WALK_SPECIES {
                 // 10.2.2 step 13 has already chosen between what the
                 // constructor answered and the object its call started from.
                 walk.output = answer;
@@ -13852,6 +13940,7 @@ impl RegisterVM {
             converting,
             convert_step,
             phase,
+            written,
         } = heap
             .get_object(reference)
             .ok_or(VMError::Heap(HeapError::InvalidReference))?
@@ -13874,6 +13963,7 @@ impl RegisterVM {
             converting,
             convert_step,
             phase,
+            written,
         })
     }
 
@@ -13904,6 +13994,7 @@ impl RegisterVM {
                 converting: walk.converting,
                 convert_step: walk.convert_step,
                 phase: walk.phase,
+                written: walk.written,
             },
         )?;
         Ok(())
@@ -13932,7 +14023,9 @@ impl RegisterVM {
                     .ok_or(VMError::Heap(HeapError::InvalidReference))?;
                 let index =
                     u32::try_from(walk.element_index).map_err(|_| VMError::PropertyLimit)?;
-                heap.set_array_element(array, index, answer)?;
+                // Step 6.c.iii writes with 7.3.5, which a species of the
+                // Script takes as an ordinary property.
+                Self::create_element_or_throw(array, index, answer, heap, realm)?;
             }
             Intrinsic::ArrayFrom => {
                 let array = walk
@@ -13951,7 +14044,7 @@ impl RegisterVM {
                     .output
                     .as_object()
                     .ok_or(VMError::Heap(HeapError::InvalidReference))?;
-                let mut next = heap.array_length(array).unwrap_or(0);
+                let mut next = u32::try_from(walk.written).map_err(|_| VMError::PropertyLimit)?;
                 if Self::is_array(answer, heap) {
                     let part = answer
                         .as_object()
@@ -13959,16 +14052,15 @@ impl RegisterVM {
                     let count = heap.array_length(part).unwrap_or(0);
                     for index in 0..count {
                         if let Some(value) = Self::element_at(heap, part, index)? {
-                            heap.set_array_element(array, next, value)?;
-                            next = next.saturating_add(1);
-                        } else {
-                            next = next.saturating_add(1);
-                            heap.set_array_length(array, next)?;
+                            Self::create_element_or_throw(array, next, value, heap, realm)?;
                         }
+                        next = next.saturating_add(1);
                     }
                 } else {
-                    heap.set_array_element(array, next, answer)?;
+                    Self::create_element_or_throw(array, next, answer, heap, realm)?;
+                    next = next.saturating_add(1);
                 }
+                walk.written = i64::from(next);
             }
             // 23.1.3.8 appends the element the answer kept.
             Intrinsic::ArrayPrototypeFilter => {
@@ -13977,8 +14069,11 @@ impl RegisterVM {
                         .output
                         .as_object()
                         .ok_or(VMError::Heap(HeapError::InvalidReference))?;
-                    let next = heap.array_length(array).unwrap_or(0);
-                    heap.set_array_element(array, next, walk.element)?;
+                    // Step 6.c.iii.2 counts the elements it kept apart from
+                    // the index it read at.
+                    let next = u32::try_from(walk.written).map_err(|_| VMError::PropertyLimit)?;
+                    Self::create_element_or_throw(array, next, walk.element, heap, realm)?;
+                    walk.written = walk.written.saturating_add(1);
                 }
             }
             // 23.1.3.6 stops at the first false, 23.1.3.29 at the first true.
@@ -14832,6 +14927,15 @@ impl RegisterVM {
             return Err(VMError::Heap(HeapError::InvalidReference));
         };
         let index = index_value(element_index);
+        // 23.1.3.4 step 7 passes the count the clause asked for.
+        if phase == ARRAY_WALK_SPECIES {
+            return Ok([
+                index_value(element_index),
+                VALUE_UNDEFINED,
+                VALUE_UNDEFINED,
+                VALUE_UNDEFINED,
+            ]);
+        }
         // 23.1.2 gives the construct of its `this` value and the setter of the
         // `length` the same one argument.
         if phase != ARRAY_WALK_RUNNING {
@@ -15908,6 +16012,37 @@ impl RegisterVM {
             return Ok(realm.array(heap, length)?);
         }
         Err(VMError::Unsupported("a species constructor of the Script"))
+    }
+
+    /// The same, where a species of the Script is a construct the caller has
+    /// a frame for: the answer is the Array 23.1.3.4 made, or the constructor
+    /// step 7 calls.
+    fn array_species_or_constructor(
+        original: ObjectRef,
+        length: u32,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Result<ObjectRef, Value>, VMError> {
+        match Self::array_species_create(original, length, heap, realm) {
+            Ok(created) => Ok(Ok(created)),
+            Err(VMError::Unsupported("a species constructor of the Script")) => {
+                let key = PropertyKey::String(heap.strings.intern("constructor")?);
+                let constructor = match heap.lookup_named(original, key)? {
+                    Some(property) => Self::plain_value(property)?,
+                    None => VALUE_UNDEFINED,
+                };
+                let object = constructor.as_object().ok_or(VMError::TypeError)?;
+                let species =
+                    heap.lookup_named(object, super::realm::WellKnownSymbol::Species.key())?;
+                let species = match species {
+                    Some(property) if property.flags.is_accessor => constructor,
+                    Some(property) => property.value,
+                    None => VALUE_UNDEFINED,
+                };
+                Ok(Err(species))
+            }
+            Err(refused) => Err(refused),
+        }
     }
 
     /// An Array of the Realm holding these values, where a `None` stays the

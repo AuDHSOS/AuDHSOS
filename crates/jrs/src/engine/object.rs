@@ -255,6 +255,9 @@ pub enum ObjectKind {
         /// before any, 1 after the getter, 2 after `valueOf`, 3 after
         /// `toString`. The object being converted waits in `element`.
         convert_step: u8,
+        /// How many elements the clause has written into its answer, which
+        /// 23.1.3.8 and 23.1.3.13 count apart from the index they read at.
+        written: i64,
     },
     /// A Proxy exotic object of 10.5, which answers every internal method out
     /// of its handler.

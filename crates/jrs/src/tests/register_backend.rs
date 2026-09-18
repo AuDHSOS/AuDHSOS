@@ -9396,6 +9396,30 @@ fn a_capability_of_27_2_1_5_constructs_a_constructor_of_the_script() -> Result<(
 }
 
 #[test]
+fn a_species_of_23_1_3_4_that_is_a_constructor_of_the_script() -> Result<(), Error> {
+    // 23.1.3.21, 23.1.3.8 and 23.1.3.13 make their answer with 23.1.3.4,
+    // whose step 7 constructs the `@@species` of the constructor.
+    let made = "function D(n){this.n=n}function E(){}E[Symbol.species]=D;";
+    for source in [
+        "var a=[1,2,3];Object.defineProperty(a,'constructor',{value:E});var m=a.map(function(v){return v*2});''+(m instanceof D)+m.n+m[0]+m[1]+m[2]",
+        "var a=[1,2,3];Object.defineProperty(a,'constructor',{value:E});var f=a.filter(function(v){return v>1});''+(f instanceof D)+f.n+f[0]+f[1]",
+        "var a=[1,2];Object.defineProperty(a,'constructor',{value:E});var g=a.flatMap(function(v){return [v,v]});''+(g instanceof D)+g[0]+g[1]+g[2]+g[3]",
+        "var a=[];Object.defineProperty(a,'constructor',{value:E});''+(a.map(function(v){return v}) instanceof D)",
+        // Step 7 passes the count the clause asked for.
+        "var a=[1,2,3];Object.defineProperty(a,'constructor',{value:E});''+a.map(function(v){return v}).n",
+        "var a=[1,2,3];Object.defineProperty(a,'constructor',{value:E});''+a.filter(function(){return true}).n",
+        // What the species throws reaches the caller.
+        "function T(){throw new RangeError('s')}var a=[1];Object.defineProperty(a,'constructor',{value:{}});a.constructor[Symbol.species]=T;var r;try{a.map(function(v){return v})}catch(e){r=e.message};r",
+        // 7.3.5 writes a property of its own, whatever the species made.
+        "function F(){var q=[];Object.defineProperty(q,0,{value:0,writable:false,configurable:true,enumerable:false});return q}var a=[1];Object.defineProperty(a,'constructor',{value:{}});a.constructor[Symbol.species]=F;var r=a.map(function(){return 2});var d=Object.getOwnPropertyDescriptor(r,0);''+d.value+d.writable+d.enumerable+d.configurable",
+    ] {
+        let source = alloc::format!("{made}{source}");
+        differential(&source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn a_replace_value_that_is_callable_runs_for_every_match() -> Result<(), Error> {
     // 22.1.3.19 step 5 and 22.2.6.11 step 14.l call the replace value with
     // the match, its captures, where it stands and the whole text, and take
