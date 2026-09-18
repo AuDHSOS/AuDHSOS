@@ -12926,11 +12926,26 @@ impl RegisterVM {
                 PrimitiveStep::ValueOf => PropertyKey::String(heap.strings.intern("valueOf")?),
                 PrimitiveStep::ToString => PropertyKey::String(heap.strings.intern("toString")?),
             };
-            let method = heap
+            let found = heap
                 .lookup_named(object, key)?
                 .map(Self::plain_value)
                 .transpose()?
-                .filter(|method| Self::is_callable(*method, heap));
+                .unwrap_or(VALUE_UNDEFINED);
+            // 7.3.11 step 3: `@@toPrimitive` that is neither undefined nor
+            // null takes a callable and no other value; 7.1.1.1 passes over a
+            // `valueOf` or a `toString` that is none.
+            if step == PrimitiveStep::Exotic
+                && !found.is_undefined()
+                && !found.is_null()
+                && !Self::is_callable(found, heap)
+            {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "the @@toPrimitive of an object is not callable",
+                ));
+            }
+            let method = Some(found).filter(|method| Self::is_callable(*method, heap));
             if let Some(method) = method {
                 // 7.1.1 step 2 passes the hint; 7.1.1.1 passes nothing. The
                 // hint goes in the register the answer comes back to, which is
