@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Manuel Baesler and contributors
+
 // Throwaway rasterizer over text-core. Not part of the design:
 // f64 everywhere below the layout, no cache, no hinting, no gamma.
 // Its only job is to make text-core's numbers visible as pixels.
@@ -7,6 +10,8 @@
 // offscreen surface, Fill covers the mask. Porter-Duff and the separable
 // blend modes are implemented; the four non-separable ones fall back to
 // source-over and say so.
+
+#![forbid(unsafe_code)]
 
 use std::env;
 use std::error::Error;
@@ -243,6 +248,9 @@ fn cff_polys(commands: &[Command], place: &dyn Fn(f64, f64) -> (f64, f64)) -> Ve
     polys
 }
 
+/// Device-space polygons of one glyph.
+type Polys = Vec<Vec<(f64, f64)>>;
+
 /// One glyph's outline as device-space polygons.
 #[allow(clippy::too_many_arguments)]
 fn glyph_polys(
@@ -254,7 +262,7 @@ fn glyph_polys(
     scratch: &mut [VariationPoint],
     commands: &mut [Command],
     place: &dyn Fn(f64, f64) -> (f64, f64),
-) -> Result<Vec<Vec<(f64, f64)>>, Box<dyn Error>> {
+) -> Result<Polys, Box<dyn Error>> {
     Ok(match face.outline_kind() {
         OutlineKind::TrueType => {
             let glyf = Glyf::parse(face)?;
@@ -729,8 +737,7 @@ fn paint_stream(
                                 y2,
                                 line,
                             } => {
-                                let (p0, p1, p2) =
-                                    ((f(x0), f(y0)), (f(x1), f(y1)), (f(x2), f(y2)));
+                                let (p0, p1, p2) = ((f(x0), f(y0)), (f(x1), f(y1)), (f(x2), f(y2)));
                                 // p3 = p0 + projection of p0p1 onto the line
                                 // perpendicular to p0p2, through p0.
                                 let n = (p2.0 - p0.0, p2.1 - p0.1);
@@ -781,8 +788,7 @@ fn paint_stream(
                                 line,
                             } => {
                                 // Angle in half-turns, counter-clockwise.
-                                let ang = (gy - f(y)).atan2(gx - f(x))
-                                    / std::f64::consts::PI;
+                                let ang = (gy - f(y)).atan2(gx - f(x)) / std::f64::consts::PI;
                                 let ang = if ang < 0.0 { ang + 2.0 } else { ang };
                                 let (s0, s1) = (f(start), f(end));
                                 let t = if (s1 - s0).abs() < 1e-12 {
@@ -842,10 +848,7 @@ fn two_point_conical(
         return None;
     }
     let root = disc.sqrt();
-    for t in [(b + root) / a, (b - root) / a] {
-        if r0 + t * dr >= 0.0 {
-            return Some(t);
-        }
-    }
-    None
+    [(b + root) / a, (b - root) / a]
+        .into_iter()
+        .find(|t| r0 + t * dr >= 0.0)
 }
