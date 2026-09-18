@@ -370,6 +370,9 @@ pub enum Construction {
     /// Root naming the [`ObjectKind::ArrayIteration`] of 23.1.2, whose
     /// `output` is the object the construct started from.
     Walk(Root),
+    /// Register the object waits in for a super call 13.3.7.1 step 9 refuses
+    /// to bind, which the return answers with a `ReferenceError`.
+    Refused(Reg),
 }
 
 /// Light frame boundary recorded on the contiguous call stack.
@@ -6612,7 +6615,9 @@ impl RegisterVM {
         heap: &GenerationalHeap,
     ) -> Result<Value, VMError> {
         match made {
-            Construction::Register(register) => self.read_reg(register),
+            Construction::Register(register) | Construction::Refused(register) => {
+                self.read_reg(register)
+            }
             Construction::Held(root) => heap
                 .root_value(root)
                 .ok_or(VMError::Heap(HeapError::InvalidReference)),
@@ -6628,7 +6633,9 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
     ) -> Result<(), VMError> {
         match made {
-            Construction::Register(register) => self.write_reg(register, value),
+            Construction::Register(register) | Construction::Refused(register) => {
+                self.write_reg(register, value)
+            }
             Construction::Held(root) => heap.set_root(root, value).map_err(VMError::Heap),
             Construction::Walk(state) => {
                 let mut walk = Self::read_iteration(state, heap)?;
@@ -11421,6 +11428,8 @@ impl RegisterVM {
     )]
     fn super_call(
         &mut self,
+        func: Reg,
+        made: Reg,
         arg_start: Reg,
         arg_count: u16,
         forwarded: bool,
@@ -11436,30 +11445,21 @@ impl RegisterVM {
         let this_register = code
             .this_register
             .ok_or(VMError::Unsupported("a super call with no this binding"))?;
-        // Step 8: the binding is made once.
-        if self.read_reg(this_register)? != VALUE_UNINITIALIZED {
-            return Err(raise(
-                heap,
-                realm,
-                super::realm::NativeErrorKind::ReferenceError,
-                "this is already initialized",
-            ));
-        }
-        let self_register = code
-            .self_register
-            .ok_or(VMError::Unsupported("a super call with no callee"))?;
+        // Step 9 binds the `this` of the environment once, and refuses a
+        // second binding after step 6 has constructed: the object of the
+        // construct waits in a register of its own until the frame returns.
+        let bound = self.read_reg(this_register)? != VALUE_UNINITIALIZED;
+        let target = if bound {
+            Construction::Refused(made)
+        } else {
+            Construction::Register(this_register)
+        };
         let new_target_register = code
             .new_target_register
             .ok_or(VMError::Unsupported("a super call with no new target"))?;
-        let active = self
-            .read_reg(self_register)?
-            .as_object()
-            .ok_or(VMError::TypeError)?;
-        // 9.4.4 answers the Prototype of the running function.
-        let parent = heap
-            .get_object(active)
-            .ok_or(VMError::Heap(HeapError::InvalidReference))?
-            .prototype;
+        // Step 3 read 13.3.7.2 before the arguments; step 5 asks of that
+        // answer whether it constructs.
+        let parent = self.read_reg(func)?;
         if !Self::constructs(parent, heap) {
             return Err(type_error(heap, realm, "super is not a constructor"));
         }
@@ -11484,21 +11484,16 @@ impl RegisterVM {
             let object = self.create_from_new_target(heap, realm, new_target_register)?;
             Value::from_object(object)
         };
-        self.write_reg(this_register, receiver)?;
+        self.write_construction(target, receiver, heap)?;
         self.pending_new_target = self.read_reg(new_target_register)?;
-        let parent = self.read_reg(self_register)?;
-        let parent = heap
-            .get_object(parent.as_object().ok_or(VMError::TypeError)?)
-            .ok_or(VMError::Heap(HeapError::InvalidReference))?
-            .prototype;
         let call = Call {
             receiver,
-            func: self_register,
+            func,
             arg_start,
             arg_count,
             slot,
             resume: spread,
-            construct: Some(Construction::Register(this_register)),
+            construct: Some(target),
             return_pc,
             caller_code_id,
             coerced: 0,
@@ -11518,7 +11513,15 @@ impl RegisterVM {
                 heap.set_object_prototype(object, prototype)
                     .map_err(VMError::Heap)?;
             }
-            self.write_reg(this_register, self.acc)?;
+            self.write_construction(target, self.acc, heap)?;
+            if bound {
+                return Err(raise(
+                    heap,
+                    realm,
+                    super::realm::NativeErrorKind::ReferenceError,
+                    "this is already initialized",
+                ));
+            }
             return Ok(None);
         }
         if !Self::is_script_function(parent, heap) {
@@ -25554,13 +25557,32 @@ impl RegisterVM {
                 Instruction::DeriveClass { heritage } => {
                     self.derive_class(heritage, heap, realm)?;
                 }
+                Instruction::SuperConstructor { target } => {
+                    // 13.3.7.2 answers the Prototype of the running function.
+                    let active = active_code
+                        .self_register
+                        .ok_or(VMError::Unsupported("a super call with no callee"))?;
+                    let active = self
+                        .read_reg(active)?
+                        .as_object()
+                        .ok_or(VMError::TypeError)?;
+                    let parent = heap
+                        .get_object(active)
+                        .ok_or(VMError::Heap(HeapError::InvalidReference))?
+                        .prototype;
+                    self.write_reg(target, parent)?;
+                }
                 Instruction::SuperCall {
+                    func,
+                    made,
                     arg_start,
                     arg_count,
                     forwarded,
                     slot,
                 } => {
                     if let Some(code_id) = self.super_call(
+                        func,
+                        made,
                         arg_start,
                         arg_count,
                         forwarded,
@@ -26458,6 +26480,17 @@ impl RegisterVM {
                             && self.acc.as_object().is_none()
                         {
                             self.acc = self.read_construction(target, heap)?;
+                        }
+                        // 13.3.7.1 step 9: the construct of a super call ran,
+                        // and the `this` of the environment takes no second
+                        // binding.
+                        if matches!(frame.construct, Some(Construction::Refused(_))) {
+                            return Err(raise(
+                                heap,
+                                realm,
+                                super::realm::NativeErrorKind::ReferenceError,
+                                "this is already initialized",
+                            ));
                         }
                         if matches!(frame.resume, Some(Resume::Job { .. })) {
                             // 9.5: the job has answered, so its capability

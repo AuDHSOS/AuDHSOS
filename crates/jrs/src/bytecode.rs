@@ -2203,14 +2203,22 @@ impl RegisterLowerer {
             ExprKind::DefaultSuper => {
                 let this_register = self.code.this_register?;
                 let register = self.allocate_register()?;
+                let func = self.allocate_register()?;
+                let made = self.allocate_register()?;
+                self.code
+                    .emit(Instruction::SuperConstructor { target: func });
                 let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
                 self.code.emit(Instruction::SuperCall {
+                    func,
+                    made,
                     arg_start: register,
                     arg_count: 0,
                     forwarded: true,
                     slot,
                 });
                 self.code.emit(Instruction::Star(this_register));
+                self.release_register(made)?;
+                self.release_register(func)?;
                 self.release_register(register)?;
                 RegisterType::Unknown
             }
@@ -4979,6 +4987,13 @@ impl RegisterLowerer {
     fn lower_super_construct(&mut self, arguments: &[Expr]) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         let this_register = self.code.this_register?;
+        // Step 3 reads 13.3.7.2 before step 4 evaluates the arguments, so an
+        // argument that changes the Prototype of the running function does
+        // not change what the call constructs.
+        let func = self.allocate_register()?;
+        self.code
+            .emit(Instruction::SuperConstructor { target: func });
+        let made = self.allocate_register()?;
         let mut argument_registers = Vec::new();
         let mut argument_types = Vec::new();
         for argument in arguments {
@@ -5000,6 +5015,8 @@ impl RegisterLowerer {
         let arg_count = u16::try_from(arguments.len()).ok()?;
         let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
         self.code.emit(Instruction::SuperCall {
+            func,
+            made,
             arg_start,
             arg_count,
             forwarded: false,
@@ -5012,6 +5029,8 @@ impl RegisterLowerer {
         for register in argument_registers.into_iter().rev() {
             self.release_register(register)?;
         }
+        self.release_register(made)?;
+        self.release_register(func)?;
         self.escape(&argument_types);
         Some(RegisterType::Unknown)
     }

@@ -603,6 +603,12 @@ pub enum Instruction {
     /// The answer is the `this` the derived constructor binds, which the
     /// instruction that follows writes into the register of the binding.
     SuperCall {
+        /// Register holding what 13.3.7.2 answered, read before the
+        /// arguments were evaluated.
+        func: Reg,
+        /// Register the object of the construct waits in where 13.3.7.1 step
+        /// 9 refuses to bind it, which keeps it from the `this` binding.
+        made: Reg,
         /// First argument register.
         arg_start: Reg,
         /// Number of arguments.
@@ -612,6 +618,12 @@ pub enum Instruction {
         forwarded: bool,
         /// Feedback vector slot for the call.
         slot: u16,
+    },
+    /// `GetSuperConstructor` of 13.3.7.2: the Prototype of the running
+    /// function, which 13.3.7.1 step 3 reads before the arguments.
+    SuperConstructor {
+        /// Register the answer is written to.
+        target: Reg,
     },
     /// `GetThisBinding` of 9.4.5 for a derived constructor, whose binding is
     /// uninitialized until 13.3.7.1 has run.
@@ -1267,16 +1279,22 @@ impl BytecodeFunction {
                 Some(list)
             }
             Instruction::GetArrayLength { obj } => Some(obj),
-            Instruction::SuperBase { target } => Some(target),
+            Instruction::SuperBase { target } | Instruction::SuperConstructor { target } => {
+                Some(target)
+            }
             Instruction::MakeMethod { home } => Some(home),
             Instruction::DeriveClass { heritage } => Some(heritage),
             Instruction::SuperCall {
+                func,
+                made,
                 arg_start,
                 arg_count,
                 forwarded,
                 slot,
             } => {
                 self.verify_feedback(pc, slot, FeedbackKind::Call)?;
+                self.verify_register(pc, func)?;
+                self.verify_register(pc, made)?;
                 if forwarded {
                     None
                 } else {
