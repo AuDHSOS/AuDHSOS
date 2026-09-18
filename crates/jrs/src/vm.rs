@@ -814,7 +814,7 @@ impl Execution<'_> {
         let Ok(text) = alloc::string::String::from_utf16(source) else {
             return crate::engine::interpreter::Compiled::Refused;
         };
-        let Ok(program) = crate::compile(&text, self.limits) else {
+        let Ok(program) = crate::bytecode::compile_dynamic_expression(&text, self.limits) else {
             return crate::engine::interpreter::Compiled::Refused;
         };
         let Some(code) = program.register_code.as_ref() else {

@@ -502,6 +502,29 @@ fn compile_mode(source: &str, limits: Limits, realm: bool) -> Result<Program, Er
     compile_parsed(&body, limits, realm)
 }
 
+/// Compiles the text 20.2.1.1 built, whose sole statement is the parenthesised
+/// `FunctionExpression` of step 22.
+///
+/// Step 26 creates the function with `OrdinaryFunctionCreate` rather than
+/// evaluating that expression, so 15.2.5 makes no binding of the name the
+/// text carries: the body of a dynamic function reads `anonymous` as any
+/// other free name.
+pub(crate) fn compile_dynamic_expression(source: &str, limits: Limits) -> Result<Program, Error> {
+    let mut body = parser::parse(source, limits)?;
+    for statement in &mut body {
+        let Stmt::Expr(expression) = statement else {
+            continue;
+        };
+        let ExprKind::Group(inner) = &mut expression.kind else {
+            continue;
+        };
+        if let ExprKind::Function(function) = &mut inner.kind {
+            function.name = None;
+        }
+    }
+    compile_parsed(&body, limits, true)
+}
+
 pub(crate) fn compile_eval(
     source: &str,
     limits: Limits,
