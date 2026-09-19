@@ -11899,3 +11899,18 @@ fn reflect_construct_reaches_a_constructor_written_in_rust() -> Result<(), Error
     }
     Ok(())
 }
+
+#[test]
+fn an_arrow_of_a_derived_constructor_reads_the_this_13_3_7_1_made() -> Result<(), Error> {
+    // 10.2.1.1 gives an arrow no `this` of its own, and 9.4.5 refuses the one
+    // of a derived constructor until the super call has made it.
+    for source in [
+        "(function(){class B{constructor(){this.b=1}}class C extends B{constructor(){super();this.f=()=>this.b}}return ''+new C().f()})()",
+        "(function(){class B{constructor(){this.b=1}}var k;class D extends B{constructor(){var g=()=>this.b;super();k=g()}}new D();return ''+k})()",
+        "(function(){class B{}var r;class E extends B{constructor(){var h=()=>this;try{h()}catch(e){r=e instanceof ReferenceError}super()}}new E();return ''+r})()",
+        "(function(){class B{constructor(){this.b=1}}class F extends B{constructor(){super();this.v=(()=>this.b)()}}return ''+new F().v})()",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}

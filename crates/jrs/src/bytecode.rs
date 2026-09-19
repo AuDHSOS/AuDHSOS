@@ -2239,6 +2239,7 @@ impl RegisterLowerer {
                     slot,
                 });
                 self.code.emit(Instruction::Star(this_register));
+                self.write_the_captured_this();
                 self.release_register(made)?;
                 self.release_register(func)?;
                 self.release_register(register)?;
@@ -3310,10 +3311,6 @@ impl RegisterLowerer {
             // 13.3.7.1 has made it. The register carries that state and a copy
             // of it into the context does not, so an arrow that reads it there
             // is a named gap.
-            if self.code.derived {
-                self.refuse("the `this` of a derived constructor, read by an arrow");
-                return None;
-            }
             captures.insert(
                 String::from(THIS_BINDING),
                 self.capture_binding(THIS_BINDING)?,
@@ -4142,6 +4139,14 @@ impl RegisterLowerer {
             // The receiver of the call; the lowering can name no type for it.
             child.bindings.get_mut(THIS_BINDING)?.value_type = Some(RegisterType::Unknown);
             child.code.this_register = Some(register);
+            // 9.4.5 refuses the `this` binding of a derived constructor until
+            // 13.3.7.1 has made it, which 9.1.1.1.1 says of every binding a
+            // context slot holds uninitialized: an arrow reads it there and
+            // the super call writes it.
+            if derived && register_body_reads(&function.body, Reads::ArrowThis) {
+                child.bindings.get_mut(THIS_BINDING)?.initialized = false;
+                child.capture_binding(THIS_BINDING)?;
+            }
         }
         for statement in &function.body {
             match statement {
@@ -5057,6 +5062,7 @@ impl RegisterLowerer {
             slot,
         });
         self.code.emit(Instruction::Star(this_register));
+        self.write_the_captured_this();
         if let Some(dummy) = dummy {
             self.release_register(dummy)?;
         }
@@ -5088,6 +5094,7 @@ impl RegisterLowerer {
             slot,
         });
         self.code.emit(Instruction::Star(this_register));
+        self.write_the_captured_this();
         self.release_register(one)?;
         self.release_register(index)?;
         self.release_register(array)?;
@@ -5105,6 +5112,24 @@ impl RegisterLowerer {
     /// so the register is taken here and written where the base is read.
     fn super_base(&mut self) -> Option<crate::engine::bytecode::Reg> {
         self.allocate_register()
+    }
+
+    /// Writes the `this` 13.3.7.1 made into the context slot the arrows of
+    /// the constructor read it from, where the frame captured it.
+    ///
+    /// The accumulator holds the value the super call answered.
+    fn write_the_captured_this(&mut self) {
+        let Some(binding) = self.bindings.get(THIS_BINDING).copied() else {
+            return;
+        };
+        if let RegisterBindingStorage::Context { depth, slot } = binding.storage {
+            self.code
+                .emit(crate::engine::bytecode::Instruction::StoreContext {
+                    depth,
+                    slot,
+                    initialize: true,
+                });
+        }
     }
 
     /// `super.name` and `super[key]` of 13.3.7, read through `this`.
