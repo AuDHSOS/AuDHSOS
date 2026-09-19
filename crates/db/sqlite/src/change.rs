@@ -621,16 +621,25 @@ pub struct Writer {
 struct Saved {
     /// The name the statement wrote, with its quotes taken off.
     name: Vec<u8>,
-    /// The pages as they stood.
-    pages: Pages,
-    /// The header as it stood.
-    header: Header,
+    /// Every database the connection held, as it stood.
+    files: Vec<SavedFile>,
     /// How many foreign keys held at the end of the transaction pointed
     /// at no row.
     deferred: i64,
     /// Whether this savepoint opened the transaction, which is what
     /// makes releasing it a commit.
     opener: bool,
+}
+
+/// One database of a connection as a savepoint found it.
+#[derive(Clone)]
+struct SavedFile {
+    /// The name the connection knows the database by.
+    name: Vec<u8>,
+    /// The pages as they stood.
+    pages: Pages,
+    /// The header as it stood.
+    header: Header,
 }
 
 /// What a connection was told for the two pragmas that hold a truth
@@ -1133,6 +1142,7 @@ impl Writer {
         // this connection's own, which is what `PRAGMA database_list`
         // writes for one.
         let file = if fresh_file(&file) { Vec::new() } else { file };
+        let held = joined(held, self.held.began.is_some());
         let place = self
             .attached
             .iter()
@@ -2298,7 +2308,7 @@ impl Writer {
         if let Some(at) = found {
             return Ok(at);
         }
-        let held = self.opened_file(b":memory:")?;
+        let held = joined(self.opened_file(b":memory:")?, self.held.began.is_some());
         self.attached.push(Attached {
             called: Called {
                 name: b"temp".to_vec(),
@@ -2646,12 +2656,11 @@ impl Writer {
                 if self.held.began.is_some() {
                     return Err(Error::Nested);
                 }
-                self.held.pages.begin();
-                self.held.began = Some(self.held.header);
+                self.opening();
             }
             crate::ast::Transaction::Commit => {
                 if self.held.began.is_none() {
-                    return Err(Error::NoTransaction);
+                    return Err(Error::NoTransaction(false));
                 }
                 // `sqlite3VdbeCheckFk`: a transaction that leaves a
                 // foreign key held at its end pointing at no row is not
@@ -2660,18 +2669,16 @@ impl Writer {
                     self.refusing = Refusing::Fail;
                     return Err(Error::Foreign);
                 }
-                let was = self.held.began.take().ok_or(Error::NoTransaction)?;
                 self.saved.clear();
-                self.commit(&was)?;
+                self.committed()?;
             }
             crate::ast::Transaction::Rollback => {
-                let was = self.held.began.take().ok_or(Error::NoTransaction)?;
+                if self.held.began.is_none() {
+                    return Err(Error::NoTransaction(true));
+                }
                 self.saved.clear();
                 self.deferred = 0;
-                // The pages go back to what they held and the header
-                // with them, so the transaction leaves no trace.
-                self.held.pages.rollback();
-                self.held.header = was;
+                self.rolled_back();
             }
         }
         Ok(Vec::new())
@@ -2713,13 +2720,11 @@ impl Writer {
             // release of that savepoint commits.
             let opener = self.held.began.is_none();
             if opener {
-                self.held.pages.begin();
-                self.held.began = Some(self.held.header);
+                self.opening();
             }
             self.saved.push(Saved {
                 name,
-                pages: self.held.pages.clone(),
-                header: self.held.header,
+                files: self.saving(),
                 deferred: self.deferred,
                 opener,
             });
@@ -2734,9 +2739,10 @@ impl Writer {
             .ok_or_else(|| Error::NoSavepoint(name.clone()))?;
         if let crate::ast::Savepoint::Back(_) = asked {
             let held = self.saved.get(at).ok_or(Error::NoSavepoint(Vec::new()))?;
-            self.held.pages = held.pages.clone();
-            self.held.header = held.header;
-            self.deferred = held.deferred;
+            let deferred = held.deferred;
+            let files = held.files.clone();
+            self.deferred = deferred;
+            self.restoring(&files);
             // The savepoint the statement names stays open, and every
             // one inside it is gone.
             self.saved.truncate(at.saturating_add(1));
@@ -2752,59 +2758,151 @@ impl Writer {
         }
         self.saved.truncate(at);
         if opener {
-            let was = self.held.began.take().ok_or(Error::NoTransaction)?;
+            let was = self.held.began.take().ok_or(Error::NoTransaction(false))?;
             self.commit(&was)?;
         }
         Ok(Vec::new())
+    }
+
+    /// Every database the connection holds, as it stands, which is what a
+    /// savepoint keeps.
+    ///
+    /// Keeping them costs O(n) in the pages of every database.
+    fn saving(&self) -> Vec<SavedFile> {
+        let mut out = alloc::vec![SavedFile {
+            name: self.called.name.clone(),
+            pages: self.held.pages.clone(),
+            header: self.held.header,
+        }];
+        for held in &self.attached {
+            out.push(SavedFile {
+                name: held.called.name.clone(),
+                pages: held.held.pages.clone(),
+                header: held.held.header,
+            });
+        }
+        out
+    }
+
+    /// Every database the connection holds put back as `files` found it,
+    /// which is what a `ROLLBACK TO` writes.
+    ///
+    /// A database the savepoint did not hold is left as it stands, which
+    /// an `ATTACH` inside the savepoint added.
+    ///
+    /// Writing them costs O(n) in the pages of every database.
+    fn restoring(&mut self, files: &[SavedFile]) {
+        for file in files {
+            if file.name.eq_ignore_ascii_case(&self.called.name) {
+                self.held.pages = file.pages.clone();
+                self.held.header = file.header;
+                continue;
+            }
+            for held in &mut self.attached {
+                if held.called.name.eq_ignore_ascii_case(&file.name) {
+                    held.held.pages = file.pages.clone();
+                    held.held.header = file.header;
+                }
+            }
+        }
+    }
+
+    /// A transaction opened on every database the connection holds, which
+    /// is what a `BEGIN` and the `SAVEPOINT` that stands for one open.
+    fn opening(&mut self) {
+        for held in Self::files_mut(&mut self.held, &mut self.attached) {
+            held.pages.begin();
+            held.began = Some(held.header);
+        }
+    }
+
+    /// What the transaction wrote on every database it wrote, written.
+    ///
+    /// Each database carries a journal of its own, so a run that stops
+    /// between two of them leaves one written and one not.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what one of the commits refused.
+    fn committed(&mut self) -> Result<(), Error> {
+        for held in Self::files_mut(&mut self.held, &mut self.attached) {
+            // Every database the connection holds joined the
+            // transaction, so each carries the header it began under.
+            let was = held.began.take().unwrap_or(held.header);
+            commit_file(held, &was)?;
+        }
+        Ok(())
+    }
+
+    /// Every database the connection holds back where its transaction
+    /// began, which is what a `ROLLBACK` writes.
+    fn rolled_back(&mut self) {
+        for held in Self::files_mut(&mut self.held, &mut self.attached) {
+            let was = held.began.take().unwrap_or(held.header);
+            held.pages.rollback();
+            held.header = was;
+        }
+    }
+
+    /// Every database the connection holds, the one the statement writes
+    /// first.
+    fn files_mut<'a>(
+        held: &'a mut HeldFile,
+        attached: &'a mut [Attached],
+    ) -> impl Iterator<Item = &'a mut HeldFile> {
+        core::iter::once(held).chain(attached.iter_mut().map(|one| &mut one.held))
     }
 
     /// What the transaction wrote, written: the file is cut back where
     /// it vacuums itself, the header counts the pages and the free list
     /// it now has, and the commit leaves a journal or a frame.
     fn commit(&mut self, was: &Header) -> Result<(), Error> {
-        // A transaction that wrote no page is one the commit has
-        // nothing to write for, so the change counter stands where it
-        // stood.
-        if self.held.pages.changed() {
-            // `autoVacuumCommit`: a file that vacuums itself whole moves
-            // the pages at its end into the free pages below them and is
-            // cut back before the commit writes anything.
-            if self.held.header.incremental_vacuum == 0 {
-                self.held.pages.vacuum_commit()?;
-            }
-            self.held.header.pages = self.held.pages.count();
-            (self.held.header.freelist, self.held.header.freelist_pages) =
-                self.held.pages.freelist();
-            // `pager_write_changecounter`: a frame of page one holds
-            // the counter the file holds and one, and no checkpoint
-            // writes the file, so every commit writes the same counter
-            // there. A commit that writes the file itself carries the
-            // counter on.
-            if let Some(log) = &mut self.held.log {
-                // `walRestartLog`: the commit after a checkpoint begins
-                // the log again, because every frame of it is in the
-                // file already.
-                if self.held.restarting {
-                    log.restart();
-                    self.held.restarting = false;
-                }
-                let mut now = self.held.header;
-                now.change_counter = now.change_counter.saturating_add(1);
-                now.version_valid_for = now.change_counter;
-                log.commit(&self.held.pages.frames(&now), self.held.pages.count());
-            } else {
-                self.held.header.change_counter = self.held.header.change_counter.saturating_add(1);
-                self.held.header.version_valid_for = self.held.header.change_counter;
-                let written = self
-                    .held
-                    .pages
-                    .journal(was, self.held.nonce, self.held.sector);
-                self.held.journal = crate::journal::committed(&written, self.held.mode);
-            }
-        }
-        Ok(())
+        commit_file(&mut self.held, was)
     }
+}
 
+/// What the transaction wrote on one database, written: the file is cut
+/// back where it vacuums itself, the header counts the pages and the free
+/// list it now has, and the commit leaves a journal or a frame.
+fn commit_file(held: &mut HeldFile, was: &Header) -> Result<(), Error> {
+    // A transaction that wrote no page is one the commit has nothing to
+    // write for, so the change counter stands where it stood.
+    if !held.pages.changed() {
+        return Ok(());
+    }
+    // `autoVacuumCommit`: a file that vacuums itself whole moves the
+    // pages at its end into the free pages below them and is cut back
+    // before the commit writes anything.
+    if held.header.incremental_vacuum == 0 {
+        held.pages.vacuum_commit()?;
+    }
+    held.header.pages = held.pages.count();
+    (held.header.freelist, held.header.freelist_pages) = held.pages.freelist();
+    // `pager_write_changecounter`: a frame of page one holds the counter
+    // the file holds and one, and no checkpoint writes the file, so every
+    // commit writes the same counter there. A commit that writes the file
+    // itself carries the counter on.
+    if let Some(log) = &mut held.log {
+        // `walRestartLog`: the commit after a checkpoint begins the log
+        // again, because every frame of it is in the file already.
+        if held.restarting {
+            log.restart();
+            held.restarting = false;
+        }
+        let mut now = held.header;
+        now.change_counter = now.change_counter.saturating_add(1);
+        now.version_valid_for = now.change_counter;
+        log.commit(&held.pages.frames(&now), held.pages.count());
+        return Ok(());
+    }
+    held.header.change_counter = held.header.change_counter.saturating_add(1);
+    held.header.version_valid_for = held.header.change_counter;
+    let written = held.pages.journal(was, held.nonce, held.sector);
+    held.journal = crate::journal::committed(&written, held.mode);
+    Ok(())
+}
+
+impl Writer {
     /// `PRAGMA name = value`, which says how the file is written.
     ///
     /// The page size, the encoding and the auto-vacuum setting are what
@@ -8616,6 +8714,18 @@ const fn table_kind(without_rowid: bool) -> Kind {
     } else {
         Kind::LeafTable
     }
+}
+
+/// One database of a connection with the transaction of the connection
+/// open on it where `began` says the connection has one, which is what a
+/// database an `ATTACH` added inside a transaction joins.
+fn joined(held: HeldFile, began: bool) -> HeldFile {
+    let mut held = held;
+    if began {
+        held.pages.begin();
+        held.began = Some(held.header);
+    }
+    held
 }
 
 /// Whether a file name stands for a database of the connection's own

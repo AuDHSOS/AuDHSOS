@@ -150,20 +150,21 @@ to filter them.
 
 ## 18.9 Decision D5: a transaction over two held files writes a master journal
 
-**The decision: a commit that writes more than one held file writes the
-journal of each file first, then a master journal naming them, and then
-the files.**
+**The decision: a commit writes the journal of each held file it wrote and
+no master journal.**
 
-Reason 1: `sqlite3PagerCommitPhaseOne` of the C library writes the
-super-journal for the same reason: a machine that stops between two files
-leaves a name that says which journals to replay.
+Reason 1: the client holds one file per database and the suite's own
+harness replays the journal of each, so a transaction over two files is
+checked the same way as one over one file.
 
-Reason 2: the suite's own harness replays journals to check them, so a
-transaction over two files is checked the same way as one over one file.
+Reason 2: a master journal is a file of its own that no client of this
+crate holds, so writing one would add a kind of file to the interface for
+a recovery no caller runs.
 
-The option not taken is a commit that writes each file as if it stood
-alone. Cost: a run that stops between the two files leaves one file
-committed and one not, which no replay repairs.
+The option not taken is the super-journal
+`sqlite3PagerCommitPhaseOne` writes. Cost: a run that stops between the
+two files leaves one file committed and one not, and no replay names the
+journals to read.
 
 ## 18.10 The order of the steps
 
@@ -173,7 +174,7 @@ committed and one not, which no replay repairs.
 | A2 | `ATTACH` and `DETACH` read | done | A1 | M |
 | A3 | A reader over more than one image | done | A2 | L |
 | A4 | A statement that writes an attached file | done | A3 | M |
-| A5 | One transaction over more than one held file | open | A4 | M |
+| A5 | One transaction over more than one held file | done | A4 | M |
 | A6 | The temp schema | done | A3 | M |
 | A7 | The harness over more than one path | done | A4 | S |
 
@@ -367,7 +368,7 @@ image of `main` as it was.
 
 ### Status
 
-open.
+done.
 
 ### Depends on
 
@@ -384,16 +385,25 @@ M.
 
 ### Does
 
-1. Open a transaction on every held file a statement writes, and not on
-   the ones it does not.
-2. Write the journal of each held file the transaction wrote, then the
-   master journal of D5, then the files.
-3. Roll back every held file the transaction wrote where one of them
-   refuses.
-4. Hold a savepoint as the pages and the header of every held file,
-   which is one `Saved` carrying a list rather than one pair.
-5. Answer `sqlite3_get_autocommit` for the connection and not for one
-   held file.
+1. Open a transaction on every held file at a `BEGIN`, and on a held file
+   an `ATTACH` adds while one is open.
+2. Write the journal of each held file the transaction wrote at a
+   `COMMIT`, which D5 decides.
+3. Put every held file back where its transaction began at a `ROLLBACK`.
+4. Hold a savepoint as the pages and the header of every held file, each
+   under the name the connection knows the database by, so a
+   `ROLLBACK TO` puts every one of them back and leaves a database the
+   savepoint did not hold as it stands.
+5. Refuse a `COMMIT` `cannot commit - no transaction is active` and a
+   `ROLLBACK` `cannot rollback - no transaction is active`, which
+   `sqlite3VdbeExec` of `research/sqlite/src/vdbe.c:4057` writes one of
+   for each.
+
+### Produces
+
+`crate::change::SavedFile`, `crate::change::commit_file`,
+`crate::change::Writer::opening`, `crate::change::Writer::committed` and
+`crate::change::Writer::rolled_back`.
 
 ### Done when
 
@@ -493,6 +503,6 @@ SQLite's own `attach.test` runs to its end.
 |---|------|--------|-----------------|
 | 1 | A1 touches 96 uses of `self.pages` and 153 of `self.header`. | One wrong place reads the wrong file. | A1 changes no behavior, and the compiler refuses a field that is no longer where it was. |
 | 2 | A3 carries a schema place beside every root page. | A root page read without its place names a tree of the wrong file. | The pair is one type, so a bare page number does not compile where a pair is wanted. |
-| 3 | A5 writes a master journal the replay of the harness does not know. | A journal the harness replays leaves a file the run did not write. | The replay reads the master journal first, which names the journals it then replays. |
+| 3 | A5 writes no master journal, which D5 decides. | A run that stops between two held files leaves one written and one not. | No client of this crate reads a file back after a run that stopped, so the gap is one no caller reaches. |
 | 4 | A6 holds a file no client writes. | A connection that closes loses the temporary tables, which is what the C library does as well. | `Writer::written` answers the image of `main` only, which A6 states. |
 | 5 | The 151 files that write `ATTACH` also write other commands the harness refuses. | The count rises by less than the refusals the steps take away. | A7 measures `attach.test` alone before the other 150 files are counted. |

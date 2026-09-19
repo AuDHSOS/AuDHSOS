@@ -239,8 +239,8 @@ pub enum Error {
     /// with the name it was written as.
     NoEncoding(Vec<u8>),
     /// A `COMMIT` or a `ROLLBACK` on a connection with no transaction
-    /// open.
-    NoTransaction,
+    /// open, the truth naming which of the two the statement was.
+    NoTransaction(bool),
     /// An `ALTER TABLE ... RENAME TO` whose new name the schema already
     /// holds, with that name.
     Named(Vec<u8>),
@@ -765,7 +765,7 @@ impl Error {
                 alloc::string::String::from_utf8_lossy(name)
             ),
             Error::Nested => "cannot start a transaction within a transaction".to_string(),
-            Error::NoTransaction => "cannot commit - no transaction is active".to_string(),
+            Error::NoTransaction(rolling) => rolled(*rolling),
             Error::Mismatch => "datatype mismatch".to_string(),
             Error::NoNamedColumn(table, column) => alloc::format!(
                 "table {} has no column named {}",
@@ -6096,6 +6096,14 @@ const SCHEMA_TABLE: &[u8] = b"sqlite_master";
 /// `sqlite3InitOne` builds it out of.
 const SCHEMA_CREATE: &[u8] =
     b"CREATE TABLE sqlite_master(type text,name text,tbl_name text,rootpage int,sql text)";
+
+/// What a `COMMIT` and a `ROLLBACK` outside a transaction are refused
+/// with, which `sqlite3VdbeExec` of `research/sqlite/src/vdbe.c:4057`
+/// writes one of for each.
+fn rolled(rolling: bool) -> alloc::string::String {
+    let word = if rolling { "rollback" } else { "commit" };
+    alloc::format!("cannot {word} - no transaction is active")
+}
 
 /// Whether a name is one the temp schema's own table answers to, which
 /// `PREFERRED_TEMP_SCHEMA_TABLE` and `LEGACY_TEMP_SCHEMA_TABLE` of

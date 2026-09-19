@@ -2174,8 +2174,8 @@ fn what_bounding_a_transaction_refuses() {
     let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
     // A `COMMIT` and a `ROLLBACK` outside a transaction have none to
     // bound.
-    assert_eq!(writer.run(b"COMMIT"), Err(Error::NoTransaction));
-    assert_eq!(writer.run(b"ROLLBACK"), Err(Error::NoTransaction));
+    assert_eq!(writer.run(b"COMMIT"), Err(Error::NoTransaction(false)));
+    assert_eq!(writer.run(b"ROLLBACK"), Err(Error::NoTransaction(true)));
     writer.run(b"BEGIN").unwrap();
     // A transaction does not open inside a transaction.
     assert_eq!(writer.run(b"BEGIN"), Err(Error::Nested));

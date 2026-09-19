@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` covers every database a connection holds with one
+  transaction: a `BEGIN` opens one on each, a `COMMIT` writes each, a
+  `ROLLBACK` puts each back, and a savepoint keeps each. D-329 records it.
+  Catalog 6.6.224. `attach3.test` goes from 26 cases passing to 32.
+
 - `db-sqlite` holds the temp schema as a database of the connection's own
   at schema place one, which a statement written `TEMP` writes and which
   `sqlite_temp_schema` reads. D-327 records it. Catalog 6.6.222.

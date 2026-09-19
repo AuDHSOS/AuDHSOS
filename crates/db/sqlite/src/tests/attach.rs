@@ -552,3 +552,64 @@ fn what_the_temp_schema_holds() {
         "0|main||1|temp||2|held1||3|held2||4|held3||5|held4||6|held5||7|held6||8|held7||9|held8||10|held9||"
     );
 }
+
+/// One transaction over more than one database, which every database the
+/// connection holds joins.
+#[test]
+fn what_a_transaction_over_more_than_one_database_writes() {
+    let mut writer = opened();
+    writer.run(b"ATTACH ':memory:' AS aux").unwrap();
+    writer.run(b"CREATE TABLE aux.u(b)").unwrap();
+    let counted = |writer: &Writer, name: &[u8], table: &[u8]| {
+        let image = writer.attached_written(name).expect("an image");
+        let database = crate::db::Database::open(&image).unwrap();
+        database.rows_of(table).unwrap().len()
+    };
+    let held = |writer: &Writer| {
+        let image = writer.written();
+        let database = crate::db::Database::open(&image).unwrap();
+        database.rows_of(b"t").unwrap().len()
+    };
+    // A `ROLLBACK` puts every database back where the `BEGIN` found it.
+    writer.run(b"BEGIN").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1)").unwrap();
+    writer.run(b"INSERT INTO aux.u VALUES(2)").unwrap();
+    writer.run(b"ROLLBACK").unwrap();
+    assert_eq!(held(&writer), 0);
+    assert_eq!(counted(&writer, b"aux", b"u"), 0);
+    // A `COMMIT` writes every database the transaction wrote.
+    writer.run(b"BEGIN").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1)").unwrap();
+    writer.run(b"INSERT INTO aux.u VALUES(2)").unwrap();
+    writer.run(b"COMMIT").unwrap();
+    assert_eq!(held(&writer), 1);
+    assert_eq!(counted(&writer, b"aux", b"u"), 1);
+    // A `ROLLBACK TO` puts every database back where the `SAVEPOINT`
+    // found it, and a database an `ATTACH` added inside the transaction
+    // joins it.
+    writer.run(b"SAVEPOINT one").unwrap();
+    writer.run(b"ATTACH ':memory:' AS two").unwrap();
+    writer.run(b"CREATE TABLE two.v(c)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(3)").unwrap();
+    writer.run(b"INSERT INTO aux.u VALUES(4)").unwrap();
+    writer.run(b"ROLLBACK TO one").unwrap();
+    assert_eq!(held(&writer), 1);
+    assert_eq!(counted(&writer, b"aux", b"u"), 1);
+    writer.run(b"RELEASE one").unwrap();
+    // A `COMMIT` with no transaction open and a second `BEGIN` are both
+    // refused.
+    assert_eq!(
+        refused(&mut writer, b"COMMIT"),
+        "cannot commit - no transaction is active"
+    );
+    assert_eq!(
+        refused(&mut writer, b"ROLLBACK"),
+        "cannot rollback - no transaction is active"
+    );
+    writer.run(b"BEGIN").unwrap();
+    assert_eq!(
+        refused(&mut writer, b"BEGIN"),
+        "cannot start a transaction within a transaction"
+    );
+    writer.run(b"COMMIT").unwrap();
+}

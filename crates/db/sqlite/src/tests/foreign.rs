@@ -468,7 +468,7 @@ fn the_text_a_refusal_is_written_as() {
         "cannot start a transaction within a transaction"
     );
     assert_eq!(
-        Error::NoTransaction.message(),
+        Error::NoTransaction(false).message(),
         "cannot commit - no transaction is active"
     );
     assert_eq!(

@@ -6256,3 +6256,13 @@ Document 16 step Q8.
 - A table that holds no row takes the column.
 - A column that points and falls back to nothing is taken.
 - A column that points at no table is taken whatever it falls back to.
+
+### 6.6.224 One transaction over more than one database (`db-sqlite`)
+
+Document 18 step A5.
+
+- A `ROLLBACK` puts every database back where the `BEGIN` found it.
+- A `COMMIT` writes every database the transaction wrote.
+- A `ROLLBACK TO` puts every database back where the `SAVEPOINT` found it.
+- A database an `ATTACH` added inside a transaction joins it.
+- A `COMMIT` and a `ROLLBACK` outside a transaction carry a word each.

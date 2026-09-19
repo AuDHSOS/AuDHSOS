@@ -878,9 +878,9 @@ Size: L.
     holds. Read, which D-323 records.
 79. The rows of a database an `ATTACH` added, which a statement reads by
     a bare name or under the schema. Built, which D-324 records.
-80. A statement that writes a database an `ATTACH` added. Built, which
-    D-325 records. A transaction over more than one of them is open,
-    which A5 of document 18 specifies.
+80. A statement that writes a database an `ATTACH` added, and one
+    transaction over every database a connection holds. Built, which
+    D-325 and D-329 record.
 81. The temp schema, which a statement written `TEMP` writes. Built,
     which D-327 records.
 82. What an added column that points at another table may fall back to,
