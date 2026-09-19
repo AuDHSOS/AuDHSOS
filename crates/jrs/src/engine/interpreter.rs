@@ -947,6 +947,14 @@ pub enum Resume {
     },
 }
 
+/// What a step of a clause of 22.2.6 left with.
+enum Stepped {
+    /// Every value it needed is in hand.
+    Done,
+    /// It left for a frame, which answers into the record.
+    Entered(Option<u32>),
+}
+
 /// What a read of a property of 22.2.6 answered.
 enum Cached {
     /// The value, which the record now holds.
@@ -1221,8 +1229,31 @@ const REGEXP_RECORD_MATCHER: u32 = 10;
 /// The matches 22.2.6.11 step 11 has taken, where an `exec` of the Script
 /// answers them one at a time.
 const REGEXP_RECORD_MATCHES: u32 = 11;
+/// What step 14 has read off those matches, one record per match.
+const REGEXP_RECORD_PARTS: u32 = 12;
+/// How many of them are read.
+const REGEXP_RECORD_READING: u32 = 13;
+/// Which field of the match in flight is next.
+const REGEXP_RECORD_FIELD: u32 = 14;
+/// Where a getter or a method of 7.1.1 answers.
+const REGEXP_RECORD_SCRATCH: u32 = 15;
+/// Which method of 7.1.1 has been asked for the value in flight.
+const REGEXP_RECORD_STEP: u32 = 16;
+/// How many captures the match in flight holds.
+const REGEXP_RECORD_CAPTURES: u32 = 17;
 /// How many slots the record of a clause of 22.2.6 holds.
-const REGEXP_RECORD_SLOTS: usize = 12;
+const REGEXP_RECORD_SLOTS: usize = 18;
+
+/// Step 14.a reads the `length` of the match.
+const REGEXP_FIELD_LENGTH: i32 = 0;
+/// Step 14.c reads the text it matched.
+const REGEXP_FIELD_MATCHED: i32 = 1;
+/// Step 14.e reads where it stands.
+const REGEXP_FIELD_POSITION: i32 = 2;
+/// Step 14.i reads the named captures it holds.
+const REGEXP_FIELD_GROUPS: i32 = 3;
+/// Step 14.g reads the first of its captures.
+const REGEXP_FIELD_CAPTURES: i32 = 4;
 
 /// The clause has not read `lastIndex` for the first `exec` yet.
 const REGEXP_PHASE_OPENING: i32 = 0;
@@ -6638,7 +6669,15 @@ impl RegisterVM {
                 *slot = text;
             } else if index == REGEXP_RECORD_SECOND {
                 *slot = second;
-            } else if index == REGEXP_RECORD_PENDING || index == REGEXP_RECORD_PHASE {
+            } else if matches!(
+                index,
+                REGEXP_RECORD_PENDING
+                    | REGEXP_RECORD_PHASE
+                    | REGEXP_RECORD_READING
+                    | REGEXP_RECORD_FIELD
+                    | REGEXP_RECORD_STEP
+                    | REGEXP_RECORD_CAPTURES
+            ) {
                 *slot = Value::from_smi(0);
             }
         }
@@ -18796,11 +18835,23 @@ impl RegisterVM {
             REGEXP_RECORD_PHASE,
             Value::from_smi(REGEXP_PHASE_MATCHED),
         )?;
-        // Step 14 reads what each match holds, which is a property of an
-        // ordinary object the `exec` made.
+        // Step 14 reads what each match holds, which a getter of the Script
+        // answers and 7.1.1 converts: both are frames the clause waits in.
+        if let Stepped::Entered(entered) = self.read_the_parts_of_the_matches(
+            record,
+            state,
+            &call,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )? {
+            return Ok(entered);
+        }
+        let parts = promise::slot(heap, record, REGEXP_RECORD_PARTS);
         let mut found: Vec<MatchParts> = Vec::new();
-        for held in Self::record_values(taken, heap) {
-            found.push(Self::parts_of_one_match(held, text, heap, realm)?);
+        for entry in Self::record_values(parts, heap) {
+            found.push(Self::parts_of_one_match(entry, text, heap));
         }
         let given = promise::slot(heap, record, REGEXP_RECORD_SECOND);
         if Self::is_callable(given, heap) {
@@ -18828,67 +18879,382 @@ impl RegisterVM {
         Ok(Value::from_string(heap.intern_index(index)?))
     }
 
-    /// Steps 14.a to 14.k of 22.2.6.11 for one match: the text it matched,
-    /// where it stands and the text of every capture it holds.
-    fn parts_of_one_match(
-        held: Value,
-        text: &[u16],
-        heap: &mut GenerationalHeap,
-        realm: &Realm,
-    ) -> Result<MatchParts, VMError> {
-        let key = PropertyKey::String(heap.strings.intern("length")?);
-        let object = held.as_object().ok_or(VMError::TypeError)?;
-        let length = match heap.lookup_named(object, key)? {
-            Some(property) if property.flags.is_accessor => {
-                return Err(VMError::Unsupported("a property that is an accessor"));
-            }
-            Some(property) => integer_argument(property.value, heap, realm)?,
-            None => 0,
-        };
-        let captures = length.saturating_sub(1).max(0);
-        let name = Self::index_name(0, heap)?;
-        let matched = property_name_units(
-            Self::json_property_of(held, name, heap, realm)?,
-            heap,
-            realm,
-        )?;
-        let key = PropertyKey::String(heap.strings.intern("index")?);
-        let position = match heap.lookup_named(object, key)? {
-            Some(property) if property.flags.is_accessor => {
-                return Err(VMError::Unsupported("a property that is an accessor"));
-            }
-            Some(property) => integer_argument(property.value, heap, realm)?,
-            None => 0,
-        };
-        let position = usize::try_from(position.max(0))
-            .unwrap_or(usize::MAX)
-            .min(text.len());
-        let mut parts: Vec<Option<Vec<u16>>> = Vec::new();
-        let mut index = 1i64;
-        while index <= captures {
-            let at = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
-            let name = Self::index_name(at, heap)?;
-            let value = Self::json_property_of(held, name, heap, realm)?;
-            if value.is_undefined() {
-                parts.push(None);
-            } else {
-                parts.push(Some(property_name_units(value, heap, realm)?));
-            }
-            index = index.saturating_add(1);
-        }
-        // Step 14.i reads the named captures the match holds.
-        let key = PropertyKey::String(heap.strings.intern("groups")?);
-        let groups = match heap.lookup_named(object, key)? {
-            Some(property) if property.flags.is_accessor => {
-                return Err(VMError::Unsupported("a property that is an accessor"));
-            }
-            Some(property) => property.value,
-            None => VALUE_UNDEFINED,
-        };
-        Ok((position, matched, parts, groups))
+    /// Steps 14.a to 14.k of 22.2.6.11 for one match, out of the record the
+    /// reader filled: every value in it is a primitive already.
+    fn parts_of_one_match(entry: Value, text: &[u16], heap: &GenerationalHeap) -> MatchParts {
+        let held = Self::record_values(entry, heap);
+        let matched = heap
+            .strings
+            .to_utf16(
+                held.get(REPLACE_MATCH_TEXT as usize)
+                    .copied()
+                    .unwrap_or(VALUE_UNDEFINED),
+            )
+            .unwrap_or_default();
+        let position = usize::try_from(
+            held.get(REPLACE_MATCH_POSITION as usize)
+                .and_then(|value| value.as_smi())
+                .unwrap_or(0)
+                .max(0),
+        )
+        .unwrap_or(0)
+        .min(text.len());
+        let groups = held
+            .get(REPLACE_MATCH_GROUPS as usize)
+            .copied()
+            .unwrap_or(VALUE_UNDEFINED);
+        let captures = held
+            .get(REPLACE_MATCH_CAPTURES as usize..)
+            .unwrap_or_default()
+            .iter()
+            .map(|value| {
+                if value.is_undefined() {
+                    None
+                } else {
+                    Some(heap.strings.to_utf16(*value).unwrap_or_default())
+                }
+            })
+            .collect();
+        (position, matched, captures, groups)
     }
 
-    /// `RegExp.prototype[@@split]` of 22.2.6.14.
+    /// Step 14 of 22.2.6.11 for every match: each value is read with 7.3.2
+    /// and converted where the step says, both of which run a frame of the
+    /// Script.
+    ///
+    /// Answers the frame it left for, and nothing once every match is read.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a clause of 22.2.6 runs where a call does, with what a call has"
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function carries every field of a match step 14 reads"
+    )]
+    fn read_the_parts_of_the_matches(
+        &mut self,
+        record: Value,
+        state: Root,
+        call: &Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Stepped, VMError> {
+        if promise::slot(heap, record, REGEXP_RECORD_PARTS) == VALUE_UNINITIALIZED {
+            let list = Value::from_object(realm.array(heap, 0)?);
+            promise::set_slot(heap, record, REGEXP_RECORD_PARTS, list)?;
+        }
+        loop {
+            let taken = promise::slot(heap, record, REGEXP_RECORD_MATCHES);
+            let parts = promise::slot(heap, record, REGEXP_RECORD_PARTS);
+            let count = promise::length_of(heap, taken);
+            let reading = u32::try_from(
+                promise::slot(heap, record, REGEXP_RECORD_READING)
+                    .as_smi()
+                    .unwrap_or(0)
+                    .max(0),
+            )
+            .unwrap_or(u32::MAX);
+            if reading >= count {
+                return Ok(Stepped::Done);
+            }
+            let held = promise::slot(heap, taken, reading);
+            let Some(object) = held.as_object() else {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "the exec of a RegExp answered neither an Object nor null",
+                ));
+            };
+            // The record of the match grows as its fields are read.
+            if promise::length_of(heap, parts) <= reading {
+                let entry = promise::record(
+                    heap,
+                    realm,
+                    &[VALUE_UNDEFINED, Value::from_smi(0), VALUE_UNDEFINED],
+                )?;
+                promise::set_slot(heap, parts, reading, entry)?;
+            }
+            let entry = promise::slot(heap, parts, reading);
+            let field = promise::slot(heap, record, REGEXP_RECORD_FIELD)
+                .as_smi()
+                .unwrap_or(REGEXP_FIELD_LENGTH);
+            let captures = promise::slot(heap, record, REGEXP_RECORD_CAPTURES)
+                .as_smi()
+                .unwrap_or(0)
+                .max(0);
+            if field >= REGEXP_FIELD_CAPTURES.saturating_add(captures) {
+                promise::set_slot(
+                    heap,
+                    record,
+                    REGEXP_RECORD_READING,
+                    Value::from_smi(i32::try_from(reading).unwrap_or(i32::MAX).saturating_add(1)),
+                )?;
+                promise::set_slot(
+                    heap,
+                    record,
+                    REGEXP_RECORD_FIELD,
+                    Value::from_smi(REGEXP_FIELD_LENGTH),
+                )?;
+                promise::set_slot(heap, record, REGEXP_RECORD_CAPTURES, Value::from_smi(0))?;
+                continue;
+            }
+            let (key, hint) = match field {
+                REGEXP_FIELD_LENGTH => (
+                    PropertyKey::String(heap.strings.intern("length")?),
+                    Some(PrimitiveHint::Number),
+                ),
+                REGEXP_FIELD_MATCHED => (
+                    PropertyKey::String(heap.intern_index(0)?),
+                    Some(PrimitiveHint::String),
+                ),
+                REGEXP_FIELD_POSITION => (
+                    PropertyKey::String(heap.strings.intern("index")?),
+                    Some(PrimitiveHint::Number),
+                ),
+                REGEXP_FIELD_GROUPS => (PropertyKey::String(heap.strings.intern("groups")?), None),
+                _ => {
+                    let at = u32::try_from(field.saturating_sub(REGEXP_FIELD_CAPTURES))
+                        .unwrap_or(0)
+                        .saturating_add(1);
+                    (
+                        PropertyKey::String(heap.intern_index(at)?),
+                        Some(PrimitiveHint::String),
+                    )
+                }
+            };
+            // The value of the field, which a getter of the Script answers.
+            let mut value = promise::slot(heap, record, REGEXP_RECORD_SCRATCH);
+            if value == VALUE_UNINITIALIZED {
+                let found = heap.lookup_named(object, key)?;
+                if let Some(found) = found.filter(|property| property.flags.is_accessor) {
+                    promise::set_slot(
+                        heap,
+                        record,
+                        REGEXP_RECORD_PENDING,
+                        Value::from_smi(i32::try_from(REGEXP_RECORD_SCRATCH).unwrap_or(0)),
+                    )?;
+                    self.accessor_resume = Some(Resume::Property {
+                        intrinsic: Intrinsic::RegExpPrototypeReplace.id(),
+                        state,
+                        value: state,
+                        arg_start: call.arg_start,
+                        arg_count: call.arg_count,
+                    });
+                    let entered = self.enter_accessor(
+                        found.value,
+                        held,
+                        None,
+                        call.return_pc,
+                        call.caller_code_id,
+                        units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    )?;
+                    if entered.is_some() {
+                        return Ok(Stepped::Entered(entered));
+                    }
+                    // A getter of this Realm answered in place.
+                    self.accessor_resume = None;
+                    value = self.acc;
+                } else if let Some(found) = found {
+                    value = found.value;
+                } else {
+                    // An index and the `length` of an Array are no property of
+                    // the Shape, and the Prototype Chain answers the rest.
+                    let name = Value::from_string(match key {
+                        PropertyKey::String(name) => name,
+                        PropertyKey::Symbol(_) => return Err(VMError::TypeError),
+                    });
+                    value = Self::json_property_of(held, name, heap, realm)?;
+                }
+                promise::set_slot(heap, record, REGEXP_RECORD_SCRATCH, value)?;
+            }
+            // 7.1.1 of an Object runs a method of it, which is a frame too.
+            if let Some(hint) = hint
+                && value.is_object()
+            {
+                if let Stepped::Entered(entered) = self.convert_the_cached(
+                    record,
+                    state,
+                    value,
+                    hint,
+                    call,
+                    units,
+                    active_feedback,
+                    heap,
+                    realm,
+                )? {
+                    return Ok(Stepped::Entered(entered));
+                }
+                continue;
+            }
+            Self::take_one_field(entry, record, field, value, heap, realm)?;
+            promise::set_slot(heap, record, REGEXP_RECORD_SCRATCH, VALUE_UNINITIALIZED)?;
+            promise::set_slot(heap, record, REGEXP_RECORD_STEP, Value::from_smi(0))?;
+            promise::set_slot(
+                heap,
+                record,
+                REGEXP_RECORD_FIELD,
+                Value::from_smi(field.saturating_add(1)),
+            )?;
+        }
+    }
+
+    /// One field of step 14 of 22.2.6.11, converted and written into the
+    /// record of its match.
+    fn take_one_field(
+        entry: Value,
+        record: Value,
+        field: i32,
+        value: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        match field {
+            REGEXP_FIELD_LENGTH => {
+                let length = integer_argument(value, heap, realm)?.max(0);
+                let captures = i32::try_from(length.saturating_sub(1).max(0))
+                    .map_err(|_| VMError::PropertyLimit)?;
+                promise::set_slot(
+                    heap,
+                    record,
+                    REGEXP_RECORD_CAPTURES,
+                    Value::from_smi(captures),
+                )?;
+            }
+            REGEXP_FIELD_MATCHED => {
+                let text = property_name_units(value, heap, realm)?;
+                let matched = Value::from_string(heap.strings.intern_units(&text)?);
+                promise::set_slot(heap, entry, REPLACE_MATCH_TEXT, matched)?;
+            }
+            REGEXP_FIELD_POSITION => {
+                let position =
+                    i32::try_from(integer_argument(value, heap, realm)?.max(0)).unwrap_or(i32::MAX);
+                promise::set_slot(
+                    heap,
+                    entry,
+                    REPLACE_MATCH_POSITION,
+                    Value::from_smi(position),
+                )?;
+            }
+            REGEXP_FIELD_GROUPS => {
+                promise::set_slot(heap, entry, REPLACE_MATCH_GROUPS, value)?;
+            }
+            _ => {
+                let at = u32::try_from(field.saturating_sub(REGEXP_FIELD_CAPTURES)).unwrap_or(0);
+                let held = if value.is_undefined() {
+                    VALUE_UNDEFINED
+                } else {
+                    let text = property_name_units(value, heap, realm)?;
+                    Value::from_string(heap.strings.intern_units(&text)?)
+                };
+                promise::set_slot(heap, entry, REPLACE_MATCH_CAPTURES.saturating_add(at), held)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// 7.1.1 for a value a clause of 22.2.6 holds: the methods of 7.1.1.1 run
+    /// as frames, and each answer goes back into the scratch slot.
+    ///
+    /// Answers the frame it left for, and nothing where a method of this
+    /// Realm answered in place.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a clause of 22.2.6 runs where a call does, with what a call has"
+    )]
+    fn convert_the_cached(
+        &mut self,
+        record: Value,
+        state: Root,
+        value: Value,
+        hint: PrimitiveHint,
+        call: &Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Stepped, VMError> {
+        let object = value.as_object().ok_or(VMError::TypeError)?;
+        let step = promise::slot(heap, record, REGEXP_RECORD_STEP)
+            .as_smi()
+            .unwrap_or(0)
+            .max(0);
+        // 7.1.1 step 1 asks `@@toPrimitive` first, which takes the hint as an
+        // argument and so a register the clause has none of.
+        if step == 0
+            && heap
+                .lookup_named(object, super::realm::WellKnownSymbol::ToPrimitive.key())?
+                .is_some()
+        {
+            return Err(VMError::Unsupported(
+                "the @@toPrimitive of a value 22.2.6.11 converts",
+            ));
+        }
+        let order = if hint == PrimitiveHint::String {
+            ["toString", "valueOf"]
+        } else {
+            ["valueOf", "toString"]
+        };
+        let Some(name) = order
+            .get(usize::try_from(step).unwrap_or(usize::MAX))
+            .copied()
+        else {
+            return Err(type_error(heap, realm, "an object has no primitive value"));
+        };
+        promise::set_slot(
+            heap,
+            record,
+            REGEXP_RECORD_STEP,
+            Value::from_smi(step.saturating_add(1)),
+        )?;
+        let key = PropertyKey::String(heap.strings.intern(name)?);
+        let method = heap
+            .lookup_named(object, key)?
+            .map(Self::plain_value)
+            .transpose()?
+            .filter(|method| Self::is_callable(*method, heap));
+        let Some(method) = method else {
+            return Ok(Stepped::Done);
+        };
+        promise::set_slot(
+            heap,
+            record,
+            REGEXP_RECORD_PENDING,
+            Value::from_smi(i32::try_from(REGEXP_RECORD_SCRATCH).unwrap_or(0)),
+        )?;
+        let next = Call {
+            receiver: value,
+            func: call.arg_start,
+            arg_start: call.arg_start,
+            arg_count: 0,
+            slot: 0,
+            resume: Some(Resume::Property {
+                intrinsic: Intrinsic::RegExpPrototypeReplace.id(),
+                state,
+                value: state,
+                arg_start: call.arg_start,
+                arg_count: call.arg_count,
+            }),
+            construct: None,
+            return_pc: call.return_pc,
+            caller_code_id: call.caller_code_id,
+            coerced: 0,
+        };
+        if let Some(code_id) =
+            self.enter_call_value(method, units, active_feedback, heap, realm, next)?
+        {
+            return Ok(Stepped::Entered(Some(code_id)));
+        }
+        // A method of this Realm answered in place.
+        promise::set_slot(heap, record, REGEXP_RECORD_SCRATCH, self.acc)?;
+        Ok(Stepped::Done)
+    }
+
+    /// `RegExp.prototype[@@split]` of 22.2.6.14.    /// `RegExp.prototype[@@split]` of 22.2.6.14.
     ///
     /// The splitter 22.2.6.14 constructs differs from the receiver only in
     /// carrying `y`, so the walk matches stickily at each position instead of
@@ -23683,10 +24049,17 @@ impl RegisterVM {
         let Some(text) = heap.strings.to_utf16(key) else {
             return Ok(VALUE_UNDEFINED);
         };
-        match array_index_units(&text) {
-            Some(index) => Ok(Self::element_at(heap, object, index)?.unwrap_or(VALUE_UNDEFINED)),
-            None => Ok(VALUE_UNDEFINED),
+        if let Some(index) = array_index_units(&text) {
+            return Ok(Self::element_at(heap, object, index)?.unwrap_or(VALUE_UNDEFINED));
         }
+        // 10.4.2 keeps the `length` of an Array beside its Elements store,
+        // which no Shape carries.
+        if text == "length".encode_utf16().collect::<Vec<u16>>()
+            && let Some(length) = heap.array_length(object)
+        {
+            return Ok(index_value(i64::from(length)));
+        }
+        Ok(VALUE_UNDEFINED)
     }
 
     /// Step 3 of 25.5.2.4: the `toJSON` of the value, which 7.3.2 reads off

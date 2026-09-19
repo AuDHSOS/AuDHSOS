@@ -9446,6 +9446,14 @@ fn an_exec_of_the_script_answers_the_matches_of_22_2_6_11() -> Result<(), Error>
         "var r=/x/;r.exec=function(){throw 'e'};var t;try{r[Symbol.replace]('abc','-')}catch(e){t=e};''+t",
         // Step 2.b refuses everything but an Object and null.
         "var r=/x/;r.exec=function(){return 5};var t;try{r[Symbol.replace]('abc','-')}catch(e){t=e instanceof TypeError};''+t",
+        // Step 14 reads every part with 7.3.2, which a getter answers, and
+        // converts it, which runs a method of the object.
+        "var r=/x/;r.exec=function(){var o={};Object.defineProperty(o,'0',{get:function(){return 'b'}});Object.defineProperty(o,'index',{get:function(){return 1}});Object.defineProperty(o,'length',{get:function(){return 1}});return o};r[Symbol.replace]('abc','[$&]')",
+        "var r=/x/;r.exec=function(){return {0:{toString:function(){return 'b'}},index:{valueOf:function(){return 1}},length:{valueOf:function(){return 2}},1:{toString:function(){return 'C'}}}};r[Symbol.replace]('abc','<$1>')",
+        // An Array keeps its `length` and its indices beside the Shape.
+        "var r=/x/;r.exec=function(){return ['b','B']};r[Symbol.replace]('abc','<$1>')",
+        // What a getter of a part throws leaves the clause.
+        "var r=/x/;r.exec=function(){var o={};Object.defineProperty(o,'index',{get:function(){throw 'g'}});o[0]='b';o.length=1;return o};var t;try{r[Symbol.replace]('abc','-')}catch(e){t=e};''+t",
     ] {
         differential(source)?;
     }
