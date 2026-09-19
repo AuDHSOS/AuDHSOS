@@ -1144,6 +1144,8 @@ const PROXY_KIND_SET_PROTOTYPE: i32 = 4;
 const PROXY_KIND_EXTENSIBLE: i32 = 5;
 /// The `[[PreventExtensions]]` of 10.5.4.
 const PROXY_KIND_PREVENT: i32 = 6;
+/// The `[[GetOwnProperty]]` of 10.5.5.
+const PROXY_KIND_OWN: i32 = 7;
 /// The bit of `PROXY_PRESENT` for each field a descriptor may have.
 const DESCRIPTOR_VALUE: i32 = 1;
 /// The bit for `[[Writable]]`.
@@ -6016,6 +6018,28 @@ impl RegisterVM {
             return self.begin_define_on_a_proxy(
                 proxy,
                 intrinsic,
+                &call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
+        // 20.1.2.8 and 28.1.6 reach `[[GetOwnProperty]]`, which for a Proxy
+        // is the `getOwnPropertyDescriptor` of its handler.
+        if matches!(
+            intrinsic,
+            Intrinsic::ObjectGetOwnPropertyDescriptor | Intrinsic::ReflectGetOwnPropertyDescriptor
+        ) && let Some(proxy) = self
+            .call_argument(&call, 0, heap)?
+            .as_object()
+            .filter(|object| heap.is_a_proxy(*object))
+        {
+            let key = self.call_argument(&call, 1, heap)?;
+            let name = property_key(key, heap, realm)?;
+            return self.begin_the_proxy_own_property(
+                proxy,
+                name,
                 &call,
                 units,
                 active_feedback,
@@ -11219,6 +11243,158 @@ impl RegisterVM {
         Ok(None)
     }
 
+    /// `[[GetOwnProperty]]` of 10.5.5: the `getOwnPropertyDescriptor` of the
+    /// handler answers, as the object 6.2.6.4 makes of the descriptor.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a trap opens a frame, which needs what a call needs"
+    )]
+    fn begin_the_proxy_own_property(
+        &mut self,
+        proxy: ObjectRef,
+        name: PropertyKey,
+        call: &Call,
+        code: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let (target, handler) = Self::proxy_parts(proxy, heap, realm)?;
+        let trap = Self::proxy_trap(handler, "getOwnPropertyDescriptor", heap, realm)?;
+        // Reading what the target owns is its own `[[GetOwnProperty]]`, which
+        // for a target that is itself a Proxy is a second trap.
+        if target
+            .as_object()
+            .is_some_and(|object| heap.is_a_proxy(object))
+        {
+            return Err(VMError::Unsupported("an internal method of a Proxy"));
+        }
+        let Some(object) = target.as_object() else {
+            return Err(VMError::TypeError);
+        };
+        // Step 4 forwards to the target where the handler carries no trap.
+        if trap.is_undefined() {
+            self.acc = Self::own_descriptor_object(object, name, heap, realm)?;
+            return Ok(None);
+        }
+        let key = Self::key_value(name);
+        let record = promise::record(heap, realm, &[target, key, Value::from_smi(PROXY_KIND_OWN)])?;
+        let arguments = Self::array_of(alloc::vec![target, key], heap, realm)?;
+        // The record and the List outlive the frame the trap opens, so they
+        // are roots of a scope of their own, which the answer leaves.
+        heap.enter_scope();
+        let state = heap.push_root(record)?;
+        let list = heap.push_root(arguments)?;
+        let call = Call {
+            receiver: Value::from_object(handler),
+            func: Reg(0),
+            arg_start: Reg(0),
+            arg_count: 2,
+            slot: 0,
+            resume: Some(Resume::ProxyTrap {
+                state,
+                arguments: list,
+            }),
+            construct: None,
+            return_pc: call.return_pc,
+            caller_code_id: call.caller_code_id,
+            coerced: 0,
+        };
+        let entered = self.enter_call_value(trap, code, active_feedback, heap, realm, call)?;
+        if entered.is_some() {
+            return Ok(entered);
+        }
+        // A trap written in Rust answered without a frame of its own.
+        let answered = self.acc;
+        self.finish_the_proxy_trap(state, answered, heap, realm)?;
+        Ok(None)
+    }
+
+    /// The descriptor of one own property as 6.2.6.4 makes it, or undefined
+    /// where the object owns no such property.
+    fn own_descriptor_object(
+        object: ObjectRef,
+        name: PropertyKey,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let Some(flags) = heap.own_named_flags(object, name)? else {
+            return Ok(VALUE_UNDEFINED);
+        };
+        let indexed = Self::element_index_of(object, name, heap);
+        let held = Self::own_property_value(object, name, indexed, heap)?;
+        Self::from_property_descriptor(held, flags, heap, realm)
+    }
+
+    /// Steps 6 to 15 of 10.5.5: what the target owes the descriptor its
+    /// `getOwnPropertyDescriptor` trap answered.
+    fn the_target_takes_the_own_property(
+        answered: Value,
+        target: Value,
+        name: PropertyKey,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        // Step 6: the trap answers an Object or undefined and nothing else.
+        if !answered.is_object() && !answered.is_undefined() {
+            return Err(type_error(
+                heap,
+                realm,
+                "the getOwnPropertyDescriptor of a Proxy answers an object or undefined",
+            ));
+        }
+        let Some(object) = target.as_object() else {
+            return Err(VMError::TypeError);
+        };
+        let refused = "the trap of a Proxy answered what its target refuses";
+        let extensible = heap.is_extensible(object).unwrap_or(false);
+        let current = heap.own_named_flags(object, name)?;
+        // Step 8: a trap that answers undefined names a property the target
+        // does not own, or owns and can drop.
+        let Some(source) = answered.as_object() else {
+            let Some(current) = current else {
+                return Ok(VALUE_UNDEFINED);
+            };
+            if !current.configurable || !extensible {
+                return Err(type_error(heap, realm, refused));
+            }
+            return Ok(VALUE_UNDEFINED);
+        };
+        let mut descriptor = Self::to_property_descriptor(source, heap, realm)?;
+        // Step 11 is `CompletePropertyDescriptor` of 6.2.6.6, which fills in
+        // the default of every field the descriptor does not have.
+        if descriptor.is_accessor() {
+            descriptor.get = Some(descriptor.get.unwrap_or(VALUE_UNDEFINED));
+            descriptor.set = Some(descriptor.set.unwrap_or(VALUE_UNDEFINED));
+        } else {
+            descriptor.value = Some(descriptor.value.unwrap_or(VALUE_UNDEFINED));
+            descriptor.writable = Some(descriptor.writable.unwrap_or(false));
+        }
+        descriptor.enumerable = Some(descriptor.enumerable.unwrap_or(false));
+        descriptor.configurable = Some(descriptor.configurable.unwrap_or(false));
+        let refusing = descriptor.configurable == Some(false);
+        let breached = match current {
+            // Step 12 on a property the target does not own answers whether
+            // the target still grows, and step 14.a refuses either way.
+            None => !extensible || refusing,
+            Some(current) => {
+                let indexed = Self::element_index_of(object, name, heap);
+                let held = Self::own_property_value(object, name, indexed, heap)?;
+                !Self::is_compatible_descriptor(&descriptor, current, held, heap)?
+                    || (refusing && current.configurable)
+                    || (refusing
+                        && descriptor.writable == Some(false)
+                        && !current.is_accessor
+                        && current.writable)
+            }
+        };
+        if breached {
+            return Err(type_error(heap, realm, refused));
+        }
+        // 20.1.2.8 step 4 and 28.1.6 step 5 answer the object 6.2.6.4 makes.
+        Self::partial_descriptor_object(&descriptor, heap, realm)
+    }
+
     /// Which of the four internal methods of 10.5.1 to 10.5.4 a clause of
     /// 20.1.2 or 28.1 reaches, where it reaches one.
     const fn object_trap_of(intrinsic: Intrinsic) -> Option<i32> {
@@ -11505,7 +11681,10 @@ impl RegisterVM {
         // The key is read while the record is still a root, because interning
         // it allocates and the record would not survive that afterwards. The
         // four traps of 10.5.1 to 10.5.4 name no key at all.
-        let named = matches!(kind, PROXY_KIND_GET | PROXY_KIND_SET | PROXY_KIND_DEFINE);
+        let named = matches!(
+            kind,
+            PROXY_KIND_GET | PROXY_KIND_SET | PROXY_KIND_DEFINE | PROXY_KIND_OWN
+        );
         let name = named.then(|| property_key(key, heap, realm)).transpose()?;
         heap.exit_scope();
         // Step 6 of 10.5.9: a trap that answers false wrote nothing at all,
@@ -11545,6 +11724,12 @@ impl RegisterVM {
                 realm,
             );
         }
+        if kind == PROXY_KIND_OWN {
+            let name = name.ok_or(VMError::TypeError)?;
+            self.acc =
+                Self::the_target_takes_the_own_property(answered, target, name, heap, realm)?;
+            return Ok(());
+        }
         if kind == PROXY_KIND_DEFINE {
             // Step 8 of 10.5.6: a trap that refused defined nothing, which
             // 7.3.8 makes a `TypeError` of where the clause called it.
@@ -11560,41 +11745,58 @@ impl RegisterVM {
             self.acc = answer;
             return Ok(());
         }
-        if let Some(object) = target.as_object()
-            && let Some(name) = name
-            && let Some(flags) = heap.own_named_flags(object, name)?
-            && !flags.configurable
-        {
-            let held = heap
-                .lookup_named(object, name)?
-                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
-            // Steps 9 and 10 of 10.5.8 and steps 8.a and 8.b of 10.5.9: a
-            // property the target cannot change binds the trap to it.
-            let refused = if flags.is_accessor {
-                let (get, set) = Self::accessor_parts(held.value, heap)?;
-                if kind == PROXY_KIND_SET {
-                    set.is_undefined()
-                } else {
-                    get.is_undefined() && !answered.is_undefined()
-                }
-            } else if kind == PROXY_KIND_SET {
-                !flags.writable && !same_value(written, held.value, heap)?
-            } else {
-                !flags.writable && !same_value(answered, held.value, heap)?
-            };
-            if refused {
-                return Err(type_error(
-                    heap,
-                    realm,
-                    "the trap of a Proxy answered what its target refuses",
-                ));
-            }
-        }
+        Self::the_target_takes_the_value(kind, target, name, (answered, written), heap, realm)?;
         self.acc = if kind == PROXY_KIND_SET {
             written
         } else {
             answered
         };
+        Ok(())
+    }
+
+    /// Steps 9 and 10 of 10.5.8 and steps 8.a and 8.b of 10.5.9: a property
+    /// the target cannot change binds the trap to it.
+    fn the_target_takes_the_value(
+        kind: i32,
+        target: Value,
+        name: Option<PropertyKey>,
+        held: (Value, Value),
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let (answered, written) = held;
+        let Some(object) = target.as_object() else {
+            return Ok(());
+        };
+        let Some(name) = name else { return Ok(()) };
+        let Some(flags) = heap
+            .own_named_flags(object, name)?
+            .filter(|flags| !flags.configurable)
+        else {
+            return Ok(());
+        };
+        let found = heap
+            .lookup_named(object, name)?
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let refused = if flags.is_accessor {
+            let (get, set) = Self::accessor_parts(found.value, heap)?;
+            if kind == PROXY_KIND_SET {
+                set.is_undefined()
+            } else {
+                get.is_undefined() && !answered.is_undefined()
+            }
+        } else if kind == PROXY_KIND_SET {
+            !flags.writable && !same_value(written, found.value, heap)?
+        } else {
+            !flags.writable && !same_value(answered, found.value, heap)?
+        };
+        if refused {
+            return Err(type_error(
+                heap,
+                realm,
+                "the trap of a Proxy answered what its target refuses",
+            ));
+        }
         Ok(())
     }
 

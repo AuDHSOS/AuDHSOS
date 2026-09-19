@@ -12053,7 +12053,7 @@ fn step_3_of_20_1_2_24_reads_every_property_through_its_getter() -> Result<(), E
 }
 
 #[test]
-fn the_get_of_10_5_8_answers_out_of_the_handler() -> Result<(), Error> {
+fn the_read_and_the_write_of_10_5_answer_out_of_the_handler() -> Result<(), Error> {
     let mut host = SilentHost;
     let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
     // The stack backend has no Proxy of 10.5 at all, so only the engine
@@ -12110,6 +12110,19 @@ fn the_get_of_10_5_8_answers_out_of_the_handler() -> Result<(), Error> {
             "(function(){var p=new Proxy({a:1},{set(){throw new TypeError()}});var r;try{p.a=1}catch(e){r=e instanceof TypeError};return ''+r})()",
             "true",
         ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}
+
+#[test]
+fn the_internal_methods_of_10_5_answer_out_of_the_handler() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend has no Proxy of 10.5 at all, so only the engine
+    // answers here.
+    for (source, answer) in [
         // 10.5.6 answers the definition out of the `defineProperty` of the
         // handler, which is given the descriptor 6.2.6.4 made.
         (
@@ -12175,6 +12188,35 @@ fn the_get_of_10_5_8_answers_out_of_the_handler() -> Result<(), Error> {
         (
             "(function(){var r={};var n=new Proxy(Object.create(r),{});return ''+(Object.getPrototypeOf(n)===r)+'|'+Object.isExtensible(n)})()",
             "true|true",
+        ),
+        // 10.5.5 answers the descriptor out of the `getOwnPropertyDescriptor`
+        // of the handler, which 20.1.2.8 and 28.1.6 both reach.
+        (
+            "(function(){var l=[];var t={a:1};var p=new Proxy(t,{getOwnPropertyDescriptor(o,n){l.push(n);return Reflect.getOwnPropertyDescriptor(o,n)}});var d=Object.getOwnPropertyDescriptor(p,'a');return d.value+'|'+d.writable+'|'+d.enumerable+'|'+d.configurable+'|'+l.join('')+'|'+Object.getOwnPropertyDescriptor(p,'zz')+'|'+Reflect.getOwnPropertyDescriptor(p,'a').value})()",
+            "1|true|true|true|a|undefined|1",
+        ),
+        // Step 6: the trap answers an Object or undefined and nothing else.
+        (
+            "(function(){var b=new Proxy({},{getOwnPropertyDescriptor(){return 1}});var r;try{Object.getOwnPropertyDescriptor(b,'x')}catch(e){r=e instanceof TypeError};return ''+r})()",
+            "true",
+        ),
+        // Steps 8.b and 8.c: undefined names a property the target owns and
+        // cannot drop.
+        (
+            "(function(){var f={};Object.defineProperty(f,'f',{value:1,configurable:false});var p=new Proxy(f,{getOwnPropertyDescriptor(){return undefined}});var r;try{Object.getOwnPropertyDescriptor(p,'f')}catch(e){r=e instanceof TypeError};var g={h:1};Object.preventExtensions(g);var q=new Proxy(g,{getOwnPropertyDescriptor(){return undefined}});var s;try{Object.getOwnPropertyDescriptor(q,'h')}catch(e){s=e instanceof TypeError};return ''+r+'|'+s})()",
+            "true|true",
+        ),
+        // Steps 12 and 14.a: a target that cannot grow owns no new property,
+        // and a configurable it answers true for stays true.
+        (
+            "(function(){var e=Object.preventExtensions({});var p=new Proxy(e,{getOwnPropertyDescriptor(){return {value:1,configurable:true}}});var r;try{Object.getOwnPropertyDescriptor(p,'k')}catch(x){r=x instanceof TypeError};var g={};Object.defineProperty(g,'z',{value:1,configurable:true});var q=new Proxy(g,{getOwnPropertyDescriptor(){return {value:1,configurable:false}}});var s;try{Object.getOwnPropertyDescriptor(q,'z')}catch(x){s=x instanceof TypeError};return ''+r+'|'+s})()",
+            "true|true",
+        ),
+        // Step 11 fills in the default of 6.2.6.6 for each field the trap
+        // left out, and step 4 forwards where the handler carries no trap.
+        (
+            "(function(){var p=new Proxy({},{getOwnPropertyDescriptor(){return {value:7,configurable:true}}});var d=Object.getOwnPropertyDescriptor(p,'q');var n=new Proxy({m:5},{});return d.value+'|'+d.writable+'|'+d.enumerable+'|'+d.configurable+'|'+Object.getOwnPropertyDescriptor(n,'m').value})()",
+            "7|false|false|true|5",
         ),
     ] {
         assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
