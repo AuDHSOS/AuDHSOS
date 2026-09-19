@@ -7105,15 +7105,6 @@ fn json_parses_and_quotes_what_it_reaches() -> Result<(), Error> {
     ] {
         differential_scripts(&[source])?;
     }
-    // 25.5.2 takes a space, which this engine has not built.
-    {
-        let mut host = SilentHost;
-        let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
-        assert!(matches!(
-            realm.evaluate("JSON.stringify({},null,2)"),
-            Err(Error::Unsupported { .. })
-        ));
-    }
     Ok(())
 }
 
@@ -11912,5 +11903,36 @@ fn an_arrow_of_a_derived_constructor_reads_the_this_13_3_7_1_made() -> Result<()
     ] {
         differential(source)?;
     }
+    Ok(())
+}
+
+#[test]
+fn the_space_of_25_5_2_lays_every_container_out() -> Result<(), Error> {
+    // Steps 5 through 8 of 25.5.2.1 make the gap, and 25.5.2.5 step 6 and
+    // 25.5.2.6 step 7 write one piece per line behind it.
+    for source in [
+        "JSON.stringify({a:1,b:[1,2],c:{d:3}},null,2)",
+        "JSON.stringify([1,[2,3],{x:1}],null,'\\t')",
+        // A gap of no code units lays nothing out.
+        "JSON.stringify({a:1},null,0)",
+        "JSON.stringify({a:1},null,-1)+'|'+JSON.stringify({a:1},null,{})",
+        // An empty container takes no line at all.
+        "JSON.stringify({},null,2)+'|'+JSON.stringify([],null,2)",
+        // Step 6 takes no more than ten spaces and step 7 no more than ten
+        // code units.
+        "''+JSON.stringify({a:1},null,100).length",
+        "JSON.stringify({a:1},null,'0123456789abc')",
+    ] {
+        differential(source)?;
+    }
+    // Step 5 sends a wrapper through 7.1.4 or 7.1.17, which is a method of
+    // the Script this clause has no frame for.
+    let source = "JSON.stringify({a:1},null,new Number(2))";
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    assert!(
+        matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
+        "{source}"
+    );
     Ok(())
 }

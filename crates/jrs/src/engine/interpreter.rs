@@ -266,6 +266,9 @@ const JSON_KEY: u32 = 5;
 const JSON_VALUE: u32 = 6;
 /// Index of the arguments of the call in flight.
 const JSON_ARGUMENTS: u32 = 7;
+/// Index of the gap of 25.5.2.1 step 8, which every container is laid out
+/// with.
+const JSON_GAP: u32 = 8;
 /// The clause is waiting for nothing.
 const JSON_PHASE_IDLE: i32 = 0;
 /// It is waiting for the `toJSON` of 25.5.2.4 step 5.
@@ -6274,13 +6277,11 @@ impl RegisterVM {
         if intrinsic == Intrinsic::JsonStringify {
             let value = self.call_argument(&call, 0, heap)?;
             let replacer = self.call_argument(&call, 1, heap)?;
-            // Step 5 takes the space, which this Realm has no form of.
-            if !self.call_argument(&call, 2, heap)?.is_undefined() {
-                return Err(VMError::Unsupported("a space of 25.5.2"));
-            }
+            let space = self.call_argument(&call, 2, heap)?;
             return self.begin_the_stringify(
                 value,
                 replacer,
+                space,
                 call,
                 units,
                 active_feedback,
@@ -24215,6 +24216,7 @@ impl RegisterVM {
         &mut self,
         value: Value,
         replacer: Value,
+        space: Value,
         call: Call,
         units: CodeUnits<'_>,
         active_feedback: &mut FeedbackVector,
@@ -24228,6 +24230,10 @@ impl RegisterVM {
             self.json_property_list(replacer, heap, realm)?
         } else {
             VALUE_UNDEFINED
+        };
+        let gap = {
+            let units = Self::json_gap(space, heap)?;
+            self.allocate_string(heap, &units)?
         };
         // Step 9 serializes the argument as the one property of a wrapper.
         let wrapper = realm.ordinary_object(heap)?;
@@ -24256,6 +24262,7 @@ impl RegisterVM {
                 VALUE_UNDEFINED,
                 VALUE_UNDEFINED,
                 VALUE_UNDEFINED,
+                gap,
             ],
         )?;
         // The record outlives every frame the walk opens, so it is a root of
@@ -24263,6 +24270,53 @@ impl RegisterVM {
         heap.enter_scope();
         let state = heap.push_root(record)?;
         self.step_the_stringify(state, None, call, units, active_feedback, heap, realm)
+    }
+
+    /// Steps 5 through 8 of 25.5.2.1: the text every container is laid out
+    /// with.
+    ///
+    /// A Number takes that many spaces, no more than ten; a String takes its
+    /// first ten code units; every other value takes none.
+    ///
+    /// Step 5 sends a wrapper through 7.1.4 or 7.1.17, which is a method of
+    /// the Script the clause has no frame for.
+    fn json_gap(space: Value, heap: &GenerationalHeap) -> Result<Vec<u16>, VMError> {
+        /// The space step 6 repeats.
+        const SPACE: u16 = 0x20;
+        /// Step 6 and step 7 take no more than ten of either.
+        const LIMIT: usize = 10;
+        /// The same count, as the Number step 6 compares against.
+        const LIMIT_NUMBER: f64 = 10.0;
+        if let Some(object) = space.as_object() {
+            if matches!(
+                heap.get_object(object).map(|entry| &entry.kind),
+                Some(&ObjectKind::NumberWrapper(_) | &ObjectKind::StringWrapper(_))
+            ) {
+                return Err(VMError::Unsupported("a space of 25.5.2 that is a wrapper"));
+            }
+            return Ok(Vec::new());
+        }
+        if space.is_string() {
+            let text = heap
+                .strings
+                .to_utf16(space)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            return Ok(text.get(..LIMIT.min(text.len())).unwrap_or(&text).to_vec());
+        }
+        let Some(number) = numeric_value(space) else {
+            return Ok(Vec::new());
+        };
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "7.1.5 clamps the count to the ten of step 6"
+        )]
+        let count = if number.is_nan() || number < 1.0 {
+            0
+        } else {
+            number.min(LIMIT_NUMBER) as usize
+        };
+        Ok(alloc::vec![SPACE; count])
     }
 
     /// Step 4.b of 25.5.2: the names a replacer that is an Array holds, each
@@ -24873,6 +24927,12 @@ impl RegisterVM {
             .map_err(|_| VMError::StringLimit)?;
         self.fuel = work;
         out.push(0x3A);
+        // Step 6.b.ii of 25.5.2.6 writes a space after the colon where the
+        // gap is not empty.
+        if Self::json_gap_units(record, heap)?.is_empty() {
+        } else {
+            out.push(0x20);
+        }
         let body = heap
             .strings
             .to_utf16(text)
@@ -24919,11 +24979,23 @@ impl RegisterVM {
             .collect();
         let seen = promise::record(heap, realm, &kept)?;
         promise::set_slot(heap, record, JSON_SEEN, seen)?;
+        // Step 6 of 25.5.2.5 and step 7 of 25.5.2.6 lay the pieces out one
+        // per line, each behind the gap of every container it stands in, and
+        // an empty container takes no line at all.
+        let gap = Self::json_gap_units(record, heap)?;
+        let depth = frames.len().saturating_sub(1);
+        let indent: Vec<u16> = gap.repeat(depth);
+        let step_back: Vec<u16> = gap.repeat(depth.saturating_sub(1));
+        let laid_out = !gap.is_empty() && !pieces.is_empty();
         let mut out: Vec<u16> = Vec::new();
         out.push(if kind == JSON_KIND_ARRAY { 0x5B } else { 0x7B });
         for (at, piece) in pieces.iter().enumerate() {
             if at > 0 {
                 out.push(0x2C);
+            }
+            if laid_out {
+                out.push(0x0A);
+                out.extend_from_slice(&indent);
             }
             let body = heap
                 .strings
@@ -24934,12 +25006,27 @@ impl RegisterVM {
                 return Err(VMError::StringLimit);
             }
         }
+        if laid_out {
+            out.push(0x0A);
+            out.extend_from_slice(&step_back);
+        }
         out.push(if kind == JSON_KIND_ARRAY { 0x5D } else { 0x7D });
         let text = self.allocate_string(heap, &out)?;
         // The key the container stood at is the one its holder waits on.
         let parent = Self::json_key_of_the_open_frame(record, heap);
         promise::set_slot(heap, record, JSON_KEY, parent)?;
         self.write_the_json_piece(state, Some(text), heap)
+    }
+
+    /// The gap of 25.5.2.1 step 8 the record holds.
+    fn json_gap_units(record: Value, heap: &GenerationalHeap) -> Result<Vec<u16>, VMError> {
+        let gap = promise::slot(heap, record, JSON_GAP);
+        if !gap.is_string() {
+            return Ok(Vec::new());
+        }
+        heap.strings
+            .to_utf16(gap)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))
     }
 
     /// The key the frame on top of the stack stands at, which the container
