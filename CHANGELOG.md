@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` answers the type the schema declares for every column a
+  statement answers, which `sqlite3_column_decltype` reads. D-317 records
+  it. Catalog 6.6.214. `capi2.test` goes from 69 cases passing to 103 and
+  `schema2.test` from 5 to 34.
+
 - `db-sqlite` carries the result code the C library answers for every
   refusal, primary and extended, and names a file the format forbids
   `file is not a database` or `database disk image is malformed`. D-316

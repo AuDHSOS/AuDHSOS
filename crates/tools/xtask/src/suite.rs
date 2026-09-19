@@ -596,6 +596,8 @@ struct Prepared {
     bound: BTreeMap<usize, String>,
     /// The names of the columns the statement answers.
     names: Vec<String>,
+    /// The type the schema declares for each of those columns.
+    declared: Vec<String>,
     /// The rows the statement answered, where it has run.
     rows: Vec<Vec<Value>>,
     /// Which row the reader stands on, counting from nought.
@@ -1164,6 +1166,7 @@ impl Session {
             sql: text.clone(),
             bound: BTreeMap::new(),
             names: Vec::new(),
+            declared: Vec::new(),
             rows: Vec::new(),
             at: 0,
             ran: false,
@@ -1180,11 +1183,8 @@ impl Session {
             let read = self.read_statement(connection, &bound_into(&text, &BTreeMap::new()));
             match read {
                 Ok(answered) => {
-                    prepared.names = answered
-                        .names
-                        .iter()
-                        .map(|name| String::from_utf8_lossy(name).into_owned())
-                        .collect();
+                    prepared.names = texts(&answered.names);
+                    prepared.declared = texts(&answered.declared);
                 }
                 Err(message) => return vec![String::new(), tail, message],
             }
@@ -1322,11 +1322,8 @@ impl Session {
             held.at = 0;
             held.rows.clone_from(&answered.rows);
             if !answered.names.is_empty() {
-                held.names = answered
-                    .names
-                    .iter()
-                    .map(|name| String::from_utf8_lossy(name).into_owned())
-                    .collect();
+                held.names = texts(&answered.names);
+                held.declared = texts(&answered.declared);
             }
             held.row = !held.rows.is_empty();
         }
@@ -1410,6 +1407,10 @@ impl Session {
         let place: usize = at.parse().unwrap_or(usize::MAX);
         if which == "name" {
             let named = held.names.get(place).cloned().unwrap_or_default();
+            return Ok(alloc_one(&named));
+        }
+        if which == "decltype" {
+            let named = held.declared.get(place).cloned().unwrap_or_default();
             return Ok(alloc_one(&named));
         }
         let value = held
@@ -2529,6 +2530,14 @@ fn listed(value: &Value, null: &str) -> String {
         }
         Value::Text(bytes) | Value::Blob(bytes) => String::from_utf8_lossy(bytes).into_owned(),
     }
+}
+
+/// The names of a run of values, each as text.
+fn texts(values: &[Vec<u8>]) -> Vec<String> {
+    values
+        .iter()
+        .map(|value| String::from_utf8_lossy(value).into_owned())
+        .collect()
 }
 
 /// One value, as one answer of a request.

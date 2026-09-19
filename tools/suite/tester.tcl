@@ -360,7 +360,28 @@ proc sqlite3_exec {db sql} {
 proc sqlite3_exec_nr {db sql} { return [lindex [sqlite3_exec $db $sql] 0] }
 
 proc db_eval {sql} { return [db eval $sql] }
-proc stepsql {db sql} { return [$db eval $sql] }
+# `stepsql` of the suite's own tester: every statement of the text
+# prepared and stepped in turn, answering nought and then the values.
+proc stepsql {dbptr sql} {
+  set sql [string trim $sql]
+  set r 0
+  while {[string length $sql] > 0} {
+    if {[catch { sqlite3_prepare $dbptr $sql -1 sqltail } vm]} {
+      return [list 1 $vm]
+    }
+    if {$vm eq ""} { break }
+    set sql [string trim $sqltail]
+    while {[sqlite3_step $vm] eq "SQLITE_ROW"} {
+      for {set i 0} {$i < [sqlite3_data_count $vm]} {incr i} {
+        lappend r [sqlite3_column_text $vm $i]
+      }
+    }
+    if {[catch { sqlite3_finalize $vm } errmsg]} {
+      return [list 1 $errmsg]
+    }
+  }
+  return $r
+}
 
 proc forcedelete {args} { foreach f $args { harness_send delete $f } }
 proc delete_file {args} { foreach f $args { harness_send delete $f } }
@@ -774,6 +795,10 @@ proc sqlite3_column_count {stmt} { return [lindex [harness_send column $stmt cou
 proc sqlite3_data_count {stmt} { return [lindex [harness_send column $stmt data 0] 0] }
 proc sqlite3_column_name {stmt at} { return [lindex [harness_send column $stmt name $at] 0] }
 proc sqlite3_column_name16 {stmt at} { return [sqlite3_column_name $stmt $at] }
+proc sqlite3_column_decltype {stmt at} {
+  return [lindex [harness_send column $stmt decltype $at] 0]
+}
+proc sqlite3_column_decltype16 {stmt at} { return [sqlite3_column_decltype $stmt $at] }
 proc sqlite3_column_type {stmt at} { return [lindex [harness_send column $stmt type $at] 0] }
 proc sqlite3_column_int {stmt at} { return [lindex [harness_send column $stmt int $at] 0] }
 proc sqlite3_column_int64 {stmt at} { return [sqlite3_column_int $stmt $at] }

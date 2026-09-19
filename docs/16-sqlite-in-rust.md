@@ -866,6 +866,9 @@ Size: L.
     forms the C library answers. Built, which D-315 records.
 74. The result code every refusal carries, primary and extended. Built,
     which D-316 records.
+75. The type the schema declares for every column a statement answers.
+    Built, which D-317 records. `sqlite3_column_table_name` and
+    `sqlite3_column_origin_name` are not answered.
 
 ### Done when
 

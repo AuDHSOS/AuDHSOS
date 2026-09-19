@@ -192,3 +192,63 @@ fn what_the_two_pragmas_answer_back() {
         }
     );
 }
+
+/// The type the schema declares for each column a statement answers,
+/// which `sqlite3_column_decltype` answers and which a column that came
+/// from an expression carries none of.
+#[test]
+fn what_type_the_schema_declares_for_each_column_answered() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE t1(a INTEGER, b VARCHAR(10), c)")
+        .unwrap();
+    writer.run(b"CREATE TABLE t2(x BLOB, y)").unwrap();
+    writer
+        .run(b"CREATE TABLE t3(k TEXT PRIMARY KEY) WITHOUT ROWID")
+        .unwrap();
+    writer.run(b"INSERT INTO t1 VALUES(1,'b',3)").unwrap();
+    writer.run(b"INSERT INTO t2 VALUES(x'00',5)").unwrap();
+    writer.run(b"INSERT INTO t3 VALUES('k')").unwrap();
+    let bytes = writer.written();
+    let database = Database::open(&bytes).unwrap();
+    let declared = |sql: &[u8]| -> Vec<String> {
+        database
+            .query(sql)
+            .unwrap()
+            .declared
+            .iter()
+            .map(|held| String::from_utf8_lossy(held).into_owned())
+            .collect()
+    };
+    // A column of a table carries the type the schema declares, and one
+    // a `*` stands for carries it as well.
+    assert_eq!(
+        declared(b"SELECT a, b, c FROM t1"),
+        ["INTEGER", "VARCHAR(10)", ""]
+    );
+    assert_eq!(
+        declared(b"SELECT * FROM t1"),
+        ["INTEGER", "VARCHAR(10)", ""]
+    );
+    // A column written with the name of its table, and one written under
+    // the name of another table of the statement.
+    assert_eq!(
+        declared(b"SELECT t2.x, t1.a FROM t1, t2"),
+        ["BLOB", "INTEGER"]
+    );
+    // A bare `rowid` of a table that keeps its rows under a key carries
+    // the type of a whole number.
+    assert_eq!(declared(b"SELECT rowid FROM t1"), ["INTEGER"]);
+    assert_eq!(declared(b"SELECT k FROM t3"), ["TEXT"]);
+    // A `rowid` of a statement written inside the `FROM` is no column of
+    // it, so the statement carries no type for it and is refused.
+    assert!(database.query(b"SELECT rowid FROM (SELECT 1)").is_err());
+    // A column that came from an expression carries none, and a column
+    // a statement written inside the `FROM` answers carries the type of
+    // the column it came from, which `columnTypeImpl` reads through it.
+    assert_eq!(declared(b"SELECT a+1, 'x', count(*) FROM t1"), ["", "", ""]);
+    assert_eq!(declared(b"SELECT a FROM (SELECT a FROM t1)"), ["INTEGER"]);
+    // A statement over no table answers a type for no column of it.
+    assert_eq!(declared(b"SELECT 1"), [""]);
+    assert_eq!(declared(b"VALUES(1,2)"), ["", ""]);
+}

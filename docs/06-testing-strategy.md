@@ -6127,3 +6127,16 @@ Document 16 step Q8.
   extended code of the constraint it broke.
 - A statement the authorizer denied carries `SQLITE_AUTH`.
 - Every statement the engine could not read carries `SQLITE_ERROR`.
+
+### 6.6.214 The type the schema declares for a column answered (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A column of a table carries the type the schema declares, under its own
+  name, under the name of its table and through a `*`.
+- A column a statement written inside the `FROM` answers carries the type
+  of the column it came from.
+- A bare `rowid` of a table that keeps its rows under a key carries
+  `INTEGER`.
+- A column that came from an expression carries nothing.
+- Every statement carries one entry per column it answers.

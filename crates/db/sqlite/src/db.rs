@@ -923,6 +923,10 @@ struct Column {
     /// what `sqlite3ExprDataType` reads off it: one bit for a number,
     /// one for text and one for a blob.
     datatype: u8,
+    /// The type the schema declares for the column it came from, and
+    /// nothing where it came from an expression, which is what
+    /// `sqlite3_column_decltype` answers.
+    declared: Vec<u8>,
 }
 
 /// The columns a side of a `FROM` answers.
@@ -1327,6 +1331,7 @@ fn shape_of(table: &Table) -> Shape {
                 affinity: column.affinity,
                 collation: Some(column.collation),
                 datatype: classes_of(column.affinity),
+                declared: column.declared.clone(),
             })
             .collect(),
         keyed: !table.without_rowid,
@@ -1452,6 +1457,10 @@ impl Default for Naming {
 pub struct Answer {
     /// The name of each column, as SQLite would name it.
     pub names: Vec<Vec<u8>>,
+    /// The type the schema declares for each column, and nothing for a
+    /// column that came from an expression, which is what
+    /// `sqlite3_column_decltype` answers.
+    pub declared: Vec<Vec<u8>>,
     /// The rows, each as many values as there are names.
     pub rows: Vec<Vec<Value>>,
 }
@@ -2493,6 +2502,7 @@ impl<'a> Database<'a> {
                 .map(|text| alloc::vec![Value::Text(text)])
                 .collect();
             return Ok(Answer {
+                declared: alloc::vec![Vec::new()],
                 names: alloc::vec![name],
                 rows,
             });
@@ -2522,6 +2532,7 @@ impl<'a> Database<'a> {
         .ok_or(Error::Unsupported)?;
         let rows = alloc::vec![alloc::vec![value]];
         Ok(Answer {
+            declared: alloc::vec![Vec::new()],
             names: alloc::vec![name],
             rows,
         })
@@ -2698,7 +2709,15 @@ impl<'a> Database<'a> {
             limit(arena, &select, sql, &mut rows, &cursor)?;
         }
         Ok(Answered {
-            answer: Answer { names: shown, rows },
+            answer: Answer {
+                names: shown,
+                declared: shape
+                    .columns
+                    .iter()
+                    .map(|column| column.declared.clone())
+                    .collect(),
+                rows,
+            },
             shape,
         })
     }
@@ -3153,6 +3172,7 @@ impl<'a> Database<'a> {
                 name.to_vec(),
                 Answered {
                     answer: Answer {
+                        declared: answered.answer.declared.clone(),
                         names: answered.answer.names.clone(),
                         rows: alloc::vec![row],
                     },
@@ -3546,11 +3566,16 @@ fn listed(
             affinity: Affinity::None,
             collation: None,
             datatype: NUMBER,
+            declared: Vec::new(),
         });
         names.push(name);
     }
     Ok(Answered {
-        answer: Answer { names, rows },
+        answer: Answer {
+            declared: alloc::vec![Vec::new(); names.len()],
+            names,
+            rows,
+        },
         shape: Shape {
             columns,
             nested: false,
@@ -5124,6 +5149,7 @@ fn shape(
                     affinity,
                     collation,
                     datatype: data_type(arena, expr, sql, sides, collating),
+                    declared: declared_of(arena, expr, sql, sides),
                 });
             }
         }
@@ -5134,6 +5160,36 @@ fn shape(
         keyed: false,
         key: None,
     })
+}
+
+/// The type the schema declares for the column one result column names,
+/// and nothing where the result column is not one column of a side.
+///
+/// A bare `rowid` of a side that keeps its rows under a key answers the
+/// type of a whole number, which is what `columnTypeImpl` of
+/// `research/sqlite/src/select.c` writes for it.
+fn declared_of(arena: &Arena, expr: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Vec<u8> {
+    let Some(Node::Column { table, column, .. }) = arena.node(expr) else {
+        return Vec::new();
+    };
+    let name = dequote(column.text(sql));
+    let named = table.map(|table| dequote(table.text(sql)));
+    for side in sides {
+        if named.as_ref().is_some_and(|named| !side.named(named)) {
+            continue;
+        }
+        if let Some(at) = side.shape.place(&name) {
+            return side
+                .shape
+                .columns
+                .get(at)
+                .map_or_else(Vec::new, |column| column.declared.clone());
+        }
+        if side.shape.keyed && rowid_named(&name) {
+            return b"INTEGER".to_vec();
+        }
+    }
+    Vec::new()
 }
 
 /// The values one row answers.
