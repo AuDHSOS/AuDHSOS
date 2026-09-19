@@ -1096,6 +1096,14 @@ const COPY_KEYS: u32 = 2;
 const COPY_POSITION: u32 = 3;
 /// The key a getter of the Script is answering for.
 const COPY_PENDING: u32 = 4;
+/// What the walk does with each value it reads.
+const COPY_MODE: u32 = 5;
+/// 7.3.25 defines it on the target under the key it stood at.
+const COPY_MODE_PROPERTIES: i32 = 0;
+/// 20.1.2.24 appends it to the Array the clause answers.
+const COPY_MODE_VALUES: i32 = 1;
+/// 20.1.2.5 appends the key and the value as an Array of two.
+const COPY_MODE_ENTRIES: i32 = 2;
 
 /// The items 23.1.3.30 step 3 read, in the order the merge has reached.
 const SORT_ITEMS: u32 = 0;
@@ -5143,9 +5151,8 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        // 20.1.2.10 answers every own String key; 20.1.2.19, 20.1.2.24 and
-        // 20.1.2.5 answer only the enumerable ones, as the key, the value, or
-        // the two of them in an Array of their own.
+        // 20.1.2.10 answers every own String key and 20.1.2.19 only the
+        // enumerable ones.
         let every = intrinsic == Intrinsic::ObjectGetOwnPropertyNames;
         let object = Self::coerce_object(target, heap, realm)?;
         let names: Vec<StringRef> = heap
@@ -5154,33 +5161,7 @@ impl RegisterVM {
             .filter(|(_, enumerable)| *enumerable || every)
             .filter_map(|(key, _)| key.as_string())
             .collect();
-        let mut answers = Vec::with_capacity(names.len());
-        for name in names {
-            let key = Value::from_string(name);
-            let answer = match intrinsic {
-                Intrinsic::ObjectValues | Intrinsic::ObjectEntries => {
-                    let own = PropertyKey::String(name);
-                    // 10.4.2, 10.4.3 and 10.4.5 hold an own index in an
-                    // element store, in a `[[StringData]]` and in a block,
-                    // none of which a Shape carries.
-                    let indexed = Self::element_index_of(object, own, heap);
-                    let held = Self::own_property_value(object, own, indexed, heap)?;
-                    if heap
-                        .own_named_flags(object, own)?
-                        .is_some_and(|flags| flags.is_accessor)
-                    {
-                        return Err(VMError::Unsupported("a property that is an accessor"));
-                    }
-                    if intrinsic == Intrinsic::ObjectValues {
-                        held
-                    } else {
-                        Self::array_of(alloc::vec![key, held], heap, realm)?
-                    }
-                }
-                _ => key,
-            };
-            answers.push(answer);
-        }
+        let answers = names.into_iter().map(Value::from_string).collect();
         Self::array_of(answers, heap, realm)
     }
 
@@ -5519,10 +5500,9 @@ impl RegisterVM {
             Intrinsic::ObjectGetOwnPropertyDescriptors => {
                 Self::own_descriptors(target, heap, realm)
             }
-            Intrinsic::ObjectGetOwnPropertyNames
-            | Intrinsic::ObjectKeys
-            | Intrinsic::ObjectValues
-            | Intrinsic::ObjectEntries => Self::own_string_keys(intrinsic, target, heap, realm),
+            Intrinsic::ObjectGetOwnPropertyNames | Intrinsic::ObjectKeys => {
+                Self::own_string_keys(intrinsic, target, heap, realm)
+            }
             // 20.1.2.20 and 20.1.2.16 are [[PreventExtensions]] and
             // [[IsExtensible]] of 10.1.4 and 10.1.3, on a value that is not an
             // Object unchanged and true respectively (steps 1 of each).
@@ -5994,6 +5974,29 @@ impl RegisterVM {
             Intrinsic::FunctionPrototypeApply | Intrinsic::ReflectApply
         ) {
             return self.begin_spread_call(intrinsic, call, units, active_feedback, heap, realm);
+        }
+        // Step 3 of 20.1.2.24 and of 20.1.2.5 reads every own enumerable
+        // property with 7.3.2, which for an accessor is a getter of the
+        // Script.
+        if let Some(mode) = match intrinsic {
+            Intrinsic::ObjectValues => Some(COPY_MODE_VALUES),
+            Intrinsic::ObjectEntries => Some(COPY_MODE_ENTRIES),
+            _ => None,
+        } {
+            let source = Self::coerce_object(self.call_argument(&call, 0, heap)?, heap, realm)?;
+            let answer = realm.array(heap, 0)?;
+            return self.begin_the_copy(
+                answer,
+                Value::from_object(source),
+                &[],
+                mode,
+                call.return_pc,
+                call.caller_code_id,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
         }
         // 6.2.6.5 reads six fields of the descriptor, and a getter among them
         // runs a method of the Script; 7.3.25 reads one descriptor per key,
@@ -10558,6 +10561,7 @@ impl RegisterVM {
         target: ObjectRef,
         source: Value,
         excluded: &[PropertyKey],
+        mode: i32,
         return_pc: usize,
         caller_code_id: Option<u32>,
         units: CodeUnits<'_>,
@@ -10576,8 +10580,10 @@ impl RegisterVM {
             if !enumerable || excluded.contains(&key) {
                 continue;
             }
+            // 20.1.2.24 and 20.1.2.5 answer for the String keys alone.
             let held = match key {
                 PropertyKey::String(name) => Value::from_string(name),
+                PropertyKey::Symbol(_) if mode != COPY_MODE_PROPERTIES => continue,
                 PropertyKey::Symbol(symbol) => Value::from_symbol(symbol),
             };
             heap.set_array_element(keys, count, held)?;
@@ -10592,6 +10598,7 @@ impl RegisterVM {
                 Value::from_object(keys),
                 Value::from_smi(0),
                 VALUE_UNINITIALIZED,
+                Value::from_smi(mode),
             ],
         )?;
         // The record outlives every frame the copy opens, so it is a root of a
@@ -10607,6 +10614,33 @@ impl RegisterVM {
             heap,
             realm,
         )
+    }
+
+    /// Puts one value the walk read where its mode says.
+    fn place_the_copied_value(
+        record: Value,
+        target: ObjectRef,
+        key: Value,
+        value: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let mode = promise::slot(heap, record, COPY_MODE)
+            .as_smi()
+            .unwrap_or(COPY_MODE_PROPERTIES);
+        if mode == COPY_MODE_PROPERTIES {
+            let key = property_key(key, heap, realm)?;
+            heap.define_own_named(target, key, value, PropertyFlags::ordinary_data())?;
+            return Ok(());
+        }
+        let held = if mode == COPY_MODE_VALUES {
+            value
+        } else {
+            Self::array_of(alloc::vec![key, value], heap, realm)?
+        };
+        let at = heap.array_length(target).unwrap_or(0);
+        heap.set_array_element(target, at, held)?;
+        Ok(())
     }
 
     /// One step of the copy: it runs until the next getter of the Script, or
@@ -10642,9 +10676,8 @@ impl RegisterVM {
             // The getter of the key the copy stood at has answered.
             let pending = promise::slot(heap, record, COPY_PENDING);
             if pending != VALUE_UNINITIALIZED {
-                let key = property_key(pending, heap, realm)?;
                 let answer = self.acc;
-                heap.define_own_named(target, key, answer, PropertyFlags::ordinary_data())?;
+                Self::place_the_copied_value(record, target, pending, answer, heap, realm)?;
                 promise::set_slot(heap, record, COPY_PENDING, VALUE_UNINITIALIZED)?;
                 position = position.saturating_add(1);
                 promise::set_slot(heap, record, COPY_POSITION, Value::from_smi(position))?;
@@ -10666,8 +10699,13 @@ impl RegisterVM {
                     return Err(VMError::PropertyLimit);
                 }
                 let key = property_key(held, heap, realm)?;
-                // Step 4.c.i passes over a key the source no longer has.
-                let Some(flags) = heap.own_named_flags(object, key)? else {
+                // Step 4.c.i of 7.3.25 and step 3.a.i of 7.3.23 read the
+                // descriptor again, so a key the source no longer has or no
+                // longer counts as enumerable is passed over.
+                let Some(flags) = heap
+                    .own_named_flags(object, key)?
+                    .filter(|flags| flags.enumerable)
+                else {
                     position = position.saturating_add(1);
                     continue;
                 };
@@ -10693,7 +10731,7 @@ impl RegisterVM {
                 }
                 let indexed = Self::element_index_of(object, key, heap);
                 let value = Self::own_property_value(object, key, indexed, heap)?;
-                heap.define_own_named(target, key, value, PropertyFlags::ordinary_data())?;
+                Self::place_the_copied_value(record, target, held, value, heap, realm)?;
                 position = position.saturating_add(1);
             }
         }
@@ -33347,6 +33385,7 @@ impl RegisterVM {
                         rest,
                         target,
                         &names,
+                        COPY_MODE_PROPERTIES,
                         pc,
                         current_code_id,
                         units,
@@ -33414,6 +33453,7 @@ impl RegisterVM {
                             target,
                             source,
                             &[],
+                            COPY_MODE_PROPERTIES,
                             pc,
                             current_code_id,
                             units,

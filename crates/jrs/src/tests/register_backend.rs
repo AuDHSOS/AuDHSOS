@@ -12025,3 +12025,29 @@ fn step_2_of_25_5_2_4_reads_a_property_through_its_getter() -> Result<(), Error>
     }
     Ok(())
 }
+
+#[test]
+fn step_3_of_20_1_2_24_reads_every_property_through_its_getter() -> Result<(), Error> {
+    // 7.3.2 runs the getter of an accessor, which the walk opens a frame for,
+    // and 20.1.2.24 and 20.1.2.5 answer for the String keys alone.
+    for source in [
+        "var k=[];var o={get a(){k.push('a');return 1},b:2,get c(){k.push('c');return 3}};Object.values(o).join(',')+'|'+k.join(',')",
+        "var k=[];var o={get a(){k.push('a');return 1},b:2};JSON.stringify(Object.entries(o))+'|'+k.join(',')",
+        "Object.values({x:1,y:2}).join(',')",
+        "JSON.stringify(Object.entries({x:1}))",
+        "Object.values('ab').join(',')",
+        "Object.values([7,8]).join(',')",
+        "var s=Symbol('s');var p={};p[s]=1;p.q=2;Object.values(p).join(',')+'|'+JSON.stringify(Object.entries(p))",
+        "''+Object.values(Object.create(null,{h:{value:5,enumerable:false}})).length",
+        // A getter that throws leaves the clause.
+        "var r;try{Object.values({get z(){throw new TypeError()}})}catch(e){r=e instanceof TypeError};''+r",
+        // Step 3.a.i reads the descriptor again, so a key a getter before it
+        // took the enumerability off is passed over.
+        "var o={get a(){Object.defineProperty(o,'b',{enumerable:false});return 1},b:2};Object.values(o).join(',')",
+        // 20.1.2.19 and 20.1.2.10 read no value at all.
+        "var o={get a(){return 1},b:2};Object.keys(o).join(',')+'|'+Object.getOwnPropertyNames(o).join(',')",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
