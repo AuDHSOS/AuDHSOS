@@ -1179,7 +1179,10 @@ impl Session {
         if text.is_empty() {
             return vec![String::new(), tail, String::new()];
         }
-        if reads(&text) {
+        if pragmas(&text) {
+            prepared.names = pragma_columns(&text);
+            prepared.declared = prepared.names.iter().map(|_| String::new()).collect();
+        } else if reads(&text) {
             let read = self.read_statement(connection, &bound_into(&text, &BTreeMap::new()));
             match read {
                 Ok(answered) => {
@@ -1638,10 +1641,13 @@ impl Session {
         let Some(last) = statements(sql)
             .into_iter()
             .map(str::trim)
-            .rfind(|text| reads(text))
+            .rfind(|text| reads(text) || pragmas(text))
         else {
             return Ok(Vec::new());
         };
+        if pragmas(last) {
+            return Ok(pragma_columns(last));
+        }
         let collating = self.collations.get(name).copied().unwrap_or_default();
         let defines = self.defines(name);
         let beside = attached_images(writer);
@@ -2548,6 +2554,41 @@ pub(crate) fn after_name(held: &[String], after: &str) -> String {
             .map(|at| at.saturating_add(1)),
     };
     at.and_then(|at| held.get(at)).cloned().unwrap_or_default()
+}
+
+/// Whether the statement is a `PRAGMA`, which names the columns it
+/// answers even though the connection that writes runs it.
+fn pragmas(sql: &str) -> bool {
+    words(sql)
+        .first()
+        .is_some_and(|word| word.eq_ignore_ascii_case("pragma"))
+}
+
+/// The columns a `PRAGMA` answers, each by name, which
+/// `db_sqlite::pragma::Setting::columns` names off the pragma and
+/// whether a value follows it.
+///
+/// The words of the statement are the name and the schema in front of
+/// it where one is written, and a value follows the name where the text
+/// holds `=` or a bracket, neither of which stands in a name.
+fn pragma_columns(sql: &str) -> Vec<String> {
+    let text = uncommented(sql);
+    let words = words(sql);
+    // `PRAGMA schema.name` writes the schema in front of the name, which
+    // says nothing about the columns.
+    let at = if text.contains('.') { 2 } else { 1 };
+    let Some(name) = words.get(at) else {
+        return Vec::new();
+    };
+    let Some(setting) = db_sqlite::pragma::of_name(name.as_bytes()) else {
+        return Vec::new();
+    };
+    let valued = text.contains('=') || text.contains('(');
+    setting
+        .columns(name.as_bytes(), valued)
+        .iter()
+        .map(|column| String::from_utf8_lossy(column).into_owned())
+        .collect()
 }
 
 /// A `PRAGMA` goes to the connection either way, because a connection

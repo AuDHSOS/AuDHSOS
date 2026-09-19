@@ -30,6 +30,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` names the columns every pragma answers, answers the pragmas
+  of the schema from a reader as well as a writer, and answers a pragma
+  that wrote a schema in front of its name out of that database. D-337
+  records it. Catalog 6.6.229. `PRAGMA journal_mode = X` with no schema in
+  front of it now sets the mode of every database the connection holds.
+  `pragma4.test` goes from 42 cases passing to 70, `pragma.test` from 66
+  to 73, `trans.test` from 99 to 228 and `avtrans.test` from 78 to 201.
+
 - The tester answers what the TCL interface of SQLite answers: the error a
   method that is no method raises, the error a count of values a method
   does not take raises, a savepoint for a `db transaction` inside another,

@@ -2742,16 +2742,23 @@ impl<'a> Database<'a> {
             crate::pragma::Setting::Quick => Some(true),
             _ => None,
         };
+        let columns = setting.columns(&name, asked.value.is_some());
+        let shaped = |rows: Vec<Vec<Value>>| Answer {
+            declared: alloc::vec![Vec::new(); columns.len()],
+            names: columns.clone(),
+            rows,
+        };
         if let Some(quick) = quick {
             let rows = crate::check::integrity(self, quick)?
                 .into_iter()
                 .map(|text| alloc::vec![Value::Text(text)])
                 .collect();
-            return Ok(Answer {
-                declared: alloc::vec![Vec::new()],
-                names: alloc::vec![name],
-                rows,
-            });
+            return Ok(shaped(rows));
+        }
+        // The pragmas that answer the schema read the tables, the indexes
+        // and the collations of this database, which D-330 records.
+        if let Some(rows) = self.schema_rows(setting, asked, sql) {
+            return Ok(shaped(rows));
         }
         // A file being read is not being configured, and a pragma the
         // file does not hold has no answer to read out of it.
@@ -2776,11 +2783,34 @@ impl<'a> Database<'a> {
             other => other.read(self.image.header()),
         }
         .ok_or(Error::Unsupported)?;
-        let rows = alloc::vec![alloc::vec![value]];
-        Ok(Answer {
-            declared: alloc::vec![Vec::new()],
-            names: alloc::vec![name],
-            rows,
+        Ok(shaped(alloc::vec![alloc::vec![value]]))
+    }
+
+    /// The rows one pragma of the schema answers, and nothing where the
+    /// pragma is another.
+    ///
+    /// Reading the schema costs O(n) in its rows.
+    fn schema_rows(
+        &self,
+        setting: crate::pragma::Setting,
+        asked: &crate::ast::Pragma,
+        sql: &[u8],
+    ) -> Option<Vec<Vec<Value>>> {
+        use crate::pragma::Setting;
+        if setting == Setting::CollationList {
+            return Some(crate::change::listed_collations(self.collating));
+        }
+        let named = asked
+            .value
+            .map(|value| crate::schema::dequote(value.text(sql)))
+            .unwrap_or_default();
+        Some(match setting {
+            Setting::TableInfo => crate::change::columns_of(self, &named, false),
+            Setting::TableXinfo => crate::change::columns_of(self, &named, true),
+            Setting::IndexInfo => crate::change::places_of(self, &named, false),
+            Setting::IndexXinfo => crate::change::places_of(self, &named, true),
+            Setting::IndexList => crate::change::listed_indexes(self, &named),
+            _ => return None,
         })
     }
 

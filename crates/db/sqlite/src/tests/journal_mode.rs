@@ -64,6 +64,37 @@ fn what_journal_mode_a_connection_is_in() {
     );
 }
 
+/// `PRAGMA journal_mode = X` with no schema in front of it sets the mode
+/// of every database the connection holds, and one that names a schema
+/// sets that database alone.
+#[test]
+fn what_journal_mode_the_databases_beside_the_first_are_in() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.opens(opening);
+    writer.run(b"ATTACH 'one.db' AS one").unwrap();
+    assert_eq!(word(&mut writer, b"PRAGMA one.journal_mode"), "delete");
+    assert_eq!(word(&mut writer, b"PRAGMA journal_mode=persist"), "persist");
+    assert_eq!(word(&mut writer, b"PRAGMA one.journal_mode"), "persist");
+    // A pragma that names a schema leaves the other databases as they
+    // were.
+    assert_eq!(
+        word(&mut writer, b"PRAGMA one.journal_mode=truncate"),
+        "truncate"
+    );
+    assert_eq!(word(&mut writer, b"PRAGMA journal_mode"), "persist");
+    assert_eq!(word(&mut writer, b"PRAGMA one.journal_mode"), "truncate");
+}
+
+/// The file the `ATTACH` of these tests names.
+fn opening(file: &[u8]) -> Option<alloc::vec::Vec<u8>> {
+    if file != b"one.db" {
+        return None;
+    }
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE u(b)").unwrap();
+    Some(writer.written())
+}
+
 /// A statement an `IN` looks in answers one column for a bare value
 /// and as many as a row of values holds, which is counted where the
 /// statement is read and not where a row is.

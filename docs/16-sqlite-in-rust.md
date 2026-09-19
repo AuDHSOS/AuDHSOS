@@ -901,6 +901,8 @@ Size: L.
     written and not where the statement ends.
 87. The key a row that carries none takes, which is read after the
     triggers before the row have run. Built, which D-336 records.
+88. The columns a pragma answers, and the database a pragma that wrote a
+    schema answers out of. Built, which D-337 records.
 
 ### Done when
 
@@ -910,8 +912,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 107 717 cases in 798 files, 94 850
-pass, 3323 answer differently, and 9544 name something the engine
+under the `tclsh` of the machine. Of 108 087 cases in 798 files, 95 168
+pass, 3372 answer differently, and 9547 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the three-minute
 deadline and are counted with the cases they ran by then. One run over

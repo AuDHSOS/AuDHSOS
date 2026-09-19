@@ -325,6 +325,30 @@ pub static HELD: &[Keeps] = &[
         answers: true,
         fixed: true,
     },
+    // The three flags of the file system that this crate reads nothing
+    // of: a connection answers what it was told and the file is written
+    // the same way either way.
+    Keeps {
+        name: b"cell_size_check",
+        fallback: 0,
+        written: Written::Truth,
+        answers: false,
+        fixed: false,
+    },
+    Keeps {
+        name: b"checkpoint_fullfsync",
+        fallback: 0,
+        written: Written::Truth,
+        answers: false,
+        fixed: false,
+    },
+    Keeps {
+        name: b"fullfsync",
+        fallback: 0,
+        written: Written::Truth,
+        answers: false,
+        fixed: false,
+    },
 ];
 
 /// What a pragma the connection keeps answers for `value`.
@@ -452,6 +476,103 @@ pub fn of_name(name: &[u8]) -> Option<Setting> {
 }
 
 impl Setting {
+    /// The columns this pragma answers, each by name, and none where it
+    /// answers no column. `valued` says whether a value follows the name.
+    ///
+    /// `setPragmaResultColumnNames` of
+    /// `research/sqlite/src/pragma.c:207` sets the names `pragCName`
+    /// holds where the pragma names columns of its own, and one column
+    /// named after the pragma where it does not. `PragFlg_NoColumns`
+    /// answers none at all, and `PragFlg_NoColumns1` none where a value
+    /// follows the name, which every pragma written `TYPE: FLAG` in
+    /// `research/sqlite/tool/mkpragmatab.tcl` carries.
+    #[must_use]
+    pub fn columns(self, name: &[u8], valued: bool) -> Vec<Vec<u8>> {
+        let named = |words: &[&[u8]]| words.iter().map(|word| word.to_vec()).collect();
+        match self {
+            Setting::TableInfo => {
+                return named(&[b"cid", b"name", b"type", b"notnull", b"dflt_value", b"pk"]);
+            }
+            Setting::TableXinfo => {
+                return named(&[
+                    b"cid",
+                    b"name",
+                    b"type",
+                    b"notnull",
+                    b"dflt_value",
+                    b"pk",
+                    b"hidden",
+                ]);
+            }
+            Setting::IndexInfo => return named(&[b"seqno", b"cid", b"name"]),
+            Setting::IndexXinfo => {
+                return named(&[b"seqno", b"cid", b"name", b"desc", b"coll", b"key"]);
+            }
+            Setting::IndexList => {
+                return named(&[b"seq", b"name", b"unique", b"origin", b"partial"]);
+            }
+            Setting::CollationList => return named(&[b"seq", b"name"]),
+            Setting::DatabaseList => return named(&[b"seq", b"name", b"file"]),
+            Setting::ForeignKeyList => {
+                return named(&[
+                    b"id",
+                    b"seq",
+                    b"table",
+                    b"from",
+                    b"to",
+                    b"on_update",
+                    b"on_delete",
+                    b"match",
+                ]);
+            }
+            Setting::ForeignKeyCheck => return named(&[b"table", b"rowid", b"parent", b"fkid"]),
+            Setting::WalCheckpoint => return named(&[b"busy", b"log", b"checkpointed"]),
+            // `PRAGMA case_sensitive_like` answers no column, which
+            // `PragFlg_NoColumns` states, and the three names no version
+            // of the library still holds answer none either.
+            Setting::CaseSensitiveLike => return Vec::new(),
+            Setting::Ignored
+                if [
+                    b"shrink_memory".as_slice(),
+                    b"legacy_file_format",
+                    b"default_synchronous",
+                ]
+                .iter()
+                .any(|word| name.eq_ignore_ascii_case(word)) =>
+            {
+                return Vec::new();
+            }
+            _ => {}
+        }
+        // `PRAGMA optimize` names its column whatever follows the name,
+        // because `PragFlg_NoColumns1` does not stand against it.
+        let named = name.eq_ignore_ascii_case(b"optimize");
+        if valued && !named && self.none_valued() {
+            return Vec::new();
+        }
+        alloc::vec![name.to_ascii_lowercase()]
+    }
+
+    /// Whether this pragma answers no column where a value follows its
+    /// name, which is `PragFlg_NoColumns1`.
+    const fn none_valued(self) -> bool {
+        matches!(
+            self,
+            Setting::PageSize
+                | Setting::Reserved
+                | Setting::Encoding
+                | Setting::AutoVacuum
+                | Setting::SchemaVersion
+                | Setting::UserVersion
+                | Setting::ApplicationId
+                | Setting::SchemaFormat
+                | Setting::CountChanges
+                | Setting::DefaultCacheSize
+                | Setting::Held(_)
+                | Setting::Ignored
+        )
+    }
+
     /// What a file whose header is `header` answers for this pragma, or
     /// nothing where the pragma answers no row.
     ///

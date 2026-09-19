@@ -2267,13 +2267,19 @@ impl Writer {
         if self.attached.is_empty() && !temping {
             return Ok(None);
         }
-        let names = match crate::parse::definition(sql) {
-            Ok((_, definition)) => defined_under(definition),
-            Err(_) => match crate::parse::change(sql) {
-                Ok((_, change)) => changed_under(change),
-                // A statement neither reading takes is one that writes no
-                // database of its own, which a `SELECT` is.
-                Err(_) => Names::made(None, None, false),
+        // A pragma answers out of the database its schema names, which
+        // `sqlite3Pragma` of `research/sqlite/src/pragma.c:381` reads
+        // with `sqlite3TwoPartName`.
+        let names = match crate::parse::pragma(sql) {
+            Ok(asked) => Names::made(asked.schema, None, false),
+            Err(_) => match crate::parse::definition(sql) {
+                Ok((_, definition)) => defined_under(definition),
+                Err(_) => match crate::parse::change(sql) {
+                    Ok((_, change)) => changed_under(change),
+                    // A statement neither reading takes is one that
+                    // writes no database of its own, which a `SELECT` is.
+                    Err(_) => Names::made(None, None, false),
+                },
             },
         };
         // A statement that names the temp schema opens it, which is what
@@ -3022,7 +3028,7 @@ impl Writer {
         let Some(value) = asked.value else {
             return self.pragma_read(setting);
         };
-        self.pragma_write(setting, value.text(sql))
+        self.pragma_write(setting, value.text(sql), asked.schema.is_none())
     }
 
     /// `PRAGMA name = value`, with `text` for what is written.
@@ -3035,6 +3041,7 @@ impl Writer {
         &mut self,
         setting: crate::pragma::Setting,
         text: &[u8],
+        every: bool,
     ) -> Result<Vec<Vec<Value>>, Error> {
         if setting == crate::pragma::Setting::Ignored {
             return Ok(Vec::new());
@@ -3143,6 +3150,17 @@ impl Writer {
                     let mode = wanted.ok_or(Error::Unsupported)?;
                     if !held {
                         self.held.mode = mode;
+                        // `PRAGMA journal_mode = X` with no schema in
+                        // front of it sets the mode of every database the
+                        // connection holds, which
+                        // `sqlite3PragmaJournalMode` of
+                        // `research/sqlite/src/pragma.c:520` writes to
+                        // each and keeps as the connection's own.
+                        if every {
+                            for beside in &mut self.attached {
+                                beside.held.mode = mode;
+                            }
+                        }
                     }
                 }
                 // The mode the connection is left in is the one row
@@ -3664,8 +3682,10 @@ impl Writer {
             .value
             .map(|value| crate::schema::dequote(value.text(sql)))
             .unwrap_or_default();
-        let bytes = self.image();
-        let database = self.reading(&bytes)?;
+        // A bare name is the table of any database the connection holds,
+        // which `sqlite3FindTable` reads them in turn for.
+        let bytes = self.images();
+        let database = self.reading_beside(&bytes)?;
         Ok(Some(match setting {
             Setting::TableInfo => columns_of(&database, &named, false),
             Setting::TableXinfo => columns_of(&database, &named, true),
@@ -8993,7 +9013,7 @@ fn named_text(named: Option<Span>, sql: &[u8]) -> Vec<u8> {
 /// The rows `PRAGMA collation_list` answers: one per collation the
 /// connection holds, the three of the library first and the ones the
 /// application defined after them.
-fn listed_collations(collating: &[crate::value::Collating]) -> Vec<Vec<Value>> {
+pub(crate) fn listed_collations(collating: &[crate::value::Collating]) -> Vec<Vec<Value>> {
     let held = [
         crate::value::Collation::Binary,
         crate::value::Collation::NoCase,
@@ -9024,7 +9044,7 @@ fn listed_collations(collating: &[crate::value::Collating]) -> Vec<Vec<Value>> {
 /// the two kinds of computed column each is.
 ///
 /// Reading the table costs O(n) in its columns.
-fn columns_of(database: &Database<'_>, name: &[u8], every: bool) -> Vec<Vec<Value>> {
+pub(crate) fn columns_of(database: &Database<'_>, name: &[u8], every: bool) -> Vec<Vec<Value>> {
     let Some((table, _)) = database.table(name) else {
         return Vec::new();
     };
@@ -9079,7 +9099,7 @@ struct Place {
 /// ones an entry carries to name the row.
 ///
 /// Reading the index costs O(n) in its places.
-fn places_of(database: &Database<'_>, name: &[u8], every: bool) -> Vec<Vec<Value>> {
+pub(crate) fn places_of(database: &Database<'_>, name: &[u8], every: bool) -> Vec<Vec<Value>> {
     let Some(indexed) = database.indexed(name) else {
         return Vec::new();
     };
@@ -9174,7 +9194,7 @@ fn naming_places(indexed: &crate::db::Indexed<'_>) -> Vec<Place> {
 /// has rows.
 ///
 /// Reading the table costs O(n) in its indexes.
-fn listed_indexes(database: &Database<'_>, name: &[u8]) -> Vec<Vec<Value>> {
+pub(crate) fn listed_indexes(database: &Database<'_>, name: &[u8]) -> Vec<Vec<Value>> {
     let held = database.indexes(name);
     held.iter()
         .rev()

@@ -6327,3 +6327,22 @@ Document 16 step Q8.
   before the row wrote the key it stood to take, and the counters of the
   connection name the key the row took.
 
+### 6.6.229 What columns a pragma answers (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A pragma that answers columns of its own names each of them.
+- A pragma that answers one value names the column after itself.
+- A pragma written `TYPE: FLAG` names no column where a value follows
+  the name.
+- `PRAGMA case_sensitive_like` and `PRAGMA shrink_memory` name no column
+  either way.
+- A reader answers `PRAGMA table_info`, `table_xinfo`, `index_info`,
+  `index_xinfo`, `index_list` and `collation_list` out of the database it
+  was opened over.
+- A pragma that wrote a schema in front of its name answers out of that
+  database.
+- `PRAGMA journal_mode = X` with no schema in front of it sets the mode
+  of every database the connection holds, and one that names a schema
+  sets that database alone.
+

@@ -156,3 +156,137 @@ fn what_the_indexes_of_a_table_answer() {
         ])
     );
 }
+
+/// The columns a pragma answers, which a caller reads the shape of the
+/// statement from and a reader answers the rows of.
+#[test]
+fn what_columns_a_pragma_answers() {
+    use crate::pragma::{Setting, of_name};
+    let named = |sql: &str, valued: bool| {
+        let name = sql.as_bytes();
+        of_name(name)
+            .map(|setting| setting.columns(name, valued))
+            .unwrap_or_default()
+            .iter()
+            .map(|column| alloc::string::String::from_utf8_lossy(column).into_owned())
+            .collect::<Vec<alloc::string::String>>()
+            .join("|")
+    };
+    // A pragma of columns of its own names each of them, whether a value
+    // follows the name or not.
+    assert_eq!(
+        named("table_info", false),
+        "cid|name|type|notnull|dflt_value|pk"
+    );
+    assert_eq!(
+        named("table_info", true),
+        "cid|name|type|notnull|dflt_value|pk"
+    );
+    assert_eq!(
+        named("table_xinfo", false),
+        "cid|name|type|notnull|dflt_value|pk|hidden"
+    );
+    assert_eq!(named("index_info", false), "seqno|cid|name");
+    assert_eq!(named("index_xinfo", false), "seqno|cid|name|desc|coll|key");
+    assert_eq!(named("index_list", false), "seq|name|unique|origin|partial");
+    assert_eq!(named("collation_list", false), "seq|name");
+    assert_eq!(named("database_list", false), "seq|name|file");
+    assert_eq!(
+        named("foreign_key_list", false),
+        "id|seq|table|from|to|on_update|on_delete|match"
+    );
+    assert_eq!(named("foreign_key_check", false), "table|rowid|parent|fkid");
+    assert_eq!(named("wal_checkpoint", false), "busy|log|checkpointed");
+    // A pragma of one value names the column after itself, and names none
+    // where a value follows the name and `PragFlg_NoColumns1` stands
+    // against it.
+    assert_eq!(named("user_version", false), "user_version");
+    assert_eq!(named("user_version", true), "");
+    assert_eq!(named("page_size", true), "");
+    assert_eq!(named("encoding", true), "");
+    assert_eq!(named("auto_vacuum", true), "");
+    assert_eq!(named("schema_version", true), "");
+    assert_eq!(named("application_id", true), "");
+    assert_eq!(named("schema_format", true), "");
+    assert_eq!(named("count_changes", true), "");
+    assert_eq!(named("default_cache_size", true), "");
+    assert_eq!(named("foreign_keys", true), "");
+    assert_eq!(named("cache_spill", true), "");
+    assert_eq!(named("journal_mode", true), "journal_mode");
+    assert_eq!(named("integrity_check", true), "integrity_check");
+    assert_eq!(named("quick_check", false), "quick_check");
+    assert_eq!(named("page_count", true), "page_count");
+    assert_eq!(named("freelist_count", false), "freelist_count");
+    assert_eq!(named("cell_size_check", false), "cell_size_check");
+    // `PragFlg_NoColumns` names none either way, and a name no version of
+    // the library still holds names none.
+    assert_eq!(named("case_sensitive_like", false), "");
+    assert_eq!(named("shrink_memory", false), "");
+    assert_eq!(named("legacy_file_format", false), "");
+    assert_eq!(named("default_synchronous", false), "");
+    assert_eq!(named("optimize", false), "optimize");
+    // A name that is no pragma names no column.
+    assert_eq!(named("nonesuch", false), "");
+    assert!(!Setting::Ignored.columns(b"optimize", true).is_empty());
+}
+
+/// A reader answers the pragmas of the schema out of the database it was
+/// opened over, with the columns each names.
+#[test]
+fn what_a_reader_answers_for_a_pragma_of_the_schema() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.collates(COLLATING);
+    writer.run(b"CREATE TABLE t(a, b TEXT)").unwrap();
+    writer.run(b"CREATE INDEX i ON t(b)").unwrap();
+    let bytes = writer.written();
+    let database = crate::db::Database::open_collating(&bytes, COLLATING).unwrap();
+    let answered = |sql: &[u8]| {
+        let answered = database.query(sql).expect("rows");
+        let names = answered
+            .names
+            .iter()
+            .map(|name| alloc::string::String::from_utf8_lossy(name).into_owned())
+            .collect::<Vec<alloc::string::String>>()
+            .join("|");
+        let rows = answered
+            .rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|value| {
+                        alloc::string::String::from_utf8_lossy(&value.text().unwrap_or_default())
+                            .into_owned()
+                    })
+                    .collect::<Vec<alloc::string::String>>()
+                    .join(",")
+            })
+            .collect::<Vec<alloc::string::String>>()
+            .join("/");
+        alloc::format!("{names} {rows}")
+    };
+    assert_eq!(
+        answered(b"PRAGMA table_info(t)"),
+        "cid|name|type|notnull|dflt_value|pk 0,a,,0,,0/1,b,TEXT,0,,0"
+    );
+    assert_eq!(
+        answered(b"PRAGMA table_xinfo(t)"),
+        "cid|name|type|notnull|dflt_value|pk|hidden 0,a,,0,,0,0/1,b,TEXT,0,,0,0"
+    );
+    assert_eq!(answered(b"PRAGMA index_info(i)"), "seqno|cid|name 0,1,b");
+    assert_eq!(
+        answered(b"PRAGMA index_xinfo(i)"),
+        "seqno|cid|name|desc|coll|key 0,1,b,0,BINARY,1/1,-1,,0,BINARY,0"
+    );
+    assert_eq!(
+        answered(b"PRAGMA index_list(t)"),
+        "seq|name|unique|origin|partial 0,i,0,c,0"
+    );
+    assert_eq!(
+        answered(b"PRAGMA collation_list"),
+        "seq|name 0,BINARY/1,NOCASE/2,RTRIM/3,BACKWARDS"
+    );
+    // A pragma of one value names its own column, and one the reader
+    // holds no value for is refused.
+    assert_eq!(answered(b"PRAGMA page_size"), "page_size 1024");
+    assert!(database.query(b"PRAGMA cache_spill").is_err());
+}
