@@ -6095,3 +6095,21 @@ Document 16 step Q8.
   each asked for and each left undone where the function ignores it.
 - A term of a `WITH` that reads its own name is asked for.
 - A `VACUUM` is asked for nothing.
+
+### 6.6.212 One statement written again with every literal as a `?` (`db-sqlite`)
+
+Document 16 step Q8.
+
+- Every literal, every variable and every blob is a `?`.
+- A comment and a run of whitespace are dropped, and a space stands
+  between two words that would otherwise run together.
+- The right side of an `IN` becomes `?,?,?`, and one a statement opens
+  stands as it was.
+- A `NULL` after `IS` or `NOT` is a word of the language; every other one
+  is a value.
+- A name in double quotes is written bare where it is one identifier and
+  quoted where it is not.
+- A word in double quotes the schema carries no name for is a text; one
+  in an `ATTACH` is a name.
+- A statement that ends in no semicolon carries one.
+- The lower-case form answers nothing for a byte no rule accepts.

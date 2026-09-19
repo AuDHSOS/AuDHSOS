@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` writes one statement again with every literal as a `?`,
+  which `sqlite3_normalize` and `sqlite3_normalized_sql` answer. D-315
+  records it. Catalog 6.6.212. `normalize.test` goes from 3 cases passing
+  to 66.
+
 - The suite's own harness answers `sqlite3_prepare`, `sqlite3_step`,
   `sqlite3_bind_*`, `sqlite3_column_*` and the commands beside them, so a
   file that drives the C API over a statement it prepared runs. D-314

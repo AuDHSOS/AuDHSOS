@@ -27,6 +27,7 @@ pub mod image;
 pub mod journal;
 pub mod json;
 pub mod keyword;
+pub mod normalize;
 pub mod number;
 pub mod page;
 pub mod parse;

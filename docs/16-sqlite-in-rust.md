@@ -862,6 +862,8 @@ Size: L.
     the rest of `auth.test` waits on, and `SQLITE_ATTACH` and
     `SQLITE_DETACH` are not among the actions because this crate holds
     one file per connection.
+73. One statement written again with every literal as a `?`, in the two
+    forms the C library answers. Built, which D-315 records.
 
 ### Done when
 

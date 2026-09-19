@@ -48,6 +48,7 @@ mod key_tree;
 mod matrix;
 mod misuse;
 mod newrowid;
+mod normalize;
 mod number;
 mod page;
 mod parse;

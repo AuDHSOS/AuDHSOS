@@ -809,6 +809,13 @@ impl Session {
             // it answered.
             "prepare" | "autocommit" | "step" | "finalize" | "reset" | "clear_binds" | "bind"
             | "column" | "stmt" => self.of_statement(verb, args),
+            // `sqlite3_normalize SQL`, which is the same statement in
+            // lower case and answers nothing for a byte no rule accepts.
+            "normalize" => Ok(alloc_one(
+                &db_sqlite::normalize::normalized(first.as_bytes())
+                    .map(|held| String::from_utf8_lossy(&held).into_owned())
+                    .unwrap_or_default(),
+            )),
             "columnmeta" => self.column_meta(first, second, args.get(2).map_or("", String::as_str)),
             "eval" => self.eval(first, second),
             "names" => self.names(first, second),
@@ -1165,9 +1172,34 @@ impl Session {
                 .collect();
         }
         self.prepared = self.prepared.saturating_add(1);
-        let name = format!("STMT{}", self.prepared);
+        // The name stands for the pointer the C library answers, which
+        // a file may read as a run of hexadecimal digits.
+        let name = format!("{:08X}", self.prepared.saturating_add(0x1000_0000));
         self.statements.insert(name.clone(), prepared);
         Ok(alloc_two(name, tail))
+    }
+
+    /// The names a statement of `connection` may read, which are the
+    /// tables of its schema and their columns.
+    fn named(&self, connection: &str) -> Vec<Vec<u8>> {
+        let Some(path) = self.connections.get(connection) else {
+            return Vec::new();
+        };
+        let Some(writer) = self.held.get(path) else {
+            return Vec::new();
+        };
+        let bytes = writer.written();
+        let Ok(database) = Database::open(&bytes) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for table in database.tables() {
+            out.push(table.name.clone());
+            for column in &table.columns {
+                out.push(column.name.clone());
+            }
+        }
+        out
     }
 
     /// `sqlite3_get_autocommit DB`: nought where the connection has a
@@ -1380,6 +1412,16 @@ impl Session {
                     .get(place.saturating_sub(1))
                     .cloned()
                     .unwrap_or_default()
+            }
+            // `sqlite3_normalized_sql` writes the statement again with
+            // every literal as a `?`.
+            "normalized" => {
+                let names = self.named(&held.connection);
+                String::from_utf8_lossy(&db_sqlite::normalize::normalized_sql(
+                    held.sql.as_bytes(),
+                    &names,
+                ))
+                .into_owned()
             }
             "index" => named_parameters(&held.sql)
                 .iter()

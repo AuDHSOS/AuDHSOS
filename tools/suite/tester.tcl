@@ -385,6 +385,10 @@ proc reset_db {} {
   catch { db close }
   forcedelete test.db test.db-journal test.db-wal test.db-shm
   sqlite3 db test.db
+  # `reset_db` of the suite's own tester names the connection `::DB` as
+  # well, which the files that drive the C API read.
+  set ::DB [sqlite3_connection_pointer db]
+  if {[info exists ::SETUP_SQL]} { db eval $::SETUP_SQL }
 }
 proc db_delete_and_reopen {{file test.db}} { reset_db }
 proc drop_all_tables {{db db}} {
@@ -762,12 +766,15 @@ proc sqlite3_column_text16 {stmt at} { return [sqlite3_column_text $stmt $at] }
 proc sqlite3_column_blob {stmt at} { return [sqlite3_column_text $stmt $at] }
 proc sqlite3_column_bytes {stmt at} { return [string length [sqlite3_column_text $stmt $at]] }
 proc sqlite3_column_bytes16 {stmt at} { return [expr {2*[sqlite3_column_bytes $stmt $at]}] }
-proc sqlite3_bind_int {stmt at value} { return [harness_send bind $stmt $at $value] }
-proc sqlite3_bind_int64 {stmt at value} { return [harness_send bind $stmt $at $value] }
-proc sqlite3_bind_double {stmt at value} { return [harness_send bind $stmt $at $value] }
-proc sqlite3_bind_null {stmt at} { return [harness_send bind $stmt $at NULL] }
+# `sqlite3_bind_*` answers nothing where it bound the value, which is
+# what `test_bind` of `research/sqlite/src/test1.c` writes.
+proc sqlite3_bind_int {stmt at value} { harness_send bind $stmt $at $value ; return {} }
+proc sqlite3_bind_int64 {stmt at value} { harness_send bind $stmt $at $value ; return {} }
+proc sqlite3_bind_double {stmt at value} { harness_send bind $stmt $at $value ; return {} }
+proc sqlite3_bind_null {stmt at} { harness_send bind $stmt $at NULL ; return {} }
 proc sqlite3_bind_text {stmt at value args} {
-  return [harness_send bind $stmt $at '[string map {' ''} $value]']
+  harness_send bind $stmt $at '[string map {' ''} $value]'
+  return {}
 }
 proc sqlite3_bind_text16 {args} { return [eval sqlite3_bind_text $args] }
 proc sqlite3_bind_blob {stmt at value args} { return [eval sqlite3_bind_text [list $stmt $at $value]] }
@@ -793,6 +800,8 @@ proc sqlite_bind {stmt at value type} {
 set ::sqlite_static_bind_value {}
 set ::sqlite_static_bind_nbytes 0
 proc sqlite3_sql {stmt} { return [lindex [harness_send stmt $stmt sql] 0] }
+proc sqlite3_normalized_sql {stmt} { return [lindex [harness_send stmt $stmt normalized] 0] }
+proc sqlite3_normalize {sql} { return [lindex [harness_send normalize $sql] 0] }
 proc sqlite3_expanded_sql {stmt} { return [lindex [harness_send stmt $stmt expanded] 0] }
 proc sqlite3_errcode {db} { return $::harness_code }
 proc sqlite3_extended_errcode {db} { return $::harness_code }
@@ -1054,3 +1063,7 @@ set ::tcl_precision 15
 # The connection every file reads without opening one, which SQLite's
 # own tester opens the same way.
 sqlite3 db test.db
+
+# The files that drive the C API read `::DB` for the connection, which
+# `reset_db` of the suite's own tester names as well.
+set ::DB [sqlite3_connection_pointer db]
