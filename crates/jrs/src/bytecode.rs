@@ -809,6 +809,18 @@ enum RegisterPreparedAssignment {
     Member(RegisterMemberAssignment),
 }
 
+/// The registers the keys of an object pattern stand in, one per property.
+///
+/// 13.15.5.5 and 8.6.2 evaluate each key once, before the target of its
+/// property, and the rest element excludes the keys so evaluated. A key the
+/// lowering cannot fold to a name therefore keeps its register until 7.3.25
+/// reads the whole window as the excluded list.
+#[derive(Clone, Copy)]
+struct RegisterKeyWindow {
+    first: crate::engine::bytecode::Reg,
+    count: u16,
+}
+
 #[expect(
     clippy::struct_excessive_bools,
     reason = "each flag names one independent property of the lowering"
@@ -1225,7 +1237,6 @@ impl RegisterLowerer {
         value_type: RegisterType,
         pattern: &parser::BindingPattern,
     ) -> Option<()> {
-        use crate::engine::bytecode::Instruction;
         match pattern {
             parser::BindingPattern::Name(name) => {
                 let Some(binding) = self.bindings.get(name).copied() else {
@@ -1260,69 +1271,7 @@ impl RegisterLowerer {
                 entry.initialized = true;
             }
             parser::BindingPattern::Object(object) => {
-                // A layout the lowering tracks answers each property from
-                // what it knows; every other value is read at run time.
-                let tracked = value_type.is_object();
-                if object.rest.is_some()
-                    && tracked
-                    && !matches!(value_type, RegisterType::Object(_))
-                {
-                    return None;
-                }
-                if !tracked {
-                    self.code.emit(Instruction::Require(
-                        crate::engine::bytecode::RequireKind::ObjectCoercible,
-                    ));
-                }
-                let source = self.allocate_register()?;
-                self.code.emit(Instruction::Star(source));
-                let mut excluded = Vec::new();
-                for property in &object.properties {
-                    if object.rest.is_some() {
-                        excluded.push(Self::binding_property_name(property)?);
-                    }
-                    let mut property_type = if tracked {
-                        self.lower_property_from_register(
-                            source,
-                            value_type,
-                            &property.key,
-                            property.computed,
-                            true,
-                        )?
-                    } else {
-                        self.lower_unknown_property_from_register(
-                            source,
-                            &property.key,
-                            property.computed,
-                        )?
-                    };
-                    if let Some(initializer) = &property.initializer {
-                        let bound: Option<Vec<u16>> = property
-                            .pattern
-                            .identifier()
-                            .map(|name| name.encode_utf16().collect());
-                        property_type = self.lower_binding_default_named(
-                            property_type,
-                            initializer,
-                            bound.as_deref(),
-                        )?;
-                    }
-                    self.bind_pattern(property_type, &property.pattern)?;
-                }
-                if let Some(rest) = &object.rest {
-                    let (rest_type, rest_object) = if tracked {
-                        self.lower_object_rest_from_register(source, value_type, &excluded)?
-                    } else {
-                        // 7.3.25 collects every own enumerable key of a value
-                        // the lowering could not name, which only the run time
-                        // knows.
-                        self.lower_copied_data_properties(source, &excluded)?
-                    };
-                    self.code.emit(Instruction::Ldar(rest_object));
-                    self.bind_pattern(rest_type, &parser::BindingPattern::Name(rest.clone()))?;
-                    self.release_register(rest_object)?;
-                }
-                self.release_register(source)?;
+                self.bind_object_pattern(value_type, object)?;
             }
             parser::BindingPattern::Array(array) => {
                 // 8.6.2 takes the elements from the iterator of the value,
@@ -2619,59 +2568,7 @@ impl RegisterLowerer {
                 self.release_register(source)?;
             }
             parser::AssignmentPattern::Object(object) => {
-                let tracked = matches!(value_type, RegisterType::Object(_));
-                if !value_type.is_object() {
-                    // 13.15.5.5 step 1 refuses undefined and null before it
-                    // reads any property.
-                    self.code.emit(Instruction::Require(
-                        crate::engine::bytecode::RequireKind::ObjectCoercible,
-                    ));
-                }
-                let source = self.allocate_register()?;
-                self.code.emit(Instruction::Star(source));
-                let mut excluded = Vec::new();
-                for property in &object.properties {
-                    let prepared = self.prepare_assignment_pattern_target(&property.target)?;
-                    if object.rest.is_some() {
-                        excluded.push(Self::static_property_key_units(&property.key)?);
-                    }
-                    let keyed = Self::static_property_name(&property.key).is_none();
-                    let mut property_type = if value_type.is_object() {
-                        self.lower_property_from_register(
-                            source,
-                            value_type,
-                            &property.key,
-                            keyed,
-                            true,
-                        )?
-                    } else {
-                        self.lower_unknown_property_from_register(source, &property.key, keyed)?
-                    };
-                    if let Some(initializer) = &property.initializer {
-                        property_type = self.lower_assignment_default(
-                            property_type,
-                            initializer,
-                            &property.target,
-                        )?;
-                    }
-                    self.finish_assignment_pattern_target(
-                        property_type,
-                        &property.target,
-                        prepared,
-                    )?;
-                }
-                if let Some(rest) = &object.rest {
-                    let prepared = self.prepare_assignment_reference(rest)?;
-                    let (rest_type, rest_object) = if tracked {
-                        self.lower_object_rest_from_register(source, value_type, &excluded)?
-                    } else {
-                        self.lower_copied_data_properties(source, &excluded)?
-                    };
-                    self.code.emit(Instruction::Ldar(rest_object));
-                    self.release_register(rest_object)?;
-                    self.finish_assignment_reference(rest_type, rest, prepared)?;
-                }
-                self.release_register(source)?;
+                self.assign_object_pattern(value_type, object)?;
             }
         }
         Some(())
@@ -5934,6 +5831,265 @@ impl RegisterLowerer {
             elements.insert(offset, value_type);
         }
         Some((RegisterType::Array(rest_id), rest_array))
+    }
+
+    /// `BindingInitialization` of 8.6.2 for an object pattern.
+    fn bind_object_pattern(
+        &mut self,
+        value_type: RegisterType,
+        object: &parser::ObjectBindingPattern,
+    ) -> Option<()> {
+        use crate::engine::bytecode::Instruction;
+        // A layout the lowering tracks answers each property from what it
+        // knows; every other value is read at run time.
+        let tracked = value_type.is_object();
+        if object.rest.is_some() && tracked && !matches!(value_type, RegisterType::Object(_)) {
+            return None;
+        }
+        if !tracked {
+            self.code.emit(Instruction::Require(
+                crate::engine::bytecode::RequireKind::ObjectCoercible,
+            ));
+        }
+        let source = self.allocate_register()?;
+        self.code.emit(Instruction::Star(source));
+        // 8.6.2 evaluates a key that folds to no name where the pattern
+        // stands, so the key keeps a register of its own.
+        let window = if object.properties.iter().any(|property| {
+            self.pattern_key_units(&property.key, property.computed)
+                .is_none()
+        }) {
+            Some(self.open_key_window(object.properties.len())?)
+        } else {
+            None
+        };
+        let mut excluded = Vec::new();
+        for (index, property) in object.properties.iter().enumerate() {
+            if window.is_none() && object.rest.is_some() {
+                excluded.push(Self::binding_property_name(property)?);
+            }
+            let mut property_type = if let Some(window) = window {
+                let key =
+                    self.write_pattern_key(window, index, &property.key, property.computed)?;
+                self.lower_property_by_key_register(source, key)?
+            } else if tracked {
+                self.lower_property_from_register(
+                    source,
+                    value_type,
+                    &property.key,
+                    property.computed,
+                    true,
+                )?
+            } else {
+                self.lower_unknown_property_from_register(source, &property.key, property.computed)?
+            };
+            if let Some(initializer) = &property.initializer {
+                let bound: Option<Vec<u16>> = property
+                    .pattern
+                    .identifier()
+                    .map(|name| name.encode_utf16().collect());
+                property_type =
+                    self.lower_binding_default_named(property_type, initializer, bound.as_deref())?;
+            }
+            self.bind_pattern(property_type, &property.pattern)?;
+        }
+        if let Some(rest) = &object.rest {
+            let (rest_type, rest_object) = match window {
+                Some(window) => self.lower_copied_data_properties_in_window(source, window)?,
+                None if tracked => {
+                    self.lower_object_rest_from_register(source, value_type, &excluded)?
+                }
+                // 7.3.25 collects every own enumerable key of a value the
+                // lowering could not name, which only the run time knows.
+                None => self.lower_copied_data_properties(source, &excluded)?,
+            };
+            self.code.emit(Instruction::Ldar(rest_object));
+            self.bind_pattern(rest_type, &parser::BindingPattern::Name(rest.clone()))?;
+            self.release_register(rest_object)?;
+        }
+        if let Some(window) = window {
+            self.close_key_window(window)?;
+        }
+        self.release_register(source)?;
+        Some(())
+    }
+
+    /// `DestructuringAssignmentEvaluation` of 13.15.5.5 for an object
+    /// pattern.
+    fn assign_object_pattern(
+        &mut self,
+        value_type: RegisterType,
+        object: &parser::AssignmentObjectPattern,
+    ) -> Option<()> {
+        use crate::engine::bytecode::Instruction;
+        let tracked = matches!(value_type, RegisterType::Object(_));
+        if !value_type.is_object() {
+            // 13.15.5.5 step 1 refuses undefined and null before it reads
+            // any property.
+            self.code.emit(Instruction::Require(
+                crate::engine::bytecode::RequireKind::ObjectCoercible,
+            ));
+        }
+        let source = self.allocate_register()?;
+        self.code.emit(Instruction::Star(source));
+        // 13.15.5.5 evaluates a key that folds to no name where the pattern
+        // stands, before the target of its property, so the key keeps a
+        // register of its own.
+        let window = if object.properties.iter().any(|property| {
+            let keyed = Self::static_property_name(&property.key).is_none();
+            self.pattern_key_units(&property.key, keyed).is_none()
+        }) {
+            Some(self.open_key_window(object.properties.len())?)
+        } else {
+            None
+        };
+        let mut excluded = Vec::new();
+        for (index, property) in object.properties.iter().enumerate() {
+            let keyed = Self::static_property_name(&property.key).is_none();
+            let key = match window {
+                Some(window) => {
+                    Some(self.write_pattern_key(window, index, &property.key, keyed)?)
+                }
+                None => None,
+            };
+            let prepared = self.prepare_assignment_pattern_target(&property.target)?;
+            if window.is_none() && object.rest.is_some() {
+                excluded.push(Self::static_property_key_units(&property.key)?);
+            }
+            let mut property_type = if let Some(key) = key {
+                self.lower_property_by_key_register(source, key)?
+            } else if value_type.is_object() {
+                self.lower_property_from_register(source, value_type, &property.key, keyed, true)?
+            } else {
+                self.lower_unknown_property_from_register(source, &property.key, keyed)?
+            };
+            if let Some(initializer) = &property.initializer {
+                property_type =
+                    self.lower_assignment_default(property_type, initializer, &property.target)?;
+            }
+            self.finish_assignment_pattern_target(property_type, &property.target, prepared)?;
+        }
+        if let Some(rest) = &object.rest {
+            let prepared = self.prepare_assignment_reference(rest)?;
+            let (rest_type, rest_object) = match window {
+                Some(window) => self.lower_copied_data_properties_in_window(source, window)?,
+                None if tracked => {
+                    self.lower_object_rest_from_register(source, value_type, &excluded)?
+                }
+                None => self.lower_copied_data_properties(source, &excluded)?,
+            };
+            self.code.emit(Instruction::Ldar(rest_object));
+            self.release_register(rest_object)?;
+            self.finish_assignment_reference(rest_type, rest, prepared)?;
+        }
+        if let Some(window) = window {
+            self.close_key_window(window)?;
+        }
+        self.release_register(source)?;
+        Some(())
+    }
+
+    /// The name a key of an object pattern denotes at lowering time.
+    fn pattern_key_units(&self, key: &Expr, computed: bool) -> Option<Vec<u16>> {
+        if computed {
+            self.static_key_units(key)
+        } else {
+            Self::static_property_name(key).map(<[u16]>::to_vec)
+        }
+    }
+
+    /// Reserves one register per property of an object pattern, contiguous
+    /// because 7.3.25 addresses the excluded names as a range.
+    fn open_key_window(&mut self, properties: usize) -> Option<RegisterKeyWindow> {
+        let count = u16::try_from(properties).ok()?;
+        let first = self.allocate_register()?;
+        for _ in 1..count {
+            self.allocate_register()?;
+        }
+        Some(RegisterKeyWindow { first, count })
+    }
+
+    fn close_key_window(&mut self, window: RegisterKeyWindow) -> Option<()> {
+        for offset in (0..window.count).rev() {
+            self.release_register(crate::engine::bytecode::Reg(
+                window.first.0.checked_add(offset)?,
+            ))?;
+        }
+        Some(())
+    }
+
+    /// Evaluates the key of one property into its register of the window.
+    ///
+    /// A key that folds to a name is loaded as that name, which is what the
+    /// property read and the rest element both take.
+    fn write_pattern_key(
+        &mut self,
+        window: RegisterKeyWindow,
+        index: usize,
+        key: &Expr,
+        computed: bool,
+    ) -> Option<crate::engine::bytecode::Reg> {
+        use crate::engine::bytecode::Instruction;
+        let offset = u16::try_from(index).ok()?;
+        if offset >= window.count {
+            return None;
+        }
+        let slot = crate::engine::bytecode::Reg(window.first.0.checked_add(offset)?);
+        if let Some(units) = self.pattern_key_units(key, computed) {
+            let constant = self.string_constant(&units)?;
+            self.code.emit(Instruction::LdaString(constant));
+            self.code.emit(Instruction::Star(slot));
+            return Some(slot);
+        }
+        let key_type = self.lower(key)?;
+        self.code.emit(Instruction::Star(slot));
+        // 13.2.5.3 makes the key where it stands, so the conversion of an
+        // Object key runs its method before the target of the property.
+        if !key_type.is_primitive() {
+            self.code.emit(Instruction::ToPropertyKey(slot));
+            self.code.emit(Instruction::Star(slot));
+        }
+        Some(slot)
+    }
+
+    /// Reads one property of a pattern under the key its register holds,
+    /// which 7.1.19 converts where the access stands.
+    fn lower_property_by_key_register(
+        &mut self,
+        object: crate::engine::bytecode::Reg,
+        key: crate::engine::bytecode::Reg,
+    ) -> Option<RegisterType> {
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        self.code
+            .emit(crate::engine::bytecode::Instruction::GetByValue {
+                obj: object,
+                key,
+                slot,
+            });
+        Some(RegisterType::Unknown)
+    }
+
+    /// `CopyDataProperties` of 7.3.25 whose excluded names are the keys the
+    /// properties of the pattern evaluated.
+    fn lower_copied_data_properties_in_window(
+        &mut self,
+        source: crate::engine::bytecode::Reg,
+        window: RegisterKeyWindow,
+    ) -> Option<(RegisterType, crate::engine::bytecode::Reg)> {
+        use crate::engine::bytecode::Instruction;
+        let excluded = if window.count == 0 {
+            source
+        } else {
+            window.first
+        };
+        self.code.emit(Instruction::CopyDataProperties {
+            source,
+            excluded,
+            count: window.count,
+        });
+        let rest_object = self.allocate_register()?;
+        self.code.emit(Instruction::Star(rest_object));
+        Some((RegisterType::Unknown, rest_object))
     }
 
     /// `CopyDataProperties` of 7.3.25 over a value whose layout the lowering
@@ -13492,18 +13648,10 @@ fn register_binding_pattern_supported(pattern: &parser::BindingPattern) -> bool 
                 .as_deref()
                 .is_none_or(register_binding_pattern_supported)
         }
-        parser::BindingPattern::Object(object) => {
-            object.properties.iter().all(|property| {
-                (!property.computed
-                    && RegisterLowerer::static_property_name(&property.key).is_some()
-                    || property.computed && register_computed_property_key_supported(&property.key))
-                    && register_binding_pattern_supported(&property.pattern)
-            }) && (object.rest.is_none()
-                || object
-                    .properties
-                    .iter()
-                    .all(|property| RegisterLowerer::binding_property_name(property).is_some()))
-        }
+        parser::BindingPattern::Object(object) => object.properties.iter().all(|property| {
+            (property.computed || RegisterLowerer::static_property_name(&property.key).is_some())
+                && register_binding_pattern_supported(&property.pattern)
+        }),
     }
 }
 
@@ -13621,15 +13769,13 @@ fn register_assignment_pattern_supported(pattern: &parser::AssignmentPattern) ->
                 .is_none_or(register_assignment_pattern_supported)
         }
         parser::AssignmentPattern::Object(object) => {
-            object.properties.iter().all(|property| {
-                register_computed_property_key_supported(&property.key)
-                    && register_assignment_pattern_supported(&property.target)
-            }) && object.rest.as_ref().is_none_or(|rest| {
-                (rest.reference_name().is_some() || register_member_assignment_supported(rest))
-                    && object.properties.iter().all(|property| {
-                        RegisterLowerer::static_property_key_units(&property.key).is_some()
-                    })
-            })
+            object
+                .properties
+                .iter()
+                .all(|property| register_assignment_pattern_supported(&property.target))
+                && object.rest.as_ref().is_none_or(|rest| {
+                    rest.reference_name().is_some() || register_member_assignment_supported(rest)
+                })
         }
     }
 }
@@ -13641,21 +13787,6 @@ fn register_assignment_pattern_supported(pattern: &parser::AssignmentPattern) ->
 /// and refuses what it cannot name, so this asks only for the shape.
 fn register_member_assignment_supported(target: &Expr) -> bool {
     target.member().is_some()
-}
-
-fn register_computed_property_key_supported(expression: &Expr) -> bool {
-    match &expression.kind {
-        ExprKind::Literal(
-            Value::Number(_)
-            | Value::Boolean(_)
-            | Value::Null
-            | Value::Undefined
-            | Value::String(_),
-        )
-        | ExprKind::Name(_) => true,
-        ExprKind::Group(inner) => register_computed_property_key_supported(inner),
-        _ => false,
-    }
 }
 
 fn register_expression_stack_requirement(expression: &Expr) -> usize {

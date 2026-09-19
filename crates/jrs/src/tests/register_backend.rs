@@ -2272,15 +2272,15 @@ fn iterator_and_dynamic_binding_patterns_stay_on_legacy_backend() -> Result<(), 
     differential(
         "let input={next(){return {done:true}},[Symbol.iterator](){return this}};let [...x]=input;x.length",
     )?;
-    // A computed key of a pattern is a named gap, and an Array whose
-    // `@@iterator` the Script replaced is not a layout the lowering keeps.
-    for source in [
-        "let a=[1];a[Symbol.iterator]=function(){return {next(){return {value:42}}}};let [x]=a;x",
-        "let key={toString(){return 'x'}};let {[key]:x,...rest}={x:1,y:2};rest.y",
-    ] {
-        let program = compile(source, Limits::default())?;
-        assert!(!program.uses_register_backend(), "{source}");
-    }
+    // An Array whose `@@iterator` the Script replaced is not a layout the
+    // lowering keeps.
+    let source =
+        "let a=[1];a[Symbol.iterator]=function(){return {next(){return {value:42}}}};let [x]=a;x";
+    let program = compile(source, Limits::default())?;
+    assert!(!program.uses_register_backend(), "{source}");
+    // 7.1.19 sends an Object key through 7.1.1, and the rest element of
+    // 7.3.25 excludes the name that conversion answered.
+    differential("let key={toString(){return 'x'}};let {[key]:x,...rest}={x:1,y:2};rest.y")?;
     Ok(())
 }
 
@@ -2431,14 +2431,10 @@ fn observable_object_binding_defaults_stay_on_legacy_backend() -> Result<(), Err
     differential("let {x=({})}={};42")?;
     differential("let o={};let {x=(o.y=1)}={};42")?;
     differential("let o={};let {x=(o.y=1)}={x:0};o.y")?;
-    for source in [
-        "let key='x';let {[key='y']:x}={x:42};x",
-        "let {['x'+'']:x}={x:42};x",
-    ] {
-        let program = compile(source, Limits::default())?;
-        assert!(!program.uses_register_backend(), "{source}");
-        Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
-    }
+    // A key the lowering cannot fold is evaluated where the pattern stands,
+    // an Initializer of that key included.
+    differential("let key='x';let {[key='y']:x}={x:42};x")?;
+    differential("let {['x'+'']:x}={x:42};x")?;
     // 7.1.19 sends the key through 7.1.1, and the binding opens a frame for a
     // `toString` of the Script.
     differential("let key={toString(){return 'x'}};let {[key]:x}={x:42};x")?;
@@ -11662,6 +11658,54 @@ fn the_three_helpers_of_27_1_5_that_stop_early_close_the_iterator() -> Result<()
     ] {
         let source = alloc::format!("{made}{source}");
         assert_eq!(realm.evaluate(&source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}
+
+#[test]
+fn a_computed_key_of_an_object_pattern_is_evaluated_once_and_excluded() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    for (source, answer) in [
+        // 13.15.5.5 reads the property under the key the pattern evaluated,
+        // whatever expression the key is.
+        ("var x;({['x'+'y']:x}={x:1,xy:23,y:2});''+x", "23"),
+        // 7.3.25 excludes that key from the rest element, which the lowering
+        // knows only at run time.
+        (
+            "var a='foo',b,r;({[a]:b,...r}={foo:1,bar:2});''+b+(r.foo===undefined)+r.bar",
+            "1true2",
+        ),
+        // 7.1.19 makes the name of a key that is no String, and the rest
+        // element excludes that name and not the value.
+        (
+            "var n=1.,v,w;({[n]:v,...w}={1:1,bar:2});''+v+(w['1']===undefined)+w.bar",
+            "1true2",
+        ),
+        // A Symbol key is excluded as itself.
+        (
+            "var s=Symbol('s'),v,w;({[s]:v,...w}={[s]:7,k:8});''+v+w.k+Object.getOwnPropertySymbols(w).length",
+            "780",
+        ),
+        // Step 1 of 13.15.5.5 evaluates the key before the target of its
+        // property.
+        (
+            "var o={},k=[];function n(v){k.push(v);return v}({[n('p')]:o[n('t')]}={p:9});k.join(',')+o.t",
+            "p,t9",
+        ),
+        // Step 1 throws where the key stands, so no later property of the
+        // pattern is reached.
+        (
+            "function bad(){throw new TypeError()}var x,r,seen=0;try{({[bad()]:x,[seen=1]:x}={})}catch(e){r=e instanceof TypeError};''+r+seen",
+            "true0",
+        ),
+        // 8.6.2 takes the same key for a binding pattern.
+        (
+            "(function(){var q='foo';let{[q]:c,...d}={foo:5,q:6};return ''+c+d.q})()",
+            "56",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
     }
     Ok(())
 }
