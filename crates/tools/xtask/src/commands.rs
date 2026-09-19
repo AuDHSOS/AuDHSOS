@@ -20,9 +20,12 @@ use crate::session::Session;
 use crate::ssh;
 use crate::symbolize;
 use crate::tls;
-use crate::{artifacts, coverage, deps, fs, layering, linker, sections, spdx, unsafe_budget};
+use crate::{
+    artifacts, asm_options, coverage, deps, fs, layering, linker, sections, spdx, unsafe_budget,
+};
 
-/// `rustfmt --check`, `clippy -D warnings` per target group, SPDX headers.
+/// `rustfmt --check`, `clippy -D warnings` per target group, SPDX
+/// headers, and the barrier options of R11 of document 4.
 pub(crate) fn lint(root: &Path) -> Result<(), Error> {
     Cmd::cargo()
         .cwd(root)
@@ -53,6 +56,9 @@ pub(crate) fn lint(root: &Path) -> Result<(), Error> {
     }
     let violations = spdx::check(root)?;
     report("SPDX headers", &violations);
+    Error::from_violations(violations)?;
+    let violations = asm_options::check(root)?;
+    report("asm barrier options", &violations);
     Error::from_violations(violations)
 }
 

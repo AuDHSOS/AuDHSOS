@@ -7,6 +7,7 @@
 
 mod anchors;
 mod artifacts;
+mod asm_options;
 mod commands;
 mod coverage;
 mod deps;

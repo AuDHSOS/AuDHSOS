@@ -905,6 +905,46 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   of the built kernel and refuses a `.data` above 64 KiB or a `.bss` below
   1 MiB.
 
+- `kernel-hal-x86_64`: `enter_user_trampoline` ran `iretq` with every
+  register but `rdi` as the kernel left it, because `switch` saves and
+  restores only the six callee-saved registers. A new thread read the
+  virtual address of its own kernel stack out of `rsi` and kernel data out
+  of `rax`, `rcx`, `rdx` and `r8` to `r11` at its entry point. The
+  trampoline now zeroes all fourteen; the clearing costs no kernel-to-kernel
+  switch, which is why it stands there and not in `switch`. The user test
+  image runs `entry_registers`, a program with a naked entry point that
+  reports the bitwise or of the registers it started with. Issue #82.
+
+- `kernel-hal-x86_64`: `PhysicalWindow` derived `Clone` and `Copy`, so safe
+  code held two `&mut [u8; 4096]` over one physical frame: `frame_bytes_mut`
+  and `FrameAccess::table_mut` are safe and rest on the exclusive borrow of
+  one window, and a copy is a second value with no borrow relation to the
+  first. The two derives are gone, `read_array` and `read_table` in `acpi`
+  take `&PhysicalWindow`, and a compile-time assertion in the module fails
+  if the type becomes `Copy` again. The contract of `PhysicalWindow::new`
+  gains the clause the borrow cannot carry: no second window may hand out a
+  reference to a frame this one hands out a reference to. Issue #85.
+
+- `kernel-hal-x86_64`: the `cli` and `sti` blocks declared `options(nomem)`,
+  which lets the compiler cache a global in a register across the block and
+  move a load or a store to the other side of it. The release store of the
+  borrow flag of a cell an interrupt handler also reaches could sink past
+  the `sti` of `InterruptGuard::drop`, where a timer interrupt finds the cell
+  busy, `acknowledge` returns without an end-of-interrupt, and the local APIC
+  delivers nothing further at that priority. Both blocks now declare
+  `options(nostack, preserves_flags)` and are full compiler barriers. R11 of
+  document 4 and a check in `cargo xtask lint` keep `nomem` off both
+  instructions. Issue #90.
+
+- `kernel-mm`: `Mapper::unmap` flushed the page before `collect_empty_tables`
+  cleared the parent entry of every empty table and released the table frame,
+  against Intel SDM Vol. 3A, 5.10.4.2, which requires the invalidation after
+  the write of an entry that references another paging structure. The
+  processor could cache a still-present parent entry after the flush, and a
+  later access walked the content of a frame the allocator had handed out
+  again. The flush now follows the collection, on the error path as well.
+  Issue #59.
+
 - `text-raster`: the segment count of a quadratic came from
   `max(|start - control|, |end - control|)` rather than the curve's own second
   difference `start - 2*control + end`, so the polyline left the eighth of a

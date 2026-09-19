@@ -20,7 +20,7 @@ pub const FRAME_BYTES: usize = 4096;
 const _: () = assert!(PAGE_SIZE == 4096);
 
 /// Reaches physical memory through the window.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct PhysicalWindow {
     base: VirtAddr,
 }
@@ -32,7 +32,11 @@ impl PhysicalWindow {
     ///
     /// The window must map every physical frame at `base + address`, read
     /// and write, for as long as this value exists, and the kernel must be
-    /// the only writer of the memory it hands out.
+    /// the only writer of the memory it hands out. No other
+    /// `PhysicalWindow` may hand out a reference to a frame this one hands
+    /// out a reference to: the exclusive borrow that
+    /// [`PhysicalWindow::frame_bytes_mut`] and [`FrameAccess::table_mut`]
+    /// rest on covers one value, and a second window is a second value.
     #[must_use]
     pub const unsafe fn new(base: VirtAddr) -> Self {
         PhysicalWindow { base }
@@ -55,22 +59,22 @@ impl PhysicalWindow {
 
     /// The virtual base of the window.
     #[must_use]
-    pub const fn base(self) -> VirtAddr {
+    pub const fn base(&self) -> VirtAddr {
         self.base
     }
 
     /// The address `frame` is reachable at.
-    const fn address_of(self, frame: PhysFrame) -> Option<u64> {
+    const fn address_of(&self, frame: PhysFrame) -> Option<u64> {
         self.address_of_addr(frame.start())
     }
 
     /// The address a physical address is reachable at.
-    const fn address_of_addr(self, address: PhysAddr) -> Option<u64> {
+    const fn address_of_addr(&self, address: PhysAddr) -> Option<u64> {
         self.base.as_u64().checked_add(address.as_u64())
     }
 
     /// A pointer to the value of type `T` stored in `frame`.
-    fn pointer<T>(self, frame: PhysFrame) -> Option<*mut T> {
+    fn pointer<T>(&self, frame: PhysFrame) -> Option<*mut T> {
         let address = self.address_of(frame)?;
         Some(core::ptr::without_provenance_mut::<T>(
             usize::try_from(address).ok()?,
@@ -145,4 +149,45 @@ impl<T> FrameAccess<T> for PhysicalWindow {
         // kernel is the only writer, so no other reference exists.
         Some(unsafe { &mut *pointer })
     }
+}
+
+/// Holds `PhysicalWindow` to one value per borrow.
+///
+/// [`PhysicalWindow::frame_bytes_mut`] and [`FrameAccess::table_mut`] are
+/// safe and rest on the exclusive borrow of one window to keep two
+/// references to one frame apart. A copy of a window is a second value
+/// with no borrow relation to the first, so safe code could hold two
+/// `&mut` over the same frame (issue #85).
+///
+/// Without the two derives, safe code reaches a second window only through
+/// [`PhysicalWindow::new`] or [`PhysicalWindow::kernel`], whose contract
+/// carries the frames the two windows may hand out.
+mod not_copy {
+    use core::marker::PhantomData;
+
+    use super::PhysicalWindow;
+
+    /// Carries `true` as an inherent constant for a `Copy` type and
+    /// `false` through the trait for every other type; an inherent
+    /// constant is found before a trait constant.
+    struct IsCopy<T>(PhantomData<T>);
+
+    /// The answer for a type that is not `Copy`.
+    trait Fallback {
+        const VALUE: bool = false;
+    }
+
+    impl<T> Fallback for IsCopy<T> {}
+
+    #[expect(
+        dead_code,
+        reason = "the assertion below reads the trait constant instead, \
+                  which is what it checks; a `PhysicalWindow` that became \
+                  `Copy` would select this one and fail the assertion"
+    )]
+    impl<T: Copy> IsCopy<T> {
+        const VALUE: bool = true;
+    }
+
+    const _: () = assert!(!<IsCopy<PhysicalWindow>>::VALUE);
 }

@@ -5,6 +5,7 @@
 //! product code only.
 
 mod artifacts;
+mod asm_options;
 mod coverage;
 mod deps;
 mod error;

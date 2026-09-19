@@ -6,11 +6,13 @@
 
 #![allow(clippy::arithmetic_side_effects)]
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use audhsos_abi::layout::{KERNEL_SPACE_START, MAX_PAGES_PER_CALL, PAGE_SIZE, USER_SPACE_END};
 use kernel_hal_api::doubles::{CountingFrameSource, Flush, MemoryFrameAccess, RecordingTlb};
-use kernel_hal_api::paging::FrameAccess;
+use kernel_hal_api::paging::{FrameAccess, FrameSource, TlbControl};
 use kernel_types::{Page, PageRange, PhysFrame, PhysFrameRange, VirtAddr};
 use test_support::generators::{BoxGen, Generator, one_of, pair, range};
 use test_support::model::{ModelTest, run_model_test};
@@ -177,6 +179,112 @@ fn mapping_the_same_page_twice_changes_nothing() {
     assert_eq!(
         fixture.mapper().translate(target),
         Some((frame(0x40), Permissions::READ_WRITE))
+    );
+}
+
+/// One step of an unmap, as the order the mapper made them in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Step {
+    /// A page was flushed.
+    Flush(Page),
+    /// Everything was flushed.
+    FlushAll,
+    /// A table frame was released.
+    Release(PhysFrame),
+}
+
+/// The steps both doubles below append to, in the order they happened.
+type Steps = Rc<RefCell<Vec<Step>>>;
+
+/// A lookaside buffer double that records into a shared order.
+#[derive(Debug)]
+struct OrderedTlb {
+    steps: Steps,
+}
+
+impl TlbControl for OrderedTlb {
+    fn flush_page(&mut self, page: Page) {
+        self.steps.borrow_mut().push(Step::Flush(page));
+    }
+
+    fn flush_all(&mut self) {
+        self.steps.borrow_mut().push(Step::FlushAll);
+    }
+}
+
+/// A frame source that records releases into the same shared order.
+#[derive(Debug)]
+struct OrderedFrames {
+    next: u64,
+    steps: Steps,
+}
+
+impl FrameSource for OrderedFrames {
+    fn allocate_frame(&mut self) -> Option<PhysFrame> {
+        let allocated = frame(self.next);
+        self.next += 1;
+        Some(allocated)
+    }
+
+    fn release_frame(&mut self, released: PhysFrame) {
+        self.steps.borrow_mut().push(Step::Release(released));
+    }
+}
+
+/// `unmap` flushes the page after it clears the entries that reference the
+/// tables it released.
+///
+/// Regression test for issue #59: the flush stood between the write of the
+/// leaf entry and `collect_empty_tables`, so the processor could cache a
+/// still-present parent entry after the flush and walk a frame the source
+/// had already handed out again. Intel SDM Vol. 3A, 5.10.4.2 asks for the
+/// invalidation after the write of an entry that references another
+/// paging structure.
+#[test]
+fn unmapping_flushes_after_it_releases_the_empty_tables() {
+    let ram = PhysFrameRange::new(frame(RAM_START), RAM_FRAMES).unwrap();
+    let mut access: MemoryFrameAccess<PageTable<X86Entry>> =
+        MemoryFrameAccess::with_lazy_tables(ram);
+    let root = frame(RAM_START);
+    access.insert(root, PageTable::default());
+    let steps: Steps = Rc::new(RefCell::new(Vec::new()));
+    let mut tlb = OrderedTlb {
+        steps: Rc::clone(&steps),
+    };
+    let mut frames = OrderedFrames {
+        next: POOL_START,
+        steps: Rc::clone(&steps),
+    };
+    let target = page(0x1000);
+    let mut mapper = Mapper::new(root, &mut access, &mut tlb, &mut frames);
+    mapper
+        .map(
+            target,
+            frame(0x40),
+            Permissions::READ_WRITE,
+            CachePolicy::WriteBack,
+        )
+        .unwrap();
+    steps.borrow_mut().clear();
+    assert_eq!(mapper.unmap(target), Ok(frame(0x40)));
+
+    let recorded = steps.borrow().clone();
+    let flush = recorded
+        .iter()
+        .position(|step| *step == Step::Flush(target))
+        .expect("the unmap flushes the page");
+    let releases = recorded
+        .iter()
+        .filter(|step| matches!(step, Step::Release(_)))
+        .count();
+    assert_eq!(releases, 3, "the empty table of every level is released");
+    let last_release = recorded
+        .iter()
+        .rposition(|step| matches!(step, Step::Release(_)))
+        .expect("the unmap releases the empty tables");
+    assert!(
+        flush > last_release,
+        "the flush must follow every release: {recorded:?}"
     );
 }
 
