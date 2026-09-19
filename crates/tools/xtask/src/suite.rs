@@ -609,6 +609,14 @@ struct Prepared {
     /// which is what makes a step answer `SQLITE_ERROR` rather than the
     /// code the refusal carries.
     legacy: bool,
+    /// The number the schema of the connection stood at where the
+    /// statement was made, which a step reads again to answer
+    /// `SQLITE_SCHEMA` for a schema that has changed since.
+    cookie: u32,
+    /// How many reasons of its own the connection had given where the
+    /// statement was made, which a database taken away, a function, a
+    /// collation and an authorizer each count as one of.
+    stamp: u64,
 }
 
 /// One run of one file: the interpreter on one side of the line and the
@@ -623,6 +631,12 @@ struct Session {
     connections: BTreeMap<String, String>,
     /// What a `NULL` prints as, per connection.
     nulls: BTreeMap<String, String>,
+    /// How many times each connection was told a function, a collation
+    /// or an authorizer, or took a database away, which
+    /// `sqlite3ExpirePreparedStatements` of
+    /// `research/sqlite/src/vdbeaux.c:5337` counts as a reason to make
+    /// every statement of it again.
+    stamps: BTreeMap<String, u64>,
     /// The three counters of each connection, which belong to a
     /// connection and not to the file the connection opened.
     counters: BTreeMap<String, Counted>,
@@ -668,6 +682,7 @@ impl Session {
             held: BTreeMap::new(),
             connections: BTreeMap::new(),
             nulls: BTreeMap::new(),
+            stamps: BTreeMap::new(),
             counters: BTreeMap::new(),
             pragmas: BTreeMap::new(),
             collations: BTreeMap::new(),
@@ -813,7 +828,7 @@ impl Session {
             // `sqlite3_prepare`, the commands that read a statement it
             // answered, and the three that read what it is.
             "prepare" | "autocommit" | "step" | "finalize" | "reset" | "clear_binds" | "bind"
-            | "column" | "stmt" | "next_stmt" | "readonly" | "busy" | "isexplain" => {
+            | "column" | "stmt" | "next_stmt" | "readonly" | "busy" | "isexplain" | "expired" => {
                 self.of_statement(verb, args)
             }
             // `sqlite3_errcode` and `sqlite3_extended_errcode`.
@@ -1065,6 +1080,7 @@ impl Session {
     /// definition costs O(n^2) bytes over n definitions and nothing
     /// that matters.
     fn collates(&mut self, connection: &str, name: &str) {
+        self.stamped(connection);
         let held = self.collations.entry(connection.to_owned()).or_default();
         let mut collating: Vec<Collating> = held
             .iter()
@@ -1085,6 +1101,7 @@ impl Session {
     /// The function takes any number of arguments, which `db function`
     /// of `testfixture` registers as `nArg` at -1.
     fn functions(&mut self, connection: &str, name: &str) {
+        self.stamped(connection);
         let held = self.functions.entry(connection.to_owned()).or_default();
         let mut defined: Vec<Defined> = held
             .iter()
@@ -1132,7 +1149,9 @@ impl Session {
             "bind" => self.bind(first, second, third),
             "column" => self.column(first, second, third),
             "next_stmt" => Ok(self.next_statement(first, second)),
-            "readonly" | "busy" | "isexplain" => Ok(alloc_one(&self.statement_is(verb, first))),
+            "readonly" | "busy" | "isexplain" | "expired" => {
+                Ok(alloc_one(&self.statement_is(verb, first)))
+            }
             _ => self.stmt_text(first, second, third),
         }
     }
@@ -1175,6 +1194,8 @@ impl Session {
             ran: false,
             row: false,
             legacy: false,
+            cookie: self.cookie(connection),
+            stamp: self.stamp(connection),
         };
         prepared.legacy = legacy;
         // A text that holds no statement answers no statement at all,
@@ -1208,7 +1229,7 @@ impl Session {
     /// `EXPLAIN`.
     ///
     /// A name no statement stands under is the null pointer, which
-    /// `sqlite3_stmt_readonly` answers one for and the two beside it
+    /// `sqlite3_stmt_readonly` answers one for and the three beside it
     /// nought.
     fn statement_is(&self, verb: &str, name: &str) -> String {
         let Some(prepared) = self.statements.get(name) else {
@@ -1217,6 +1238,13 @@ impl Session {
         let answered = match verb {
             "busy" => i64::from(prepared.ran && prepared.row),
             "isexplain" => explaining(&prepared.sql),
+            // `sqlite3_expired` answers whether the statement must be
+            // made again, which a change to the schema since it was made
+            // is what this harness holds.
+            "expired" => i64::from(
+                prepared.cookie != self.cookie(&prepared.connection)
+                    || prepared.stamp != self.stamp(&prepared.connection),
+            ),
             _ => i64::from(readonly(&prepared.sql)),
         };
         answered.to_string()
@@ -1344,6 +1372,19 @@ impl Session {
             .get(name)
             .ok_or_else(|| format!("no such statement: {name}"))?;
         let (connection, sql) = (held.connection.clone(), held.sql.clone());
+        // `sqlite3_prepare` holds the schema the statement was made
+        // under, and a step past a change to it is refused
+        // `SQLITE_SCHEMA`; `sqlite3_prepare_v2` makes the statement
+        // again, which `sqlite3Reprepare` does.
+        if held.legacy
+            && (held.cookie != self.cookie(&connection) || held.stamp != self.stamp(&connection))
+        {
+            if let Some(held) = self.statements.get_mut(name) {
+                held.ran = true;
+                held.row = false;
+            }
+            return Err(stale());
+        }
         let text = bound_into(&sql, &held.bound);
         let answered = if reads(&sql) {
             self.read_statement(&connection, &text)
@@ -1371,6 +1412,36 @@ impl Session {
             held.row = !held.rows.is_empty();
         }
         Ok(())
+    }
+
+    /// Counts one more reason for the statements of the connection to be
+    /// made again.
+    fn stamped(&mut self, connection: &str) {
+        let held = self.stamps.entry(connection.to_owned()).or_default();
+        *held = held.saturating_add(1);
+    }
+
+    /// How many reasons the connection has given for its statements to be
+    /// made again.
+    fn stamp(&self, connection: &str) -> u64 {
+        self.stamps.get(connection).copied().unwrap_or_default()
+    }
+
+    /// The number the schema of the connection stands at, which every
+    /// change to it raises and `PRAGMA schema_version` answers.
+    ///
+    /// Reading the header costs O(1) over the image the writer holds.
+    fn cookie(&self, connection: &str) -> u32 {
+        let Some(path) = self.connections.get(connection) else {
+            return 0;
+        };
+        let Some(writer) = self.held.get(path) else {
+            return 0;
+        };
+        let bytes = writer.written();
+        db_sqlite::image::Image::open(&bytes)
+            .map(|image| image.header().schema_cookie)
+            .unwrap_or_default()
     }
 
     /// One statement of `connection` run through its writer, which
@@ -1515,6 +1586,7 @@ impl Session {
     /// `sqlite3_set_authorizer`: the tester names a proc for one
     /// connection, or nothing to tell it no authorizer at all.
     fn authorizes(&mut self, connection: &str, name: &str) {
+        self.stamped(connection);
         if name.is_empty() {
             self.authorizers.remove(connection);
         } else {
@@ -1547,6 +1619,10 @@ impl Session {
     fn eval(&mut self, name: &str, sql: &str) -> Result<Vec<String>, String> {
         if may_attach(sql) {
             self.telling_files();
+            // `sqlite3DetachDatabase` makes every statement of the
+            // connection again, because the databases it reads have
+            // moved.
+            self.stamped(name);
         }
         let null = self.nulls.get(name).cloned().unwrap_or_default();
         let path = self
@@ -1787,10 +1863,24 @@ fn refusal(error: &db_sqlite::db::Error) -> String {
     error.message()
 }
 
+/// Records that the schema of the connection changed since the statement
+/// was made, which `sqlite3_step` of a statement `sqlite3_prepare` made
+/// is refused with.
+pub(crate) fn stale() -> String {
+    CODE.with(|held| {
+        *held.borrow_mut() = (
+            String::from("SQLITE_SCHEMA"),
+            String::from("SQLITE_SCHEMA"),
+            17,
+        );
+    });
+    String::from("database schema has changed")
+}
+
 /// The code of the last refusal, as the name of the primary code, the
 /// name of the extended one or the number of the primary one, which is
 /// `SQLITE_OK` where the statements of this run all stood.
-fn last_code(which: &str) -> String {
+pub(crate) fn last_code(which: &str) -> String {
     CODE.with(|held| {
         let held = held.borrow();
         let name = if which == "extended" {

@@ -1266,6 +1266,10 @@ proc sqlite3_stmt_busy {stmt} { return [lindex [harness_send busy $stmt] 0] }
 proc sqlite3_stmt_isexplain {stmt} {
   return [lindex [harness_send isexplain $stmt] 0]
 }
+
+# `sqlite3_expired`: whether the statement must be made again, which a
+# change to the schema since it was made says.
+proc sqlite3_expired {stmt} { return [lindex [harness_send expired $stmt] 0] }
 proc sqlite3_column_count {stmt} { return [lindex [harness_send column $stmt count 0] 0] }
 proc sqlite3_data_count {stmt} { return [lindex [harness_send column $stmt data 0] 0] }
 proc sqlite3_column_name {stmt at} { return [lindex [harness_send column $stmt name $at] 0] }

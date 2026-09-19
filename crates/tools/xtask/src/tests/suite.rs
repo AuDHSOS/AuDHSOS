@@ -295,3 +295,14 @@ fn what_a_statement_writes_and_whether_it_explains() {
     assert_eq!(explaining(" explain SELECT * FROM sqlite_master"), 1);
     assert_eq!(explaining("  Explain Query Plan select * FROM t1"), 2);
 }
+
+#[test]
+fn what_a_step_past_a_changed_schema_answers() {
+    use crate::suite::{last_code, stale};
+    // A step of a statement `sqlite3_prepare` made carries the message
+    // and the code `sqlite3_step` writes for `p->expired`.
+    assert_eq!(stale(), "database schema has changed");
+    assert_eq!(last_code("primary"), "SQLITE_SCHEMA");
+    assert_eq!(last_code("extended"), "SQLITE_SCHEMA");
+    assert_eq!(last_code("number"), "17");
+}

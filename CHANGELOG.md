@@ -39,6 +39,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- The tester refuses a statement `sqlite3_prepare` made with `SQLITE_SCHEMA`
+  where the schema, a function, a collation, an authorizer or a `DETACH`
+  changed since the statement was made, and answers `sqlite3_expired` off
+  the same test. D-341 records it. `schema.test` goes from 16 cases passing
+  to 34 and `analyze3.test` from 29 to 41.
+
 - The tester tells the traces of a connection of each statement it runs,
   which `sqlite3_trace` and `sqlite3_trace_v2` are told, and the text of a
   prepared statement carries the semicolon that ends it. D-339 records it.
