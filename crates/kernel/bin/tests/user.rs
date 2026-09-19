@@ -42,6 +42,15 @@ static COUNT_AND_EXIT: &[u8] = include_bytes!(concat!(
 static THREAD_EXIT: &[u8] =
     include_bytes!(concat!(env!("AUDHSOS_USER_TESTS_DIR"), "/thread_exit.bin"));
 
+/// The program that reports the registers it started with.
+static ENTRY_REGISTERS: &[u8] = include_bytes!(concat!(
+    env!("AUDHSOS_USER_TESTS_DIR"),
+    "/entry_registers.bin"
+));
+
+/// What `entry_registers` leaves in the second payload word of its buffer.
+const REGISTERS_MARK: u64 = 0x5EED_0002;
+
 /// What `count_and_exit` leaves in the first payload word of its buffer.
 const MARK: u64 = 0x5EED_0001;
 
@@ -80,4 +89,32 @@ fn a_second_thread_runs_after_the_first_one_ended() {
         testing::fail(format_args!("the second thread did not end"));
     }
     say!("a second process ran and ended in the same machine");
+}
+
+/// A new thread starts with every general register but the one that
+/// carries its buffer address at zero.
+///
+/// Regression test for issue #82: the trampoline used to run `iretq` with
+/// `rsi` holding the kernel stack address `switch_to` was given, and with
+/// `rax`, `rcx`, `rdx` and `r8` to `r11` holding what the kernel left.
+#[test_case]
+fn a_user_thread_starts_with_no_kernel_register() {
+    support::bring_up();
+    let spawned = support::spawn(ENTRY_REGISTERS);
+    support::run_threads(None);
+
+    let mark = support::buffer_word(spawned.buffer, 1);
+    if mark != REGISTERS_MARK {
+        testing::fail(format_args!(
+            "the thread left {mark:#x} in its buffer, not {REGISTERS_MARK:#x}"
+        ));
+    }
+    let combined = support::buffer_word(spawned.buffer, 0);
+    if combined != 0 {
+        testing::fail(format_args!(
+            "the thread started with {combined:#x} in its registers, not 0"
+        ));
+    }
+    say!("the thread started with every register but its buffer address at zero");
+    let _ = spawned.process;
 }

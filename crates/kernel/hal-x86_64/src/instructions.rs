@@ -38,6 +38,11 @@ fn disable_interrupts_and_halt() {
 
 /// Turns interrupts off.
 ///
+/// The block omits `nomem` so that the compiler keeps every memory access
+/// on the side of `cli` the source puts it on: [`InterruptGuard`] is built
+/// on this call, and code that borrows a cell an interrupt handler also
+/// reaches depends on that order.
+///
 /// # Safety
 ///
 /// The caller must turn them on again, or never return; a kernel that
@@ -45,11 +50,13 @@ fn disable_interrupts_and_halt() {
 pub unsafe fn disable_interrupts() {
     // SAFETY: the caller promises to restore the interrupt state.
     unsafe {
-        asm!("cli", options(nomem, nostack));
+        asm!("cli", options(nostack, preserves_flags));
     }
 }
 
 /// Turns interrupts on.
+///
+/// The block omits `nomem` for the reason [`disable_interrupts`] names.
 ///
 /// # Safety
 ///
@@ -58,7 +65,7 @@ pub unsafe fn disable_interrupts() {
 pub unsafe fn enable_interrupts() {
     // SAFETY: the caller promises that the table is loaded.
     unsafe {
-        asm!("sti", options(nomem, nostack));
+        asm!("sti", options(nostack, preserves_flags));
     }
 }
 

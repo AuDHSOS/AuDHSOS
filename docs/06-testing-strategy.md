@@ -3521,7 +3521,7 @@ freeze, WeakMap identity and unchanged native behavior after property mutation.
 
 Jobs run in this order; a failure stops the pipeline.
 
-1. `lint` (fmt, clippy, SPDX headers)
+1. `lint` (fmt, clippy, SPDX headers, the barrier options of R11)
 2. `check-layering`, `check-deps`, `unsafe-budget`
 3. `test --host` with coverage thresholds
 4. `miri`

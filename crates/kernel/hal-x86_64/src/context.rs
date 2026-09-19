@@ -80,13 +80,37 @@ pub unsafe fn switch_to(from: *mut VirtAddr, to: VirtAddr) {
 /// leaves the stack pointer at the word the thread is told and, below the
 /// pop, at the five words `iretq` reads.
 ///
+/// Every register but `rdi` is zeroed before `iretq`, because [`switch`]
+/// saves and restores only the six callee-saved registers and leaves the
+/// rest as the kernel left them; `rsi` in particular holds the kernel
+/// stack address the switch was given. This is the only path into user
+/// mode a new thread takes, so the clearing costs no kernel-to-kernel
+/// switch.
+///
 /// # Safety
 ///
 /// It runs only as the return address of a frame [`prepare_user`] built,
 /// and never as a call.
 #[unsafe(naked)]
 pub unsafe extern "sysv64" fn enter_user_trampoline() -> ! {
-    naked_asm!("pop rdi", "iretq")
+    naked_asm!(
+        "pop rdi",
+        "xor eax, eax",
+        "xor ecx, ecx",
+        "xor edx, edx",
+        "xor esi, esi",
+        "xor ebx, ebx",
+        "xor ebp, ebp",
+        "xor r8d, r8d",
+        "xor r9d, r9d",
+        "xor r10d, r10d",
+        "xor r11d, r11d",
+        "xor r12d, r12d",
+        "xor r13d, r13d",
+        "xor r14d, r14d",
+        "xor r15d, r15d",
+        "iretq"
+    )
 }
 
 /// Writes the frame a new thread starts through into the top of its kernel

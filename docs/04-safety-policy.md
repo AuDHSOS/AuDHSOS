@@ -58,6 +58,7 @@ new entry in the decision register.
 | R8 | No external code. `Cargo.lock` lists only workspace members. No `[dependencies]`, `[dev-dependencies]`, or `[build-dependencies]` entry points outside the workspace. No external Cargo subcommand is used by the xtask or CI. | `cargo xtask check-deps` parses `Cargo.lock` and every manifest |
 | R9 | Unsafe code that can run on the host (`audhsos-sync`, `fuzz-support`) runs under Miri in CI: the tests of the modules that hold that `unsafe`, and not the safe logic around them (D-76). | `cargo xtask miri`, whose list of modules is checked against the files that hold `unsafe` |
 | R10 | A change touching an adapter crate needs a review with the checklist in 4.9. | pull request template |
+| R11 | An `asm!` block that runs `cli` or `sti` does not declare `nomem`. `nomem` lets the compiler cache a global in a register across the block and move a load or a store to the other side of it, so a store an interrupt guard was meant to cover reaches memory where a handler sees it. | `cargo xtask lint` reads the Rust files of every adapter crate, which are the only crates that may carry assembly (R3) |
 
 ## 4.5 Inline assembly inventory
 
@@ -66,7 +67,7 @@ The xtask policy table holds the machine-readable form.
 
 | Crate | Site | Instructions |
 |-------|------|--------------|
-| `kernel-hal-x86_64` | interrupt disable, enable, halt | `cli`, `sti`, `hlt` |
+| `kernel-hal-x86_64` | interrupt disable, enable, halt | `cli`, `sti`, `hlt`; the `cli` and `sti` blocks declare no `nomem`, so each is a full compiler barrier (R11) |
 | `kernel-hal-x86_64` | read and write `CR3`, read `CR2` | `mov` from and to control registers |
 | `kernel-hal-x86_64` | flush one page | `invlpg` |
 | `kernel-hal-x86_64` | descriptor table loading | `lgdt`, `lidt`, `ltr` |
@@ -76,12 +77,13 @@ The xtask policy table holds the machine-readable form.
 | `kernel-hal-x86_64` | time-stamp counter | `rdtsc` |
 | `kernel-hal-x86_64` | port I/O, byte, word, and double word | `in`, `out` |
 | `kernel-hal-x86_64` | context switch (naked function) | save callee-saved registers, swap stack pointer, restore, return |
-| `kernel-hal-x86_64` | entry into user mode (naked function) | `iretq` through the frame the kernel wrote onto a fresh kernel stack |
+| `kernel-hal-x86_64` | entry into user mode (naked function) | `xor` of every general register but the one that carries the buffer address, then `iretq` through the frame the kernel wrote onto a fresh kernel stack |
 | `kernel-hal-x86_64` | the exceptions a test image raises and the vectors it raises from software (`testing`, features `debug-uart` and `test-exit`) | `int3`, `ud2`, `div` by zero, `mov` of a selector beyond the table into a segment register, `int` with the vector as an inline constant |
 | `boot-uefi-x86_64` | kernel entry (naked function) | disable interrupts, write `CR3`, load stack pointer, jump |
 | `boot-uefi-x86_64` | exit device on loader failure | `out` |
 | `user-sys-x86_64` | system call trap | `int 0x80` |
 | `user-test-programs` | the privileged instruction a user thread may not run (`hlt_in_user`) | `hlt` |
+| `user-test-programs` | the entry point that reports the registers a thread started with (`entry_registers`, naked function) | `push` of every general register but the one that carries the buffer address, then `call` |
 
 Interrupt and exception entry use the `x86-interrupt` ABI, which the
 compiler implements. System call entry is an interrupt vector and uses the
@@ -92,7 +94,7 @@ same ABI.
 | Part | Technique |
 |------|-----------|
 | Page tables | The walker is generic over `FrameAccess`, which returns `&mut PageTable` for a `PhysFrame`. The kernel adapter builds that reference from the physical window; the loader adapter builds it from the identity mapping; the test double from a `HashMap`. The walker never sees a pointer. |
-| Physical memory window | `PhysicalWindow::frame_bytes_mut(frame) -> &mut [u8; 4096]` is the single conversion from a physical frame to a byte slice. The safety argument: the window maps all RAM, the frame is inside RAM by construction of `PhysFrame`, the kernel is single-threaded and non-preemptible, and callers hold the slice only inside one system call. |
+| Physical memory window | `PhysicalWindow::frame_bytes_mut(frame) -> &mut [u8; 4096]` is the single conversion from a physical frame to a byte slice. The safety argument: the window maps all RAM, the frame is inside RAM by construction of `PhysFrame`, the kernel is single-threaded and non-preemptible, and callers hold the slice only inside one system call. The type is neither `Clone` nor `Copy`, because that method is safe and rests on the exclusive borrow of one window; a copy would be a second value with no borrow relation to the first, and safe code could hold two `&mut` over one frame. A compile-time assertion in the module fails if the type becomes `Copy`. Safe code reaches a second window only through the `unsafe` constructor, whose contract names the frames two windows may hand out. |
 | Descriptor tables | GDT entries, IDT entries, and the TSS are `repr(C)` types built by safe bit packing that is unit-tested for layout on the host. Only the three load instructions are `unsafe`. |
 | APIC register blocks | The register offsets and the encoding of a redirection entry live in `kernel-x86-tables`, unit-tested against the specification values. The adapter reaches the block through the physical window and uses one volatile read or one volatile write per `unsafe` block. The window the loader builds covers memory; the kernel maps the two apertures itself, uncached, at the address the window rule gives them. |
 | ACPI tables and UEFI structures | The adapters hand table bytes to safe parsers as `&[u8]`: `kernel-acpi` for the root pointer, the table headers, the root table, and the MADT. No range is read before it has been checked against the memory the firmware reported. `audhsos-uefi` defines structure layouts only; the loader performs the calls. |
@@ -114,7 +116,7 @@ fuzz entry point is project code.
 
 | Check | Command | Runs |
 |-------|---------|------|
-| Lints | `cargo xtask lint` (`rustfmt --check`, `clippy` with the workspace lint set, `deny(warnings)`, SPDX headers) | every push |
+| Lints | `cargo xtask lint` (`rustfmt --check`, `clippy` with the workspace lint set, `deny(warnings)`, SPDX headers, the barrier options of R11) | every push |
 | Layering, forbids, assembly files | `cargo xtask check-layering` | every push |
 | External code | `cargo xtask check-deps` | every push |
 | Unsafe budget | `cargo xtask unsafe-budget` | every push |

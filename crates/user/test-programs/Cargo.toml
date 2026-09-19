@@ -35,6 +35,12 @@ test = false
 bench = false
 
 [[bin]]
+name = "entry_registers"
+path = "src/bin/entry_registers.rs"
+test = false
+bench = false
+
+[[bin]]
 name = "two_threads"
 path = "src/bin/two_threads.rs"
 test = false
