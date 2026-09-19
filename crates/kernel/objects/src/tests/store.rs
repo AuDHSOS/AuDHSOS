@@ -11,7 +11,7 @@ use crate::object::{
     AnyObjectId, Endpoint, Interrupt, IoPortRange, MemoryObject, Notification, Process, ProcessId,
     Reply, SystemControl, Thread, ThreadId,
 };
-use crate::pool::ObjectId;
+use crate::pool::{ObjectId, slot_tag_is_a_field_of_its_own};
 use crate::quota::Quota;
 use crate::store::{Destroyed, MachineObjects, Objects};
 use kernel_types::{PhysAddr, PhysFrame};
@@ -23,13 +23,10 @@ type Small = Objects<2, 4, 4, 8>;
 #[test]
 fn what_the_machine_costs_the_image() {
     // The whole structure is one `static` in the `.bss`, so its size is
-    // what the kernel image grows by. The bound is what the numbers of
-    // `config` add up to today, with room for the padding a change of a
-    // field would add; a jump past it means a number was raised without
-    // anyone looking at the image.
-    // It measures 1_224_280 bytes today. The bound leaves room for the
-    // padding a new field would add; a jump past it means a number in
-    // `config` was raised without anyone looking at the image.
+    // what the kernel memory grows by. It measures 1_477_840 bytes today;
+    // the bound leaves room for the padding a new field would add, and a
+    // jump past it means a number in `config` was raised without anyone
+    // looking at the image.
     let size = size_of::<MachineObjects>();
     assert!(size < 2 * 1024 * 1024, "the machine is {size} bytes");
     assert!(
@@ -398,4 +395,20 @@ fn destroying_an_object_that_is_already_gone_says_so() {
     assert_eq!(held.objects.destroy(stale), None);
     let stale = AnyObjectId::of(ObjectId::<Interrupt>::new(9, 9));
     assert_eq!(held.objects.destroy(stale), None);
+}
+
+#[test]
+fn no_slot_of_any_pool_hides_its_free_tag_in_a_niche() {
+    // A niche of `T` holds `None` as a nonzero byte, so a pool of such
+    // slots is not all zeros and the machine lands in `.data` instead of
+    // `.bss`, which costs the kernel image 1.4 MiB (D-66, D-185). Every
+    // object type but `IoPortRange` has a niche.
+    assert!(slot_tag_is_a_field_of_its_own::<Process>());
+    assert!(slot_tag_is_a_field_of_its_own::<Thread>());
+    assert!(slot_tag_is_a_field_of_its_own::<MemoryObject>());
+    assert!(slot_tag_is_a_field_of_its_own::<Endpoint>());
+    assert!(slot_tag_is_a_field_of_its_own::<Notification>());
+    assert!(slot_tag_is_a_field_of_its_own::<Reply>());
+    assert!(slot_tag_is_a_field_of_its_own::<Interrupt>());
+    assert!(slot_tag_is_a_field_of_its_own::<IoPortRange>());
 }

@@ -1062,6 +1062,7 @@ pub(crate) const CRATES: &[Crate] = &[
         deps: &[
             "app-canvas",
             "audhsos-abi",
+            "audhsos-elf",
             "audhsos-encoding",
             "audhsos-symbols",
             "audhsos-time",

@@ -22,6 +22,7 @@ mod ppm;
 mod process;
 mod qemu;
 mod qmp;
+mod sections;
 mod session;
 mod spdx;
 mod ssh;
@@ -44,6 +45,8 @@ subcommands:
   check-layering   dependency edges, forbid(unsafe_code), assembly files
   check-deps       no dependency outside the workspace
   unsafe-budget    unsafe blocks and asm! sites per adapter crate
+  kernel-sections  the sizes of .data and .bss of the built kernel against
+                   their bounds; builds the kernel first
   test [--host] [--qemu] [--e2e] [--ssh] [--tls] [--release]
                    run the selected test levels (default: host);
                    --release builds the end-to-end run from the release
@@ -135,6 +138,9 @@ fn run() -> Result<(), Error> {
         }
         "check-deps" => none(subcommand, options).and_then(|()| commands::check_deps(&root)),
         "unsafe-budget" => none(subcommand, options).and_then(|()| commands::unsafe_budget(&root)),
+        "kernel-sections" => {
+            none(subcommand, options).and_then(|()| commands::check_kernel_sections(&root))
+        }
         "test" => commands::test(&root, options),
         "pdf" => commands::pdf(&root, options),
         "jrs" => commands::jrs(&root, options),
