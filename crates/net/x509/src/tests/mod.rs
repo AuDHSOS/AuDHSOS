@@ -37,6 +37,18 @@ pub(crate) fn early() -> CivilTime {
     }
 }
 
+/// A moment inside every window these tests build.
+pub(crate) fn now() -> CivilTime {
+    CivilTime {
+        year: 2025,
+        month: 6,
+        day: 15,
+        hour: 12,
+        minute: 0,
+        second: 0,
+    }
+}
+
 /// A moment after every certificate these tests build.
 pub(crate) fn late() -> CivilTime {
     CivilTime {
