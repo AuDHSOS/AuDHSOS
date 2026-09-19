@@ -666,6 +666,9 @@ done until every applicable item has a test. Items are added, never removed.
   appears on the serial port through the userland driver, which owns COM1
   from the moment it created the `IoPortRange` over it.
 - Name lookup of a missing name returns `NotFound`.
+- An endpoint found under a name carries `SEND | TRANSFER` and nothing
+  more: `ipc_try_recv`, `endpoint_badge` and a duplication to `RECV |
+  BADGE` on it are each refused with `AccessDenied`.
 - Two clients write interleaved lines; no line is torn: every line the
   second client writes carries its own number and has to stand whole and
   exactly once in the output, so a line that lost bytes to the other writer
