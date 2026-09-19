@@ -8555,7 +8555,8 @@ impl RegisterVM {
         {
             return Err(type_error(heap, realm, "value is not a constructor"));
         }
-        if !Self::is_script_function(target, heap) {
+        let native = Self::native_constructor_of(target, heap);
+        if native.is_none() && !Self::is_script_function(target, heap) {
             return Err(VMError::Unsupported(
                 "construct of a constructor written in Rust",
             ));
@@ -8612,6 +8613,26 @@ impl RegisterVM {
             construct: Some(Construction::Register(held)),
             ..call
         };
+        // 10.1.13: a constructor of this Realm written in Rust makes its own
+        // object, which takes the Prototype the `newTarget` names.
+        if let Some(intrinsic) = native {
+            let made =
+                Self::object_takes_its_new_target(intrinsic, self.read_reg(new_target)?, heap);
+            self.acc = if made {
+                receiver
+            } else {
+                self.call_intrinsic(intrinsic, call, units, heap, realm)?
+            };
+            heap.exit_scope();
+            let prototype = self.prototype_of_new_target(new_target, heap)?;
+            if let Some(object) = self.acc.as_object()
+                && let Some(prototype) = prototype
+            {
+                heap.set_object_prototype(object, prototype)
+                    .map_err(VMError::Heap)?;
+            }
+            return Ok(None);
+        }
         self.enter_call_value(target, units, active_feedback, heap, realm, call)
     }
 
@@ -14775,7 +14796,16 @@ impl RegisterVM {
         // object with `OrdinaryCreateFromConstructor`, so the object it
         // answers takes the Prototype the `newTarget` names.
         if let Some(intrinsic) = Self::native_constructor_of(parent, heap) {
-            self.acc = self.call_intrinsic(intrinsic, call, units, heap, realm)?;
+            let made = Self::object_takes_its_new_target(
+                intrinsic,
+                self.read_reg(new_target_register)?,
+                heap,
+            );
+            self.acc = if made {
+                receiver
+            } else {
+                self.call_intrinsic(intrinsic, call, units, heap, realm)?
+            };
             if spread.is_some() {
                 heap.exit_scope();
             }
@@ -14981,6 +15011,20 @@ impl RegisterVM {
     }
 
     /// The intrinsic of a constructor of this Realm written in Rust.
+    /// Whether 20.1.1.1 step 1 answers the object 10.1.13 made rather than
+    /// 7.1.18 of the argument.
+    ///
+    /// A `newTarget` that is not `%Object%` itself takes a plain object with
+    /// the Prototype it names, whatever the call passed.
+    fn object_takes_its_new_target(
+        intrinsic: Intrinsic,
+        new_target: Value,
+        heap: &GenerationalHeap,
+    ) -> bool {
+        matches!(intrinsic, Intrinsic::ObjectConstructor)
+            && !Self::is_intrinsic(new_target, Intrinsic::ObjectConstructor, heap)
+    }
+
     fn native_constructor_of(value: Value, heap: &GenerationalHeap) -> Option<Intrinsic> {
         let object = value.as_object()?;
         let ObjectKind::NativeFunction { id, .. } = heap.get_object(object)?.kind else {

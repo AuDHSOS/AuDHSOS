@@ -11866,3 +11866,36 @@ fn a_super_call_reaches_a_constructor_of_the_realm_written_in_rust() -> Result<(
     )?;
     Ok(())
 }
+
+#[test]
+fn reflect_construct_reaches_a_constructor_written_in_rust() -> Result<(), Error> {
+    /// A derived class whose Prototype 10.1.13 gives the object.
+    const MADE: &str = "function D(){}D.prototype=Object.create(Array.prototype);";
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // Step 5 of 28.1.2 gives the construct the `newTarget` it was passed, and
+    // 10.1.13 takes the Prototype off it.
+    for (source, answer) in [
+        (
+            "var a=Reflect.construct(Array,[1,2,3],D);return ''+a.length+'|'+(Object.getPrototypeOf(a)===D.prototype)+'|'+Array.isArray(a)",
+            "3|true|true",
+        ),
+        (
+            "var e=Reflect.construct(TypeError,['boom'],D);return e.message+'|'+(Object.getPrototypeOf(e)===D.prototype)",
+            "boom|true",
+        ),
+        // Step 3 takes the target as the `newTarget` where the call named
+        // none.
+        ("return ''+Reflect.construct(Array,[5]).length", "5"),
+        // 20.1.1.1 step 1 answers a plain object for a `newTarget` that is
+        // not %Object% itself, whatever the call passed.
+        (
+            "var o=Reflect.construct(Object,[{b:2}],D);return ''+(o.b===undefined)+'|'+(Object.getPrototypeOf(o)===D.prototype)",
+            "true|true",
+        ),
+    ] {
+        let source = alloc::format!("(function(){{{MADE}{source}}})()");
+        assert_eq!(realm.evaluate(&source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}
