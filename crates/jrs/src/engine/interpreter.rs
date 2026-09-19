@@ -2286,13 +2286,18 @@ impl RegisterVM {
 
     fn type_of(&self, heap: &mut GenerationalHeap) -> Result<Value, VMError> {
         // 13.5.3.1 answers "function" for a Proxy whose target is callable,
-        // which 10.5.13 reads out of the target.
+        // which 7.2.3 reads out of the target.
         if self
             .acc
             .as_object()
             .is_some_and(|object| heap.is_a_proxy(object))
         {
-            return Err(VMError::Unsupported("an internal method of a Proxy"));
+            let name: &[u8] = if Self::is_callable(self.acc, heap) {
+                b"function"
+            } else {
+                b"object"
+            };
+            return self.allocate_latin1(heap, name);
         }
         let name: &[u8] = if self.acc.is_undefined() {
             b"undefined"
@@ -2845,6 +2850,22 @@ impl RegisterVM {
             return self.begin_bound_call(function, call, units, active_feedback, heap, realm);
         }
         let function_ref = self.resolve_callee(function, &mut call, heap, realm)?;
+        // 10.5.12 answers the call of a Proxy out of the `apply` of its
+        // handler, which is a frame of its own; 10.5.13 the construct out of
+        // its `construct`, which the engine has not built.
+        if heap.is_a_proxy(function_ref) {
+            if call.construct.is_some() {
+                return Err(VMError::Unsupported("an internal method of a Proxy"));
+            }
+            return self.begin_the_proxy_call(
+                function_ref,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
         let kind = heap
             .get_object(function_ref)
             .ok_or(VMError::Heap(HeapError::InvalidReference))?
@@ -4679,10 +4700,10 @@ impl RegisterVM {
             let Some(function_ref) = function.as_object() else {
                 return Err(type_error(heap, realm, "value is not callable"));
             };
-            // 10.5.13 and 10.5.14 answer the call of a Proxy out of its
-            // handler, which the engine has not built.
+            // 10.5.12 and 10.5.13 answer the call of a Proxy out of its
+            // handler, which the caller opens a frame for.
             if heap.is_a_proxy(function_ref) {
-                return Err(VMError::Unsupported("an internal method of a Proxy"));
+                return Ok(function_ref);
             }
             let forwards = matches!(
                 heap.get_object(function_ref)
@@ -6116,6 +6137,12 @@ impl RegisterVM {
                 realm,
             );
         }
+        if matches!(
+            intrinsic,
+            Intrinsic::FunctionPrototypeApply | Intrinsic::ReflectApply
+        ) {
+            return self.begin_spread_call(intrinsic, call, units, active_feedback, heap, realm);
+        }
         // 10.5 answers every internal method of a Proxy out of its handler,
         // which the engine has not built: a clause that reads one names the
         // gap rather than answering as though the object were ordinary.
@@ -6142,12 +6169,6 @@ impl RegisterVM {
         if intrinsic == Intrinsic::PromiseConstructor && call.construct.is_some() {
             let executor = self.call_argument(&call, 0, heap)?;
             return self.begin_promise(None, executor, call, units, active_feedback, heap, realm);
-        }
-        if matches!(
-            intrinsic,
-            Intrinsic::FunctionPrototypeApply | Intrinsic::ReflectApply
-        ) {
-            return self.begin_spread_call(intrinsic, call, units, active_feedback, heap, realm);
         }
         // Step 3 of 20.1.2.24 and of 20.1.2.5 reads every own enumerable
         // property with 7.3.2, which for an accessor is a getter of the
@@ -8523,7 +8544,10 @@ impl RegisterVM {
                 self.call_argument(&call, 1, heap)?,
             )
         };
-        if !Self::is_script_function(target, heap) {
+        let proxy = target
+            .as_object()
+            .is_some_and(|object| heap.is_a_proxy(object));
+        if !Self::is_script_function(target, heap) && !proxy {
             if !Self::is_callable(target, heap) {
                 return Err(type_error(heap, realm, "value is not callable"));
             }
@@ -8636,6 +8660,60 @@ impl RegisterVM {
     /// chain, outermost bind last, followed by the arguments of the call
     /// site. No frame of the caller holds the two together, so the call
     /// carries the Array 7.3.18 would make.
+    /// `[[Call]]` of 10.5.12: the `apply` of the handler is called with the
+    /// target, the `this` value and the Array 23.1 makes of the arguments.
+    fn begin_the_proxy_call(
+        &mut self,
+        proxy: ObjectRef,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let (target, handler) = Self::proxy_parts(proxy, heap, realm)?;
+        let trap = Self::proxy_trap(handler, "apply", heap, realm)?;
+        let mut arguments = Vec::new();
+        for index in 0..call.arg_count {
+            arguments.push(self.call_argument(&call, index, heap)?);
+        }
+        let arg_count = u16::try_from(arguments.len())
+            .map_err(|_| VMError::Unsupported("a call of more arguments than a frame passes"))?;
+        let list = Self::array_of(arguments, heap, realm)?;
+        // The List outlives every frame the call opens, so it is a root of a
+        // scope of its own, which the return leaves.
+        heap.enter_scope();
+        let held = heap.push_root(list)?;
+        // Step 4: a handler with no trap calls the target itself.
+        if trap.is_undefined() {
+            let call = Call {
+                arg_count,
+                resume: Some(Resume::Spread { arguments: held }),
+                ..call
+            };
+            return self.enter_call_value(target, units, active_feedback, heap, realm, call);
+        }
+        // Step 5 makes the List of the arguments an Array of 23.1, which is
+        // the third argument of the trap.
+        let array = heap.root_value(held).unwrap_or(VALUE_UNDEFINED);
+        let outer = Self::array_of(alloc::vec![target, call.receiver, array], heap, realm);
+        let outer = match outer {
+            Ok(outer) => outer,
+            Err(error) => {
+                heap.exit_scope();
+                return Err(error);
+            }
+        };
+        let arguments = heap.push_root(outer)?;
+        let call = Call {
+            receiver: Value::from_object(handler),
+            arg_count: 3,
+            resume: Some(Resume::Spread { arguments }),
+            ..call
+        };
+        self.enter_call_value(trap, units, active_feedback, heap, realm, call)
+    }
+
     fn begin_bound_call(
         &mut self,
         function: Value,
@@ -10861,6 +10939,14 @@ impl RegisterVM {
         let key = Self::key_value(name);
         // Step 6 forwards to the target where the handler carries no trap.
         if trap.is_undefined() {
+            // Forwarding to a target that is itself a Proxy is that Proxy's own
+            // internal method, which is a second trap.
+            if target
+                .as_object()
+                .is_some_and(|object| heap.is_a_proxy(object))
+            {
+                return Err(VMError::Unsupported("an internal method of a Proxy"));
+            }
             let Some(object) = target.as_object() else {
                 return Err(VMError::TypeError);
             };
@@ -11207,6 +11293,14 @@ impl RegisterVM {
         let trap = Self::proxy_trap(handler, "defineProperty", heap, realm)?;
         // Step 6 forwards to the target where the handler carries no trap.
         if trap.is_undefined() {
+            // Forwarding to a target that is itself a Proxy is that Proxy's own
+            // internal method, which is a second trap.
+            if target
+                .as_object()
+                .is_some_and(|object| heap.is_a_proxy(object))
+            {
+                return Err(VMError::Unsupported("an internal method of a Proxy"));
+            }
             let Some(object) = target.as_object() else {
                 return Err(VMError::TypeError);
             };
@@ -19108,16 +19202,25 @@ impl RegisterVM {
 
     /// Whether a value is one of the callables this engine knows (7.2.3).
     fn is_callable(value: Value, heap: &GenerationalHeap) -> bool {
-        value.as_object().is_some_and(|reference| {
-            heap.get_object(reference).is_some_and(|object| {
-                matches!(
-                    object.kind,
-                    ObjectKind::Function { .. }
-                        | ObjectKind::NativeFunction { .. }
-                        | ObjectKind::BoundFunction { .. }
-                )
-            })
-        })
+        let mut current = value;
+        loop {
+            let Some(object) = current
+                .as_object()
+                .and_then(|reference| heap.get_object(reference))
+            else {
+                return false;
+            };
+            match object.kind {
+                ObjectKind::Function { .. }
+                | ObjectKind::NativeFunction { .. }
+                | ObjectKind::BoundFunction { .. } => return true,
+                // 10.5.15 gives a Proxy `[[Call]]` where its target has it,
+                // and a target is made before the Proxy that names it, so the
+                // chain of targets cannot close on itself.
+                ObjectKind::Proxy { target, .. } => current = target,
+                _ => return false,
+            }
+        }
     }
 
     /// The answer one method of 7.1.1 gave, or none when the conversion goes

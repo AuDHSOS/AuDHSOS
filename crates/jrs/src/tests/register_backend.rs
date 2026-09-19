@@ -12218,6 +12218,19 @@ fn the_internal_methods_of_10_5_answer_out_of_the_handler() -> Result<(), Error>
             "(function(){var p=new Proxy({},{getOwnPropertyDescriptor(){return {value:7,configurable:true}}});var d=Object.getOwnPropertyDescriptor(p,'q');var n=new Proxy({m:5},{});return d.value+'|'+d.writable+'|'+d.enumerable+'|'+d.configurable+'|'+Object.getOwnPropertyDescriptor(n,'m').value})()",
             "7|false|false|true|5",
         ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}
+
+#[test]
+fn the_key_tests_and_the_call_of_10_5_answer_out_of_the_handler() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend has no Proxy of 10.5 at all, so only the engine
+    // answers here.
+    for (source, answer) in [
         // 10.5.7 answers the test out of the `has` of the handler, which
         // 13.10.1 and 28.1.8 both reach.
         (
@@ -12250,6 +12263,18 @@ fn the_internal_methods_of_10_5_answer_out_of_the_handler() -> Result<(), Error>
         (
             "(function(){var f={};Object.defineProperty(f,'g',{value:1,configurable:false});var p=new Proxy(f,{deleteProperty(){return true}});var r;try{delete p.g}catch(e){r=e instanceof TypeError};var t={v:1};var n=new Proxy(t,{});return ''+r+'|'+(delete n.v)+'|'+t.v})()",
             "true|true|undefined",
+        ),
+        // 10.5.12 answers the call out of the `apply` of the handler, which
+        // is given the target, the `this` value and an Array of 23.1.
+        (
+            "(function(){function f(a,b){return this.t+':'+a+','+b}var p=new Proxy(f,{apply(t,r,a){return Reflect.apply(t,r,a)}});function h(g){return g.call({t:'h'},1,2)}var n=new Proxy(f,{apply(t,r,a){return a.length+'/'+Array.isArray(a)}});return h(p)+'|'+typeof p+'|'+n(1,2,3)+'|'+p.apply({t:'s'},[7,8])+'|'+Reflect.apply(p,{t:'r'},[1,2])})()",
+            "h:1,2|function|3/true|s:7,8|r:1,2",
+        ),
+        // Step 4: a handler with no trap calls the target itself, and a trap
+        // that throws leaves the call.
+        (
+            "(function(){function f(a,b){return this.t+':'+a+','+b}var n=new Proxy(f,{});var e=new Proxy(f,{apply(){throw new TypeError()}});var r;try{e()}catch(x){r=x instanceof TypeError};var o={t:'o',m:new Proxy(f,{apply(t,q,a){return Reflect.apply(t,q,a)}})};return n.call({t:'n'},4,5)+'|'+r+'|'+o.m(9,10)})()",
+            "n:4,5|true|o:9,10",
         ),
     ] {
         assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
