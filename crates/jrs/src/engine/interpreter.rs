@@ -14501,6 +14501,113 @@ impl RegisterVM {
         )
     }
 
+    /// `PutValue` of 6.2.5.6 step 5 on a Super Reference.
+    ///
+    /// 10.1.9.2 reads the chain from the base of 13.3.7.3 and takes the `this`
+    /// value of the call as the receiver: a setter of the chain runs with it,
+    /// and every other write lands on its own properties.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a super write runs where a call does, with what a call has"
+    )]
+    fn write_super(
+        &mut self,
+        base: Reg,
+        name: PropertyKey,
+        strict: bool,
+        return_pc: usize,
+        caller_code_id: Option<u32>,
+        code: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let value = self.acc;
+        let held = self.read_reg(base)?;
+        let Some(object) = held.as_object() else {
+            return Err(property_base_error(held, heap, realm));
+        };
+        let receiver = self.this_of(code.active)?;
+        let found = heap.lookup_named(object, name)?;
+        if let Some(found) = found
+            && found.flags.is_accessor
+        {
+            return self.enter_accessor(
+                found.value,
+                receiver,
+                Some((value, strict)),
+                return_pc,
+                caller_code_id,
+                code,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
+        // Step 2.b of 10.1.9.2: a data property of the chain that is not
+        // writable refuses the write wherever the receiver is.
+        let refused = found.is_some_and(|found| !found.flags.writable);
+        let wrote = if refused {
+            false
+        } else {
+            match receiver.as_object() {
+                // Step 3.b takes no receiver that is not an Object.
+                None => false,
+                Some(target) => Self::write_on_the_receiver(target, name, value, heap, realm)?,
+            }
+        };
+        if !wrote && strict {
+            return Err(type_error(
+                heap,
+                realm,
+                "cannot write a property of the super reference",
+            ));
+        }
+        self.acc = value;
+        Ok(None)
+    }
+
+    /// Steps 3.b through 3.e of 10.1.9.2: the receiver takes the value on its
+    /// own property, or on a data property this creates.
+    ///
+    /// The chain of the receiver is never read here; the chain the Super
+    /// Reference names was read before.
+    fn write_on_the_receiver(
+        target: ObjectRef,
+        key: PropertyKey,
+        value: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<bool, VMError> {
+        // 10.4.3.1 gives a String exotic object own indices and a `length`
+        // that are neither writable nor configurable.
+        if Self::owns_string_exotic(target, key, heap)? {
+            return Ok(false);
+        }
+        let own = heap.own_named_flags(target, key)?;
+        if own.is_some_and(|flags| flags.is_accessor || !flags.writable)
+            || own.is_none() && !heap.is_extensible(target).unwrap_or(true)
+        {
+            return Ok(false);
+        }
+        let shape = heap.get_object(target).ok_or(VMError::TypeError)?.shape_id;
+        if let Some(location) = heap.shapes.lookup(shape, key) {
+            heap.write_parameter(target, key, value)?;
+            heap.set_object_slot(target, location.slot_offset, value)?;
+            return Ok(true);
+        }
+        if let Some(index) = key
+            .as_string()
+            .and_then(|name| array_index_units(&heap.strings.to_utf16(Value::from_string(name))?))
+            && heap.array_length(target).is_some()
+        {
+            Self::set_element(target, index, value, heap, realm)?;
+            return Ok(true);
+        }
+        heap.define_own_named(target, key, value, PropertyFlags::ordinary_data())?;
+        Ok(true)
+    }
+
     /// The `this` value of the running call (9.4.5).
     fn this_of(&self, code: &BytecodeFunction) -> Result<Value, VMError> {
         let register = code
@@ -32556,6 +32663,18 @@ impl RegisterVM {
                     let target = self.read_reg(home)?.as_object().ok_or(VMError::TypeError)?;
                     Self::make_method(self.acc, target, heap)?;
                 }
+                Instruction::SuperThis => {
+                    if let Some(register) = active_code.this_register
+                        && self.read_reg(register)? == VALUE_UNINITIALIZED
+                    {
+                        return Err(raise(
+                            heap,
+                            realm,
+                            super::realm::NativeErrorKind::ReferenceError,
+                            "this is not initialized",
+                        ));
+                    }
+                }
                 Instruction::SuperBase { target } => {
                     // 13.3.7.3 step 3 reads the `this` of the environment,
                     // which a derived constructor has only after its super
@@ -32621,6 +32740,60 @@ impl RegisterVM {
                     if let Some(code_id) = self.read_super(
                         base,
                         name,
+                        pc,
+                        current_code_id,
+                        code_units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    )? {
+                        current_code_id = Some(code_id);
+                        pc = self.pending_pc.take().unwrap_or(0);
+                    }
+                }
+                Instruction::SetSuper { base, name, strict } => {
+                    let code_units = units;
+                    let text = active_code
+                        .string_constants
+                        .get(name as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    let name = PropertyKey::String(heap.strings.intern_units(text)?);
+                    if let Some(code_id) = self.write_super(
+                        base,
+                        name,
+                        strict,
+                        pc,
+                        current_code_id,
+                        code_units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    )? {
+                        current_code_id = Some(code_id);
+                        pc = self.pending_pc.take().unwrap_or(0);
+                    }
+                }
+                Instruction::SetSuperByValue { base, key, strict } => {
+                    let code_units = units;
+                    // 7.1.19 reaches the key after the value, which waits in a
+                    // root while the method of the key runs.
+                    if self.convert_key(
+                        key,
+                        Some(self.acc),
+                        &mut pc,
+                        &mut current_code_id,
+                        code_units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    )? {
+                        return Ok(None);
+                    }
+                    let name = property_key(self.read_reg(key)?, heap, realm)?;
+                    if let Some(code_id) = self.write_super(
+                        base,
+                        name,
+                        strict,
                         pc,
                         current_code_id,
                         code_units,

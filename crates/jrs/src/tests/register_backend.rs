@@ -11806,3 +11806,34 @@ fn the_argument_22_1_3_makes_a_regexp_of_goes_through_7_1_17() -> Result<(), Err
     }
     Ok(())
 }
+
+#[test]
+fn a_write_through_a_super_reference_lands_on_the_this_of_the_call() -> Result<(), Error> {
+    // 10.1.9.2 reads the chain from the base of 13.3.7.3 and creates the
+    // property on the `this` value of the call.
+    for source in [
+        "(function(){class B{}B.prototype.x=1;class C extends B{m(){super.x=5;return this.x+'|'+B.prototype.x}}return new C().m()})()",
+        "(function(){class B{}class C extends B{n(k){super[k]=7;return this.y+'|'+(B.prototype.y===undefined)}}return new C().n('y')})()",
+        // 13.15.2 reads through the Reference once and writes back through it.
+        "(function(){class B{}B.prototype.x=1;class C extends B{o(){super.x+=10;return this.x}}return ''+new C().o()})()",
+        "(function(){class B{}B.prototype.x=1;class C extends B{p(){return super.x++}}var e=new C();return e.p()+'|'+e.x})()",
+        // A setter of the chain runs with that `this` value.
+        "(function(){var k=[];var p={set s(v){k.push(v+':'+(this===h))}};var h=Object.create(p);var o={t(){super.s=3}};Object.setPrototypeOf(o,p);o.t.call(h);return k.join(',')})()",
+        // Step 2.b refuses a data property of the chain that is not writable,
+        // and step 6.e of 6.2.5.6 makes that a TypeError in strict code.
+        "(function(){var b={};Object.defineProperty(b,'f',{value:0,writable:false});var o={q(){'use strict';super.f=1}};Object.setPrototypeOf(o,b);var r;try{o.q()}catch(e){r=e instanceof TypeError};return ''+r})()",
+        // 13.3.7.1 evaluates the key expression before it makes the
+        // Reference, so a key that changes the `[[HomeObject]]` chain is seen
+        // by the base.
+        "(function(){var k=[];var b={};var o={m(){return super[(k.push('key'),'x')]}};Object.setPrototypeOf(o,b);o.m();return k.join(',')})()",
+    ] {
+        differential(source)?;
+    }
+    // Sloppy code keeps the refusal, which the stack backend raises as a
+    // `TypeError` there too.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    let source = "(function(){var b={};Object.defineProperty(b,'f',{value:0,writable:false});var o={u(){super.f=1;return 'sloppy'}};Object.setPrototypeOf(o,b);return o.u()})()";
+    assert_eq!(realm.evaluate(source)?, Value::string("sloppy"), "{source}");
+    Ok(())
+}

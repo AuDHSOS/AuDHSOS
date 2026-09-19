@@ -789,6 +789,9 @@ struct RegisterMemberAssignment {
     object: crate::engine::bytecode::Reg,
     base_type: RegisterType,
     key: RegisterMemberKey,
+    /// Whether the base is the one 13.3.7.3 makes, which writes on the `this`
+    /// value of the call and not on the object the chain was read from.
+    super_base: bool,
 }
 
 enum RegisterMemberKey {
@@ -5095,11 +5098,13 @@ impl RegisterLowerer {
     }
 
     /// `MakeSuperPropertyReference` of 13.3.7.3, in a register of its own.
+    /// Reserves the register `MakeSuperPropertyReference` of 13.3.7.3 writes
+    /// the base to.
+    ///
+    /// 13.3.7.1 evaluates the key expression before it makes the Reference,
+    /// so the register is taken here and written where the base is read.
     fn super_base(&mut self) -> Option<crate::engine::bytecode::Reg> {
-        use crate::engine::bytecode::Instruction;
-        let register = self.allocate_register()?;
-        self.code.emit(Instruction::SuperBase { target: register });
-        Some(register)
+        self.allocate_register()
     }
 
     /// `super.name` and `super[key]` of 13.3.7, read through `this`.
@@ -5111,14 +5116,19 @@ impl RegisterLowerer {
         use crate::engine::bytecode::Instruction;
         if let Some(name) = Self::static_property_name(key) {
             let name = self.string_constant(name)?;
+            self.code.emit(Instruction::SuperBase { target: base });
             self.code.emit(Instruction::GetSuper { base, name });
             return Some(RegisterType::Unknown);
         }
+        // 13.3.7.1 step 3 reads the `this` of the environment before the key
+        // expression and step 7 makes the Reference after it.
+        self.code.emit(Instruction::SuperThis);
         if !self.lower(key)?.converts_to_primitive() {
             return None;
         }
         let register = self.allocate_register()?;
         self.code.emit(Instruction::Star(register));
+        self.code.emit(Instruction::SuperBase { target: base });
         self.code.emit(Instruction::GetSuperByValue {
             base,
             key: register,
@@ -6523,6 +6533,7 @@ impl RegisterLowerer {
             );
         }
         if operator.is_none()
+            && !matches!(base.kind, ExprKind::Super)
             && let Some(value_type) = self.lower_unknown_member_assignment(base, key, value)?
         {
             return Some(value_type);
@@ -6604,11 +6615,55 @@ impl RegisterLowerer {
     /// The instruction answers what 10.1.8.1 answers, walking the Prototype
     /// Chain and naming the gap where the chain reaches a Prototype this Realm
     /// has not built, so the read needs no type of its own to be right.
+    /// Writes the accumulator through the base of 13.3.7.3, which 10.1.9.2
+    /// takes the `this` value of the call as the receiver of.
+    fn finish_super_assignment(&mut self, prepared: &RegisterMemberAssignment) -> Option<()> {
+        use crate::engine::bytecode::Instruction;
+        match &prepared.key {
+            RegisterMemberKey::Named { constant, .. } => {
+                self.code.emit(Instruction::SetSuper {
+                    base: prepared.object,
+                    name: *constant,
+                    strict: self.assignment_strict,
+                });
+            }
+            RegisterMemberKey::ObjectKeyed(register, _) => {
+                let register = *register;
+                self.code.emit(Instruction::SetSuperByValue {
+                    base: prepared.object,
+                    key: register,
+                    strict: self.assignment_strict,
+                });
+                self.release_register(register)?;
+            }
+            RegisterMemberKey::ArrayKeyed { .. } => return None,
+        }
+        self.release_register(prepared.object)
+    }
+
     fn read_prepared_member(
         &mut self,
         prepared: &RegisterMemberAssignment,
     ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
+        if prepared.super_base {
+            match &prepared.key {
+                RegisterMemberKey::Named { constant, .. } => {
+                    self.code.emit(Instruction::GetSuper {
+                        base: prepared.object,
+                        name: *constant,
+                    });
+                }
+                RegisterMemberKey::ObjectKeyed(register, _) => {
+                    self.code.emit(Instruction::GetSuperByValue {
+                        base: prepared.object,
+                        key: *register,
+                    });
+                }
+                RegisterMemberKey::ArrayKeyed { .. } => return None,
+            }
+            return Some(RegisterType::Unknown);
+        }
         let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
         match &prepared.key {
             RegisterMemberKey::Named { constant, .. } => {
@@ -6726,6 +6781,9 @@ impl RegisterLowerer {
     fn prepare_member_assignment(&mut self, target: &Expr) -> Option<RegisterMemberAssignment> {
         use crate::engine::bytecode::Instruction;
         let (base, key) = target.member()?;
+        if matches!(base.kind, ExprKind::Super) {
+            return self.prepare_super_assignment(key);
+        }
         let base_type = self.lower(base)?;
         // A value the lowering cannot name is written at run time, which is
         // what 13.15.2 does anyway; only a layout it tracks needs more.
@@ -6773,6 +6831,33 @@ impl RegisterLowerer {
             object,
             base_type,
             key,
+            super_base: false,
+        })
+    }
+
+    /// The same for `super.name` and `super[key]`, whose base 13.3.7.3 makes
+    /// before 7.1.19 reaches the key.
+    fn prepare_super_assignment(&mut self, key: &Expr) -> Option<RegisterMemberAssignment> {
+        use crate::engine::bytecode::Instruction;
+        let object = self.super_base()?;
+        let key = if let Some(name) = Self::static_property_name(key) {
+            let name = name.to_vec();
+            let constant = self.string_constant(&name)?;
+            self.code.emit(Instruction::SuperBase { target: object });
+            RegisterMemberKey::Named { constant, name }
+        } else {
+            self.code.emit(Instruction::SuperThis);
+            self.lower(key)?;
+            let register = self.allocate_register()?;
+            self.code.emit(Instruction::Star(register));
+            self.code.emit(Instruction::SuperBase { target: object });
+            RegisterMemberKey::ObjectKeyed(register, None)
+        };
+        Some(RegisterMemberAssignment {
+            object,
+            base_type: RegisterType::Unknown,
+            key,
+            super_base: true,
         })
     }
 
@@ -6784,6 +6869,9 @@ impl RegisterLowerer {
         use crate::engine::bytecode::Instruction;
         if matches!(value_type, RegisterType::NativeFunction(_)) {
             return None;
+        }
+        if prepared.super_base {
+            return self.finish_super_assignment(&prepared);
         }
         let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
         match prepared.key {

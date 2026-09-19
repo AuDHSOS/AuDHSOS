@@ -682,6 +682,12 @@ pub enum Instruction {
         /// Register the base is written to.
         target: Reg,
     },
+    /// Step 3 of 13.3.7.3 alone: the `this` of the environment, which a
+    /// derived constructor has only after its super call.
+    ///
+    /// 13.3.7.1 reads it before the key expression and makes the Reference
+    /// after, so the two halves stand apart there.
+    SuperThis,
     /// `super.name` of 13.3.7: the property of the base, read with `this` as
     /// the receiver, which is what a getter of the chain is called with.
     GetSuper {
@@ -697,6 +703,25 @@ pub enum Instruction {
         base: Reg,
         /// Register holding the key.
         key: Reg,
+    },
+    /// `super.name = acc` of 6.2.5.6 step 5: 10.1.9.2 reads the chain from
+    /// the base of 13.3.7.3 and writes on the `this` value of the call.
+    SetSuper {
+        /// Register holding the base of 13.3.7.3.
+        base: Reg,
+        /// Property-name index in the heap-independent UTF-16 constant pool.
+        name: u16,
+        /// Whether step 6.e makes a refusal a `TypeError`.
+        strict: bool,
+    },
+    /// [`Instruction::SetSuper`] under a key only the run time knows.
+    SetSuperByValue {
+        /// Register holding the base of 13.3.7.3.
+        base: Reg,
+        /// Register holding the key.
+        key: Reg,
+        /// Whether step 6.e makes a refusal a `TypeError`.
+        strict: bool,
     },
     /// Load indexed element: `acc = obj_reg[key_reg]` (uses feedback slot).
     GetByValue {
@@ -1354,11 +1379,12 @@ impl BytecodeFunction {
                 self.verify_register(pc, made)?;
                 Some(list)
             }
-            Instruction::GetSuper { base, name } => {
+            Instruction::GetSuper { base, name } | Instruction::SetSuper { base, name, .. } => {
                 self.verify_string_constant(pc, name)?;
                 Some(base)
             }
-            Instruction::GetSuperByValue { base, key } => {
+            Instruction::GetSuperByValue { base, key }
+            | Instruction::SetSuperByValue { base, key, .. } => {
                 self.verify_register(pc, base)?;
                 Some(key)
             }
@@ -1447,7 +1473,8 @@ impl BytecodeFunction {
                 self.jump_target(pc, offset)?;
                 None
             }
-            Instruction::LdaSmi(_)
+            Instruction::SuperThis
+            | Instruction::LdaSmi(_)
             | Instruction::Negate
             | Instruction::LogicalNot
             | Instruction::ToUndefined
