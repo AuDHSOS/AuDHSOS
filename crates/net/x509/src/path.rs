@@ -5,10 +5,10 @@
 //!
 //! The subset of RFC 5280 this implements is the one a TLS client needs:
 //! names chained by their encodings, one signature verified per link, the
-//! validity window of every certificate, the authority bit and the path
-//! length on every intermediate, the certificate-signing usage where a
-//! usage is stated, and server authentication on the leaf where a purpose
-//! is stated.
+//! size bound of D-79 on every key of the chain, the validity window of
+//! every certificate, the authority bit and the path length on every
+//! intermediate, the certificate-signing usage where a usage is stated,
+//! and server authentication on the leaf where a purpose is stated.
 //!
 //! What is absent is absent by decision D-44: no revocation, no name
 //! constraints, no policy processing. A revoked certificate that is
@@ -139,8 +139,8 @@ impl<'a> TrustAnchors<'a> {
 /// # Errors
 ///
 /// One of the [`X509Error`] variants that name a rule of the path: the
-/// window, the authority bit, the path length, the usages, the name, or
-/// the absence of an anchor.
+/// key size, the window, the authority bit, the path length, the usages,
+/// the name, or the absence of an anchor.
 pub fn verify_chain(
     end_entity: &Certificate<'_>,
     intermediates: &[Certificate<'_>],
@@ -152,6 +152,9 @@ pub fn verify_chain(
         // A server that sends more than this has not sent a chain.
         return Err(X509Error::ChainTooLong);
     }
+    // The leaf key verifies no certificate, so the walk below never
+    // reaches it and this is the only place that judges its size (D-79).
+    end_entity.spki.check_usable()?;
     check_window(end_entity, now)?;
     if end_entity.extended_key_usage == Some(false) {
         return Err(X509Error::NotForServerAuthentication);
@@ -171,6 +174,11 @@ pub fn verify_chain(
             let mut reader = Reader::new(anchor.spki);
             let key = SubjectPublicKey::parse(&mut reader)?;
             reader.finish()?;
+            // `TrustAnchor` has public fields and `TrustAnchors::new`
+            // takes any slice, so an anchor reaches here without having
+            // passed `from_certificate`. The bound is applied again, and
+            // the walk holds it for every key of the chain.
+            key.check_usable()?;
             return key.verify(current.algorithm, current.tbs, current.signature);
         }
 
@@ -222,6 +230,9 @@ fn check_authority(
     now: CivilTime,
     below: usize,
 ) -> Result<(), X509Error> {
+    // The size bound of D-79 on every key that signs inside the chain,
+    // which `RsaKey::new` does not carry.
+    issuer.spki.check_usable()?;
     check_window(issuer, now)?;
 
     let constraints = issuer.basic_constraints.ok_or(X509Error::NotAnAuthority)?;

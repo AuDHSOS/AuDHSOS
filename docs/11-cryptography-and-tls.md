@@ -358,7 +358,8 @@ the RFC 5280 subset. `now` is a `CivilTime`, whose fields order
 lexicographically in the order time runs, so the window comparison is the
 derived one; a caller that holds a `UnixTime` converts it first. The
 rules are: issuer and subject distinguished names compared as
-DER bytes, one signature verification per link, the validity window
+DER bytes, one signature verification per link, the size bound of D-79 on
+every key of the chain, the validity window
 against `now`, `cA` and the path length constraint on every intermediate,
 `keyCertSign` on every CA, `serverAuth` on the leaf, chain length at most
 eight, and RFC 6125 name matching against `dNSName` entries only, with a
@@ -818,7 +819,11 @@ parsed from the inner `RSAPublicKey` of RFC 3279 section 2.3.1; the DER
 reader needs nothing new for it, since `read_integer` already strips the
 leading zero of a positive integer and refuses a negative one.
 `check_usable` applies the size bound of D-79, which is what makes an
-out-of-range anchor a refusal rather than a path that reaches nothing.
+out-of-range key a refusal rather than a path that reaches nothing.
+`TrustAnchor::from_certificate` calls it on the anchor while the operator
+still holds the file, and `verify_chain` calls it on the leaf, on every
+intermediate, and on the anchor it reaches, whose fields a caller may
+fill without that conversion.
 
 The builder behind `test-certificates` is the part that is easy to
 underestimate. It gains RSA `TestKey` variants over the fixed pairs of

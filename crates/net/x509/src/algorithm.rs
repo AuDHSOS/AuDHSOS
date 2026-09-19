@@ -293,9 +293,12 @@ impl<'a> SubjectPublicKey<'a> {
     /// them to be. Ed25519 has no equivalent step that is cheaper than the
     /// verification itself, so for that key the width is all there is.
     ///
-    /// It exists for [`crate::path::TrustAnchor::from_certificate`], where
-    /// a key that cannot be used is worth refusing while the caller still
-    /// holds the file it came from.
+    /// [`crate::path::TrustAnchor::from_certificate`] calls it so that a
+    /// key that cannot be used is refused while the caller still holds
+    /// the file it came from, and [`crate::path::verify_chain`] calls it
+    /// on every key of a chain — the leaf, each intermediate, and the
+    /// anchor it reaches — which is what applies the size bound to a
+    /// chain and not to the anchor's file alone.
     ///
     /// # Errors
     ///
