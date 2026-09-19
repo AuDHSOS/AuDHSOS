@@ -6361,3 +6361,23 @@ Document 16 step Q8.
 - `BEGIN`, `COMMIT` and `ROLLBACK` take a name after the word
   `TRANSACTION`.
 
+
+### 6.6.231 The three hooks a connection is told (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A connection told no function runs the same statements and is asked
+  nothing.
+- A statement of its own that writes a page asks the commit hook once,
+  and a transaction asks it at its `COMMIT`.
+- A commit hook that answers true refuses the statement `constraint
+  failed` with the extended code 531, sends the transaction back and
+  tells the rollback hook.
+- A `ROLLBACK` tells the rollback hook whether or not the transaction
+  wrote, and a statement of its own whose row broke a constraint tells
+  it as well.
+- The update hook is told the word of the action, the database, the table
+  and the key of every row a statement wrote, including the rows a
+  trigger's body wrote and the rows of an attached database.
+- A row of a `WITHOUT ROWID` table and a row of `sqlite_sequence` tell
+  the update hook nothing.

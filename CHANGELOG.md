@@ -30,6 +30,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` takes the three hooks of a connection: `sqlite3_commit_hook`
+  is asked where a transaction that wrote a page ends and a true answer
+  refuses the statement `constraint failed` with
+  `SQLITE_CONSTRAINT_COMMITHOOK`, `sqlite3_rollback_hook` is told where a
+  transaction goes back, and `sqlite3_update_hook` is told the action, the
+  database, the table and the key of every row a statement wrote in a
+  table that keeps a key of its own. D-342 records it. Catalog 6.6.231.
+  `hook.test` goes from 47 cases passing to 57.
+
 - `db-sqlite` reads `INDEXED BY name` and `NOT INDEXED` after the name of
   a table in a `SELECT`, an `UPDATE` and a `DELETE`, refusing an index the
   table does not hold, and takes the name a `BEGIN`, a `COMMIT` or a

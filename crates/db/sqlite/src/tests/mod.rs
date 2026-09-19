@@ -36,6 +36,7 @@ mod foreign;
 mod fp;
 mod generated;
 mod header;
+mod hooks;
 mod image;
 mod index;
 mod indexexpr;

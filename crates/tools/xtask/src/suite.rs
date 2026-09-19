@@ -619,6 +619,17 @@ struct Prepared {
     stamp: u64,
 }
 
+/// The two hooks one connection was told.
+#[derive(Clone, Copy, Default)]
+struct Hooked {
+    /// Whether `sqlite3_commit_hook` named a script.
+    commits: bool,
+    /// Whether `sqlite3_rollback_hook` named a script.
+    rolls: bool,
+    /// Whether `sqlite3_update_hook` named a script.
+    writes: bool,
+}
+
 /// One run of one file: the interpreter on one side of the line and the
 /// engine on the other.
 struct Session {
@@ -652,6 +663,9 @@ struct Session {
     /// Whether the tester told each connection an authorizer, which a
     /// connection that is opened again holds none of.
     authorizers: BTreeMap<String, bool>,
+    /// Whether the tester told each connection a commit hook and a
+    /// rollback hook, which the writer is told for each request.
+    hooked: BTreeMap<String, Hooked>,
     /// The statements the tester prepared, by the name it holds each at.
     statements: BTreeMap<String, Prepared>,
     /// How many statements the tester has prepared, which names the next
@@ -688,6 +702,7 @@ impl Session {
             collations: BTreeMap::new(),
             functions: BTreeMap::new(),
             authorizers: BTreeMap::new(),
+            hooked: BTreeMap::new(),
             statements: BTreeMap::new(),
             prepared: 0,
             prng: 0,
@@ -819,10 +834,10 @@ impl Session {
                 Ok(Vec::new())
             }
             "clock" => self.ticks(first),
-            // `sqlite3_set_authorizer`, and
-            // `sqlite3_table_column_metadata DB SCHEMA TABLE COLUMN`.
-            "authorizer" => {
-                self.authorizes(first, second);
+            // `sqlite3_set_authorizer`, `sqlite3_commit_hook`,
+            // `sqlite3_rollback_hook` and `sqlite3_update_hook`.
+            "authorizer" | "commit_hook" | "rollback_hook" | "update_hook" => {
+                self.hooks(verb, first, second);
                 Ok(Vec::new())
             }
             // `sqlite3_prepare`, the commands that read a statement it
@@ -1594,6 +1609,22 @@ impl Session {
         }
     }
 
+    /// `sqlite3_set_authorizer`, `sqlite3_commit_hook`,
+    /// `sqlite3_rollback_hook` and `sqlite3_update_hook`: the tester
+    /// names a script for one connection, or nothing to tell it none.
+    fn hooks(&mut self, verb: &str, connection: &str, name: &str) {
+        if verb == "authorizer" {
+            self.authorizes(connection, name);
+            return;
+        }
+        let held = self.hooked.entry(connection.to_owned()).or_default();
+        match verb {
+            "commit_hook" => held.commits = !name.is_empty(),
+            "rollback_hook" => held.rolls = !name.is_empty(),
+            _ => held.writes = !name.is_empty(),
+        }
+    }
+
     /// The functions one connection reads, which are the ones this
     /// harness holds where the tester defined none.
     fn defines(&self, connection: &str) -> &'static [Defined] {
@@ -1635,6 +1666,7 @@ impl Session {
         let collating = self.collations.get(name).copied().unwrap_or_default();
         let defines = self.defines(name);
         let asks = self.authorizers.contains_key(name);
+        let hooked = self.hooked.get(name).copied().unwrap_or_default();
         let writer = self
             .held
             .get_mut(&path)
@@ -1650,6 +1682,21 @@ impl Session {
             writer.asks(asking);
         } else {
             writer.asks_nothing();
+        }
+        if hooked.commits {
+            writer.commits(committing);
+        } else {
+            writer.commits_nothing();
+        }
+        if hooked.rolls {
+            writer.rolls_back(rolling);
+        } else {
+            writer.rolls_back_nothing();
+        }
+        if hooked.writes {
+            writer.writes_rows(writing);
+        } else {
+            writer.writes_nothing();
         }
         WHO.with(|who| who.borrow_mut().clone_from(&name.to_owned()));
         NULLED.with(|text| text.borrow_mut().clone_from(&null));
@@ -1932,6 +1979,61 @@ fn asking(asked: &db_sqlite::auth::Asked<'_>) -> db_sqlite::auth::Answer {
             Some("SQLITE_IGNORE") => Answer::Ignore,
             _ => Answer::Deny,
         }
+    })
+}
+
+/// Whether the commit hook the tester named refuses the commit, which is
+/// one `CALL` onto the line and the `RET` that answers it.
+///
+/// A script that answers other than a number lets the commit stand,
+/// which is what `tclsqlite.c` reads for it.
+fn committing() -> bool {
+    hooked_answer("commit_hook")
+        .and_then(|text| text.trim().parse::<i64>().ok())
+        .is_some_and(|answered| answered != 0)
+}
+
+/// Tells the rollback hook the tester named that a transaction went
+/// back, which is one `CALL` onto the line and the `RET` that answers
+/// it.
+fn rolling() {
+    drop(hooked_answer("rollback_hook"));
+}
+
+/// Tells the update hook the tester named of one row a statement wrote,
+/// which is one `CALL` onto the line and the `RET` that answers it.
+///
+/// Costs one round trip per row, so a statement that writes n rows costs
+/// O(n) of them.
+fn writing(wrote: &db_sqlite::change::Wrote<'_>) {
+    let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
+    LINE.with(|line| {
+        let mut held = line.borrow_mut();
+        let Some(line) = held.as_mut() else {
+            return;
+        };
+        let values = [
+            WHO.with(|who| who.borrow().clone()),
+            text(wrote.did.word()),
+            text(wrote.schema),
+            text(wrote.table),
+            wrote.rowid.to_string(),
+        ];
+        if write_call(&mut line.writer, "update_hook", &values).is_ok() {
+            drop(returned(&mut line.reader));
+        }
+    });
+}
+
+/// What the script one connection named answers, written as `CALL` with
+/// the name of the connection.
+fn hooked_answer(kind: &str) -> Option<String> {
+    LINE.with(|line| {
+        let mut held = line.borrow_mut();
+        let line = held.as_mut()?;
+        let values = [WHO.with(|who| who.borrow().clone())];
+        write_call(&mut line.writer, kind, &values).ok()?;
+        returned(&mut line.reader)
     })
 }
 

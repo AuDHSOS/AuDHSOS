@@ -563,6 +563,65 @@ struct Attached {
 /// reach no function, because both stand for a database of one page.
 pub type Opening = fn(&[u8]) -> Option<Vec<u8>>;
 
+/// The function `sqlite3_commit_hook` told the connection, which the
+/// connection asks where a transaction that wrote a page ends.
+///
+/// A true answer refuses the commit and sends the transaction back,
+/// which `sqlite3VdbeHalt` of `research/sqlite/src/vdbeaux.c:2982`
+/// answers `SQLITE_CONSTRAINT_COMMITHOOK` for.
+pub type Committing = fn() -> bool;
+
+/// The function `sqlite3_rollback_hook` told the connection, which
+/// `sqlite3RollbackAll` of `research/sqlite/src/main.c:1535` tells where
+/// a transaction that had written goes back.
+pub type Rolling = fn();
+
+/// What a statement did to one row of a table that keeps a key of its
+/// own, which the connection tells the function
+/// `sqlite3_update_hook` told it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Did {
+    /// The statement wrote the row.
+    Insert,
+    /// The statement changed the row.
+    Update,
+    /// The statement took the row away.
+    Delete,
+}
+
+impl Did {
+    /// The word of the action, which is what the second argument of the
+    /// function stands for.
+    #[must_use]
+    pub const fn word(self) -> &'static [u8] {
+        match self {
+            Did::Insert => b"INSERT",
+            Did::Update => b"UPDATE",
+            Did::Delete => b"DELETE",
+        }
+    }
+}
+
+/// One row a statement wrote, as the connection tells it.
+pub struct Wrote<'a> {
+    /// What the statement did to the row.
+    pub did: Did,
+    /// The name of the database that holds the table.
+    pub schema: &'a [u8],
+    /// The name of the table.
+    pub table: &'a [u8],
+    /// The key of the row.
+    pub rowid: i64,
+}
+
+/// The function `sqlite3_update_hook` told the connection, which every
+/// row a statement writes in a table that keeps a key of its own tells.
+///
+/// `sqlite3_update_hook` of `research/sqlite/src/main.c:2439` reaches no
+/// row of a `WITHOUT ROWID` table and no row of a table the library keeps
+/// for itself.
+pub type Writing = fn(&Wrote<'_>);
+
 /// A database being written, statement by statement.
 pub struct Writer {
     /// The file the statement running now writes, which is `main` where
@@ -595,6 +654,16 @@ pub struct Writer {
     /// The function `sqlite3_set_authorizer` told the connection, which
     /// every statement is read against before it runs.
     asking: Option<crate::auth::Asking>,
+    /// The function `sqlite3_commit_hook` told the connection, which a
+    /// transaction that wrote a page asks before it writes.
+    committing: Option<Committing>,
+    /// The function `sqlite3_rollback_hook` told the connection, which a
+    /// transaction that goes back tells.
+    rolling: Option<Rolling>,
+    /// The function `sqlite3_update_hook` told the connection, which
+    /// every row a statement writes in a table that keeps a key of its
+    /// own tells.
+    writes: Option<Writing>,
     /// The columns of the `UPDATE` running now that the function
     /// ignored, which keep the value they had.
     unwritten: Vec<Vec<u8>>,
@@ -725,6 +794,9 @@ impl Writer {
             running: Vec::new(),
             truth: Truths::default(),
             asking: None,
+            committing: None,
+            rolling: None,
+            writes: None,
             unwritten: Vec::new(),
             counted: crate::func::Counted::default(),
             writing: 0,
@@ -785,6 +857,9 @@ impl Writer {
             running: Vec::new(),
             truth: Truths::default(),
             asking: None,
+            committing: None,
+            rolling: None,
+            writes: None,
             unwritten: Vec::new(),
             counted: crate::func::Counted::default(),
             writing: 0,
@@ -2479,9 +2554,16 @@ impl Writer {
                     self.deferred = 0;
                     self.held.pages.rollback();
                     self.held.header = was;
+                    self.tells_rollback();
                     return Err(error);
                 }
                 if matches!(self.refusing, Refusing::Abort) {
+                    // A statement of its own that leaves the file as it
+                    // found it sends its own transaction back, which
+                    // `sqlite3RollbackAll` tells the rollback hook of
+                    // where the statement had written a page.
+                    let wrote = self.held.began.is_none()
+                        && (self.held.pages.changed() || ran_refusal(&error));
                     if self.held.began.is_none() {
                         self.held.pages.rollback();
                     } else {
@@ -2489,6 +2571,9 @@ impl Writer {
                     }
                     self.held.header = held;
                     self.deferred = counted;
+                    if wrote {
+                        self.tells_rollback();
+                    }
                 }
                 return Err(error);
             }
@@ -2505,6 +2590,16 @@ impl Writer {
                 self.held.header = held;
                 self.counts_step(0);
                 return Err(Error::Foreign);
+            }
+            // `sqlite3VdbeHalt`: the commit hook is asked where the
+            // statement wrote a page, and a true answer sends the
+            // transaction back.
+            if self.refuses_commit() {
+                self.held.pages.rollback();
+                self.held.header = held;
+                self.counts_step(0);
+                self.tells_rollback();
+                return Err(Error::CommitHook);
             }
             self.commit(&was)?;
         }
@@ -2733,6 +2828,13 @@ impl Writer {
                     self.refusing = Refusing::Fail;
                     return Err(Error::Foreign);
                 }
+                if self.refuses_commit() {
+                    self.saved.clear();
+                    self.deferred = 0;
+                    self.rolled_back();
+                    self.tells_rollback();
+                    return Err(Error::CommitHook);
+                }
                 self.saved.clear();
                 self.committed()?;
             }
@@ -2743,6 +2845,7 @@ impl Writer {
                 self.saved.clear();
                 self.deferred = 0;
                 self.rolled_back();
+                self.tells_rollback();
             }
         }
         Ok(Vec::new())
@@ -2898,6 +3001,52 @@ impl Writer {
         Ok(())
     }
 
+    /// Whether the function `sqlite3_commit_hook` told the connection
+    /// refuses the commit.
+    ///
+    /// `sqlite3VdbeHalt` of `research/sqlite/src/vdbeaux.c:2982` asks
+    /// the function only where a database of the connection carries a
+    /// transaction that wrote, which is `needXcommit`. Reading that
+    /// costs O(1) per database the connection holds.
+    fn refuses_commit(&mut self) -> bool {
+        let Some(committing) = self.committing else {
+            return false;
+        };
+        let wrote =
+            Self::files_mut(&mut self.held, &mut self.attached).any(|held| held.pages.changed());
+        wrote && committing()
+    }
+
+    /// Tells the function `sqlite3_rollback_hook` told the connection
+    /// that a transaction went back, which `sqlite3RollbackAll` of
+    /// `research/sqlite/src/main.c:1535` does.
+    fn tells_rollback(&self) {
+        if let Some(rolling) = self.rolling {
+            rolling();
+        }
+    }
+
+    /// Tells the function `sqlite3_update_hook` told the connection of one
+    /// row a statement wrote, which costs O(1).
+    ///
+    /// The three callers are the paths that write a table keeping a key
+    /// of its own, so a row of a `WITHOUT ROWID` table reaches no
+    /// function; `sqlite_master` and `sqlite_sequence` are written by
+    /// paths of their own and reach none either, which is
+    /// `OP_Insert` of `research/sqlite/src/vdbe.c:5779` carrying the
+    /// table in `p4` for the statements the hook is told of alone.
+    fn tells_write(&self, did: Did, table: &Table, rowid: i64) {
+        let Some(writing) = self.writes else {
+            return;
+        };
+        writing(&Wrote {
+            did,
+            schema: &self.called.name,
+            table: &table.name,
+            rowid,
+        });
+    }
+
     /// Every database the connection holds back where its transaction
     /// began, which is what a `ROLLBACK` writes.
     fn rolled_back(&mut self) {
@@ -2923,6 +3072,29 @@ impl Writer {
     fn commit(&mut self, was: &Header) -> Result<(), Error> {
         commit_file(&mut self.held, was)
     }
+}
+
+/// Whether the refusal came while the statement ran rather than while the
+/// connection read it, which says the statement had opened a transaction
+/// that writes.
+///
+/// `sqlite3RollbackAll` of `research/sqlite/src/main.c:1495` tells the
+/// rollback hook where `inTrans` stands, and the C library opens the
+/// transaction that writes after it has read the statement and found the
+/// objects it names, so a constraint the row breaks carries one and a
+/// statement the connection could not read carries none.
+const fn ran_refusal(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::Unique(_)
+            | Error::NotNull(_)
+            | Error::Check(_)
+            | Error::Foreign
+            | Error::ForeignMismatch(..)
+            | Error::StoredType(..)
+            | Error::Constraint
+            | Error::HeldConstraint(_)
+    )
 }
 
 /// What the transaction wrote on one database, written: the file is cut
@@ -3615,6 +3787,42 @@ impl Writer {
     /// `sqlite3_set_authorizer` with a null pointer.
     pub const fn asks_nothing(&mut self) {
         self.asking = None;
+    }
+
+    /// The function `sqlite3_commit_hook` told this connection, which
+    /// the connection asks where a transaction that wrote a page ends.
+    pub const fn commits(&mut self, committing: Committing) {
+        self.committing = Some(committing);
+    }
+
+    /// The same, with the connection told no function, which is
+    /// `sqlite3_commit_hook` with a null pointer.
+    pub const fn commits_nothing(&mut self) {
+        self.committing = None;
+    }
+
+    /// The function `sqlite3_rollback_hook` told this connection, which
+    /// the connection tells where a transaction goes back.
+    pub const fn rolls_back(&mut self, rolling: Rolling) {
+        self.rolling = Some(rolling);
+    }
+
+    /// The same, with the connection told no function, which is
+    /// `sqlite3_rollback_hook` with a null pointer.
+    pub const fn rolls_back_nothing(&mut self) {
+        self.rolling = None;
+    }
+
+    /// The function `sqlite3_update_hook` told this connection, which the
+    /// connection tells of every row a statement writes.
+    pub const fn writes_rows(&mut self, writing: Writing) {
+        self.writes = Some(writing);
+    }
+
+    /// The same, with the connection told no function, which is
+    /// `sqlite3_update_hook` with a null pointer.
+    pub const fn writes_nothing(&mut self) {
+        self.writes = None;
     }
 
     /// The database at `at` of the list becomes the one the connection
@@ -6396,6 +6604,7 @@ impl Writer {
         self.parented(table, named, rowid)?;
         self.index_row(kept, table, named, &keyed_as(rowid))?;
         insert(&mut self.held.pages, root, rowid, &record)?;
+        self.tells_write(Did::Insert, table, rowid);
         Ok(())
     }
 
@@ -7656,6 +7865,7 @@ impl Writer {
             self.orphaned(&name, &table, &values, key, None)?;
             self.unindex_row(&kept, &table, &values, &keyed_as(key))?;
             crate::tree::remove(&mut self.held.pages, root, key)?;
+            self.tells_write(Did::Delete, &table, key);
             taken = taken.saturating_add(1);
             self.writing = taken;
             let answered = (&table, values.as_slice(), Some(key));
@@ -7908,6 +8118,7 @@ impl Writer {
             } else {
                 crate::tree::update(&mut self.held.pages, root, rowid, &record)?;
             }
+            self.tells_write(Did::Update, &table, key);
             changed = changed.saturating_add(1);
             self.writing = changed;
             self.returns(arena, statement.returning, sql, (&table, &named, Some(key)))?;

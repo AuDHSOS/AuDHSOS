@@ -371,6 +371,9 @@ pub enum Error {
     /// the table it names and carry no unique index of their own,
     /// which `sqlite3FkLocateIndex` refuses as `foreign key mismatch`.
     ForeignMismatch(Vec<u8>, Vec<u8>),
+    /// The function `sqlite3_commit_hook` told the connection answered
+    /// true, which sends the transaction back.
+    CommitHook,
 }
 
 impl Error {
@@ -639,7 +642,7 @@ impl Error {
                 "constraint may not be dropped: {}",
                 alloc::string::String::from_utf8_lossy(name)
             ),
-            Error::Constraint => "constraint failed".to_string(),
+            Error::Constraint | Error::CommitHook => "constraint failed".to_string(),
             Error::HeldConstraint(name) => alloc::format!(
                 "constraint {} already exists",
                 alloc::string::String::from_utf8_lossy(name)
@@ -678,6 +681,7 @@ impl Error {
                 Code::broke(787, b"SQLITE_CONSTRAINT_FOREIGNKEY")
             }
             Error::StoredType(..) => Code::broke(3091, b"SQLITE_CONSTRAINT_DATATYPE"),
+            Error::CommitHook => Code::broke(531, b"SQLITE_CONSTRAINT_COMMITHOOK"),
             Error::Constraint | Error::HeldConstraint(_) => Code::plain(19, b"SQLITE_CONSTRAINT"),
             Error::Auth(_) => Code::plain(23, b"SQLITE_AUTH"),
             Error::Mismatch => Code::plain(20, b"SQLITE_MISMATCH"),

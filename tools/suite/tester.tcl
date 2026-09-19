@@ -149,6 +149,23 @@ proc harness_call {kind vals} {
     if {[catch { uplevel #0 $cmd } out]} { return [list SQLITE_DENY] }
     return [list $out]
   }
+  # `sqlite3_commit_hook` and `sqlite3_rollback_hook` name one script
+  # per connection, which the first value names. A script that raises
+  # answers nought, which lets the commit stand.
+  if {$kind eq "update_hook"} {
+    set who [lindex $vals 0]
+    if {![info exists ::hooks($who,update_hook)]} { return [list 0] }
+    set cmd $::hooks($who,update_hook)
+    foreach v [lrange $vals 1 end] { lappend cmd $v }
+    catch { uplevel #0 $cmd }
+    return [list 0]
+  }
+  if {$kind eq "commit_hook" || $kind eq "rollback_hook"} {
+    set who [lindex $vals 0]
+    if {![info exists ::hooks($who,$kind)]} { return [list 0] }
+    if {[catch { uplevel #0 $::hooks($who,$kind) } out]} { return [list 0] }
+    return [list $out]
+  }
   set name [lindex $vals 0]
   if {$kind eq "collate"} {
     set cmd $::collations($name)
@@ -731,8 +748,26 @@ proc sqlite3 {args} {
         }
         return {}
       }
-      bind_fallback - busy - commit_hook - profile - rollback_hook -
-      trace - unlock_notify - update_hook - wal_hook {
+      commit_hook - rollback_hook - update_hook {
+        # `sqlite3_commit_hook`, `sqlite3_rollback_hook` and
+        # `sqlite3_update_hook`: the engine asks the script where a
+        # transaction ends or goes back and tells it of each row a
+        # statement wrote, so the connection is told whether one stands.
+        if {[llength $args] == 0} {
+          if {[info exists ::hooks(%N%,$method)]} { return $::hooks(%N%,$method) }
+          return {}
+        }
+        set held [lindex $args 0]
+        if {$held eq ""} {
+          catch { unset ::hooks(%N%,$method) }
+        } else {
+          set ::hooks(%N%,$method) $held
+        }
+        harness_send $method %N% $held
+        return {}
+      }
+      bind_fallback - busy - profile -
+      trace - unlock_notify - wal_hook {
         # A callback the connection holds, which the method answers
         # where no script follows it.
         if {[llength $args] == 0} {
