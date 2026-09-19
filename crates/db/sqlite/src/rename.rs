@@ -31,7 +31,12 @@ pub fn places(sql: &[u8], table: &[u8]) -> Vec<Span> {
     };
     let mut out = Vec::new();
     match definition {
-        Definition::Table(made) if same(made.name.text(sql), table) => out.push(made.name),
+        Definition::Table(made) => {
+            if same(made.name.text(sql), table) {
+                out.push(made.name);
+            }
+            parents(&arena, &made, sql, table, &mut out);
+        }
         Definition::Index(made) if same(made.table.text(sql), table) => out.push(made.table),
         Definition::Trigger(made) if same(made.table.text(sql), table) => out.push(made.table),
         _ => {}
@@ -68,6 +73,45 @@ pub fn places(sql: &[u8], table: &[u8]) -> Vec<Span> {
     out.sort_unstable_by_key(|span| span.start);
     out.dedup_by_key(|span| span.start);
     out
+}
+
+/// Where a `CREATE TABLE` names `table` as the parent of a foreign key,
+/// which is `renameParentFunc` of `research/sqlite/src/alter.c:848`
+/// marking the `REFERENCES` clauses of one statement.
+///
+/// A column carries one such clause and a table constraint carries one
+/// each, so reading them costs O(n) in the columns and the constraints.
+fn parents(
+    arena: &Arena,
+    made: &crate::ast::CreateTable,
+    sql: &[u8],
+    table: &[u8],
+    out: &mut Vec<Span>,
+) {
+    let crate::ast::TableBody::Columns {
+        columns,
+        constraints,
+    } = made.body
+    else {
+        return;
+    };
+    let mut mark = |foreign: crate::ast::Foreign| {
+        if same(foreign.table.text(sql), table) {
+            out.push(foreign.table);
+        }
+    };
+    for column in arena.columns(columns) {
+        for constraint in arena.column_constraints(column.constraints) {
+            if let crate::ast::ColumnConstraint::References(foreign) = constraint {
+                mark(*foreign);
+            }
+        }
+    }
+    for constraint in arena.table_constraints(constraints) {
+        if let crate::ast::TableConstraint::ForeignKey { foreign, .. } = constraint {
+            mark(*foreign);
+        }
+    }
 }
 
 /// The name written as `sqlite3_mprintf("\"%w\"")` writes it: in double

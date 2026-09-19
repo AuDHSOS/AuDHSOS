@@ -7,6 +7,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` writes the new name at every `REFERENCES` clause of the
+  schema that named a table `ALTER TABLE ... RENAME TO` renames. D-321
+  records it. Catalog 6.6.217. `fkey2.test` goes from 1029 cases passing
+  to 1030.
+
+- The suite's own harness answers `sqlite3_next_stmt`, binds the first
+  `BYTES` bytes of what `sqlite3_bind_text` was given, and reads the
+  UTF-16 text of `sqlite3_bind_text16` and `sqlite3_prepare16` back as
+  UTF-8. D-319 and D-320 record it. Catalog 6.6.216. `capi3d.test` goes
+  from 0 cases passing to 201 and `enc4.test` from 406 to 1102.
+
 - `db-sqlite` reads `X REGEXP Y` and `X MATCH Y` as calls of the function
   the application defined under that name. D-318 records it. Catalog
   6.6.215. `e_expr.test` goes from 374 cases passing to 7280.

@@ -248,6 +248,30 @@ fn every_place_a_statement_names_the_table() {
     );
 }
 
+/// Where a `CREATE TABLE` names the table as the parent of a foreign
+/// key, which `ALTER TABLE ... RENAME TO` writes the new name at.
+#[test]
+fn every_place_a_foreign_key_names_the_parent() {
+    // A column's own `REFERENCES`, the table's own name beside it, and
+    // a `FOREIGN KEY` clause of the table.
+    let sql = b"CREATE TABLE t(a PRIMARY KEY, b REFERENCES t, c, FOREIGN KEY(c) REFERENCES t(a))";
+    let places = crate::rename::places(sql, b"t");
+    assert_eq!(places.len(), 3);
+    assert_eq!(
+        crate::rename::written(sql, &places, b"u"),
+        b"CREATE TABLE \"u\"(a PRIMARY KEY, b REFERENCES \"u\", c, FOREIGN KEY(c) REFERENCES \"u\"(a))"
+            .to_vec()
+    );
+    // A key that names another table is left as it is, and so is a
+    // table whose columns come out of a statement.
+    let sql = b"CREATE TABLE other(a REFERENCES third, UNIQUE(a), FOREIGN KEY(a) REFERENCES third)";
+    assert_eq!(crate::rename::places(sql, b"t"), Vec::new());
+    assert_eq!(
+        crate::rename::places(b"CREATE TABLE other AS SELECT 1", b"t"),
+        Vec::new()
+    );
+}
+
 #[test]
 fn a_statement_that_names_another_table_names_nothing_of_this_one() {
     for sql in [

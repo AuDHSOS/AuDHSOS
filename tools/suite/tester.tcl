@@ -575,7 +575,7 @@ foreach cmd {
   file_control_tempfilename file_control_external_reader
   speed_trial speed_trial_init speed_trial_summary
   tcl_variable_type
-  sqlite3_db_filename sqlite3_next_stmt sqlite3_stmt_readonly
+  sqlite3_db_filename sqlite3_stmt_readonly
   vfs_unlink_test vfs_shared_errors
   add_alignment_test_collations add_test_collate add_test_function
   add_test_utf16bin_collate autoinstall_test_functions
@@ -756,14 +756,26 @@ proc sqlite3_prepare_v2 {db sql bytes {tailvar ""}} {
 proc sqlite3_prepare_v3 {db sql bytes flags {tailvar ""}} {
   return [harness_prepare $db $sql $tailvar 0]
 }
+# `sqlite3_prepare16` is given the statement as UTF-16, which a file
+# writes with `encoding convertto unicode` and ends in two nulls. The
+# engine reads UTF-8, so the text is read back and the nulls dropped.
+proc harness_utf8 {sql} {
+  return [string trimright [encoding convertfrom unicode $sql] "\x00"]
+}
 proc sqlite3_prepare16 {db sql bytes {tailvar ""}} {
-  return [harness_prepare $db $sql $tailvar 1]
+  return [harness_prepare $db [harness_utf8 $sql] $tailvar 1]
 }
 proc sqlite3_prepare16_v2 {db sql bytes {tailvar ""}} {
-  return [harness_prepare $db $sql $tailvar 0]
+  return [harness_prepare $db [harness_utf8 $sql] $tailvar 0]
 }
 proc sqlite3_prepare16_v3 {db sql bytes flags {tailvar ""}} {
-  return [harness_prepare $db $sql $tailvar 0]
+  return [harness_prepare $db [harness_utf8 $sql] $tailvar 0]
+}
+
+# `sqlite3_next_stmt DB STMT`: the statement after the one named, and
+# the first where the name is `0`.
+proc sqlite3_next_stmt {db stmt} {
+  return [lindex [harness_send next_stmt $db $stmt] 0]
 }
 proc sqlite3_step {stmt} {
   set answered [harness_try step $stmt]
@@ -814,12 +826,27 @@ proc sqlite3_bind_int {stmt at value} { harness_send bind $stmt $at $value ; ret
 proc sqlite3_bind_int64 {stmt at value} { harness_send bind $stmt $at $value ; return {} }
 proc sqlite3_bind_double {stmt at value} { harness_send bind $stmt $at $value ; return {} }
 proc sqlite3_bind_null {stmt at} { harness_send bind $stmt $at NULL ; return {} }
+# The first `$bytes` bytes of a value, and the whole of it where the
+# count is negative or absent, which is what `nByte` of
+# `sqlite3_bind_text` names.
+proc harness_bytes {value bytes} {
+  if {$bytes eq "" || $bytes < 0} { return $value }
+  return [string range $value 0 [expr {$bytes - 1}]]
+}
 proc sqlite3_bind_text {stmt at value args} {
-  harness_send bind $stmt $at '[string map {' ''} $value]'
+  set held [harness_bytes $value [lindex $args 0]]
+  harness_send bind $stmt $at '[string map {' ''} $held]'
   return {}
 }
-proc sqlite3_bind_text16 {args} { return [eval sqlite3_bind_text $args] }
-proc sqlite3_bind_blob {stmt at value args} { return [eval sqlite3_bind_text [list $stmt $at $value]] }
+# `sqlite3_bind_text16` counts the bytes of the UTF-16 text, so two per
+# character, and the engine reads UTF-8.
+proc sqlite3_bind_text16 {stmt at value args} {
+  set held [harness_bytes $value [lindex $args 0]]
+  return [sqlite3_bind_text $stmt $at [harness_utf8 $held] -1]
+}
+proc sqlite3_bind_blob {stmt at value args} {
+  return [sqlite3_bind_text $stmt $at $value [lindex $args 0]]
+}
 proc sqlite3_bind_parameter_count {stmt} { return [lindex [harness_send stmt $stmt binds] 0] }
 proc sqlite3_bind_parameter_name {stmt at} {
   return [lindex [harness_send stmt $stmt parameter $at] 0]

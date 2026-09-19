@@ -814,7 +814,7 @@ impl Session {
             // `sqlite3_prepare` and the commands that read a statement
             // it answered.
             "prepare" | "autocommit" | "step" | "finalize" | "reset" | "clear_binds" | "bind"
-            | "column" | "stmt" => self.of_statement(verb, args),
+            | "column" | "stmt" | "next_stmt" => self.of_statement(verb, args),
             // `sqlite3_errcode` and `sqlite3_extended_errcode`.
             "errcode" => Ok(alloc_one(&last_code(first))),
             // `sqlite3_normalize SQL`, which is the same statement in
@@ -1136,6 +1136,7 @@ impl Session {
             "clear_binds" => Ok(self.reset_statement(first, true)),
             "bind" => self.bind(first, second, third),
             "column" => self.column(first, second, third),
+            "next_stmt" => Ok(self.next_statement(first, second)),
             _ => self.stmt_text(first, second, third),
         }
     }
@@ -1195,6 +1196,24 @@ impl Session {
         let name = format!("{:08X}", self.prepared.saturating_add(0x1000_0000));
         self.statements.insert(name.clone(), prepared);
         vec![name, tail, String::new()]
+    }
+
+    /// `sqlite3_next_stmt DB STMT`: the name of the statement of
+    /// `connection` that stands after `after`, and the first one where
+    /// `after` is `0`, which is how a file reads every statement a
+    /// connection holds. Nothing stands after the last one.
+    ///
+    /// The names are read in the order they were made, which is the
+    /// order of the map, so a walk over them costs O(n log n) in the
+    /// statements the session holds.
+    fn next_statement(&self, connection: &str, after: &str) -> Vec<String> {
+        let held: Vec<String> = self
+            .statements
+            .iter()
+            .filter(|(_, prepared)| prepared.connection == connection)
+            .map(|(name, _)| name.clone())
+            .collect();
+        alloc_one(&after_name(&held, after))
     }
 
     /// The names a statement of `connection` may read, which are the
@@ -2376,6 +2395,23 @@ fn first_words(sql: &str) -> String {
         .map(str::to_uppercase)
         .collect::<Vec<String>>()
         .join(" ")
+}
+
+/// The name that stands after `after` in `held`, and the first one where
+/// `after` is `0` or nothing, which is what `sqlite3_next_stmt` answers.
+/// Nothing stands after the last name, and nothing after a name `held`
+/// does not carry.
+///
+/// Reading the names costs O(n) in their number.
+pub(crate) fn after_name(held: &[String], after: &str) -> String {
+    let at = match after {
+        "" | "0" => Some(0),
+        _ => held
+            .iter()
+            .position(|name| name == after)
+            .map(|at| at.saturating_add(1)),
+    };
+    at.and_then(|at| held.get(at)).cloned().unwrap_or_default()
 }
 
 /// A `PRAGMA` goes to the connection either way, because a connection

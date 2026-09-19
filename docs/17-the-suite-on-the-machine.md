@@ -54,17 +54,18 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-99 811 cases of 786 files: 85 792 pass, 4014 answer differently and
-10 005 are refused.
+106 748 cases of 786 files: 93 630 pass, 3317 answer differently and
+9801 are refused.
 
-What the 10 005 refusals are for, most first: `db status` (2104), which
+What the 9801 refusals are for, most first: `db status` (2104), which
 answers counters of memory and of the page cache; `sqlite3_memdebug_fail`
 (1260), which fails one allocation of the C library; `crash_on_write`
 (960) and the crash the harness does not simulate (435); a table an
 earlier refusal left unmade (743); `EXPLAIN` and `EXPLAIN QUERY PLAN`
 (632), which name the program a statement compiles to; a connection an
 earlier case left inside a transaction (626); a statement the engine
-does not read (349); and `sqlite3_next_stmt` (201).
+does not read (350); and `ATTACH` (118), which opens a second file on
+one connection.
 
 `--configuration` opens every connection of a run under one of nine
 page-size, encoding and journal-mode settings, which D-275 decides.
@@ -72,7 +73,7 @@ What each answers, over the same files:
 
 | Configuration | Passed | Answered differently | Refused |
 |---------------|-------:|---------------------:|--------:|
-| `utf8-4096-delete` | 85 792 | 4014 | 10 005 |
+| `utf8-4096-delete` | 93 630 | 3317 | 9801 |
 | `utf16le-4096-delete` | 61 214 | 2392 | 9500 |
 | `utf16be-4096-delete` | 61 229 | 2392 | 9500 |
 | `utf8-512-delete` | 61 073 | 2452 | 9435 |
@@ -84,15 +85,15 @@ What each answers, over the same files:
 
 The counts move between runs of one configuration only where a file
 reaches the deadline, which D-302 sets at three minutes. Only the
-first row is a run after D-286 to D-317, the fourth one after D-296; the
+first row is a run after D-286 to D-320, the fourth one after D-296; the
 other seven were measured before them and are lower than they would read
 now.
 `testfixture` is built with `SQLITE_DEFAULT_PAGE_SIZE=1024`, which
 `main.mk` line 1784 sets, so the fourth row is the page size the files
-were written for; it scores 269 cases below the first.
+were written for.
 
 One row is behind the others by more than that: `utf8-4096-wal` refuses
-786 more than `utf8-4096-delete`, which a connection in write-ahead
+493 more than `utf8-4096-delete`, which a connection in write-ahead
 logging reads its newest pages out of the log for.
 
 ## 17.4 What is missing
@@ -380,6 +381,12 @@ Size: S.
     the empty string.
 13. A connection that closes leaves the file it read no transaction,
     which `sqlite3_close` rolls back.
+14. `sqlite3_next_stmt` answers the statements the harness holds for one
+    connection, in the order it made them, which D-319 records.
+15. `sqlite3_bind_text` and `sqlite3_bind_blob` bind the first `BYTES`
+    bytes of the value, and `sqlite3_bind_text16` and `sqlite3_prepare16`
+    read the UTF-16 text they are given back as UTF-8, which D-320
+    records.
 
 ### Produces
 

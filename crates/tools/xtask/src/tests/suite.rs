@@ -222,3 +222,22 @@ fn what_is_bound_is_written_into_the_statement_as_a_literal() {
     held.insert(1, "7".to_owned());
     assert_eq!(bound_into("SELECT :a + :a", &held), "SELECT 7 + 7");
 }
+
+/// The name `sqlite3_next_stmt` answers for each name a connection
+/// holds, which is a walk over them from the first to the last.
+#[test]
+fn the_statement_after_one_is_the_next_name_the_connection_holds() {
+    use crate::suite::after_name;
+    let held: Vec<String> = ["A", "B", "C"]
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect();
+    assert_eq!(after_name(&held, "0"), "A");
+    assert_eq!(after_name(&held, ""), "A");
+    assert_eq!(after_name(&held, "A"), "B");
+    assert_eq!(after_name(&held, "C"), "");
+    // A name the connection does not hold has nothing after it, and a
+    // connection that holds none answers nothing for the first.
+    assert_eq!(after_name(&held, "Z"), "");
+    assert_eq!(after_name(&[], "0"), "");
+}

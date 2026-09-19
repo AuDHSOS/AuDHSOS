@@ -6151,3 +6151,22 @@ Document 16 step Q8.
 - `NOT REGEXP` answers the rows the function did not hold for.
 - A row of nothing answers nothing either way.
 - A statement that writes reaches the same function.
+
+### 6.6.216 The statement after one the connection holds (`xtask`)
+
+Document 17 step T5.
+
+- The first name answers where the one given is `0` or nothing.
+- The name after each one answers, and nothing after the last.
+- A name the connection does not hold has nothing after it.
+- A connection that holds no statement answers nothing for the first.
+
+### 6.6.217 The parent a foreign key names under a rename (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A column's own `REFERENCES` and a `FOREIGN KEY` clause of the table
+  both carry the new name.
+- A table that names itself is written again with its own new name.
+- A key that names another table is left as it is.
+- A table whose columns come out of a `SELECT` carries no key.

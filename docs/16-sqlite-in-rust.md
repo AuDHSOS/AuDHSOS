@@ -871,6 +871,9 @@ Size: L.
     `sqlite3_column_origin_name` are not answered.
 76. `REGEXP` and `MATCH`, which reach the function the application
     defined under that name. Built, which D-318 records.
+77. The parent a foreign key names, written again where
+    `ALTER TABLE ... RENAME TO` renames that table. Built, which D-321
+    records.
 
 ### Done when
 
@@ -880,8 +883,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 99 811 cases in 786 files, 85 792
-pass, 4014 answer differently, and 10 005 name something the engine
+under the `tclsh` of the machine. Of 106 748 cases in 786 files, 93 630
+pass, 3317 answer differently, and 9801 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the three-minute
 deadline and are counted with the cases they ran by then. One run over
