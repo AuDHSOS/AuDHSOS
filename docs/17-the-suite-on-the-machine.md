@@ -47,6 +47,8 @@ At the end of the track, three things are true that are not true now:
 | `db_sqlite::db::Database` | A connection that reads, opened over the bytes the writer holds. | D-172 |
 | `process::Cmd` | Runs a program and reads what it writes. | Phase 2 |
 | `suite::CONFIGURATIONS` | The nine page-size, encoding and journal-mode configurations `--configuration` opens a connection under. | D-275 |
+| `suite::Prepared` | One statement the tester prepared, which it steps and reads the columns of. | D-314 |
+| `db_sqlite::auth::Authorizer` | The reading of one statement against the function `sqlite3_set_authorizer` told the connection. | D-313 |
 
 Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724

@@ -532,9 +532,7 @@ foreach cmd {
   sqlite3_config sqlite3_db_config
   sqlite3_db_status sqlite3_status
   sqlite3_reset_auto_extension sqlite3_create_function sqlite3_limit
-  sqlite3_extended_result_codes sqlite3_prepare
-  sqlite3_prepare_v2 sqlite3_prepare_v3 sqlite3_finalize sqlite3_step
-  sqlite3_column_count sqlite3_errcode sqlite3_errmsg sqlite3_bind_parameter_count
+  sqlite3_extended_result_codes
   sqlite3_enable_shared_cache sqlite3_release_memory sqlite3_db_release_memory
   sqlite3_memdebug_vfs_oom_test sqlite3_memdebug_settitle sqlite3_memdebug_fail
   sqlite3_memdebug_pending sqlite3_memdebug_log sqlite3_stmt_status
@@ -680,6 +678,127 @@ proc sqlite3_soft_heap_limit64 {args} { return 0 }
 proc sqlite3_config_uri {args} { return 0 }
 proc sqlite3_register_cksumvfs {args} { return 0 }
 proc sqlite3_multiplex_initialize {args} { return 0 }
+
+# `sqlite3_prepare` and the commands that read a statement it answered.
+# The harness holds the statement under a name, which stands for the
+# pointer the C library answers. The message of the last request is kept
+# so that `sqlite3_errmsg` answers it.
+set ::harness_error ""
+set ::harness_code SQLITE_OK
+
+# One request whose error is kept rather than raised, which is how a
+# command that answers a code rather than raising is written.
+proc harness_try {verb args} {
+  set ::harness_error ""
+  set ::harness_code SQLITE_OK
+  if {[catch { eval harness_send [list $verb] $args } out]} {
+    set ::harness_error $out
+    set ::harness_code SQLITE_ERROR
+    return ""
+  }
+  return $out
+}
+
+# `sqlite3_prepare DB SQL BYTES ?TAILVAR?`: the name of the statement,
+# with the text after it written into the variable the caller names. A
+# statement the engine refuses raises `(code) message`, which is what
+# `test_prepare` of `research/sqlite/src/test1.c` writes.
+proc harness_prepare {db sql tailvar} {
+  set answered [harness_try prepare $db $sql]
+  if {$tailvar ne ""} {
+    upvar 2 $tailvar tail
+    set tail [lindex $answered 1]
+  }
+  if {$::harness_code ne "SQLITE_OK"} { error "(1) $::harness_error" }
+  return [lindex $answered 0]
+}
+proc sqlite3_prepare {db sql bytes {tailvar ""}} {
+  return [harness_prepare $db $sql $tailvar]
+}
+proc sqlite3_prepare_v2 {db sql bytes {tailvar ""}} {
+  return [harness_prepare $db $sql $tailvar]
+}
+proc sqlite3_prepare_v3 {db sql bytes flags {tailvar ""}} {
+  return [harness_prepare $db $sql $tailvar]
+}
+proc sqlite3_prepare16 {db sql bytes {tailvar ""}} {
+  return [harness_prepare $db $sql $tailvar]
+}
+proc sqlite3_prepare16_v2 {db sql bytes {tailvar ""}} {
+  return [harness_prepare $db $sql $tailvar]
+}
+proc sqlite3_prepare16_v3 {db sql bytes flags {tailvar ""}} {
+  return [harness_prepare $db $sql $tailvar]
+}
+proc sqlite3_step {stmt} {
+  set answered [harness_try step $stmt]
+  if {$::harness_code ne "SQLITE_OK"} { return SQLITE_ERROR }
+  return [lindex $answered 0]
+}
+proc sqlite3_finalize {stmt} {
+  set held $::harness_code
+  harness_send finalize $stmt
+  if {$held ne "SQLITE_OK"} { return SQLITE_ERROR }
+  return SQLITE_OK
+}
+proc sqlite3_reset {stmt} {
+  set held $::harness_code
+  harness_send reset $stmt
+  set ::harness_code SQLITE_OK
+  if {$held ne "SQLITE_OK"} { return SQLITE_ERROR }
+  return SQLITE_OK
+}
+proc sqlite3_clear_bindings {stmt} { return [harness_send clear_binds $stmt] }
+proc sqlite3_column_count {stmt} { return [lindex [harness_send column $stmt count 0] 0] }
+proc sqlite3_data_count {stmt} { return [lindex [harness_send column $stmt data 0] 0] }
+proc sqlite3_column_name {stmt at} { return [lindex [harness_send column $stmt name $at] 0] }
+proc sqlite3_column_name16 {stmt at} { return [sqlite3_column_name $stmt $at] }
+proc sqlite3_column_type {stmt at} { return [lindex [harness_send column $stmt type $at] 0] }
+proc sqlite3_column_int {stmt at} { return [lindex [harness_send column $stmt int $at] 0] }
+proc sqlite3_column_int64 {stmt at} { return [sqlite3_column_int $stmt $at] }
+proc sqlite3_column_double {stmt at} { return [lindex [harness_send column $stmt double $at] 0] }
+proc sqlite3_column_text {stmt at} { return [lindex [harness_send column $stmt text $at] 0] }
+proc sqlite3_column_text16 {stmt at} { return [sqlite3_column_text $stmt $at] }
+proc sqlite3_column_blob {stmt at} { return [sqlite3_column_text $stmt $at] }
+proc sqlite3_column_bytes {stmt at} { return [string length [sqlite3_column_text $stmt $at]] }
+proc sqlite3_column_bytes16 {stmt at} { return [expr {2*[sqlite3_column_bytes $stmt $at]}] }
+proc sqlite3_bind_int {stmt at value} { return [harness_send bind $stmt $at $value] }
+proc sqlite3_bind_int64 {stmt at value} { return [harness_send bind $stmt $at $value] }
+proc sqlite3_bind_double {stmt at value} { return [harness_send bind $stmt $at $value] }
+proc sqlite3_bind_null {stmt at} { return [harness_send bind $stmt $at NULL] }
+proc sqlite3_bind_text {stmt at value args} {
+  return [harness_send bind $stmt $at '[string map {' ''} $value]']
+}
+proc sqlite3_bind_text16 {args} { return [eval sqlite3_bind_text $args] }
+proc sqlite3_bind_blob {stmt at value args} { return [eval sqlite3_bind_text [list $stmt $at $value]] }
+proc sqlite3_bind_parameter_count {stmt} { return [lindex [harness_send stmt $stmt binds] 0] }
+proc sqlite3_bind_parameter_name {stmt at} {
+  return [lindex [harness_send stmt $stmt parameter $at] 0]
+}
+proc sqlite3_bind_parameter_index {stmt name} {
+  return [lindex [harness_send stmt $stmt index $name] 0]
+}
+
+# `sqlite_bind VM IDX VALUE TYPE` of `research/sqlite/src/test1.c`: the
+# value one parameter stands for, with `null` for nothing and the other
+# three words for a text.
+proc sqlite_bind {stmt at value type} {
+  if {$type eq "null"} { return [sqlite3_bind_null $stmt $at] }
+  if {$type eq "blob10"} { return [harness_send bind $stmt $at x'00000000000000000000'] }
+  if {[string match "static*" $type]} {
+    return [sqlite3_bind_text $stmt $at $::sqlite_static_bind_value]
+  }
+  return [sqlite3_bind_text $stmt $at $value]
+}
+set ::sqlite_static_bind_value {}
+set ::sqlite_static_bind_nbytes 0
+proc sqlite3_sql {stmt} { return [lindex [harness_send stmt $stmt sql] 0] }
+proc sqlite3_expanded_sql {stmt} { return [lindex [harness_send stmt $stmt expanded] 0] }
+proc sqlite3_errcode {db} { return $::harness_code }
+proc sqlite3_extended_errcode {db} { return $::harness_code }
+proc sqlite3_get_autocommit {db} { return [lindex [harness_send autocommit $db] 0] }
+proc sqlite3_errmsg {db} { return $::harness_error }
+proc sqlite3_errmsg16 {db} { return $::harness_error }
 
 # `sqlite3_connection_pointer` answers the pointer the C library holds
 # the connection at, which the commands that take one are stand-ins

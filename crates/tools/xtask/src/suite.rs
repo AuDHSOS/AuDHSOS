@@ -580,6 +580,32 @@ fn files(dir: &Path) -> Result<Vec<PathBuf>, Error> {
     Ok(out)
 }
 
+/// One statement the tester prepared, which it steps and reads the
+/// columns of.
+///
+/// `sqlite3_prepare` compiles a statement and `sqlite3_step` runs it one
+/// row at a time. This harness runs the whole statement at the first
+/// step and holds its rows, so a step reads the row it stands on rather
+/// than the next row of a walk.
+struct Prepared {
+    /// The connection it was prepared on.
+    connection: String,
+    /// The text of the statement, as the tester wrote it.
+    sql: String,
+    /// What the tester bound at each place, counting from one.
+    bound: BTreeMap<usize, String>,
+    /// The names of the columns the statement answers.
+    names: Vec<String>,
+    /// The rows the statement answered, where it has run.
+    rows: Vec<Vec<Value>>,
+    /// Which row the reader stands on, counting from nought.
+    at: usize,
+    /// Whether the statement has run.
+    ran: bool,
+    /// Whether the last step answered a row.
+    row: bool,
+}
+
 /// One run of one file: the interpreter on one side of the line and the
 /// engine on the other.
 struct Session {
@@ -607,6 +633,11 @@ struct Session {
     /// Whether the tester told each connection an authorizer, which a
     /// connection that is opened again holds none of.
     authorizers: BTreeMap<String, bool>,
+    /// The statements the tester prepared, by the name it holds each at.
+    statements: BTreeMap<String, Prepared>,
+    /// How many statements the tester has prepared, which names the next
+    /// one.
+    prepared: u64,
     /// What `save_prng_state` held, which `restore_prng_state` hands
     /// back to every writer.
     prng: u64,
@@ -637,6 +668,8 @@ impl Session {
             collations: BTreeMap::new(),
             functions: BTreeMap::new(),
             authorizers: BTreeMap::new(),
+            statements: BTreeMap::new(),
+            prepared: 0,
             prng: 0,
             clock: None,
             repeated: (String::new(), 0),
@@ -772,6 +805,10 @@ impl Session {
                 self.authorizes(first, second);
                 Ok(Vec::new())
             }
+            // `sqlite3_prepare` and the commands that read a statement
+            // it answered.
+            "prepare" | "autocommit" | "step" | "finalize" | "reset" | "clear_binds" | "bind"
+            | "column" | "stmt" => self.of_statement(verb, args),
             "columnmeta" => self.column_meta(first, second, args.get(2).map_or("", String::as_str)),
             "eval" => self.eval(first, second),
             "names" => self.names(first, second),
@@ -1068,6 +1105,290 @@ impl Session {
             ticked(writer, held);
         }
         Ok(Vec::new())
+    }
+
+    /// The requests of a statement the tester prepared.
+    fn of_statement(&mut self, verb: &str, args: &[String]) -> Result<Vec<String>, String> {
+        let first = args.first().map_or("", String::as_str);
+        let second = args.get(1).map_or("", String::as_str);
+        let third = args.get(2).map_or("", String::as_str);
+        match verb {
+            "prepare" => self.prepare(first, second),
+            "autocommit" => self.autocommit(first),
+            "step" => self.step(first),
+            "finalize" => Ok(self.finalize(first)),
+            "reset" => Ok(self.reset_statement(first, false)),
+            "clear_binds" => Ok(self.reset_statement(first, true)),
+            "bind" => self.bind(first, second, third),
+            "column" => self.column(first, second, third),
+            _ => self.stmt_text(first, second, third),
+        }
+    }
+
+    /// `sqlite3_prepare DB SQL`: the first statement of the text is
+    /// held under a name of its own, and the text after it is the tail.
+    ///
+    /// A statement that reads is run once with every parameter left
+    /// unbound, so that the names of its columns are known before the
+    /// first step and a statement the engine refuses is refused here.
+    fn prepare(&mut self, connection: &str, sql: &str) -> Result<Vec<String>, String> {
+        // `sqlite3Prepare` reads past the semicolons and the comments no
+        // statement stands in, so the first statement of a text is the
+        // first one that carries meaning and the tail begins after the
+        // semicolon that ends it.
+        let mut at: usize = 0;
+        let mut text = String::new();
+        for piece in statements(sql) {
+            at = at.saturating_add(piece.len()).saturating_add(1);
+            if !db_sqlite::parse::blank(piece.as_bytes()) {
+                piece.clone_into(&mut text);
+                break;
+            }
+        }
+        let tail = sql.get(at.min(sql.len())..).unwrap_or("").to_owned();
+        let mut prepared = Prepared {
+            connection: connection.to_owned(),
+            sql: text.clone(),
+            bound: BTreeMap::new(),
+            names: Vec::new(),
+            rows: Vec::new(),
+            at: 0,
+            ran: false,
+            row: false,
+        };
+        if reads(&text) {
+            let answered = self.read_statement(connection, &bound_into(&text, &BTreeMap::new()))?;
+            prepared.names = answered
+                .names
+                .iter()
+                .map(|name| String::from_utf8_lossy(name).into_owned())
+                .collect();
+        }
+        self.prepared = self.prepared.saturating_add(1);
+        let name = format!("STMT{}", self.prepared);
+        self.statements.insert(name.clone(), prepared);
+        Ok(alloc_two(name, tail))
+    }
+
+    /// `sqlite3_get_autocommit DB`: nought where the connection has a
+    /// transaction open and one where it has none.
+    fn autocommit(&self, connection: &str) -> Result<Vec<String>, String> {
+        let path = self
+            .connections
+            .get(connection)
+            .cloned()
+            .ok_or_else(|| format!("no such connection: {connection}"))?;
+        let writer = self
+            .held
+            .get(&path)
+            .ok_or_else(|| format!("no such database: {path}"))?;
+        Ok(alloc_one(if writer.began() { "0" } else { "1" }))
+    }
+
+    /// What one statement of `connection` answers, with the names of its
+    /// columns.
+    fn read_statement(&self, connection: &str, sql: &str) -> Result<db_sqlite::db::Answer, String> {
+        let path = self
+            .connections
+            .get(connection)
+            .cloned()
+            .ok_or_else(|| format!("no such connection: {connection}"))?;
+        let collating = self.collations.get(connection).copied().unwrap_or_default();
+        let defines = self.defines(connection);
+        let writer = self
+            .held
+            .get(&path)
+            .ok_or_else(|| format!("no such database: {path}"))?;
+        answered_rows(writer, sql, collating, defines)
+    }
+
+    /// `sqlite3_step STMT`: the code the step answers, which is
+    /// `SQLITE_ROW` where the statement stands on a row and
+    /// `SQLITE_DONE` where it has none left.
+    fn step(&mut self, name: &str) -> Result<Vec<String>, String> {
+        let held = self
+            .statements
+            .get(name)
+            .ok_or_else(|| format!("no such statement: {name}"))?;
+        if held.ran {
+            if let Some(held) = self.statements.get_mut(name) {
+                held.at = held.at.saturating_add(1);
+                held.row = held.at < held.rows.len();
+            }
+        } else {
+            self.first_step(name)?;
+        }
+        let held = self
+            .statements
+            .get(name)
+            .ok_or_else(|| format!("no such statement: {name}"))?;
+        Ok(alloc_one(if held.row {
+            "SQLITE_ROW"
+        } else {
+            "SQLITE_DONE"
+        }))
+    }
+
+    /// The first step of one statement, which runs it and holds the rows
+    /// it answered.
+    fn first_step(&mut self, name: &str) -> Result<(), String> {
+        let held = self
+            .statements
+            .get(name)
+            .ok_or_else(|| format!("no such statement: {name}"))?;
+        let (connection, sql) = (held.connection.clone(), held.sql.clone());
+        let text = bound_into(&sql, &held.bound);
+        let answered = if reads(&sql) {
+            self.read_statement(&connection, &text)
+        } else {
+            self.ran_one(&connection, &text)
+        };
+        let answered = match answered {
+            Ok(answered) => answered,
+            Err(message) => {
+                if let Some(held) = self.statements.get_mut(name) {
+                    held.ran = true;
+                    held.row = false;
+                }
+                return Err(message);
+            }
+        };
+        if let Some(held) = self.statements.get_mut(name) {
+            held.ran = true;
+            held.at = 0;
+            held.rows.clone_from(&answered.rows);
+            if !answered.names.is_empty() {
+                held.names = answered
+                    .names
+                    .iter()
+                    .map(|name| String::from_utf8_lossy(name).into_owned())
+                    .collect();
+            }
+            held.row = !held.rows.is_empty();
+        }
+        Ok(())
+    }
+
+    /// One statement of `connection` run through its writer, which
+    /// answers no row.
+    fn ran_one(&mut self, connection: &str, sql: &str) -> Result<db_sqlite::db::Answer, String> {
+        let path = self
+            .connections
+            .get(connection)
+            .cloned()
+            .ok_or_else(|| format!("no such connection: {connection}"))?;
+        let collating = self.collations.get(connection).copied().unwrap_or_default();
+        let defines = self.defines(connection);
+        let writer = self
+            .held
+            .get_mut(&path)
+            .ok_or_else(|| format!("no such database: {path}"))?;
+        writer.collates(collating);
+        writer.defines(defines);
+        writer
+            .run(sql.as_bytes())
+            .map(|_| db_sqlite::db::Answer::default())
+            .map_err(|error| shape(sql, error.message()))
+    }
+
+    /// `sqlite3_finalize STMT`: the statement is let go, and the code it
+    /// answers is `SQLITE_OK`.
+    fn finalize(&mut self, name: &str) -> Vec<String> {
+        self.statements.remove(name);
+        alloc_one("SQLITE_OK")
+    }
+
+    /// `sqlite3_reset STMT` and `sqlite3_clear_bindings STMT`: the
+    /// statement stands before its first step again, and the second
+    /// drops what was bound.
+    fn reset_statement(&mut self, name: &str, clearing: bool) -> Vec<String> {
+        if let Some(held) = self.statements.get_mut(name) {
+            held.ran = false;
+            held.row = false;
+            held.at = 0;
+            held.rows.clear();
+            if clearing {
+                held.bound.clear();
+            }
+        }
+        alloc_one("SQLITE_OK")
+    }
+
+    /// `sqlite3_bind_* STMT N VALUE`: the value the parameter at `at`
+    /// stands for, written as a literal.
+    fn bind(&mut self, name: &str, at: &str, value: &str) -> Result<Vec<String>, String> {
+        let place: usize = at
+            .parse()
+            .map_err(|source| format!("a place is a whole number: {source}"))?;
+        if let Some(held) = self.statements.get_mut(name) {
+            held.bound.insert(place, value.to_owned());
+        }
+        Ok(alloc_one("SQLITE_OK"))
+    }
+
+    /// `sqlite3_column_* STMT N` and `sqlite3_column_count STMT`, which
+    /// `which` names.
+    fn column(&self, name: &str, which: &str, at: &str) -> Result<Vec<String>, String> {
+        let held = self
+            .statements
+            .get(name)
+            .ok_or_else(|| format!("no such statement: {name}"))?;
+        if which == "count" {
+            return Ok(alloc_one(&held.names.len().to_string()));
+        }
+        if which == "data" {
+            let count = if held.row { held.names.len() } else { 0 };
+            return Ok(alloc_one(&count.to_string()));
+        }
+        let place: usize = at.parse().unwrap_or(usize::MAX);
+        if which == "name" {
+            let named = held.names.get(place).cloned().unwrap_or_default();
+            return Ok(alloc_one(&named));
+        }
+        let value = held
+            .rows
+            .get(held.at)
+            .and_then(|row| row.get(place))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let text = match which {
+            "type" => type_word(&value).to_owned(),
+            "int" => value.to_integer().to_string(),
+            "double" => listed(&db_sqlite::value::Value::Real(real_of(&value)), ""),
+            _ => listed(&value, ""),
+        };
+        Ok(alloc_one(&text))
+    }
+
+    /// `sqlite3_sql STMT` and `sqlite3_expanded_sql STMT`: the text the
+    /// statement was prepared from, and the same with what was bound
+    /// written into it.
+    fn stmt_text(&self, name: &str, which: &str, at: &str) -> Result<Vec<String>, String> {
+        let held = self
+            .statements
+            .get(name)
+            .ok_or_else(|| format!("no such statement: {name}"))?;
+        let text = match which {
+            "expanded" => bound_into(&held.sql, &held.bound),
+            "binds" => count_binds(&held.sql).to_string(),
+            // `sqlite3_bind_parameter_name` answers the name of the
+            // parameter at a place, which a `?` carries none of, and
+            // `sqlite3_bind_parameter_index` the place of a name.
+            "parameter" => {
+                let place: usize = at.parse().unwrap_or(0);
+                named_parameters(&held.sql)
+                    .get(place.saturating_sub(1))
+                    .cloned()
+                    .unwrap_or_default()
+            }
+            "index" => named_parameters(&held.sql)
+                .iter()
+                .position(|name| name == at)
+                .map_or(0, |place| place.saturating_add(1))
+                .to_string(),
+            _ => held.sql.clone(),
+        };
+        Ok(alloc_one(&text))
     }
 
     /// `sqlite3_set_authorizer`: the tester names a proc for one
@@ -1477,6 +1798,34 @@ fn run_one(
 ) -> Result<Vec<Value>, String> {
     let mut out = Vec::new();
     if reads(text) {
+        let answered = answered_rows(writer, text, collating, defines)?;
+        for row in &answered.rows {
+            out.extend(row.iter().cloned());
+        }
+        return Ok(out);
+    }
+    let rows = writer
+        .run(text.as_bytes())
+        .map_err(|error| shape(text, error.message()))?;
+    for row in &rows {
+        out.extend(row.iter().cloned());
+    }
+    Ok(out)
+}
+
+/// What one statement that reads answers: the names of its columns and
+/// its rows, read over a database opened as the harness opens one.
+///
+/// # Errors
+///
+/// The message the engine refused the statement with.
+fn answered_rows(
+    writer: &Writer,
+    text: &str,
+    collating: &'static [Collating],
+    defines: &'static [Defined],
+) -> Result<db_sqlite::db::Answer, String> {
+    {
         let bytes = writer.written();
         // A connection in write-ahead logging holds its newest pages in
         // the log, so a reader follows the log beside the file.
@@ -1512,18 +1861,8 @@ fn run_one(
             })
             .and_then(|database| database.query(text.as_bytes()))
             .map_err(|error| shape(text, error.message()))?;
-        for row in &answered.rows {
-            out.extend(row.iter().cloned());
-        }
-        return Ok(out);
+        Ok(answered)
     }
-    let rows = writer
-        .run(text.as_bytes())
-        .map_err(|error| shape(text, error.message()))?;
-    for row in &rows {
-        out.extend(row.iter().cloned());
-    }
-    Ok(out)
 }
 
 /// Whether this engine has what an `ifcapable` names, which is a
@@ -2072,4 +2411,217 @@ fn listed(value: &Value, null: &str) -> String {
         }
         Value::Text(bytes) | Value::Blob(bytes) => String::from_utf8_lossy(bytes).into_owned(),
     }
+}
+
+/// One value, as one answer of a request.
+fn alloc_one(text: &str) -> Vec<String> {
+    vec![text.to_owned()]
+}
+
+/// Two values, as one answer of a request.
+fn alloc_two(first: String, second: String) -> Vec<String> {
+    vec![first, second]
+}
+
+/// The word `sqlite3_column_type` answers for a value.
+const fn type_word(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "NULL",
+        Value::Int(_) => "INTEGER",
+        Value::Real(_) => "FLOAT",
+        Value::Text(_) => "TEXT",
+        Value::Blob(_) => "BLOB",
+    }
+}
+
+/// The real a value converts to, which is what `sqlite3_column_double`
+/// answers for it.
+fn real_of(value: &Value) -> f64 {
+    match value {
+        Value::Real(number) => *number,
+        // `sqlite3_column_double` reads the whole number as a real,
+        // which the text of the number reads as the same real.
+        Value::Int(number) => db_sqlite::number::real(number.to_string().as_bytes()).value,
+        Value::Text(bytes) | Value::Blob(bytes) => db_sqlite::number::real(bytes).value,
+        Value::Null => 0.0,
+    }
+}
+
+/// How many parameters one statement carries, which is what
+/// `sqlite3_bind_parameter_count` answers: the largest place any of them
+/// stands at.
+pub(crate) fn count_binds(sql: &str) -> usize {
+    named_parameters(sql).len()
+}
+
+/// The parameters one statement carries, in the order they are written,
+/// each as the character that opens it and the name after it.
+///
+/// A parameter inside a string, a comment or an identifier in brackets is
+/// text and is left, which is what `sqlite3GetToken` reads.
+pub(crate) fn parameters(sql: &str) -> Vec<(u8, String)> {
+    let bytes = sql.as_bytes();
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        let byte = bytes.get(at).copied().unwrap_or(0);
+        let next = bytes.get(at.saturating_add(1)).copied().unwrap_or(0);
+        match byte {
+            b'\'' | b'"' | b'`' | b'[' => {
+                let close = if byte == b'[' { b']' } else { byte };
+                at = at.saturating_add(1);
+                while at < bytes.len() {
+                    if bytes.get(at).copied() == Some(close) {
+                        break;
+                    }
+                    at = at.saturating_add(1);
+                }
+                at = at.saturating_add(1);
+            }
+            b'-' if next == b'-' => {
+                while at < bytes.len() && bytes.get(at).copied() != Some(b'\n') {
+                    at = at.saturating_add(1);
+                }
+            }
+            b'/' if next == b'*' => {
+                at = at.saturating_add(2);
+                while at.saturating_add(1) < bytes.len() {
+                    if bytes.get(at).copied() == Some(b'*')
+                        && bytes.get(at.saturating_add(1)).copied() == Some(b'/')
+                    {
+                        break;
+                    }
+                    at = at.saturating_add(1);
+                }
+                at = at.saturating_add(2);
+            }
+            b'?' | b':' | b'@' | b'$' => {
+                let mut end = at.saturating_add(1);
+                while end < bytes.len() {
+                    let held = bytes.get(end).copied().unwrap_or(0);
+                    let named = held.is_ascii_alphanumeric() || held == b'_';
+                    let held = if byte == b'?' {
+                        held.is_ascii_digit()
+                    } else {
+                        named || (byte == b'$' && held == b':')
+                    };
+                    if !held {
+                        break;
+                    }
+                    end = end.saturating_add(1);
+                }
+                // A `$name(...)` carries the brackets and what stands
+                // inside them, which is how the TCL interface names a
+                // member of an array.
+                if byte == b'$' && bytes.get(end).copied() == Some(b'(') {
+                    while end < bytes.len() {
+                        let held = bytes.get(end).copied().unwrap_or(0);
+                        end = end.saturating_add(1);
+                        if held == b')' {
+                            break;
+                        }
+                    }
+                }
+                let name = sql.get(at.saturating_add(1)..end).unwrap_or("").to_owned();
+                if byte == b'?' || !name.is_empty() {
+                    out.push((byte, name));
+                }
+                at = end;
+            }
+            _ => at = at.saturating_add(1),
+        }
+    }
+    out
+}
+
+/// One statement with what the tester bound written into it as literals,
+/// which is how this harness answers a parameter.
+pub(crate) fn bound_into(sql: &str, bound: &BTreeMap<usize, String>) -> String {
+    let held = parameters(sql);
+    if held.is_empty() {
+        return sql.to_owned();
+    }
+    let bytes = sql.as_bytes();
+    let mut out = String::new();
+    let mut at = 0;
+    let mut place: usize = 0;
+    let mut names: BTreeMap<String, usize> = BTreeMap::new();
+    // The places are counted as `sqlite3ExprAssignVarNumber` counts
+    // them: a `?` takes the next place, a `?N` takes the place it names,
+    // and a name takes the place it was first written at.
+    for (kind, name) in held {
+        let mark = find_parameter(bytes, at, kind, &name);
+        out.push_str(sql.get(at..mark).unwrap_or(""));
+        let width = 1usize.saturating_add(name.len());
+        at = mark.saturating_add(width);
+        place = match (kind, name.as_str()) {
+            (b'?', "") => place.saturating_add(1),
+            (b'?', digits) => digits.parse().unwrap_or(place.saturating_add(1)),
+            _ => {
+                if let Some(held) = names.get(&name) {
+                    *held
+                } else {
+                    let held = place.saturating_add(1);
+                    names.insert(name.clone(), held);
+                    held
+                }
+            }
+        };
+        out.push_str(bound.get(&place).map_or("NULL", String::as_str));
+    }
+    out.push_str(sql.get(at..).unwrap_or(""));
+    out
+}
+
+/// Where the parameter of `kind` and `name` stands from `at` on.
+fn find_parameter(bytes: &[u8], at: usize, kind: u8, name: &str) -> usize {
+    let mut held = at;
+    while held < bytes.len() {
+        if bytes.get(held).copied() == Some(kind) {
+            let width = 1usize.saturating_add(name.len());
+            let end = held.saturating_add(width);
+            if bytes.get(held.saturating_add(1)..end) == Some(name.as_bytes()) {
+                return held;
+            }
+        }
+        held = held.saturating_add(1);
+    }
+    bytes.len()
+}
+
+/// The name of the parameter at each place of one statement, counting
+/// from one, which is what `sqlite3_bind_parameter_name` answers.
+///
+/// A `?` carries no name, a `?N` names the place `N`, and a name takes
+/// the place it was first written at, which is
+/// `sqlite3ExprAssignVarNumber`.
+pub(crate) fn named_parameters(sql: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut place: usize = 0;
+    for (kind, name) in parameters(sql) {
+        let (held, named) = match (kind, name.as_str()) {
+            (b'?', "") => (place.saturating_add(1), String::new()),
+            (b'?', digits) => (
+                digits.parse().unwrap_or(place.saturating_add(1)),
+                String::new(),
+            ),
+            _ => {
+                let mut written = String::new();
+                written.push(char::from(kind));
+                written.push_str(&name);
+                match out.iter().position(|first| *first == written) {
+                    Some(at) => (at.saturating_add(1), written),
+                    None => (place.saturating_add(1), written),
+                }
+            }
+        };
+        place = held;
+        while out.len() < held {
+            out.push(String::new());
+        }
+        for slot in out.iter_mut().skip(held.saturating_sub(1)).take(1) {
+            slot.clone_from(&named);
+        }
+    }
+    out
 }

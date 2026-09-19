@@ -154,3 +154,71 @@ fn a_program_that_does_not_start_is_an_error() {
     let files = [scratch.file("f", "echo 'C passed'")];
     assert!(beside(Path::new("/definitely/missing/binary"), &files, 2).is_err());
 }
+
+/// The parameters one statement carries, in the order they are written,
+/// with the ones inside a string, a comment or brackets left as text.
+#[test]
+fn the_parameters_of_a_statement_are_the_ones_outside_a_string() {
+    use crate::suite::parameters;
+    assert_eq!(
+        parameters("INSERT INTO t VALUES(:1,?,:abc)"),
+        [
+            (b':', "1".to_owned()),
+            (b'?', String::new()),
+            (b':', "abc".to_owned())
+        ]
+    );
+    // A `?N` names its place, and a `$name(...)` carries the brackets.
+    assert_eq!(parameters("SELECT ?99"), [(b'?', "99".to_owned())]);
+    assert_eq!(
+        parameters("SELECT $x(-z-), @a, $::two"),
+        [
+            (b'$', "x(-z-)".to_owned()),
+            (b'@', "a".to_owned()),
+            (b'$', "::two".to_owned())
+        ]
+    );
+    // A parameter inside a string, a comment or brackets is text.
+    assert!(parameters("SELECT ':a', \"@b\", [$c] -- :d\n/* ?1 */").is_empty());
+    // A colon that opens no name is no parameter at all.
+    assert!(parameters("SELECT a:").is_empty());
+}
+
+/// The place of each parameter, and the name it carries there.
+#[test]
+fn the_place_of_a_parameter_is_the_one_it_was_first_written_at() {
+    use crate::suite::{count_binds, named_parameters};
+    assert_eq!(
+        named_parameters("INSERT INTO t VALUES(:1,?,:abc)"),
+        [":1", "", ":abc"]
+    );
+    assert_eq!(count_binds("INSERT INTO t VALUES(:1,?,:abc)"), 3);
+    // A name written twice stands at one place.
+    assert_eq!(named_parameters("SELECT :a, :b, :a"), [":a", ":b"]);
+    assert_eq!(count_binds("SELECT :a, :b, :a"), 2);
+    // A `?N` names the place it carries, and the `?` after it takes the
+    // next one.
+    assert_eq!(count_binds("SELECT ?4, ?"), 5);
+    assert_eq!(named_parameters("SELECT ?2, ?"), ["", "", ""]);
+    assert_eq!(count_binds("SELECT 1"), 0);
+}
+
+/// What the tester bound, written into the statement as literals.
+#[test]
+fn what_is_bound_is_written_into_the_statement_as_a_literal() {
+    use crate::suite::bound_into;
+    use std::collections::BTreeMap;
+    let mut bound = BTreeMap::new();
+    bound.insert(1, "'one'".to_owned());
+    bound.insert(3, "3".to_owned());
+    assert_eq!(
+        bound_into("INSERT INTO t VALUES(:1,?,:abc)", &bound),
+        "INSERT INTO t VALUES('one',NULL,3)"
+    );
+    // A statement of no parameter is the statement itself.
+    assert_eq!(bound_into("SELECT 1", &bound), "SELECT 1");
+    // A name written twice takes the one value bound at its place.
+    let mut held = BTreeMap::new();
+    held.insert(1, "7".to_owned());
+    assert_eq!(bound_into("SELECT :a + :a", &held), "SELECT 7 + 7");
+}

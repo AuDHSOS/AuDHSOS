@@ -2901,6 +2901,13 @@ impl Writer {
         self.asking = None;
     }
 
+    /// Whether this connection has a transaction open, which
+    /// `sqlite3_get_autocommit` answers nought for.
+    #[must_use]
+    pub const fn began(&self) -> bool {
+        self.began.is_some()
+    }
+
     /// The function this connection was told, which a caller that opens
     /// a [`Database`] of its own passes to [`Database::asked`].
     #[must_use]

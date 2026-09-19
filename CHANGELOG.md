@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- The suite's own harness answers `sqlite3_prepare`, `sqlite3_step`,
+  `sqlite3_bind_*`, `sqlite3_column_*` and the commands beside them, so a
+  file that drives the C API over a statement it prepared runs. D-314
+  records it. `capi2.test` goes from 6 cases passing to 59 and
+  `bind.test` from 18 to 75.
+
 - `db-sqlite` reads every statement against the function
   `sqlite3_set_authorizer` tells a connection: a denial refuses the
   statement, an ignored action leaves it undone, and an ignored column

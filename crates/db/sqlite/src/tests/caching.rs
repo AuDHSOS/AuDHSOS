@@ -298,8 +298,12 @@ fn what_a_pragma_writes_of_the_header_words() {
     );
     assert!(again.run(b"PRAGMA encoding='UTF-8'").unwrap().is_empty());
     // `PRAGMA synchronous` refuses inside a transaction, which
-    // `PragTyp_SYNCHRONOUS` does because a commit is waiting.
+    // `PragTyp_SYNCHRONOUS` does because a commit is waiting, and the
+    // connection says it has one open, which `sqlite3_get_autocommit`
+    // answers nought for.
+    assert!(!again.began());
     again.run(b"BEGIN").unwrap();
+    assert!(again.began());
     assert_eq!(
         again.run(b"PRAGMA synchronous=OFF").unwrap_err().message(),
         "Safety level may not be changed inside a transaction"
@@ -309,6 +313,7 @@ fn what_a_pragma_writes_of_the_header_words() {
         alloc::vec![alloc::vec![Value::Int(2)]]
     );
     again.run(b"COMMIT").unwrap();
+    assert!(!again.began());
     assert!(again.run(b"PRAGMA synchronous=OFF").unwrap().is_empty());
     assert_eq!(
         again.run(b"PRAGMA synchronous").unwrap(),
