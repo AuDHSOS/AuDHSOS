@@ -235,19 +235,41 @@ fn what_a_register_of_the_routine_is_refused_with() {
 fn what_a_column_that_points_may_fall_back_to() {
     let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
     writer.run(b"CREATE TABLE t1(a,b)").unwrap();
+    writer.run(b"PRAGMA foreign_keys=on").unwrap();
     writer
         .run(b"ALTER TABLE t1 ADD COLUMN f REFERENCES t1")
         .expect("a column");
     writer
         .run(b"ALTER TABLE t1 ADD COLUMN h REFERENCES t1 DEFAULT NULL")
         .expect("a column");
+    // `sqlite3ErrorIfNotEmpty` reads the table first, so a table that
+    // holds no row takes the column whatever it falls back to.
+    writer
+        .run(b"ALTER TABLE t1 ADD COLUMN j REFERENCES t1 DEFAULT 4")
+        .expect("a column");
+    writer.run(b"CREATE TABLE t2(a)").unwrap();
+    writer.run(b"INSERT INTO t2 VALUES(1)").unwrap();
+    // A column that points at no row, and one that points and falls back
+    // to nothing, are both taken by a table that holds a row.
+    writer
+        .run(b"ALTER TABLE t2 ADD COLUMN k DEFAULT 4")
+        .expect("a column");
+    writer
+        .run(b"ALTER TABLE t2 ADD COLUMN l REFERENCES t1 DEFAULT NULL")
+        .expect("a column");
     assert_eq!(
         writer
-            .run(b"ALTER TABLE t1 ADD COLUMN g REFERENCES t1 DEFAULT 4")
+            .run(b"ALTER TABLE t2 ADD COLUMN g REFERENCES t1 DEFAULT 4")
             .unwrap_err()
             .message(),
         "Cannot add a REFERENCES column with non-NULL default value"
     );
+    // A connection that holds its rows to no foreign key takes the
+    // column, which `db->flags&SQLITE_ForeignKeys` reads.
+    writer.run(b"PRAGMA foreign_keys=off").unwrap();
+    writer
+        .run(b"ALTER TABLE t2 ADD COLUMN g REFERENCES t1 DEFAULT 4")
+        .expect("a column");
     // A column that points at no row takes the value it falls back to.
     writer
         .run(b"ALTER TABLE t1 ADD COLUMN i DEFAULT 4")

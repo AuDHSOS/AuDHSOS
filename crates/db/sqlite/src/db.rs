@@ -1407,8 +1407,11 @@ pub struct Database<'a> {
     /// The name the database at schema place nought answers to, which is
     /// `main` where no statement named another.
     named: Vec<u8>,
-    /// The databases an `ATTACH` added, in the order they were attached.
+    /// The databases an `ATTACH` added, in the order they were attached,
+    /// with the temp schema among them where the connection made one.
     attached: Vec<Attached<'a>>,
+    /// The place of the temp schema, where the reader carries one.
+    temp: Option<usize>,
     /// Its tables.
     tables: Vec<Stored>,
     /// Its views.
@@ -1647,6 +1650,7 @@ impl<'a> Database<'a> {
             image,
             named: b"main".to_vec(),
             attached: Vec::new(),
+            temp: None,
             tables,
             views: Vec::new(),
             triggers: Vec::new(),
@@ -1698,6 +1702,9 @@ impl<'a> Database<'a> {
     pub fn attaching(mut self, name: &[u8], bytes: &'a [u8]) -> Result<Self, Error> {
         let image = Image::open(bytes)?;
         let place = self.attached.len().saturating_add(1);
+        if is_temp(name) {
+            self.temp = Some(place);
+        }
         let tables = read_tables(&image, place, self.encoding, self.collating)?;
         self.tables.extend(tables);
         self.attached.push(Attached {
@@ -1729,34 +1736,36 @@ impl<'a> Database<'a> {
         }
     }
 
-    /// The schema place of the database that holds the table, the view,
-    /// the index or the trigger named `name`, and nothing where no
-    /// database of the connection holds one.
+    /// The name of the database that holds the table, the view, the index
+    /// or the trigger named `name`, and nothing where no database of the
+    /// connection holds one.
     ///
     /// `sqlite3LocateTable` of `research/sqlite/src/build.c:408` reads
     /// the databases in turn, so a bare name names the first one that
     /// holds it. Reading them costs O(n) in the names they hold.
     #[must_use]
-    pub fn holding(&self, name: &[u8]) -> Option<usize> {
+    pub fn holding(&self, name: &[u8]) -> Option<Vec<u8>> {
+        self.holding_at(name).map(|place| self.named_place(place))
+    }
+
+    /// The schema place of the database that holds the table, the view,
+    /// the index or the trigger named `name`.
+    fn holding_at(&self, name: &[u8]) -> Option<usize> {
         if let Some(stored) = self.find(name) {
             return Some(stored.place);
         }
-        if let Some(view) = self
-            .views
-            .iter()
-            .find(|view| view.name.eq_ignore_ascii_case(name))
-        {
-            return Some(view.place);
-        }
-        self.tables
-            .iter()
-            .find(|stored| {
-                stored
-                    .indexes
-                    .iter()
-                    .any(|kept| kept.index.name.eq_ignore_ascii_case(name))
-            })
-            .map(|stored| stored.place)
+        self.searching().into_iter().find(|place| {
+            self.views
+                .iter()
+                .any(|view| view.place == *place && view.name.eq_ignore_ascii_case(name))
+                || self.tables.iter().any(|stored| {
+                    stored.place == *place
+                        && stored
+                            .indexes
+                            .iter()
+                            .any(|kept| kept.index.name.eq_ignore_ascii_case(name))
+                })
+        })
     }
 
     /// The table of `name` in the database at `place`, and in every
@@ -2571,14 +2580,38 @@ impl<'a> Database<'a> {
     /// The table `name` names, with the three names of the schema's own
     /// table read as the one it is held under.
     fn find(&self, name: &[u8]) -> Option<&Stored> {
-        let name = if schema_named(name) {
-            SCHEMA_TABLE
-        } else {
-            name
-        };
-        self.tables
-            .iter()
-            .find(|stored| stored.table.name.eq_ignore_ascii_case(name))
+        // `sqlite3FindTable` of `research/sqlite/src/build.c:386` reads
+        // `sqlite_schema` out of `main` and `sqlite_temp_schema` out of
+        // the temp schema, whatever else a database holds under either
+        // name.
+        if temp_named(name) {
+            return self
+                .temp
+                .and_then(|place| self.find_in(place, SCHEMA_TABLE));
+        }
+        if schema_named(name) {
+            return self.find_in(0, SCHEMA_TABLE);
+        }
+        self.searching()
+            .into_iter()
+            .find_map(|place| self.find_in(place, name))
+    }
+
+    /// The schema places in the order `sqlite3FindTable` of
+    /// `research/sqlite/src/build.c:373` reads them: the temp schema,
+    /// then `main`, then the attached databases in the order they were
+    /// attached.
+    ///
+    /// Reading them costs O(n) in their number.
+    fn searching(&self) -> Vec<usize> {
+        let mut out: Vec<usize> = self.temp.into_iter().collect();
+        out.push(0);
+        for place in 1..=self.attached.len() {
+            if Some(place) != self.temp {
+                out.push(place);
+            }
+        }
+        out
     }
 
     /// What `sql` answers.
@@ -6063,6 +6096,19 @@ const SCHEMA_TABLE: &[u8] = b"sqlite_master";
 /// `sqlite3InitOne` builds it out of.
 const SCHEMA_CREATE: &[u8] =
     b"CREATE TABLE sqlite_master(type text,name text,tbl_name text,rootpage int,sql text)";
+
+/// Whether a name is one the temp schema's own table answers to, which
+/// `PREFERRED_TEMP_SCHEMA_TABLE` and `LEGACY_TEMP_SCHEMA_TABLE` of
+/// `research/sqlite/src/sqliteInt.h` are the two of.
+const fn temp_named(name: &[u8]) -> bool {
+    name.eq_ignore_ascii_case(b"sqlite_temp_master")
+        || name.eq_ignore_ascii_case(b"sqlite_temp_schema")
+}
+
+/// Whether a name is the one the temp schema answers to.
+const fn is_temp(name: &[u8]) -> bool {
+    name.eq_ignore_ascii_case(b"temp")
+}
 
 /// Whether `name` is one of the three the schema's own table answers
 /// to.

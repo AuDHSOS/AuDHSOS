@@ -880,8 +880,12 @@ Size: L.
     a bare name or under the schema. Built, which D-324 records.
 80. A statement that writes a database an `ATTACH` added. Built, which
     D-325 records. A transaction over more than one of them is open,
-    which A5 of document 18 specifies, and so is the temp schema, which
-    A6 specifies.
+    which A5 of document 18 specifies.
+81. The temp schema, which a statement written `TEMP` writes. Built,
+    which D-327 records.
+82. What an added column that points at another table may fall back to,
+    which the keys of the connection and the rows of the table decide.
+    Built, which D-328 records.
 
 ### Done when
 

@@ -440,3 +440,115 @@ fn what_a_bare_name_of_a_view_and_of_an_index_names() {
     assert!(database.index(b"ub").is_none());
     assert!(database.table(b"u").is_some());
 }
+
+/// A name that holds the letters `temp` and is no word of its own opens
+/// no temp schema, which is what `sqlite3OpenTempDatabase` is reached for.
+#[test]
+fn what_names_holding_the_letters_of_temp_open() {
+    let mut writer = opened();
+    for sql in [
+        b"CREATE TABLE temperature(x)".as_slice(),
+        b"CREATE TABLE xtemp(x)",
+        b"CREATE TABLE \"temp$x\"(x)",
+        "CREATE TABLE \"tempé\"(x)".as_bytes(),
+    ] {
+        writer.run(sql).unwrap();
+        assert_eq!(shown(&mut writer), "0|main||", "{sql:?}");
+    }
+    // The word itself opens one, and its own table is read under the
+    // schema as well as by its bare name.
+    writer.run(b"CREATE TEMP TABLE tt(a)").unwrap();
+    assert_eq!(shown(&mut writer), "0|main||1|temp||");
+    let temp = writer.attached_written(b"temp").expect("a temp schema");
+    let held = writer.written();
+    let database = crate::db::Database::open(&held)
+        .unwrap()
+        .attaching(b"temp", &temp)
+        .unwrap();
+    for name in [
+        b"temp.sqlite_temp_master".as_slice(),
+        b"temp.sqlite_temp_schema",
+        b"temp.sqlite_master",
+        b"temp.sqlite_schema",
+    ] {
+        let mut sql = b"SELECT count(*) FROM ".to_vec();
+        sql.extend_from_slice(name);
+        assert_eq!(
+            database.query(&sql).unwrap().rows,
+            [[Value::Int(1)]],
+            "{name:?}"
+        );
+    }
+}
+
+/// The temp schema, which a statement written `TEMP` writes and which
+/// stands in front of `main` for a bare name.
+#[test]
+fn what_the_temp_schema_holds() {
+    let mut writer = opened();
+    writer.run(b"INSERT INTO t VALUES(1)").unwrap();
+    writer.run(b"CREATE TEMP TABLE tt(b)").unwrap();
+    writer.run(b"INSERT INTO tt VALUES(2)").unwrap();
+    // The temp schema stands at schema place one, which no file of the
+    // client holds.
+    assert_eq!(shown(&mut writer), "0|main||1|temp||");
+    assert_eq!(writer.attached_names(), [b"temp".to_vec()]);
+    assert!(writer.attached_files().is_empty());
+    let temp = writer.attached_written(b"temp").expect("a temp schema");
+    let held = writer.written();
+    let database = crate::db::Database::open(&held)
+        .unwrap()
+        .attaching(b"temp", &temp)
+        .unwrap();
+    // A bare name both hold is answered out of the temp schema, and the
+    // two names of its own table read it.
+    writer.run(b"CREATE TEMP TABLE t(c)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(3)").unwrap();
+    let answered = |sql: &[u8], database: &crate::db::Database<'_>| {
+        database
+            .query(sql)
+            .map(|answered| answered.rows)
+            .map_err(|error| error.message())
+    };
+    for name in [b"sqlite_temp_master".as_slice(), b"sqlite_temp_schema"] {
+        let mut sql = b"SELECT count(*) FROM ".to_vec();
+        sql.extend_from_slice(name);
+        assert_eq!(answered(&sql, &database).unwrap(), [[Value::Int(1)]]);
+    }
+    assert_eq!(
+        answered(b"SELECT count(*) FROM sqlite_master", &database).unwrap(),
+        [[Value::Int(1)]]
+    );
+    assert_eq!(
+        answered(b"SELECT b FROM temp.tt", &database).unwrap(),
+        [[Value::Int(2)]]
+    );
+    // A `DROP` of a bare name both hold takes the temp one away, and the
+    // one of `main` stands.
+    writer.run(b"DROP TABLE t").unwrap();
+    let held = writer.written();
+    let database = crate::db::Database::open(&held).unwrap();
+    assert_eq!(database.rows_of(b"t").unwrap().len(), 1);
+    // `main` and `temp` are both refused a `DETACH`, and the temp schema
+    // holds a place no `ATTACH` counts against the ten.
+    assert_eq!(
+        refused(&mut writer, b"DETACH temp"),
+        "cannot detach database temp"
+    );
+    for at in 0..crate::db::ATTACHED {
+        let mut sql = b"ATTACH ':memory:' AS held".to_vec();
+        sql.extend_from_slice(alloc::format!("{at}").as_bytes());
+        writer.run(&sql).unwrap();
+    }
+    assert_eq!(
+        refused(&mut writer, b"ATTACH ':memory:' AS last"),
+        "too many attached databases - max 10"
+    );
+    // A `DETACH` leaves the databases after the one it took away one
+    // place lower, which `sqlite3DetachDatabase` moves them down by.
+    writer.run(b"DETACH held0").unwrap();
+    assert_eq!(
+        shown(&mut writer),
+        "0|main||1|temp||2|held1||3|held2||4|held3||5|held4||6|held5||7|held6||8|held7||9|held8||10|held9||"
+    );
+}

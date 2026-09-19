@@ -7,6 +7,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` holds the temp schema as a database of the connection's own
+  at schema place one, which a statement written `TEMP` writes and which
+  `sqlite_temp_schema` reads. D-327 records it. Catalog 6.6.222.
+  `date.test` goes from 1395 cases passing to 1649, `fkey2.test` from 1030
+  to 1137 and `trigger1.test` from 44 to 52.
+
+- `db-sqlite` refuses an added column that points at another table and
+  falls back to a value only where the connection holds its rows to the
+  foreign keys and the table holds a row. D-328 records it. Catalog
+  6.6.223.
+
 - `db-sqlite` writes the database a statement names, and the suite's own
   harness answers an `ATTACH` out of the files the session holds. D-325
   and D-326 record it. Catalog 6.6.220 and 6.6.221. `attach.test` goes

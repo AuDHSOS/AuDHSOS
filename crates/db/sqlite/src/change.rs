@@ -34,7 +34,12 @@ const SECTOR: u32 = 512;
 /// rows the table already has, and one that may not be nothing and
 /// falls back to nothing, because the rows it already has hold nothing
 /// for it.
-fn refused_column(arena: &Arena, asked: &crate::ast::AddColumn, sql: &[u8]) -> Result<(), Error> {
+fn refused_column(
+    arena: &Arena,
+    asked: &crate::ast::AddColumn,
+    sql: &[u8],
+    holding: bool,
+) -> Result<(), Error> {
     let mut fallback = false;
     let mut points = false;
     let mut falls_back_to = None;
@@ -53,10 +58,14 @@ fn refused_column(arena: &Arena, asked: &crate::ast::AddColumn, sql: &[u8]) -> R
             _ => {}
         }
     }
-    // `sqlite3AlterFinishAddColumn`: a column that points at a row of
+    // `sqlite3AlterFinishAddColumn` of
+    // `research/sqlite/src/alter.c:373`: a column that points at a row of
     // another table falls back to nothing, the rows the table already
-    // holds gaining no value of their own and pointing at no row.
-    if points
+    // holds gaining no value of their own and pointing at no row. The
+    // refusal stands where the connection holds the keys and the table
+    // holds a row, which `sqlite3ErrorIfNotEmpty` reads.
+    if holding
+        && points
         && falls_back_to.is_some_and(|text| {
             !crate::schema::dequote(text.text(sql)).eq_ignore_ascii_case(b"null")
         })
@@ -441,6 +450,64 @@ struct HeldFile {
     began: Option<Header>,
 }
 
+/// What one statement names: the schema it wrote, the name the database
+/// that holds it is found by, whether the refusal for a schema the
+/// connection does not hold names that name, and whether the statement
+/// writes the temp schema.
+struct Names {
+    /// The schema the statement wrote, where it wrote one.
+    schema: Option<Span>,
+    /// The name of the thing the statement locates, which says which
+    /// database holds it where the statement wrote no schema.
+    located: Option<Span>,
+    /// Whether a schema the connection holds no database under is refused
+    /// `no such table:` rather than `unknown database`.
+    table: bool,
+    /// Whether the statement was written `TEMP`.
+    temporary: bool,
+    /// Whether a statement that names the temp schema opens it, which an
+    /// `ATTACH` and a `DETACH` do not.
+    opens: bool,
+}
+
+impl Names {
+    /// One statement that makes something, which is refused `unknown
+    /// database` for a schema the connection does not hold.
+    const fn made(schema: Option<Span>, located: Option<Span>, temporary: bool) -> Self {
+        Names {
+            schema,
+            located,
+            table: false,
+            temporary,
+            opens: true,
+        }
+    }
+
+    /// One statement that locates a table, which is refused `no such
+    /// table:` for a schema the connection does not hold.
+    const fn located(schema: Option<Span>, located: Span) -> Self {
+        Names {
+            schema,
+            located: Some(located),
+            table: true,
+            temporary: false,
+            opens: true,
+        }
+    }
+
+    /// One statement that names a database rather than reading or writing
+    /// one, which an `ATTACH` and a `DETACH` are the two of.
+    const fn naming() -> Self {
+        Names {
+            schema: None,
+            located: None,
+            table: false,
+            temporary: false,
+            opens: false,
+        }
+    }
+}
+
 /// The files a connection holds, as a statement of it reads them.
 struct Images {
     /// The file the statement writes.
@@ -459,6 +526,10 @@ struct Called {
     /// The file name the `ATTACH` named, which is empty for `main` and
     /// for a database of the connection's own.
     file: Vec<u8>,
+    /// Where it stands in the list `PRAGMA database_list` answers: nought
+    /// for `main`, one for the temp schema, and two and up for an
+    /// attached database in the order they were attached.
+    place: usize,
 }
 
 /// One database of a connection beside the one the statement running now
@@ -621,6 +692,7 @@ impl Writer {
             called: Called {
                 name: b"main".to_vec(),
                 file: Vec::new(),
+                place: 0,
             },
             attached: Vec::new(),
             opening: None,
@@ -680,6 +752,7 @@ impl Writer {
             called: Called {
                 name: b"main".to_vec(),
                 file: Vec::new(),
+                place: 0,
             },
             attached: Vec::new(),
             opening: None,
@@ -834,6 +907,17 @@ impl Writer {
         Some(written_image(&held.held))
     }
 
+    /// The databases beside the one the connection writes, in the order
+    /// of their schema places, which is the order `sqlite3FindTable`
+    /// reads them in.
+    ///
+    /// Sorting them costs O(n log n) in their number.
+    fn in_place(&self) -> Vec<&Attached> {
+        let mut out: Vec<&Attached> = self.attached.iter().collect();
+        out.sort_by_key(|held| held.called.place);
+        out
+    }
+
     /// The image of every database an `ATTACH` added that names a file,
     /// each with that file name.
     ///
@@ -856,8 +940,8 @@ impl Writer {
     /// Reading them costs O(n) in their number.
     #[must_use]
     pub fn attached_names(&self) -> Vec<Vec<u8>> {
-        self.attached
-            .iter()
+        self.in_place()
+            .into_iter()
             .map(|held| held.called.name.clone())
             .collect()
     }
@@ -885,7 +969,7 @@ impl Writer {
     ) -> Result<(), Error> {
         let name = crate::schema::dequote(asked.table.text(sql));
         let written = asked.written.text(sql).to_vec();
-        refused_column(arena, asked, sql)?;
+        refused_column(arena, asked, sql, self.holding() && self.holds_rows(&name)?)?;
         let rowid = self.row_of(&name)?;
         let image = self.image();
         let database = Database::open(&image)?;
@@ -1027,7 +1111,15 @@ impl Writer {
     ) -> Result<(), Error> {
         let file = self.text_of(arena, asked.file, sql)?;
         let name = self.text_of(arena, asked.name, sql)?;
-        if self.attached.len() >= crate::db::ATTACHED {
+        // The temp schema holds a place of its own and is none of the ten
+        // an `ATTACH` may add, which `db->nDb>=db->aLimit+2` of
+        // `attachFunc` counts by leaving `main` and `temp` out.
+        let held = self
+            .attached
+            .iter()
+            .filter(|held| held.called.place > 1)
+            .count();
+        if held >= crate::db::ATTACHED {
             return Err(Error::TooManyAttached);
         }
         if named_database(&name) || self.attached.iter().any(|held| named_as(held, &name)) {
@@ -1041,8 +1133,16 @@ impl Writer {
         // this connection's own, which is what `PRAGMA database_list`
         // writes for one.
         let file = if fresh_file(&file) { Vec::new() } else { file };
+        let place = self
+            .attached
+            .iter()
+            .map(|held| held.called.place)
+            .chain(core::iter::once(1))
+            .max()
+            .unwrap_or(1)
+            .saturating_add(1);
         self.attached.push(Attached {
-            called: Called { name, file },
+            called: Called { name, file, place },
             held,
         });
         Ok(())
@@ -1103,7 +1203,17 @@ impl Writer {
             }
             return Err(Error::NoDatabase(name));
         };
-        self.attached.remove(at);
+        if named_database(&name) {
+            return Err(Error::KeptDatabase(name));
+        }
+        let held = self.attached.remove(at);
+        // `sqlite3DetachDatabase` moves the databases after the one it
+        // took away down, so the places count on with no gap.
+        for beside in &mut self.attached {
+            if beside.called.place > held.called.place {
+                beside.called.place = beside.called.place.saturating_sub(1);
+            }
+        }
         Ok(())
     }
 
@@ -1265,6 +1375,21 @@ impl Writer {
             }
         }
         Ok(())
+    }
+
+    /// Whether the table of `name` holds a row, which
+    /// `sqlite3ErrorIfNotEmpty` of `research/sqlite/src/alter.c:308`
+    /// reads before it refuses an `ALTER TABLE`.
+    ///
+    /// Reading the table costs O(n) in its rows.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what reading the table refused.
+    fn holds_rows(&self, name: &[u8]) -> Result<bool, Error> {
+        let bytes = self.image();
+        let database = self.reading(&bytes)?;
+        Ok(!database.held_rows_of(name)?.is_empty())
     }
 
     /// `ALTER TABLE ... RENAME COLUMN`: every statement of the schema
@@ -2025,8 +2150,8 @@ impl Writer {
         Images {
             held: self.image(),
             beside: self
-                .attached
-                .iter()
+                .in_place()
+                .into_iter()
                 .map(|held| (held.called.name.clone(), written_image(&held.held)))
                 .collect(),
         }
@@ -2113,30 +2238,76 @@ impl Writer {
     /// one that names the database alone, which is what
     /// `sqlite3TwoPartName` of `research/sqlite/src/build.c:596`
     /// answers.
-    fn writing_at(&self, sql: &[u8]) -> Result<Option<usize>, Error> {
-        if self.attached.is_empty() {
+    fn writing_at(&mut self, sql: &[u8]) -> Result<Option<usize>, Error> {
+        let temping = holds_temp(sql);
+        if self.attached.is_empty() && !temping {
             return Ok(None);
         }
-        let (schema, named) = match crate::parse::definition(sql) {
+        let names = match crate::parse::definition(sql) {
             Ok((_, definition)) => defined_under(definition),
             Err(_) => match crate::parse::change(sql) {
                 Ok((_, change)) => changed_under(change),
-                Err(_) => return Ok(None),
+                // A statement neither reading takes is one that writes no
+                // database of its own, which a `SELECT` is.
+                Err(_) => Names::made(None, None, false),
             },
         };
-        let held = self.switched(schema, sql).map_err(|held| match named {
-            Some(name) => {
+        // A statement that names the temp schema opens it, which is what
+        // `sqlite3OpenTempDatabase` of
+        // `research/sqlite/src/build.c:2830` does where a statement reads
+        // or writes one. An `ATTACH` and a `DETACH` name a database
+        // rather than reading one, so neither opens it.
+        if temping && names.opens {
+            self.temping()?;
+        }
+        // A statement written `TEMP` writes the temp schema, which
+        // `sqlite3TwoPartName` of `research/sqlite/src/build.c:596` reads
+        // as one that names schema place one.
+        if names.temporary {
+            return self.temping().map(Some);
+        }
+        let held = self.switched(names.schema, sql).map_err(|held| {
+            if names.table {
                 let mut shown = held;
                 shown.push(b'.');
-                shown.extend_from_slice(&crate::schema::dequote(name.text(sql)));
-                Error::NoTable(shown)
+                shown.extend_from_slice(&named_text(names.located, sql));
+                return Error::NoTable(shown);
             }
-            None => Error::NoSchema(held),
+            Error::NoSchema(held)
         })?;
-        if schema.is_some() {
+        if names.schema.is_some() {
             return Ok(held);
         }
-        self.holding_at(named, sql)
+        self.holding_at(names.located, sql)
+    }
+
+    /// The place in the list of the temp schema, which the connection
+    /// makes where it holds none.
+    ///
+    /// The temp schema is a database of one page under the page size and
+    /// the encoding of `main`, which no file of the client holds.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what the page size of `main` breaks.
+    fn temping(&mut self) -> Result<usize, Error> {
+        let found = self
+            .attached
+            .iter()
+            .position(|held| named_as(held, b"temp"));
+        if let Some(at) = found {
+            return Ok(at);
+        }
+        let held = self.opened_file(b":memory:")?;
+        self.attached.push(Attached {
+            called: Called {
+                name: b"temp".to_vec(),
+                file: Vec::new(),
+                place: 1,
+            },
+            held,
+        });
+        Ok(self.attached.len().saturating_sub(1))
     }
 
     /// Which database of the list holds the name a statement wrote with
@@ -2158,9 +2329,10 @@ impl Writer {
         let bytes = self.images();
         let database = self.reading_beside(&bytes)?;
         let held = crate::schema::dequote(name.text(sql));
-        Ok(database
-            .holding(&held)
-            .and_then(|place| place.checked_sub(1)))
+        let Some(named) = database.holding(&held) else {
+            return Ok(None);
+        };
+        Ok(self.attached.iter().position(|one| named_as(one, &named)))
     }
 
     /// One statement run against the database the connection writes.
@@ -3321,8 +3493,8 @@ impl Writer {
             ]
         };
         let mut out = alloc::vec![row(0, b"main", b"")];
-        for (at, held) in self.attached.iter().enumerate() {
-            let place = i64::try_from(at).unwrap_or(0).saturating_add(2);
+        for held in self.in_place() {
+            let place = i64::try_from(held.called.place).unwrap_or(0);
             out.push(row(place, &held.called.name, &held.called.file));
         }
         out
@@ -8473,28 +8645,72 @@ fn bare_text(arena: &Arena, id: crate::ast::ExprId, sql: &[u8]) -> Option<Vec<u8
 /// A statement that names a table is refused `no such table:` and one
 /// that names the database alone `unknown database`, which is what
 /// `sqlite3TwoPartName` of `research/sqlite/src/build.c:596` answers.
-const fn defined_under(definition: Definition) -> (Option<Span>, Option<Span>) {
+const fn defined_under(definition: Definition) -> Names {
     match definition {
-        Definition::Table(made) => (made.schema, None),
-        Definition::Index(made) => (made.schema, None),
-        Definition::View(made) => (made.schema, None),
-        Definition::Trigger(made) => (made.schema, None),
-        Definition::Drop(asked) => (asked.schema, Some(asked.name)),
-        Definition::Rename(asked) => (asked.schema, Some(asked.table)),
-        Definition::AddColumn(asked) => (asked.schema, Some(asked.table)),
-        Definition::DropColumn(asked) => (asked.schema, Some(asked.table)),
-        Definition::RenameColumn(asked) => (asked.schema, Some(asked.table)),
-        Definition::DropConstraint(asked) => (asked.schema, Some(asked.table)),
-        Definition::Vacuum(_) | Definition::Attach(_) | Definition::Detach(_) => (None, None),
+        Definition::Table(made) => Names::made(made.schema, None, made.temporary),
+        // An index and a trigger both stand in the database of the table
+        // they are over, which `sqlite3CreateIndex` and
+        // `sqlite3FinishTrigger` read out of that table.
+        Definition::Index(made) => Names::made(made.schema, Some(made.table), false),
+        Definition::View(made) => Names::made(made.schema, None, made.temporary),
+        Definition::Trigger(made) => Names::made(made.schema, Some(made.table), made.temporary),
+        Definition::Drop(asked) => Names::located(asked.schema, asked.name),
+        Definition::Rename(asked) => Names::located(asked.schema, asked.table),
+        Definition::AddColumn(asked) => Names::located(asked.schema, asked.table),
+        Definition::DropColumn(asked) => Names::located(asked.schema, asked.table),
+        Definition::RenameColumn(asked) => Names::located(asked.schema, asked.table),
+        Definition::DropConstraint(asked) => Names::located(asked.schema, asked.table),
+        Definition::Attach(_) | Definition::Detach(_) => Names::naming(),
+        Definition::Vacuum(_) => Names::made(None, None, false),
     }
 }
 
 /// The schema one statement that changes rows names, and the table it
 /// names under it.
-const fn changed_under(change: Change) -> (Option<Span>, Option<Span>) {
+const fn changed_under(change: Change) -> Names {
     match change {
-        Change::Insert(statement) => (statement.schema, Some(statement.name)),
-        Change::Update(statement) => (statement.schema, Some(statement.name)),
-        Change::Delete(statement) => (statement.schema, Some(statement.name)),
+        Change::Insert(statement) => Names::located(statement.schema, statement.name),
+        Change::Update(statement) => Names::located(statement.schema, statement.name),
+        Change::Delete(statement) => Names::located(statement.schema, statement.name),
     }
+}
+
+/// Whether a text holds the word `temp`, which is what a statement that
+/// writes the temp schema is read for.
+///
+/// Reading the text costs O(n) in its bytes.
+fn holds_temp(sql: &[u8]) -> bool {
+    for name in [
+        b"temp".as_slice(),
+        b"sqlite_temp_master",
+        b"sqlite_temp_schema",
+    ] {
+        if worded(sql, name) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether a text holds `name` as a word of its own, which is one no byte
+/// a bare name is written with stands beside.
+///
+/// Reading the text costs O(n) in its bytes.
+fn worded(sql: &[u8], name: &[u8]) -> bool {
+    let named = |byte: Option<&u8>| byte.is_some_and(|byte| is_name_byte(*byte));
+    sql.windows(name.len()).enumerate().any(|(at, window)| {
+        window.eq_ignore_ascii_case(name)
+            && !named(at.checked_sub(1).and_then(|before| sql.get(before)))
+            && !named(sql.get(at.saturating_add(name.len())))
+    })
+}
+
+/// Whether a byte is one a bare name is written with.
+const fn is_name_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$' || byte >= 0x80
+}
+
+/// The text of a name a statement wrote, and nothing where it wrote none.
+fn named_text(named: Option<Span>, sql: &[u8]) -> Vec<u8> {
+    named.map_or_else(Vec::new, |span| crate::schema::dequote(span.text(sql)))
 }

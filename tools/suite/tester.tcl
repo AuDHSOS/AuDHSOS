@@ -421,9 +421,22 @@ proc reset_db {} {
 }
 proc db_delete_and_reopen {{file test.db}} { reset_db }
 proc drop_all_tables {{db db}} {
-  foreach t [$db eval {SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'}] {
-    catch { $db eval "DROP TABLE '$t'" }
+  set pk [$db one "PRAGMA foreign_keys"]
+  catch { $db eval "PRAGMA foreign_keys = OFF" }
+  foreach {idx name file} [$db eval {PRAGMA database_list}] {
+    if {$idx==1} {
+      set master sqlite_temp_master
+    } else {
+      set master $name.sqlite_master
+    }
+    foreach {t type} [$db eval "
+      SELECT name, type FROM $master
+      WHERE type IN('table', 'view') AND name NOT LIKE 'sqliteX_%' ESCAPE 'X'
+    "] {
+      catch { $db eval "DROP $type \"$t\"" }
+    }
   }
+  catch { $db eval "PRAGMA foreign_keys = $pk" }
 }
 
 proc finish_test {} { harness_send done ; exit 0 }

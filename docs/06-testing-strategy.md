@@ -6230,3 +6230,29 @@ Document 18 step A7.
   page.
 - A text that holds no `attach` tells the files nothing, because writing
   them out costs O(n) in the pages of all of them.
+
+### 6.6.222 What the temp schema holds (`db-sqlite`)
+
+Document 18 step A6.
+
+- A statement written `TEMP` writes schema place one, which no file of the
+  client holds.
+- A bare name both the temp schema and `main` hold is answered out of the
+  temp schema, and a `DROP` of it takes the temp one away.
+- `sqlite_temp_master` and `sqlite_temp_schema` read the temp schema, and
+  `temp.sqlite_master` reads it as well.
+- A name that holds the letters `temp` and is no word of its own opens no
+  temp schema.
+- The temp schema holds a place no `ATTACH` counts against the ten, and no
+  `DETACH` takes it away.
+- A `DETACH` leaves the databases after the one it took away one place
+  lower.
+
+### 6.6.223 What an added column that points may fall back to (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A connection that holds its rows to no foreign key takes the column.
+- A table that holds no row takes the column.
+- A column that points and falls back to nothing is taken.
+- A column that points at no table is taken whatever it falls back to.

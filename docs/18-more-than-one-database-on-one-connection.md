@@ -174,7 +174,7 @@ committed and one not, which no replay repairs.
 | A3 | A reader over more than one image | done | A2 | L |
 | A4 | A statement that writes an attached file | done | A3 | M |
 | A5 | One transaction over more than one held file | open | A4 | M |
-| A6 | The temp schema | open | A3 | M |
+| A6 | The temp schema | done | A3 | M |
 | A7 | The harness over more than one path | done | A4 | S |
 
 ## 18.11 A1. One held file, as one struct
@@ -404,7 +404,7 @@ at the `BEGIN`.
 
 ### Status
 
-open.
+done.
 
 ### Depends on
 
@@ -420,17 +420,28 @@ M.
 
 ### Does
 
-1. Make an empty held file at schema place 1 when the first
-   `CREATE TEMP TABLE`, `CREATE TEMP VIEW`, `CREATE TEMP TRIGGER` or
-   `CREATE TEMP INDEX` runs.
-2. Write a temporary table into that held file, and read a bare name out
-   of it first.
-3. Answer its rows from `sqlite_temp_schema` and from
-   `sqlite_temp_master`.
-4. Answer `temp` as the schema name of a temporary table where the
-   authorizer is asked.
-5. Leave the held file out of what `Writer::written` answers, because no
-   file on the client's side holds it.
+1. Make an empty held file at schema place 1 where a statement names
+   `temp` or `sqlite_temp_schema` as a word of its own, which is
+   `sqlite3OpenTempDatabase` of `research/sqlite/src/build.c:2830`. An
+   `ATTACH` and a `DETACH` name a database rather than reading one, so
+   neither opens it.
+2. Write a statement written `TEMP` into that held file.
+3. Read a bare name out of the temp schema before `main` and before the
+   attached databases, which `sqlite3FindTable` of
+   `research/sqlite/src/build.c:373` reads them in the order of.
+4. Answer the rows of its own table from `sqlite_temp_schema` and
+   `sqlite_temp_master`, and the rows of `main` from `sqlite_schema` and
+   `sqlite_master`.
+5. Leave the held file out of what `Writer::written` and
+   `Writer::attached_files` answer, because no file on the client's side
+   holds it.
+6. Count it against no `ATTACH` of the ten, and take it away for no
+   `DETACH`.
+
+### Produces
+
+`crate::change::Writer::temping`, `crate::db::Database::searching` and
+`crate::db::Database::holding`.
 
 ### Done when
 

@@ -990,16 +990,18 @@ fn the_schema_is_a_table_that_is_read_and_not_written() {
             ]
         ]
     );
-    // The three names it answers to, and the statement it holds.
-    for name in [
-        b"sqlite_master".as_slice(),
-        b"sqlite_schema",
-        b"sqlite_temp_master",
-        b"sqlite_temp_schema",
-    ] {
+    // The two names it answers to, and the statement it holds. The two
+    // names of the temp schema's own table reach the temp schema, which a
+    // reader the caller attached none to holds nothing of.
+    for name in [b"sqlite_master".as_slice(), b"sqlite_schema"] {
         let mut sql = b"SELECT count(*) FROM ".to_vec();
         sql.extend_from_slice(name);
         assert_eq!(database.query(&sql).unwrap().rows, [[Value::Int(2)]]);
+    }
+    for name in [b"sqlite_temp_master".as_slice(), b"sqlite_temp_schema"] {
+        let mut sql = b"SELECT count(*) FROM ".to_vec();
+        sql.extend_from_slice(name);
+        assert!(database.query(&sql).is_err(), "{name:?}");
     }
     assert_eq!(
         database
@@ -1068,10 +1070,14 @@ fn a_row_of_the_schema_holds_the_statement_from_the_name_on() {
             b"CREATE TABLE a(x)".to_vec(),
             b"CREATE UNIQUE INDEX i ON a(x)".to_vec(),
             b"CREATE VIEW v AS SELECT 1".to_vec(),
-            b"CREATE TABLE abc(a, b, c)".to_vec(),
-            b"CREATE INDEX j ON abc(a)".to_vec(),
         ]
     );
+    // A table written `TEMP` and an index over it stand in the temp
+    // schema, which the file the client holds carries no row of.
+    let temp = writer.attached_written(b"temp").expect("a temp schema");
+    let database = Database::open(&temp).unwrap();
+    assert!(database.table(b"abc").is_some());
+    assert!(database.index(b"j").is_some());
 }
 
 #[test]
