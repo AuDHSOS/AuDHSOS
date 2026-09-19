@@ -65,6 +65,12 @@ Both tracks are finished.
 | 17 | [Text and fonts](17-text-and-fonts.md) | The pure `text-core` track: borrowed font parsing, fixed-point geometry, Unicode, shaping, resolution, layout, and colour glyphs; the two contracts the rasterizer is written against |
 | 18 | [Rasterization](18-rasterization.md) | The `text-raster` track: the surface, flattening to a tolerance, exact-area coverage, subpixel positioning, gamma, the glyph cache, the transcendentals, gradients, the clip and group stacks, and drawing a `LayoutView` |
 
+[audit/](audit) holds what an audit of the workspace found: one
+document per group of crates audited together, one section per
+finding, and the number of the GitHub issue each finding was filed
+as. It is a record of what was found, not a plan; a finding is
+closed by closing its issue.
+
 Beside the documents lie the standards they cite, verbatim and with
 their checksums, one directory per body that publishes them: [rfc/](rfc)
 for the RFCs (D-59), [oasis/](oasis) for what OASIS publishes (D-100),
