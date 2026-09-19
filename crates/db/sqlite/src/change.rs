@@ -397,8 +397,12 @@ const SCHEMA: [Affinity; 5] = [
     Affinity::Text,
 ];
 
-/// A database being written, statement by statement.
-pub struct Writer {
+/// One file a connection holds: its pages, its header and the journal
+/// beside them.
+///
+/// A connection holds one of these per database, which `main` is the
+/// first of.
+struct HeldFile {
     /// The pages of it.
     pages: Pages,
     /// The bytes of the file as it stood under the schema cookie beside
@@ -414,22 +418,9 @@ pub struct Writer {
     /// The nonce every checksum of the journal begins at, which comes
     /// from SQLite's random source.
     nonce: u32,
-    /// Where `random` and `randomblob` take their bytes from, which
-    /// comes from SQLite's random source as well.
-    random: crate::random::Source,
-    /// The moment `now` names, as the seconds since 1970, and nothing
-    /// where the caller told the connection none.
-    clock: Option<i64>,
     /// The page size a `PRAGMA page_size` named after the first table
     /// was made, which the next `VACUUM` writes the file under.
     wanted_page: Option<u32>,
-    /// What the connection was told for each pragma of
-    /// [`crate::pragma::HELD`], where it was told one.
-    kept: Vec<Option<i64>>,
-    /// The triggers running now, innermost last, which is what stops a
-    /// trigger that reaches itself where `PRAGMA recursive_triggers`
-    /// is off.
-    running: Vec<Vec<u8>>,
     /// How many bytes the header of the journal takes, which is what
     /// the device says a write cannot damage beyond.
     sector: u32,
@@ -444,6 +435,29 @@ pub struct Writer {
     /// Whether the commit after this one begins the log again, which a
     /// checkpoint that left the frames where they are asks for.
     restarting: bool,
+    /// The header as the open transaction began, where a `BEGIN` opened
+    /// one. A connection outside `BEGIN` holds none and commits every
+    /// statement of its own.
+    began: Option<Header>,
+}
+
+/// A database being written, statement by statement.
+pub struct Writer {
+    /// The file the connection holds under the name `main`.
+    held: HeldFile,
+    /// Where `random` and `randomblob` take their bytes from, which
+    /// comes from SQLite's random source as well.
+    random: crate::random::Source,
+    /// The moment `now` names, as the seconds since 1970, and nothing
+    /// where the caller told the connection none.
+    clock: Option<i64>,
+    /// What the connection was told for each pragma of
+    /// [`crate::pragma::HELD`], where it was told one.
+    kept: Vec<Option<i64>>,
+    /// The triggers running now, innermost last, which is what stops a
+    /// trigger that reaches itself where `PRAGMA recursive_triggers`
+    /// is off.
+    running: Vec<Vec<u8>>,
     /// What the connection was told for the two pragmas that hold a
     /// truth value outside [`crate::pragma::HELD`].
     truth: Truths,
@@ -464,10 +478,6 @@ pub struct Writer {
     /// at no row, which is the counter `sqlite3VdbeCheckFk` reads at a
     /// `COMMIT`.
     deferred: i64,
-    /// The header as the open transaction began, where a `BEGIN` opened
-    /// one. A connection outside `BEGIN` holds none and commits every
-    /// statement of its own.
-    began: Option<Header>,
 
     /// What the statement running now does beyond refusing the row
     /// where it breaks a constraint.
@@ -529,27 +539,49 @@ impl Writer {
     pub fn new(page_size: u32, reserved: u8, encoding: Encoding) -> Result<Self, Error> {
         let pages = Pages::new(page_size, reserved)?;
         Ok(Writer {
-            pages,
-            schema_bytes: None,
-            mode: Mode::Delete,
-            nonce: 0,
+            held: HeldFile {
+                pages,
+                schema_bytes: None,
+                mode: Mode::Delete,
+                nonce: 0,
+                wanted_page: None,
+                sector: SECTOR,
+                journal: None,
+                log: None,
+                origin: None,
+                restarting: false,
+                began: None,
+                header: Header {
+                    page_size,
+                    write_version: 1,
+                    read_version: 1,
+                    reserved,
+                    change_counter: 0,
+                    pages: 1,
+                    freelist: 0,
+                    freelist_pages: 0,
+                    schema_cookie: 0,
+                    schema_format: 0,
+                    cache_size: 0,
+                    largest_root: 0,
+                    encoding,
+                    user_version: 0,
+                    incremental_vacuum: 0,
+                    application_id: 0,
+                    version_valid_for: 0,
+                    library_version: LIBRARY_VERSION,
+                },
+            },
             random: crate::random::Source::default(),
             clock: None,
-            wanted_page: None,
             kept: alloc::vec![None; crate::pragma::HELD.len()],
             running: Vec::new(),
-            sector: SECTOR,
-            journal: None,
-            log: None,
-            origin: None,
-            restarting: false,
             truth: Truths::default(),
             asking: None,
             unwritten: Vec::new(),
             counted: crate::func::Counted::default(),
             writing: 0,
             deferred: 0,
-            began: None,
             refusing: Refusing::Abort,
             defined: &[],
             grouped: &[],
@@ -557,26 +589,6 @@ impl Writer {
             saved: Vec::new(),
             returned: Vec::new(),
             making_own: false,
-            header: Header {
-                page_size,
-                write_version: 1,
-                read_version: 1,
-                reserved,
-                change_counter: 0,
-                pages: 1,
-                freelist: 0,
-                freelist_pages: 0,
-                schema_cookie: 0,
-                schema_format: 0,
-                cache_size: 0,
-                largest_root: 0,
-                encoding,
-                user_version: 0,
-                incremental_vacuum: 0,
-                application_id: 0,
-                version_valid_for: 0,
-                library_version: LIBRARY_VERSION,
-            },
         })
     }
 
@@ -599,28 +611,30 @@ impl Writer {
         let header = Header::parse(image)?;
         let pages = Pages::opened(image, &header)?;
         Ok(Writer {
-            pages,
-            schema_bytes: None,
-            header,
-            mode: Mode::Delete,
-            nonce: 0,
+            held: HeldFile {
+                pages,
+                schema_bytes: None,
+                header,
+                mode: Mode::Delete,
+                nonce: 0,
+                wanted_page: None,
+                sector: SECTOR,
+                journal: None,
+                log: None,
+                origin: None,
+                restarting: false,
+                began: None,
+            },
             random: crate::random::Source::default(),
             clock: None,
-            wanted_page: None,
             kept: alloc::vec![None; crate::pragma::HELD.len()],
             running: Vec::new(),
-            sector: SECTOR,
-            journal: None,
-            log: None,
-            origin: None,
-            restarting: false,
             truth: Truths::default(),
             asking: None,
             unwritten: Vec::new(),
             counted: crate::func::Counted::default(),
             writing: 0,
             deferred: 0,
-            began: None,
             refusing: Refusing::Abort,
             defined: &[],
             grouped: &[],
@@ -683,9 +697,9 @@ impl Writer {
     /// modes here are the ones that write the database file itself;
     /// [`Writer::logging`] is the sixth.
     pub const fn journalling(&mut self, mode: Mode, nonce: u32, sector: u32) {
-        self.mode = mode;
-        self.nonce = nonce;
-        self.sector = sector;
+        self.held.mode = mode;
+        self.held.nonce = nonce;
+        self.held.sector = sector;
     }
 
     /// `PRAGMA auto_vacuum`, which gives the file pointer maps: page two
@@ -694,13 +708,13 @@ impl Writer {
     /// The pragma writes the file, so it stands before the first
     /// statement and before [`Writer::logging`].
     pub fn vacuuming(&mut self, incremental: bool) {
-        self.pages.vacuums();
+        self.held.pages.vacuums();
         // The pragma is itself a change, and the largest root a file
         // with no table holds is page one.
-        self.header.change_counter = 1;
-        self.header.version_valid_for = 1;
-        self.header.largest_root = 1;
-        self.header.incremental_vacuum = u32::from(incremental);
+        self.held.header.change_counter = 1;
+        self.held.header.version_valid_for = 1;
+        self.held.header.largest_root = 1;
+        self.held.header.incremental_vacuum = u32::from(incremental);
     }
 
     /// `PRAGMA journal_mode=wal`: the commits write frames into a log
@@ -713,12 +727,12 @@ impl Writer {
         // one more and names both versions two. A file that vacuums
         // itself counted the pragma that said so, so the two pragmas
         // count two between them.
-        self.header.write_version = 2;
-        self.header.read_version = 2;
-        self.header.change_counter = self.header.change_counter.saturating_add(1);
-        self.header.version_valid_for = self.header.change_counter;
-        self.origin = Some(self.pages.written(&self.header));
-        self.log = Some(Log::new(self.header.page_size, salt, 0, false));
+        self.held.header.write_version = 2;
+        self.held.header.read_version = 2;
+        self.held.header.change_counter = self.held.header.change_counter.saturating_add(1);
+        self.held.header.version_valid_for = self.held.header.change_counter;
+        self.held.origin = Some(self.held.pages.written(&self.held.header));
+        self.held.log = Some(Log::new(self.held.header.page_size, salt, 0, false));
     }
 
     /// What the connection has written, which `changes()`,
@@ -746,9 +760,9 @@ impl Writer {
     /// written a frame back into it.
     #[must_use]
     pub fn written(&self) -> Vec<u8> {
-        match &self.origin {
+        match &self.held.origin {
             Some(bytes) => bytes.clone(),
-            None => self.pages.written(&self.header),
+            None => self.held.pages.written(&self.held.header),
         }
     }
 
@@ -806,11 +820,11 @@ impl Writer {
             ],
             &SCHEMA,
             4,
-            self.header.encoding,
+            self.held.header.encoding,
         );
         drop(database);
-        crate::tree::update(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &row)?;
-        self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
+        crate::tree::update(&mut self.held.pages, crate::image::SCHEMA_ROOT, rowid, &row)?;
+        self.held.header.schema_cookie = self.held.header.schema_cookie.saturating_add(1);
         self.reread(&name, b"add column")
     }
 
@@ -887,11 +901,10 @@ impl Writer {
         }
         drop(database);
         for (rowid, values) in written {
-            let record = crate::record::write_in(&values, &SCHEMA, 4, self.header.encoding);
-            crate::tree::update(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &record)?;
+            self.schema_row(rowid, &values)?;
         }
         self.rename_sequence(&from, &to)?;
-        self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
+        self.held.header.schema_cookie = self.held.header.schema_cookie.saturating_add(1);
         Ok(())
     }
 
@@ -974,11 +987,11 @@ impl Writer {
             ],
             &SCHEMA,
             4,
-            self.header.encoding,
+            self.held.header.encoding,
         );
         let schema = crate::image::SCHEMA_ROOT;
-        crate::tree::update(&mut self.pages, schema, schema_rowid, &row)?;
-        self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
+        crate::tree::update(&mut self.held.pages, schema, schema_rowid, &row)?;
+        self.held.header.schema_cookie = self.held.header.schema_cookie.saturating_add(1);
         Ok(())
     }
 
@@ -1006,7 +1019,7 @@ impl Writer {
             let row = Indexing {
                 table,
                 values: &values,
-                encoding: self.header.encoding,
+                encoding: self.held.header.encoding,
             };
             // `sqlite3ExprIfFalse`: a `CHECK` holds where it answers
             // anything but false, so a row that answers nothing holds.
@@ -1102,10 +1115,9 @@ impl Writer {
         }
         drop(database);
         for (rowid, values) in written {
-            let record = crate::record::write_in(&values, &SCHEMA, 4, self.header.encoding);
-            crate::tree::update(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &record)?;
+            self.schema_row(rowid, &values)?;
         }
-        self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
+        self.held.header.schema_cookie = self.held.header.schema_cookie.saturating_add(1);
         Ok(())
     }
 
@@ -1162,10 +1174,10 @@ impl Writer {
             ],
             &SCHEMA,
             4,
-            self.header.encoding,
+            self.held.header.encoding,
         );
         let schema = crate::image::SCHEMA_ROOT;
-        crate::tree::update(&mut self.pages, schema, schema_rowid, &row)?;
+        crate::tree::update(&mut self.held.pages, schema, schema_rowid, &row)?;
         // `sqlite3AlterDropColumn` writes every row again with the
         // value of that column left out.
         for (key, values) in rows {
@@ -1175,11 +1187,11 @@ impl Writer {
                 .filter(|(place, _)| *place != at)
                 .map(|(_, value)| value)
                 .collect();
-            let record = crate::record::write_in(&held, &affinities, 4, self.header.encoding);
-            crate::tree::update(&mut self.pages, root, key, &record)?;
+            let record = crate::record::write_in(&held, &affinities, 4, self.held.header.encoding);
+            crate::tree::update(&mut self.held.pages, root, key, &record)?;
         }
         self.reads_without(&name, &column)?;
-        self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
+        self.held.header.schema_cookie = self.held.header.schema_cookie.saturating_add(1);
         Ok(())
     }
 
@@ -1206,7 +1218,7 @@ impl Writer {
             table,
             values,
             rowid,
-            encoding: self.header.encoding,
+            encoding: self.held.header.encoding,
             random: &self.random,
             clock: self.clock.map(crate::date::julian_of),
             sensitive: self.truth.sensitive,
@@ -1295,9 +1307,13 @@ impl Writer {
             for slot in values.iter_mut().take(1) {
                 *slot = Value::Text(to.to_vec());
             }
-            let record =
-                crate::record::write_in(&values, &[Affinity::None; 2], 4, self.header.encoding);
-            crate::tree::update(&mut self.pages, root, rowid, &record)?;
+            let record = crate::record::write_in(
+                &values,
+                &[Affinity::None; 2],
+                4,
+                self.held.header.encoding,
+            );
+            crate::tree::update(&mut self.held.pages, root, rowid, &record)?;
         }
         Ok(())
     }
@@ -1329,7 +1345,7 @@ impl Writer {
             };
         }
         for rowid in rowids {
-            crate::tree::remove(&mut self.pages, crate::image::SCHEMA_ROOT, rowid)?;
+            crate::tree::remove(&mut self.held.pages, crate::image::SCHEMA_ROOT, rowid)?;
         }
         // `sqlite3CodeDropTable` takes the row of `sqlite_sequence`
         // that names the table away with the table.
@@ -1338,9 +1354,9 @@ impl Writer {
         }
         roots.sort_unstable();
         for root in roots.into_iter().rev() {
-            crate::tree::destroy(&mut self.pages, root)?;
+            crate::tree::destroy(&mut self.held.pages, root)?;
         }
-        self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
+        self.held.header.schema_cookie = self.held.header.schema_cookie.saturating_add(1);
         Ok(())
     }
 
@@ -1432,7 +1448,7 @@ impl Writer {
     /// A file already in that mode stays in it, which is what the
     /// pragma answers for a connection that is already logging.
     fn log_mode(&mut self) {
-        if self.log.is_none() {
+        if self.held.log.is_none() {
             self.logging((0, 0));
         }
     }
@@ -1491,7 +1507,7 @@ impl Writer {
     /// its pages.
     fn checkpoint(&mut self, how: Option<&[u8]>) -> Vec<Vec<Value>> {
         let named = |word: &[u8]| how.is_some_and(|text| text.eq_ignore_ascii_case(word));
-        let Some(mut log) = self.log.take() else {
+        let Some(mut log) = self.held.log.take() else {
             // A file that is not logging holds no frame, which the C
             // library says with minus one rather than nought.
             return alloc::vec![alloc::vec![Value::Int(0), Value::Int(-1), Value::Int(-1)]];
@@ -1502,16 +1518,16 @@ impl Writer {
         if restarting {
             log.restart();
         }
-        self.log = Some(log);
-        self.restarting = !restarting;
+        self.held.log = Some(log);
+        self.held.restarting = !restarting;
         // `pager_write_changecounter`: the file the checkpoint writes
         // carries the counter the frames carried.
         let mut now = self.now();
         now.change_counter = now.change_counter.saturating_add(1);
         now.version_valid_for = now.change_counter;
-        self.origin = Some(self.pages.written(&now));
-        self.header.change_counter = now.change_counter;
-        self.header.version_valid_for = now.version_valid_for;
+        self.held.origin = Some(self.held.pages.written(&now));
+        self.held.header.change_counter = now.change_counter;
+        self.held.header.version_valid_for = now.version_valid_for;
         let counted = if truncating { 0 } else { frames };
         alloc::vec![alloc::vec![
             Value::Int(0),
@@ -1547,12 +1563,12 @@ impl Writer {
                 return Err(Error::NoSchema(named));
             }
         }
-        if self.began.is_some() {
+        if self.held.began.is_some() {
             return Err(Error::VacuumInTransaction);
         }
         let bytes = self.image();
-        let held = self.header;
-        let size = self.wanted_page.unwrap_or(held.page_size);
+        let held = self.held.header;
+        let size = self.held.wanted_page.unwrap_or(held.page_size);
         let mut fresh = Writer::new(size, held.reserved, held.encoding)?;
         fresh.defines(self.defined);
         fresh.groups(self.grouped);
@@ -1591,15 +1607,15 @@ impl Writer {
         }
         fresh.making_own = false;
         drop(database);
-        self.pages = fresh.pages;
-        self.header.page_size = fresh.header.page_size;
-        self.header.pages = fresh.header.pages;
-        self.header.freelist = fresh.header.freelist;
-        self.header.freelist_pages = fresh.header.freelist_pages;
-        self.header.largest_root = fresh.header.largest_root;
-        self.header.schema_cookie = held.schema_cookie.saturating_add(1);
-        self.header.change_counter = held.change_counter.saturating_add(1);
-        self.header.version_valid_for = self.header.change_counter;
+        self.held.pages = fresh.held.pages;
+        self.held.header.page_size = fresh.held.header.page_size;
+        self.held.header.pages = fresh.held.header.pages;
+        self.held.header.freelist = fresh.held.header.freelist;
+        self.held.header.freelist_pages = fresh.held.header.freelist_pages;
+        self.held.header.largest_root = fresh.held.header.largest_root;
+        self.held.header.schema_cookie = held.schema_cookie.saturating_add(1);
+        self.held.header.change_counter = held.change_counter.saturating_add(1);
+        self.held.header.version_valid_for = self.held.header.change_counter;
         Ok(())
     }
 
@@ -1627,7 +1643,7 @@ impl Writer {
             let text = |at: usize| -> Result<Vec<u8>, Error> {
                 Ok(match record.value(at)? {
                     Some(crate::record::Value::Text(bytes)) => {
-                        crate::value::decoded(bytes, self.header.encoding)
+                        crate::value::decoded(bytes, self.held.header.encoding)
                     }
                     _ => Vec::new(),
                 })
@@ -1672,11 +1688,11 @@ impl Writer {
                     &ordered(&table, values),
                     &affinities,
                     4,
-                    self.header.encoding,
+                    self.held.header.encoding,
                 );
                 let collations = crate::schema::key_collations(&table);
-                let order = ordering(&collations, self.header.encoding);
-                crate::tree::insert_entry(&mut self.pages, root, &record, key, order, false)?;
+                let order = ordering(&collations, self.held.header.encoding);
+                crate::tree::insert_entry(&mut self.held.pages, root, &record, key, order, false)?;
                 continue;
             }
             let mut held = values.clone();
@@ -1691,9 +1707,9 @@ impl Writer {
                 &ordered(&table, &held),
                 &affinities,
                 4,
-                self.header.encoding,
+                self.held.header.encoding,
             );
-            insert(&mut self.pages, root, keyed_rowid(key), &record)?;
+            insert(&mut self.held.pages, root, keyed_rowid(key), &record)?;
         }
         Ok(())
     }
@@ -1773,16 +1789,16 @@ impl Writer {
     /// The file the pages hold, which is what a statement reads its
     /// rows out of, whatever a log beside the file holds.
     fn image(&self) -> Vec<u8> {
-        self.pages.written(&self.header)
+        self.held.pages.written(&self.held.header)
     }
 
     /// The header as the pages stand, which is what a pragma answers:
     /// the count of pages and the free list are the pages' own and not
     /// the header's until a commit writes them.
     fn now(&self) -> Header {
-        let mut now = self.header;
-        let (first, count) = self.pages.freelist();
-        now.pages = self.pages.count();
+        let mut now = self.held.header;
+        let (first, count) = self.held.pages.freelist();
+        now.pages = self.held.pages.count();
         now.freelist = first;
         now.freelist_pages = count;
         now
@@ -1793,14 +1809,14 @@ impl Writer {
     /// keeps none.
     #[must_use]
     pub fn journal(&self) -> Option<&[u8]> {
-        self.journal.as_deref()
+        self.held.journal.as_deref()
     }
 
     /// The log the commits wrote their frames into, where the file is
     /// in write-ahead logging mode.
     #[must_use]
     pub fn log(&self) -> Option<&[u8]> {
-        self.log.as_ref().map(Log::bytes)
+        self.held.log.as_ref().map(Log::bytes)
     }
 
     /// Runs one statement, which is one transaction, and answers the
@@ -1843,20 +1859,20 @@ impl Writer {
         // A statement inside a transaction writes on what the
         // statements before it wrote, so the pages keep what they held
         // when the `BEGIN` ran and not when this statement began.
-        let was = self.began.unwrap_or(self.header);
+        let was = self.held.began.unwrap_or(self.held.header);
         // A statement of a transaction is one unit of its own as well:
         // the pages it opens are kept as it found them, which is the
         // statement journal.
-        if self.began.is_none() {
-            self.pages.begin();
+        if self.held.began.is_none() {
+            self.held.pages.begin();
         } else {
-            self.pages.mark();
+            self.held.pages.mark();
         }
-        let held = self.header;
+        let held = self.held.header;
         // `PRAGMA max_page_count` holds the file to a count of pages
         // from the statement that sets it onward, so the pages are told
         // it where each statement begins.
-        self.pages.capped(capped(self.told(b"max_page_count")));
+        self.held.pages.capped(capped(self.told(b"max_page_count")));
         self.refusing = Refusing::Abort;
         self.writing = 0;
         self.returned.clear();
@@ -1888,20 +1904,20 @@ impl Writer {
                 // runs inside one and the same pages either way where
                 // it runs on its own.
                 if matches!(self.refusing, Refusing::Rollback) {
-                    let was = self.began.take().unwrap_or(held);
+                    let was = self.held.began.take().unwrap_or(held);
                     self.saved.clear();
                     self.deferred = 0;
-                    self.pages.rollback();
-                    self.header = was;
+                    self.held.pages.rollback();
+                    self.held.header = was;
                     return Err(error);
                 }
                 if matches!(self.refusing, Refusing::Abort) {
-                    if self.began.is_none() {
-                        self.pages.rollback();
+                    if self.held.began.is_none() {
+                        self.held.pages.rollback();
                     } else {
-                        self.pages.undo();
+                        self.held.pages.undo();
                     }
-                    self.header = held;
+                    self.held.header = held;
                 }
                 return Err(error);
             }
@@ -1909,13 +1925,13 @@ impl Writer {
         // A statement inside a transaction is written by the `COMMIT`
         // and not by itself, which is what makes the transaction one
         // unit of work.
-        if self.began.is_none() {
+        if self.held.began.is_none() {
             // A statement of its own commits at its end, so a foreign
             // key held at the end of the transaction is held there.
             if self.deferred != 0 {
                 self.deferred = 0;
-                self.pages.rollback();
-                self.header = held;
+                self.held.pages.rollback();
+                self.held.header = held;
                 self.counts_step(0);
                 return Err(Error::Foreign);
             }
@@ -1998,7 +2014,7 @@ impl Writer {
     ///
     /// Taking `n` rows out costs O(n log n).
     fn unstat(&mut self, scope: Option<&[u8]>) -> Result<(), Error> {
-        let wanted = scope.map(|name| crate::value::stored(name, self.header.encoding));
+        let wanted = scope.map(|name| crate::value::stored(name, self.held.header.encoding));
         let (root, held) = {
             let bytes = self.image();
             let database = self.reading(&bytes)?;
@@ -2017,7 +2033,7 @@ impl Writer {
             (root, held)
         };
         for rowid in held {
-            crate::tree::remove(&mut self.pages, root, rowid)?;
+            crate::tree::remove(&mut self.held.pages, root, rowid)?;
         }
         Ok(())
     }
@@ -2033,9 +2049,11 @@ impl Writer {
             text(&stat.stat),
         ];
         let record =
-            crate::record::write_in(&values, &[Affinity::None; 3], 4, self.header.encoding);
-        let rowid = largest(&self.pages, root)?.unwrap_or(0).saturating_add(1);
-        insert(&mut self.pages, root, rowid, &record)?;
+            crate::record::write_in(&values, &[Affinity::None; 3], 4, self.held.header.encoding);
+        let rowid = largest(&self.held.pages, root)?
+            .unwrap_or(0)
+            .saturating_add(1);
+        insert(&mut self.held.pages, root, rowid, &record)?;
         Ok(())
     }
 
@@ -2128,14 +2146,14 @@ impl Writer {
         }
         match asked {
             crate::ast::Transaction::Begin => {
-                if self.began.is_some() {
+                if self.held.began.is_some() {
                     return Err(Error::Nested);
                 }
-                self.pages.begin();
-                self.began = Some(self.header);
+                self.held.pages.begin();
+                self.held.began = Some(self.held.header);
             }
             crate::ast::Transaction::Commit => {
-                if self.began.is_none() {
+                if self.held.began.is_none() {
                     return Err(Error::NoTransaction);
                 }
                 // `sqlite3VdbeCheckFk`: a transaction that leaves a
@@ -2145,18 +2163,18 @@ impl Writer {
                     self.refusing = Refusing::Fail;
                     return Err(Error::Foreign);
                 }
-                let was = self.began.take().ok_or(Error::NoTransaction)?;
+                let was = self.held.began.take().ok_or(Error::NoTransaction)?;
                 self.saved.clear();
                 self.commit(&was)?;
             }
             crate::ast::Transaction::Rollback => {
-                let was = self.began.take().ok_or(Error::NoTransaction)?;
+                let was = self.held.began.take().ok_or(Error::NoTransaction)?;
                 self.saved.clear();
                 self.deferred = 0;
                 // The pages go back to what they held and the header
                 // with them, so the transaction leaves no trace.
-                self.pages.rollback();
-                self.header = was;
+                self.held.pages.rollback();
+                self.held.header = was;
             }
         }
         Ok(Vec::new())
@@ -2196,15 +2214,15 @@ impl Writer {
         if let crate::ast::Savepoint::Open(_) = asked {
             // A `SAVEPOINT` outside a transaction opens one, which the
             // release of that savepoint commits.
-            let opener = self.began.is_none();
+            let opener = self.held.began.is_none();
             if opener {
-                self.pages.begin();
-                self.began = Some(self.header);
+                self.held.pages.begin();
+                self.held.began = Some(self.held.header);
             }
             self.saved.push(Saved {
                 name,
-                pages: self.pages.clone(),
-                header: self.header,
+                pages: self.held.pages.clone(),
+                header: self.held.header,
                 deferred: self.deferred,
                 opener,
             });
@@ -2219,8 +2237,8 @@ impl Writer {
             .ok_or_else(|| Error::NoSavepoint(name.clone()))?;
         if let crate::ast::Savepoint::Back(_) = asked {
             let held = self.saved.get(at).ok_or(Error::NoSavepoint(Vec::new()))?;
-            self.pages = held.pages.clone();
-            self.header = held.header;
+            self.held.pages = held.pages.clone();
+            self.held.header = held.header;
             self.deferred = held.deferred;
             // The savepoint the statement names stays open, and every
             // one inside it is gone.
@@ -2237,7 +2255,7 @@ impl Writer {
         }
         self.saved.truncate(at);
         if opener {
-            let was = self.began.take().ok_or(Error::NoTransaction)?;
+            let was = self.held.began.take().ok_or(Error::NoTransaction)?;
             self.commit(&was)?;
         }
         Ok(Vec::new())
@@ -2250,37 +2268,41 @@ impl Writer {
         // A transaction that wrote no page is one the commit has
         // nothing to write for, so the change counter stands where it
         // stood.
-        if self.pages.changed() {
+        if self.held.pages.changed() {
             // `autoVacuumCommit`: a file that vacuums itself whole moves
             // the pages at its end into the free pages below them and is
             // cut back before the commit writes anything.
-            if self.header.incremental_vacuum == 0 {
-                self.pages.vacuum_commit()?;
+            if self.held.header.incremental_vacuum == 0 {
+                self.held.pages.vacuum_commit()?;
             }
-            self.header.pages = self.pages.count();
-            (self.header.freelist, self.header.freelist_pages) = self.pages.freelist();
+            self.held.header.pages = self.held.pages.count();
+            (self.held.header.freelist, self.held.header.freelist_pages) =
+                self.held.pages.freelist();
             // `pager_write_changecounter`: a frame of page one holds
             // the counter the file holds and one, and no checkpoint
             // writes the file, so every commit writes the same counter
             // there. A commit that writes the file itself carries the
             // counter on.
-            if let Some(log) = &mut self.log {
+            if let Some(log) = &mut self.held.log {
                 // `walRestartLog`: the commit after a checkpoint begins
                 // the log again, because every frame of it is in the
                 // file already.
-                if self.restarting {
+                if self.held.restarting {
                     log.restart();
-                    self.restarting = false;
+                    self.held.restarting = false;
                 }
-                let mut now = self.header;
+                let mut now = self.held.header;
                 now.change_counter = now.change_counter.saturating_add(1);
                 now.version_valid_for = now.change_counter;
-                log.commit(&self.pages.frames(&now), self.pages.count());
+                log.commit(&self.held.pages.frames(&now), self.held.pages.count());
             } else {
-                self.header.change_counter = self.header.change_counter.saturating_add(1);
-                self.header.version_valid_for = self.header.change_counter;
-                let written = self.pages.journal(was, self.nonce, self.sector);
-                self.journal = crate::journal::committed(&written, self.mode);
+                self.held.header.change_counter = self.held.header.change_counter.saturating_add(1);
+                self.held.header.version_valid_for = self.held.header.change_counter;
+                let written = self
+                    .held
+                    .pages
+                    .journal(was, self.held.nonce, self.held.sector);
+                self.held.journal = crate::journal::committed(&written, self.held.mode);
             }
         }
         Ok(())
@@ -2388,7 +2410,7 @@ impl Writer {
             // the connection's own cache size together, so the pragma
             // that reads either answers what this one wrote.
             let size = crate::pragma::cache_word(text);
-            self.header.cache_size = size;
+            self.held.header.cache_size = size;
             for slot in self.kept.iter_mut().skip(crate::pragma::CACHED).take(1) {
                 *slot = Some(i64::from(size));
             }
@@ -2400,9 +2422,9 @@ impl Writer {
         // number of the user. `data_version` and `freelist_count` carry
         // `PragFlg_ReadOnly` and are read alone.
         let word = match setting {
-            crate::pragma::Setting::SchemaVersion => Some(&mut self.header.schema_cookie),
-            crate::pragma::Setting::UserVersion => Some(&mut self.header.user_version),
-            crate::pragma::Setting::ApplicationId => Some(&mut self.header.application_id),
+            crate::pragma::Setting::SchemaVersion => Some(&mut self.held.header.schema_cookie),
+            crate::pragma::Setting::UserVersion => Some(&mut self.held.header.user_version),
+            crate::pragma::Setting::ApplicationId => Some(&mut self.held.header.application_id),
             _ => None,
         };
         if let Some(word) = word {
@@ -2421,23 +2443,23 @@ impl Writer {
             self.truth.counting = crate::pragma::truth(text).ok_or(Error::Unsupported)?;
             return Ok(Vec::new());
         }
-        if self.header.schema_cookie != 0 && setting != crate::pragma::Setting::JournalMode {
+        if self.held.header.schema_cookie != 0 && setting != crate::pragma::Setting::JournalMode {
             // `sqlite3BtreeSetPageSize` keeps the size the pragma named
             // for the next `VACUUM`, which is the only thing that can
             // write the file again under another size.
             if setting == crate::pragma::Setting::PageSize {
-                self.wanted_page = crate::pragma::whole_number(text);
+                self.held.wanted_page = crate::pragma::whole_number(text);
             }
             return Ok(Vec::new());
         }
         match setting {
             crate::pragma::Setting::PageSize => {
                 let size = crate::pragma::whole_number(text).ok_or(Error::Unsupported)?;
-                self.pages = Pages::new(size, self.header.reserved)?;
-                self.header.page_size = size;
+                self.held.pages = Pages::new(size, self.held.header.reserved)?;
+                self.held.header.page_size = size;
             }
             crate::pragma::Setting::Encoding => {
-                self.header.encoding =
+                self.held.header.encoding =
                     crate::pragma::encoding_of(text).ok_or(Error::Unsupported)?;
             }
             crate::pragma::Setting::AutoVacuum => {
@@ -2450,7 +2472,7 @@ impl Writer {
                 // `sqlite3PragmaJournalMode` leaves the mode as it is
                 // where the connection has a transaction open, so the
                 // pragma answers the mode it did not change.
-                let held = self.began.is_some();
+                let held = self.held.began.is_some();
                 let wanted = crate::pragma::mode_of(text);
                 if crate::pragma::is_log(text) {
                     if !held {
@@ -2460,12 +2482,12 @@ impl Writer {
                     // A file in write-ahead logging leaves that mode
                     // through a checkpoint, which this crate does not
                     // write.
-                    if self.log.is_some() {
+                    if self.held.log.is_some() {
                         return Err(Error::Unsupported);
                     }
                     let mode = wanted.ok_or(Error::Unsupported)?;
                     if !held {
-                        self.mode = mode;
+                        self.held.mode = mode;
                     }
                 }
                 // The mode the connection is left in is the one row
@@ -2568,7 +2590,7 @@ impl Writer {
         // out of the header word, so the file and not the crate says
         // what a connection told nothing answers.
         let fallback = match at {
-            crate::pragma::CACHED => crate::pragma::default_cache(self.header.cache_size),
+            crate::pragma::CACHED => crate::pragma::default_cache(self.held.header.cache_size),
             _ => crate::pragma::HELD
                 .get(at)
                 .map_or(0, |keeps| keeps.fallback),
@@ -2588,10 +2610,11 @@ impl Writer {
         // there changes nothing.
         // `PragTyp_SYNCHRONOUS` refuses inside a transaction, because the
         // level says what a commit writes and a commit is waiting.
-        if self.began.is_some() && keeps.is_some_and(|keeps| keeps.name == b"synchronous") {
+        if self.held.began.is_some() && keeps.is_some_and(|keeps| keeps.name == b"synchronous") {
             return Err(Error::SafetyInTransaction);
         }
-        let held = self.began.is_some() && keeps.is_some_and(|keeps| keeps.name == b"foreign_keys");
+        let held =
+            self.held.began.is_some() && keeps.is_some_and(|keeps| keeps.name == b"foreign_keys");
         if !held && !keeps.is_some_and(|keeps| keeps.fixed) {
             for slot in self.kept.iter_mut().skip(at).take(1) {
                 *slot = Some(value);
@@ -2639,10 +2662,10 @@ impl Writer {
         };
         let columns = crate::schema::columns_from(&answer.names);
         let written = crate::schema::created(&name, &columns, &affinities);
-        let root = self.pages.add(Kind::LeafTable, 0)?;
-        self.pages.point(root, crate::tree::Point::Root, 0)?;
-        if self.header.largest_root != 0 {
-            self.header.largest_root = root;
+        let root = self.held.pages.add(Kind::LeafTable, 0)?;
+        self.held.pages.point(root, crate::tree::Point::Root, 0)?;
+        if self.held.header.largest_root != 0 {
+            self.held.header.largest_root = root;
         }
         let text = |bytes: &[u8]| Value::Text(bytes.to_vec());
         let row = crate::record::write_in(
@@ -2655,15 +2678,15 @@ impl Writer {
             ],
             &SCHEMA,
             4,
-            self.header.encoding,
+            self.held.header.encoding,
         );
         let at = self.schema_blank()?;
         self.schema_written(at, &row)?;
         let mut rowid = 0_i64;
         for row in &answer.rows {
-            let record = crate::record::write_in(row, &affinities, 4, self.header.encoding);
+            let record = crate::record::write_in(row, &affinities, 4, self.held.header.encoding);
             rowid = rowid.saturating_add(1);
-            insert(&mut self.pages, root, rowid, &record)?;
+            insert(&mut self.held.pages, root, rowid, &record)?;
         }
         Ok(())
     }
@@ -2770,14 +2793,14 @@ impl Writer {
             ],
             &SCHEMA,
             4,
-            self.header.encoding,
+            self.held.header.encoding,
         );
-        let rowid = largest(&self.pages, crate::image::SCHEMA_ROOT)?
+        let rowid = largest(&self.held.pages, crate::image::SCHEMA_ROOT)?
             .unwrap_or(0)
             .saturating_add(1);
-        insert(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &row)?;
-        self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
-        self.header.schema_format = 4;
+        insert(&mut self.held.pages, crate::image::SCHEMA_ROOT, rowid, &row)?;
+        self.held.header.schema_cookie = self.held.header.schema_cookie.saturating_add(1);
+        self.held.header.schema_format = 4;
         Ok(())
     }
 
@@ -2905,7 +2928,7 @@ impl Writer {
     /// `sqlite3_get_autocommit` answers nought for.
     #[must_use]
     pub const fn began(&self) -> bool {
-        self.began.is_some()
+        self.held.began.is_some()
     }
 
     /// The function this connection was told, which a caller that opens
@@ -2930,10 +2953,10 @@ impl Writer {
     /// five modes that write the file itself otherwise.
     #[must_use]
     pub const fn journalled(&self) -> &'static [u8] {
-        if self.log.is_some() {
+        if self.held.log.is_some() {
             return b"wal";
         }
-        crate::pragma::mode_word(self.mode)
+        crate::pragma::mode_word(self.held.mode)
     }
 
     /// What this connection was told for the pragmas it keeps a value
@@ -3328,12 +3351,12 @@ impl Writer {
         self.unindex_row(&kept, &table, &values, key)?;
         if table.without_rowid {
             let collations = crate::schema::key_collations(&table);
-            let order = ordering(&collations, self.header.encoding);
-            crate::tree::remove_entry(&mut self.pages, root, key, order)?;
+            let order = ordering(&collations, self.held.header.encoding);
+            crate::tree::remove_entry(&mut self.held.pages, root, key, order)?;
             self.counted.total = self.counted.total.saturating_add(1);
             return Ok(());
         }
-        crate::tree::remove(&mut self.pages, root, keyed_rowid(key))?;
+        crate::tree::remove(&mut self.held.pages, root, keyed_rowid(key))?;
         self.counted.total = self.counted.total.saturating_add(1);
         Ok(())
     }
@@ -3416,14 +3439,15 @@ impl Writer {
             // refuses nothing.
             let affinities = ordered_affinities(&table);
             let stored = ordered(&table, values);
-            let record = crate::record::write_in(&stored, &affinities, 4, self.header.encoding);
+            let record =
+                crate::record::write_in(&stored, &affinities, 4, self.held.header.encoding);
             let collations = crate::schema::key_collations(&table);
             // The entry the row stands under is written again in place,
             // which is one taken out and one put back.
-            let order = ordering(&collations, self.header.encoding);
-            crate::tree::remove_entry(&mut self.pages, root, key, order)?;
-            let order = ordering(&collations, self.header.encoding);
-            crate::tree::insert_entry(&mut self.pages, root, &record, key, order, false)?;
+            let order = ordering(&collations, self.held.header.encoding);
+            crate::tree::remove_entry(&mut self.held.pages, root, key, order)?;
+            let order = ordering(&collations, self.held.header.encoding);
+            crate::tree::insert_entry(&mut self.held.pages, root, &record, key, order, false)?;
             self.counted.total = self.counted.total.saturating_add(1);
             return Ok(());
         }
@@ -3442,9 +3466,9 @@ impl Writer {
             &ordered(&table, &held),
             &affinities,
             4,
-            self.header.encoding,
+            self.held.header.encoding,
         );
-        crate::tree::update(&mut self.pages, root, keyed_rowid(key), &record)?;
+        crate::tree::update(&mut self.held.pages, root, keyed_rowid(key), &record)?;
         // `sqlite3_total_changes` counts the rows a foreign key action
         // writes, which `sqlite3FkActions` writes through a trigger of
         // its own.
@@ -3558,31 +3582,33 @@ impl Writer {
     /// The record of five noughts `sqlite3StartTable` writes into
     /// `sqlite_schema` first, and the key it is written under.
     fn schema_blank(&mut self) -> Result<i64, Error> {
-        let rowid = largest(&self.pages, crate::image::SCHEMA_ROOT)?
+        let rowid = largest(&self.held.pages, crate::image::SCHEMA_ROOT)?
             .unwrap_or(0)
             .saturating_add(1);
-        let blank = crate::record::write_in(
-            &[
-                Value::Null,
-                Value::Null,
-                Value::Null,
-                Value::Null,
-                Value::Null,
-            ],
-            &SCHEMA,
-            4,
-            self.header.encoding,
-        );
-        insert(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &blank)?;
+        let blanks = alloc::vec![Value::Null; SCHEMA.len()];
+        let blank = crate::record::write_in(&blanks, &SCHEMA, 4, self.held.header.encoding);
+        let pages = &mut self.held.pages;
+        insert(pages, crate::image::SCHEMA_ROOT, rowid, &blank)?;
         Ok(rowid)
+    }
+
+    /// One row of `sqlite_schema` written again over the row that
+    /// carries the same key.
+    ///
+    /// Writing one row costs O(log n) in the rows of the schema.
+    fn schema_row(&mut self, rowid: i64, values: &[Value]) -> Result<(), Error> {
+        let record = crate::record::write_in(values, &SCHEMA, 4, self.held.header.encoding);
+        let pages = &mut self.held.pages;
+        crate::tree::update(pages, crate::image::SCHEMA_ROOT, rowid, &record)?;
+        Ok(())
     }
 
     /// The row `sqlite3EndTable` writes over the blank record, which
     /// raises the schema cookie.
     fn schema_written(&mut self, rowid: i64, row: &[u8]) -> Result<(), Error> {
-        crate::tree::update(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, row)?;
-        self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
-        self.header.schema_format = 4;
+        crate::tree::update(&mut self.held.pages, crate::image::SCHEMA_ROOT, rowid, row)?;
+        self.held.header.schema_cookie = self.held.header.schema_cookie.saturating_add(1);
+        self.held.header.schema_format = 4;
         Ok(())
     }
 
@@ -3593,12 +3619,12 @@ impl Writer {
         let Some(kind) = kind else {
             return Ok(0);
         };
-        let root = self.pages.add(kind, 0)?;
+        let root = self.held.pages.add(kind, 0)?;
         // `sqlite3BtreeCreateTable`: the root of a tree is named by no
         // page, and page one holds the largest root the file has.
-        self.pages.point(root, crate::tree::Point::Root, 0)?;
-        if self.header.largest_root != 0 {
-            self.header.largest_root = root;
+        self.held.pages.point(root, crate::tree::Point::Root, 0)?;
+        if self.held.header.largest_root != 0 {
+            self.held.header.largest_root = root;
         }
         Ok(root)
     }
@@ -3690,19 +3716,19 @@ impl Writer {
             ],
             &SCHEMA,
             4,
-            self.header.encoding,
+            self.held.header.encoding,
         );
         // `sqlite3StartTable` writes a record of five noughts and
         // `sqlite3EndTable` writes over it, so the page keeps the bytes
         // of the blank record where the row no longer stands.
         // `sqlite3CreateIndex` writes its row once and has no blank.
         if let Definition::Index(index) = definition {
-            let rowid = largest(&self.pages, crate::image::SCHEMA_ROOT)?
+            let rowid = largest(&self.held.pages, crate::image::SCHEMA_ROOT)?
                 .unwrap_or(0)
                 .saturating_add(1);
-            insert(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &row)?;
-            self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
-            self.header.schema_format = 4;
+            insert(&mut self.held.pages, crate::image::SCHEMA_ROOT, rowid, &row)?;
+            self.held.header.schema_cookie = self.held.header.schema_cookie.saturating_add(1);
+            self.held.header.schema_format = 4;
             return self.fill(arena, &index, sql, root, &over);
         }
         let rowid = self.schema_blank()?;
@@ -3714,9 +3740,9 @@ impl Writer {
         if counts && !self.holds(SEQUENCE)? {
             // The two rows are one change of the schema, so the cookie
             // the statement raised already counts for both.
-            let cookie = self.header.schema_cookie;
+            let cookie = self.held.header.schema_cookie;
             self.own_table(b"CREATE TABLE sqlite_sequence(name,seq)")?;
-            self.header.schema_cookie = cookie;
+            self.held.header.schema_cookie = cookie;
         }
         Ok(())
     }
@@ -3908,10 +3934,10 @@ impl Writer {
         let Some(index) = crate::schema::own_index(table, at) else {
             return Ok(());
         };
-        let root = self.pages.add(Kind::LeafIndex, 0)?;
-        self.pages.point(root, crate::tree::Point::Root, 0)?;
-        if self.header.largest_root != 0 {
-            self.header.largest_root = root;
+        let root = self.held.pages.add(Kind::LeafIndex, 0)?;
+        self.held.pages.point(root, crate::tree::Point::Root, 0)?;
+        if self.held.header.largest_root != 0 {
+            self.held.header.largest_root = root;
         }
         let text = |bytes: &[u8]| Value::Text(bytes.to_vec());
         let row = crate::record::write_in(
@@ -3924,12 +3950,12 @@ impl Writer {
             ],
             &SCHEMA,
             4,
-            self.header.encoding,
+            self.held.header.encoding,
         );
-        let rowid = largest(&self.pages, crate::image::SCHEMA_ROOT)?
+        let rowid = largest(&self.held.pages, crate::image::SCHEMA_ROOT)?
             .unwrap_or(0)
             .saturating_add(1);
-        insert(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &row)?;
+        insert(&mut self.held.pages, crate::image::SCHEMA_ROOT, rowid, &row)?;
         Ok(())
     }
 
@@ -3959,7 +3985,7 @@ impl Writer {
                 arena,
                 sql,
                 table,
-                encoding: self.header.encoding,
+                encoding: self.held.header.encoding,
             };
             let mut entries = Vec::new();
             for (key, values) in database.held_rows_of(&read.table)? {
@@ -4083,7 +4109,7 @@ impl Writer {
             table,
             old: None,
             new: Some((&early, shown)),
-            encoding: self.header.encoding,
+            encoding: self.held.header.encoding,
         };
         self.fire(before, &[], &row)
     }
@@ -4176,7 +4202,7 @@ impl Writer {
             (table, rows)
         };
         for values in &rows {
-            let row = Fired::inserted(&table, values, self.header.encoding);
+            let row = Fired::inserted(&table, values, self.held.header.encoding);
             self.fire(&triggers, &[], &row)?;
         }
         // `sqlite3_changes` counts the rows a statement wrote, and a
@@ -4239,7 +4265,7 @@ impl Writer {
                         table: &table,
                         values,
                         rowid: None,
-                        encoding: self.header.encoding,
+                        encoding: self.held.header.encoding,
                         random: &self.random,
                         clock: self.clock.map(crate::date::julian_of),
                         sensitive: self.truth.sensitive,
@@ -4283,7 +4309,7 @@ impl Writer {
                 table: &table,
                 old: Some((old, 0)),
                 new: Some((new, 0)),
-                encoding: self.header.encoding,
+                encoding: self.held.header.encoding,
             };
             self.fire(&triggers, &columns, &row)?;
         }
@@ -4322,7 +4348,7 @@ impl Writer {
                     table: &table,
                     values,
                     rowid: None,
-                    encoding: self.header.encoding,
+                    encoding: self.held.header.encoding,
                     random: &self.random,
                     clock: self.clock.map(crate::date::julian_of),
                     sensitive: self.truth.sensitive,
@@ -4354,7 +4380,7 @@ impl Writer {
                 table: &table,
                 old: Some((values, 0)),
                 new: None,
-                encoding: self.header.encoding,
+                encoding: self.held.header.encoding,
             };
             self.fire(&triggers, &[], &row)?;
         }
@@ -4393,7 +4419,7 @@ impl Writer {
             table,
             values,
             rowid: None,
-            encoding: self.header.encoding,
+            encoding: self.held.header.encoding,
             random: &self.random,
             clock: self.clock.map(crate::date::julian_of),
             sensitive: self.truth.sensitive,
@@ -4450,7 +4476,7 @@ impl Writer {
                 table: &table,
                 old: Some((&values, 0)),
                 new: None,
-                encoding: self.header.encoding,
+                encoding: self.held.header.encoding,
             };
             if fires && !self.fire(&before, &[], &row)? {
                 continue;
@@ -4461,8 +4487,8 @@ impl Writer {
             self.orphaned(name, &table, &values, 0, None)?;
             let key = crate::schema::key_of(&table, &values);
             self.unindex_row(&kept, &table, &values, &key)?;
-            let order = ordering(&collations, self.header.encoding);
-            crate::tree::remove_entry(&mut self.pages, root, &key, order)?;
+            let order = ordering(&collations, self.held.header.encoding);
+            crate::tree::remove_entry(&mut self.held.pages, root, &key, order)?;
             taken = taken.saturating_add(1);
             self.writing = taken;
             self.returns(arena, statement.returning, sql, (&table, &values, None))?;
@@ -4519,7 +4545,7 @@ impl Writer {
         let mut count = 0_i64;
         for (_, values) in rows {
             let mut named = values;
-            let row = Fired::inserted(&table, &named, self.header.encoding);
+            let row = Fired::inserted(&table, &named, self.held.header.encoding);
             if fires && !self.fire(&before, &[], &row)? {
                 continue;
             }
@@ -4539,14 +4565,15 @@ impl Writer {
             }
             self.parented(&table, &named, 0)?;
             self.index_row(&kept, &table, &named, &key)?;
-            let record = crate::record::write_in(&stored, &affinities, 4, self.header.encoding);
-            let order = ordering(&collations, self.header.encoding);
-            crate::tree::insert_entry(&mut self.pages, root, &record, &key, order, false)?;
+            let record =
+                crate::record::write_in(&stored, &affinities, 4, self.held.header.encoding);
+            let order = ordering(&collations, self.held.header.encoding);
+            crate::tree::insert_entry(&mut self.held.pages, root, &record, &key, order, false)?;
             count = count.saturating_add(1);
             self.writing = count;
             self.returns(arena, statement.returning, sql, (&table, &named, None))?;
             if fires {
-                let row = Fired::inserted(&table, &named, self.header.encoding);
+                let row = Fired::inserted(&table, &named, self.held.header.encoding);
                 self.fire(&after, &[], &row)?;
             }
         }
@@ -4572,7 +4599,8 @@ impl Writer {
         let collations = crate::schema::key_collations(into.table);
         for at in into.order.iter().copied() {
             let Some(index) = at else {
-                if crate::tree::find_entry(&self.pages, into.root, key, &collations)?.is_none() {
+                if crate::tree::find_entry(&self.held.pages, into.root, key, &collations)?.is_none()
+                {
                     continue;
                 }
                 let columns = Self::key_column(into.table, None);
@@ -4688,7 +4716,7 @@ impl Writer {
             table,
             held: (&held, 0),
             proposed: (wanted.proposed, 0),
-            encoding: self.header.encoding,
+            encoding: self.held.header.encoding,
         };
         // The `WHERE` of the clause is read against the row the conflict
         // found, and a row it does not hold for is passed over.
@@ -4741,7 +4769,7 @@ impl Writer {
                 table,
                 old: Some((held, 0)),
                 new: Some((&named, 0)),
-                encoding: self.header.encoding,
+                encoding: self.held.header.encoding,
             };
             if !self.fire(&before, columns, &row)? {
                 return Ok(false);
@@ -4769,13 +4797,14 @@ impl Writer {
         self.parented(table, &named, 0)?;
         self.orphaned(&table.name, table, held, 0, Some((&named, 0)))?;
         self.unindex_row(wanted.kept, table, held, &was)?;
-        let order = ordering(&collations, self.header.encoding);
-        crate::tree::remove_entry(&mut self.pages, root, &was, order)?;
+        let order = ordering(&collations, self.held.header.encoding);
+        crate::tree::remove_entry(&mut self.held.pages, root, &was, order)?;
         self.index_row(wanted.kept, table, &named, &key)?;
         let stored = ordered(table, &named);
-        let record = crate::record::write_in(&stored, wanted.affinities, 4, self.header.encoding);
-        let order = ordering(&collations, self.header.encoding);
-        crate::tree::insert_entry(&mut self.pages, root, &record, &key, order, false)?;
+        let record =
+            crate::record::write_in(&stored, wanted.affinities, 4, self.held.header.encoding);
+        let order = ordering(&collations, self.held.header.encoding);
+        crate::tree::insert_entry(&mut self.held.pages, root, &record, &key, order, false)?;
         let answered = (table, named.as_slice(), None);
         self.returns(wanted.arena, wanted.returning, wanted.sql, answered)?;
         if fires {
@@ -4783,7 +4812,7 @@ impl Writer {
                 table,
                 old: Some((held, 0)),
                 new: Some((&named, 0)),
-                encoding: self.header.encoding,
+                encoding: self.held.header.encoding,
             };
             self.fire(&after, columns, &row)?;
         }
@@ -4806,7 +4835,7 @@ impl Writer {
         kept: &[Kept],
         written: Conflict,
     ) -> Result<bool, Error> {
-        if crate::tree::find_entry(&self.pages, root, key, collations)?.is_none() {
+        if crate::tree::find_entry(&self.held.pages, root, key, collations)?.is_none() {
             return Ok(true);
         }
         let mut answer = written;
@@ -4845,7 +4874,7 @@ impl Writer {
             table,
             old: Some((&values, 0)),
             new: None,
-            encoding: self.header.encoding,
+            encoding: self.held.header.encoding,
         };
         // A trigger that says the row stays leaves the key where it
         // was, so what the statement writes shares a key with it.
@@ -4853,8 +4882,8 @@ impl Writer {
             return Ok(false);
         }
         self.unindex_row(kept, table, &values, key)?;
-        let order = ordering(&collations, self.header.encoding);
-        crate::tree::remove_entry(&mut self.pages, root, key, order)?;
+        let order = ordering(&collations, self.held.header.encoding);
+        crate::tree::remove_entry(&mut self.held.pages, root, key, order)?;
         self.fire(&after, &[], &row)?;
         Ok(true)
     }
@@ -4962,7 +4991,7 @@ impl Writer {
                     table,
                     values: &values,
                     rowid: None,
-                    encoding: self.header.encoding,
+                    encoding: self.held.header.encoding,
                     random: &self.random,
                     clock: self.clock.map(crate::date::julian_of),
                     sensitive: self.truth.sensitive,
@@ -5048,10 +5077,11 @@ impl Writer {
                 .get(stood.len()..)
                 .unwrap_or_default()
                 .iter()
-                .map(|value| stored(value, self.header.encoding))
+                .map(|value| stored(value, self.held.header.encoding))
                 .collect();
-            let order = ordering(&collations, self.header.encoding);
-            let found = crate::tree::entry_tail_at(&self.pages, root, &stood, order, tail.len())?;
+            let order = ordering(&collations, self.held.header.encoding);
+            let found =
+                crate::tree::entry_tail_at(&self.held.pages, root, &stood, order, tail.len())?;
             if found.as_deref() != Some(tail.as_slice()) {
                 continue;
             }
@@ -5061,7 +5091,7 @@ impl Writer {
                     table: &table,
                     old: Some((&held, 0)),
                     new: Some((&named, 0)),
-                    encoding: self.header.encoding,
+                    encoding: self.held.header.encoding,
                 };
                 if !self.fire(&before, &columns, &row)? {
                     continue;
@@ -5079,13 +5109,14 @@ impl Writer {
             self.orphaned(name, &table, &held, 0, Some((&named, 0)))?;
             let was = crate::schema::key_of(&table, &held);
             self.unindex_row(&kept, &table, &held, &was)?;
-            let order = ordering(&collations, self.header.encoding);
-            crate::tree::remove_entry(&mut self.pages, root, &was, order)?;
+            let order = ordering(&collations, self.held.header.encoding);
+            crate::tree::remove_entry(&mut self.held.pages, root, &was, order)?;
             self.index_row(&kept, &table, &named, &key)?;
             let stored = ordered(&table, &named);
-            let record = crate::record::write_in(&stored, &affinities, 4, self.header.encoding);
-            let order = ordering(&collations, self.header.encoding);
-            crate::tree::insert_entry(&mut self.pages, root, &record, &key, order, false)?;
+            let record =
+                crate::record::write_in(&stored, &affinities, 4, self.held.header.encoding);
+            let order = ordering(&collations, self.held.header.encoding);
+            crate::tree::insert_entry(&mut self.held.pages, root, &record, &key, order, false)?;
             changed = changed.saturating_add(1);
             self.writing = changed;
             self.returns(arena, statement.returning, sql, (&table, &named, None))?;
@@ -5094,7 +5125,7 @@ impl Writer {
                     table: &table,
                     old: Some((&held, 0)),
                     new: Some((&named, 0)),
-                    encoding: self.header.encoding,
+                    encoding: self.held.header.encoding,
                 };
                 self.fire(&after, &columns, &row)?;
             }
@@ -5158,9 +5189,9 @@ impl Writer {
         entries.sort_by(|one, other| order_of_keys(one, other, collations));
         let affinities = alloc::vec![Affinity::None; collations.len().saturating_add(1)];
         for key in entries {
-            let record = crate::record::write_in(&key, &affinities, 4, self.header.encoding);
-            let order = ordering(collations, self.header.encoding);
-            crate::tree::insert_entry(&mut self.pages, root, &record, &key, order, true)?;
+            let record = crate::record::write_in(&key, &affinities, 4, self.held.header.encoding);
+            let order = ordering(collations, self.held.header.encoding);
+            crate::tree::insert_entry(&mut self.held.pages, root, &record, &key, order, true)?;
         }
         Ok(())
     }
@@ -5196,7 +5227,7 @@ impl Writer {
             arena: tree,
         } in held
         {
-            crate::tree::clear_tree(&mut self.pages, root, Kind::LeafIndex)?;
+            crate::tree::clear_tree(&mut self.held.pages, root, Kind::LeafIndex)?;
             let entries = {
                 let bytes = self.image();
                 let database = self.reading(&bytes)?;
@@ -5205,7 +5236,7 @@ impl Writer {
                     arena: &tree,
                     sql: &made,
                     table: over,
-                    encoding: self.header.encoding,
+                    encoding: self.held.header.encoding,
                 };
                 let mut entries = Vec::new();
                 for (key, values) in database.held_rows_of(&table)? {
@@ -5335,7 +5366,7 @@ impl Writer {
         for _ in 0..100 {
             let word = i64::from_le_bytes(self.random.word().to_le_bytes());
             let drawn = (word & (i64::MAX >> 1)).saturating_add(1);
-            if !crate::tree::holds(&self.pages, root, drawn)? {
+            if !crate::tree::holds(&self.held.pages, root, drawn)? {
                 return Ok(drawn);
             }
         }
@@ -5430,7 +5461,7 @@ impl Writer {
             // writes, so the largest key is read again per row where
             // one runs.
             if fires {
-                next = next.max(largest(&self.pages, root)?.unwrap_or(0));
+                next = next.max(largest(&self.held.pages, root)?.unwrap_or(0));
             }
             let given = Self::given_key(key, &values, alias)?;
             let rowid = given.map_or_else(|| self.free_key(root, next, counted.is_some()), Ok)?;
@@ -5450,7 +5481,7 @@ impl Writer {
                 table: &table,
                 old: None,
                 new: Some((&named, rowid)),
-                encoding: self.header.encoding,
+                encoding: self.held.header.encoding,
             };
             match self.conflicted(&into, &named, rowid)? {
                 Conflicted::Write => {}
@@ -5464,7 +5495,7 @@ impl Writer {
                 &ordered(&table, &values),
                 &affinities,
                 4,
-                self.header.encoding,
+                self.held.header.encoding,
             );
             // `I.1` of `src/fkey.c`: a row whose foreign key points at
             // no row is refused before it is written.
@@ -5473,7 +5504,7 @@ impl Writer {
             // index before the row, so the pages an entry runs onto
             // are taken before the pages the row runs onto.
             self.index_row(&kept, &table, &named, &keyed_as(rowid))?;
-            insert(&mut self.pages, root, rowid, &record)?;
+            insert(&mut self.held.pages, root, rowid, &record)?;
             written = written.saturating_add(1);
             self.writing = written;
             // `sqlite3_last_insert_rowid` is the key of the last row an
@@ -5513,7 +5544,7 @@ impl Writer {
         table: &Table,
         name: &[u8],
     ) -> Result<(i64, Option<i64>), Error> {
-        let largest = largest(&self.pages, root)?.unwrap_or(0);
+        let largest = largest(&self.held.pages, root)?.unwrap_or(0);
         let counted = table
             .autoincrement
             .then(|| self.counted(name))
@@ -5596,7 +5627,7 @@ impl Writer {
         named: &[Value],
         rowid: i64,
     ) -> Result<Option<Conflicted>, Error> {
-        if into.alias.is_none() || !crate::tree::holds(&self.pages, into.root, rowid)? {
+        if into.alias.is_none() || !crate::tree::holds(&self.held.pages, into.root, rowid)? {
             return Ok(None);
         }
         let key = Self::key_column(into.table, into.alias);
@@ -5732,7 +5763,7 @@ impl Writer {
             table,
             held: (&held, rowid),
             proposed: (wanted.proposed, wanted.given),
-            encoding: self.header.encoding,
+            encoding: self.held.header.encoding,
         };
         // The `WHERE` of the clause is read against the row the conflict
         // found, and a row it does not hold for is passed over.
@@ -5807,7 +5838,7 @@ impl Writer {
                 table,
                 old: Some((held, rowid)),
                 new: Some((&named, key)),
-                encoding: self.header.encoding,
+                encoding: self.held.header.encoding,
             };
             if !self.fire(&before, columns, &row)? {
                 return Ok(false);
@@ -5822,7 +5853,7 @@ impl Writer {
             table,
             old: Some((held, rowid)),
             new: Some((&named, key)),
-            encoding: self.header.encoding,
+            encoding: self.held.header.encoding,
         };
         if key != rowid {
             self.keyed(
@@ -5844,7 +5875,7 @@ impl Writer {
             &ordered(table, &values),
             &affinities,
             4,
-            self.header.encoding,
+            self.held.header.encoding,
         );
         self.unparented(table, held, rowid)?;
         self.parented(table, &named, key)?;
@@ -5852,13 +5883,13 @@ impl Writer {
         self.unindex_row(wanted.kept, wanted.table, held, &keyed_as(rowid))?;
         let moved = key != rowid;
         if moved {
-            crate::tree::remove(&mut self.pages, wanted.root, rowid)?;
+            crate::tree::remove(&mut self.held.pages, wanted.root, rowid)?;
         }
         self.index_row(wanted.kept, wanted.table, &named, &keyed_as(key))?;
         if moved {
-            insert(&mut self.pages, wanted.root, key, &record)?;
+            insert(&mut self.held.pages, wanted.root, key, &record)?;
         } else {
-            crate::tree::update(&mut self.pages, wanted.root, rowid, &record)?;
+            crate::tree::update(&mut self.held.pages, wanted.root, rowid, &record)?;
         }
         let answered = (table, named.as_slice(), Some(key));
         self.returns(wanted.arena, wanted.returning, wanted.sql, answered)?;
@@ -5873,7 +5904,7 @@ impl Writer {
     ///
     /// Taking one row out costs O(log n).
     fn uncount(&mut self, name: &[u8]) -> Result<(), Error> {
-        let wanted = crate::value::stored(name, self.header.encoding);
+        let wanted = crate::value::stored(name, self.held.header.encoding);
         let found = {
             let bytes = self.image();
             let database = self.reading(&bytes)?;
@@ -5889,7 +5920,7 @@ impl Writer {
                 .map(|(rowid, _)| (root, *rowid))
         };
         if let Some((root, rowid)) = found {
-            crate::tree::remove(&mut self.pages, root, rowid)?;
+            crate::tree::remove(&mut self.held.pages, root, rowid)?;
         }
         Ok(())
     }
@@ -5901,7 +5932,7 @@ impl Writer {
     fn counted(&self, name: &[u8]) -> Result<i64, Error> {
         let bytes = self.image();
         let database = self.reading(&bytes)?;
-        let wanted = crate::value::stored(name, self.header.encoding);
+        let wanted = crate::value::stored(name, self.held.header.encoding);
         Ok(database
             .rows_of(SEQUENCE)?
             .iter()
@@ -5916,7 +5947,7 @@ impl Writer {
     ///
     /// Writing one row costs O(log n).
     fn count_up(&mut self, name: &[u8], held: i64) -> Result<(), Error> {
-        let wanted = crate::value::stored(name, self.header.encoding);
+        let wanted = crate::value::stored(name, self.held.header.encoding);
         let (root, rowid) = {
             let bytes = self.image();
             let database = self.reading(&bytes)?;
@@ -5932,14 +5963,16 @@ impl Writer {
             &[Value::Text(wanted), Value::Int(held)],
             &[Affinity::None; 2],
             4,
-            self.header.encoding,
+            self.held.header.encoding,
         );
         if let Some(rowid) = rowid {
-            crate::tree::update(&mut self.pages, root, rowid, &record)?;
+            crate::tree::update(&mut self.held.pages, root, rowid, &record)?;
             return Ok(());
         }
-        let rowid = largest(&self.pages, root)?.unwrap_or(0).saturating_add(1);
-        insert(&mut self.pages, root, rowid, &record)?;
+        let rowid = largest(&self.held.pages, root)?
+            .unwrap_or(0)
+            .saturating_add(1);
+        insert(&mut self.held.pages, root, rowid, &record)?;
         Ok(())
     }
 }
@@ -6697,7 +6730,7 @@ impl Writer {
                     table,
                     values,
                     rowid: Some(*rowid),
-                    encoding: self.header.encoding,
+                    encoding: self.held.header.encoding,
                     random: &self.random,
                     clock: self.clock.map(crate::date::julian_of),
                     sensitive: self.truth.sensitive,
@@ -6735,7 +6768,7 @@ impl Writer {
                 table: &table,
                 old: Some((&values, key)),
                 new: None,
-                encoding: self.header.encoding,
+                encoding: self.held.header.encoding,
             };
             if fires && !self.fire(&before, &[], &row)? {
                 continue;
@@ -6746,7 +6779,7 @@ impl Writer {
             self.unparented(&table, &values, key)?;
             self.orphaned(&name, &table, &values, key, None)?;
             self.unindex_row(&kept, &table, &values, &keyed_as(key))?;
-            crate::tree::remove(&mut self.pages, root, key)?;
+            crate::tree::remove(&mut self.held.pages, root, key)?;
             taken = taken.saturating_add(1);
             self.writing = taken;
             let answered = (&table, values.as_slice(), Some(key));
@@ -6831,7 +6864,7 @@ impl Writer {
                     table,
                     values: &values,
                     rowid: Some(rowid),
-                    encoding: self.header.encoding,
+                    encoding: self.held.header.encoding,
                     random: &self.random,
                     clock: self.clock.map(crate::date::julian_of),
                     sensitive: self.truth.sensitive,
@@ -6930,7 +6963,7 @@ impl Writer {
             // the first of them was written, so a row the statement
             // took out on the way is passed over rather than written
             // again.
-            if !crate::tree::holds(&self.pages, root, rowid)? {
+            if !crate::tree::holds(&self.held.pages, root, rowid)? {
                 continue;
             }
             // The column the key is another name for says the key, so a
@@ -6943,7 +6976,7 @@ impl Writer {
                     table: &table,
                     old: Some((&held, rowid)),
                     new: Some((&named, key)),
-                    encoding: self.header.encoding,
+                    encoding: self.held.header.encoding,
                 };
                 if !self.fire(&before, &columns, &row)? {
                     continue;
@@ -6957,7 +6990,7 @@ impl Writer {
                 table: &table,
                 old: Some((&held, rowid)),
                 new: Some((&named, key)),
-                encoding: self.header.encoding,
+                encoding: self.held.header.encoding,
             };
             // A row that keeps the key it had shares it with nothing.
             if key != rowid && !self.keyed(root, &kept, &table, alias, key, statement.conflict)? {
@@ -6976,7 +7009,7 @@ impl Writer {
                 &ordered(&table, &values),
                 &affinities,
                 4,
-                self.header.encoding,
+                self.held.header.encoding,
             );
             // `I.1` of `src/fkey.c` over the row as it will stand, and
             // `D.2` over the row as it stands: a row that points at no
@@ -6990,13 +7023,13 @@ impl Writer {
             self.unindex_row(&kept, &table, &held, &keyed_as(rowid))?;
             let moved = key != rowid;
             if moved {
-                crate::tree::remove(&mut self.pages, root, rowid)?;
+                crate::tree::remove(&mut self.held.pages, root, rowid)?;
             }
             self.index_row(&kept, &table, &named, &keyed_as(key))?;
             if moved {
-                insert(&mut self.pages, root, key, &record)?;
+                insert(&mut self.held.pages, root, key, &record)?;
             } else {
-                crate::tree::update(&mut self.pages, root, rowid, &record)?;
+                crate::tree::update(&mut self.held.pages, root, rowid, &record)?;
             }
             changed = changed.saturating_add(1);
             self.writing = changed;
@@ -7054,7 +7087,7 @@ impl Writer {
         values: &[Value],
         tail: &[Value],
     ) -> Result<(), Error> {
-        let encoding = self.header.encoding;
+        let encoding = self.held.header.encoding;
         for held in kept {
             let over = held.over(table, encoding);
             if !indexes_row(&held.index, &over, values)? {
@@ -7062,8 +7095,8 @@ impl Writer {
             }
             let key = entry_of(&held.index, &over, values, tail)?;
             let plain = alloc::vec![Affinity::None; key.len()];
-            let entry = crate::record::write_in(&key, &plain, 4, self.header.encoding);
-            let pages = &mut self.pages;
+            let entry = crate::record::write_in(&key, &plain, 4, self.held.header.encoding);
+            let pages = &mut self.held.pages;
             let order = ordering(&held.collations, encoding);
             crate::tree::insert_entry(pages, held.root, &entry, &key, order, false)?;
         }
@@ -7096,7 +7129,7 @@ impl Writer {
             table,
             old: Some((&values, rowid)),
             new: None,
-            encoding: self.header.encoding,
+            encoding: self.held.header.encoding,
         };
         // A trigger that says the row stays leaves the key where it
         // was, so what the statement writes shares a key with it.
@@ -7104,7 +7137,7 @@ impl Writer {
             return Ok(false);
         }
         self.unindex_row(kept, table, &values, &keyed_as(rowid))?;
-        crate::tree::remove(&mut self.pages, root, rowid)?;
+        crate::tree::remove(&mut self.held.pages, root, rowid)?;
         self.fire(&after, &[], &row)?;
         Ok(true)
     }
@@ -7152,7 +7185,7 @@ impl Writer {
         if !one.index.unique {
             return Ok(None);
         }
-        let over = one.over(table, self.header.encoding);
+        let over = one.over(table, self.held.header.encoding);
         if !indexes_row(&one.index, &over, values)? {
             return Ok(None);
         }
@@ -7162,8 +7195,8 @@ impl Writer {
             return Ok(None);
         }
         let width = tail.len();
-        let order = ordering(&one.collations, self.header.encoding);
-        let found = crate::tree::entry_tail_at(&self.pages, one.root, key, order, width)?;
+        let order = ordering(&one.collations, self.held.header.encoding);
+        let found = crate::tree::entry_tail_at(&self.held.pages, one.root, key, order, width)?;
         Ok(found.filter(|found| held != Some(found.as_slice())))
     }
 
@@ -7189,13 +7222,13 @@ impl Writer {
         // statement writes under it. Building them per row costs O(n)
         // in the pages of the file, which is O(n²) over a statement that
         // writes n rows.
-        let cookie = self.header.schema_cookie;
-        let bytes = match self.schema_bytes.take() {
+        let cookie = self.held.header.schema_cookie;
+        let bytes = match self.held.schema_bytes.take() {
             Some((held, bytes)) if held == cookie => bytes,
             _ => self.image(),
         };
         let answered = self.checked(&bytes, table, values, rowid, written);
-        self.schema_bytes = Some((cookie, bytes));
+        self.held.schema_bytes = Some((cookie, bytes));
         answered
     }
 
@@ -7252,7 +7285,7 @@ impl Writer {
             table,
             values,
             rowid: Some(rowid),
-            encoding: self.header.encoding,
+            encoding: self.held.header.encoding,
             random: &self.random,
             clock: self.clock.map(crate::date::julian_of),
             sensitive: self.truth.sensitive,
@@ -7303,7 +7336,7 @@ impl Writer {
         key: i64,
         written: Conflict,
     ) -> Result<bool, Error> {
-        if alias.is_none() || !crate::tree::holds(&self.pages, root, key)? {
+        if alias.is_none() || !crate::tree::holds(&self.held.pages, root, key)? {
             return Ok(true);
         }
         match written {
@@ -7426,15 +7459,15 @@ impl Writer {
         values: &[Value],
         tail: &[Value],
     ) -> Result<(), Error> {
-        let encoding = self.header.encoding;
+        let encoding = self.held.header.encoding;
         for held in kept {
             let over = held.over(table, encoding);
             if !indexes_row(&held.index, &over, values)? {
                 continue;
             }
             let key = entry_of(&held.index, &over, values, tail)?;
-            let order = ordering(&held.collations, self.header.encoding);
-            crate::tree::remove_entry(&mut self.pages, held.root, &key, order)?;
+            let order = ordering(&held.collations, self.held.header.encoding);
+            crate::tree::remove_entry(&mut self.held.pages, held.root, &key, order)?;
         }
         Ok(())
     }

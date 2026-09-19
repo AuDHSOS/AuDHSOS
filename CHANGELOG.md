@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` holds the pages, the header and the journal of one file in
+  one struct, which is the first step toward more than one database on
+  one connection. D-322 records the track and
+  [document 18](docs/18-more-than-one-database-on-one-connection.md)
+  specifies it.
+
 - `db-sqlite` writes the new name at every `REFERENCES` clause of the
   schema that named a table `ALTER TABLE ... RENAME TO` renames. D-321
   records it. Catalog 6.6.217. `fkey2.test` goes from 1029 cases passing
