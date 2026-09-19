@@ -11936,3 +11936,30 @@ fn the_space_of_25_5_2_lays_every_container_out() -> Result<(), Error> {
     );
     Ok(())
 }
+
+#[test]
+fn the_done_and_the_value_of_7_4_4_reach_a_getter_of_the_script() -> Result<(), Error> {
+    /// An iterator whose result holds both parts as accessors.
+    const MADE: &str = "var k=[];function make(v){var i=0;return {[Symbol.iterator](){return this},next(){var a=i++;return {get done(){k.push('d'+a);return a>=v.length},get value(){k.push('v'+a);return v[a]}}}}}";
+    // 7.4.4 step 3 reads the `done` with 7.3.2 and 7.4.5 the `value`, in that
+    // order and only where the walk goes on.
+    for source in [
+        "return Array.from(make([1,2,3])).join(',')+'|'+k.join(',')",
+        "return [...make(['a','b'])].join('-')+'|'+k.join(',')",
+    ] {
+        let source = alloc::format!("(function(){{{MADE}{source}}})()");
+        differential(&source)?;
+    }
+    // 24.2.1.1 walks the same way, which the stack backend has no clause for.
+    let source = alloc::format!(
+        "(function(){{{MADE}return ''+new Set(make([1,2,2])).size+'|'+k.join(',')}})()"
+    );
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    assert_eq!(
+        realm.evaluate(&source)?,
+        Value::string("2|d0,v0,d1,v1,d2,v2,d3"),
+        "{source}"
+    );
+    Ok(())
+}

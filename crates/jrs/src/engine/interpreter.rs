@@ -1205,6 +1205,11 @@ const ITERATOR_WALK_RESOLVING: i32 = 10;
 const ITERATOR_WALK_THENING: i32 = 11;
 /// Step 4.d.iii is waiting for the `resolve` of its capability.
 const ITERATOR_WALK_SETTLING: i32 = 12;
+/// 7.4.4 step 3 is waiting for the `done` of the result, which an accessor
+/// answers through a getter of the Script.
+const ITERATOR_WALK_DONE: i32 = 13;
+/// 7.4.5 is waiting for the `value` of the same result.
+const ITERATOR_WALK_VALUE: i32 = 14;
 
 /// The `this` value of a clause of 22.2.6, in its record.
 const REGEXP_RECORD_RECEIVER: u32 = 0;
@@ -11272,6 +11277,8 @@ impl RegisterVM {
                 taker.collection(),
                 taker.constructor(),
                 VALUE_UNDEFINED,
+                VALUE_UNDEFINED,
+                VALUE_UNDEFINED,
             ],
         )?;
         // The record outlives every frame the walk opens, so it is a root of a
@@ -11457,12 +11464,23 @@ impl RegisterVM {
                 }
                 // 7.4.4 step 3 reads the result, and a `done` that is true
                 // ends the walk with the Array it filled.
-                ITERATOR_WALK_STEPPING => {
+                ITERATOR_WALK_STEPPING | ITERATOR_WALK_DONE | ITERATOR_WALK_VALUE => {
                     // 7.4.9 steps 5 and 7 leave with what `next` or the result
                     // of it threw and close nothing; only the steps after the
                     // value is in hand close with 7.4.10.
-                    let stepped = answered.as_object().is_some();
-                    match self.continue_iterator_step(record, answered, heap, realm) {
+                    let stepped = phase != ITERATOR_WALK_STEPPING || answered.as_object().is_some();
+                    let taken = match phase {
+                        // The getter of the `done` or of the `value` answered,
+                        // and the step goes on from there.
+                        ITERATOR_WALK_DONE => {
+                            self.take_the_iterator_result(record, answered, heap, realm)
+                        }
+                        ITERATOR_WALK_VALUE => {
+                            self.finish_the_iterator_step(record, answered, heap, realm)
+                        }
+                        _ => self.continue_iterator_step(record, answered, heap, realm),
+                    };
+                    match taken {
                         Ok(Some(called)) => Some(called),
                         Ok(None) => match Self::set_the_length_of_23_1_2_1(record, heap, realm) {
                             Ok(Some(called)) => Some(called),
@@ -11774,10 +11792,70 @@ impl RegisterVM {
                 "the next of an iterator answered no object",
             ));
         };
-        let (done, value) = Self::iterator_step_parts(result, heap)?;
+        // 7.4.4 step 3 reads the `done` with 7.3.2, which for an accessor is
+        // a getter of the Script.
+        promise::set_slot(heap, record, 13, answered)?;
+        match Self::iterator_result_part(result, &DONE_NAME, heap)? {
+            ResultPart::Getter(get) => {
+                promise::set_slot(heap, record, 6, Value::from_smi(ITERATOR_WALK_DONE))?;
+                Ok(Some((get, answered)))
+            }
+            ResultPart::Held(done) => self.take_the_iterator_result(record, done, heap, realm),
+        }
+    }
+
+    /// 7.4.4 step 3 with the `done` in hand: a walk that is not done reads the
+    /// `value` of 7.4.5 off the same result.
+    fn take_the_iterator_result(
+        &self,
+        record: Value,
+        done: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<(Value, Value)>, VMError> {
         if Self::to_boolean(done, heap)? {
             return Ok(None);
         }
+        let held = promise::slot(heap, record, 13);
+        let result = held.as_object().ok_or(VMError::TypeError)?;
+        match Self::iterator_result_part(result, &VALUE_NAME, heap)? {
+            ResultPart::Getter(get) => {
+                promise::set_slot(heap, record, 6, Value::from_smi(ITERATOR_WALK_VALUE))?;
+                Ok(Some((get, held)))
+            }
+            ResultPart::Held(value) => self.finish_the_iterator_step(record, value, heap, realm),
+        }
+    }
+
+    /// One part of the result of 7.4.4, as 7.3.2 reads it.
+    fn iterator_result_part(
+        result: ObjectRef,
+        name: &[u16],
+        heap: &mut GenerationalHeap,
+    ) -> Result<ResultPart, VMError> {
+        let key = PropertyKey::String(heap.strings.intern_units(name)?);
+        let Some(found) = heap.lookup_named(result, key)? else {
+            return Ok(ResultPart::Held(VALUE_UNDEFINED));
+        };
+        if found.flags.is_accessor {
+            let (get, _) = Self::accessor_parts(found.value, heap)?;
+            if !get.is_undefined() {
+                return Ok(ResultPart::Getter(get));
+            }
+            return Ok(ResultPart::Held(VALUE_UNDEFINED));
+        }
+        Ok(ResultPart::Held(found.value))
+    }
+
+    /// 7.4.5 with the `value` in hand: the walk either keeps it or names the
+    /// call that takes it on.
+    fn finish_the_iterator_step(
+        &self,
+        record: Value,
+        value: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<(Value, Value)>, VMError> {
         let tag = promise::slot(heap, record, 9).as_smi().unwrap_or(0);
         // 27.1.3.3.9 step 6.a takes the first element as the accumulator where
         // the call named none, and counts it.
@@ -12227,26 +12305,6 @@ impl RegisterVM {
             promise::set_slot(heap, entries, end.saturating_add(1), value)?;
         }
         Ok(())
-    }
-
-    /// The `done` and the `value` of 7.4.4 step 4.
-    fn iterator_step_parts(
-        result: ObjectRef,
-        heap: &mut GenerationalHeap,
-    ) -> Result<(Value, Value), VMError> {
-        let mut parts = [VALUE_UNDEFINED, VALUE_UNDEFINED];
-        for (slot, name) in ["done", "value"].into_iter().enumerate() {
-            let key = PropertyKey::String(heap.strings.intern(name)?);
-            if let Some(found) = heap.lookup_named(result, key)?
-                && let Some(part) = parts.get_mut(slot)
-            {
-                *part = Self::plain_value(found)?;
-            }
-        }
-        Ok((
-            *parts.first().unwrap_or(&VALUE_UNDEFINED),
-            *parts.get(1).unwrap_or(&VALUE_UNDEFINED),
-        ))
     }
 
     /// Leaves the scope the walk held before its error reaches the caller.
@@ -34882,6 +34940,21 @@ fn integer_argument(
 
 /// UTF-16 code units of the property name `"length"`.
 const LENGTH_NAME: [u16; 6] = [0x6C, 0x65, 0x6E, 0x67, 0x74, 0x68];
+
+/// UTF-16 code units of the property name `"done"`, which 7.4.4 reads.
+const DONE_NAME: [u16; 4] = [0x64, 0x6F, 0x6E, 0x65];
+
+/// UTF-16 code units of the property name `"value"`, which 7.4.5 reads.
+const VALUE_NAME: [u16; 5] = [0x76, 0x61, 0x6C, 0x75, 0x65];
+
+/// One part of the result of 7.4.4: what the property holds, or the getter of
+/// the Script a read of it runs.
+enum ResultPart {
+    /// The value 7.3.2 answers without a frame.
+    Held(Value),
+    /// The getter a frame of the walk runs.
+    Getter(Value),
+}
 
 /// The `prototype` 10.2.5 gives a constructor, as code units.
 const PROTOTYPE_NAME: [u16; 9] = [0x70, 0x72, 0x6F, 0x74, 0x6F, 0x74, 0x79, 0x70, 0x65];
