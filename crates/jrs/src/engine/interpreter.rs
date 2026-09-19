@@ -1158,6 +1158,15 @@ const PROXY_KIND_OWN: i32 = 7;
 const PROXY_KIND_HAS: i32 = 8;
 /// The `[[Delete]]` of 10.5.10.
 const PROXY_KIND_DELETE: i32 = 9;
+/// The `[[OwnPropertyKeys]]` of 10.5.11.
+const PROXY_KIND_KEYS: i32 = 10;
+/// Which of the three clauses of 20.1.2 and 28.1 asked for the keys: every
+/// key, every String key or every Symbol key.
+const PROXY_KEYS_EVERY: i32 = 0;
+/// 20.1.2.10 answers every own String key.
+const PROXY_KEYS_STRINGS: i32 = 1;
+/// 20.1.2.11 answers every own Symbol key.
+const PROXY_KEYS_SYMBOLS: i32 = 2;
 /// The bit of `PROXY_PRESENT` for each field a descriptor may have.
 const DESCRIPTOR_VALUE: i32 = 1;
 /// The bit for `[[Writable]]`.
@@ -6078,6 +6087,28 @@ impl RegisterVM {
                 name,
                 false,
                 (call.return_pc, call.caller_code_id),
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
+        // 28.1.10, 20.1.2.10 and 20.1.2.11 reach `[[OwnPropertyKeys]]`, which
+        // for a Proxy is the `ownKeys` of its handler.
+        if let Some(form) = match intrinsic {
+            Intrinsic::ReflectOwnKeys => Some(PROXY_KEYS_EVERY),
+            Intrinsic::ObjectGetOwnPropertyNames => Some(PROXY_KEYS_STRINGS),
+            Intrinsic::ObjectGetOwnPropertySymbols => Some(PROXY_KEYS_SYMBOLS),
+            _ => None,
+        } && let Some(proxy) = self
+            .call_argument(&call, 0, heap)?
+            .as_object()
+            .filter(|object| heap.is_a_proxy(*object))
+        {
+            return self.begin_the_proxy_keys(
+                proxy,
+                form,
+                &call,
                 units,
                 active_feedback,
                 heap,
@@ -11443,6 +11474,185 @@ impl RegisterVM {
         Ok(None)
     }
 
+    /// `[[OwnPropertyKeys]]` of 10.5.11: the `ownKeys` of the handler answers
+    /// the List of keys, which `form` narrows to what the clause asked for.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a trap opens a frame, which needs what a call needs"
+    )]
+    fn begin_the_proxy_keys(
+        &mut self,
+        proxy: ObjectRef,
+        form: i32,
+        call: &Call,
+        code: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let (target, handler) = Self::proxy_parts(proxy, heap, realm)?;
+        let trap = Self::proxy_trap(handler, "ownKeys", heap, realm)?;
+        // Reading what the target owns is its own `[[OwnPropertyKeys]]`,
+        // which for a target that is itself a Proxy is a second trap.
+        if target
+            .as_object()
+            .is_some_and(|object| heap.is_a_proxy(object))
+        {
+            return Err(VMError::Unsupported("an internal method of a Proxy"));
+        }
+        let Some(object) = target.as_object() else {
+            return Err(VMError::TypeError);
+        };
+        // Step 4 forwards to the target where the handler carries no trap.
+        if trap.is_undefined() {
+            let keys = Self::narrowed_keys(heap.own_keys(object)?, form);
+            self.acc = Self::array_of(keys, heap, realm)?;
+            return Ok(None);
+        }
+        let record = promise::record(
+            heap,
+            realm,
+            &[
+                target,
+                VALUE_UNDEFINED,
+                Value::from_smi(PROXY_KIND_KEYS),
+                Value::from_smi(form),
+            ],
+        )?;
+        let arguments = Self::array_of(alloc::vec![target], heap, realm)?;
+        // The record and the List outlive the frame the trap opens, so they
+        // are roots of a scope of their own, which the answer leaves.
+        heap.enter_scope();
+        let state = heap.push_root(record)?;
+        let list = heap.push_root(arguments)?;
+        let call = Call {
+            receiver: Value::from_object(handler),
+            func: Reg(0),
+            arg_start: Reg(0),
+            arg_count: 1,
+            slot: 0,
+            resume: Some(Resume::ProxyTrap {
+                state,
+                arguments: list,
+            }),
+            construct: None,
+            return_pc: call.return_pc,
+            caller_code_id: call.caller_code_id,
+            coerced: 0,
+        };
+        let entered = self.enter_call_value(trap, code, active_feedback, heap, realm, call)?;
+        if entered.is_some() {
+            return Ok(entered);
+        }
+        // A trap written in Rust answered without a frame of its own.
+        let answered = self.acc;
+        self.finish_the_proxy_trap(state, answered, heap, realm)?;
+        Ok(None)
+    }
+
+    /// The keys of one object, as the clause that asked narrowed them.
+    fn narrowed_keys(keys: Vec<(PropertyKey, bool)>, form: i32) -> Vec<Value> {
+        keys.into_iter()
+            .filter_map(|(key, _)| match key {
+                PropertyKey::String(name) if form != PROXY_KEYS_SYMBOLS => {
+                    Some(Value::from_string(name))
+                }
+                PropertyKey::Symbol(symbol) if form != PROXY_KEYS_STRINGS => {
+                    Some(Value::from_symbol(symbol))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Steps 6 to 19 of 10.5.11: the List the `ownKeys` trap answered, read
+    /// with 7.3.19, checked for duplicates and against what the target owns.
+    fn the_target_takes_the_keys(
+        answered: Value,
+        target: Value,
+        form: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let form = form.as_smi().unwrap_or(PROXY_KEYS_EVERY);
+        // Step 6 is `CreateListFromArrayLike` of 7.3.19, which takes only
+        // Strings and Symbols.
+        let Some(source) = answered.as_object() else {
+            return Err(type_error(
+                heap,
+                realm,
+                "the ownKeys of a Proxy answers an array-like object",
+            ));
+        };
+        let length = Self::array_like_length(heap, source, realm)?;
+        let mut keys = Vec::with_capacity(usize::try_from(length).unwrap_or(0));
+        for index in Self::scan_range(0, length) {
+            let held = Self::element_at(heap, source, index)?.unwrap_or(VALUE_UNDEFINED);
+            if !held.is_string() && !held.is_symbol() {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "the ownKeys of a Proxy answers strings and symbols",
+                ));
+            }
+            keys.push(property_key(held, heap, realm)?);
+        }
+        // Step 7: a key the List names twice.
+        for (position, key) in keys.iter().enumerate() {
+            if keys
+                .iter()
+                .skip(position.saturating_add(1))
+                .any(|other| other == key)
+            {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "the ownKeys of a Proxy answers a key twice",
+                ));
+            }
+        }
+        let Some(object) = target.as_object() else {
+            return Err(VMError::TypeError);
+        };
+        let extensible = heap.is_extensible(object).unwrap_or(false);
+        let mut configurable = Vec::new();
+        let mut fixed = Vec::new();
+        // Step 12 sorts the keys of the target by whether it can drop them.
+        for (key, _) in heap.own_keys(object)? {
+            match heap.own_named_flags(object, key)? {
+                Some(flags) if !flags.configurable => fixed.push(key),
+                _ => configurable.push(key),
+            }
+        }
+        let refused = "the trap of a Proxy answered what its target refuses";
+        // Step 13: a target that grows and holds nothing fixed asks nothing.
+        if !(extensible && fixed.is_empty()) {
+            let mut unchecked = keys.clone();
+            // Step 15: every key the target cannot drop is in the answer.
+            for key in fixed {
+                let Some(at) = unchecked.iter().position(|held| *held == key) else {
+                    return Err(type_error(heap, realm, refused));
+                };
+                unchecked.remove(at);
+            }
+            if !extensible {
+                // Steps 17 and 18: a target that cannot grow owns exactly
+                // what the answer names, no more and no less.
+                for key in configurable {
+                    let Some(at) = unchecked.iter().position(|held| *held == key) else {
+                        return Err(type_error(heap, realm, refused));
+                    };
+                    unchecked.remove(at);
+                }
+                if !unchecked.is_empty() {
+                    return Err(type_error(heap, realm, refused));
+                }
+            }
+        }
+        let narrowed = Self::narrowed_keys(keys.into_iter().map(|key| (key, true)).collect(), form);
+        Self::array_of(narrowed, heap, realm)
+    }
+
     /// `[[HasProperty]]` of 10.5.7 and `[[Delete]]` of 10.5.10: the `has` or
     /// the `deleteProperty` of the handler answers for one key.
     ///
@@ -12086,6 +12296,10 @@ impl RegisterVM {
                 heap,
                 realm,
             );
+        }
+        if kind == PROXY_KIND_KEYS {
+            self.acc = Self::the_target_takes_the_keys(answered, target, written, heap, realm)?;
+            return Ok(());
         }
         if matches!(kind, PROXY_KIND_HAS | PROXY_KIND_DELETE) {
             let name = name.ok_or(VMError::TypeError)?;

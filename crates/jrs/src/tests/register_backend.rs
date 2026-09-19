@@ -12294,6 +12294,23 @@ fn the_key_tests_and_the_call_of_10_5_answer_out_of_the_handler() -> Result<(), 
             "(function(){function F(a){this.a=a}var q=new Proxy(new Proxy(F,{construct(t,a){return new t(a[0])}}),{construct(t,a){return new t(a[0])}});return ''+new q(7).a})()",
             "7",
         ),
+        // 10.5.11 answers the keys out of the `ownKeys` of the handler,
+        // which 28.1.10, 20.1.2.10 and 20.1.2.11 each narrow their own way.
+        (
+            "(function(){var l=[];var t={a:1,b:2};var p=new Proxy(t,{ownKeys(o){l.push('k');return Reflect.ownKeys(o)}});return Object.getOwnPropertyNames(p).join('')+'|'+l.join('')+'|'+Reflect.ownKeys(p).join('')+'|'+Object.getOwnPropertySymbols(p).length})()",
+            "ab|k|ab|0",
+        ),
+        // Steps 6 and 7: the answer names Strings and Symbols, each once.
+        (
+            "(function(){var d=new Proxy({},{ownKeys(){return ['a','a']}});var r;try{Object.getOwnPropertyNames(d)}catch(e){r=e instanceof TypeError};var n=new Proxy({},{ownKeys(){return [1]}});var s;try{Object.getOwnPropertyNames(n)}catch(e){s=e instanceof TypeError};return ''+r+'|'+s})()",
+            "true|true",
+        ),
+        // Steps 15 and 18: every key the target cannot drop is in the
+        // answer, and a target that cannot grow owns exactly what it names.
+        (
+            "(function(){var f={};Object.defineProperty(f,'f',{value:1,configurable:false});var p=new Proxy(f,{ownKeys(){return []}});var r;try{Object.getOwnPropertyNames(p)}catch(e){r=e instanceof TypeError};var g=Object.preventExtensions({x:1});var q=new Proxy(g,{ownKeys(){return ['x','y']}});var s;try{Object.getOwnPropertyNames(q)}catch(e){s=e instanceof TypeError};var w=new Proxy(g,{ownKeys(){return ['x']}});var n=new Proxy({m:1,n:2},{});return ''+r+'|'+s+'|'+Object.getOwnPropertyNames(w).join('')+'|'+Object.getOwnPropertyNames(n).join('')})()",
+            "true|true|x|mn",
+        ),
     ] {
         assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
     }
