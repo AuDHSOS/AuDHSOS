@@ -8,6 +8,7 @@ AuDHSOS/
 ├── Cargo.lock                 workspace members only
 ├── rust-toolchain.toml        pinned nightly, components, targets
 ├── .cargo/config.toml         `cargo xtask` alias; relocation model of the kernel target
+├── .gitattributes             Linguist: detection off for every path, on again for Rust
 ├── LICENSE                    AGPL-3.0 text, verbatim from gnu.org
 ├── README.md
 ├── CONTRIBUTING.md
@@ -497,6 +498,9 @@ on the `PATH` is never used.
   passes `sh tools/xtask-check.sh`.
 - `CHANGELOG.md` follows Keep a Changelog and is updated in the same commit
   as the change.
+- `.gitattributes` turns GitHub Linguist detection off for every path and on
+  again for `*.rs`, so the repository reports Rust alone and a tracked file of
+  a new kind adds no language.
 
 ## 5.9 Definition of done for a change
 
