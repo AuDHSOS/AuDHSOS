@@ -12218,6 +12218,39 @@ fn the_internal_methods_of_10_5_answer_out_of_the_handler() -> Result<(), Error>
             "(function(){var p=new Proxy({},{getOwnPropertyDescriptor(){return {value:7,configurable:true}}});var d=Object.getOwnPropertyDescriptor(p,'q');var n=new Proxy({m:5},{});return d.value+'|'+d.writable+'|'+d.enumerable+'|'+d.configurable+'|'+Object.getOwnPropertyDescriptor(n,'m').value})()",
             "7|false|false|true|5",
         ),
+        // 10.5.7 answers the test out of the `has` of the handler, which
+        // 13.10.1 and 28.1.8 both reach.
+        (
+            "(function(){var l=[];var t={a:1};var p=new Proxy(t,{has(o,n){l.push(n);return Reflect.has(o,n)}});var m='a';return ''+('a' in p)+'|'+('b' in p)+'|'+l.join('')+'|'+Reflect.has(p,'a')+'|'+(m in p)})()",
+            "true|false|ab|true|true",
+        ),
+        // Step 9.b: false names a property the target owns and cannot drop.
+        (
+            "(function(){var f={};Object.defineProperty(f,'f',{value:1,configurable:false});var p=new Proxy(f,{has(){return false}});var r;try{'f' in p}catch(e){r=e instanceof TypeError};var g={h:1};Object.preventExtensions(g);var q=new Proxy(g,{has(){return false}});var s;try{'h' in q}catch(e){s=e instanceof TypeError};return ''+r+'|'+s})()",
+            "true|true",
+        ),
+        // Step 4 of 10.5.7 walks the Prototype Chain of the target.
+        (
+            "(function(){var n=new Proxy(Object.create({z:1}),{});return ''+('z' in n)+'|'+('q' in n)})()",
+            "true|false",
+        ),
+        // 10.5.10 answers the delete out of the `deleteProperty` of the
+        // handler, which 13.5.1.2 and 28.1.4 both reach.
+        (
+            "(function(){var d=[];var t={x:1,y:2};var p=new Proxy(t,{deleteProperty(o,k){d.push(k);return Reflect.deleteProperty(o,k)}});var a=delete p.x;var b=Reflect.deleteProperty(p,'y');var k='w';var u={w:1};var q=new Proxy(u,{deleteProperty(o,n){return Reflect.deleteProperty(o,n)}});return ''+a+'|'+t.x+'|'+b+'|'+d.join('')+'|'+(delete q[k])})()",
+            "true|undefined|true|xy|true",
+        ),
+        // Step 6: a trap that refused dropped nothing, which 13.5.1.2 step
+        // 5.b makes a TypeError of in strict code alone.
+        (
+            "(function(){var p=new Proxy({},{deleteProperty(){return false}});var a=delete p.a;var r;try{(function(){'use strict';delete p.a})()}catch(e){r=e instanceof TypeError};return ''+a+'|'+r})()",
+            "false|true",
+        ),
+        // Steps 9 and 10: a property the target still owns and cannot drop.
+        (
+            "(function(){var f={};Object.defineProperty(f,'g',{value:1,configurable:false});var p=new Proxy(f,{deleteProperty(){return true}});var r;try{delete p.g}catch(e){r=e instanceof TypeError};var t={v:1};var n=new Proxy(t,{});return ''+r+'|'+(delete n.v)+'|'+t.v})()",
+            "true|true|undefined",
+        ),
     ] {
         assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
     }

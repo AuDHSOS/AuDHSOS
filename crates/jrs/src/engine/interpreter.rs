@@ -1146,6 +1146,10 @@ const PROXY_KIND_EXTENSIBLE: i32 = 5;
 const PROXY_KIND_PREVENT: i32 = 6;
 /// The `[[GetOwnProperty]]` of 10.5.5.
 const PROXY_KIND_OWN: i32 = 7;
+/// The `[[HasProperty]]` of 10.5.7.
+const PROXY_KIND_HAS: i32 = 8;
+/// The `[[Delete]]` of 10.5.10.
+const PROXY_KIND_DELETE: i32 = 9;
 /// The bit of `PROXY_PRESENT` for each field a descriptor may have.
 const DESCRIPTOR_VALUE: i32 = 1;
 /// The bit for `[[Writable]]`.
@@ -6019,6 +6023,31 @@ impl RegisterVM {
                 proxy,
                 intrinsic,
                 &call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
+        // 28.1.8 and 28.1.4 reach `[[HasProperty]]` and `[[Delete]]`, each
+        // of which is a trap of the handler.
+        if let Some(kind) = match intrinsic {
+            Intrinsic::ReflectHas => Some(PROXY_KIND_HAS),
+            Intrinsic::ReflectDeleteProperty => Some(PROXY_KIND_DELETE),
+            _ => None,
+        } && let Some(proxy) = self
+            .call_argument(&call, 0, heap)?
+            .as_object()
+            .filter(|object| heap.is_a_proxy(*object))
+        {
+            let key = self.call_argument(&call, 1, heap)?;
+            let name = property_key(key, heap, realm)?;
+            return self.begin_the_proxy_key_test(
+                proxy,
+                kind,
+                name,
+                false,
+                (call.return_pc, call.caller_code_id),
                 units,
                 active_feedback,
                 heap,
@@ -11243,6 +11272,164 @@ impl RegisterVM {
         Ok(None)
     }
 
+    /// `[[HasProperty]]` of 10.5.7 and `[[Delete]]` of 10.5.10: the `has` or
+    /// the `deleteProperty` of the handler answers for one key.
+    ///
+    /// `strict` says a `delete` of 13.5.1.2 in strict code, where a false
+    /// answer is a `TypeError`; it is false for every `has`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a trap opens a frame, which needs what a call needs"
+    )]
+    fn begin_the_proxy_key_test(
+        &mut self,
+        proxy: ObjectRef,
+        kind: i32,
+        name: PropertyKey,
+        strict: bool,
+        frame: (usize, Option<u32>),
+        code: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let (return_pc, caller_code_id) = frame;
+        let (target, handler) = Self::proxy_parts(proxy, heap, realm)?;
+        let trap = Self::proxy_trap(
+            handler,
+            if kind == PROXY_KIND_HAS {
+                "has"
+            } else {
+                "deleteProperty"
+            },
+            heap,
+            realm,
+        )?;
+        // Reading what the target owns is its own `[[GetOwnProperty]]`, which
+        // for a target that is itself a Proxy is a second trap.
+        if target
+            .as_object()
+            .is_some_and(|object| heap.is_a_proxy(object))
+        {
+            return Err(VMError::Unsupported("an internal method of a Proxy"));
+        }
+        let Some(object) = target.as_object() else {
+            return Err(VMError::TypeError);
+        };
+        // Step 4 forwards to the target where the handler carries no trap.
+        if trap.is_undefined() {
+            if kind == PROXY_KIND_HAS {
+                self.acc = Value::from_bool(Self::has_property(object, name, heap, realm)?);
+                return Ok(None);
+            }
+            let index = name
+                .as_string()
+                .map(|name| heap.array_index_of(name))
+                .transpose()?
+                .flatten();
+            self.acc = Value::from_bool(delete_property(object, name, index, heap)?);
+            if self.acc == VALUE_FALSE && strict {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "delete of a property that is not configurable",
+                ));
+            }
+            return Ok(None);
+        }
+        let key = Self::key_value(name);
+        let record = promise::record(
+            heap,
+            realm,
+            &[
+                target,
+                key,
+                Value::from_smi(kind),
+                VALUE_UNDEFINED,
+                Value::from_bool(strict),
+            ],
+        )?;
+        let arguments = Self::array_of(alloc::vec![target, key], heap, realm)?;
+        // The record and the List outlive the frame the trap opens, so they
+        // are roots of a scope of their own, which the answer leaves.
+        heap.enter_scope();
+        let state = heap.push_root(record)?;
+        let list = heap.push_root(arguments)?;
+        let call = Call {
+            receiver: Value::from_object(handler),
+            func: Reg(0),
+            arg_start: Reg(0),
+            arg_count: 2,
+            slot: 0,
+            resume: Some(Resume::ProxyTrap {
+                state,
+                arguments: list,
+            }),
+            construct: None,
+            return_pc,
+            caller_code_id,
+            coerced: 0,
+        };
+        let entered = self.enter_call_value(trap, code, active_feedback, heap, realm, call)?;
+        if entered.is_some() {
+            return Ok(entered);
+        }
+        // A trap written in Rust answered without a frame of its own.
+        let answered = self.acc;
+        self.finish_the_proxy_trap(state, answered, heap, realm)?;
+        Ok(None)
+    }
+
+    /// What the target owes the answer of a `has` or a `deleteProperty`
+    /// trap, which for each is a property it owns and cannot drop.
+    fn the_target_takes_the_key_test(
+        &mut self,
+        kind: i32,
+        target: Value,
+        name: PropertyKey,
+        held: (Value, bool),
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let (answered, strict) = held;
+        let taken = Self::to_boolean(answered, heap)?;
+        let Some(object) = target.as_object() else {
+            return Err(VMError::TypeError);
+        };
+        let refused = "the trap of a Proxy answered what its target refuses";
+        // Step 9.b of 10.5.7 and steps 9 and 10 of 10.5.10: a property the
+        // target owns and cannot drop.
+        let stuck = match heap.own_named_flags(object, name)? {
+            None => false,
+            Some(current) => !current.configurable || !heap.is_extensible(object).unwrap_or(false),
+        };
+        if kind == PROXY_KIND_HAS {
+            if !taken && stuck {
+                return Err(type_error(heap, realm, refused));
+            }
+            self.acc = Value::from_bool(taken);
+            return Ok(());
+        }
+        // Step 6 of 10.5.10: a trap that refused dropped nothing, which
+        // 13.5.1.2 step 5.b makes a `TypeError` of in strict code.
+        if !taken {
+            if strict {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "delete of a property that is not configurable",
+                ));
+            }
+            self.acc = VALUE_FALSE;
+            return Ok(());
+        }
+        if stuck {
+            return Err(type_error(heap, realm, refused));
+        }
+        self.acc = VALUE_TRUE;
+        Ok(())
+    }
+
     /// `[[GetOwnProperty]]` of 10.5.5: the `getOwnPropertyDescriptor` of the
     /// handler answers, as the object 6.2.6.4 makes of the descriptor.
     #[expect(
@@ -11683,7 +11870,12 @@ impl RegisterVM {
         // four traps of 10.5.1 to 10.5.4 name no key at all.
         let named = matches!(
             kind,
-            PROXY_KIND_GET | PROXY_KIND_SET | PROXY_KIND_DEFINE | PROXY_KIND_OWN
+            PROXY_KIND_GET
+                | PROXY_KIND_SET
+                | PROXY_KIND_DEFINE
+                | PROXY_KIND_OWN
+                | PROXY_KIND_HAS
+                | PROXY_KIND_DELETE
         );
         let name = named.then(|| property_key(key, heap, realm)).transpose()?;
         heap.exit_scope();
@@ -11720,6 +11912,17 @@ impl RegisterVM {
                 target,
                 written,
                 (answered, answer, strict),
+                heap,
+                realm,
+            );
+        }
+        if matches!(kind, PROXY_KIND_HAS | PROXY_KIND_DELETE) {
+            let name = name.ok_or(VMError::TypeError)?;
+            return self.the_target_takes_the_key_test(
+                kind,
+                target,
+                name,
+                (answered, strict),
                 heap,
                 realm,
             );
@@ -33062,7 +33265,27 @@ impl RegisterVM {
                         ));
                     };
                     let key = property_key(self.acc, heap, realm)?;
-                    self.acc = Value::from_bool(Self::has_property(object, key, heap, realm)?);
+                    // 10.5.7 answers the test out of the `has` of the handler,
+                    // which is a frame this instruction opens.
+                    if heap.is_a_proxy(object) {
+                        if let Some(code_id) = self.begin_the_proxy_key_test(
+                            object,
+                            PROXY_KIND_HAS,
+                            key,
+                            false,
+                            (pc, current_code_id),
+                            units,
+                            active_feedback,
+                            heap,
+                            realm,
+                        )? {
+                            current_code_id = Some(code_id);
+                            pc = self.pending_pc.take().unwrap_or(0);
+                            return Ok(None);
+                        }
+                    } else {
+                        self.acc = Value::from_bool(Self::has_property(object, key, heap, realm)?);
+                    }
                 }
                 Instruction::TestInstanceOf(reg) => {
                     let constructor = self.read_reg(reg)?;
@@ -34238,14 +34461,36 @@ impl RegisterVM {
                     name: name_index,
                     strict,
                 } => {
-                    let units = active_code
+                    let name_units = active_code
                         .string_constants
                         .get(name_index as usize)
                         .ok_or(VMError::InvalidRegister)?;
-                    let index = array_index_units(units);
-                    let name = PropertyKey::String(heap.strings.intern_units(units)?);
+                    let index = array_index_units(name_units);
+                    let name = PropertyKey::String(heap.strings.intern_units(name_units)?);
                     let target = self.read_reg(obj)?;
-                    self.acc = delete_reference(target, name, index, strict, heap, realm)?;
+                    // 10.5.10 answers the delete out of the `deleteProperty`
+                    // of the handler, which is a frame this instruction opens.
+                    if let Some(proxy) =
+                        target.as_object().filter(|object| heap.is_a_proxy(*object))
+                    {
+                        if let Some(code_id) = self.begin_the_proxy_key_test(
+                            proxy,
+                            PROXY_KIND_DELETE,
+                            name,
+                            strict,
+                            (pc, current_code_id),
+                            units,
+                            active_feedback,
+                            heap,
+                            realm,
+                        )? {
+                            current_code_id = Some(code_id);
+                            pc = self.pending_pc.take().unwrap_or(0);
+                            return Ok(None);
+                        }
+                    } else {
+                        self.acc = delete_reference(target, name, index, strict, heap, realm)?;
+                    }
                 }
                 Instruction::DeleteByValue {
                     obj,
@@ -34269,7 +34514,29 @@ impl RegisterVM {
                     let index = array_index(key, heap)?;
                     // 7.1.19 keeps a Symbol as the key it is.
                     let name = property_key(key, heap, realm)?;
-                    self.acc = delete_reference(target, name, index, strict, heap, realm)?;
+                    // 10.5.10 answers the delete out of the `deleteProperty`
+                    // of the handler, which is a frame this instruction opens.
+                    if let Some(proxy) =
+                        target.as_object().filter(|object| heap.is_a_proxy(*object))
+                    {
+                        if let Some(code_id) = self.begin_the_proxy_key_test(
+                            proxy,
+                            PROXY_KIND_DELETE,
+                            name,
+                            strict,
+                            (pc, current_code_id),
+                            units,
+                            active_feedback,
+                            heap,
+                            realm,
+                        )? {
+                            current_code_id = Some(code_id);
+                            pc = self.pending_pc.take().unwrap_or(0);
+                            return Ok(None);
+                        }
+                    } else {
+                        self.acc = delete_reference(target, name, index, strict, heap, realm)?;
+                    }
                 }
                 Instruction::Require(kind) => {
                     let refused = match kind {
