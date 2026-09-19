@@ -3,16 +3,20 @@
 
 //! RSA in a certificate: the identifiers, the parameters rule that is a
 //! rule per algorithm, the key of RFC 3279, section 2.3.1, the size bound
-//! of D-79, and chains under each of the six schemes.
+//! of D-79 on every key of a chain, and chains under each of the six
+//! schemes.
 
 use audhsos_der::Reader;
 
 use crate::algorithm::{MAX_RSA_BITS, MIN_RSA_BITS, SignatureAlgorithm, SubjectPublicKey};
 use crate::builder::{Params, RsaScheme, RsaTestKey, TestKey};
+use crate::certificate::Certificate;
 use crate::error::X509Error;
+use crate::name::ServerName;
 use crate::oid;
-use crate::test_keys::{RSA_2048, RSA_2048_MODULUS, RSA_4096};
-use crate::tests::{build_certificate, early, late};
+use crate::path::{TrustAnchor, TrustAnchors, verify_chain};
+use crate::test_keys::{RSA_1024, RSA_2048, RSA_2048_MODULUS, RSA_4096};
+use crate::tests::{Built, build_certificate, early, late, now};
 
 /// A value with the given tag and content, for the identifiers this file
 /// writes by hand.
@@ -330,4 +334,102 @@ fn a_key_the_primitive_refuses_does_not_verify() {
         key.verify(SignatureAlgorithm::RsaPkcs1Sha256, b"body", &[0u8; 256]),
         Err(X509Error::BadPublicKey)
     );
+}
+
+/// The three certificates of a chain: a self-signed root, an intermediate
+/// under it, and a leaf under the intermediate.
+fn three_of(root_key: TestKey, middle_key: TestKey, leaf_key: TestKey) -> [Built; 3] {
+    let root = build_certificate(
+        &Params::authority("Root", "Root", None, early(), late()),
+        root_key,
+        root_key,
+    )
+    .expect("the root is built");
+    let middle = build_certificate(
+        &Params::authority("Root", "Middle", None, early(), late()),
+        middle_key,
+        root_key,
+    )
+    .expect("the intermediate is built");
+    let leaf = build_certificate(
+        &Params::leaf("Middle", "leaf", &["leaf.example"], early(), late()),
+        leaf_key,
+        middle_key,
+    )
+    .expect("the leaf is built");
+    [root, middle, leaf]
+}
+
+/// Whether the chain those three certificates form reaches its anchor.
+fn chain_outcome(built: &[Built; 3]) -> Result<(), X509Error> {
+    let [root, middle, leaf] = built;
+    let root = Certificate::parse(root.as_slice()).expect("the root parses");
+    let middle = Certificate::parse(middle.as_slice()).expect("the intermediate parses");
+    let leaf = Certificate::parse(leaf.as_slice()).expect("the leaf parses");
+    let anchors = [TrustAnchor {
+        subject: root.subject,
+        spki: root.spki_bytes,
+    }];
+    verify_chain(
+        &leaf,
+        &[middle],
+        &TrustAnchors::new(&anchors),
+        ServerName::Dns("leaf.example"),
+        now(),
+    )
+}
+
+/// The size bound of D-79 covers every key of the chain, not the anchor
+/// alone. An intermediate of a thousand and twenty-four bits is signed by
+/// an anchor of two thousand and forty-eight and signs the leaf, so every
+/// signature verifies and the width is the only thing that refuses it.
+#[test]
+fn an_intermediate_below_the_size_bound_is_refused() {
+    let wide = TestKey::Rsa(RSA_2048, RsaScheme::Pkcs1Sha256);
+    let narrow = TestKey::Rsa(RSA_1024, RsaScheme::Pkcs1Sha256);
+    assert_eq!(
+        chain_outcome(&three_of(wide, narrow, wide)),
+        Err(X509Error::BadPublicKey)
+    );
+}
+
+/// The leaf key verifies no certificate, so only a check at the start of
+/// the walk judges it.
+#[test]
+fn a_leaf_below_the_size_bound_is_refused() {
+    let wide = TestKey::Rsa(RSA_2048, RsaScheme::Pkcs1Sha256);
+    let narrow = TestKey::Rsa(RSA_1024, RsaScheme::Pkcs1Sha256);
+    assert_eq!(
+        chain_outcome(&three_of(wide, wide, narrow)),
+        Err(X509Error::BadPublicKey)
+    );
+}
+
+/// An anchor built by hand rather than by `from_certificate`, which is
+/// what `TrustAnchors::new` accepts and what the walk judges again.
+#[test]
+fn an_anchor_below_the_size_bound_is_refused() {
+    let wide = TestKey::Rsa(RSA_2048, RsaScheme::Pkcs1Sha256);
+    let narrow = TestKey::Rsa(RSA_1024, RsaScheme::Pkcs1Sha256);
+    assert_eq!(
+        chain_outcome(&three_of(narrow, wide, wide)),
+        Err(X509Error::BadPublicKey)
+    );
+}
+
+/// The same chain with every key inside the bound, which is what the
+/// three tests above differ from by one key.
+#[test]
+fn a_chain_whose_every_key_is_inside_the_bound_reaches_the_anchor() {
+    let wide = TestKey::Rsa(RSA_2048, RsaScheme::Pkcs1Sha256);
+    assert_eq!(chain_outcome(&three_of(wide, wide, wide)), Ok(()));
+}
+
+/// A curve key is judged by the same call, so a chain that mixes the two
+/// still reaches its anchor.
+#[test]
+fn a_curve_intermediate_under_an_rsa_anchor_reaches_the_anchor() {
+    let wide = TestKey::Rsa(RSA_2048, RsaScheme::Pkcs1Sha256);
+    let curve = TestKey::EcdsaSha256([0x33; 32]);
+    assert_eq!(chain_outcome(&three_of(wide, curve, curve)), Ok(()));
 }

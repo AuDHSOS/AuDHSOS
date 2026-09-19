@@ -1073,10 +1073,15 @@ done until every applicable item has a test. Items are added, never removed.
   forty-eight, three thousand and seventy-two, and four thousand and
   ninety-six bits accepted; a thousand and twenty-four, two thousand and
   forty, and four thousand one hundred and four refused — and it is
-  applied here rather than in `crypto-rsa`. A chain verifies under each of
-  the six schemes and a modified body under none of them; the widest key
-  is built and verified once, which is what took `MAX_CERTIFICATE` past a
-  kibibyte.
+  applied here rather than in `crypto-rsa`. It covers every key a chain
+  carries and not the anchor's file alone: one chain per position of a
+  thousand-and-twenty-four-bit key — the intermediate, the leaf, and an
+  anchor built by hand rather than by `from_certificate` — is refused
+  where the same chain with every key inside the bound reaches its
+  anchor, and a curve intermediate under an RSA anchor reaches it too. A
+  chain verifies under each of the six schemes and a modified body under
+  none of them; the widest key is built and verified once, which is what
+  took `MAX_CERTIFICATE` past a kibibyte.
 - Property: mutating any byte of a valid certificate, in either of two
   ways, makes parsing or verification fail; mutating any byte of an
   intermediate makes the chain fail. The fuzz target `x509` parses
@@ -1983,9 +1988,9 @@ follows the catalog rather than the layer, as 6.6.54 records.
 - The one vector from outside: the `CertificateVerify` of the simple
   1-RTT handshake of RFC 8448 verifies as `rsa_pss_rsae_sha256` under the
   key that document's section 2 prints. It is 1024 bits and therefore
-  never reaches a chain (D-79); it reaches the primitive. The test lives
-  in the replay of 6.6.38, because that is where the transcript the
-  signature was made over is computed.
+  reaches no chain that verifies (D-79); it reaches the primitive. The
+  test lives in the replay of 6.6.38, because that is where the
+  transcript the signature was made over is computed.
 - Fuzz target `rsa`: a key and a signature from the same input, parsed
   and verified, must not panic and must not loop. Everything it reaches is
   bounded before it runs — the modulus by `MAX_LIMBS`, the exponent by the

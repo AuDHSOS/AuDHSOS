@@ -10,22 +10,10 @@ use crate::certificate::{BasicConstraints, Certificate};
 use crate::error::X509Error;
 use crate::name::ServerName;
 use crate::path::{TrustAnchor, TrustAnchors, verify_chain};
-use crate::tests::{AUTHORITY_SECRET, Built, LEAF_SECRET, build_certificate, early, late};
+use crate::tests::{AUTHORITY_SECRET, Built, LEAF_SECRET, build_certificate, early, late, now};
 
 /// The name the leaves of these tests carry.
 const NAME: &str = "example.test";
-
-/// A moment inside every window these tests build.
-fn now() -> CivilTime {
-    CivilTime {
-        year: 2025,
-        month: 6,
-        day: 15,
-        hour: 12,
-        minute: 0,
-        second: 0,
-    }
-}
 
 /// The secret of the intermediate.
 const INTERMEDIATE_SECRET: [u8; 32] = [0x44; 32];
