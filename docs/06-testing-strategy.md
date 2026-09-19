@@ -6203,3 +6203,30 @@ Document 18 step A3.
 - `aux.t.a` reaches the side that reads `aux.t`, and a schema the side
   does not read names no column.
 - A join over two databases answers the rows of both.
+
+### 6.6.220 What a statement writes into an attached database (`db-sqlite`)
+
+Document 18 step A4.
+
+- `CREATE`, `INSERT`, `UPDATE`, `DELETE` and `DROP` under a schema write
+  that database and leave the one the connection was opened over as it
+  was.
+- `INSERT INTO aux.t SELECT ... FROM main.u` reads both databases.
+- A bare name only the attached database holds names that database.
+- A `CREATE` of a bare name makes the table in the database the
+  connection writes, whatever the attached one holds.
+- A schema the connection holds no database under is refused `no such
+  table:` where the statement names a table and `unknown database` where
+  it names the database alone.
+- `attached_files` answers the file name of every attached database that
+  names one.
+
+### 6.6.221 The files the harness answers an `ATTACH` with (`xtask`)
+
+Document 18 step A7.
+
+- A path the session holds a writer under answers that writer's bytes.
+- A path it holds none under answers no bytes, which is a database of one
+  page.
+- A text that holds no `attach` tells the files nothing, because writing
+  them out costs O(n) in the pages of all of them.

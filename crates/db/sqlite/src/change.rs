@@ -441,13 +441,31 @@ struct HeldFile {
     began: Option<Header>,
 }
 
-/// One database an `ATTACH` added to a connection.
-struct Attached {
-    /// The name the statement gave, with its quotes taken off.
+/// The files a connection holds, as a statement of it reads them.
+struct Images {
+    /// The file the statement writes.
+    held: Vec<u8>,
+    /// The others, each with the name a statement names it by.
+    beside: Vec<(Vec<u8>, Vec<u8>)>,
+}
+
+/// What one database of a connection is called: the name a statement
+/// names it by, the file name `PRAGMA database_list` answers, and its
+/// schema place.
+#[derive(Clone, Default)]
+struct Called {
+    /// The name, with its quotes taken off.
     name: Vec<u8>,
-    /// The file name the statement named, which
-    /// `PRAGMA database_list` answers.
+    /// The file name the `ATTACH` named, which is empty for `main` and
+    /// for a database of the connection's own.
     file: Vec<u8>,
+}
+
+/// One database of a connection beside the one the statement running now
+/// writes.
+struct Attached {
+    /// What it is called.
+    called: Called,
     /// The file itself.
     held: HeldFile,
 }
@@ -462,9 +480,13 @@ pub type Opening = fn(&[u8]) -> Option<Vec<u8>>;
 
 /// A database being written, statement by statement.
 pub struct Writer {
-    /// The file the connection holds under the name `main`.
+    /// The file the statement running now writes, which is `main` where
+    /// no statement of the connection named another database.
     held: HeldFile,
-    /// The databases an `ATTACH` added, from schema place 2 on.
+    /// What that database is called.
+    called: Called,
+    /// The databases of the connection beside it, in no order of their
+    /// own: the schema place of each says where it stands.
     attached: Vec<Attached>,
     /// The function `ATTACH` answers a file name with, and nothing where
     /// the caller told the connection none.
@@ -596,6 +618,10 @@ impl Writer {
                     library_version: LIBRARY_VERSION,
                 },
             },
+            called: Called {
+                name: b"main".to_vec(),
+                file: Vec::new(),
+            },
             attached: Vec::new(),
             opening: None,
             random: crate::random::Source::default(),
@@ -650,6 +676,10 @@ impl Writer {
                 origin: None,
                 restarting: false,
                 began: None,
+            },
+            called: Called {
+                name: b"main".to_vec(),
+                file: Vec::new(),
             },
             attached: Vec::new(),
             opening: None,
@@ -804,13 +834,32 @@ impl Writer {
         Some(written_image(&held.held))
     }
 
+    /// The image of every database an `ATTACH` added that names a file,
+    /// each with that file name.
+    ///
+    /// The client writes the bytes back to the file it answered the
+    /// `ATTACH` with, so a second connection over that file reads what
+    /// this one wrote. Building them costs O(n) in the pages of those
+    /// databases.
+    #[must_use]
+    pub fn attached_files(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+        self.attached
+            .iter()
+            .filter(|held| !held.called.file.is_empty())
+            .map(|held| (held.called.file.clone(), written_image(&held.held)))
+            .collect()
+    }
+
     /// The names of the databases an `ATTACH` added, in the order they
     /// were attached.
     ///
     /// Reading them costs O(n) in their number.
     #[must_use]
     pub fn attached_names(&self) -> Vec<Vec<u8>> {
-        self.attached.iter().map(|held| held.name.clone()).collect()
+        self.attached
+            .iter()
+            .map(|held| held.called.name.clone())
+            .collect()
     }
 
     /// `ALTER TABLE ... ADD COLUMN`: the statement of the table gains
@@ -992,7 +1041,10 @@ impl Writer {
         // this connection's own, which is what `PRAGMA database_list`
         // writes for one.
         let file = if fresh_file(&file) { Vec::new() } else { file };
-        self.attached.push(Attached { name, file, held });
+        self.attached.push(Attached {
+            called: Called { name, file },
+            held,
+        });
         Ok(())
     }
 
@@ -1730,7 +1782,6 @@ impl Writer {
         if self.held.began.is_some() {
             return Err(Error::VacuumInTransaction);
         }
-        let bytes = self.image();
         let held = self.held.header;
         let size = self.held.wanted_page.unwrap_or(held.page_size);
         let mut fresh = Writer::new(size, held.reserved, held.encoding)?;
@@ -1746,6 +1797,7 @@ impl Writer {
             fresh.vacuuming(held.incremental_vacuum != 0);
         }
         fresh.making_own = true;
+        let bytes = self.image();
         let schema = self.schema_of(&bytes)?;
         let database = self.reading(&bytes)?;
         for made in &schema {
@@ -1939,15 +1991,45 @@ impl Writer {
         Ok(authorizer.taken(answer))
     }
 
+    fn reading_beside<'a>(&self, images: &'a Images) -> Result<Database<'a>, Error> {
+        let mut database = self.reading(&images.held)?;
+        for (name, bytes) in &images.beside {
+            database = database.attaching(name, bytes)?;
+        }
+        Ok(database)
+    }
+
+    /// A reader over the one file the statement writes, which is what a
+    /// constraint reads the schema out of.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what the image breaks.
     fn reading<'a>(&self, bytes: &'a [u8]) -> Result<Database<'a>, Error> {
         let database = Database::open_collating(bytes, self.collating)?
             .defining(self.defined)
             .grouping(self.grouped)
-            .sensitively(self.truth.sensitive);
+            .sensitively(self.truth.sensitive)
+            .named_main(&self.called.name);
         Ok(match self.clock {
             Some(seconds) => database.clocked(seconds),
             None => database,
         })
+    }
+
+    /// The files the connection holds: the one the statement writes, and
+    /// each of the others with the name a statement names it by.
+    ///
+    /// Building them costs O(n) in the pages of every database.
+    fn images(&self) -> Images {
+        Images {
+            held: self.image(),
+            beside: self
+                .attached
+                .iter()
+                .map(|held| (held.called.name.clone(), written_image(&held.held)))
+                .collect(),
+        }
     }
 
     /// The file the pages hold, which is what a statement reads its
@@ -2004,6 +2086,85 @@ impl Writer {
     ///
     /// [`Error`] names what the statement could not do.
     fn ran_statement(&mut self, sql: &[u8]) -> Result<Vec<Vec<Value>>, Error> {
+        // A statement that names a database of its own writes that one,
+        // so the connection takes it as the one it writes for the length
+        // of the statement and puts the one it wrote back after it.
+        let at = self.writing_at(sql)?;
+        if let Some(held) = at {
+            self.switch(held);
+        }
+        let answered = self.ran_held(sql);
+        if let Some(held) = at {
+            self.switch(held);
+        }
+        answered
+    }
+
+    /// Which database of the list the statement writes, and nothing where
+    /// it writes the one the connection already writes.
+    ///
+    /// The statement is read for its schema alone, which costs O(n) in
+    /// its bytes; a connection that holds one database reads nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoTable`] for a statement that names a table of a
+    /// database the connection does not hold, and [`Error::NoSchema`] for
+    /// one that names the database alone, which is what
+    /// `sqlite3TwoPartName` of `research/sqlite/src/build.c:596`
+    /// answers.
+    fn writing_at(&self, sql: &[u8]) -> Result<Option<usize>, Error> {
+        if self.attached.is_empty() {
+            return Ok(None);
+        }
+        let (schema, named) = match crate::parse::definition(sql) {
+            Ok((_, definition)) => defined_under(definition),
+            Err(_) => match crate::parse::change(sql) {
+                Ok((_, change)) => changed_under(change),
+                Err(_) => return Ok(None),
+            },
+        };
+        let held = self.switched(schema, sql).map_err(|held| match named {
+            Some(name) => {
+                let mut shown = held;
+                shown.push(b'.');
+                shown.extend_from_slice(&crate::schema::dequote(name.text(sql)));
+                Error::NoTable(shown)
+            }
+            None => Error::NoSchema(held),
+        })?;
+        if schema.is_some() {
+            return Ok(held);
+        }
+        self.holding_at(named, sql)
+    }
+
+    /// Which database of the list holds the name a statement wrote with
+    /// no schema in front of it, and nothing where the one the connection
+    /// writes holds it or no database of it does.
+    ///
+    /// `sqlite3LocateTable` of `research/sqlite/src/build.c:408` reads
+    /// the databases in turn, so a statement that names a table only an
+    /// attached database holds writes that one. Reading the schemas costs
+    /// O(n) in the pages of every database.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what one of the images breaks.
+    fn holding_at(&self, named: Option<Span>, sql: &[u8]) -> Result<Option<usize>, Error> {
+        let Some(name) = named else {
+            return Ok(None);
+        };
+        let bytes = self.images();
+        let database = self.reading_beside(&bytes)?;
+        let held = crate::schema::dequote(name.text(sql));
+        Ok(database
+            .holding(&held)
+            .and_then(|place| place.checked_sub(1)))
+    }
+
+    /// One statement run against the database the connection writes.
+    fn ran_held(&mut self, sql: &[u8]) -> Result<Vec<Vec<Value>>, Error> {
         // A text of comments alone holds no statement, so it writes no
         // byte and raises no counter of the header.
         if crate::parse::blank(sql) {
@@ -2524,6 +2685,10 @@ impl Writer {
             return Ok(self.checkpoint(how));
         }
         if let Some(quick) = quick {
+            // The walk is over the one database the pragma names, which
+            // is the one the connection writes, so the reader carries no
+            // other: a tree of another file would be read as a second
+            // reference to the pages of this one.
             let bytes = self.image();
             let database = self.reading(&bytes)?;
             return Ok(crate::check::integrity(&database, quick)?
@@ -2820,9 +2985,9 @@ impl Writer {
             return Ok(());
         }
         let (answer, affinities) = {
-            let bytes = self.image();
+            let bytes = self.images();
             let database = self
-                .reading(&bytes)?
+                .reading_beside(&bytes)?
                 .seeded(self.random.word())
                 .counting(self.counted);
             database.answered(arena, select, sql)?
@@ -3091,6 +3256,47 @@ impl Writer {
         self.asking = None;
     }
 
+    /// The database at `at` of the list becomes the one the connection
+    /// writes, and the one it wrote takes its place in the list.
+    ///
+    /// Calling this again with the same place puts both back, which is
+    /// what every statement does once it has run.
+    ///
+    /// The swap moves two files and costs O(1).
+    fn switch(&mut self, at: usize) {
+        let mut attached = core::mem::take(&mut self.attached);
+        for held in attached.iter_mut().skip(at).take(1) {
+            core::mem::swap(&mut self.held, &mut held.held);
+            core::mem::swap(&mut self.called, &mut held.called);
+        }
+        self.attached = attached;
+    }
+
+    /// Which database of the list a schema names, and nothing where it
+    /// names the one the connection already writes.
+    ///
+    /// `main` and `temp` both name the one the connection writes, because
+    /// the temp schema is the file of `main` until A6 of document 18
+    /// makes one of its own.
+    ///
+    /// Reading the names costs O(n) in their number.
+    ///
+    /// # Errors
+    ///
+    /// The name the connection holds no database under, which the caller
+    /// writes its own refusal for.
+    fn switched(&self, schema: Option<Span>, sql: &[u8]) -> Result<Option<usize>, Vec<u8>> {
+        let Some(span) = schema else {
+            return Ok(None);
+        };
+        let named = crate::schema::dequote(span.text(sql));
+        if named_database(&named) {
+            return Ok(None);
+        }
+        let found = self.attached.iter().position(|held| named_as(held, &named));
+        found.map(Some).ok_or(named)
+    }
+
     /// The function `ATTACH` answers a file name with.
     ///
     /// This crate reads no file system, so a connection that is told no
@@ -3117,7 +3323,7 @@ impl Writer {
         let mut out = alloc::vec![row(0, b"main", b"")];
         for (at, held) in self.attached.iter().enumerate() {
             let place = i64::try_from(at).unwrap_or(0).saturating_add(2);
-            out.push(row(place, &held.name, &held.file));
+            out.push(row(place, &held.called.name, &held.called.file));
         }
         out
     }
@@ -3754,9 +3960,9 @@ impl Writer {
                 // and answers nothing, which is what a `SELECT` of a
                 // body is for: it carries the `RAISE`.
                 crate::ast::TriggerStep::Select(select) => {
-                    let bytes = self.image();
+                    let bytes = self.images();
                     let database = self
-                        .reading(&bytes)?
+                        .reading_beside(&bytes)?
                         .seeded(self.random.word())
                         .defining(self.defined)
                         .grouping(self.grouped)
@@ -4213,12 +4419,12 @@ impl Writer {
             .iter()
             .map(|span: &Span| crate::schema::dequote(span.text(sql)))
             .collect();
-        let bytes = self.image();
+        let bytes = self.images();
         // Every statement draws from where the connection stands, so
         // two statements of one connection answer `randomblob`
         // differently.
         let database = self
-            .reading(&bytes)?
+            .reading_beside(&bytes)?
             .seeded(self.random.word())
             .counting(self.counted);
         let (table, root) = database
@@ -4360,9 +4566,9 @@ impl Writer {
             .map(|span: &Span| crate::schema::dequote(span.text(sql)))
             .collect();
         let (table, rows) = {
-            let bytes = self.image();
+            let bytes = self.images();
             let database = self
-                .reading(&bytes)?
+                .reading_beside(&bytes)?
                 .seeded(self.random.word())
                 .counting(self.counted);
             let (table, _) = database.viewing(name)?;
@@ -4430,9 +4636,9 @@ impl Writer {
             .map(|set| crate::schema::dequote(set.column.text(sql)))
             .collect();
         let (table, written) = {
-            let bytes = self.image();
+            let bytes = self.images();
             let database = self
-                .reading(&bytes)?
+                .reading_beside(&bytes)?
                 .seeded(self.random.word())
                 .counting(self.counted);
             let (table, held) = database.viewing(name)?;
@@ -4529,9 +4735,9 @@ impl Writer {
     ) -> Result<i64, Error> {
         let triggers = self.instead_of(name, TriggerEvent::Delete)?;
         let (table, taken) = {
-            let bytes = self.image();
+            let bytes = self.images();
             let database = self
-                .reading(&bytes)?
+                .reading_beside(&bytes)?
                 .seeded(self.random.word())
                 .counting(self.counted);
             let (table, held) = database.viewing(name)?;
@@ -4640,8 +4846,8 @@ impl Writer {
         name: &[u8],
     ) -> Result<i64, Error> {
         let (root, rows, kept, table) = {
-            let bytes = self.image();
-            let database = self.reading(&bytes)?.counting(self.counted);
+            let bytes = self.images();
+            let database = self.reading_beside(&bytes)?.counting(self.counted);
             // The table was found before this ran, so the refusal
             // carries no name to write into a message.
             let (table, root) = database.table(name).ok_or(Error::NoTable(Vec::new()))?;
@@ -5142,8 +5348,8 @@ impl Writer {
     ) -> Result<Rewriting, Error> {
         written_to(name)?;
         let sets = self.writing(arena, statement, sql);
-        let bytes = self.image();
-        let database = self.reading(&bytes)?.counting(self.counted);
+        let bytes = self.images();
+        let database = self.reading_beside(&bytes)?.counting(self.counted);
         // The table was found before this ran, so the refusal carries
         // no name to write into a message.
         let (table, root) = database.table(name).ok_or(Error::NoTable(Vec::new()))?;
@@ -6910,8 +7116,8 @@ impl Writer {
             return self.delete_keyed(arena, statement, sql, outer, &name);
         }
         let (root, keys, kept, table) = {
-            let bytes = self.image();
-            let database = self.reading(&bytes)?.counting(self.counted);
+            let bytes = self.images();
+            let database = self.reading_beside(&bytes)?.counting(self.counted);
             let (table, root) = database
                 .table(&name)
                 .ok_or_else(|| Error::NoTable(name.clone()))?;
@@ -7008,8 +7214,8 @@ impl Writer {
     ) -> Result<Updating, Error> {
         written_to(name)?;
         let sets = self.writing(arena, statement, sql);
-        let bytes = self.image();
-        let database = self.reading(&bytes)?.counting(self.counted);
+        let bytes = self.images();
+        let database = self.reading_beside(&bytes)?.counting(self.counted);
         let (table, root) = database
             .table(name)
             .ok_or_else(|| Error::NoTable(name.to_vec()))?;
@@ -8216,7 +8422,7 @@ const fn named_database(name: &[u8]) -> bool {
 
 /// Whether an attached database answers to `name`.
 fn named_as(held: &Attached, name: &[u8]) -> bool {
-    held.name.eq_ignore_ascii_case(name)
+    held.called.name.eq_ignore_ascii_case(name)
 }
 
 /// The image of one file a connection holds, which is the file as
@@ -8258,5 +8464,37 @@ fn bare_text(arena: &Arena, id: crate::ast::ExprId, sql: &[u8]) -> Option<Vec<u8
             column,
         }) => Some(crate::schema::dequote(column.text(sql))),
         _ => None,
+    }
+}
+
+/// The schema one statement of the schema names, and the table it names
+/// under it where it names one.
+///
+/// A statement that names a table is refused `no such table:` and one
+/// that names the database alone `unknown database`, which is what
+/// `sqlite3TwoPartName` of `research/sqlite/src/build.c:596` answers.
+const fn defined_under(definition: Definition) -> (Option<Span>, Option<Span>) {
+    match definition {
+        Definition::Table(made) => (made.schema, None),
+        Definition::Index(made) => (made.schema, None),
+        Definition::View(made) => (made.schema, None),
+        Definition::Trigger(made) => (made.schema, None),
+        Definition::Drop(asked) => (asked.schema, Some(asked.name)),
+        Definition::Rename(asked) => (asked.schema, Some(asked.table)),
+        Definition::AddColumn(asked) => (asked.schema, Some(asked.table)),
+        Definition::DropColumn(asked) => (asked.schema, Some(asked.table)),
+        Definition::RenameColumn(asked) => (asked.schema, Some(asked.table)),
+        Definition::DropConstraint(asked) => (asked.schema, Some(asked.table)),
+        Definition::Vacuum(_) | Definition::Attach(_) | Definition::Detach(_) => (None, None),
+    }
+}
+
+/// The schema one statement that changes rows names, and the table it
+/// names under it.
+const fn changed_under(change: Change) -> (Option<Span>, Option<Span>) {
+    match change {
+        Change::Insert(statement) => (statement.schema, Some(statement.name)),
+        Change::Update(statement) => (statement.schema, Some(statement.name)),
+        Change::Delete(statement) => (statement.schema, Some(statement.name)),
     }
 }

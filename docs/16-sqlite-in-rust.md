@@ -877,9 +877,11 @@ Size: L.
 78. `ATTACH` and `DETACH`, which say what databases one connection
     holds. Read, which D-323 records.
 79. The rows of a database an `ATTACH` added, which a statement reads by
-    a bare name or under the schema. Built, which D-324 records; a
-    statement that writes one is open, which A4 of document 18
-    specifies.
+    a bare name or under the schema. Built, which D-324 records.
+80. A statement that writes a database an `ATTACH` added. Built, which
+    D-325 records. A transaction over more than one of them is open,
+    which A5 of document 18 specifies, and so is the temp schema, which
+    A6 specifies.
 
 ### Done when
 

@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` writes the database a statement names, and the suite's own
+  harness answers an `ATTACH` out of the files the session holds. D-325
+  and D-326 record it. Catalog 6.6.220 and 6.6.221. `attach.test` goes
+  from 0 cases passing to 23, `auth.test` from 142 to 248 and
+  `e_reindex.test` from 8 to 80.
+
 - `db-sqlite` answers the rows of every database a connection holds: a
   bare name out of `main` first and out of the attached databases in the
   order they were attached, and `aux.t` out of that database alone. D-324

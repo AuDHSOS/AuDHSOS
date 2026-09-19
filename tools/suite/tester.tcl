@@ -215,6 +215,10 @@ proc whole_method {method} {
 
 # A connection: the command `sqlite3` makes one and names it.
 proc sqlite3 {name args} {
+  # `sqlite3 -has-codec` asks what the library was built with rather than
+  # opening a connection, which this build has no encryption extension
+  # for.
+  if {$name eq "-has-codec"} { return 0 }
   set file [lindex $args 0]
   if {$file eq ""} { set file ":memory:" }
   harness_send open $name $file
@@ -1103,11 +1107,11 @@ set ::bitmask_size 64
 # reach, which `ifcapable` answers for as well.
 foreach option {
   fts3 fts5 rtree icu vtab incrblob shared_cache codec atomicwrite vacuum
-  attach explain autovacuum session setlk_timeout configslower
+  explain autovacuum session setlk_timeout configslower
   memorymanage threadsafe
 } { set ::sqlite_options($option) 0 }
 foreach option {
-  wal utf16 integrityck casesensitivelike trigger view subquery compound
+  wal utf16 integrityck casesensitivelike trigger view subquery compound attach
   foreignkey json1 like_match_blobs pragma reindex analyze altertable
   cast check conflict datetime floatingpoint or_opt stat4 update_delete_limit
 } { set ::sqlite_options($option) 1 }

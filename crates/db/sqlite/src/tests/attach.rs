@@ -310,3 +310,133 @@ fn what_a_statement_reads_out_of_an_attached_database() {
         "no such column: two.t.a"
     );
 }
+
+/// What a statement writes into a database an `ATTACH` added.
+#[test]
+fn what_a_statement_writes_into_an_attached_database() {
+    let mut writer = opened();
+    writer.run(b"INSERT INTO t VALUES(1)").unwrap();
+    writer.run(b"ATTACH 'one.db' AS aux").unwrap();
+    // A statement that names the database writes that one, and the one
+    // the connection was opened over is left as it was.
+    writer.run(b"CREATE TABLE aux.made(b)").unwrap();
+    writer.run(b"INSERT INTO aux.made VALUES(2)").unwrap();
+    writer.run(b"INSERT INTO aux.made SELECT a FROM t").unwrap();
+    writer.run(b"UPDATE aux.made SET b=b+10 WHERE b=1").unwrap();
+    writer.run(b"DELETE FROM aux.made WHERE b=2").unwrap();
+    let image = writer.attached_written(b"aux").expect("an image");
+    let database = crate::db::Database::open(&image).unwrap();
+    assert_eq!(
+        database.rows_of(b"made").unwrap(),
+        [(2, alloc::vec![Value::Int(11)])]
+    );
+    assert!(
+        crate::db::Database::open(&writer.written())
+            .unwrap()
+            .table(b"made")
+            .is_none()
+    );
+    // A bare name only the attached database holds names that database,
+    // which `sqlite3LocateTable` reads the databases in turn for.
+    writer.run(b"INSERT INTO u VALUES(3)").unwrap();
+    writer.run(b"DROP TABLE made").unwrap();
+    let image = writer.attached_written(b"aux").expect("an image");
+    let database = crate::db::Database::open(&image).unwrap();
+    assert!(database.table(b"made").is_none());
+    assert_eq!(database.rows_of(b"u").unwrap().len(), 1);
+    // A `CREATE` of a bare name makes the table in the database the
+    // connection writes, whatever the attached one holds.
+    writer.run(b"CREATE TABLE u(c)").unwrap();
+    assert!(
+        crate::db::Database::open(&writer.written())
+            .unwrap()
+            .table(b"u")
+            .is_some()
+    );
+    // The file name of every attached database that names one, which the
+    // client writes the bytes back to.
+    let files = writer.attached_files();
+    assert_eq!(files.len(), 1);
+    assert_eq!(
+        files.first().map(|(file, _)| file.clone()),
+        Some(b"one.db".to_vec())
+    );
+    writer.run(b"ATTACH ':memory:' AS held").unwrap();
+    assert_eq!(writer.attached_files().len(), 1);
+    // A schema the connection holds no database under is refused: the
+    // statements that name a table by `no such table`, and the ones that
+    // name the database alone by `unknown database`.
+    assert_eq!(
+        refused(&mut writer, b"INSERT INTO two.t VALUES(1)"),
+        "no such table: two.t"
+    );
+    assert_eq!(
+        refused(&mut writer, b"UPDATE two.t SET a=1"),
+        "no such table: two.t"
+    );
+    assert_eq!(
+        refused(&mut writer, b"DELETE FROM two.t"),
+        "no such table: two.t"
+    );
+    assert_eq!(
+        refused(&mut writer, b"DROP TABLE two.t"),
+        "no such table: two.t"
+    );
+    assert_eq!(
+        refused(&mut writer, b"ALTER TABLE two.t RENAME TO x"),
+        "no such table: two.t"
+    );
+    assert_eq!(
+        refused(&mut writer, b"CREATE TABLE two.x(a)"),
+        "unknown database two"
+    );
+    assert_eq!(
+        refused(&mut writer, b"CREATE INDEX two.i ON t(a)"),
+        "unknown database two"
+    );
+    assert_eq!(
+        refused(&mut writer, b"CREATE VIEW two.v AS SELECT 1"),
+        "unknown database two"
+    );
+    assert_eq!(
+        refused(
+            &mut writer,
+            b"CREATE TRIGGER two.g AFTER INSERT ON t BEGIN SELECT 1; END"
+        ),
+        "unknown database two"
+    );
+    for sql in [
+        b"ALTER TABLE two.t ADD COLUMN x".as_slice(),
+        b"ALTER TABLE two.t DROP COLUMN a",
+        b"ALTER TABLE two.t RENAME COLUMN a TO b",
+        b"ALTER TABLE two.t DROP CONSTRAINT c",
+    ] {
+        assert_eq!(refused(&mut writer, sql), "no such table: two.t", "{sql:?}");
+    }
+    // `main` and `temp` both name the database the connection writes,
+    // whatever it attached.
+    writer.run(b"INSERT INTO main.t VALUES(4)").unwrap();
+    writer.run(b"INSERT INTO temp.t VALUES(5)").unwrap();
+    let held = writer.written();
+    let database = crate::db::Database::open(&held).unwrap();
+    assert_eq!(database.rows_of(b"t").unwrap().len(), 3);
+}
+
+/// A view and an index only an attached database holds are both named by
+/// their bare names, which `sqlite3LocateTable` and `sqlite3FindIndex`
+/// read the databases in turn for.
+#[test]
+fn what_a_bare_name_of_a_view_and_of_an_index_names() {
+    let mut writer = opened();
+    writer.run(b"ATTACH ':memory:' AS aux").unwrap();
+    writer.run(b"CREATE TABLE aux.u(b)").unwrap();
+    writer.run(b"CREATE INDEX aux.ub ON u(b)").unwrap();
+    writer.run(b"CREATE VIEW aux.v AS SELECT b FROM u").unwrap();
+    writer.run(b"DROP VIEW v").unwrap();
+    writer.run(b"DROP INDEX ub").unwrap();
+    let image = writer.attached_written(b"aux").expect("an image");
+    let database = crate::db::Database::open(&image).unwrap();
+    assert!(database.view(b"v").is_none());
+    assert!(database.index(b"ub").is_none());
+    assert!(database.table(b"u").is_some());
+}

@@ -1404,6 +1404,9 @@ fn shape_of(table: &Table) -> Shape {
 pub struct Database<'a> {
     /// The file.
     image: Image<'a>,
+    /// The name the database at schema place nought answers to, which is
+    /// `main` where no statement named another.
+    named: Vec<u8>,
     /// The databases an `ATTACH` added, in the order they were attached.
     attached: Vec<Attached<'a>>,
     /// Its tables.
@@ -1642,6 +1645,7 @@ impl<'a> Database<'a> {
         let tables = read_tables(&image, 0, encoding, collating)?;
         let mut database = Database {
             image,
+            named: b"main".to_vec(),
             attached: Vec::new(),
             tables,
             views: Vec::new(),
@@ -1663,6 +1667,18 @@ impl<'a> Database<'a> {
         database.read_views(&image, 0)?;
         database.read_triggers(&image)?;
         Ok(database)
+    }
+
+    /// The same reader with the database at schema place nought named
+    /// `name` rather than `main`.
+    ///
+    /// A connection whose statement writes an attached database reads that
+    /// one at place nought and `main` beside it, so the name a statement
+    /// writes in front of a table is the name the reader answers under.
+    #[must_use]
+    pub fn named_main(mut self, name: &[u8]) -> Self {
+        self.named = name.to_vec();
+        self
     }
 
     /// The same reader with the database `name` beside it, which an
@@ -1709,8 +1725,38 @@ impl<'a> Database<'a> {
     fn named_place(&self, place: usize) -> Vec<u8> {
         match place.checked_sub(1).and_then(|at| self.attached.get(at)) {
             Some(held) => held.name.clone(),
-            None => b"main".to_vec(),
+            None => self.named.clone(),
         }
+    }
+
+    /// The schema place of the database that holds the table, the view,
+    /// the index or the trigger named `name`, and nothing where no
+    /// database of the connection holds one.
+    ///
+    /// `sqlite3LocateTable` of `research/sqlite/src/build.c:408` reads
+    /// the databases in turn, so a bare name names the first one that
+    /// holds it. Reading them costs O(n) in the names they hold.
+    #[must_use]
+    pub fn holding(&self, name: &[u8]) -> Option<usize> {
+        if let Some(stored) = self.find(name) {
+            return Some(stored.place);
+        }
+        if let Some(view) = self
+            .views
+            .iter()
+            .find(|view| view.name.eq_ignore_ascii_case(name))
+        {
+            return Some(view.place);
+        }
+        self.tables
+            .iter()
+            .find(|stored| {
+                stored
+                    .indexes
+                    .iter()
+                    .any(|kept| kept.index.name.eq_ignore_ascii_case(name))
+            })
+            .map(|stored| stored.place)
     }
 
     /// The table of `name` in the database at `place`, and in every
@@ -1737,7 +1783,7 @@ impl<'a> Database<'a> {
     /// The schema place of the database named `schema`, and nothing where
     /// the connection holds none under that name.
     fn placed(&self, schema: &[u8]) -> Option<usize> {
-        if is_main(schema) {
+        if self.named.eq_ignore_ascii_case(schema) {
             return Some(0);
         }
         let at = self
@@ -6026,11 +6072,6 @@ pub const fn schema_named(name: &[u8]) -> bool {
         || name.eq_ignore_ascii_case(b"sqlite_schema")
         || name.eq_ignore_ascii_case(b"sqlite_temp_master")
         || name.eq_ignore_ascii_case(b"sqlite_temp_schema")
-}
-
-/// Whether a schema name is the one a file holds.
-const fn is_main(name: &[u8]) -> bool {
-    name.eq_ignore_ascii_case(b"main")
 }
 
 /// What a comparison against an expression does: the affinity and the

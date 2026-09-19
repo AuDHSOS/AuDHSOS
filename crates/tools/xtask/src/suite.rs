@@ -267,7 +267,7 @@ const LOOPING: usize = 5000;
 
 /// The capabilities an `ifcapable` may name that this engine does not
 /// have. Every other name is answered as held.
-const MISSING: [&str; 21] = [
+const MISSING: [&str; 20] = [
     "vtab",
     "fts1",
     "fts2",
@@ -282,7 +282,6 @@ const MISSING: [&str; 21] = [
     "crashtest",
     "codec",
     "atomicwrite",
-    "attach",
     "explain",
     "autovacuum",
     "compound_select",
@@ -1521,6 +1520,9 @@ impl Session {
 
     /// The statements of one text, in order, answered as one list.
     fn eval(&mut self, name: &str, sql: &str) -> Result<Vec<String>, String> {
+        if may_attach(sql) {
+            self.telling_files();
+        }
         let null = self.nulls.get(name).cloned().unwrap_or_default();
         let path = self
             .connections
@@ -1549,6 +1551,7 @@ impl Session {
             writer.asks_nothing();
         }
         WHO.with(|who| who.borrow_mut().clone_from(&name.to_owned()));
+        writer.opens(opening);
         let mut out = Vec::new();
         let mut ran = Ok(());
         for statement in statements(sql) {
@@ -1569,10 +1572,52 @@ impl Session {
         }
         let counted = writer.counts();
         let kept = writer.kept();
+        let files = writer.attached_files();
         self.counters.insert(name.to_owned(), counted);
         self.pragmas.insert(name.to_owned(), kept);
+        self.mirror(&path, files);
         ran?;
         Ok(out)
+    }
+
+    /// The image of every attached database written back into the file
+    /// the session holds under its name, so a connection over that path
+    /// reads what the statement wrote, except for `held`, which is the
+    /// path the connection itself reads.
+    ///
+    /// Reading one file again costs O(n) in its pages.
+    fn mirror(&mut self, held: &str, files: Vec<(Vec<u8>, Vec<u8>)>) {
+        for (file, bytes) in files {
+            let path = String::from_utf8_lossy(&file).into_owned();
+            // A connection that attached its own file writes both
+            // through the one writer the session holds for that path,
+            // so writing the copy back would take away what the
+            // connection holds.
+            if path == held {
+                continue;
+            }
+            let Ok(mut writer) = Writer::opened(&bytes) else {
+                continue;
+            };
+            writer.defines(DEFINED);
+            writer.groups(GROUPED);
+            self.held.insert(path, writer);
+        }
+    }
+
+    /// The files the session holds, told to the opening function every
+    /// connection reads an `ATTACH` out of.
+    ///
+    /// Writing them out costs O(n) in the pages of every file, so the
+    /// session tells them only where a text may attach one.
+    fn telling_files(&self) {
+        FILES.with(|files| {
+            let mut held = files.borrow_mut();
+            held.clear();
+            for (path, writer) in &self.held {
+                held.insert(path.as_bytes().to_vec(), writer.written());
+            }
+        });
     }
 
     /// The names of the columns the last statement of a text answers.
@@ -1598,6 +1643,7 @@ impl Session {
         };
         let collating = self.collations.get(name).copied().unwrap_or_default();
         let defines = self.defines(name);
+        let beside = attached_images(writer);
         let bytes = writer.written();
         // A connection in write-ahead logging holds its newest pages in
         // the log, so the schema this reads is the one the log carries.
@@ -1621,6 +1667,7 @@ impl Session {
                     None => database,
                 }
             })
+            .and_then(|database| attaching(database, &beside))
             .map_err(|error| refusal(&error))?;
         let answered = database
             .query(last.as_bytes())
@@ -1689,6 +1736,10 @@ thread_local! {
     /// `sqlite3_errcode` and `sqlite3_extended_errcode` answer.
     static CODE: RefCell<(String, String, i64)> =
         const { RefCell::new((String::new(), String::new(), 0)) };
+
+    /// The files the session holds, which `opening` answers an `ATTACH`
+    /// out of because the function carries nothing.
+    static FILES: RefCell<BTreeMap<Vec<u8>, Vec<u8>>> = const { RefCell::new(BTreeMap::new()) };
 }
 
 /// What one refusal says, with the code it carries kept for
@@ -1964,6 +2015,7 @@ fn answered_rows(
     defines: &'static [Defined],
 ) -> Result<db_sqlite::db::Answer, String> {
     {
+        let beside = attached_images(writer);
         let bytes = writer.written();
         // A connection in write-ahead logging holds its newest pages in
         // the log, so a reader follows the log beside the file.
@@ -1997,10 +2049,59 @@ fn answered_rows(
                     None => database,
                 }
             })
+            .and_then(|database| attaching(database, &beside))
             .and_then(|database| database.query(text.as_bytes()))
             .map_err(|error| shape(text, refusal(&error)))?;
         Ok(answered)
     }
+}
+
+/// The image of the file an `ATTACH` names, out of what the session
+/// holds.
+///
+/// A path the session holds no file under answers no bytes at all, which
+/// the engine reads as a database of one page: `sqlite3OsOpen` makes the
+/// file where it is not there.
+fn opening(file: &[u8]) -> Option<Vec<u8>> {
+    FILES.with(|files| Some(files.borrow().get(file).cloned().unwrap_or_default()))
+}
+
+/// Whether a text may attach a file, which is what the session tells the
+/// files it holds for.
+///
+/// Reading the text costs O(n) in its bytes.
+fn may_attach(sql: &str) -> bool {
+    sql.as_bytes()
+        .windows(6)
+        .any(|window| window.eq_ignore_ascii_case(b"attach"))
+}
+
+/// The images of the databases an `ATTACH` added to a connection, each
+/// with the name a statement names it by.
+///
+/// Building them costs O(n) in the pages of every attached database.
+fn attached_images(writer: &Writer) -> Vec<(Vec<u8>, Vec<u8>)> {
+    writer
+        .attached_names()
+        .into_iter()
+        .filter_map(|name| writer.attached_written(&name).map(|bytes| (name, bytes)))
+        .collect()
+}
+
+/// The same reader with every attached database beside it.
+///
+/// # Errors
+///
+/// What the engine refused one of the images for.
+fn attaching<'a>(
+    database: Database<'a>,
+    beside: &'a [(Vec<u8>, Vec<u8>)],
+) -> Result<Database<'a>, db_sqlite::db::Error> {
+    let mut database = database;
+    for (name, bytes) in beside {
+        database = database.attaching(name, bytes)?;
+    }
+    Ok(database)
 }
 
 /// Whether this engine has what an `ifcapable` names, which is a

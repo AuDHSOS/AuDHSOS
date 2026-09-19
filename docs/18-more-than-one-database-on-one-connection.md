@@ -172,10 +172,10 @@ committed and one not, which no replay repairs.
 | A1 | One held file, as one struct | done | — | M |
 | A2 | `ATTACH` and `DETACH` read | done | A1 | M |
 | A3 | A reader over more than one image | done | A2 | L |
-| A4 | A statement that writes an attached file | open | A3 | M |
+| A4 | A statement that writes an attached file | done | A3 | M |
 | A5 | One transaction over more than one held file | open | A4 | M |
 | A6 | The temp schema | open | A3 | M |
-| A7 | The harness over more than one path | open | A4 | S |
+| A7 | The harness over more than one path | done | A4 | S |
 
 ## 18.11 A1. One held file, as one struct
 
@@ -320,7 +320,7 @@ L.
 
 ### Status
 
-open.
+done.
 
 ### Depends on
 
@@ -336,16 +336,27 @@ M.
 
 ### Does
 
-1. Read the schema name of every statement that writes, and write the
-   held file it names.
-2. Write `CREATE TABLE aux.t`, `DROP TABLE aux.t`, `CREATE INDEX`,
-   `CREATE VIEW` and `CREATE TRIGGER` into the schema they name.
-3. Count the rows a statement wrote once for the connection, whichever
-   held file they stand in, which `changes()` answers.
-4. Refuse a foreign key whose parent stands in another held file, which
-   is `sqlite3FkLocateIndex` refusing `foreign key mismatch`.
-5. Answer `last_insert_rowid()` for the last row written, whichever held
-   file it stands in.
+1. Read the schema name of every statement that writes, and take the
+   held file it names as the one the connection writes for the length of
+   that statement.
+2. Read a name with no schema in front of it against every held file,
+   and write the first that holds it, which `sqlite3LocateTable` of
+   `research/sqlite/src/build.c:408` reads the databases in turn for.
+   A `CREATE` writes the held file the connection already writes,
+   whatever the others hold.
+3. Refuse `no such table: <schema>.<name>` for a statement that names a
+   table of a database the connection does not hold, and `unknown
+   database <schema>` for one that names the database alone.
+4. Read the schema of the held file the statement writes alone where the
+   statement reads no rows of its own, so a tree of another file is no
+   second reference to the pages of this one.
+5. Read every held file where the statement answers rows, so an
+   `INSERT INTO aux.t SELECT ... FROM main.u` reads both.
+
+### Produces
+
+`crate::change::Called`, `crate::change::Images`,
+`crate::change::Writer::switch` and `crate::db::Database::holding`.
 
 ### Done when
 
@@ -430,7 +441,7 @@ and `sqlite_temp_schema` with one.
 
 ### Status
 
-open.
+done.
 
 ### Depends on
 
@@ -448,14 +459,18 @@ S.
 ### Does
 
 1. Tell every connection an opening function that answers the bytes of
-   the writer the session holds for that path.
-2. Write the bytes of every attached held file back into the writer of
-   that path after each statement, where the connection holds no open
-   transaction over it.
-3. Read the bytes of every attached held file out of the writer of that
-   path before each statement, under the same condition.
-4. Take `ATTACH` and `DETACH` out of the statements the harness counts as
-   ones the engine does not read.
+   the writer the session holds for that path, and no bytes at all for a
+   path it holds none under, which the engine reads as a database of one
+   page.
+2. Tell the files of the session only where a text may attach one, which
+   is a text that holds the word `attach`, because writing every file out
+   costs O(n) in the pages of all of them.
+3. Write the bytes of every attached held file back into the writer of
+   that path after a text has run, except for the path the connection
+   itself reads, which one writer already holds.
+4. Read a statement against every attached held file of the connection.
+5. Answer `attach` to `ifcapable`, which 41 files read before they run a
+   case.
 
 ### Done when
 
