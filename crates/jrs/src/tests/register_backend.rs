@@ -11748,3 +11748,29 @@ fn a_clause_that_reads_every_argument_converts_every_one_of_them() -> Result<(),
     )?;
     Ok(())
 }
+
+#[test]
+fn the_pattern_and_the_flags_of_22_2_4_1_go_through_7_1_17() -> Result<(), Error> {
+    // Step 6 takes the pattern and the flags as they are, and step 8 sends
+    // both through 7.1.17, in that order.
+    differential(
+        "var k=[];var t=function(n,v){return {toString:function(){k.push(n);return v}}};var r=new RegExp(t('p','[a-c]*'),t('f','gm'));r.source+'|'+r.flags+'|'+k.join(',')",
+    )?;
+    differential("RegExp({toString:function(){return 'a'}},'g').source")?;
+    // Step 4 takes the source of a pattern that is a RegExp, which no
+    // conversion reaches.
+    differential("var r=/x/g;new RegExp(r).source+'|'+new RegExp(r).flags")?;
+    differential("var r=/x/g;''+(RegExp(r)===r)")?;
+    // A conversion that throws leaves the constructor.
+    differential(
+        "var r;try{new RegExp({toString:function(){throw new TypeError()}})}catch(e){r=e instanceof TypeError};''+r",
+    )?;
+    // Step 8 takes the empty String for flags the call left out; an
+    // `undefined` a conversion answered is the text 7.1.17 spells, which
+    // names no flag.
+    differential(
+        "var r;try{new RegExp('a',{toString:function(){}})}catch(e){r=e instanceof SyntaxError};''+r",
+    )?;
+    differential("new RegExp('a').flags+'|'+new RegExp().source")?;
+    Ok(())
+}

@@ -5833,6 +5833,15 @@ impl RegisterVM {
             {
                 return Ok(None);
             }
+            // Step 4 of 22.2.4.1 takes the source of a pattern that is a
+            // RegExp, and step 5 the `source` of one whose `@@match` answers;
+            // only step 6 converts the pattern.
+            if intrinsic == Intrinsic::RegExpConstructor
+                && *index == 0
+                && Self::is_a_regexp(self.call_argument(call, 0, heap)?, heap)?
+            {
+                continue;
+            }
             // Step 2 of 22.1.3.23 answers with the `@@split` of a RegExp,
             // which runs without a frame, so step 5 converts no separator.
             if intrinsic == Intrinsic::StringPrototypeSplit
@@ -7185,6 +7194,11 @@ impl RegisterVM {
         }
         let text_of_flags =
             alloc::string::String::from_utf16(&units_of_flags).map_err(|_| VMError::StringLimit)?;
+        if Self::folds_case(&text_of_flags) {
+            return Err(VMError::Unsupported(
+                "the case-insensitive flag of a RegExp",
+            ));
+        }
         let splitter = crate::regexp::RegExp::compile(source, &text_of_flags).map_err(|_| {
             raise(
                 heap,
@@ -26371,6 +26385,11 @@ impl RegisterVM {
     ) -> Result<Value, VMError> {
         let pattern = self.call_argument(call, 0, heap)?;
         let flags = self.call_argument(call, 1, heap)?;
+        // Step 8 of 22.2.4.1 takes the empty String for a pattern or flags the
+        // call left out; an `undefined` a conversion answered is a value of
+        // its own, which 7.1.17 spells.
+        let no_pattern = call.passed_undefined(0, pattern);
+        let no_flags = call.passed_undefined(1, flags);
         // Step 3: a RegExp pattern gives its own source, and its flags where
         // the call passed none.
         let held = pattern
@@ -26381,13 +26400,13 @@ impl RegisterVM {
             // the same object, where 22.2.7.2 still calls it a RegExp and its
             // `constructor` is `%RegExp%` itself.
             if call.construct.is_none()
-                && flags.is_undefined()
+                && no_flags
                 && Self::is_a_regexp(pattern, heap)?
                 && Self::regexp_constructor_of(pattern, heap, realm)?
             {
                 return Ok(pattern);
             }
-            let flags = if flags.is_undefined() {
+            let flags = if no_flags {
                 held.flags.clone()
             } else {
                 Self::flag_units(flags, heap, realm)?
@@ -26395,15 +26414,30 @@ impl RegisterVM {
             (alloc::rc::Rc::clone(&held.source), flags)
         } else {
             if pattern.is_object() {
+                // Step 5 reads the `source` and the `flags` of an object whose
+                // `@@match` answers, which are properties of the Script.
+                if Self::is_a_regexp(pattern, heap)? {
+                    return Err(VMError::Unsupported("the source of a regexp-like Object"));
+                }
                 return Err(VMError::Unsupported("ToString of an Object"));
             }
-            let source: alloc::rc::Rc<[u16]> = if pattern.is_undefined() {
+            let source: alloc::rc::Rc<[u16]> = if no_pattern {
                 alloc::rc::Rc::from(&[][..])
             } else {
                 alloc::rc::Rc::from(property_name_units(pattern, heap, realm)?)
             };
-            (source, Self::flag_units(flags, heap, realm)?)
+            let text = if no_flags {
+                alloc::string::String::new()
+            } else {
+                Self::flag_units(flags, heap, realm)?
+            };
+            (source, text)
         };
+        if Self::folds_case(&text) {
+            return Err(VMError::Unsupported(
+                "the case-insensitive flag of a RegExp",
+            ));
+        }
         let compiled = crate::regexp::RegExp::compile(source, &text).map_err(|_| {
             raise(
                 heap,
@@ -26416,15 +26450,23 @@ impl RegisterVM {
         Self::allocate_regexp(pattern, heap, realm)
     }
 
+    /// Whether 22.2.7.2 would have to fold case for these flags.
+    ///
+    /// The automaton carries no case folding, so an `i` beside neither `u`
+    /// nor `v` is a gap: the pattern compiles and the `RegExp` answers every
+    /// match but the folded ones. With `u` or `v` the pattern is measured
+    /// against a grammar this crate does not carry, which the compile of the
+    /// pattern names.
+    fn folds_case(flags: &str) -> bool {
+        flags.contains('i') && !flags.contains('u') && !flags.contains('v')
+    }
+
     /// The flags 22.2.3.1 was given, as the text `RegExp::compile` reads.
     fn flag_units(
         flags: Value,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<alloc::string::String, VMError> {
-        if flags.is_undefined() {
-            return Ok(alloc::string::String::new());
-        }
         if flags.is_object() {
             return Err(VMError::Unsupported("ToString of an Object"));
         }

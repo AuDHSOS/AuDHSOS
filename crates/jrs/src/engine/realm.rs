@@ -4459,7 +4459,10 @@ impl Intrinsic {
             | Self::RegExpPrototypeReplace => TEXT,
             // 22.1.3.19 steps 4 and 5 convert the value it searches for and
             // the one it writes, where neither takes the clause over.
-            Self::StringPrototypeReplace => TWO_TEXTS,
+            Self::StringPrototypeReplace
+            // 22.2.4.1 converts a pattern that is no RegExp and the flags
+            // beside it.
+            | Self::RegExpConstructor => TWO_TEXTS,
             // 20.5.7.1 step 4 applies `ToString` to the message, which it
             // takes after the errors.
             Self::AggregateErrorConstructor => SECOND_TEXT,
@@ -4813,7 +4816,6 @@ impl Intrinsic {
             | Self::StringPrototypeToString
             | Self::ThrowTypeError
             | Self::SymbolConstructor
-            | Self::RegExpConstructor
             | Self::RegExpPrototypeToString
             | Self::JsonParse
             | Self::JsonStringify
