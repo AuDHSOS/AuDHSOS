@@ -25,7 +25,10 @@ fn opened() -> Writer {
 fn opening(file: &[u8]) -> Option<Vec<u8>> {
     if file == b"one.db" {
         let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
-        writer.run(b"CREATE TABLE u(b)").unwrap();
+        // The key makes an index of the table's own, which the reader
+        // holds against the table of that database and not against the
+        // table of the same name in another.
+        writer.run(b"CREATE TABLE u(b TEXT PRIMARY KEY)").unwrap();
         return Some(writer.written());
     }
     if file == b"empty.db" {

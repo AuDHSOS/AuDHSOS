@@ -179,6 +179,20 @@ pub struct Collating {
     pub by: Comparing,
 }
 
+impl Collation {
+    /// The name the collation is known by, which `PRAGMA index_xinfo` and
+    /// `PRAGMA collation_list` write.
+    #[must_use]
+    pub const fn word(self) -> &'static [u8] {
+        match self {
+            Collation::NoCase => b"NOCASE",
+            Collation::Rtrim => b"RTRIM",
+            Collation::Defined(name, _) => name,
+            Collation::Binary | Collation::Binary16Le | Collation::Binary16Be => b"BINARY",
+        }
+    }
+}
+
 /// The collation `name` names: one of the three the library holds, or
 /// one the application defined on the connection.
 ///

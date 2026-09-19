@@ -2950,6 +2950,9 @@ impl Writer {
         if setting == crate::pragma::Setting::DatabaseList {
             return Ok(self.listed_databases());
         }
+        if let Some(listed) = self.schema_rows(setting, asked, sql)? {
+            return Ok(listed);
+        }
         if setting == crate::pragma::Setting::WalCheckpoint {
             let how = asked.value.map(|value| value.text(sql));
             return Ok(self.checkpoint(how));
@@ -3574,6 +3577,52 @@ impl Writer {
     /// database: <file>`.
     pub const fn opens(&mut self, opening: Opening) {
         self.opening = Some(opening);
+    }
+
+    /// The rows one pragma of the schema answers: the columns of a table,
+    /// the places of an index, the indexes of a table, or the collations
+    /// the connection holds.
+    ///
+    /// Nothing where the pragma is another. Reading the schema costs O(n)
+    /// in its rows.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what the image breaks.
+    fn schema_rows(
+        &self,
+        setting: crate::pragma::Setting,
+        asked: &crate::ast::Pragma,
+        sql: &[u8],
+    ) -> Result<Option<Vec<Vec<Value>>>, Error> {
+        use crate::pragma::Setting;
+        if !matches!(
+            setting,
+            Setting::TableInfo
+                | Setting::TableXinfo
+                | Setting::IndexInfo
+                | Setting::IndexXinfo
+                | Setting::IndexList
+                | Setting::CollationList
+        ) {
+            return Ok(None);
+        }
+        if setting == Setting::CollationList {
+            return Ok(Some(listed_collations(self.collating)));
+        }
+        let named = asked
+            .value
+            .map(|value| crate::schema::dequote(value.text(sql)))
+            .unwrap_or_default();
+        let bytes = self.image();
+        let database = self.reading(&bytes)?;
+        Ok(Some(match setting {
+            Setting::TableInfo => columns_of(&database, &named, false),
+            Setting::TableXinfo => columns_of(&database, &named, true),
+            Setting::IndexInfo => places_of(&database, &named, false),
+            Setting::IndexXinfo => places_of(&database, &named, true),
+            _ => listed_indexes(&database, &named),
+        }))
     }
 
     /// The databases the connection holds, each as a row of the schema
@@ -8823,4 +8872,246 @@ const fn is_name_byte(byte: u8) -> bool {
 /// The text of a name a statement wrote, and nothing where it wrote none.
 fn named_text(named: Option<Span>, sql: &[u8]) -> Vec<u8> {
     named.map_or_else(Vec::new, |span| crate::schema::dequote(span.text(sql)))
+}
+
+/// The rows `PRAGMA collation_list` answers: one per collation the
+/// connection holds, the three of the library first and the ones the
+/// application defined after them.
+fn listed_collations(collating: &[crate::value::Collating]) -> Vec<Vec<Value>> {
+    let held = [
+        crate::value::Collation::Binary,
+        crate::value::Collation::NoCase,
+        crate::value::Collation::Rtrim,
+    ];
+    let names = held
+        .iter()
+        .map(|collation| collation.word().to_vec())
+        .chain(collating.iter().map(|one| one.name.to_vec()));
+    names
+        .enumerate()
+        .map(|(seq, name)| {
+            alloc::vec![
+                Value::Int(i64::try_from(seq).unwrap_or(0)),
+                Value::Text(name),
+            ]
+        })
+        .collect()
+}
+
+/// The rows `PRAGMA table_info` and `PRAGMA table_xinfo` answer: one per
+/// column of the table, with the place it takes, its name, the type it was
+/// declared with, whether it refuses nothing, what it falls back to, and
+/// where it stands in the primary key.
+///
+/// `PragTyp_TABLE_INFO` of `research/sqlite/src/pragma.c:1211` leaves a
+/// computed column out of the first, and writes for the second which of
+/// the two kinds of computed column each is.
+///
+/// Reading the table costs O(n) in its columns.
+fn columns_of(database: &Database<'_>, name: &[u8], every: bool) -> Vec<Vec<Value>> {
+    let Some((table, _)) = database.table(name) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (at, column) in table.columns.iter().enumerate() {
+        let hidden = match column.generated {
+            crate::schema::Generated::Never => 0,
+            crate::schema::Generated::Virtual => 2,
+            crate::schema::Generated::Stored => 3,
+        };
+        if !every && hidden != 0 {
+            continue;
+        }
+        let mut row = alloc::vec![
+            Value::Int(i64::try_from(at).unwrap_or(0)),
+            Value::Text(column.name.clone()),
+            Value::Text(column.declared.clone()),
+            Value::Int(i64::from(column.not_null)),
+            column.default.clone().map_or(Value::Null, Value::Text),
+            Value::Int(i64::from(column.key)),
+        ];
+        if every {
+            row.push(Value::Int(hidden));
+        }
+        out.push(row);
+    }
+    out
+}
+
+/// One place of an index as `PRAGMA index_xinfo` writes it.
+struct Place {
+    /// The place in the table of the column it holds, which is -1 for the
+    /// rowid and -2 for an expression.
+    cid: i64,
+    /// The name of the column, and nothing for the rowid and for an
+    /// expression.
+    name: Option<Vec<u8>>,
+    /// Whether the entries run backwards in it.
+    back: bool,
+    /// The collation its text is compared under.
+    collation: crate::value::Collation,
+    /// Whether the entries are held in the order of it.
+    key: bool,
+}
+
+/// The rows `PRAGMA index_info` and `PRAGMA index_xinfo` answer: one per
+/// place of the index, with the place in the table of the column it holds.
+///
+/// `PragTyp_INDEX_INFO` writes for the second the order the entries run
+/// in, the collation they are compared under, and whether the place is one
+/// the entries are held in the order of; the places after those are the
+/// ones an entry carries to name the row.
+///
+/// Reading the index costs O(n) in its places.
+fn places_of(database: &Database<'_>, name: &[u8], every: bool) -> Vec<Vec<Value>> {
+    let Some(indexed) = database.indexed(name) else {
+        return Vec::new();
+    };
+    let mut held: Vec<Place> = indexed
+        .index
+        .columns
+        .iter()
+        .map(|keyed| Place {
+            cid: keyed
+                .place()
+                .and_then(|at| i64::try_from(at).ok())
+                .unwrap_or(-2),
+            name: keyed
+                .place()
+                .and_then(|at| indexed.table.columns.get(at))
+                .map(|column| column.name.clone()),
+            back: keyed.order == crate::ast::Order::Descending,
+            collation: keyed.collation,
+            key: true,
+        })
+        .collect();
+    if every {
+        held.extend(naming_places(&indexed));
+    }
+    held.iter()
+        .enumerate()
+        .map(|(seq, place)| {
+            let mut row = alloc::vec![
+                Value::Int(i64::try_from(seq).unwrap_or(0)),
+                Value::Int(place.cid),
+                place.name.clone().map_or(Value::Null, Value::Text),
+            ];
+            if every {
+                row.push(Value::Int(i64::from(place.back)));
+                row.push(Value::Text(place.collation.word().to_vec()));
+                row.push(Value::Int(i64::from(place.key)));
+            }
+            row
+        })
+        .collect()
+}
+
+/// The places an entry of the index carries to name the row: the rowid of
+/// a table that holds one, and the columns of the primary key of a table
+/// that keeps its rows in the key's own tree.
+///
+/// The tree of the primary key of such a table is the table itself and is
+/// no index this crate holds, so no index answers every other column here.
+fn naming_places(indexed: &crate::db::Indexed<'_>) -> Vec<Place> {
+    let place = |at: usize| Place {
+        cid: i64::try_from(at).unwrap_or(-2),
+        name: indexed
+            .table
+            .columns
+            .get(at)
+            .map(|column| column.name.clone()),
+        back: false,
+        collation: indexed
+            .table
+            .columns
+            .get(at)
+            .map_or(crate::value::Collation::Binary, |column| column.collation),
+        key: false,
+    };
+    if !indexed.table.without_rowid {
+        return alloc::vec![Place {
+            cid: -1,
+            name: None,
+            back: false,
+            collation: crate::value::Collation::Binary,
+            key: false,
+        }];
+    }
+    // An index of a table that keeps its rows in the key's own tree
+    // carries the key, which names the row.
+    let held: Vec<usize> = indexed
+        .index
+        .columns
+        .iter()
+        .filter_map(crate::schema::Keyed::place)
+        .collect();
+    primary_places(indexed.table)
+        .into_iter()
+        .filter(|at| !held.contains(at))
+        .map(place)
+        .collect()
+}
+
+/// The rows `PRAGMA index_list` answers: one per index over the table, the
+/// one made last first, with its name, whether two rows may share one key,
+/// where it came from, and whether it holds fewer entries than the table
+/// has rows.
+///
+/// Reading the table costs O(n) in its indexes.
+fn listed_indexes(database: &Database<'_>, name: &[u8]) -> Vec<Vec<Value>> {
+    let held = database.indexes(name);
+    held.iter()
+        .rev()
+        .enumerate()
+        .map(|(seq, indexed)| {
+            alloc::vec![
+                Value::Int(i64::try_from(seq).unwrap_or(0)),
+                Value::Text(indexed.index.name.clone()),
+                Value::Int(i64::from(indexed.index.unique)),
+                Value::Text(origin_of(indexed).to_vec()),
+                Value::Int(i64::from(indexed.index.filter.is_some())),
+            ]
+        })
+        .collect()
+}
+
+/// Where an index came from, which `PRAGMA index_list` writes as a word:
+/// `c` for a `CREATE INDEX`, `pk` for a `PRIMARY KEY` and `u` for a
+/// `UNIQUE`.
+fn origin_of(indexed: &crate::db::Indexed<'_>) -> &'static [u8] {
+    if !indexed.sql.is_empty() {
+        return b"c";
+    }
+    if keyed_as_primary(indexed) {
+        return b"pk";
+    }
+    b"u"
+}
+
+/// Whether the places of an index are the columns of the primary key, in
+/// the order the key holds them.
+fn keyed_as_primary(indexed: &crate::db::Indexed<'_>) -> bool {
+    let held: Vec<usize> = indexed
+        .index
+        .columns
+        .iter()
+        .filter_map(crate::schema::Keyed::place)
+        .collect();
+    primary_places(indexed.table) == held
+}
+
+/// The places of the columns of the primary key, in the order the key
+/// holds them.
+///
+/// Sorting them costs O(n log n) in the columns of the table.
+fn primary_places(table: &Table) -> Vec<usize> {
+    let mut out: Vec<(u16, usize)> = table
+        .columns
+        .iter()
+        .enumerate()
+        .filter(|(_, column)| column.key != 0)
+        .map(|(at, column)| (column.key, at))
+        .collect();
+    out.sort_unstable();
+    out.into_iter().map(|(_, at)| at).collect()
 }

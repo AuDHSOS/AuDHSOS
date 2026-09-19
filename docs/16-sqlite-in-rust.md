@@ -886,6 +886,9 @@ Size: L.
 82. What an added column that points at another table may fall back to,
     which the keys of the connection and the rows of the table decide.
     Built, which D-328 records.
+83. The pragmas that answer the schema: `table_info`, `table_xinfo`,
+    `index_info`, `index_xinfo`, `index_list` and `collation_list`. Built,
+    which D-330 records.
 
 ### Done when
 
@@ -895,8 +898,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 106 748 cases in 786 files, 93 630
-pass, 3317 answer differently, and 9801 name something the engine
+under the `tclsh` of the machine. Of 107 673 cases in 797 files, 94 587
+pass, 3476 answer differently, and 9610 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the three-minute
 deadline and are counted with the cases they ran by then. One run over

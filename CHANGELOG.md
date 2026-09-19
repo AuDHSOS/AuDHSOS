@@ -7,6 +7,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` answers `PRAGMA table_info`, `table_xinfo`, `index_info`,
+  `index_xinfo`, `index_list` and `collation_list`. D-330 records it.
+  Catalog 6.6.225. `pragma.test` goes from 57 cases passing to 66.
+
 - `db-sqlite` covers every database a connection holds with one
   transaction: a `BEGIN` opens one on each, a `COMMIT` writes each, a
   `ROLLBACK` puts each back, and a savepoint keeps each. D-329 records it.

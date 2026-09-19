@@ -67,6 +67,25 @@ pub enum Setting {
     /// because `PragFlg_NoColumns` stands against its name in
     /// `research/sqlite/pragma.h:200`.
     CaseSensitiveLike,
+    /// `PRAGMA table_info(table)`, which answers one row per column of a
+    /// table that is not computed, and is `PragTyp_TABLE_INFO` of
+    /// `research/sqlite/src/pragma.c:1211`.
+    TableInfo,
+    /// The same with every column, computed or not, and a seventh column
+    /// saying which of the two each is.
+    TableXinfo,
+    /// `PRAGMA index_info(index)`, which answers one row per place of an
+    /// index.
+    IndexInfo,
+    /// The same with the order, the collation and whether the place is one
+    /// the entries are held in the order of.
+    IndexXinfo,
+    /// `PRAGMA index_list(table)`, which answers one row per index over a
+    /// table.
+    IndexList,
+    /// `PRAGMA collation_list`, which answers one row per collation the
+    /// connection holds.
+    CollationList,
     /// `PRAGMA database_list`, which answers one row per database the
     /// connection holds, and is `PragTyp_DATABASE_LIST` of
     /// `research/sqlite/src/pragma.c:1436`.
@@ -403,6 +422,12 @@ pub fn of_name(name: &[u8]) -> Option<Setting> {
         b"quick_check" => Setting::Quick,
         b"foreign_key_list" => Setting::ForeignKeyList,
         b"database_list" => Setting::DatabaseList,
+        b"table_info" => Setting::TableInfo,
+        b"table_xinfo" => Setting::TableXinfo,
+        b"index_info" => Setting::IndexInfo,
+        b"index_xinfo" => Setting::IndexXinfo,
+        b"index_list" => Setting::IndexList,
+        b"collation_list" => Setting::CollationList,
         b"foreign_key_check" => Setting::ForeignKeyCheck,
         b"wal_checkpoint" => Setting::WalCheckpoint,
         b"case_sensitive_like" => Setting::CaseSensitiveLike,
@@ -469,6 +494,12 @@ impl Setting {
             | Setting::Integrity
             | Setting::Quick
             | Setting::DatabaseList
+            | Setting::TableInfo
+            | Setting::TableXinfo
+            | Setting::IndexInfo
+            | Setting::IndexXinfo
+            | Setting::IndexList
+            | Setting::CollationList
             | Setting::ForeignKeyList
             | Setting::ForeignKeyCheck
             | Setting::WalCheckpoint => return None,

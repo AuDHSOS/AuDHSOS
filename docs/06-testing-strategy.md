@@ -6266,3 +6266,21 @@ Document 18 step A5.
 - A `ROLLBACK TO` puts every database back where the `SAVEPOINT` found it.
 - A database an `ATTACH` added inside a transaction joins it.
 - A `COMMIT` and a `ROLLBACK` outside a transaction carry a word each.
+
+### 6.6.225 What the pragmas of the schema answer (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `PRAGMA table_info` answers the place, the name, the declared type,
+  whether the column refuses nothing, what it falls back to, and where it
+  stands in the primary key.
+- A computed column is out of `table_info` and in `table_xinfo`, with two
+  for `VIRTUAL` and three for `STORED`.
+- `PRAGMA index_info` answers -2 for a place over an expression.
+- `PRAGMA index_xinfo` answers the rowid of a table that holds one and the
+  primary key of a table that keeps its rows in the key's own tree.
+- `PRAGMA index_list` answers the index made last first, with `c`, `pk` and
+  `u` for where each came from.
+- `PRAGMA collation_list` answers the three of the library and then the
+  ones the application defined.
+- A table or an index the schema does not hold answers no row.

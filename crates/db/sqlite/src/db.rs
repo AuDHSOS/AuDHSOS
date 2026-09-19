@@ -2227,11 +2227,9 @@ impl<'a> Database<'a> {
                 // name says which of them it is.
                 let name = text(1)?;
                 let over = text(2)?;
-                let Some(stored) = self
-                    .tables
-                    .iter_mut()
-                    .find(|stored| stored.table.name.eq_ignore_ascii_case(&over))
-                else {
+                let Some(stored) = self.tables.iter_mut().find(|stored| {
+                    stored.place == place && stored.table.name.eq_ignore_ascii_case(&over)
+                }) else {
                     continue;
                 };
                 let index = (0..stored.table.keys.len())

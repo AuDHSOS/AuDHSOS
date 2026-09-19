@@ -46,6 +46,7 @@ mod journal;
 mod journal_mode;
 mod json;
 mod key_tree;
+mod listed;
 mod matrix;
 mod misuse;
 mod newrowid;
