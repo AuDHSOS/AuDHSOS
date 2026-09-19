@@ -10,6 +10,7 @@
 
 use core::fmt;
 
+use audhsos_abi::Rights;
 use audhsos_abi::layout::{PAGE_SIZE, USER_SPACE_START};
 use kernel_types::{Page, PageRange, VirtAddr};
 
@@ -99,18 +100,26 @@ pub struct Region<B: Copy> {
     pub offset: u64,
     /// The permissions of the mapping.
     pub perms: Permissions,
+    /// The rights that bound what a later `memory_protect` of the region
+    /// may allow, out of `READ`, `WRITE`, and `EXECUTE`. [`Rights::ALL`]
+    /// for a kernel mapping, which no handle names.
+    pub rights: Rights,
 }
 
 impl<B: Copy + PartialEq> Region<B> {
     /// `true` when `next` continues this region: it begins where this one
-    /// ends, names the same object at the offset this one runs on to, and
-    /// allows the same. Such a pair is one region and not two (D-104):
-    /// without that, a mapping of a full screen, which no call can make in
-    /// one step, would cost one region per call.
+    /// ends, names the same object at the offset this one runs on to,
+    /// allows the same, and carries the same rights.
+    /// Such a pair is one region and not two (D-104): without that, a
+    /// mapping of a full screen, which no call can make in one step, would
+    /// cost one region per call. The rights take part because
+    /// `memory_protect` reads them: a merge across two sets would lend the
+    /// weaker mapping the rights of the stronger one.
     pub(crate) fn continues_into(self, next: Region<B>) -> bool {
         self.pages.end_number() == next.pages.start().number()
             && self.backing == next.backing
             && self.perms == next.perms
+            && self.rights == next.rights
             && self.offset.checked_add(self.pages.bytes()) == Some(next.offset)
     }
 }
@@ -549,13 +558,10 @@ impl<B: Copy, const N: usize> RegionTable<B, N> {
     /// the range is the whole region, one when it lies at either end of it,
     /// and two when it lies in the middle. A caller that holds one
     /// reference to the backing object per region takes that many more.
+    /// The pieces keep the [`rights`](Region::rights) of the region they
+    /// come from: a change of permissions is not a transfer.
     pub fn protect(&mut self, pages: PageRange, perms: Permissions) -> Result<usize, RegionError> {
-        self.check_range(pages)?;
-        let index = self.index_of(pages.start()).ok_or(RegionError::NotMapped)?;
-        let region = self.get(index).ok_or(RegionError::NotMapped)?;
-        if pages.end_number() > region.pages.end_number() {
-            return Err(RegionError::NotMapped);
-        }
+        let (index, region, extra) = self.protect_plan(pages)?;
         let head = region.head(pages.start());
         let tail = pages
             .last()
@@ -565,10 +571,6 @@ impl<B: Copy, const N: usize> RegionTable<B, N> {
             perms,
             ..region.clipped(pages).ok_or(RegionError::NotMapped)?
         };
-        let extra = usize::from(head.is_some()).saturating_add(usize::from(tail.is_some()));
-        if self.free_slots() < extra {
-            return Err(RegionError::QuotaExceeded);
-        }
         let next = if let Some(head) = head {
             self.set(index, head);
             self.insert_at(index.saturating_add(1), middle)?;
@@ -581,6 +583,40 @@ impl<B: Copy, const N: usize> RegionTable<B, N> {
             self.insert_at(next, tail)?;
         }
         Ok(extra)
+    }
+
+    /// What [`protect`](Self::protect) of `pages` would do: the slot of the
+    /// region that holds them, that region, and the number of regions the
+    /// table would gain.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`protect`](Self::protect).
+    fn protect_plan(&self, pages: PageRange) -> Result<(usize, Region<B>, usize), RegionError> {
+        self.check_range(pages)?;
+        let index = self.index_of(pages.start()).ok_or(RegionError::NotMapped)?;
+        let region = self.get(index).ok_or(RegionError::NotMapped)?;
+        if pages.end_number() > region.pages.end_number() {
+            return Err(RegionError::NotMapped);
+        }
+        let head = pages.start().number() > region.pages.start().number();
+        let tail = pages.end_number() < region.pages.end_number();
+        let extra = usize::from(head).saturating_add(usize::from(tail));
+        if self.free_slots() < extra {
+            return Err(RegionError::QuotaExceeded);
+        }
+        Ok((index, region, extra))
+    }
+
+    /// Answers what [`protect`](Self::protect) of `pages` would answer,
+    /// and changes nothing. A caller that changes the page tables before
+    /// the table asks this first, so that a refusal leaves the two in step.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`protect`](Self::protect).
+    pub fn check_protect(&self, pages: PageRange) -> Result<(), RegionError> {
+        self.protect_plan(pages).map(|_| ())
     }
 
     /// `true` if the regions are sorted, non-empty, disjoint, and, for a

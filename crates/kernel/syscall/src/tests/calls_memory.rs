@@ -679,6 +679,7 @@ fn mapping_with_a_full_region_table_is_refused_and_takes_its_pages_back() {
                 backing: kernel_objects::pool::ObjectId::new(0, 1),
                 offset: 0,
                 perms: kernel_mm::page_table::Permissions::READ_ONLY.for_user(),
+                rights: Rights::ALL,
             })
             .unwrap();
         page += 2;
@@ -1188,5 +1189,301 @@ fn a_range_over_more_mappings_than_one_call_takes_comes_back_with_the_rest() {
             .regions
             .len(),
         1
+    );
+}
+
+#[test]
+fn protecting_writable_without_the_write_right_is_refused() {
+    let mut fixture = Fixture::new();
+    let (_, handle) = fixture.memory(0x100, 2, Rights::READ | Rights::MAP);
+    let own = fixture.own_process.raw();
+    value_of(
+        &mut fixture,
+        request(
+            Syscall::MemoryMap,
+            &[own, handle.raw(), ADDRESS, 0, 2 * PAGE_SIZE, READ_ONLY],
+        ),
+    );
+    fixture.environment.calls.clear();
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(
+                Syscall::MemoryProtect,
+                &[own, ADDRESS, 2 * PAGE_SIZE, WRITABLE]
+            )
+        ),
+        Some(Error::AccessDenied)
+    );
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(
+                Syscall::MemoryProtect,
+                &[own, ADDRESS, 2 * PAGE_SIZE, EXECUTABLE]
+            )
+        ),
+        Some(Error::AccessDenied)
+    );
+    assert_eq!(
+        fixture.environment.calls.len(),
+        0,
+        "the page tables were not touched"
+    );
+    let holder = fixture.objects.processes.get(fixture.process).unwrap();
+    let region = holder.regions.iter().next().expect("a region");
+    assert!(!region.perms.write);
+    assert!(!region.perms.execute);
+}
+
+#[test]
+fn protecting_writable_with_the_write_right_is_allowed() {
+    let mut fixture = Fixture::new();
+    let (_, handle) = fixture.memory(0x100, 2, Rights::READ | Rights::WRITE | Rights::MAP);
+    let own = fixture.own_process.raw();
+    value_of(
+        &mut fixture,
+        request(
+            Syscall::MemoryMap,
+            &[own, handle.raw(), ADDRESS, 0, 2 * PAGE_SIZE, READ_ONLY],
+        ),
+    );
+    assert_eq!(
+        value_of(
+            &mut fixture,
+            request(
+                Syscall::MemoryProtect,
+                &[own, ADDRESS, 2 * PAGE_SIZE, WRITABLE]
+            )
+        ),
+        2
+    );
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(
+                Syscall::MemoryProtect,
+                &[own, ADDRESS, 2 * PAGE_SIZE, EXECUTABLE]
+            )
+        ),
+        Some(Error::AccessDenied),
+        "the handle carries no EXECUTE"
+    );
+    value_of(
+        &mut fixture,
+        request(
+            Syscall::MemoryProtect,
+            &[own, ADDRESS, 2 * PAGE_SIZE, READ_ONLY],
+        ),
+    );
+    assert_eq!(
+        value_of(
+            &mut fixture,
+            request(
+                Syscall::MemoryProtect,
+                &[own, ADDRESS, 2 * PAGE_SIZE, WRITABLE]
+            )
+        ),
+        2,
+        "a process keeps the rights of its own handle over its own mapping"
+    );
+}
+
+#[test]
+fn protecting_a_range_that_leaves_its_region_changes_no_page_table() {
+    let mut fixture = Fixture::new();
+    let (_, writable) = fixture.memory(0x100, 1, Rights::READ | Rights::WRITE | Rights::MAP);
+    let (_, read_only) = fixture.memory(0x200, 1, Rights::READ | Rights::MAP);
+    let own = fixture.own_process.raw();
+    value_of(
+        &mut fixture,
+        request(
+            Syscall::MemoryMap,
+            &[own, writable.raw(), ADDRESS, 0, PAGE_SIZE, READ_ONLY],
+        ),
+    );
+    value_of(
+        &mut fixture,
+        request(
+            Syscall::MemoryMap,
+            &[
+                own,
+                read_only.raw(),
+                ADDRESS + PAGE_SIZE,
+                0,
+                PAGE_SIZE,
+                READ_ONLY,
+            ],
+        ),
+    );
+    fixture.environment.calls.clear();
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(
+                Syscall::MemoryProtect,
+                &[own, ADDRESS, 2 * PAGE_SIZE, WRITABLE]
+            )
+        ),
+        Some(Error::NotMapped)
+    );
+    assert_eq!(
+        fixture.environment.calls.len(),
+        0,
+        "the second region carries no WRITE and its page stayed read-only"
+    );
+}
+
+#[test]
+fn two_mappings_of_one_object_through_handles_of_different_rights_stay_apart() {
+    let mut fixture = Fixture::new();
+    let (object, full_handle) = fixture.memory(0x100, 2, full());
+    let own = fixture.own_process.raw();
+    let weak = fixture.install(AnyObjectId::of(object), Rights::READ | Rights::MAP);
+    value_of(
+        &mut fixture,
+        request(
+            Syscall::MemoryMap,
+            &[own, full_handle.raw(), ADDRESS, 0, PAGE_SIZE, READ_ONLY],
+        ),
+    );
+    value_of(
+        &mut fixture,
+        request(
+            Syscall::MemoryMap,
+            &[
+                own,
+                weak.raw(),
+                ADDRESS + PAGE_SIZE,
+                PAGE_SIZE,
+                PAGE_SIZE,
+                READ_ONLY,
+            ],
+        ),
+    );
+    let holder = fixture.objects.processes.get(fixture.process).unwrap();
+    assert_eq!(
+        holder.regions.len(),
+        2,
+        "a merge would lend the read-only mapping the rights of the other"
+    );
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(
+                Syscall::MemoryProtect,
+                &[own, ADDRESS + PAGE_SIZE, PAGE_SIZE, WRITABLE]
+            )
+        ),
+        Some(Error::AccessDenied)
+    );
+}
+
+#[test]
+fn a_mapping_another_process_made_carries_only_what_it_allows() {
+    let mut fixture = Fixture::new();
+    let (_, handle) = fixture.memory(0x100, 2, full());
+    let child = fixture.process(4);
+    let child_handle = fixture.install(AnyObjectId::of(child), Rights::MAP);
+    value_of(
+        &mut fixture,
+        request(
+            Syscall::MemoryMap,
+            &[
+                child_handle.raw(),
+                handle.raw(),
+                ADDRESS,
+                0,
+                2 * PAGE_SIZE,
+                EXECUTABLE,
+            ],
+        ),
+    );
+    // The child holds no handle to the object, so the mapping the parent
+    // made may not become writable although the parent's handle carries
+    // WRITE.
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(
+                Syscall::MemoryProtect,
+                &[child_handle.raw(), ADDRESS, 2 * PAGE_SIZE, WRITABLE]
+            )
+        ),
+        Some(Error::AccessDenied)
+    );
+    assert_eq!(
+        value_of(
+            &mut fixture,
+            request(
+                Syscall::MemoryProtect,
+                &[child_handle.raw(), ADDRESS, 2 * PAGE_SIZE, READ_ONLY]
+            )
+        ),
+        2,
+        "what the mapping allows it may take back"
+    );
+    assert_eq!(
+        value_of(
+            &mut fixture,
+            request(
+                Syscall::MemoryProtect,
+                &[child_handle.raw(), ADDRESS, 2 * PAGE_SIZE, EXECUTABLE]
+            )
+        ),
+        2,
+        "a protection changes permissions and not rights"
+    );
+}
+
+#[test]
+fn protecting_with_a_full_region_table_is_refused_and_changes_no_page_table() {
+    let mut fixture = Fixture::new();
+    let (_, handle) = fixture.memory(0x100, 4, full());
+    let own = fixture.own_process.raw();
+    value_of(
+        &mut fixture,
+        request(
+            Syscall::MemoryMap,
+            &[own, handle.raw(), ADDRESS, 0, 4 * PAGE_SIZE, WRITABLE],
+        ),
+    );
+    // Fill the rest of the table, so that the split the call needs has no
+    // slot.
+    let holder = fixture.objects.processes.get_mut(fixture.process).unwrap();
+    let mut page = 0x1000_u64;
+    while holder.regions.free_slots() > 0 {
+        let pages = kernel_types::PageRange::new(
+            kernel_types::Page::containing(kernel_types::VirtAddr::new(page * PAGE_SIZE).unwrap()),
+            1,
+        )
+        .unwrap();
+        holder
+            .regions
+            .insert(kernel_mm::address_space::Region {
+                pages,
+                backing: kernel_objects::pool::ObjectId::new(0, 1),
+                offset: 0,
+                perms: kernel_mm::page_table::Permissions::READ_ONLY.for_user(),
+                rights: Rights::ALL,
+            })
+            .unwrap();
+        page += 2;
+    }
+    fixture.environment.calls.clear();
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(
+                Syscall::MemoryProtect,
+                &[own, ADDRESS + PAGE_SIZE, 2 * PAGE_SIZE, READ_ONLY]
+            )
+        ),
+        Some(Error::QuotaExceeded)
+    );
+    assert_eq!(
+        fixture.environment.calls.len(),
+        0,
+        "the page tables were not touched"
     );
 }

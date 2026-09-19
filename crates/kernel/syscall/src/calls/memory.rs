@@ -19,6 +19,42 @@ use kernel_types::{PageRange, PhysFrame, PhysFrameRange};
 use crate::dispatch::{Machine, Reply, Request};
 use crate::environment::Environment;
 
+/// The rights of a memory handle that bound what a mapping made through it
+/// may allow.
+const MAPPING_RIGHTS: Rights = Rights::READ.union(Rights::WRITE).union(Rights::EXECUTE);
+
+/// The rights a mapping of these permissions already allows.
+const fn rights_of(perms: Permissions) -> Rights {
+    let write = if perms.write {
+        Rights::WRITE
+    } else {
+        Rights::EMPTY
+    };
+    let execute = if perms.execute {
+        Rights::EXECUTE
+    } else {
+        Rights::EMPTY
+    };
+    Rights::READ.union(write).union(execute)
+}
+
+/// The rights a mapping carries that `caller` makes in the address space of
+/// `target` through a handle carrying `held`.
+///
+/// A mapping in another address space hands that process no capability to
+/// the object, so the region carries only what the mapping allows: rights
+/// only decrease along a transfer (2.11 of `docs/02-architecture.md`). In
+/// its own address space the caller holds `held` anyway. A later
+/// `memory_protect` leaves the rights as they are; what takes them back is
+/// `memory_unmap`.
+fn region_rights(caller: ProcessId, target: ProcessId, held: Rights, perms: Permissions) -> Rights {
+    if target == caller {
+        held.intersection(MAPPING_RIGHTS)
+    } else {
+        rights_of(perms)
+    }
+}
+
 /// The permissions a `memory_map` or `memory_protect` argument names: bit
 /// zero writable, bit one executable. A mapping always allows reading, and
 /// one a user thread may reach is always a user mapping.
@@ -128,11 +164,13 @@ pub fn map<E: Environment, const NP: usize, const NT: usize, const NM: usize, co
         mapped = mapped.saturating_add(1);
     }
 
+    let rights = region_rights(caller, target, object_rights, perms);
     let region = Region {
         pages: PageRange::new(pages.start(), mapped).map_err(|_| Error::InvalidArgument)?,
         backing: object_id,
         offset,
         perms,
+        rights,
     };
     let inserted = machine
         .objects
@@ -167,6 +205,21 @@ fn unwind<E: Environment, const NP: usize, const NT: usize, const NM: usize, con
 ) {
     for page in pages.into_iter().take(count_of(count)) {
         let _ = machine.environment.unmap(root, page);
+    }
+}
+
+/// Puts `perms` back on the pages a failed `memory_protect` had already
+/// changed. The pages lie in one region, which carries one set of
+/// permissions, so `perms` is what each of them had.
+fn restore<E: Environment, const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
+    machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+    root: PhysFrame,
+    pages: PageRange,
+    count: u64,
+    perms: Permissions,
+) {
+    for page in pages.into_iter().take(count_of(count)) {
+        let _ = machine.environment.protect(root, page, perms);
     }
 }
 
@@ -256,7 +309,11 @@ pub fn unmap<E: Environment, const NP: usize, const NT: usize, const NM: usize, 
 /// [`Error::InvalidHandle`] or [`Error::WrongObjectType`] for the process
 /// handle; [`Error::InvalidArgument`] for a range outside user space or
 /// permission bits that name nothing; [`Error::NotMapped`] when nothing is
-/// mapped there.
+/// mapped there or when the part of the range this call would do leaves
+/// the region it starts in; [`Error::AccessDenied`] when a permission
+/// asked for is not in the rights the mapping was made with;
+/// [`Error::QuotaExceeded`] when the region table has no room for the
+/// split the change would make.
 pub fn protect<
     E: Environment,
     const NP: usize,
@@ -273,32 +330,40 @@ pub fn protect<
     let perms = permissions_of(request.argument(3))?;
     let holder = machine.objects.processes.get(target)?;
     let root = holder.root;
-    if holder.regions.find(pages.start()).is_none() {
-        return Err(Error::NotMapped);
+    let region = *holder.regions.find(pages.start()).ok_or(Error::NotMapped)?;
+    // The rights of the mapping bound what the call may allow, as they do
+    // in `map`: without the check a process that holds an object read-only
+    // reaches a writable mapping of it, against 2.11 of
+    // `docs/02-architecture.md`.
+    if perms.write && !region.rights.contains(Rights::WRITE) {
+        return Err(Error::AccessDenied);
+    }
+    if perms.execute && !region.rights.contains(Rights::EXECUTE) {
+        return Err(Error::AccessDenied);
     }
     let budget = pages.count().min(MAX_PAGES_PER_CALL);
+    let touched = PageRange::new(pages.start(), budget).map_err(|_| Error::InvalidArgument)?;
+    // The region table answers before a page table changes, so that a
+    // refusal leaves no page carrying permissions no region records; the
+    // pages past this region belong to a region whose rights were never
+    // read.
+    holder.regions.check_protect(touched)?;
     let mut done = 0_u64;
     for page in pages.into_iter().take(count_of(budget)) {
-        machine.environment.protect(root, page, perms)?;
+        if let Err(error) = machine.environment.protect(root, page, perms) {
+            restore(machine, root, touched, done, region.perms);
+            return Err(error);
+        }
         done = done.saturating_add(1);
     }
-    let region = machine
-        .objects
-        .processes
-        .get(target)?
-        .regions
-        .find(pages.start())
-        .map(|held| held.backing);
     let gained = machine.objects.processes.get_mut(target)?.regions.protect(
         PageRange::new(pages.start(), done).map_err(|_| Error::InvalidArgument)?,
         perms,
     )?;
     // A protection that split a region left more regions than it found, and
     // the backing object is held by one reference per region.
-    if let Some(backing) = region {
-        for _ in 0..gained {
-            machine.objects.memory.retain(backing)?;
-        }
+    for _ in 0..gained {
+        machine.objects.memory.retain(region.backing)?;
     }
     if done < pages.count() {
         return Ok(Reply::partial(done));
