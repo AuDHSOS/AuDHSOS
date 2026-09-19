@@ -9540,9 +9540,6 @@ fn the_engine_names_the_parts_of_clause_27_it_has_not_built() -> Result<(), Erro
         // without either call.
         "Promise.all({[Symbol.iterator](){return {next(){return {done:true}}}}})",
         "Promise.all('ab')",
-        // A Promise of a subclass needs the `newTarget` of 10.1.13, which this
-        // engine does not carry into a constructor written in Rust.
-        "class C extends Promise{}; new C(function(){})",
     ] {
         let mut host = SilentHost;
         let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
@@ -11986,6 +11983,27 @@ fn the_arguments_20_2_1_1_makes_a_function_of_go_through_7_1_17() -> Result<(), 
         "var r;try{new Function({toString:function(){throw new TypeError()}})}catch(e){r=e instanceof TypeError};''+r",
     ] {
         differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn a_promise_of_a_derived_class_takes_the_prototype_of_its_new_target() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // 10.1.13 takes the Prototype off the `newTarget`, and 27.2.3.1 step 6
+    // calls the executor in a frame of its own.
+    for (source, answer) in [
+        (
+            "(function(){class P extends Promise{constructor(e){super(e);this.tag='p'}}var p=new P(function(r){r(7)});return p.tag+'|'+(p instanceof P)+'|'+(p instanceof Promise)+'|'+(Object.getPrototypeOf(p)===P.prototype)})()",
+            "p|true|true|true",
+        ),
+        (
+            "(function(){class P extends Promise{}var q=Reflect.construct(Promise,[function(r){r(9)}],P);return ''+(Object.getPrototypeOf(q)===P.prototype)})()",
+            "true",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
     }
     Ok(())
 }

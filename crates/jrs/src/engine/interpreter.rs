@@ -3217,16 +3217,11 @@ impl RegisterVM {
             }
             // 27.2.3.1 step 6 calls the executor, which only a frame the
             // instruction opens can do.
-            Intrinsic::PromiseConstructor => {
-                if call.construct.is_some() {
-                    return Err(VMError::Unsupported("a Promise of a derived class"));
-                }
-                Err(type_error(
-                    heap,
-                    realm,
-                    "Promise cannot be called without new",
-                ))
-            }
+            Intrinsic::PromiseConstructor => Err(type_error(
+                heap,
+                realm,
+                "Promise cannot be called without new",
+            )),
             // 27.2.1.5.1: the constructor of the Script gave the capability
             // its two functions, and neither may be given twice.
             Intrinsic::CapabilitiesExecutor => {
@@ -5989,7 +5984,8 @@ impl RegisterVM {
         }
         // 27.2.3.1 calls the executor before it answers, which needs a frame.
         if intrinsic == Intrinsic::PromiseConstructor && call.construct.is_some() {
-            return self.begin_promise(call, units, active_feedback, heap, realm);
+            let executor = self.call_argument(&call, 0, heap)?;
+            return self.begin_promise(None, executor, call, units, active_feedback, heap, realm);
         }
         if matches!(
             intrinsic,
@@ -8623,6 +8619,17 @@ impl RegisterVM {
         // 10.1.13: a constructor of this Realm written in Rust makes its own
         // object, which takes the Prototype the `newTarget` names.
         if let Some(intrinsic) = native {
+            if intrinsic == Intrinsic::PromiseConstructor {
+                return self.super_call_of_27_2_3_1(
+                    new_target,
+                    true,
+                    call,
+                    units,
+                    active_feedback,
+                    heap,
+                    realm,
+                );
+            }
             let made =
                 Self::object_takes_its_new_target(intrinsic, self.read_reg(new_target)?, heap);
             self.acc = if made {
@@ -14856,36 +14863,16 @@ impl RegisterVM {
         // object with `OrdinaryCreateFromConstructor`, so the object it
         // answers takes the Prototype the `newTarget` names.
         if let Some(intrinsic) = Self::native_constructor_of(parent, heap) {
-            let made = Self::object_takes_its_new_target(
+            return self.super_call_of_a_native(
                 intrinsic,
-                self.read_reg(new_target_register)?,
+                (new_target_register, target, receiver),
+                (spread.is_some(), bound),
+                call,
+                units,
+                active_feedback,
                 heap,
+                realm,
             );
-            self.acc = if made {
-                receiver
-            } else {
-                self.call_intrinsic(intrinsic, call, units, heap, realm)?
-            };
-            if spread.is_some() {
-                heap.exit_scope();
-            }
-            let prototype = self.prototype_of_new_target(new_target_register, heap)?;
-            if let Some(object) = self.acc.as_object()
-                && let Some(prototype) = prototype
-            {
-                heap.set_object_prototype(object, prototype)
-                    .map_err(VMError::Heap)?;
-            }
-            self.write_construction(target, self.acc, heap)?;
-            if bound {
-                return Err(raise(
-                    heap,
-                    realm,
-                    super::realm::NativeErrorKind::ReferenceError,
-                    "this is already initialized",
-                ));
-            }
-            return Ok(None);
         }
         if !Self::is_script_function(parent, heap) {
             if spread.is_some() {
@@ -29302,8 +29289,14 @@ impl RegisterVM {
 
     /// 27.2.3.1: `new Promise(executor)`, which calls the executor at once
     /// with the pair of 27.2.1.3 and answers the promise whatever it does.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the executor opens a frame, which needs what a call needs"
+    )]
     fn begin_promise(
         &mut self,
+        prototype: Option<Value>,
+        executor: Value,
         call: Call,
         units: CodeUnits<'_>,
         active_feedback: &mut FeedbackVector,
@@ -29313,7 +29306,6 @@ impl RegisterVM {
         let target = call
             .construct
             .ok_or_else(|| type_error(heap, realm, "Promise cannot be called without new"))?;
-        let executor = self.call_argument(&call, 0, heap)?;
         if !Self::is_callable(executor, heap) {
             return Err(type_error(heap, realm, "Promise executor is not callable"));
         }
@@ -29324,7 +29316,12 @@ impl RegisterVM {
                 "a Promise executor that is not a Script function",
             ));
         }
-        let prototype = realm.promise_prototype(heap)?;
+        // 10.1.13 takes the Prototype off the `newTarget`, which a derived
+        // class is; a plain `new Promise` names `%Promise%` itself.
+        let prototype = match prototype {
+            Some(prototype) => prototype,
+            None => realm.promise_prototype(heap)?,
+        };
         let promise = Value::from_object(promise::create(heap, realm, prototype)?);
         let (resolve, reject) = promise::resolving_functions(heap, realm, promise)?;
         let state = Self::native_state(resolve, heap).ok_or(VMError::TypeError)?;
@@ -29351,6 +29348,103 @@ impl RegisterVM {
             coerced: 0,
         };
         self.enter_call_value(executor, units, active_feedback, heap, realm, call)
+    }
+
+    /// The super call of a derived class whose Prototype is a constructor of
+    /// this Realm written in Rust.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a super call opens a frame, which needs what a call needs"
+    )]
+    fn super_call_of_a_native(
+        &mut self,
+        intrinsic: Intrinsic,
+        registers: (Reg, Construction, Value),
+        flags: (bool, bool),
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let (new_target, target, receiver) = registers;
+        let (spread, bound) = flags;
+        // 27.2.3.1 step 6 calls the executor, which only a frame this
+        // instruction opens can do.
+        if intrinsic == Intrinsic::PromiseConstructor {
+            return self.super_call_of_27_2_3_1(
+                new_target,
+                spread,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
+        let made = Self::object_takes_its_new_target(intrinsic, self.read_reg(new_target)?, heap);
+        self.acc = if made {
+            receiver
+        } else {
+            self.call_intrinsic(intrinsic, call, units, heap, realm)?
+        };
+        if spread {
+            heap.exit_scope();
+        }
+        let prototype = self.prototype_of_new_target(new_target, heap)?;
+        if let Some(object) = self.acc.as_object()
+            && let Some(prototype) = prototype
+        {
+            heap.set_object_prototype(object, prototype)
+                .map_err(VMError::Heap)?;
+        }
+        self.write_construction(target, self.acc, heap)?;
+        if bound {
+            return Err(raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::ReferenceError,
+                "this is already initialized",
+            ));
+        }
+        Ok(None)
+    }
+
+    /// The super call of a derived class whose Prototype is `%Promise%`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the executor opens a frame, which needs what a call needs"
+    )]
+    fn super_call_of_27_2_3_1(
+        &mut self,
+        new_target: Reg,
+        spread: bool,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let prototype = self.prototype_of_new_target(new_target, heap)?;
+        // The executor comes out of the List a spread call carries before that
+        // List leaves, and the frame it runs in holds its own roots.
+        let executor = self.call_argument(&call, 0, heap)?;
+        if spread {
+            heap.exit_scope();
+        }
+        let call = Call {
+            resume: None,
+            ..call
+        };
+        self.begin_promise(
+            prototype,
+            executor,
+            call,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )
     }
 
     /// 27.2.1.3.2 and 27.2.1.3.1: settles the promise the pair of resolving
@@ -33403,9 +33497,16 @@ impl RegisterVM {
                             return Ok(None);
                         }
                         if intrinsic == Intrinsic::PromiseConstructor {
-                            if let Some(code_id) =
-                                self.begin_promise(call, units, active_feedback, heap, realm)?
-                            {
+                            let executor = self.call_argument(&call, 0, heap)?;
+                            if let Some(code_id) = self.begin_promise(
+                                None,
+                                executor,
+                                call,
+                                units,
+                                active_feedback,
+                                heap,
+                                realm,
+                            )? {
                                 current_code_id = Some(code_id);
                                 pc = self.pending_pc.take().unwrap_or(0);
                             }
