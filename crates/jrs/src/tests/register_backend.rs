@@ -12110,6 +12110,38 @@ fn the_get_of_10_5_8_answers_out_of_the_handler() -> Result<(), Error> {
             "(function(){var p=new Proxy({a:1},{set(){throw new TypeError()}});var r;try{p.a=1}catch(e){r=e instanceof TypeError};return ''+r})()",
             "true",
         ),
+        // 10.5.6 answers the definition out of the `defineProperty` of the
+        // handler, which is given the descriptor 6.2.6.4 made.
+        (
+            "(function(){var l=[];var t={};var p=new Proxy(t,{defineProperty(o,n,d){l.push(n+':'+Object.keys(d).join('/'));return Reflect.defineProperty(o,n,d)}});Object.defineProperty(p,'a',{value:1,enumerable:true,configurable:true});return l.join('')+'|'+t.a})()",
+            "a:value/enumerable/configurable|1",
+        ),
+        // 20.1.2.4 answers the Proxy and 28.1.3 whether the trap took it.
+        (
+            "(function(){var t={};var p=new Proxy(t,{defineProperty(o,n,d){return Reflect.defineProperty(o,n,d)}});return ''+(Object.defineProperty(p,'a',{value:1})===p)+'|'+Reflect.defineProperty(p,'b',{value:2})+'|'+t.b})()",
+            "true|true|2",
+        ),
+        // Step 8: a trap that refuses is a TypeError of 7.3.8 where 20.1.2.4
+        // called it, and the false answer of 28.1.3 where 28.1.3 did.
+        (
+            "(function(){var p=new Proxy({},{defineProperty(){return false}});var r;try{Object.defineProperty(p,'x',{value:1})}catch(e){r=e instanceof TypeError};return ''+r+'|'+Reflect.defineProperty(p,'x',{value:1})})()",
+            "true|false",
+        ),
+        // Step 10: a target that is not extensible owns no new property.
+        (
+            "(function(){var f=Object.preventExtensions({});var p=new Proxy(f,{defineProperty(){return true}});var r;try{Object.defineProperty(p,'y',{value:1})}catch(e){r=e instanceof TypeError};return ''+r})()",
+            "true",
+        ),
+        // Step 11.b: a configurable the target still answers true for.
+        (
+            "(function(){var g={};Object.defineProperty(g,'z',{value:1,configurable:true});var p=new Proxy(g,{defineProperty(){return true}});var r;try{Object.defineProperty(p,'z',{value:1,configurable:false})}catch(e){r=e instanceof TypeError};return ''+r})()",
+            "true",
+        ),
+        // Step 6: a handler with no trap defines on the target.
+        (
+            "(function(){var t={};var p=new Proxy(t,{});Object.defineProperty(p,'k',{value:9,enumerable:true});return ''+t.k+'|'+Object.getOwnPropertyDescriptor(t,'k').enumerable})()",
+            "9|true",
+        ),
     ] {
         assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
     }

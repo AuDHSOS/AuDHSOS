@@ -1116,10 +1116,38 @@ const PROXY_KIND: u32 = 2;
 const PROXY_VALUE: u32 = 3;
 /// Whether a write the trap refuses is the `TypeError` of 6.2.5.6 step 6.e.
 const PROXY_STRICT: u32 = 4;
+/// What the clause answers where the trap accepted the definition.
+const PROXY_ANSWER: u32 = 5;
+/// The `[[Writable]]` of a descriptor a `defineProperty` trap was given.
+const PROXY_WRITABLE: u32 = 6;
+/// The `[[Get]]` of that descriptor.
+const PROXY_GET: u32 = 7;
+/// The `[[Set]]` of that descriptor.
+const PROXY_SET: u32 = 8;
+/// The `[[Enumerable]]` of that descriptor.
+const PROXY_ENUMERABLE: u32 = 9;
+/// The `[[Configurable]]` of that descriptor.
+const PROXY_CONFIGURABLE: u32 = 10;
+/// Which fields that descriptor has, as the bits below name them.
+const PROXY_PRESENT: u32 = 11;
 /// The `[[Get]]` of 10.5.8.
 const PROXY_KIND_GET: i32 = 0;
 /// The `[[Set]]` of 10.5.9.
 const PROXY_KIND_SET: i32 = 1;
+/// The `[[DefineOwnProperty]]` of 10.5.6.
+const PROXY_KIND_DEFINE: i32 = 2;
+/// The bit of `PROXY_PRESENT` for each field a descriptor may have.
+const DESCRIPTOR_VALUE: i32 = 1;
+/// The bit for `[[Writable]]`.
+const DESCRIPTOR_WRITABLE: i32 = 2;
+/// The bit for `[[Get]]`.
+const DESCRIPTOR_GET: i32 = 4;
+/// The bit for `[[Set]]`.
+const DESCRIPTOR_SET: i32 = 8;
+/// The bit for `[[Enumerable]]`.
+const DESCRIPTOR_ENUMERABLE: i32 = 16;
+/// The bit for `[[Configurable]]`.
+const DESCRIPTOR_CONFIGURABLE: i32 = 32;
 /// What the walk does with each value it reads.
 const COPY_MODE: u32 = 5;
 /// 7.3.25 defines it on the target under the key it stood at.
@@ -5967,6 +5995,26 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Option<u32>, VMError> {
+        // 7.3.8 and 28.1.3 reach `[[DefineOwnProperty]]`, which for a Proxy
+        // is the `defineProperty` of its handler.
+        if matches!(
+            intrinsic,
+            Intrinsic::ObjectDefineProperty | Intrinsic::ReflectDefineProperty
+        ) && let Some(proxy) = self
+            .call_argument(&call, 0, heap)?
+            .as_object()
+            .filter(|object| heap.is_a_proxy(*object))
+        {
+            return self.begin_define_on_a_proxy(
+                proxy,
+                intrinsic,
+                &call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
         // 10.5 answers every internal method of a Proxy out of its handler,
         // which the engine has not built: a clause that reads one names the
         // gap rather than answering as though the object were ordinary.
@@ -10854,6 +10902,314 @@ impl RegisterVM {
         Ok(None)
     }
 
+    /// The record slots a partial descriptor travels in, with the bitmask of
+    /// the fields it has.
+    fn descriptor_slots(descriptor: &PartialDescriptor) -> ([Value; 6], i32) {
+        let mut present = 0;
+        let mut flag = |bit: i32, held: bool| {
+            if held {
+                present |= bit;
+            }
+        };
+        flag(DESCRIPTOR_VALUE, descriptor.value.is_some());
+        flag(DESCRIPTOR_WRITABLE, descriptor.writable.is_some());
+        flag(DESCRIPTOR_GET, descriptor.get.is_some());
+        flag(DESCRIPTOR_SET, descriptor.set.is_some());
+        flag(DESCRIPTOR_ENUMERABLE, descriptor.enumerable.is_some());
+        flag(DESCRIPTOR_CONFIGURABLE, descriptor.configurable.is_some());
+        let truth = |held: Option<bool>| Value::from_bool(held.unwrap_or(false));
+        (
+            [
+                descriptor.value.unwrap_or(VALUE_UNDEFINED),
+                truth(descriptor.writable),
+                descriptor.get.unwrap_or(VALUE_UNDEFINED),
+                descriptor.set.unwrap_or(VALUE_UNDEFINED),
+                truth(descriptor.enumerable),
+                truth(descriptor.configurable),
+            ],
+            present,
+        )
+    }
+
+    /// The descriptor those slots hold, as the bitmask says which fields it
+    /// has.
+    fn descriptor_from_slots(record: Value, heap: &GenerationalHeap) -> PartialDescriptor {
+        let present = promise::slot(heap, record, PROXY_PRESENT)
+            .as_smi()
+            .unwrap_or(0);
+        let held =
+            |bit: i32, index: u32| (present & bit != 0).then(|| promise::slot(heap, record, index));
+        let truth = |bit: i32, index: u32| held(bit, index).map(|value| value == VALUE_TRUE);
+        PartialDescriptor {
+            value: held(DESCRIPTOR_VALUE, PROXY_VALUE),
+            writable: truth(DESCRIPTOR_WRITABLE, PROXY_WRITABLE),
+            get: held(DESCRIPTOR_GET, PROXY_GET),
+            set: held(DESCRIPTOR_SET, PROXY_SET),
+            enumerable: truth(DESCRIPTOR_ENUMERABLE, PROXY_ENUMERABLE),
+            configurable: truth(DESCRIPTOR_CONFIGURABLE, PROXY_CONFIGURABLE),
+        }
+    }
+
+    /// `FromPropertyDescriptor` of 6.2.6.4 for a descriptor 6.2.6.5 read,
+    /// which carries only the fields it named.
+    fn partial_descriptor_object(
+        descriptor: &PartialDescriptor,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        // The two halves travel in roots, because allocating the object may
+        // scavenge and an Object they hold would not survive that otherwise.
+        heap.enter_scope();
+        let held_value = heap.push_root(descriptor.value.unwrap_or(VALUE_UNDEFINED))?;
+        let held_get = heap.push_root(descriptor.get.unwrap_or(VALUE_UNDEFINED))?;
+        let held_set = heap.push_root(descriptor.set.unwrap_or(VALUE_UNDEFINED))?;
+        let object = realm.ordinary_object(heap);
+        let read = |root: Root, heap: &GenerationalHeap| heap.root_value(root);
+        let value = read(held_value, heap);
+        let get = read(held_get, heap);
+        let set = read(held_set, heap);
+        heap.exit_scope();
+        let object = object?;
+        let named = [
+            ("value", descriptor.value.and(value)),
+            ("writable", descriptor.writable.map(Value::from_bool)),
+            ("get", descriptor.get.and(get)),
+            ("set", descriptor.set.and(set)),
+            ("enumerable", descriptor.enumerable.map(Value::from_bool)),
+            (
+                "configurable",
+                descriptor.configurable.map(Value::from_bool),
+            ),
+        ];
+        for (name, entry) in named {
+            let Some(entry) = entry else { continue };
+            let key = PropertyKey::String(heap.strings.intern(name)?);
+            heap.define_own_named(object, key, entry, PropertyFlags::ordinary_data())?;
+        }
+        Ok(Value::from_object(object))
+    }
+
+    /// `IsCompatiblePropertyDescriptor` of 6.2.6.7 for a property that exists,
+    /// which is step 5 of 10.1.6.3 without the change it would apply.
+    fn is_compatible_descriptor(
+        descriptor: &PartialDescriptor,
+        current: PropertyFlags,
+        held: Value,
+        heap: &GenerationalHeap,
+    ) -> Result<bool, VMError> {
+        if descriptor.is_empty() || current.configurable {
+            return Ok(true);
+        }
+        if descriptor.configurable == Some(true) {
+            return Ok(false);
+        }
+        if descriptor
+            .enumerable
+            .is_some_and(|wanted| wanted != current.enumerable)
+        {
+            return Ok(false);
+        }
+        if !descriptor.is_generic() && descriptor.is_accessor() != current.is_accessor {
+            return Ok(false);
+        }
+        if current.is_accessor {
+            let (get, set) = Self::accessor_parts(held, heap)?;
+            for (wanted, existing) in [(descriptor.get, get), (descriptor.set, set)] {
+                if let Some(wanted) = wanted
+                    && !same_value(wanted, existing, heap)?
+                {
+                    return Ok(false);
+                }
+            }
+        } else if !current.writable {
+            if descriptor.writable == Some(true) {
+                return Ok(false);
+            }
+            if let Some(wanted) = descriptor.value {
+                return same_value(wanted, held, heap);
+            }
+        }
+        Ok(true)
+    }
+
+    /// 20.1.2.4 and 28.1.3 on a Proxy: the key and the descriptor the two
+    /// clauses read before `[[DefineOwnProperty]]` takes them.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a trap opens a frame, which needs what a call needs"
+    )]
+    fn begin_define_on_a_proxy(
+        &mut self,
+        proxy: ObjectRef,
+        intrinsic: Intrinsic,
+        call: &Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let key = self.call_argument(call, 1, heap)?;
+        let attributes = self.call_argument(call, 2, heap)?;
+        let name = property_key(key, heap, realm)?;
+        let Some(source) = attributes.as_object() else {
+            return Err(type_error(
+                heap,
+                realm,
+                "a property descriptor must be an object",
+            ));
+        };
+        let descriptor = Self::to_property_descriptor(source, heap, realm)?;
+        // 20.1.2.4 answers the object it was given and throws where the
+        // definition was refused; 28.1.3 answers whether it was taken.
+        let reflect = intrinsic == Intrinsic::ReflectDefineProperty;
+        let answer = if reflect {
+            VALUE_TRUE
+        } else {
+            Value::from_object(proxy)
+        };
+        self.begin_the_proxy_define(
+            proxy,
+            name,
+            &descriptor,
+            (answer, !reflect),
+            call,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )
+    }
+
+    /// `[[DefineOwnProperty]]` of 10.5.6: the `defineProperty` of the handler
+    /// answers whether the definition happened.
+    ///
+    /// `answered` is what the clause that called it answers where the trap
+    /// accepted, beside whether a refusal is the `TypeError` of 7.3.8.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a trap opens a frame, which needs what a call needs"
+    )]
+    fn begin_the_proxy_define(
+        &mut self,
+        proxy: ObjectRef,
+        name: PropertyKey,
+        descriptor: &PartialDescriptor,
+        answered: (Value, bool),
+        call: &Call,
+        code: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let (answer, throws) = answered;
+        let (target, handler) = Self::proxy_parts(proxy, heap, realm)?;
+        let trap = Self::proxy_trap(handler, "defineProperty", heap, realm)?;
+        // Step 6 forwards to the target where the handler carries no trap.
+        if trap.is_undefined() {
+            let Some(object) = target.as_object() else {
+                return Err(VMError::TypeError);
+            };
+            if Self::define_property_from(object, name, descriptor, heap, realm)? {
+                self.acc = answer;
+                return Ok(None);
+            }
+            if throws {
+                return Err(type_error(heap, realm, "property definition rejected"));
+            }
+            self.acc = VALUE_FALSE;
+            return Ok(None);
+        }
+        let key = Self::key_value(name);
+        let (slots, present) = Self::descriptor_slots(descriptor);
+        let described = Self::partial_descriptor_object(descriptor, heap, realm)?;
+        let record = promise::record(
+            heap,
+            realm,
+            &[
+                target,
+                key,
+                Value::from_smi(PROXY_KIND_DEFINE),
+                slots[0],
+                Value::from_bool(throws),
+                answer,
+                slots[1],
+                slots[2],
+                slots[3],
+                slots[4],
+                slots[5],
+                Value::from_smi(present),
+            ],
+        )?;
+        let arguments = Self::array_of(alloc::vec![target, key, described], heap, realm)?;
+        // The record and the List outlive the frame the trap opens, so they
+        // are roots of a scope of their own, which the answer leaves.
+        heap.enter_scope();
+        let state = heap.push_root(record)?;
+        let list = heap.push_root(arguments)?;
+        let call = Call {
+            receiver: Value::from_object(handler),
+            func: Reg(0),
+            arg_start: Reg(0),
+            arg_count: 3,
+            slot: 0,
+            resume: Some(Resume::ProxyTrap {
+                state,
+                arguments: list,
+            }),
+            construct: None,
+            return_pc: call.return_pc,
+            caller_code_id: call.caller_code_id,
+            coerced: 0,
+        };
+        let entered = self.enter_call_value(trap, code, active_feedback, heap, realm, call)?;
+        if entered.is_some() {
+            return Ok(entered);
+        }
+        // A trap written in Rust answered without a frame of its own.
+        let answered = self.acc;
+        self.finish_the_proxy_trap(state, answered, heap, realm)?;
+        Ok(None)
+    }
+
+    /// Steps 10 and 11 of 10.5.6: what the target owes the answer of a
+    /// `defineProperty` trap that accepted.
+    fn the_target_takes_the_definition(
+        descriptor: &PartialDescriptor,
+        target: Value,
+        name: PropertyKey,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let Some(object) = target.as_object() else {
+            return Err(VMError::TypeError);
+        };
+        let extensible = heap.is_extensible(object).unwrap_or(false);
+        let refusing = descriptor.configurable == Some(false);
+        let refused = match heap.own_named_flags(object, name)? {
+            // Step 10: the target has no such property.
+            None => !extensible || refusing,
+            Some(current) => {
+                let held = heap
+                    .lookup_named(object, name)?
+                    .map_or(VALUE_UNDEFINED, |found| found.value);
+                !Self::is_compatible_descriptor(descriptor, current, held, heap)?
+                    || (refusing && current.configurable)
+                    || (!current.is_accessor
+                        && !current.configurable
+                        && current.writable
+                        && descriptor.writable == Some(false))
+            }
+        };
+        if refused {
+            return Err(type_error(
+                heap,
+                realm,
+                "the trap of a Proxy answered what its target refuses",
+            ));
+        }
+        Ok(())
+    }
+
     /// The invariant the target of a Proxy owes the answer of its trap.
     fn finish_the_proxy_trap(
         &mut self,
@@ -10872,6 +11228,11 @@ impl RegisterVM {
             .unwrap_or(PROXY_KIND_GET);
         let written = promise::slot(heap, record, PROXY_VALUE);
         let strict = promise::slot(heap, record, PROXY_STRICT) == VALUE_TRUE;
+        let answer = promise::slot(heap, record, PROXY_ANSWER);
+        let descriptor = Self::descriptor_from_slots(record, heap);
+        // The key is read while the record is still a root, because interning
+        // it allocates and the record would not survive that afterwards.
+        let name = property_key(key, heap, realm)?;
         heap.exit_scope();
         // Step 6 of 10.5.9: a trap that answers false wrote nothing at all,
         // which 6.2.5.6 step 6.e makes a `TypeError` of in strict code.
@@ -10886,7 +11247,28 @@ impl RegisterVM {
             self.acc = written;
             return Ok(());
         }
-        let name = property_key(key, heap, realm)?;
+        // Reading what the target owns is its own `[[GetOwnProperty]]`, which
+        // for a target that is itself a Proxy is a second trap.
+        if target
+            .as_object()
+            .is_some_and(|object| heap.is_a_proxy(object))
+        {
+            return Err(VMError::Unsupported("an internal method of a Proxy"));
+        }
+        if kind == PROXY_KIND_DEFINE {
+            // Step 8 of 10.5.6: a trap that refused defined nothing, which
+            // 7.3.8 makes a `TypeError` of where the clause called it.
+            if !Self::to_boolean(answered, heap)? {
+                if strict {
+                    return Err(type_error(heap, realm, "property definition rejected"));
+                }
+                self.acc = VALUE_FALSE;
+                return Ok(());
+            }
+            Self::the_target_takes_the_definition(&descriptor, target, name, heap, realm)?;
+            self.acc = answer;
+            return Ok(());
+        }
         if let Some(object) = target.as_object()
             && let Some(flags) = heap.own_named_flags(object, name)?
             && !flags.configurable
