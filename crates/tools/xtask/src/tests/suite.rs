@@ -241,3 +241,21 @@ fn the_statement_after_one_is_the_next_name_the_connection_holds() {
     assert_eq!(after_name(&held, "Z"), "");
     assert_eq!(after_name(&[], "0"), "");
 }
+
+/// The value a function of the tester answered, read off the kind of
+/// value it named and the text beside it.
+#[test]
+fn what_a_function_answered_is_the_kind_it_named() {
+    use crate::suite::valued;
+    use db_sqlite::value::Value;
+    let named = |kind: &str, text: &str| valued(&[kind.to_owned(), text.to_owned()]);
+    assert_eq!(named("int", "12"), Value::Int(12));
+    assert_eq!(named("real", "2.5"), Value::Real(2.5));
+    assert_eq!(named("text", "abc"), Value::Text(b"abc".to_vec()));
+    assert_eq!(named("blob", "abc"), Value::Blob(b"abc".to_vec()));
+    assert_eq!(named("null", ""), Value::Null);
+    // A number the kind does not hold and a count of values that is not
+    // two are NULL.
+    assert_eq!(named("int", "abc"), Value::Null);
+    assert_eq!(valued(&["int".to_owned()]), Value::Null);
+}

@@ -46,12 +46,14 @@ proc harness_send {verb args} {
     # onto the line the answer to this call is read from, so it is
     # refused rather than let past.
     set ::calling 1
-    if {[catch {harness_call $kind $vals} out]} { set out 0 }
+    if {[catch {harness_call $kind $vals} out]} { set out [list null {}] }
     set ::calling 0
-    set b [encoding convertto utf-8 $out]
-    puts $h "RET 1"
-    puts $h [string length $b]
-    puts $h $b
+    puts $h "RET [llength $out]"
+    foreach value $out {
+      set b [encoding convertto utf-8 $value]
+      puts $h [string length $b]
+      puts $h $b
+    }
     flush $h
     set head [gets $h]
     set n [lindex $head 1]
@@ -77,39 +79,79 @@ array set ::collations {}
 # The procs the functions of this file name, by function name.
 array set ::functions {}
 
+# The type `db function -returntype` declared, by function name.
+array set ::returns {}
+
 # The proc the authorizer of each connection names, by connection name.
 array set ::authorizers {}
+
+# The text a NULL is read out as, by connection name.
+array set ::nulls {}
+
+# The script each callback of each connection names, by connection name
+# and method name.
+array set ::hooks {}
+
+# How many transactions of `db transaction` each connection has open,
+# by connection name.
+array set ::transactions {}
 
 # Whether each statement the tester prepared was made by
 # `sqlite3_prepare` and not `sqlite3_prepare_v2`.
 array set ::stmt_legacy {}
 
+# The kind of value a function's result stands for: what
+# `db function -returntype` declared, and where that is `any` or none
+# the form of the text, which stands in for the Tcl type
+# `research/sqlite/src/tclsqlite.c:1256` reads the result off.
+proc value_kind {declared value} {
+  if {$declared eq "blob"} { return blob }
+  if {$declared ne "real" && $declared ne "text"
+      && [string is entier -strict $value]} {
+    return int
+  }
+  if {$declared ne "text" && [string is double -strict $value]} { return real }
+  return text
+}
+
 # One call the engine wrote onto the line: the name of the collation or
-# the function, then its values, answered by the proc the file named.
+# the function, then its values, answered by the proc the file named, as
+# the values the `RET` carries.
 proc harness_call {kind vals} {
   # `sqlite3_set_authorizer` names one proc per connection, which the
   # first value names, and a proc that raises answers a denial, which is
   # what `tclsqlite.c:1240` reads for it.
   if {$kind eq "auth"} {
     set who [lindex $vals 0]
-    if {![info exists ::authorizers($who)]} { return SQLITE_OK }
+    if {![info exists ::authorizers($who)]} { return [list SQLITE_OK] }
     set cmd $::authorizers($who)
     foreach v [lrange $vals 1 end] { lappend cmd $v }
-    if {[catch { uplevel #0 $cmd } out]} { return SQLITE_DENY }
-    return $out
+    if {[catch { uplevel #0 $cmd } out]} { return [list SQLITE_DENY] }
+    return [list $out]
   }
   set name [lindex $vals 0]
-  set held [expr {$kind eq "collate" ? $::collations($name) : $::functions($name)}]
-  set cmd $held
+  if {$kind eq "collate"} {
+    set cmd $::collations($name)
+    foreach v [lrange $vals 1 end] { lappend cmd $v }
+    return [list [uplevel #0 $cmd]]
+  }
+  set cmd $::functions($name)
   foreach v [lrange $vals 1 end] { lappend cmd $v }
-  return [uplevel #0 $cmd]
+  set rc [catch { uplevel #0 $cmd } out]
+  # A script that ends by `break` answers NULL, and one that raises ends
+  # the statement, which this harness has no path for and answers NULL.
+  if {$rc == 3} { return [list null {}] }
+  if {$rc == 1} { error $out }
+  set declared ""
+  if {[info exists ::returns($name)]} { set declared $::returns($name) }
+  return [list [value_kind $declared $out] $out]
 }
 
 # What the TCL interface binds: `$name`, `$name(key)`, `:name` and
 # `@name` inside a statement stand for the variable of that name, which
 # this writes into the statement as a literal. A parameter inside a
 # string, a comment or an identifier in brackets is text and is left.
-proc bound {sql} {
+proc bound {db sql} {
   set out ""
   set n [string length $sql]
   for {set i 0} {$i < $n} {incr i} {
@@ -162,17 +204,19 @@ proc bound {sql} {
         set j [expr {$k+1}]
       }
     }
-    append out [literal $name]
+    append out [literal $db $c$name]
     set i [expr {$j-1}]
   }
   return $out
 }
 
-# One variable as the literal the interface binds it as: a whole number
-# and a real as themselves, anything else as text, and a variable that
-# holds nothing as `NULL`.
-proc literal {name} {
-  upvar #0 $name global_value
+# One parameter as the literal the interface binds it as: a whole
+# number and a real as themselves, anything else as text, and a
+# parameter whose name begins with `@` as a blob of the bytes of its
+# value, which `research/sqlite/src/tclsqlite.c:1517` binds. `whole` is
+# the name with the character that opens it.
+proc literal {db whole} {
+  set name [string range $whole 1 end]
   set found 0
   set value ""
   if {[uplevel 3 [list info exists $name]]} {
@@ -181,8 +225,26 @@ proc literal {name} {
   } elseif {[info exists ::$name]} {
     set value [set ::$name]
     set found 1
+  } elseif {[info exists ::hooks($db,bind_fallback)]} {
+    # The script `db bind_fallback` named answers a parameter no
+    # variable is set for, which `tclsqlite.c:1495` calls it for. A
+    # script that raises ends the statement; one that ends by `return`
+    # or by `break` leaves the parameter unbound.
+    set cmd $::hooks($db,bind_fallback)
+    lappend cmd $whole
+    set rc [catch { uplevel #0 $cmd } out]
+    if {$rc == 1} { error $out }
+    if {$rc == 0} {
+      set value $out
+      set found 1
+    }
   }
   if {!$found} { return "NULL" }
+  if {[string index $whole 0] eq "@"} {
+    set hex ""
+    binary scan [encoding convertto utf-8 $value] H* hex
+    return "X'$hex'"
+  }
   if {[string is entier -strict $value]} { return $value }
   # A real is written with every digit its bits carry, because
   # `tcl_precision` is 15 and the C library is handed the double
@@ -191,46 +253,196 @@ proc literal {name} {
   return "'[string map {' ''} $value]'"
 }
 
-# The methods a connection answers. TCL matches the method of a command
-# by any unambiguous beginning of its name, which SQLite's own files
-# write as `db func` for `db function` and as `db onecolumn` for the
-# same method the shorter `db one` names.
+# The methods a connection answers, in the order `DB_enum` of
+# `research/sqlite/src/tclsqlite.c:2455` names them, which the message
+# for a word that is not one of them lists. TCL matches a method by any
+# unambiguous beginning of its name, which SQLite's own files write as
+# `db func` for `db function` and as `db one` for `db onecolumn`.
 set ::methods {
-  authorizer backup busy cache changes close collate collation_needed
-  commit_hook complete config copy deserialize enable_load_extension
-  errorcode eval exists function interrupt last_insert_rowid nullvalue
-  one onecolumn preupdate profile progress restore rollback_hook
-  serialize timeout total_changes trace trace_v2 transaction
-  unlock_notify update_hook version wal_hook
+  authorizer backup bind_fallback busy cache changes close collate
+  collation_needed commit_hook complete config copy deserialize
+  enable_load_extension errorcode erroroffset eval exists format
+  function incrblob interrupt last_insert_rowid nullvalue onecolumn
+  preupdate profile progress rekey restore rollback_hook serialize
+  status timeout total_changes trace trace_v2 transaction unlock_notify
+  update_hook version wal_hook
 }
 
-# The whole name of a method, where the one written is a beginning of
-# exactly one of them, and the one written otherwise.
-proc whole_method {method} {
-  if {[lsearch -exact $::methods $method] >= 0} { return $method }
-  set found [lsearch -all -inline -glob $::methods "$method*"]
+# The VFS names a build registers, which `sqlite3_open_v2` raises for a
+# name that is none of them. This harness holds every file itself and
+# reads the name only to answer for one it has none of.
+set ::vfses {
+  unix unix-none unix-excl unix-dotfile unix-flock win32 win32-none
+  win32-longpath memdb cksmvfs
+}
+
+# How many values each method takes after its name, and the words the
+# message for another count carries, which
+# `research/sqlite/src/tclsqlite.c:2476` onward states per method. A
+# count written with `+` is that many or more. A method the table omits
+# takes any count.
+set ::method_args {
+  authorizer        {{0 1} ?CALLBACK?}
+  bind_fallback     {{0 1} ?CALLBACK?}
+  busy              {{0 1} CALLBACK}
+  cache             {{1 2} {option ?arg?}}
+  changes           {0 {}}
+  collate           {2 {NAME SCRIPT}}
+  collation_needed  {1 SCRIPT}
+  commit_hook       {{0 1} ?CALLBACK?}
+  complete          {1 SQL}
+  copy              {{3 4 5} {CONFLICT-ALGORITHM TABLE FILENAME ?SEPARATOR? ?NULLINDICATOR?}}
+  eval              {{1 2 3} {?OPTIONS? SQL ?VAR-NAME? ?SCRIPT?}}
+  exists            {1 SQL}
+  function          {2+ {NAME ?SWITCHES? SCRIPT}}
+  last_insert_rowid {0 {}}
+  nullvalue         {{0 1} NULLVALUE}
+  onecolumn         {1 SQL}
+  profile           {{0 1} ?CALLBACK?}
+  progress          {{0 2} {N CALLBACK}}
+  rekey             {1 KEY}
+  rollback_hook     {{0 1} ?CALLBACK?}
+  timeout           {1 MILLISECONDS}
+  total_changes     {0 {}}
+  trace             {{0 1} ?CALLBACK?}
+  transaction       {{1 2} {[TYPE] SCRIPT}}
+  unlock_notify     {{0 1} ?SCRIPT?}
+  update_hook       {{0 1} ?CALLBACK?}
+  wal_hook          {{0 1} ?CALLBACK?}
+}
+
+# The words of a list as `Tcl_GetIndexFromObj` writes them: two joined
+# by `or`, more separated by commas with `or` before the last.
+proc listed_words {words} {
+  if {[llength $words] < 3} { return [join $words " or "] }
+  return "[join [lrange $words 0 end-1] {, }], or [lindex $words end]"
+}
+
+# One word of `words`, where `written` is a beginning of exactly one of
+# them. `what` names what the word stands for, which the message for a
+# word that matches none or more than one carries.
+proc one_word {written words what} {
+  set found {}
+  foreach word $words {
+    if {[string equal -length [string length $written] $written $word]} {
+      lappend found $word
+    }
+  }
   if {[llength $found] == 1} { return [lindex $found 0] }
-  return $method
+  set kind [expr {[llength $found] > 1 ? "ambiguous" : "bad"}]
+  error "$kind $what \"$written\": must be [listed_words $words]"
+}
+
+# The whole name of a method.
+proc whole_method {method} { return [one_word $method $::methods option] }
+
+# The first of `options` the written word is a beginning of, which
+# `research/sqlite/src/tclsqlite.c:3398` reads the switches of
+# `db function` by; a word of one character matches none.
+proc first_option {written options} {
+  if {[string length $written] > 1} {
+    foreach option $options {
+      if {[string equal -length [string length $written] $written $option]} {
+        return $option
+      }
+    }
+  }
+  error "bad option \"$written\": must be [listed_words $options]"
+}
+
+# Raises the message `Tcl_WrongNumArgs` writes, where a method was
+# written with a count of values it does not take.
+proc check_args {db written method given} {
+  if {![dict exists $::method_args $method]} return
+  set spec [dict get $::method_args $method]
+  set n [llength $given]
+  foreach count [lindex $spec 0] {
+    if {[string index $count end] eq "+"} {
+      if {$n >= [string range $count 0 end-1]} return
+    } elseif {$n == $count} {
+      return
+    }
+  }
+  error "wrong # args: should be \"$db $written [lindex $spec 1]\""
+}
+
+# The message `sqliteCmdUsage` of
+# `research/sqlite/src/tclsqlite.c:4225` writes, where the arguments of
+# the command `sqlite3` are not a handle and a file name. The command
+# names itself `sqlite_orig` because the tester renames it.
+proc sqlite_usage {} {
+  error "wrong # args: should be \"sqlite_orig HANDLE ?FILENAME? ?-vfs VFSNAME?\
+      ?-readonly BOOLEAN? ?-create BOOLEAN? ?-nofollow BOOLEAN?\
+      ?-nomutex BOOLEAN? ?-fullmutex BOOLEAN? ?-uri BOOLEAN?\""
 }
 
 # A connection: the command `sqlite3` makes one and names it.
-proc sqlite3 {name args} {
-  # `sqlite3 -has-codec` asks what the library was built with rather than
-  # opening a connection, which this build has no encryption extension
-  # for.
-  if {$name eq "-has-codec"} { return 0 }
-  set file [lindex $args 0]
+proc sqlite3 {args} {
+  if {[llength $args] == 0} { sqlite_usage }
+  set name [lindex $args 0]
+  if {[llength $args] == 1} {
+    # `sqlite3 -has-codec` asks what the library was built with rather
+    # than opening a connection, which this build has no encryption
+    # extension for.
+    if {$name eq "-has-codec"} { return 0 }
+    if {[string index $name 0] eq "-"} { sqlite_usage }
+  }
+  # The words after the handle: one file name, and each option with the
+  # value that follows it.
+  set rest [lrange $args 1 end]
+  set count [llength $rest]
+  set file ""
+  set vfs ""
+  for {set i 0} {$i < $count} {incr i} {
+    set word [lindex $rest $i]
+    if {[string index $word 0] ne "-"} {
+      if {$file ne ""} { sqlite_usage }
+      set file $word
+      continue
+    }
+    if {$i == $count-1} { sqlite_usage }
+    incr i
+    if {$word eq "-vfs"} { set vfs [lindex $rest $i] }
+  }
+  if {$vfs ne "" && [lsearch -exact $::vfses $vfs] < 0} {
+    error "no such vfs: $vfs"
+  }
   if {$file eq ""} { set file ":memory:" }
   harness_send open $name $file
-  # A connection that is opened again holds no authorizer, which
-  # `sqlite3_open` leaves null.
+  # A connection that is opened again holds no authorizer, no null value
+  # and no callback, which `sqlite3_open` leaves null.
   catch { unset ::authorizers($name) }
+  catch { unset ::nulls($name) }
+  catch { unset ::transactions($name) }
+  array unset ::hooks $name,*
   harness_send authorizer $name ""
-  proc ::$name {method args} [string map [list %N% $name] {
-    set method [whole_method $method]
+  proc ::$name {args} [string map [list %N% $name] {
+    if {[llength $args] == 0} {
+      error "wrong # args: should be \"%N% SUBCOMMAND ...\""
+    }
+    set written [lindex $args 0]
+    set args [lrange $args 1 end]
+    # `names` is no method of the interface: the procs of this harness
+    # ask the connection for the column names of a statement by it.
+    if {$written eq "names"} {
+      return [harness_send names %N% [bound %N% [lindex $args 0]]]
+    }
+    set method [whole_method $written]
+    # `db eval` takes its options before the count of the rest is read,
+    # which `research/sqlite/src/tclsqlite.c:3302` does in a loop.
+    if {$method eq "eval"} {
+      while {[llength $args] > 1 && [string index [lindex $args 0] 0] eq "-"} {
+        set option [lindex $args 0]
+        if {$option ne "-withoutnulls" && $option ne "-asdict"} {
+          error "unknown option: \"$option\""
+        }
+        set args [lrange $args 1 end]
+      }
+    }
+    check_args %N% $written $method $args
     switch -exact -- $method {
       eval {
-        set sql [bound [lindex $args 0]]
+        set sql [bound %N% [lindex $args 0]]
         if {[llength $args] == 1} {
           return [harness_send eval %N% $sql]
         }
@@ -272,29 +484,99 @@ proc sqlite3 {name args} {
         }
         return {}
       }
-      names { return [harness_send names %N% [bound [lindex $args 0]]] }
-      one - onecolumn { return [lindex [harness_send eval %N% [bound [lindex $args 0]]] 0] }
-      exists { return [expr {[llength [harness_send eval %N% [bound [lindex $args 0]]]] > 0}] }
-      close { return [harness_send close %N%] }
+      one - onecolumn { return [lindex [harness_send eval %N% [bound %N% [lindex $args 0]]] 0] }
+      exists { return [expr {[llength [harness_send eval %N% [bound %N% [lindex $args 0]]]] > 0}] }
+      close {
+        # `DbDeleteCmd` deletes the command, so a call after a close
+        # names no command.
+        set answer [harness_send close %N%]
+        rename ::%N% {}
+        return $answer
+      }
       changes { return [lindex [harness_send changes %N%] 0] }
       total_changes { return [lindex [harness_send total_changes %N%] 0] }
       last_insert_rowid { return [lindex [harness_send rowid %N%] 0] }
-      nullvalue { return [harness_send null %N% [lindex $args 0]] }
+      nullvalue {
+        if {[llength $args] == 1} {
+          set ::nulls(%N%) [lindex $args 0]
+          harness_send null %N% [lindex $args 0]
+        }
+        if {[info exists ::nulls(%N%)]} { return $::nulls(%N%) }
+        return {}
+      }
       errorcode { return [lindex [harness_send errorcode %N%] 0] }
       complete { return [lindex [harness_send complete %N% [lindex $args 0]] 0] }
       collate {
         set ::collations([lindex $args 0]) [lindex $args 1]
         return [harness_send collate %N% [lindex $args 0]]
       }
+      cache {
+        set sub [one_word [lindex $args 0] {flush size} option]
+        set wanted [expr {$sub eq "size" ? 2 : 1}]
+        if {[llength $args] != $wanted} {
+          set words [expr {$sub eq "size" ? "size n" : "flush"}]
+          error "wrong # args: should be \"%N% cache $words\""
+        }
+        return {}
+      }
       function {
+        # The switches lie between the name and the script, and
+        # `-argcount` and `-returntype` each take the word after them.
+        set switches [lrange $args 1 end-1]
+        set ::returns([lindex $args 0]) ""
+        set options {-argcount -deterministic -directonly -innocuous -returntype}
+        for {set i 0} {$i < [llength $switches]} {incr i} {
+          set word [lindex $switches $i]
+          set which [first_option $word $options]
+          if {$which ne "-argcount" && $which ne "-returntype"} { continue }
+          if {$i == [llength $switches]-1} {
+            error "option requires an argument: $word"
+          }
+          incr i
+          if {$which eq "-returntype"} {
+            set ::returns([lindex $args 0]) \
+                [one_word [lindex $switches $i] {integer real text blob any} type]
+          }
+        }
         set ::functions([lindex $args 0]) [lindex $args end]
         return [harness_send function %N% [lindex $args 0]]
       }
       transaction {
-        harness_send eval %N% BEGIN
-        set rc [catch { uplevel 1 [lindex $args end] } msg]
-        harness_send eval %N% [expr {$rc ? "ROLLBACK" : "COMMIT"}]
-        if {$rc} { error $msg }
+        # A transaction inside another one is a savepoint, and a type is
+        # read only for the outermost, which
+        # `research/sqlite/src/tclsqlite.c:3958` states.
+        set type deferred
+        if {[llength $args] == 2} {
+          set type [one_word [lindex $args 0] {deferred exclusive immediate} \
+                             "transaction type"]
+        }
+        set depth 0
+        if {[info exists ::transactions(%N%)]} { set depth $::transactions(%N%) }
+        if {$depth > 0 || $type eq "deferred"} {
+          set begin "SAVEPOINT _tcl_transaction"
+        } else {
+          set begin [expr {$type eq "exclusive" ? "BEGIN EXCLUSIVE" : "BEGIN IMMEDIATE"}]
+        }
+        harness_send eval %N% $begin
+        set ::transactions(%N%) [expr {$depth+1}]
+        set rc [catch { uplevel 1 [lindex $args end] } msg opts]
+        set ::transactions(%N%) $depth
+        if {$rc == 1} {
+          set end [expr {$depth == 0 ? "ROLLBACK" \
+                         : "ROLLBACK TO _tcl_transaction ; RELEASE _tcl_transaction"}]
+        } else {
+          set end [expr {$depth == 0 ? "COMMIT" : "RELEASE _tcl_transaction"}]
+        }
+        # A commit the engine refuses leaves the transaction open, which
+        # a rollback ends.
+        if {[catch { harness_send eval %N% $end } refusal]} {
+          catch { harness_send eval %N% ROLLBACK }
+          if {$rc != 1} { error $refusal }
+        }
+        if {$rc} {
+          dict incr opts -level 1
+          return -options $opts $msg
+        }
         return $msg
       }
       authorizer {
@@ -310,11 +592,33 @@ proc sqlite3 {name args} {
         }
         return [harness_send authorizer %N% $held]
       }
-      copy - busy - cache - collate - collation_needed -
-      commit_hook - enable_load_extension - function - interrupt -
-      preupdate - profile - progress - rollback_hook - timeout -
-      trace - trace_v2 - unlock_notify - update_hook - version -
-      wal_hook - config - deserialize - serialize - backup - restore {
+      progress {
+        if {[llength $args] == 0} {
+          catch { unset ::hooks(%N%,progress) }
+        } else {
+          set ::hooks(%N%,progress) [lindex $args 1]
+        }
+        return {}
+      }
+      bind_fallback - busy - commit_hook - profile - rollback_hook -
+      trace - trace_v2 - unlock_notify - update_hook - wal_hook {
+        # A callback the connection holds, which the method answers
+        # where no script follows it.
+        if {[llength $args] == 0} {
+          if {[info exists ::hooks(%N%,$method)]} { return $::hooks(%N%,$method) }
+          return {}
+        }
+        set held [lindex $args 0]
+        if {$held eq ""} {
+          catch { unset ::hooks(%N%,$method) }
+        } else {
+          set ::hooks(%N%,$method) $held
+        }
+        return {}
+      }
+      copy - collation_needed - enable_load_extension - interrupt -
+      preupdate - rekey - version - config - deserialize - serialize -
+      backup - restore {
         return {}
       }
       default { error "no such method: $method" }

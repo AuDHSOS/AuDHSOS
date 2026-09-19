@@ -1551,6 +1551,7 @@ impl Session {
             writer.asks_nothing();
         }
         WHO.with(|who| who.borrow_mut().clone_from(&name.to_owned()));
+        NULLED.with(|text| text.borrow_mut().clone_from(&null));
         writer.opens(opening);
         let mut out = Vec::new();
         let mut ran = Ok(());
@@ -1732,6 +1733,11 @@ thread_local! {
     /// in the call it writes because the function carries nothing.
     static WHO: RefCell<String> = const { RefCell::new(String::new()) };
 
+    /// The text a NULL argument of a function call is written as, which
+    /// is the null value of the connection whose statement is running,
+    /// because `called` carries nothing.
+    static NULLED: RefCell<String> = const { RefCell::new(String::new()) };
+
     /// The result code of the last statement this thread refused, which
     /// `sqlite3_errcode` and `sqlite3_extended_errcode` answer.
     static CODE: RefCell<(String, String, i64)> =
@@ -1852,17 +1858,45 @@ fn write_call(stream: &mut TcpStream, kind: &str, values: &[String]) -> Result<(
         .map_err(|source| Error::io("writing a call", source))
 }
 
-/// What the tester's proc answered, read as `RET` and one value.
-fn returned(reader: &mut BufReader<TcpStream>) -> Option<String> {
+/// What the tester's proc answered, read as `RET` and its values.
+fn returned_values(reader: &mut BufReader<TcpStream>) -> Option<Vec<String>> {
     let head = line(reader).ok()??;
-    if head.split_whitespace().next() != Some("RET") {
+    let mut words = head.split_whitespace();
+    if words.next() != Some("RET") {
         return None;
     }
-    let length: usize = line(reader).ok()??.trim().parse().ok()?;
-    let mut bytes = vec![0_u8; length];
-    reader.read_exact(&mut bytes).ok()?;
-    line(reader).ok()?;
-    Some(String::from_utf8_lossy(&bytes).into_owned())
+    let count: usize = words.next()?.trim().parse().ok()?;
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        let length: usize = line(reader).ok()??.trim().parse().ok()?;
+        let mut bytes = vec![0_u8; length];
+        reader.read_exact(&mut bytes).ok()?;
+        line(reader).ok()?;
+        out.push(String::from_utf8_lossy(&bytes).into_owned());
+    }
+    Some(out)
+}
+
+/// The first value the tester's proc answered.
+fn returned(reader: &mut BufReader<TcpStream>) -> Option<String> {
+    returned_values(reader)?.into_iter().next()
+}
+
+/// What a function the tester defined answered: the kind of value the
+/// result stands for and its text, which `tclSqlFunc` of
+/// `research/sqlite/src/tclsqlite.c:1256` reads the Tcl type of the
+/// result and the declared return type for.
+pub(crate) fn valued(values: &[String]) -> Value {
+    let [kind, text] = values else {
+        return Value::Null;
+    };
+    match kind.as_str() {
+        "int" => text.trim().parse::<i64>().map_or(Value::Null, Value::Int),
+        "real" => text.trim().parse::<f64>().map_or(Value::Null, Value::Real),
+        "blob" => Value::Blob(text.as_bytes().to_vec()),
+        "text" => Value::Text(text.as_bytes().to_vec()),
+        _ => Value::Null,
+    }
 }
 
 /// What a function the tester defined answers, which is one `CALL` onto
@@ -1881,12 +1915,13 @@ fn called(
         let Some(line) = held.as_mut() else {
             return Ok(Value::Null);
         };
+        let null = NULLED.with(|text| text.borrow().clone());
         let mut values = vec![String::from_utf8_lossy(name).into_owned()];
-        values.extend(args.iter().map(|value| listed(value, "")));
+        values.extend(args.iter().map(|value| listed(value, &null)));
         if write_call(&mut line.writer, "function", &values).is_err() {
             return Ok(Value::Null);
         }
-        Ok(returned(&mut line.reader).map_or(Value::Null, |text| Value::Text(text.into_bytes())))
+        Ok(returned_values(&mut line.reader).map_or(Value::Null, |values| valued(&values)))
     })
 }
 

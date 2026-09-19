@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- The tester answers what the TCL interface of SQLite answers: the error a
+  method that is no method raises, the error a count of values a method
+  does not take raises, a savepoint for a `db transaction` inside another,
+  a blob for a parameter that begins with `@`, the script
+  `db bind_fallback` named for a parameter no variable is set for, and the
+  kind of value a function's answer stands for. D-332 records it.
+  `tclsqlite.test` goes from 15 cases passing to 115.
+
 - `db-sqlite` asks the authorizer under the schema the statement writes, so
   a `DROP` of a temporary table asks the action of the temp schema and a
   read of another database carries that schema in the message. D-331
