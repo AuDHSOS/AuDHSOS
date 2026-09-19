@@ -326,3 +326,51 @@ fn the_columns_a_key_is_over_are_the_ones_the_message_names() {
         "UNIQUE constraint failed: u.a"
     );
 }
+
+/// The key a statement wrote is held against the rows of the table
+/// whether or not a column is another name for it, and the message names
+/// `rowid` where none is, which `sqlite3RowidConstraint` writes.
+#[test]
+fn a_key_a_statement_wrote_is_held_against_the_rows_the_table_holds() {
+    let mut writer = connection();
+    assert_eq!(
+        refusal(
+            &mut writer,
+            &[
+                "CREATE TABLE t(a, b, c, PRIMARY KEY(b, c))",
+                "INSERT INTO t(rowid, a, b, c) VALUES(7, 1, 1, 1)",
+                "INSERT INTO t(rowid, a, b, c) VALUES(7, 2, 2, 2)",
+            ]
+        ),
+        "UNIQUE constraint failed: t.rowid"
+    );
+    assert_eq!(rows(&writer, "SELECT rowid, a FROM t"), ["7", "1"]);
+    // `REPLACE` writes over the row the key names.
+    writer
+        .run(b"REPLACE INTO t(rowid, a, b, c) VALUES(7, 2, 2, 2)")
+        .unwrap();
+    assert_eq!(rows(&writer, "SELECT rowid, a FROM t"), ["7", "2"]);
+    // An `UPDATE` that writes the key is held against them as well.
+    assert_eq!(
+        refusal(
+            &mut writer,
+            &[
+                "INSERT INTO t(rowid, a, b, c) VALUES(8, 3, 3, 3)",
+                "UPDATE t SET rowid = 7 WHERE rowid = 8",
+            ]
+        ),
+        "UNIQUE constraint failed: t.rowid"
+    );
+    // The column the key is another name for names itself.
+    assert_eq!(
+        refusal(
+            &mut writer,
+            &[
+                "CREATE TABLE u(a INTEGER PRIMARY KEY, b)",
+                "INSERT INTO u VALUES(1, 1)",
+                "INSERT INTO u VALUES(1, 2)",
+            ]
+        ),
+        "UNIQUE constraint failed: u.a"
+    );
+}

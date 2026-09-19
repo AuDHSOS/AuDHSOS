@@ -5,6 +5,29 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- `db-sqlite` writes the database a statement named in front of a table and
+  locates the table in that database alone, so an `INSERT INTO temp.t` over
+  a table of `main` is refused `no such table: temp.t` rather than leaving
+  the temp schema malformed. D-333 records it. Catalog 6.6.227.
+  `trigger1.test` goes from 52 cases passing to 56.
+
+- `db-sqlite` holds the row a `REPLACE` writes over to the foreign keys of
+  the rows that point at it. D-334 records it. Catalog 6.6.228.
+  `fkey2.test` goes from 1140 cases passing to 1144.
+
+- `db-sqlite` holds the key a statement wrote against the rows the table
+  holds where no column is another name for it, so
+  `INSERT INTO t(rowid, a) VALUES(7, 1)` over a row of that key is refused
+  `UNIQUE constraint failed: t.rowid`. D-335 records it. Catalog 6.6.228.
+
+- `db-sqlite` gives a row that carries no key of its own a key no row holds
+  after the triggers before the row have run, so a trigger whose body
+  writes that key no longer leaves the statement writing over the row.
+  D-336 records it. Catalog 6.6.228. `misc2.test` goes from 31 cases
+  passing to 32.
+
 ### Changed
 
 - The tester answers what the TCL interface of SQLite answers: the error a
@@ -12,8 +35,9 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   does not take raises, a savepoint for a `db transaction` inside another,
   a blob for a parameter that begins with `@`, the script
   `db bind_fallback` named for a parameter no variable is set for, and the
-  kind of value a function's answer stands for. D-332 records it.
-  `tclsqlite.test` goes from 15 cases passing to 115.
+  kind of value a function's answer stands for, which is the Tcl type of
+  the result. D-332 records it. `tclsqlite.test` goes from 15 cases
+  passing to 113.
 
 - `db-sqlite` asks the authorizer under the schema the statement writes, so
   a `DROP` of a temporary table asks the action of the temp schema and a

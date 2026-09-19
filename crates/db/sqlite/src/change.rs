@@ -460,14 +460,28 @@ struct Names {
     /// The name of the thing the statement locates, which says which
     /// database holds it where the statement wrote no schema.
     located: Option<Span>,
-    /// Whether a schema the connection holds no database under is refused
-    /// `no such table:` rather than `unknown database`.
-    table: bool,
+    /// What the statement names under the schema.
+    locates: Located,
     /// Whether the statement was written `TEMP`.
     temporary: bool,
     /// Whether a statement that names the temp schema opens it, which an
     /// `ATTACH` and a `DETACH` do not.
     opens: bool,
+}
+
+/// What one statement names under the schema it wrote.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Located {
+    /// Nothing the schema must hold, which a statement that makes
+    /// something names. A schema the connection holds no database under
+    /// is refused `unknown database`.
+    Nothing,
+    /// A name any database the connection holds may hold, which a `DROP`
+    /// of an index, a view or a trigger names. A schema the connection
+    /// holds no database under is refused `no such table:`.
+    Name,
+    /// A table the schema it wrote is the only one that may hold.
+    Table,
 }
 
 impl Names {
@@ -477,19 +491,19 @@ impl Names {
         Names {
             schema,
             located,
-            table: false,
+            locates: Located::Nothing,
             temporary,
             opens: true,
         }
     }
 
-    /// One statement that locates a table, which is refused `no such
+    /// One statement that locates a name, which is refused `no such
     /// table:` for a schema the connection does not hold.
-    const fn located(schema: Option<Span>, located: Span) -> Self {
+    const fn located(schema: Option<Span>, name: Span, locates: Located) -> Self {
         Names {
             schema,
-            located: Some(located),
-            table: true,
+            located: Some(name),
+            locates,
             temporary: false,
             opens: true,
         }
@@ -501,7 +515,7 @@ impl Names {
         Names {
             schema: None,
             located: None,
-            table: false,
+            locates: Located::Nothing,
             temporary: false,
             opens: false,
         }
@@ -2277,18 +2291,54 @@ impl Writer {
             return self.temping().map(Some);
         }
         let held = self.switched(names.schema, sql).map_err(|held| {
-            if names.table {
-                let mut shown = held;
-                shown.push(b'.');
-                shown.extend_from_slice(&named_text(names.located, sql));
-                return Error::NoTable(shown);
+            if names.locates == Located::Nothing {
+                return Error::NoSchema(held);
             }
-            Error::NoSchema(held)
+            let mut shown = held;
+            shown.push(b'.');
+            shown.extend_from_slice(&named_text(names.located, sql));
+            Error::NoTable(shown)
         })?;
         if names.schema.is_some() {
+            if names.locates == Located::Table {
+                self.holds_named(held, &names, sql)?;
+            }
             return Ok(held);
         }
         self.holding_at(names.located, sql)
+    }
+
+    /// Raises where the database a statement named holds no table of the
+    /// name it wrote.
+    ///
+    /// `sqlite3TwoPartName` of `research/sqlite/src/build.c:596` reads a
+    /// name written under a schema in that schema alone, so a table
+    /// another database holds is no table of this statement.
+    ///
+    /// Reading the schema costs O(n) in its rows.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoTable`] names the schema and the table.
+    fn holds_named(&self, at: Option<usize>, names: &Names, sql: &[u8]) -> Result<(), Error> {
+        let name = named_text(names.located, sql);
+        let bytes = match at {
+            None => self.image(),
+            Some(at) => {
+                let mut out = Vec::new();
+                for held in self.attached.iter().skip(at).take(1) {
+                    out = written_image(&held.held);
+                }
+                out
+            }
+        };
+        if Database::open(&bytes)?.holding(&name).is_some() {
+            return Ok(());
+        }
+        let mut shown = named_text(names.schema, sql);
+        shown.push(b'.');
+        shown.extend_from_slice(&name);
+        Err(Error::NoTable(shown))
     }
 
     /// The place in the list of the temp schema, which the connection
@@ -3548,9 +3598,9 @@ impl Writer {
     /// Which database of the list a schema names, and nothing where it
     /// names the one the connection already writes.
     ///
-    /// `main` and `temp` both name the one the connection writes, because
-    /// the temp schema is the file of `main` until A6 of document 18
-    /// makes one of its own.
+    /// `main` names the one the connection writes. `temp` names the
+    /// database of its own that A6 of document 18 gave the temp schema,
+    /// which the caller made before this reads the list.
     ///
     /// Reading the names costs O(n) in their number.
     ///
@@ -3563,7 +3613,7 @@ impl Writer {
             return Ok(None);
         };
         let named = crate::schema::dequote(span.text(sql));
-        if named_database(&named) {
+        if named.eq_ignore_ascii_case(b"main") {
             return Ok(None);
         }
         let found = self.attached.iter().position(|held| named_as(held, &named));
@@ -5599,6 +5649,8 @@ impl Writer {
         if !self.fire(&before, &[], &row)? {
             return Ok(false);
         }
+        self.unparented(table, &values, 0)?;
+        self.orphaned(&table.name, table, &values, 0, None)?;
         self.unindex_row(kept, table, &values, key)?;
         let order = ordering(&collations, self.held.header.encoding);
         crate::tree::remove_entry(&mut self.held.pages, root, key, order)?;
@@ -6182,11 +6234,22 @@ impl Writer {
                 next = next.max(largest(&self.held.pages, root)?.unwrap_or(0));
             }
             let given = Self::given_key(key, &values, alias)?;
-            let rowid = given.map_or_else(|| self.free_key(root, next, counted.is_some()), Ok)?;
+            let mut rowid =
+                given.map_or_else(|| self.free_key(root, next, counted.is_some()), Ok)?;
             let mut named = Self::keying(&mut values, alias, rowid);
             next = next.max(rowid);
             if fires && !self.fired_early(&before, &table, &named, alias, given)? {
                 continue;
+            }
+            // `sqlite3Insert` writes `OP_NewRowid` after the triggers
+            // before the row have run, so a row that carries no key of
+            // its own takes another key where the body of such a trigger
+            // wrote the one it stood to take.
+            if given.is_none() && crate::tree::holds(&self.held.pages, root, rowid)? {
+                next = next.max(largest(&self.held.pages, root)?.unwrap_or(0));
+                rowid = self.free_key(root, next, counted.is_some())?;
+                named = Self::keying(&mut values, alias, rowid);
+                next = next.max(rowid);
             }
             // `sqlite3GenerateConstraintChecks`: the columns that
             // refuse nothing and every `CHECK` of the table hold the
@@ -6209,20 +6272,7 @@ impl Writer {
                     continue;
                 }
             }
-            let record = crate::record::write_in(
-                &ordered(&table, &values),
-                &affinities,
-                4,
-                self.held.header.encoding,
-            );
-            // `I.1` of `src/fkey.c`: a row whose foreign key points at
-            // no row is refused before it is written.
-            self.parented(&table, &named, rowid)?;
-            // `sqlite3CompleteInsertion` writes the entry of every
-            // index before the row, so the pages an entry runs onto
-            // are taken before the pages the row runs onto.
-            self.index_row(&kept, &table, &named, &keyed_as(rowid))?;
-            insert(&mut self.held.pages, root, rowid, &record)?;
+            self.wrote_row(root, &kept, &table, (&named, &values, rowid), &affinities)?;
             written = written.saturating_add(1);
             self.writing = written;
             // `sqlite3_last_insert_rowid` is the key of the last row an
@@ -6243,6 +6293,39 @@ impl Writer {
             self.count_up(&name, next)?;
         }
         Ok(written)
+    }
+
+    /// One row written into the tree of the table, with the entry of
+    /// every index beside it.
+    ///
+    /// `sqlite3CompleteInsertion` writes the entry of every index before
+    /// the row, so the pages an entry runs onto are taken before the
+    /// pages the row runs onto. Writing costs O(log n) per tree.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Foreign`] where a foreign key of the row points at no
+    /// row, which `I.1` of `src/fkey.c` refuses before the row is
+    /// written, and whatever writing a tree refuses.
+    fn wrote_row(
+        &mut self,
+        root: u32,
+        kept: &[Kept],
+        table: &Table,
+        row: (&[Value], &[Value], i64),
+        affinities: &[Affinity],
+    ) -> Result<(), Error> {
+        let (named, values, rowid) = row;
+        let record = crate::record::write_in(
+            &ordered(table, values),
+            affinities,
+            4,
+            self.held.header.encoding,
+        );
+        self.parented(table, named, rowid)?;
+        self.index_row(kept, table, named, &keyed_as(rowid))?;
+        insert(&mut self.held.pages, root, rowid, &record)?;
+        Ok(())
     }
 
     /// The largest key the table ever held and the one `sqlite_sequence`
@@ -6345,7 +6428,10 @@ impl Writer {
         named: &[Value],
         rowid: i64,
     ) -> Result<Option<Conflicted>, Error> {
-        if into.alias.is_none() || !crate::tree::holds(&self.held.pages, into.root, rowid)? {
+        // The statement wrote the key where the row carries one, which
+        // is the column the key is another name for or the name `rowid`,
+        // and a key no row holds shares with none.
+        if !crate::tree::holds(&self.held.pages, into.root, rowid)? {
             return Ok(None);
         }
         let key = Self::key_column(into.table, into.alias);
@@ -7854,6 +7940,13 @@ impl Writer {
         if !self.fire(&before, &[], &row)? {
             return Ok(false);
         }
+        // The row goes, so its own keys point at no row and the rows
+        // that point at it are acted on, which
+        // `sqlite3GenerateRowDelete` of
+        // `research/sqlite/src/delete.c:625` does under `OE_Replace` as
+        // it does for a `DELETE`.
+        self.unparented(table, &values, rowid)?;
+        self.orphaned(&table.name, table, &values, rowid, None)?;
         self.unindex_row(kept, table, &values, &keyed_as(rowid))?;
         crate::tree::remove(&mut self.held.pages, root, rowid)?;
         self.fire(&after, &[], &row)?;
@@ -8054,7 +8147,7 @@ impl Writer {
         key: i64,
         written: Conflict,
     ) -> Result<bool, Error> {
-        if alias.is_none() || !crate::tree::holds(&self.held.pages, root, key)? {
+        if !crate::tree::holds(&self.held.pages, root, key)? {
             return Ok(true);
         }
         match written {
@@ -8083,13 +8176,15 @@ impl Writer {
     }
 
     /// The column at `at` of the table, as a message names it:
-    /// `table.column`.
+    /// `table.column`, and `table.rowid` where the table has no column
+    /// the key is another name for, which `sqlite3RowidConstraint` of
+    /// `research/sqlite/src/build.c:4254` writes.
     fn shown_column(table: &Table, at: Option<usize>) -> Vec<u8> {
         let mut out = table.name.clone();
         out.push(b'.');
         let named = at
             .and_then(|at| table.columns.get(at))
-            .map_or(&[][..], |column| column.name.as_slice());
+            .map_or(b"rowid".as_slice(), |column| column.name.as_slice());
         out.extend_from_slice(named);
         out
     }
@@ -8813,12 +8908,26 @@ const fn defined_under(definition: Definition) -> Names {
         Definition::Index(made) => Names::made(made.schema, Some(made.table), false),
         Definition::View(made) => Names::made(made.schema, None, made.temporary),
         Definition::Trigger(made) => Names::made(made.schema, Some(made.table), made.temporary),
-        Definition::Drop(asked) => Names::located(asked.schema, asked.name),
-        Definition::Rename(asked) => Names::located(asked.schema, asked.table),
-        Definition::AddColumn(asked) => Names::located(asked.schema, asked.table),
-        Definition::DropColumn(asked) => Names::located(asked.schema, asked.table),
-        Definition::RenameColumn(asked) => Names::located(asked.schema, asked.table),
-        Definition::DropConstraint(asked) => Names::located(asked.schema, asked.table),
+        // A `DROP` of an index, a view or a trigger names none of them a
+        // table, so only a `DROP TABLE` holds its name to the schema.
+        Definition::Drop(asked) => Names::located(
+            asked.schema,
+            asked.name,
+            if matches!(asked.kind, crate::ast::Dropped::Table) {
+                Located::Table
+            } else {
+                Located::Name
+            },
+        ),
+        Definition::Rename(asked) => Names::located(asked.schema, asked.table, Located::Table),
+        Definition::AddColumn(asked) => Names::located(asked.schema, asked.table, Located::Table),
+        Definition::DropColumn(asked) => Names::located(asked.schema, asked.table, Located::Table),
+        Definition::RenameColumn(asked) => {
+            Names::located(asked.schema, asked.table, Located::Table)
+        }
+        Definition::DropConstraint(asked) => {
+            Names::located(asked.schema, asked.table, Located::Table)
+        }
         Definition::Attach(_) | Definition::Detach(_) => Names::naming(),
         Definition::Vacuum(_) => Names::made(None, None, false),
     }
@@ -8828,19 +8937,26 @@ const fn defined_under(definition: Definition) -> Names {
 /// names under it.
 const fn changed_under(change: Change) -> Names {
     match change {
-        Change::Insert(statement) => Names::located(statement.schema, statement.name),
-        Change::Update(statement) => Names::located(statement.schema, statement.name),
-        Change::Delete(statement) => Names::located(statement.schema, statement.name),
+        Change::Insert(statement) => {
+            Names::located(statement.schema, statement.name, Located::Table)
+        }
+        Change::Update(statement) => {
+            Names::located(statement.schema, statement.name, Located::Table)
+        }
+        Change::Delete(statement) => {
+            Names::located(statement.schema, statement.name, Located::Table)
+        }
     }
 }
 
-/// Whether a text holds the word `temp`, which is what a statement that
-/// writes the temp schema is read for.
+/// Whether a text holds one of the words a statement that writes the temp
+/// schema carries, which the statement is read for before it is parsed.
 ///
 /// Reading the text costs O(n) in its bytes.
 fn holds_temp(sql: &[u8]) -> bool {
     for name in [
         b"temp".as_slice(),
+        b"temporary",
         b"sqlite_temp_master",
         b"sqlite_temp_schema",
     ] {

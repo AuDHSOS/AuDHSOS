@@ -822,3 +822,57 @@ fn a_chain_of_cascades_deeper_than_a_trigger_may_reach_is_refused() {
     let (mut writer, _) = ran(&borrowed).unwrap();
     assert_eq!(writer.run(b"UPDATE t0 SET a = 2"), Err(Error::Unsupported));
 }
+
+/// `fkey2-13.1`: the row a `REPLACE` writes over is held to the keys of
+/// the rows that point at it, which `sqlite3GenerateRowDelete` under
+/// `OE_Replace` checks as a `DELETE` does.
+#[test]
+fn the_row_a_replace_writes_over_is_held_to_the_keys_that_point_at_it() {
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE pp(a UNIQUE, b, c, PRIMARY KEY(b, c))",
+        "CREATE TABLE cc(d, e, f UNIQUE, FOREIGN KEY(d, e) REFERENCES pp)",
+        "INSERT INTO pp VALUES(1, 2, 3)",
+        "INSERT INTO cc VALUES(2, 3, 1)",
+    ])
+    .unwrap();
+    // The row `cc` points at is the one the unique key of `a` names, so
+    // writing over it leaves that row pointing at none.
+    assert_eq!(
+        writer.run(b"REPLACE INTO pp VALUES(1, 4, 5)"),
+        Err(Error::Foreign)
+    );
+    assert_eq!(answered(&writer, "SELECT b, c FROM pp"), ["2", "3"]);
+    // The row the key of the table names is held to them as well.
+    assert_eq!(
+        writer.run(b"REPLACE INTO pp(rowid, a, b, c) VALUES(1, 2, 3, 4)"),
+        Err(Error::Foreign)
+    );
+    assert_eq!(answered(&writer, "SELECT b, c FROM pp"), ["2", "3"]);
+    // A row that no row points at is written over.
+    writer.run(b"INSERT INTO pp VALUES(7, 7, 7)").unwrap();
+    writer.run(b"REPLACE INTO pp VALUES(7, 8, 8)").unwrap();
+    assert_eq!(
+        answered(&writer, "SELECT a, b, c FROM pp ORDER BY a"),
+        ["1", "2", "3", "7", "8", "8"]
+    );
+}
+
+/// The row a `REPLACE` writes over in a table that keeps its rows in the
+/// key's own tree is held to the keys that point at it.
+#[test]
+fn the_keyed_row_a_replace_writes_over_is_held_to_the_keys_that_point_at_it() {
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE pp(a PRIMARY KEY, b UNIQUE) WITHOUT ROWID",
+        "CREATE TABLE cc(c REFERENCES pp(b))",
+        "INSERT INTO pp VALUES(1, 2)",
+        "INSERT INTO cc VALUES(2)",
+    ])
+    .unwrap();
+    assert_eq!(
+        writer.run(b"REPLACE INTO pp VALUES(1, 3)"),
+        Err(Error::Foreign)
+    );
+    assert_eq!(answered(&writer, "SELECT a, b FROM pp"), ["1", "2"]);
+}

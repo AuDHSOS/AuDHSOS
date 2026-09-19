@@ -416,13 +416,17 @@ fn what_a_statement_writes_into_an_attached_database() {
     ] {
         assert_eq!(refused(&mut writer, sql), "no such table: two.t", "{sql:?}");
     }
-    // `main` and `temp` both name the database the connection writes,
-    // whatever it attached.
+    // `main` names the database the connection writes, whatever it
+    // attached, and `temp` names the temp schema, which holds no table of
+    // that name.
     writer.run(b"INSERT INTO main.t VALUES(4)").unwrap();
-    writer.run(b"INSERT INTO temp.t VALUES(5)").unwrap();
+    assert_eq!(
+        refused(&mut writer, b"INSERT INTO temp.t VALUES(5)"),
+        "no such table: temp.t"
+    );
     let held = writer.written();
     let database = crate::db::Database::open(&held).unwrap();
-    assert_eq!(database.rows_of(b"t").unwrap().len(), 3);
+    assert_eq!(database.rows_of(b"t").unwrap().len(), 2);
 }
 
 /// A view and an index only an attached database holds are both named by
@@ -565,6 +569,38 @@ fn what_the_temp_schema_holds() {
     assert_eq!(
         shown(&mut writer),
         "0|main||1|temp||2|held1||3|held2||4|held3||5|held4||6|held5||7|held6||8|held7||9|held8||10|held9||"
+    );
+}
+
+/// A statement that writes `temp.name` writes the database of the temp
+/// schema, as one written `TEMP` does.
+#[test]
+fn what_a_statement_that_names_the_temp_schema_writes() {
+    let mut writer = opened();
+    writer.run(b"CREATE TEMP TABLE tt(b)").unwrap();
+    writer.run(b"INSERT INTO temp.tt VALUES(1)").unwrap();
+    writer.run(b"UPDATE temp.tt SET b = 2").unwrap();
+    let temp = writer.attached_written(b"temp").expect("a temp schema");
+    let held = writer.written();
+    let database = crate::db::Database::open(&held)
+        .unwrap()
+        .attaching(b"temp", &temp)
+        .unwrap();
+    assert_eq!(
+        database.query(b"SELECT b FROM temp.tt").unwrap().rows,
+        [[Value::Int(2)]]
+    );
+    // The database of `main` gains no row of the temp schema's table.
+    assert_eq!(
+        crate::db::Database::open(&held).unwrap().rows_of(b"t"),
+        Ok(Vec::new())
+    );
+    // A `DELETE` and a `DROP` under the name reach the same database.
+    writer.run(b"DELETE FROM temp.tt").unwrap();
+    writer.run(b"DROP TABLE temp.tt").unwrap();
+    assert_eq!(
+        refused(&mut writer, b"INSERT INTO temp.tt VALUES(1)"),
+        "no such table: temp.tt"
     );
 }
 

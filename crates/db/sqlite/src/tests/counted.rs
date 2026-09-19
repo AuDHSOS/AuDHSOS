@@ -166,3 +166,30 @@ fn a_connection_carries_its_own_counters_over_a_shared_file() {
     writer.run(b"INSERT INTO t VALUES(3)").unwrap();
     assert_eq!(counts(&writer), "1|1|3");
 }
+
+/// `misc2-12.29`: the body of a trigger before the row may write the key
+/// the row stood to take, and the row then takes another, which
+/// `OP_NewRowid` of `sqlite3Insert` reads after those triggers have run.
+#[test]
+fn a_row_takes_another_key_where_a_trigger_before_it_took_the_one_it_stood_to_take() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(x)").unwrap();
+    writer
+        .run(
+            b"CREATE TRIGGER r BEFORE INSERT ON t BEGIN               INSERT INTO t SELECT y FROM (SELECT new.x y); END",
+        )
+        .unwrap();
+    writer.run(b"INSERT INTO t VALUES(1)").unwrap();
+    let written = writer.written();
+    let database = crate::db::Database::open(&written).unwrap();
+    assert_eq!(
+        database.query(b"SELECT rowid, x FROM t").unwrap().rows,
+        [
+            [crate::value::Value::Int(1), crate::value::Value::Int(1)],
+            [crate::value::Value::Int(2), crate::value::Value::Int(1)]
+        ]
+    );
+    // The key of the last row the statement wrote is the one it took
+    // after the trigger, and not the one the trigger's body took.
+    assert_eq!(counts(&writer), "1|2|2");
+}

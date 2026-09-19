@@ -892,6 +892,15 @@ Size: L.
 84. The schema the authorizer is asked under, which is the database the
     statement writes. Built, which D-331 records. `REINDEX` asks for one
     index rather than for each of a table.
+85. The schema a statement wrote in front of a name, which is the
+    database it writes and the only one that may hold the table. Built,
+    which D-333 records.
+86. What the row a `REPLACE` writes over is held to, and the key a
+    statement wrote where no column is another name for it. Built, which
+    D-334 and D-335 record. An immediate key is held where the row is
+    written and not where the statement ends.
+87. The key a row that carries none takes, which is read after the
+    triggers before the row have run. Built, which D-336 records.
 
 ### Done when
 
@@ -901,8 +910,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 107 673 cases in 797 files, 94 587
-pass, 3476 answer differently, and 9610 name something the engine
+under the `tclsh` of the machine. Of 107 717 cases in 798 files, 94 850
+pass, 3323 answer differently, and 9544 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the three-minute
 deadline and are counted with the cases they ran by then. One run over

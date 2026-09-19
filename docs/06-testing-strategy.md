@@ -6296,3 +6296,34 @@ Document 16 step Q8.
   and one over a table no database holds names no table.
 - A read the function denies of a column of another database carries the
   schema in front of the table.
+
+### 6.6.227 What the schema a statement names writes (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A statement written `temp.name` writes the temp schema, and one written
+  `main.name` the database the connection writes.
+- A statement over a table the named database does not hold is refused
+  `no such table: schema.table`.
+- A `DROP` of an index, a view or a trigger under a schema is not held to
+  that schema.
+- A `CREATE TEMPORARY TABLE` writes the temp schema, as one written
+  `TEMP` does.
+
+### 6.6.228 What a row that is written over is held to (`db-sqlite`)
+
+Document 16 step Q8.
+
+- The row a `REPLACE` writes over is refused where a row points at it
+  under a key that names no action.
+- The row a `REPLACE` writes over in a table that keeps its rows in the
+  key's own tree is held to the same keys.
+- The key a statement wrote is held against the rows the table holds
+  where `rowid` names it and where a column of an `INTEGER PRIMARY KEY`
+  does.
+- The message of the refusal names `table.rowid` where the table has no
+  column the key is another name for.
+- A row that carries no key takes another where the body of a trigger
+  before the row wrote the key it stood to take, and the counters of the
+  connection name the key the row took.
+

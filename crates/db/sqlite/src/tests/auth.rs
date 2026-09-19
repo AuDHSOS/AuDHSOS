@@ -525,6 +525,9 @@ fn what_a_drop_is_asked_for() {
         .run(b"CREATE TRIGGER g1 AFTER INSERT ON t1 BEGIN SELECT 1; END")
         .unwrap();
     writer.run(b"CREATE VIEW v1 AS SELECT 1").unwrap();
+    // The temp schema holds the table the `DROP TABLE` names, because a
+    // statement over a table locates it in the schema it wrote alone.
+    writer.run(b"CREATE TEMP TABLE t3(x, y)").unwrap();
     for (action, sql) in [
         (Action::Delete, b"DROP INDEX i1".as_slice()),
         (Action::DropIndex, b"DROP INDEX i1"),
@@ -534,7 +537,7 @@ fn what_a_drop_is_asked_for() {
         (Action::DropTempIndex, b"DROP INDEX temp.i1"),
         (Action::DropTempTrigger, b"DROP TRIGGER temp.g1"),
         (Action::DropTempView, b"DROP VIEW temp.v1"),
-        (Action::DropTempTable, b"DROP TABLE temp.t2"),
+        (Action::DropTempTable, b"DROP TABLE temp.t3"),
     ] {
         rule(action, Answer::Deny);
         assert_eq!(

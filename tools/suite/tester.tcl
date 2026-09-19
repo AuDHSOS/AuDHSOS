@@ -101,16 +101,31 @@ array set ::transactions {}
 array set ::stmt_legacy {}
 
 # The kind of value a function's result stands for: what
-# `db function -returntype` declared, and where that is `any` or none
-# the form of the text, which stands in for the Tcl type
-# `research/sqlite/src/tclsqlite.c:1256` reads the result off.
+# `db function -returntype` declared, and the Tcl type of the result
+# where that is `any` or none, which `tclSqlFunc` of
+# `research/sqlite/src/tclsqlite.c:1256` reads the same two for.
+#
+# `::tcl::unsupported::representation` writes the type of the object as
+# its fourth word, which is `pure` for a string of nothing else, and says
+# whether the object holds a string of its own, which are
+# `typePtr->name` and `bytes` there.
 proc value_kind {declared value} {
   if {$declared eq "blob"} { return blob }
-  if {$declared ne "real" && $declared ne "text"
-      && [string is entier -strict $value]} {
-    return int
+  if {$declared eq "integer" || $declared eq "real"} {
+    if {$declared eq "integer" && [string is entier -strict $value]} {
+      return int
+    }
+    if {[string is double -strict $value]} { return real }
+    return text
   }
-  if {$declared ne "text" && [string is double -strict $value]} { return real }
+  if {$declared eq "text"} { return text }
+  set shown [::tcl::unsupported::representation $value]
+  set type [lindex $shown 3]
+  set bare [string match "*no string representation*" $shown]
+  if {$bare && $type eq "bytearray"} { return blob }
+  if {$bare && ($type eq "boolean" || $type eq "booleanString")} { return int }
+  if {$type eq "double"} { return real }
+  if {$type eq "wideInt" || $type eq "int"} { return int }
   return text
 }
 
@@ -268,14 +283,6 @@ set ::methods {
   update_hook version wal_hook
 }
 
-# The VFS names a build registers, which `sqlite3_open_v2` raises for a
-# name that is none of them. This harness holds every file itself and
-# reads the name only to answer for one it has none of.
-set ::vfses {
-  unix unix-none unix-excl unix-dotfile unix-flock win32 win32-none
-  win32-longpath memdb cksmvfs
-}
-
 # How many values each method takes after its name, and the words the
 # message for another count carries, which
 # `research/sqlite/src/tclsqlite.c:2476` onward states per method. A
@@ -322,6 +329,10 @@ proc listed_words {words} {
 # them. `what` names what the word stands for, which the message for a
 # word that matches none or more than one carries.
 proc one_word {written words what} {
+  # `Tcl_GetIndexFromObj` takes a word that is one of them whole, even
+  # where it begins another, which `db trace` and `db trace_v2` are the
+  # two of.
+  if {[lsearch -exact $words $written] >= 0} { return $written }
   set found {}
   foreach word $words {
     if {[string equal -length [string length $written] $written $word]} {
@@ -388,11 +399,11 @@ proc sqlite3 {args} {
     if {[string index $name 0] eq "-"} { sqlite_usage }
   }
   # The words after the handle: one file name, and each option with the
-  # value that follows it.
+  # value that follows it. This harness holds every file itself and has
+  # no VFS to name, so `-vfs` is read and left.
   set rest [lrange $args 1 end]
   set count [llength $rest]
   set file ""
-  set vfs ""
   for {set i 0} {$i < $count} {incr i} {
     set word [lindex $rest $i]
     if {[string index $word 0] ne "-"} {
@@ -402,10 +413,6 @@ proc sqlite3 {args} {
     }
     if {$i == $count-1} { sqlite_usage }
     incr i
-    if {$word eq "-vfs"} { set vfs [lindex $rest $i] }
-  }
-  if {$vfs ne "" && [lsearch -exact $::vfses $vfs] < 0} {
-    error "no such vfs: $vfs"
   }
   if {$file eq ""} { set file ":memory:" }
   harness_send open $name $file
@@ -486,13 +493,7 @@ proc sqlite3 {args} {
       }
       one - onecolumn { return [lindex [harness_send eval %N% [bound %N% [lindex $args 0]]] 0] }
       exists { return [expr {[llength [harness_send eval %N% [bound %N% [lindex $args 0]]]] > 0}] }
-      close {
-        # `DbDeleteCmd` deletes the command, so a call after a close
-        # names no command.
-        set answer [harness_send close %N%]
-        rename ::%N% {}
-        return $answer
-      }
+      close { return [harness_send close %N%] }
       changes { return [lindex [harness_send changes %N%] 0] }
       total_changes { return [lindex [harness_send total_changes %N%] 0] }
       last_insert_rowid { return [lindex [harness_send rowid %N%] 0] }
@@ -617,8 +618,8 @@ proc sqlite3 {args} {
         return {}
       }
       copy - collation_needed - enable_load_extension - interrupt -
-      preupdate - rekey - version - config - deserialize - serialize -
-      backup - restore {
+      preupdate - rekey - timeout - version - config - deserialize -
+      serialize - backup - restore {
         return {}
       }
       default { error "no such method: $method" }
