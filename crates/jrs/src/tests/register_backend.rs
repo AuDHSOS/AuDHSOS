@@ -12086,6 +12086,30 @@ fn the_get_of_10_5_8_answers_out_of_the_handler() -> Result<(), Error> {
             "(function(){var p=new Proxy({a:1},{get(){throw new TypeError()}});var r;try{p.a}catch(e){r=e instanceof TypeError};return ''+r})()",
             "true",
         ),
+        // 10.5.9 answers the write out of the `set` of the handler.
+        (
+            "(function(){var k=[];var t={a:1};var p=new Proxy(t,{set(o,n,v){k.push(n+'='+v);o[n]=v;return true}});p.a=5;p.b=6;var m='z';p[m]=7;return ''+t.a+'|'+t.b+'|'+t.z+'|'+k.join(',')})()",
+            "5|6|7|a=5,b=6,z=7",
+        ),
+        // Step 6: a trap that answers false wrote nothing, which 6.2.5.6
+        // step 6.e makes a TypeError of in strict code alone.
+        (
+            "(function(){var p=new Proxy({},{set(){return false}});p.x=1;var r;try{(function(){'use strict';p.y=1})()}catch(e){r=e instanceof TypeError};return ''+r})()",
+            "true",
+        ),
+        // Steps 8.a and 8.b bind the trap to what the target cannot change.
+        (
+            "(function(){var f={};Object.defineProperty(f,'f',{value:5,writable:false,configurable:false});var b=new Proxy(f,{set(){return true}});var r;try{b.f=6}catch(e){r=e instanceof TypeError};return ''+r})()",
+            "true",
+        ),
+        (
+            "(function(){var f={};Object.defineProperty(f,'f',{value:5,writable:false,configurable:false});var g=new Proxy(f,{set(){return true}});g.f=5;return 'same'})()",
+            "same",
+        ),
+        (
+            "(function(){var p=new Proxy({a:1},{set(){throw new TypeError()}});var r;try{p.a=1}catch(e){r=e instanceof TypeError};return ''+r})()",
+            "true",
+        ),
     ] {
         assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
     }

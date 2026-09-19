@@ -1110,6 +1110,16 @@ const COPY_PENDING: u32 = 4;
 const PROXY_TARGET: u32 = 0;
 /// The key the trap was called for.
 const PROXY_KEY: u32 = 1;
+/// Which internal method of 10.5 the trap answers for.
+const PROXY_KIND: u32 = 2;
+/// The value a `set` trap was given.
+const PROXY_VALUE: u32 = 3;
+/// Whether a write the trap refuses is the `TypeError` of 6.2.5.6 step 6.e.
+const PROXY_STRICT: u32 = 4;
+/// The `[[Get]]` of 10.5.8.
+const PROXY_KIND_GET: i32 = 0;
+/// The `[[Set]]` of 10.5.9.
+const PROXY_KIND_SET: i32 = 1;
 /// What the walk does with each value it reads.
 const COPY_MODE: u32 = 5;
 /// 7.3.25 defines it on the target under the key it stood at.
@@ -10731,7 +10741,17 @@ impl RegisterVM {
             self.acc = found.value;
             return Ok(None);
         }
-        let record = promise::record(heap, realm, &[target, key])?;
+        let record = promise::record(
+            heap,
+            realm,
+            &[
+                target,
+                key,
+                Value::from_smi(PROXY_KIND_GET),
+                VALUE_UNDEFINED,
+                VALUE_FALSE,
+            ],
+        )?;
         let arguments = Self::array_of(alloc::vec![target, key, receiver], heap, realm)?;
         // The record and the List outlive the frame the trap opens, so they
         // are roots of a scope of their own, which the answer leaves.
@@ -10759,13 +10779,83 @@ impl RegisterVM {
         }
         // A trap written in Rust answered without a frame of its own.
         let answered = self.acc;
-        self.finish_the_proxy_get(state, answered, heap, realm)?;
+        self.finish_the_proxy_trap(state, answered, heap, realm)?;
         Ok(None)
     }
 
-    /// Steps 9 and 10 of 10.5.8: a property the target cannot change binds
-    /// the trap to the value it holds.
-    fn finish_the_proxy_get(
+    /// `[[Set]]` of 10.5.9: the `set` of the handler answers whether the
+    /// write happened.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a trap opens a frame, which needs what a call needs"
+    )]
+    fn begin_the_proxy_set(
+        &mut self,
+        proxy: ObjectRef,
+        name: PropertyKey,
+        written: (Value, Value, bool),
+        return_pc: usize,
+        caller_code_id: Option<u32>,
+        code: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let (value, receiver, strict) = written;
+        let (target, handler) = Self::proxy_parts(proxy, heap, realm)?;
+        let trap = Self::proxy_trap(handler, "set", heap, realm)?;
+        // Step 4 forwards to the target, where 10.1.9.2 writes on the Proxy
+        // itself and reaches its `defineProperty`.
+        if trap.is_undefined() {
+            return Err(VMError::Unsupported(
+                "a write forwarded to the target of a Proxy",
+            ));
+        }
+        let key = Self::key_value(name);
+        let record = promise::record(
+            heap,
+            realm,
+            &[
+                target,
+                key,
+                Value::from_smi(PROXY_KIND_SET),
+                value,
+                Value::from_bool(strict),
+            ],
+        )?;
+        let arguments = Self::array_of(alloc::vec![target, key, value, receiver], heap, realm)?;
+        // The record and the List outlive the frame the trap opens, so they
+        // are roots of a scope of their own, which the answer leaves.
+        heap.enter_scope();
+        let state = heap.push_root(record)?;
+        let list = heap.push_root(arguments)?;
+        let call = Call {
+            receiver: Value::from_object(handler),
+            func: Reg(0),
+            arg_start: Reg(0),
+            arg_count: 4,
+            slot: 0,
+            resume: Some(Resume::ProxyTrap {
+                state,
+                arguments: list,
+            }),
+            construct: None,
+            return_pc,
+            caller_code_id,
+            coerced: 0,
+        };
+        let entered = self.enter_call_value(trap, code, active_feedback, heap, realm, call)?;
+        if entered.is_some() {
+            return Ok(entered);
+        }
+        // A trap written in Rust answered without a frame of its own.
+        let answered = self.acc;
+        self.finish_the_proxy_trap(state, answered, heap, realm)?;
+        Ok(None)
+    }
+
+    /// The invariant the target of a Proxy owes the answer of its trap.
+    fn finish_the_proxy_trap(
         &mut self,
         state: Root,
         answered: Value,
@@ -10777,7 +10867,25 @@ impl RegisterVM {
             .ok_or(VMError::Heap(HeapError::InvalidReference))?;
         let target = promise::slot(heap, record, PROXY_TARGET);
         let key = promise::slot(heap, record, PROXY_KEY);
+        let kind = promise::slot(heap, record, PROXY_KIND)
+            .as_smi()
+            .unwrap_or(PROXY_KIND_GET);
+        let written = promise::slot(heap, record, PROXY_VALUE);
+        let strict = promise::slot(heap, record, PROXY_STRICT) == VALUE_TRUE;
         heap.exit_scope();
+        // Step 6 of 10.5.9: a trap that answers false wrote nothing at all,
+        // which 6.2.5.6 step 6.e makes a `TypeError` of in strict code.
+        if kind == PROXY_KIND_SET && !Self::to_boolean(answered, heap)? {
+            if strict {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "the set of a Proxy refused the write",
+                ));
+            }
+            self.acc = written;
+            return Ok(());
+        }
         let name = property_key(key, heap, realm)?;
         if let Some(object) = target.as_object()
             && let Some(flags) = heap.own_named_flags(object, name)?
@@ -10786,9 +10894,17 @@ impl RegisterVM {
             let held = heap
                 .lookup_named(object, name)?
                 .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            // Steps 9 and 10 of 10.5.8 and steps 8.a and 8.b of 10.5.9: a
+            // property the target cannot change binds the trap to it.
             let refused = if flags.is_accessor {
-                let (get, _) = Self::accessor_parts(held.value, heap)?;
-                get.is_undefined() && !answered.is_undefined()
+                let (get, set) = Self::accessor_parts(held.value, heap)?;
+                if kind == PROXY_KIND_SET {
+                    set.is_undefined()
+                } else {
+                    get.is_undefined() && !answered.is_undefined()
+                }
+            } else if kind == PROXY_KIND_SET {
+                !flags.writable && !same_value(written, held.value, heap)?
             } else {
                 !flags.writable && !same_value(answered, held.value, heap)?
             };
@@ -10796,11 +10912,15 @@ impl RegisterVM {
                 return Err(type_error(
                     heap,
                     realm,
-                    "the get of a Proxy answered a value its target refuses",
+                    "the trap of a Proxy answered what its target refuses",
                 ));
             }
         }
-        self.acc = answered;
+        self.acc = if kind == PROXY_KIND_SET {
+            written
+        } else {
+            answered
+        };
         Ok(())
     }
 
@@ -32406,10 +32526,26 @@ impl RegisterVM {
                     let Some(oref) = target.as_object() else {
                         return Err(property_store_error(target, heap, realm));
                     };
-                    // 10.5.9 and 10.5.6 answer the write of a Proxy out of its
-                    // handler, which the engine has not built.
+                    // 10.5.9 answers the write out of the `set` of the
+                    // handler, which is a frame this instruction opens.
                     if heap.is_a_proxy(oref) {
-                        return Err(VMError::Unsupported("an internal method of a Proxy"));
+                        let name = PropertyKey::String(heap.strings.intern_units(units)?);
+                        let value = self.acc;
+                        if let Some(code_id) = self.begin_the_proxy_set(
+                            oref,
+                            name,
+                            (value, target, strict),
+                            pc,
+                            current_code_id,
+                            code_units,
+                            active_feedback,
+                            heap,
+                            realm,
+                        )? {
+                            current_code_id = Some(code_id);
+                            pc = self.pending_pc.take().unwrap_or(0);
+                        }
+                        return Ok(None);
                     }
                     // 10.4.2: an Array keeps its indices in an element store,
                     // so a name that is one is written there and not as a
@@ -32981,10 +33117,26 @@ impl RegisterVM {
                     let Some(oref) = target.as_object() else {
                         return Err(property_store_error(target, heap, realm));
                     };
-                    // 10.5.9 and 10.5.6 answer the write of a Proxy out of its
-                    // handler, which the engine has not built.
+                    // 10.5.9 answers the write out of the `set` of the
+                    // handler, which is a frame this instruction opens.
                     if heap.is_a_proxy(oref) {
-                        return Err(VMError::Unsupported("an internal method of a Proxy"));
+                        let name = property_key(key_val, heap, realm)?;
+                        let value = self.acc;
+                        if let Some(code_id) = self.begin_the_proxy_set(
+                            oref,
+                            name,
+                            (value, target, strict),
+                            pc,
+                            current_code_id,
+                            code_units,
+                            active_feedback,
+                            heap,
+                            realm,
+                        )? {
+                            current_code_id = Some(code_id);
+                            pc = self.pending_pc.take().unwrap_or(0);
+                        }
+                        return Ok(None);
                     }
                     let val = self.acc;
                     // 10.4.5.5: an index of an array of 23.2 is written into the
@@ -34503,7 +34655,7 @@ impl RegisterVM {
                                     // trap against the target.
                                     Resume::ProxyTrap { state, .. } => {
                                         let answered = self.acc;
-                                        self.finish_the_proxy_get(state, answered, heap, realm)?;
+                                        self.finish_the_proxy_trap(state, answered, heap, realm)?;
                                         None
                                     }
                                     Resume::Copy { state } => self.step_the_copy(
