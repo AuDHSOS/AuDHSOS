@@ -4636,19 +4636,12 @@ fn register_lowering_rejects_exception_shapes_it_cannot_type() -> Result<(), Err
     ] {
         differential(source)?;
     }
-    for source in [
-        // A Block beside a Finally Block must not change a tracked type.
-        "let x=1;try{x='a'}finally{}x",
-        // A Finally Block cannot run before a `break` or a `continue` leaves
-        // it; a `return` takes the path 14.15.3 gives it.
-        "let i=0;while(i<2){try{i++;break}finally{i+=10}}i",
-        "let i=0;while(i<2){try{i++}finally{continue}}i",
-    ] {
-        assert!(
-            !compile(source, Limits::default())?.uses_register_backend(),
-            "{source}"
-        );
-    }
+    // A Block beside a Finally Block must not change a tracked type.
+    let source = "let x=1;try{x='a'}finally{}x";
+    assert!(
+        !compile(source, Limits::default())?.uses_register_backend(),
+        "{source}"
+    );
     Ok(())
 }
 
@@ -5373,7 +5366,7 @@ fn a_script_the_lowering_refuses_says_what_it_holds() -> Result<(), Error> {
             "a rest parameter that is a pattern",
         ),
         (
-            "var f=function(){while(1){try{break}finally{}}}; f()",
+            "var f=function(){for(const x of {[Symbol.iterator](){return {next(){return {done:true}}}}}){try{return}finally{}}}; f()",
             "a jump out of a try with a Finally Block",
         ),
     ] {
@@ -9812,17 +9805,22 @@ fn a_return_runs_the_finally_block_before_it_leaves() -> Result<(), Error> {
     ] {
         differential_scripts(&[source])?;
     }
-    // 14.15.3 would have to run the Block before a `break` or a `continue`
-    // leaves the statement, which the lowering does not do.
+    // 14.15.3 runs the Block before a `break` or a `continue` leaves the
+    // statement, and 14.13.3 takes the jump on to its target after it.
     for source in [
-        "function f(){while(1){try{break}finally{}}}f()",
+        "function f(){var k=[];for(var i=0;i<3;i++){try{if(i==1)break;k.push('b')}finally{k.push('f')}}return k.join(',')}f()",
+        "function f(){var k=[];for(var i=0;i<3;i++){try{if(i==1)continue;k.push('b')}finally{k.push('f')}}return k.join(',')}f()",
+        "function f(){var k='';for(var i=0;i<2;i++){try{try{if(i==0)continue;k+='n'}finally{k+='i'}}finally{k+='o'}}return k}f()",
         "function f(){var i=0;while(i<2){try{i++}finally{continue}}return i}f()",
     ] {
-        assert!(
-            !compile(source, Limits::default())?.uses_register_backend(),
-            "{source}"
-        );
+        differential_scripts(&[source])?;
     }
+    // 14.13.3 lets a label name the statement the jump leaves, which the
+    // stack backend does not carry.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    let source = "function f(){var k='';o:for(var i=0;i<2;i++){for(var j=0;j<2;j++){try{if(j==1)break o;k+='b'}finally{k+='f'}}}return k}f()";
+    assert_eq!(realm.evaluate(source)?, Value::string("bff"), "{source}");
     Ok(())
 }
 

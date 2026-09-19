@@ -1054,10 +1054,20 @@ enum RegisterLoopHead {
 struct RegisterFinally {
     /// Holds the value the `return` answers.
     value: crate::engine::bytecode::Reg,
-    /// Holds 1 on the path of a `return` and 0 on every other one.
-    returning: crate::engine::bytecode::Reg,
+    /// Holds why the Finally Block was reached: 0 on a normal or a throwing
+    /// path, 1 on the path of a `return`, and 2 plus the index in `exits` on
+    /// the path of a `break` or a `continue` that leaves the statement.
+    reason: crate::engine::bytecode::Reg,
+    /// Compares the reason against one of those numbers.
+    selector: crate::engine::bytecode::Reg,
     /// The jumps to the first instruction of the Finally Block.
     jumps: Vec<usize>,
+    /// How many frames 14.13.3 could name when the statement was entered: a
+    /// jump to one of them leaves the Finally Block and runs it first.
+    loop_depth: usize,
+    /// The jumps that leave the statement, each `break` or `continue` beside
+    /// the label it named.
+    exits: Vec<(bool, Option<String>)>,
 }
 
 #[derive(Clone)]
@@ -7106,16 +7116,11 @@ impl RegisterLowerer {
         let parameter = catch.and_then(|(parameter, _)| parameter.as_ref());
         let name = parameter.and_then(BindingPattern::identifier);
         let destructured = parameter.is_some() && name.is_none();
-        // 14.15.3 runs the Finally Block on the path a `break` or a `continue`
-        // takes out of the statement, which this lowering does not do. A
-        // `return` takes the path below. An open iterator of an enclosing
-        // `for`-`of` would be closed before the Block rather than after it,
-        // which is the other order, so a return inside one is refused too.
+        // An open iterator of an enclosing `for`-`of` would be closed before
+        // the Finally Block rather than after it, which is the other order.
         if finally.is_some()
-            && (try_statements(body, catch, finally).any(register_statement_breaks_control)
-                || !self.open_iterators.is_empty()
-                    && try_statements(body, catch, finally)
-                        .any(register_statement_transfers_control))
+            && !self.open_iterators.is_empty()
+            && try_statements(body, catch, finally).any(register_statement_transfers_control)
         {
             self.refuse("a jump out of a try with a Finally Block");
             return None;
@@ -7123,6 +7128,10 @@ impl RegisterLowerer {
         let result_register = self.allocate_register()?;
         let exception_register = self.allocate_register()?;
         let token_register = match finally {
+            Some(_) => Some(self.allocate_register()?),
+            None => None,
+        };
+        let selector_register = match finally {
             Some(_) => Some(self.allocate_register()?),
             None => None,
         };
@@ -7143,8 +7152,11 @@ impl RegisterLowerer {
             self.code.emit(Instruction::Star(flag));
             self.finallies.push(RegisterFinally {
                 value,
-                returning: flag,
+                reason: flag,
+                selector: selector_register?,
                 jumps: Vec::new(),
+                loop_depth: self.loops.len(),
+                exits: Vec::new(),
             });
         }
 
@@ -7339,8 +7351,11 @@ impl RegisterLowerer {
             Some(_) => self.finallies.pop()?,
             None => RegisterFinally {
                 value: result_register,
-                returning: result_register,
+                reason: result_register,
+                selector: result_register,
                 jumps: Vec::new(),
+                loop_depth: self.loops.len(),
+                exits: Vec::new(),
             },
         };
         let finally_start = self.code.instructions.len();
@@ -7365,7 +7380,19 @@ impl RegisterLowerer {
             // test for one would leave the function able to run off its end.
             let carries_on = body_flow != RegisterFlow::Abrupt
                 || catch.is_some() && handler_flow != RegisterFlow::Abrupt;
-            self.code.emit(Instruction::Ldar(routed.returning));
+            // 14.13.3 takes the jump on to its target once the Block has run,
+            // which the reason names.
+            let mut taken = Vec::with_capacity(routed.exits.len());
+            for index in 0..routed.exits.len() {
+                let selected = i32::try_from(index).ok()?.checked_add(2)?;
+                self.code.emit(Instruction::LdaSmi(selected));
+                self.code.emit(Instruction::Star(routed.selector));
+                self.code.emit(Instruction::Ldar(routed.reason));
+                self.code
+                    .emit(Instruction::TestStrictEqual(routed.selector));
+                taken.push(self.code.emit(Instruction::JumpIfTrue(0)));
+            }
+            self.code.emit(Instruction::Ldar(routed.reason));
             let leaving = self.code.emit(Instruction::JumpIfTrue(0));
             let normal = carries_on.then(|| {
                 self.code
@@ -7378,6 +7405,11 @@ impl RegisterLowerer {
             self.patch_jump(leaving, leave)?;
             self.code.emit(Instruction::Ldar(routed.value));
             self.leave_with_return()?;
+            for (jump, (is_break, label)) in taken.into_iter().zip(routed.exits.iter()) {
+                let target = self.code.instructions.len();
+                self.patch_jump(jump, target)?;
+                self.lower_loop_jump(*is_break, label.as_deref())?;
+            }
             let after = self.code.instructions.len();
             if let Some(normal) = normal {
                 self.patch_jump(normal, after)?;
@@ -7392,6 +7424,9 @@ impl RegisterLowerer {
         if let Some((value, flag)) = returning {
             self.release_register(flag)?;
             self.release_register(value)?;
+        }
+        if let Some(selector_register) = selector_register {
+            self.release_register(selector_register)?;
         }
         if let Some(token_register) = token_register {
             self.release_register(token_register)?;
@@ -7726,17 +7761,14 @@ impl RegisterLowerer {
 
     fn lower_loop_jump(&mut self, is_break: bool, label: Option<&str>) -> Option<()> {
         use crate::engine::bytecode::Instruction;
+        if self.lower_jump_through_finally(is_break, label)? {
+            return Some(());
+        }
         // 14.12: `break` leaves the innermost breakable statement, `continue`
         // the innermost iteration statement, which a `switch` is not. 14.13.3
         // names another one by its label, and a `continue` names an iteration
         // statement there too.
-        let index = match label {
-            Some(label) => self.loops.iter().rposition(|frame| {
-                (is_break || !frame.is_switch) && frame.labels.iter().any(|name| name == label)
-            })?,
-            None if is_break => self.loops.len().checked_sub(1)?,
-            None => self.loops.iter().rposition(|frame| !frame.is_switch)?,
-        };
+        let index = self.jump_target(is_break, label)?;
         let loop_state = self.loops.get(index)?;
         if !register_bindings_reach(&self.bindings, &loop_state.bindings)
             || !self.loop_layouts_match(&loop_state.object_layouts)
@@ -9560,10 +9592,55 @@ impl RegisterLowerer {
         };
         self.code.emit(Instruction::Star(finally.value));
         self.code.emit(Instruction::LdaSmi(1));
-        self.code.emit(Instruction::Star(finally.returning));
+        self.code.emit(Instruction::Star(finally.reason));
         let jump = self.code.emit(Instruction::Jump(0));
         self.finallies.last_mut()?.jumps.push(jump);
         Some(())
+    }
+
+    /// Sends a `break` or a `continue` whose target lies outside the Finally
+    /// Block it stands in to that Block, which takes it on once it has run
+    /// (14.15.3).
+    ///
+    /// Answers whether the jump was routed there.
+    fn lower_jump_through_finally(&mut self, is_break: bool, label: Option<&str>) -> Option<bool> {
+        use crate::engine::bytecode::Instruction;
+        let Some(finally) = self.finallies.last() else {
+            return Some(false);
+        };
+        let depth = finally.loop_depth;
+        let Some(index) = self.jump_target(is_break, label) else {
+            return Some(false);
+        };
+        if index >= depth {
+            return Some(false);
+        }
+        let key = (is_break, label.map(String::from));
+        let finally = self.finallies.last_mut()?;
+        let mut selected = finally.exits.iter().position(|exit| *exit == key);
+        if selected.is_none() {
+            finally.exits.push(key);
+            selected = finally.exits.len().checked_sub(1);
+        }
+        let selected = selected?;
+        let reason = finally.reason;
+        let selected = i32::try_from(selected).ok()?.checked_add(2)?;
+        self.code.emit(Instruction::LdaSmi(selected));
+        self.code.emit(Instruction::Star(reason));
+        let jump = self.code.emit(Instruction::Jump(0));
+        self.finallies.last_mut()?.jumps.push(jump);
+        Some(true)
+    }
+
+    /// The frame 14.9 or 14.10 names, which 14.13.3 lets a label pick.
+    fn jump_target(&self, is_break: bool, label: Option<&str>) -> Option<usize> {
+        match label {
+            Some(label) => self.loops.iter().rposition(|frame| {
+                (is_break || !frame.is_switch) && frame.labels.iter().any(|name| name == label)
+            }),
+            None if is_break => self.loops.len().checked_sub(1),
+            None => self.loops.iter().rposition(|frame| !frame.is_switch),
+        }
     }
 
     fn close_open_iterators(&mut self) -> Option<()> {
@@ -11768,36 +11845,6 @@ fn try_statements<'a>(
     body.iter()
         .chain(catch.into_iter().flat_map(|(_, body)| body.iter()))
         .chain(finally.into_iter().flatten())
-}
-
-/// Whether a statement holds a `break` or a `continue`, which 14.15.3 would
-/// have to run a Finally Block before.
-fn register_statement_breaks_control(statement: &Stmt) -> bool {
-    match statement {
-        Stmt::Break(_) | Stmt::Continue(_) => true,
-        Stmt::Block(body) => body.iter().any(register_statement_breaks_control),
-        Stmt::If(_, yes, no) => {
-            register_statement_breaks_control(yes)
-                || no.as_deref().is_some_and(register_statement_breaks_control)
-        }
-        Stmt::While(_, body)
-        | Stmt::DoWhile(body, _)
-        | Stmt::For(_, _, _, body)
-        | Stmt::ForIn { body, .. }
-        | Stmt::ForOf { body, .. }
-        | Stmt::Labelled(_, body) => register_statement_breaks_control(body),
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => try_statements(body, catch.as_ref(), finally.as_deref())
-            .any(register_statement_breaks_control),
-        Stmt::Switch(_, clauses) => clauses
-            .iter()
-            .flat_map(|(_, body)| body)
-            .any(register_statement_breaks_control),
-        _ => false,
-    }
 }
 
 fn register_statement_transfers_control(statement: &Stmt) -> bool {
