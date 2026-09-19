@@ -16,7 +16,7 @@ fn a_kernel_whose_pools_are_in_the_bss_passes() {
 
 #[test]
 fn a_pool_that_reached_the_data_is_refused() {
-    // The state issue 73 reports: `.data` carries 1.37 MiB of pool bytes
+    // The state issue #73 reports: `.data` carries 1.37 MiB of pool bytes
     // the loader copies, and `.bss` holds what is left.
     let sizes = Sizes {
         data: 1_437_728,

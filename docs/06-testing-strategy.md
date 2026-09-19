@@ -284,11 +284,16 @@ done until every applicable item has a test. Items are added, never removed.
 - `Rights`: empty set, full set, subset and superset checks for every pair
   of single rights, union and intersection, unknown bits rejected on decode,
   every named right has a unique bit (table-driven).
-- A pool and the handle arena built by the `const` constructor are all
-  zeros, byte for byte, and behave like the ones built at run time: the
-  first `allocate` hands out generation 1, slots come from the high-water
-  mark in index order while none has been released, and released slots
-  keep the FIFO order (D-66).
+- A pool and the handle arena built by the `const` constructor behave like
+  the ones built at run time: the first `allocate` hands out generation 1,
+  slots come from the high-water mark in index order while none has been
+  released, and released slots keep the FIFO order (D-66).
+- No slot of any of the eight pools holds its free tag in a niche of the
+  object type, for each type separately. A niche holds the free tag as a
+  nonzero byte, which takes the pool out of the `.bss`; the crate forbids
+  `unsafe` and cannot read the bytes, so the checkable form is that the tag
+  costs a field of its own (D-185). `cargo xtask kernel-sections` holds the
+  bytes themselves, in 6.6.20.
 - The message of `Unavailable` names no one caller: the entropy source,
   the wall clock, the file system server, the network server and a
   refused connection all answer that code, so the text carries neither
@@ -613,6 +618,11 @@ done until every applicable item has a test. Items are added, never removed.
   `target/qemu/` (D-136).
 - Quiet mode: a command that succeeds under `--quiet` prints nothing and
   is still an `Ok`, a command that fails is still an error.
+- Kernel sections: the measured sizes of the built kernel pass both bounds;
+  the sizes D-185 records for the layout before it, a `.data` of 1,437,728
+  bytes and a `.bss` of 20,824, break both; each bound is broken on its own
+  by one byte; a section the table does not name counts as zero bytes and
+  breaks the `.bss` bound.
 
 ### 6.6.21 Kernel integration tests in QEMU
 

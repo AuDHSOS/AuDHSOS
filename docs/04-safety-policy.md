@@ -120,6 +120,7 @@ fuzz entry point is project code.
 | Layering, forbids, assembly files | `cargo xtask check-layering` | every push |
 | External code | `cargo xtask check-deps` | every push |
 | Unsafe budget | `cargo xtask unsafe-budget` | every push |
+| Statics of the kernel in the `.bss` | `cargo xtask kernel-sections` over the section table of the built kernel | every push |
 | Miri | `cargo xtask miri` over the tests of the `unsafe` modules of the host-executable adapter crates | every push |
 | Host tests, property tests, model-based tests | `cargo xtask test --host` | every push |
 | Coverage | `cargo xtask coverage` using `-C instrument-coverage` and the `llvm-profdata` and `llvm-cov` binaries of the toolchain | every push |
