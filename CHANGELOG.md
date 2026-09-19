@@ -883,6 +883,23 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `text-raster`: the segment count of a quadratic came from
+  `max(|start - control|, |end - control|)` rather than the curve's own second
+  difference `start - 2*control + end`, so the polyline left the eighth of a
+  device pixel D-181 states, by 0.248 px on `(0,0)-(60,0)-(0,1)`, and an
+  ordinary curve took several times the segments it needs, eleven where two
+  suffice on `(0,0)-(50,1)-(100,0)`. Two regression tests cover the tolerance
+  and the count. The fix moved six golden images by 2 to 461 bytes, a largest
+  step of 39 of 255 on antialiased edge pixels and no change of shape.
+
+- `text-raster`: `gradient::extend` returned `Result<Option<Fixed>, _>` where
+  every arm gives `Some`, which left `Gradient::sample` with an unreachable
+  fallback to the first stop; `extend` returns `Result<Fixed, _>`.
+
+- `text-raster`: `composite` computed `source.straight()` once per channel
+  inside the blend loop although the same value sits one line above it, which
+  cost nine 64-bit divisions per pixel of every blend-mode composite.
+
 - `text-raster`: four defects a review of the new crate found, each with a
   regression test that fails without its fix. The normalization of a gradient
   compared the largest coordinate against a limit that halved with every shift

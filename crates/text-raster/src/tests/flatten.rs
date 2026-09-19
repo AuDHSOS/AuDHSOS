@@ -426,3 +426,54 @@ fn a_curve_beyond_the_arithmetic_takes_the_clamp() {
     // The clamp gives 256 segments, and the closing edge makes one more.
     assert_eq!(count, usize::try_from(MAX_SEGMENTS).unwrap() + 1);
 }
+
+#[test]
+fn a_quadratic_whose_control_point_lies_off_the_chord_stays_within_the_tolerance() {
+    // Regression: the segment count of a quadratic came from
+    // `max(|start - control|, |end - control|)` instead of the curve's own
+    // second difference `start - 2*control + end`. The two agree only when
+    // the control point sits on the chord's perpendicular bisector; for a
+    // control point the start and the end both point away from, the count was
+    // a factor of `sqrt(2)` too small and the polyline left the tolerance.
+    for (control, end) in [
+        ((10, 10), (0, 20)),
+        ((20, 20), (0, 30)),
+        ((40, 5), (1, 10)),
+        ((95, 40), (10, 60)),
+    ] {
+        let points = [
+            point(0, 0, true),
+            point(control.0, control.1, false),
+            point(end.0, end.1, true),
+        ];
+        let mut edges = vec![Edge::default(); 1024];
+        let transform = scaled(1, 1);
+        let count = flatten_glyf(&points, &[2], transform, &mut edges).unwrap();
+        // The last edge closes the contour and is not part of the curve.
+        let worst = deviation(
+            &edges[..count - 1],
+            &quadratic_at(
+                placed(transform, 0, 0),
+                placed(transform, control.0, control.1),
+                placed(transform, end.0, end.1),
+            ),
+        );
+        assert!(
+            worst <= i128::from(TOLERANCE.bits()),
+            "control {control:?} end {end:?} deviated {worst} of {}",
+            TOLERANCE.bits()
+        );
+    }
+}
+
+#[test]
+fn a_flat_quadratic_takes_the_segments_its_second_difference_asks_for() {
+    // Regression: a nearly straight quadratic has a second difference of two
+    // units and needs two segments, but the chord-based count gave eleven.
+    let points = [point(0, 0, true), point(50, 1, false), point(100, 0, true)];
+    let mut edges = vec![Edge::default(); 1024];
+    let count = flatten_glyf(&points, &[2], scaled(1, 1), &mut edges).unwrap();
+    assert_eq!(quadratic_segments(Fixed::from_i32(2)), 2);
+    // Two segments of curve and one closing edge.
+    assert_eq!(count, 3);
+}
