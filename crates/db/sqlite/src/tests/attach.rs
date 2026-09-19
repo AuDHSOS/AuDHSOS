@@ -435,6 +435,18 @@ fn what_a_bare_name_of_a_view_and_of_an_index_names() {
     writer.run(b"CREATE TABLE aux.u(b)").unwrap();
     writer.run(b"CREATE INDEX aux.ub ON u(b)").unwrap();
     writer.run(b"CREATE VIEW aux.v AS SELECT b FROM u").unwrap();
+    // A trigger of the attached database is named by its bare name as
+    // well, and a name `main` holds names `main`.
+    writer
+        .run(b"CREATE TRIGGER aux.ug AFTER INSERT ON u BEGIN SELECT 1; END")
+        .unwrap();
+    writer.run(b"CREATE VIEW w AS SELECT 1").unwrap();
+    writer
+        .run(b"CREATE TRIGGER tg AFTER INSERT ON t BEGIN SELECT 1; END")
+        .unwrap();
+    writer.run(b"DROP TRIGGER ug").unwrap();
+    writer.run(b"DROP TRIGGER tg").unwrap();
+    writer.run(b"DROP VIEW w").unwrap();
     writer.run(b"DROP VIEW v").unwrap();
     writer.run(b"DROP INDEX ub").unwrap();
     let image = writer.attached_written(b"aux").expect("an image");

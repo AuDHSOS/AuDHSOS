@@ -2119,8 +2119,8 @@ impl Writer {
                 unwritten: Vec::new(),
             });
         };
-        let bytes = self.image();
-        let database = self.reading(&bytes)?;
+        let bytes = self.images();
+        let database = self.reading_beside(&bytes)?;
         let mut authorizer = crate::auth::Authorizer::new(asking, &database);
         let answer = read(&mut authorizer)?;
         Ok(authorizer.taken(answer))
@@ -3350,8 +3350,8 @@ impl Writer {
             return Err(Error::SystemTrigger);
         }
         {
-            let bytes = self.image();
-            let database = self.reading(&bytes)?;
+            let bytes = self.images();
+            let database = self.reading_beside(&bytes)?;
             // `sqlite3CreateTrigger`: only a view carries an `INSTEAD
             // OF` trigger, and only a table carries the other two.
             let on_view = database.view(&over).is_some();

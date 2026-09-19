@@ -6284,3 +6284,15 @@ Document 16 step Q8.
 - `PRAGMA collation_list` answers the three of the library and then the
   ones the application defined.
 - A table or an index the schema does not hold answers no row.
+
+### 6.6.226 What schema the authorizer is asked under (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A `DROP` of a temporary table asks the action of the temp schema.
+- A `CREATE TRIGGER` over a temporary table asks the action of the temp
+  schema and `SQLITE_INSERT` of `sqlite_temp_master` after it.
+- An index over a table of the temp schema asks the action of that schema,
+  and one over a table no database holds names no table.
+- A read the function denies of a column of another database carries the
+  schema in front of the table.

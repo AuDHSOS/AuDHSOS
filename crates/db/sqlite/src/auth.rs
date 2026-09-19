@@ -576,7 +576,16 @@ impl Authorizer<'_> {
         };
         match (self.asking)(&asked) {
             Answer::Deny => {
-                let mut named = table.to_vec();
+                // `sqlite3AuthReadCol` of `research/sqlite/src/auth.c:118`
+                // writes the schema in front of the table where the
+                // column stands in a database other than the one the
+                // statement writes.
+                let mut named = Vec::new();
+                if !schema.eq_ignore_ascii_case(self.database.main_named()) {
+                    named.extend_from_slice(schema);
+                    named.push(b'.');
+                }
+                named.extend_from_slice(table);
                 named.push(b'.');
                 named.extend_from_slice(column);
                 Err(Error::Prohibited(named))
@@ -734,29 +743,34 @@ impl Authorizer<'_> {
             crate::ast::Definition::Trigger(made) => self.made_trigger(made, sql),
             crate::ast::Definition::Drop(dropped) => self.dropped(dropped, sql),
             crate::ast::Definition::Rename(altered) => {
-                let schema = Self::schema_word(altered.schema, false, sql);
+                let schema =
+                    Self::schema_word(altered.schema, self.temping(altered.schema, sql), sql);
                 let table = dequote(altered.table.text(sql));
                 self.ask(Action::AlterTable, &schema, &table, b"")
             }
             crate::ast::Definition::AddColumn(altered) => {
-                let schema = Self::schema_word(altered.schema, false, sql);
+                let schema =
+                    Self::schema_word(altered.schema, self.temping(altered.schema, sql), sql);
                 let table = dequote(altered.table.text(sql));
                 self.ask(Action::AlterTable, &schema, &table, b"")
             }
             crate::ast::Definition::DropColumn(altered) => {
-                let schema = Self::schema_word(altered.schema, false, sql);
+                let schema =
+                    Self::schema_word(altered.schema, self.temping(altered.schema, sql), sql);
                 let table = dequote(altered.table.text(sql));
                 let column = dequote(altered.column.text(sql));
                 self.ask(Action::AlterTable, &schema, &table, &column)
             }
             crate::ast::Definition::RenameColumn(altered) => {
-                let schema = Self::schema_word(altered.schema, false, sql);
+                let schema =
+                    Self::schema_word(altered.schema, self.temping(altered.schema, sql), sql);
                 let table = dequote(altered.table.text(sql));
                 let column = dequote(altered.column.text(sql));
                 self.ask(Action::AlterTable, &schema, &table, &column)
             }
             crate::ast::Definition::DropConstraint(altered) => {
-                let schema = Self::schema_word(altered.schema, false, sql);
+                let schema =
+                    Self::schema_word(altered.schema, self.temping(altered.schema, sql), sql);
                 let table = dequote(altered.table.text(sql));
                 self.ask(Action::AlterTable, &schema, &table, b"")
             }
@@ -787,20 +801,16 @@ impl Authorizer<'_> {
         made: crate::ast::CreateTable,
         sql: &[u8],
     ) -> Result<Answer, Error> {
-        let schema = Self::schema_word(made.schema, made.temporary, sql);
+        let temporary = self.temping(made.schema, sql);
+        let schema = Self::schema_word(made.schema, temporary, sql);
         let name = dequote(made.name.text(sql));
-        let action = if made.temporary {
+        let action = if temporary {
             Action::CreateTempTable
         } else {
             Action::CreateTable
         };
         let answered = self.all(&[
-            (
-                Action::Insert,
-                Self::schema_table(made.temporary),
-                b"",
-                &schema,
-            ),
+            (Action::Insert, Self::schema_table(temporary), b"", &schema),
             (action, &name, b"", &schema),
         ])?;
         // The statement that reads the rows of a `CREATE TABLE AS` is a
@@ -818,20 +828,16 @@ impl Authorizer<'_> {
     ///
     /// [`Error`] names what the function refused.
     fn made_view(&self, made: crate::ast::CreateView, sql: &[u8]) -> Result<Answer, Error> {
-        let schema = Self::schema_word(made.schema, made.temporary, sql);
+        let temporary = self.temping(made.schema, sql);
+        let schema = Self::schema_word(made.schema, temporary, sql);
         let name = dequote(made.name.text(sql));
-        let action = if made.temporary {
+        let action = if temporary {
             Action::CreateTempView
         } else {
             Action::CreateView
         };
         self.all(&[
-            (
-                Action::Insert,
-                Self::schema_table(made.temporary),
-                b"",
-                &schema,
-            ),
+            (Action::Insert, Self::schema_table(temporary), b"", &schema),
             (action, &name, b"", &schema),
         ])
     }
@@ -844,10 +850,10 @@ impl Authorizer<'_> {
     ///
     /// [`Error`] names what the function refused.
     fn made_index(&self, made: crate::ast::CreateIndex, sql: &[u8]) -> Result<Answer, Error> {
-        let schema = Self::schema_word(made.schema, false, sql);
+        let temporary = self.temping(made.schema, sql);
+        let schema = Self::schema_word(made.schema, temporary, sql);
         let name = dequote(made.name.text(sql));
         let table = dequote(made.table.text(sql));
-        let temporary = self.database.table(&table).is_none();
         let action = if temporary {
             Action::CreateTempIndex
         } else {
@@ -868,22 +874,18 @@ impl Authorizer<'_> {
     ///
     /// [`Error`] names what the function refused.
     fn made_trigger(&self, made: crate::ast::CreateTrigger, sql: &[u8]) -> Result<Answer, Error> {
-        let schema = Self::schema_word(made.schema, made.temporary, sql);
+        let temporary = self.temping(made.schema, sql);
+        let schema = Self::schema_word(made.schema, temporary, sql);
         let name = dequote(made.name.text(sql));
         let table = dequote(made.table.text(sql));
-        let action = if made.temporary {
+        let action = if temporary {
             Action::CreateTempTrigger
         } else {
             Action::CreateTrigger
         };
         self.all(&[
             (action, &name, &table, &schema),
-            (
-                Action::Insert,
-                Self::schema_table(made.temporary),
-                b"",
-                &schema,
-            ),
+            (Action::Insert, Self::schema_table(temporary), b"", &schema),
         ])
     }
 
@@ -891,8 +893,8 @@ impl Authorizer<'_> {
     /// of which takes a row out of the schema's own table.
     fn dropped(&self, dropped: crate::ast::Drop, sql: &[u8]) -> Result<Answer, Error> {
         let name = dequote(dropped.name.text(sql));
-        let temporary = Self::temporary(dropped.schema, sql);
-        let schema = Self::schema_word(dropped.schema, false, sql);
+        let temporary = self.temping(dropped.schema, sql);
+        let schema = Self::schema_word(dropped.schema, temporary, sql);
         let held = Self::schema_table(temporary);
         match dropped.kind {
             crate::ast::Dropped::Table | crate::ast::Dropped::View => {
@@ -951,9 +953,17 @@ impl Authorizer<'_> {
         }
     }
 
-    /// Whether a statement names the temporary schema.
-    fn temporary(schema: Option<Span>, sql: &[u8]) -> bool {
-        schema.is_some_and(|schema| dequote(schema.text(sql)).eq_ignore_ascii_case(b"temp"))
+    /// Whether a statement names the temp schema: the schema it wrote, or
+    /// the database the connection writes where it wrote none.
+    ///
+    /// The connection took the database a statement names as the one it
+    /// writes before the function is asked, which D-325 records, so the
+    /// name of that database says which schema a bare name stands in.
+    fn temping(&self, schema: Option<Span>, sql: &[u8]) -> bool {
+        match schema {
+            Some(schema) => dequote(schema.text(sql)).eq_ignore_ascii_case(b"temp"),
+            None => self.database.main_named().eq_ignore_ascii_case(b"temp"),
+        }
     }
 
     /// `INSERT`, `DELETE` and `UPDATE`, each of which is asked for
@@ -971,7 +981,8 @@ impl Authorizer<'_> {
     ) -> Result<Answer, Error> {
         match change {
             crate::ast::Change::Insert(statement) => {
-                let schema = Self::schema_word(statement.schema, false, sql);
+                let schema =
+                    Self::schema_word(statement.schema, self.temping(statement.schema, sql), sql);
                 let name = dequote(statement.name.text(sql));
                 let answered = self.ask(Action::Insert, &name, b"", &schema)?;
                 if !statement.defaults {
@@ -990,7 +1001,8 @@ impl Authorizer<'_> {
                 Ok(answered)
             }
             crate::ast::Change::Delete(statement) => {
-                let schema = Self::schema_word(statement.schema, false, sql);
+                let schema =
+                    Self::schema_word(statement.schema, self.temping(statement.schema, sql), sql);
                 let name = dequote(statement.name.text(sql));
                 // `sqlite3DeleteFrom` of
                 // `research/sqlite/src/delete.c:393` keeps the rows where
@@ -1001,7 +1013,8 @@ impl Authorizer<'_> {
                 Ok(answered)
             }
             crate::ast::Change::Update(statement) => {
-                let schema = Self::schema_word(statement.schema, false, sql);
+                let schema =
+                    Self::schema_word(statement.schema, self.temping(statement.schema, sql), sql);
                 let name = dequote(statement.name.text(sql));
                 let mut answered = Answer::Ok;
                 for set in arena.sets(statement.sets).to_vec() {

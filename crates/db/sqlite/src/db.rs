@@ -1462,6 +1462,8 @@ pub struct Database<'a> {
 pub(crate) struct Trigger {
     /// The name, with its quotes taken off.
     pub(crate) name: Vec<u8>,
+    /// Which database of the connection it stands in.
+    pub(crate) place: usize,
     /// The table it is on, with its quotes taken off.
     pub(crate) table: Vec<u8>,
     /// The `CREATE TRIGGER` text, which the tree points into.
@@ -1669,7 +1671,7 @@ impl<'a> Database<'a> {
         };
         database.read_indexes(&image, 0)?;
         database.read_views(&image, 0)?;
-        database.read_triggers(&image)?;
+        database.read_triggers(&image, 0)?;
         Ok(database)
     }
 
@@ -1713,7 +1715,7 @@ impl<'a> Database<'a> {
         });
         self.read_indexes(&image, place)?;
         self.read_views(&image, place)?;
-        self.read_triggers(&image)?;
+        self.read_triggers(&image, place)?;
         Ok(self)
     }
 
@@ -1725,6 +1727,13 @@ impl<'a> Database<'a> {
             Some(held) => held.image,
             None => self.image,
         }
+    }
+
+    /// The name of the database at schema place nought, which is the one a
+    /// statement of the connection writes.
+    #[must_use]
+    pub fn main_named(&self) -> &[u8] {
+        &self.named
     }
 
     /// The name of the database at `place`, which is `main` for the one
@@ -1758,6 +1767,10 @@ impl<'a> Database<'a> {
             self.views
                 .iter()
                 .any(|view| view.place == *place && view.name.eq_ignore_ascii_case(name))
+                || self
+                    .triggers
+                    .iter()
+                    .any(|held| held.place == *place && held.name.eq_ignore_ascii_case(name))
                 || self.tables.iter().any(|stored| {
                     stored.place == *place
                         && stored
@@ -1963,7 +1976,7 @@ impl<'a> Database<'a> {
     ///
     /// A trigger this crate cannot read is passed over, so a database
     /// that holds one is read for everything else it holds.
-    fn read_triggers(&mut self, image: &Image<'a>) -> Result<(), Error> {
+    fn read_triggers(&mut self, image: &Image<'a>, place: usize) -> Result<(), Error> {
         let mut triggers = Vec::new();
         let mut payload = Vec::new();
         for row in image.schema() {
@@ -1988,6 +2001,7 @@ impl<'a> Database<'a> {
             };
             triggers.push(Trigger {
                 name: schema::dequote(written.name.text(&sql)),
+                place,
                 table: schema::dequote(written.table.text(&sql)),
                 sql,
                 arena,

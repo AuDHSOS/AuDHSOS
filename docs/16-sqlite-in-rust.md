@@ -889,6 +889,9 @@ Size: L.
 83. The pragmas that answer the schema: `table_info`, `table_xinfo`,
     `index_info`, `index_xinfo`, `index_list` and `collation_list`. Built,
     which D-330 records.
+84. The schema the authorizer is asked under, which is the database the
+    statement writes. Built, which D-331 records. `REINDEX` asks for one
+    index rather than for each of a table.
 
 ### Done when
 

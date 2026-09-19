@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` asks the authorizer under the schema the statement writes, so
+  a `DROP` of a temporary table asks the action of the temp schema and a
+  read of another database carries that schema in the message. D-331
+  records it. Catalog 6.6.226. `auth.test` goes from 142 cases passing to
+  338.
+
 - `db-sqlite` answers `PRAGMA table_info`, `table_xinfo`, `index_info`,
   `index_xinfo`, `index_list` and `collation_list`. D-330 records it.
   Catalog 6.6.225. `pragma.test` goes from 57 cases passing to 66.

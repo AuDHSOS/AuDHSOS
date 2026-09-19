@@ -484,15 +484,25 @@ fn what_a_create_is_asked_for() {
         .unwrap(),
         alloc::vec![alloc::vec![Value::Int(0)]]
     );
-    // An index over a table the schema does not hold is asked for under
-    // the temporary schema, which is where such a table stands.
+    // An index over a table of the temp schema is asked for as an index
+    // of that schema, and one over a table no database holds names no
+    // table.
+    writer.run(b"CREATE TEMP TABLE tt(a)").unwrap();
     rule(Action::CreateTempIndex, Answer::Deny);
     assert_eq!(
         writer
-            .run(b"CREATE INDEX i4 ON nosuch(a)")
+            .run(b"CREATE INDEX i4 ON tt(a)")
             .unwrap_err()
             .message(),
         "not authorized"
+    );
+    allows();
+    assert_eq!(
+        writer
+            .run(b"CREATE INDEX i5 ON nosuch(a)")
+            .unwrap_err()
+            .message(),
+        "no such table: main.nosuch"
     );
     // `CREATE TABLE ... AS` reads the rows it writes, so the statement
     // it reads is read as well.
@@ -800,6 +810,25 @@ fn what_an_attach_is_asked_for() {
     assert!(writer.attached_names().is_empty());
 }
 
+/// A read the function denies of a column in a database other than the one
+/// the statement writes carries the schema in the message, which
+/// `sqlite3AuthReadCol` writes in front of the table.
+fn what_a_denied_read_of_another_database_answers() {
+    let mut writer = told();
+    writer.opens(|_| None);
+    writer.run(b"ATTACH ':memory:' AS aux").unwrap();
+    writer.run(b"CREATE TABLE aux.u(b)").unwrap();
+    rule_of(Action::Read, Answer::Deny, b'b');
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO t1(a) SELECT b FROM aux.u")
+            .expect_err("a refusal")
+            .message(),
+        "access to aux.u.b is prohibited"
+    );
+    allows();
+}
+
 /// The authorizer of a connection, asked for one statement at a time.
 ///
 /// The function the connection is told carries nothing and reads the
@@ -823,4 +852,5 @@ fn what_the_authorizer_of_a_connection_is_asked() {
     what_a_recursive_term_is_asked_for();
     what_a_vacuum_is_asked_for();
     what_an_attach_is_asked_for();
+    what_a_denied_read_of_another_database_answers();
 }
