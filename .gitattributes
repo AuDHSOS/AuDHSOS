@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+# GitHub Linguist reports a repository by the bytes of every language it
+# detects. This system is written in Rust alone; the other tracked files
+# are build scripts, test fixtures, linker scripts, reference documents
+# and fonts, none of which is part of the system. Detection is off for
+# every path and on again for Rust, so a file of a new kind adds no
+# language to the bar.
+*       -linguist-detectable
+*.rs    linguist-detectable

@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `.gitattributes`: GitHub Linguist detection is off for every path and on
+  again for `*.rs`. The repository reported Shell, JavaScript and Linker
+  Script beside Rust, from build scripts, test fixtures, the fuzzer corpus and
+  the four linker scripts, none of which is part of the system; it now
+  reports Rust alone, and a tracked file of a new kind adds no language.
+  Section 5.1 of document 5 lists the file, section 5.8 states the rule.
+
 - `docs/18-rasterization.md`: the design of `text-raster`, the crate that turns
   what `text-core` computes into pixels, in thirteen steps and eight decisions.
   D-177 makes the crate deterministic the way `text-core` is, with no floating
