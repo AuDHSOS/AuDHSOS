@@ -11,6 +11,7 @@
 #![allow(clippy::arithmetic_side_effects, clippy::indexing_slicing)]
 
 mod ambiguous;
+mod auth;
 mod balance;
 mod bytes;
 mod caching;

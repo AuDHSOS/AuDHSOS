@@ -604,6 +604,9 @@ struct Session {
     /// The functions the tester defined on each connection, beside the
     /// ones this harness holds.
     functions: BTreeMap<String, &'static [Defined]>,
+    /// Whether the tester told each connection an authorizer, which a
+    /// connection that is opened again holds none of.
+    authorizers: BTreeMap<String, bool>,
     /// What `save_prng_state` held, which `restore_prng_state` hands
     /// back to every writer.
     prng: u64,
@@ -633,6 +636,7 @@ impl Session {
             pragmas: BTreeMap::new(),
             collations: BTreeMap::new(),
             functions: BTreeMap::new(),
+            authorizers: BTreeMap::new(),
             prng: 0,
             clock: None,
             repeated: (String::new(), 0),
@@ -761,21 +765,13 @@ impl Session {
                 self.nulls.insert(first.to_owned(), second.to_owned());
                 Ok(Vec::new())
             }
-            // `sqlite_current_time` of `test1.c`: the moment `now`
-            // names, as the seconds since 1970, and nought for the
-            // clock of the machine, which this harness has none of.
-            "clock" => {
-                self.clock = first
-                    .parse::<i64>()
-                    .map_err(|source| format!("a moment is a whole number: {source}"))
-                    .map(|seconds| (seconds != 0).then_some(seconds))?;
-                let held = self.clock;
-                for writer in self.held.values_mut() {
-                    ticked(writer, held);
-                }
+            "clock" => self.ticks(first),
+            // `sqlite3_set_authorizer`, and
+            // `sqlite3_table_column_metadata DB SCHEMA TABLE COLUMN`.
+            "authorizer" => {
+                self.authorizes(first, second);
                 Ok(Vec::new())
             }
-            // `sqlite3_table_column_metadata DB SCHEMA TABLE COLUMN`.
             "columnmeta" => self.column_meta(first, second, args.get(2).map_or("", String::as_str)),
             "eval" => self.eval(first, second),
             "names" => self.names(first, second),
@@ -1059,6 +1055,31 @@ impl Session {
         *held = Box::leak(defined.into_boxed_slice());
     }
 
+    /// `sqlite_current_time` of `test1.c`: the moment `now` names, as
+    /// the seconds since 1970, and nought for the clock of the machine,
+    /// which this harness has none of.
+    fn ticks(&mut self, written: &str) -> Result<Vec<String>, String> {
+        self.clock = written
+            .parse::<i64>()
+            .map_err(|source| format!("a moment is a whole number: {source}"))
+            .map(|seconds| (seconds != 0).then_some(seconds))?;
+        let held = self.clock;
+        for writer in self.held.values_mut() {
+            ticked(writer, held);
+        }
+        Ok(Vec::new())
+    }
+
+    /// `sqlite3_set_authorizer`: the tester names a proc for one
+    /// connection, or nothing to tell it no authorizer at all.
+    fn authorizes(&mut self, connection: &str, name: &str) {
+        if name.is_empty() {
+            self.authorizers.remove(connection);
+        } else {
+            self.authorizers.insert(connection.to_owned(), true);
+        }
+    }
+
     /// The functions one connection reads, which are the ones this
     /// harness holds where the tester defined none.
     fn defines(&self, connection: &str) -> &'static [Defined] {
@@ -1092,6 +1113,7 @@ impl Session {
         let kept = self.pragmas.get(name).cloned().unwrap_or_default();
         let collating = self.collations.get(name).copied().unwrap_or_default();
         let defines = self.defines(name);
+        let asks = self.authorizers.contains_key(name);
         let writer = self
             .held
             .get_mut(&path)
@@ -1103,6 +1125,12 @@ impl Session {
         writer.kept_as(kept);
         writer.collates(collating);
         writer.defines(defines);
+        if asks {
+            writer.asks(asking);
+        } else {
+            writer.asks_nothing();
+        }
+        WHO.with(|who| who.borrow_mut().clone_from(&name.to_owned()));
         let mut out = Vec::new();
         let mut ran = Ok(());
         for statement in statements(sql) {
@@ -1234,6 +1262,43 @@ thread_local! {
     /// The line of the run on this thread, which `asked` reaches
     /// because `Comparing` is a bare function and carries nothing.
     static LINE: RefCell<Option<Line>> = const { RefCell::new(None) };
+
+    /// The connection whose statement is running, which `asking` names
+    /// in the call it writes because the function carries nothing.
+    static WHO: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+/// What the authorizer the tester defined answers, which is one `CALL`
+/// onto the line and the `RET` that answers it.
+///
+/// `sqlite3_set_authorizer` hands the action to the application, so the
+/// tester's own proc answers, as one of three words. A word it does not
+/// know is a denial, which is what `tclsqlite.c` reads for it.
+fn asking(asked: &db_sqlite::auth::Asked<'_>) -> db_sqlite::auth::Answer {
+    use db_sqlite::auth::Answer;
+    LINE.with(|line| {
+        let mut held = line.borrow_mut();
+        let Some(line) = held.as_mut() else {
+            return Answer::Ok;
+        };
+        let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
+        let values = [
+            WHO.with(|who| who.borrow().clone()),
+            text(asked.action.word()),
+            text(asked.first),
+            text(asked.second),
+            text(asked.schema),
+            text(asked.inner),
+        ];
+        if write_call(&mut line.writer, "auth", &values).is_err() {
+            return Answer::Ok;
+        }
+        match returned(&mut line.reader).as_deref().map(str::trim) {
+            Some("SQLITE_OK") => Answer::Ok,
+            Some("SQLITE_IGNORE") => Answer::Ignore,
+            _ => Answer::Deny,
+        }
+    })
 }
 
 /// The order of two values under a collation the tester defined, which
@@ -1425,6 +1490,7 @@ fn run_one(
         let naming = writer.naming();
         let journalled = writer.journalled();
         let sensitive = writer.sensitive();
+        let asks = writer.asking();
         let held = writer.clock();
         let answered = opened
             .map(|database| {
@@ -1435,6 +1501,10 @@ fn run_one(
                     .grouping(GROUPED)
                     .sensitively(sensitive)
                     .journalling(journalled);
+                let database = match asks {
+                    Some(asking) => database.asked(asking),
+                    None => database,
+                };
                 match held {
                     Some(seconds) => database.clocked(seconds),
                     None => database,

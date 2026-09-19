@@ -857,6 +857,11 @@ Size: L.
 71. The three words of the header a pragma writes, and the two it may
     not. Built, which D-312 records. `SQLITE_DBCONFIG_DEFENSIVE`, which
     turns the write of `schema_version` into a no-op, is not here.
+72. The authorizer of a connection, which every statement is read
+    against. Built, which D-313 records. The temporary schema is what
+    the rest of `auth.test` waits on, and `SQLITE_ATTACH` and
+    `SQLITE_DETACH` are not among the actions because this crate holds
+    one file per connection.
 
 ### Done when
 

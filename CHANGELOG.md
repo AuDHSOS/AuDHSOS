@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` reads every statement against the function
+  `sqlite3_set_authorizer` tells a connection: a denial refuses the
+  statement, an ignored action leaves it undone, and an ignored column
+  read answers a null. D-313 records it. Catalog 6.6.211. SQLite's
+  `auth.test` goes from 4 cases passing to 142.
+
 - `db-sqlite` sets whether `LIKE` tells the twenty-six letters apart from
   `PRAGMA case_sensitive_like`, which answers no row set or read. D-309
   records it. Catalog 6.6.208.

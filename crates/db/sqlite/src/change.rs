@@ -447,6 +447,12 @@ pub struct Writer {
     /// What the connection was told for the two pragmas that hold a
     /// truth value outside [`crate::pragma::HELD`].
     truth: Truths,
+    /// The function `sqlite3_set_authorizer` told the connection, which
+    /// every statement is read against before it runs.
+    asking: Option<crate::auth::Asking>,
+    /// The columns of the `UPDATE` running now that the function
+    /// ignored, which keep the value they had.
+    unwritten: Vec<Vec<u8>>,
     /// What the connection has written, which `changes()`,
     /// `total_changes()` and `last_insert_rowid()` answer.
     counted: crate::func::Counted,
@@ -538,6 +544,8 @@ impl Writer {
             origin: None,
             restarting: false,
             truth: Truths::default(),
+            asking: None,
+            unwritten: Vec::new(),
             counted: crate::func::Counted::default(),
             writing: 0,
             deferred: 0,
@@ -607,6 +615,8 @@ impl Writer {
             origin: None,
             restarting: false,
             truth: Truths::default(),
+            asking: None,
+            unwritten: Vec::new(),
             counted: crate::func::Counted::default(),
             writing: 0,
             deferred: 0,
@@ -1698,6 +1708,57 @@ impl Writer {
     /// # Errors
     ///
     /// Whatever reading the header or the schema refuses.
+    /// The `SET` clauses of an `UPDATE` the statement writes, which are
+    /// the ones the function the connection was told did not ignore.
+    fn writing(
+        &self,
+        arena: &Arena,
+        statement: &crate::ast::Update,
+        sql: &[u8],
+    ) -> Vec<crate::ast::Set> {
+        arena
+            .sets(statement.sets)
+            .iter()
+            .filter(|set| {
+                let column = crate::schema::dequote(set.column.text(sql));
+                !self
+                    .unwritten
+                    .iter()
+                    .any(|held| held.eq_ignore_ascii_case(&column))
+            })
+            .copied()
+            .collect()
+    }
+
+    /// What the function the connection was told answers for one
+    /// statement, read against the schema the statement runs over.
+    ///
+    /// A connection told no function opens nothing and answers `Ok`, so
+    /// a statement costs what it did. A connection told one pays O(n) in
+    /// the pages of the file for the schema the reading needs.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Auth`] names what the function refused.
+    fn asked(
+        &self,
+        read: impl FnOnce(
+            &mut crate::auth::Authorizer<'_>,
+        ) -> Result<crate::auth::Answer, crate::auth::Error>,
+    ) -> Result<crate::auth::Read, Error> {
+        let Some(asking) = self.asking else {
+            return Ok(crate::auth::Read {
+                answer: crate::auth::Answer::Ok,
+                unwritten: Vec::new(),
+            });
+        };
+        let bytes = self.image();
+        let database = self.reading(&bytes)?;
+        let mut authorizer = crate::auth::Authorizer::new(asking, &database);
+        let answer = read(&mut authorizer)?;
+        Ok(authorizer.taken(answer))
+    }
+
     fn reading<'a>(&self, bytes: &'a [u8]) -> Result<Database<'a>, Error> {
         let database = Database::open_collating(bytes, self.collating)?
             .defining(self.defined)
@@ -1884,6 +1945,14 @@ impl Writer {
         let named = asked
             .name
             .map(|span| crate::schema::dequote(span.text(sql)));
+        let asking = named.clone().unwrap_or_default();
+        if self
+            .asked(|authorizer| authorizer.analyze(&asking, b"main"))?
+            .answer
+            == crate::auth::Answer::Ignore
+        {
+            return Ok(());
+        }
         let (Analyzed { tables, only }, held) = {
             let bytes = self.image();
             let database = self.reading(&bytes)?;
@@ -1980,6 +2049,13 @@ impl Writer {
             Ok((arena, definition)) => {
                 crate::schema::collations(&arena, sql, self.collating)?;
                 crate::schema::likelihoods(&arena, sql)?;
+                let read = self.asked(|authorizer| {
+                    authorizer.functions(&arena, sql)?;
+                    authorizer.definition(&arena, definition, sql)
+                })?;
+                if read.answer == crate::auth::Answer::Ignore {
+                    return Ok(0);
+                }
                 self.define(&arena, definition, sql)?;
                 return Ok(0);
             }
@@ -2006,10 +2082,22 @@ impl Writer {
         crate::eval::rows_placed(&arena)?;
         crate::schema::collations(&arena, sql, self.collating)?;
         crate::schema::likelihoods(&arena, sql)?;
+        let read = self.asked(|authorizer| {
+            authorizer.functions(&arena, sql)?;
+            authorizer.change(&arena, change, sql)
+        })?;
         let changed = match change {
-            Change::Insert(statement) => self.insert(&arena, &statement, sql, None),
+            Change::Insert(statement) => match read.answer {
+                crate::auth::Answer::Ignore => Ok(0),
+                _ => self.insert(&arena, &statement, sql, None),
+            },
             Change::Delete(statement) => self.delete(&arena, &statement, sql, None),
-            Change::Update(statement) => self.update(&arena, &statement, sql, None),
+            Change::Update(statement) => {
+                self.unwritten.clone_from(&read.unwritten);
+                let changed = self.update(&arena, &statement, sql, None);
+                self.unwritten.clear();
+                changed
+            }
         }?;
         // `sqlite3_changes` counts the rows of the last statement that
         // changed rows, and `sqlite3_total_changes` the rows of every
@@ -2026,6 +2114,18 @@ impl Writer {
     /// [`Error::NoTransaction`] for a `COMMIT` or a `ROLLBACK` outside
     /// one.
     fn bound(&mut self, asked: crate::ast::Transaction) -> Result<Vec<Vec<Value>>, Error> {
+        let word: &[u8] = match asked {
+            crate::ast::Transaction::Begin => b"BEGIN",
+            crate::ast::Transaction::Commit => b"COMMIT",
+            crate::ast::Transaction::Rollback => b"ROLLBACK",
+        };
+        if self
+            .asked(|authorizer| authorizer.transaction(word))?
+            .answer
+            == crate::auth::Answer::Ignore
+        {
+            return Ok(Vec::new());
+        }
         match asked {
             crate::ast::Transaction::Begin => {
                 if self.began.is_some() {
@@ -2081,6 +2181,18 @@ impl Writer {
         | crate::ast::Savepoint::Release(span)
         | crate::ast::Savepoint::Back(span)) = asked;
         let name = crate::schema::dequote(span.text(sql));
+        let word: &[u8] = match asked {
+            crate::ast::Savepoint::Open(_) => b"BEGIN",
+            crate::ast::Savepoint::Release(_) => b"RELEASE",
+            crate::ast::Savepoint::Back(_) => b"ROLLBACK",
+        };
+        if self
+            .asked(|authorizer| authorizer.savepoint(word, &name))?
+            .answer
+            == crate::auth::Answer::Ignore
+        {
+            return Ok(Vec::new());
+        }
         if let crate::ast::Savepoint::Open(_) = asked {
             // A `SAVEPOINT` outside a transaction opens one, which the
             // release of that savepoint commits.
@@ -2190,6 +2302,14 @@ impl Writer {
     fn pragma(&mut self, asked: &crate::ast::Pragma, sql: &[u8]) -> Result<Vec<Vec<Value>>, Error> {
         let name = crate::schema::dequote(asked.name.text(sql));
         let setting = crate::pragma::of_name(&name).ok_or(Error::Unsupported)?;
+        let written = asked.value.map(|value| value.text(sql)).unwrap_or_default();
+        if self
+            .asked(|authorizer| authorizer.pragma(&name, written, b""))?
+            .answer
+            == crate::auth::Answer::Ignore
+        {
+            return Ok(Vec::new());
+        }
         // The two pragmas that walk the file rather than read its
         // header answer the same rows on either connection.
         let quick = match setting {
@@ -2766,6 +2886,26 @@ impl Writer {
     /// statement of this connection may call.
     pub const fn defines(&mut self, defined: &'static [crate::func::Defined]) {
         self.defined = defined;
+    }
+
+    /// The function `sqlite3_set_authorizer` told this connection, which
+    /// every statement is read against before it runs, and which a
+    /// reader built over its file is told by [`Database::asked`].
+    pub const fn asks(&mut self, asking: crate::auth::Asking) {
+        self.asking = Some(asking);
+    }
+
+    /// The same, with the connection told no function, which is
+    /// `sqlite3_set_authorizer` with a null pointer.
+    pub const fn asks_nothing(&mut self) {
+        self.asking = None;
+    }
+
+    /// The function this connection was told, which a caller that opens
+    /// a [`Database`] of its own passes to [`Database::asked`].
+    #[must_use]
+    pub const fn asking(&self) -> Option<crate::auth::Asking> {
+        self.asking
     }
 
     /// The collations the application defined on this connection, which
@@ -4058,7 +4198,7 @@ impl Writer {
         outer: Option<&dyn crate::eval::Row>,
     ) -> Result<i64, Error> {
         let triggers = self.instead_of(name, TriggerEvent::Update)?;
-        let sets = arena.sets(statement.sets);
+        let sets = self.writing(arena, statement, sql);
         let columns: Vec<Vec<u8>> = sets
             .iter()
             .map(|set| crate::schema::dequote(set.column.text(sql)))
@@ -4120,7 +4260,7 @@ impl Writer {
                         continue;
                     }
                     let mut next = values.clone();
-                    for (at, set) in places.iter().zip(sets) {
+                    for (at, set) in places.iter().zip(&sets) {
                         let value = crate::eval::evaluate_row(arena, set.value, sql, &row)?;
                         for slot in next.iter_mut().skip(at.unwrap_or(usize::MAX)).take(1) {
                             slot.clone_from(&value);
@@ -4772,7 +4912,7 @@ impl Writer {
         name: &[u8],
     ) -> Result<Rewriting, Error> {
         written_to(name)?;
-        let sets = arena.sets(statement.sets);
+        let sets = self.writing(arena, statement, sql);
         let bytes = self.image();
         let database = self.reading(&bytes)?.counting(self.counted);
         // The table was found before this ran, so the refusal carries
@@ -4839,7 +4979,7 @@ impl Writer {
                     continue;
                 }
                 let mut next = values.clone();
-                for (at, set) in places.iter().zip(sets) {
+                for (at, set) in places.iter().zip(&sets) {
                     let value = crate::eval::evaluate_row(arena, set.value, sql, &held)?;
                     for slot in next.iter_mut().skip(*at).take(1) {
                         slot.clone_from(&value);
@@ -5033,6 +5173,14 @@ impl Writer {
             .name
             .map(|span| crate::schema::dequote(span.text(sql)));
         let held = self.reindexed(named.as_deref())?;
+        let asking = named.unwrap_or_default();
+        if self
+            .asked(|authorizer| authorizer.reindex(&asking, b"main"))?
+            .answer
+            == crate::auth::Answer::Ignore
+        {
+            return Ok(());
+        }
         for Rebuilt {
             index,
             root,
@@ -6626,7 +6774,7 @@ impl Writer {
         name: &[u8],
     ) -> Result<Updating, Error> {
         written_to(name)?;
-        let sets = arena.sets(statement.sets);
+        let sets = self.writing(arena, statement, sql);
         let bytes = self.image();
         let database = self.reading(&bytes)?.counting(self.counted);
         let (table, root) = database
@@ -6705,7 +6853,7 @@ impl Writer {
                 }
                 let mut next = values.clone();
                 let mut key = rowid;
-                for (at, set) in places.iter().zip(sets) {
+                for (at, set) in places.iter().zip(&sets) {
                     let value = crate::eval::evaluate_row(arena, set.value, sql, &held)?;
                     match at {
                         Some(at) => {
@@ -6752,7 +6900,7 @@ impl Writer {
         if self.keeps_rows(&name)? {
             return self.update_keyed(arena, statement, sql, outer, &name);
         }
-        let sets = arena.sets(statement.sets);
+        let sets = self.writing(arena, statement, sql);
         let Updating {
             root,
             alias,

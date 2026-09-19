@@ -58,6 +58,8 @@ pub enum Error {
     Schema(schema::Error),
     /// An expression could not be answered.
     Eval(eval::Error),
+    /// The function the connection was told refused the statement.
+    Auth(crate::auth::Error),
     /// A table the statement names is not in the schema, by the name
     /// it was named under, which is empty where the walk asked for a
     /// side it had put there itself.
@@ -655,6 +657,7 @@ impl Error {
             }
             Error::Recursion => "recursive aggregate queries not supported".to_string(),
             Error::Eval(error) => error.message(),
+            Error::Auth(error) => error.message(),
             other => alloc::format!("{other:?}"),
         }
     }
@@ -741,6 +744,12 @@ impl From<schema::Error> for Error {
 impl From<eval::Error> for Error {
     fn from(error: eval::Error) -> Self {
         Error::Eval(error)
+    }
+}
+
+impl From<crate::auth::Error> for Error {
+    fn from(error: crate::auth::Error) -> Self {
+        Error::Auth(error)
     }
 }
 
@@ -1258,6 +1267,17 @@ pub struct Database<'a> {
     /// Whether `LIKE` tells the twenty-six letters apart, which
     /// `PRAGMA case_sensitive_like` on the connection that writes sets.
     sensitive: bool,
+    /// The function `sqlite3_set_authorizer` told the connection, which
+    /// every statement is read against.
+    asking: Option<crate::auth::Asking>,
+    /// The columns the function ignored a read of, as the name the
+    /// statement knows the table by and the column, which the statement
+    /// running now answers a null for.
+    ///
+    /// The list belongs to the statement and the statement is answered
+    /// through a shared reference, so the cell is what carries it from
+    /// the reading of the statement to the rows it answers.
+    ignored: core::cell::RefCell<Vec<(Vec<u8>, Vec<u8>)>>,
     /// What the connection has written, which `changes()`,
     /// `total_changes()` and `last_insert_rowid()` answer.
     counted: crate::func::Counted,
@@ -1467,6 +1487,8 @@ impl<'a> Database<'a> {
             random: crate::random::Source::default(),
             clock: None,
             sensitive: false,
+            asking: None,
+            ignored: core::cell::RefCell::new(Vec::new()),
             counted: crate::func::Counted::default(),
             naming: Naming::default(),
             defined: &[],
@@ -1503,6 +1525,19 @@ impl<'a> Database<'a> {
     #[must_use]
     pub const fn clocked(mut self, seconds: i64) -> Self {
         self.clock = Some(seconds);
+        self
+    }
+
+    /// The same database, read against the function
+    /// `sqlite3_set_authorizer` told the connection.
+    ///
+    /// Every statement is read before it answers a row: the function is
+    /// asked once per action, the statement is refused where the
+    /// function denies, and a column read the function ignores answers a
+    /// null.
+    #[must_use]
+    pub const fn asked(mut self, asking: crate::auth::Asking) -> Self {
+        self.asking = Some(asking);
         self
     }
 
@@ -2273,12 +2308,74 @@ impl<'a> Database<'a> {
         eval::rows_placed(&arena)?;
         crate::schema::collations(&arena, sql, self.collating)?;
         crate::schema::likelihoods(&arena, sql)?;
+        // A statement the function ignored answers no row, which is
+        // `sqlite3Select` writing no code for it.
+        if self.authorize(&arena, root, sql)? == crate::auth::Answer::Ignore {
+            return Ok(Answer::default());
+        }
         let scope = Scope {
             terms: &[],
             outer: None,
             views: 0,
         };
         Ok(self.statement(&arena, root, sql, scope)?.answer)
+    }
+
+    /// Whether the function the connection was told ignored a read of
+    /// the column `column` of the side the statement knows as `side`.
+    fn is_ignored(&self, side: &[u8], column: &[u8]) -> bool {
+        self.ignored.borrow().iter().any(|(table, name)| {
+            table.eq_ignore_ascii_case(side) && name.eq_ignore_ascii_case(column)
+        })
+    }
+
+    /// The columns of one side the function the connection was told
+    /// ignored a read of, written as nulls, which is `pExpr->op =
+    /// TK_NULL` of `sqlite3AuthRead`.
+    ///
+    /// A connection told no function leaves the row as it is, so a row
+    /// costs what it did.
+    fn nulled(&self, side: &Side<'_>, values: &mut [Value]) {
+        let ignored = self.ignored.borrow();
+        if ignored.is_empty() {
+            return;
+        }
+        for (at, column) in side.shape.columns.iter().enumerate() {
+            let held = ignored.iter().any(|(table, name)| {
+                table.eq_ignore_ascii_case(&side.name) && name.eq_ignore_ascii_case(&column.name)
+            });
+            if held {
+                for slot in values.iter_mut().skip(at).take(1) {
+                    *slot = Value::Null;
+                }
+            }
+        }
+    }
+
+    /// The statement read against the function the connection was told,
+    /// which leaves the columns a read it ignored in [`Database::ignored`].
+    ///
+    /// A connection told no function reads nothing, so a statement costs
+    /// what it did.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Auth`] names what the function refused.
+    fn authorize(
+        &self,
+        arena: &Arena,
+        root: SelectId,
+        sql: &[u8],
+    ) -> Result<crate::auth::Answer, Error> {
+        self.ignored.borrow_mut().clear();
+        let Some(asking) = self.asking else {
+            return Ok(crate::auth::Answer::Ok);
+        };
+        let mut authorizer = crate::auth::Authorizer::new(asking, self);
+        authorizer.functions(arena, sql)?;
+        let answered = authorizer.select(arena, root, sql)?;
+        *self.ignored.borrow_mut() = authorizer.ignored();
+        Ok(answered)
     }
 
     /// What a `PRAGMA` answers out of the header, which is one row of
@@ -3171,7 +3268,8 @@ impl<'a> Database<'a> {
         let mut any = false;
         let mut ordinal = 0i64;
         for step in self.feed(side, cursor) {
-            let (rowid, values) = step?;
+            let (rowid, mut values) = step?;
+            self.nulled(side, &mut values);
             let at_row = ordinal;
             ordinal = ordinal.saturating_add(1);
             if spare.is_some_and(|skip| skip.contains(&at_row)) {
@@ -6238,6 +6336,13 @@ impl eval::Row for Cursor<'_> {
             Some(_) => value,
             None => self.coalesced(at, column, &value),
         };
+        // A `rowid` the function the connection was told ignored a read
+        // of answers a null: the key is no column of the side, so
+        // `Database::nulled` does not reach it.
+        let side = self.held.get(at).map_or(b"".as_slice(), |held| held.name);
+        if self.reach.database.is_ignored(side, column) {
+            return Some((Value::Null, affinity, collation));
+        }
         Some((value, affinity, collation))
     }
 

@@ -6067,3 +6067,31 @@ Document 16 step Q8.
   table.
 - `PRAGMA synchronous=OFF` inside a transaction is refused and leaves the
   level as it was.
+
+### 6.6.211 What the authorizer of a connection is asked (`db-sqlite`)
+
+Document 16 step Q8.
+
+- Every action carries the word `tclsqlite.c` writes it as, and no two
+  actions carry one word.
+- A connection told no function is asked nothing.
+- `SQLITE_SELECT` denied refuses the statement; ignored answers no row.
+- `SQLITE_READ` denied names the column; ignored answers a null for it
+  under a `*`, under a `t.*`, under an alias, under a schema and in the
+  `WHERE`.
+- A bare `rowid` is asked under the column the key is another name for,
+  and under `ROWID` where the table has none.
+- A table no column of is read is asked for under the empty name.
+- Every clause of a statement is read, and a statement written inside one
+  is read as a statement of its own.
+- `SQLITE_FUNCTION` denied names the function.
+- Each `CREATE` and each `DROP` is asked for twice: for the write of the
+  schema's own table and for what it makes or takes away.
+- The four `ALTER TABLE` forms carry the schema, the table and, where one
+  is named, the column.
+- An `UPDATE` is asked once per column written, and an ignored column
+  keeps the value it had.
+- A `PRAGMA`, a `BEGIN`, a `SAVEPOINT`, an `ANALYZE` and a `REINDEX` are
+  each asked for and each left undone where the function ignores it.
+- A term of a `WITH` that reads its own name is asked for.
+- A `VACUUM` is asked for nothing.

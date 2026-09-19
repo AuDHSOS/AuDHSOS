@@ -77,9 +77,23 @@ array set ::collations {}
 # The procs the functions of this file name, by function name.
 array set ::functions {}
 
+# The proc the authorizer of each connection names, by connection name.
+array set ::authorizers {}
+
 # One call the engine wrote onto the line: the name of the collation or
 # the function, then its values, answered by the proc the file named.
 proc harness_call {kind vals} {
+  # `sqlite3_set_authorizer` names one proc per connection, which the
+  # first value names, and a proc that raises answers a denial, which is
+  # what `tclsqlite.c:1240` reads for it.
+  if {$kind eq "auth"} {
+    set who [lindex $vals 0]
+    if {![info exists ::authorizers($who)]} { return SQLITE_OK }
+    set cmd $::authorizers($who)
+    foreach v [lrange $vals 1 end] { lappend cmd $v }
+    if {[catch { uplevel #0 $cmd } out]} { return SQLITE_DENY }
+    return $out
+  }
   set name [lindex $vals 0]
   set held [expr {$kind eq "collate" ? $::collations($name) : $::functions($name)}]
   set cmd $held
@@ -200,6 +214,10 @@ proc sqlite3 {name args} {
   set file [lindex $args 0]
   if {$file eq ""} { set file ":memory:" }
   harness_send open $name $file
+  # A connection that is opened again holds no authorizer, which
+  # `sqlite3_open` leaves null.
+  catch { unset ::authorizers($name) }
+  harness_send authorizer $name ""
   proc ::$name {method args} [string map [list %N% $name] {
     set method [whole_method $method]
     switch -exact -- $method {
@@ -271,7 +289,20 @@ proc sqlite3 {name args} {
         if {$rc} { error $msg }
         return $msg
       }
-      copy - authorizer - busy - cache - collate - collation_needed -
+      authorizer {
+        if {[llength $args] == 0} {
+          if {[info exists ::authorizers(%N%)]} { return $::authorizers(%N%) }
+          return {}
+        }
+        set held [lindex $args 0]
+        if {$held eq ""} {
+          catch { unset ::authorizers(%N%) }
+        } else {
+          set ::authorizers(%N%) $held
+        }
+        return [harness_send authorizer %N% $held]
+      }
+      copy - busy - cache - collate - collation_needed -
       commit_hook - enable_load_extension - function - interrupt -
       preupdate - profile - progress - rollback_hook - timeout -
       trace - trace_v2 - unlock_notify - update_hook - version -
