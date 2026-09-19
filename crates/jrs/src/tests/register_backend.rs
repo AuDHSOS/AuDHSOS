@@ -11709,3 +11709,42 @@ fn a_computed_key_of_an_object_pattern_is_evaluated_once_and_excluded() -> Resul
     }
     Ok(())
 }
+
+#[test]
+fn a_clause_that_reads_every_argument_converts_every_one_of_them() -> Result<(), Error> {
+    /// The maker of an Object whose 7.1.4 answers a number of the Script.
+    const MADE: &str = "var o=function(v){return {valueOf:function(){return v}}};";
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // 21.3.2.18, 21.3.2.24, 21.3.2.25, 22.1.2.1 and 22.1.2.2 read as many
+    // arguments as the call passed, each through 7.1.4 where it stands.
+    for (source, answer) in [
+        ("''+Math.max(o(3),1,o(7))", "7"),
+        ("''+Math.min(o(3),1)", "1"),
+        ("''+Math.hypot(o(3),4)", "5"),
+        ("String.fromCharCode(o(65),66)", "AB"),
+        ("String.fromCodePoint(o(65))", "A"),
+        // 7.1.4 runs left to right, so the order of the calls is the order of
+        // the arguments.
+        (
+            "var k=[];var p=function(n,v){return {valueOf:function(){k.push(n);return v}}};Math.max(p('a',1),p('b',2));k.join(',')",
+            "a,b",
+        ),
+        // A conversion that throws leaves the clause.
+        (
+            "var r;try{Math.max(1,{valueOf:function(){throw new TypeError()}})}catch(e){r=e instanceof TypeError};''+r",
+            "true",
+        ),
+    ] {
+        let source = alloc::format!("{MADE}{source}");
+        assert_eq!(realm.evaluate(&source)?, Value::string(answer), "{source}");
+    }
+    // The two clauses the stack backend carries answer as it does.
+    differential(
+        "var o=function(v){return {valueOf:function(){return v}}};''+Math.max(o(3),1,o(7))",
+    )?;
+    differential(
+        "var o=function(v){return {valueOf:function(){return v}}};String.fromCharCode(o(65),66)",
+    )?;
+    Ok(())
+}

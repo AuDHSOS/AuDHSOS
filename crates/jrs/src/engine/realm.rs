@@ -4662,6 +4662,9 @@ impl Intrinsic {
     /// what lets a lowering pass an Object there.
     #[must_use]
     pub const fn converts_argument(self, index: u16) -> bool {
+        if self.coerces_every_argument().is_some() {
+            return true;
+        }
         let mut entries = self.coerced_arguments();
         while let [(at, _), rest @ ..] = entries {
             if *at == index {
@@ -4670,6 +4673,22 @@ impl Intrinsic {
             entries = rest;
         }
         false
+    }
+
+    /// The hint a clause converts every argument it was passed with.
+    ///
+    /// 21.3.2.18, 21.3.2.24, 21.3.2.25, 22.1.2.1 and 22.1.2.2 read as many
+    /// arguments as the call passed, which no table of fixed positions names.
+    #[must_use]
+    pub const fn coerces_every_argument(self) -> Option<PrimitiveHint> {
+        match self {
+            Self::MathHypot
+            | Self::MathMax
+            | Self::MathMin
+            | Self::StringFromCharCode
+            | Self::StringFromCodePoint => Some(PrimitiveHint::Number),
+            _ => None,
+        }
     }
 
     /// Whether this method coerces the argument at `index` to a primitive.
@@ -4752,8 +4771,6 @@ impl Intrinsic {
             | Self::MathTrunc
             | Self::MathRound
             | Self::MathSign
-            | Self::MathMax
-            | Self::MathMin
             | Self::MathClz32
             | Self::MathImul
             | Self::MathFround

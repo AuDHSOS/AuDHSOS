@@ -5792,6 +5792,16 @@ impl RegisterVM {
         if matches!(call.resume, Some(Resume::Spread { .. })) {
             return Ok(None);
         }
+        // A clause that reads as many arguments as it was passed converts
+        // them in that order, which no table of positions names.
+        if let Some(hint) = intrinsic.coerces_every_argument() {
+            for index in 0..call.arg_count {
+                if self.call_argument(call, index, heap)?.as_object().is_some() {
+                    return Ok(Some((index, hint)));
+                }
+            }
+            return Ok(None);
+        }
         for (index, hint) in intrinsic.coerced_arguments() {
             if *index >= call.arg_count
                 || self
