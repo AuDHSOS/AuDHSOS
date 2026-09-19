@@ -1136,6 +1136,14 @@ const PROXY_KIND_GET: i32 = 0;
 const PROXY_KIND_SET: i32 = 1;
 /// The `[[DefineOwnProperty]]` of 10.5.6.
 const PROXY_KIND_DEFINE: i32 = 2;
+/// The `[[GetPrototypeOf]]` of 10.5.1.
+const PROXY_KIND_PROTOTYPE: i32 = 3;
+/// The `[[SetPrototypeOf]]` of 10.5.2.
+const PROXY_KIND_SET_PROTOTYPE: i32 = 4;
+/// The `[[IsExtensible]]` of 10.5.3.
+const PROXY_KIND_EXTENSIBLE: i32 = 5;
+/// The `[[PreventExtensions]]` of 10.5.4.
+const PROXY_KIND_PREVENT: i32 = 6;
 /// The bit of `PROXY_PRESENT` for each field a descriptor may have.
 const DESCRIPTOR_VALUE: i32 = 1;
 /// The bit for `[[Writable]]`.
@@ -6008,6 +6016,46 @@ impl RegisterVM {
             return self.begin_define_on_a_proxy(
                 proxy,
                 intrinsic,
+                &call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
+        // 20.1.2 and 28.1 reach the four internal methods of 10.5.1 to
+        // 10.5.4, each of which is a trap of the handler.
+        if let Some(kind) = Self::object_trap_of(intrinsic)
+            && let Some(proxy) = self
+                .call_argument(&call, 0, heap)?
+                .as_object()
+                .filter(|object| heap.is_a_proxy(*object))
+        {
+            let reflect = matches!(
+                intrinsic,
+                Intrinsic::ReflectGetPrototypeOf
+                    | Intrinsic::ReflectSetPrototypeOf
+                    | Intrinsic::ReflectIsExtensible
+                    | Intrinsic::ReflectPreventExtensions
+            );
+            let prototype = self.call_argument(&call, 1, heap)?;
+            if kind == PROXY_KIND_SET_PROTOTYPE && !prototype.is_null() && !prototype.is_object() {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "a prototype must be an object or null",
+                ));
+            }
+            let answer = if reflect {
+                VALUE_TRUE
+            } else {
+                Value::from_object(proxy)
+            };
+            return self.begin_the_proxy_object_trap(
+                proxy,
+                kind,
+                prototype,
+                (answer, !reflect),
                 &call,
                 units,
                 active_feedback,
@@ -11171,6 +11219,230 @@ impl RegisterVM {
         Ok(None)
     }
 
+    /// Which of the four internal methods of 10.5.1 to 10.5.4 a clause of
+    /// 20.1.2 or 28.1 reaches, where it reaches one.
+    const fn object_trap_of(intrinsic: Intrinsic) -> Option<i32> {
+        match intrinsic {
+            Intrinsic::ObjectGetPrototypeOf | Intrinsic::ReflectGetPrototypeOf => {
+                Some(PROXY_KIND_PROTOTYPE)
+            }
+            Intrinsic::ObjectSetPrototypeOf | Intrinsic::ReflectSetPrototypeOf => {
+                Some(PROXY_KIND_SET_PROTOTYPE)
+            }
+            Intrinsic::ObjectIsExtensible | Intrinsic::ReflectIsExtensible => {
+                Some(PROXY_KIND_EXTENSIBLE)
+            }
+            Intrinsic::ObjectPreventExtensions | Intrinsic::ReflectPreventExtensions => {
+                Some(PROXY_KIND_PREVENT)
+            }
+            _ => None,
+        }
+    }
+
+    /// The four internal methods of 10.5.1 to 10.5.4, which name no key: the
+    /// trap is given the target alone, or the prototype beside it.
+    ///
+    /// `answered` is what the clause answers where the trap accepted, beside
+    /// whether a refusal is a `TypeError` where the clause called it.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a trap opens a frame, which needs what a call needs"
+    )]
+    fn begin_the_proxy_object_trap(
+        &mut self,
+        proxy: ObjectRef,
+        kind: i32,
+        prototype: Value,
+        answered: (Value, bool),
+        call: &Call,
+        code: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let (answer, throws) = answered;
+        let name = match kind {
+            PROXY_KIND_PROTOTYPE => "getPrototypeOf",
+            PROXY_KIND_SET_PROTOTYPE => "setPrototypeOf",
+            PROXY_KIND_EXTENSIBLE => "isExtensible",
+            _ => "preventExtensions",
+        };
+        let (target, handler) = Self::proxy_parts(proxy, heap, realm)?;
+        let trap = Self::proxy_trap(handler, name, heap, realm)?;
+        // A target that is itself a Proxy answers each of these out of a
+        // second handler, which is the trap this frame does not open.
+        if target
+            .as_object()
+            .is_some_and(|object| heap.is_a_proxy(object))
+        {
+            return Err(VMError::Unsupported("an internal method of a Proxy"));
+        }
+        if trap.is_undefined() {
+            return self
+                .the_target_answers_without_a_trap(kind, target, prototype, answered, heap, realm);
+        }
+        let arguments = if kind == PROXY_KIND_SET_PROTOTYPE {
+            alloc::vec![target, prototype]
+        } else {
+            alloc::vec![target]
+        };
+        let arg_count = u16::try_from(arguments.len()).unwrap_or(1);
+        let record = promise::record(
+            heap,
+            realm,
+            &[
+                target,
+                VALUE_UNDEFINED,
+                Value::from_smi(kind),
+                prototype,
+                Value::from_bool(throws),
+                answer,
+            ],
+        )?;
+        let arguments = Self::array_of(arguments, heap, realm)?;
+        // The record and the List outlive the frame the trap opens, so they
+        // are roots of a scope of their own, which the answer leaves.
+        heap.enter_scope();
+        let state = heap.push_root(record)?;
+        let list = heap.push_root(arguments)?;
+        let call = Call {
+            receiver: Value::from_object(handler),
+            func: Reg(0),
+            arg_start: Reg(0),
+            arg_count,
+            slot: 0,
+            resume: Some(Resume::ProxyTrap {
+                state,
+                arguments: list,
+            }),
+            construct: None,
+            return_pc: call.return_pc,
+            caller_code_id: call.caller_code_id,
+            coerced: 0,
+        };
+        let entered = self.enter_call_value(trap, code, active_feedback, heap, realm, call)?;
+        if entered.is_some() {
+            return Ok(entered);
+        }
+        // A trap written in Rust answered without a frame of its own.
+        let answered = self.acc;
+        self.finish_the_proxy_trap(state, answered, heap, realm)?;
+        Ok(None)
+    }
+
+    /// Step 4 of each of 10.5.1 to 10.5.4: the internal method of 10.1 on the
+    /// target, where the handler carries no trap.
+    fn the_target_answers_without_a_trap(
+        &mut self,
+        kind: i32,
+        target: Value,
+        prototype: Value,
+        answered: (Value, bool),
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let (answer, throws) = answered;
+        let Some(object) = target.as_object() else {
+            return Err(VMError::TypeError);
+        };
+        let took = match kind {
+            PROXY_KIND_PROTOTYPE => {
+                self.acc = heap
+                    .get_object(object)
+                    .ok_or(VMError::Heap(HeapError::InvalidReference))?
+                    .prototype;
+                return Ok(None);
+            }
+            PROXY_KIND_EXTENSIBLE => {
+                self.acc = Value::from_bool(heap.is_extensible(object).unwrap_or(false));
+                return Ok(None);
+            }
+            PROXY_KIND_SET_PROTOTYPE => Self::set_object_prototype(object, prototype, heap, realm)?,
+            _ => {
+                heap.prevent_extensions(object)?;
+                true
+            }
+        };
+        if took {
+            self.acc = answer;
+            return Ok(None);
+        }
+        if throws {
+            return Err(type_error(heap, realm, "the prototype cannot be set"));
+        }
+        self.acc = VALUE_FALSE;
+        Ok(None)
+    }
+
+    /// The invariant the target owes the answer of a trap of 10.5.1 to
+    /// 10.5.4, which for each is what the target itself answers.
+    fn the_target_takes_the_object_trap(
+        &mut self,
+        kind: i32,
+        target: Value,
+        prototype: Value,
+        held: (Value, Value, bool),
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let (answered, answer, throws) = held;
+        let Some(object) = target.as_object() else {
+            return Err(VMError::TypeError);
+        };
+        let extensible = heap.is_extensible(object).unwrap_or(false);
+        let held_prototype = heap
+            .get_object(object)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?
+            .prototype;
+        let refused = "the trap of a Proxy answered what its target refuses";
+        if kind == PROXY_KIND_PROTOTYPE {
+            // Step 6: the trap answers an Object or null and nothing else.
+            if !answered.is_object() && !answered.is_null() {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "the getPrototypeOf of a Proxy answers an object or null",
+                ));
+            }
+            // Steps 8 to 10: a target that cannot grow binds the answer to
+            // the prototype the target itself holds.
+            if !extensible && !same_value(answered, held_prototype, heap)? {
+                return Err(type_error(heap, realm, refused));
+            }
+            self.acc = answered;
+            return Ok(());
+        }
+        let taken = Self::to_boolean(answered, heap)?;
+        if kind == PROXY_KIND_EXTENSIBLE {
+            // Steps 7 and 8: the answer is the one the target gives.
+            if taken != extensible {
+                return Err(type_error(heap, realm, refused));
+            }
+            self.acc = Value::from_bool(taken);
+            return Ok(());
+        }
+        if !taken {
+            if throws {
+                return Err(type_error(heap, realm, refused));
+            }
+            self.acc = VALUE_FALSE;
+            return Ok(());
+        }
+        // Step 8 of 10.5.4: a target that still grows took no refusal.
+        // Steps 7 to 9 of 10.5.2: a target that cannot grow binds the answer
+        // to the prototype the target holds.
+        let breached = if kind == PROXY_KIND_PREVENT {
+            extensible
+        } else {
+            !extensible && !same_value(prototype, held_prototype, heap)?
+        };
+        if breached {
+            return Err(type_error(heap, realm, refused));
+        }
+        self.acc = answer;
+        Ok(())
+    }
+
     /// Steps 10 and 11 of 10.5.6: what the target owes the answer of a
     /// `defineProperty` trap that accepted.
     fn the_target_takes_the_definition(
@@ -11231,8 +11503,10 @@ impl RegisterVM {
         let answer = promise::slot(heap, record, PROXY_ANSWER);
         let descriptor = Self::descriptor_from_slots(record, heap);
         // The key is read while the record is still a root, because interning
-        // it allocates and the record would not survive that afterwards.
-        let name = property_key(key, heap, realm)?;
+        // it allocates and the record would not survive that afterwards. The
+        // four traps of 10.5.1 to 10.5.4 name no key at all.
+        let named = matches!(kind, PROXY_KIND_GET | PROXY_KIND_SET | PROXY_KIND_DEFINE);
+        let name = named.then(|| property_key(key, heap, realm)).transpose()?;
         heap.exit_scope();
         // Step 6 of 10.5.9: a trap that answers false wrote nothing at all,
         // which 6.2.5.6 step 6.e makes a `TypeError` of in strict code.
@@ -11255,6 +11529,22 @@ impl RegisterVM {
         {
             return Err(VMError::Unsupported("an internal method of a Proxy"));
         }
+        if matches!(
+            kind,
+            PROXY_KIND_PROTOTYPE
+                | PROXY_KIND_SET_PROTOTYPE
+                | PROXY_KIND_EXTENSIBLE
+                | PROXY_KIND_PREVENT
+        ) {
+            return self.the_target_takes_the_object_trap(
+                kind,
+                target,
+                written,
+                (answered, answer, strict),
+                heap,
+                realm,
+            );
+        }
         if kind == PROXY_KIND_DEFINE {
             // Step 8 of 10.5.6: a trap that refused defined nothing, which
             // 7.3.8 makes a `TypeError` of where the clause called it.
@@ -11265,11 +11555,13 @@ impl RegisterVM {
                 self.acc = VALUE_FALSE;
                 return Ok(());
             }
+            let name = name.ok_or(VMError::TypeError)?;
             Self::the_target_takes_the_definition(&descriptor, target, name, heap, realm)?;
             self.acc = answer;
             return Ok(());
         }
         if let Some(object) = target.as_object()
+            && let Some(name) = name
             && let Some(flags) = heap.own_named_flags(object, name)?
             && !flags.configurable
         {

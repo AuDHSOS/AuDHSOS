@@ -12142,6 +12142,40 @@ fn the_get_of_10_5_8_answers_out_of_the_handler() -> Result<(), Error> {
             "(function(){var t={};var p=new Proxy(t,{});Object.defineProperty(p,'k',{value:9,enumerable:true});return ''+t.k+'|'+Object.getOwnPropertyDescriptor(t,'k').enumerable})()",
             "9|true",
         ),
+        // 10.5.1 answers the prototype out of the `getPrototypeOf` of the
+        // handler, and 20.1.2.12 and 28.1.7 both reach it.
+        (
+            "(function(){var l=[];var r={};var t=Object.create(r);var p=new Proxy(t,{getPrototypeOf(o){l.push('g');return Reflect.getPrototypeOf(o)}});return ''+(Object.getPrototypeOf(p)===r)+'|'+(Reflect.getPrototypeOf(p)===r)+'|'+l.join('')})()",
+            "true|true|gg",
+        ),
+        // Step 6 of 10.5.1: the trap answers an Object or null and nothing
+        // else; steps 8 to 10 bind it to a target that cannot grow.
+        (
+            "(function(){var b=new Proxy({},{getPrototypeOf(){return 1}});var r;try{Object.getPrototypeOf(b)}catch(e){r=e instanceof TypeError};var q={};var f=Object.preventExtensions(Object.create(q));var c=new Proxy(f,{getPrototypeOf(){return {}}});var s;try{Object.getPrototypeOf(c)}catch(e){s=e instanceof TypeError};var d=new Proxy(f,{getPrototypeOf(){return q}});return ''+r+'|'+s+'|'+(Object.getPrototypeOf(d)===q)})()",
+            "true|true|true",
+        ),
+        // 10.5.2 answers the write out of the `setPrototypeOf` of the
+        // handler: 20.1.2.22 answers the Proxy, 28.1.14 whether it was taken.
+        (
+            "(function(){var t={};var n={};var p=new Proxy(t,{setPrototypeOf(o,v){return Reflect.setPrototypeOf(o,v)}});var a=Object.setPrototypeOf(p,n)===p;var d=new Proxy({},{setPrototypeOf(){return false}});var r;try{Object.setPrototypeOf(d,null)}catch(e){r=e instanceof TypeError};return ''+a+'|'+(Object.getPrototypeOf(t)===n)+'|'+Reflect.setPrototypeOf(d,null)+'|'+r})()",
+            "true|true|false|true",
+        ),
+        // Steps 7 and 8 of 10.5.3: the answer is the one the target gives.
+        (
+            "(function(){var e=new Proxy({},{isExtensible(o){return Reflect.isExtensible(o)}});var b=new Proxy({},{isExtensible(){return false}});var r;try{Object.isExtensible(b)}catch(e){r=e instanceof TypeError};return ''+Object.isExtensible(e)+'|'+Reflect.isExtensible(e)+'|'+r})()",
+            "true|true|true",
+        ),
+        // Step 8 of 10.5.4: a trap that answered true left a target that no
+        // longer grows.
+        (
+            "(function(){var v={};var x=new Proxy(v,{preventExtensions(o){Object.preventExtensions(o);return true}});var a=Object.preventExtensions(x)===x;var y=new Proxy({},{preventExtensions(){return true}});var r;try{Object.preventExtensions(y)}catch(e){r=e instanceof TypeError};var z=new Proxy({},{preventExtensions(){return false}});return ''+a+'|'+Object.isExtensible(v)+'|'+r+'|'+Reflect.preventExtensions(z)})()",
+            "true|false|true|false",
+        ),
+        // Step 4 of each: a handler with no trap answers out of the target.
+        (
+            "(function(){var r={};var n=new Proxy(Object.create(r),{});return ''+(Object.getPrototypeOf(n)===r)+'|'+Object.isExtensible(n)})()",
+            "true|true",
+        ),
     ] {
         assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
     }
