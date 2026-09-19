@@ -5002,11 +5002,6 @@ fn a_compound_assignment_of_two_strings_only_concatenates_for_plus() -> Result<(
 #[test]
 fn register_lowering_rejects_intrinsic_arguments_it_cannot_coerce() -> Result<(), Error> {
     for source in [
-        // An intrinsic runs without a call frame, so a user valueOf in an
-        // argument position whose conversion the native does not leave for
-        // keeps the call on the legacy backend. 22.1.3.6 converts every
-        // argument it reads and has no position that leaves for one.
-        "let n=0;''.concat({toString(){n++;return 'a'}})",
         // 23.1.3.22 and 23.1.3.23 need the length the layout starts from.
         "let a=[1];let i=0;a[i]=2;a.pop()",
         "let a=[1];let i=0;a[i]=2;a.reverse()",
@@ -11784,5 +11779,30 @@ fn the_pattern_and_the_flags_of_22_2_4_1_go_through_7_1_17() -> Result<(), Error
         "var r;try{new RegExp('a',{toString:function(){}})}catch(e){r=e instanceof SyntaxError};''+r",
     )?;
     differential("new RegExp('a').flags+'|'+new RegExp().source")?;
+    Ok(())
+}
+
+#[test]
+fn the_argument_22_1_3_makes_a_regexp_of_goes_through_7_1_17() -> Result<(), Error> {
+    // Step 4 of 22.1.3.13 and 22.1.3.17 makes a RegExp of an argument that
+    // carries no method of its own, which sends it through 7.1.17.
+    for source in [
+        "var o={toString:function(){return 'AB'}};'ABBABABAB'.match(o)[0]",
+        "var o={toString:function(){return 'AB'}};''+'ssABBABABAB'.search(o)",
+        // Step 2 answers with the method the argument carries, which no
+        // conversion reaches: a RegExp carries the one of 22.2.6.
+        "''+'one two three four'.search(/four/)",
+        "'one two three'.match(/two/)[0]",
+        "var m={toString:function(){return 'z'}};m[Symbol.match]=function(s){return 'c:'+s};'q'.match(m)",
+        // 22.1.3.5 reads as many arguments as the call passed, each through
+        // 7.1.17 and in that order.
+        "var c={toString:function(){return 'A'},valueOf:function(){return '_A_'}};'x'.concat(c,'y',c)",
+        "var k=[];var p=function(n){return {toString:function(){k.push(n);return n}}};'x'.concat(p('a'),p('b'));k.join(',')",
+        "'x'.concat()",
+        // A conversion that throws leaves the clause.
+        "var r;try{'a'.match({toString:function(){throw new TypeError()}})}catch(e){r=e instanceof TypeError};''+r",
+    ] {
+        differential(source)?;
+    }
     Ok(())
 }

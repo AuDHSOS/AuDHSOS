@@ -4456,7 +4456,11 @@ impl Intrinsic {
             | Self::StringPrototypeFontsize
             | Self::StringPrototypeLink
             // 22.2.6.11 step 2 converts the String it replaces in.
-            | Self::RegExpPrototypeReplace => TEXT,
+            | Self::RegExpPrototypeReplace
+            // 22.1.3.13 and 22.1.3.17 make a RegExp of an argument that
+            // carries no method of its own, which sends it through 7.1.17.
+            | Self::StringPrototypeMatch
+            | Self::StringPrototypeSearch => TEXT,
             // 22.1.3.19 steps 4 and 5 convert the value it searches for and
             // the one it writes, where neither takes the clause over.
             Self::StringPrototypeReplace
@@ -4690,6 +4694,9 @@ impl Intrinsic {
             | Self::MathMin
             | Self::StringFromCharCode
             | Self::StringFromCodePoint => Some(PrimitiveHint::Number),
+            // 22.1.3.5 reads as many arguments as the call passed, each
+            // through 7.1.17.
+            Self::StringPrototypeConcat => Some(PrimitiveHint::String),
             _ => None,
         }
     }

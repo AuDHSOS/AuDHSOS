@@ -5842,6 +5842,17 @@ impl RegisterVM {
             {
                 continue;
             }
+            // Step 2 of 22.1.3.13 and 22.1.3.17 answers with the method of
+            // the argument, and step 4 makes a RegExp only of an argument
+            // that carries none.
+            if let Some(symbol) = match intrinsic {
+                Intrinsic::StringPrototypeMatch => Some(super::realm::WellKnownSymbol::Match),
+                Intrinsic::StringPrototypeSearch => Some(super::realm::WellKnownSymbol::Search),
+                _ => None,
+            } && self.carries_the_method(call, *index, symbol, heap)?
+            {
+                continue;
+            }
             // Step 2 of 22.1.3.23 answers with the `@@split` of a RegExp,
             // which runs without a frame, so step 5 converts no separator.
             if intrinsic == Intrinsic::StringPrototypeSplit
@@ -5864,6 +5875,25 @@ impl RegisterVM {
             return Ok(Some((*index, *hint)));
         }
         Ok(None)
+    }
+
+    /// Whether the argument at this position carries the well-known method
+    /// the clause answers with, which no conversion reaches.
+    fn carries_the_method(
+        &self,
+        call: &Call,
+        index: u16,
+        symbol: super::realm::WellKnownSymbol,
+        heap: &GenerationalHeap,
+    ) -> Result<bool, VMError> {
+        let Some(object) = self.call_argument(call, index, heap)?.as_object() else {
+            return Ok(false);
+        };
+        let method = match heap.lookup_named(object, symbol.key())? {
+            Some(found) => Self::plain_value(found)?,
+            None => VALUE_UNDEFINED,
+        };
+        Ok(!method.is_undefined() && !method.is_null())
     }
 
     /// Whether the value at this position of 22.1.3.19 stands where the clause
