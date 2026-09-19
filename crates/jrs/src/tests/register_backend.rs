@@ -12276,6 +12276,24 @@ fn the_key_tests_and_the_call_of_10_5_answer_out_of_the_handler() -> Result<(), 
             "(function(){function f(a,b){return this.t+':'+a+','+b}var n=new Proxy(f,{});var e=new Proxy(f,{apply(){throw new TypeError()}});var r;try{e()}catch(x){r=x instanceof TypeError};var o={t:'o',m:new Proxy(f,{apply(t,q,a){return Reflect.apply(t,q,a)}})};return n.call({t:'n'},4,5)+'|'+r+'|'+o.m(9,10)})()",
             "n:4,5|true|o:9,10",
         ),
+        // 10.5.13 answers the construct out of the `construct` of the
+        // handler, which is given the target, an Array of 23.1 and the
+        // `newTarget`.
+        (
+            "(function(){function F(a){this.a=a}var l=[];var p=new Proxy(F,{construct(t,a,nt){l.push(a.length+'/'+(nt===p));return new t(a[0])}});var o=new p(5);return o.a+'|'+l.join('')+'|'+(o instanceof F)})()",
+            "5|1/true|true",
+        ),
+        // Step 7: the answer of the trap is an Object and nothing else, and
+        // a trap that throws leaves the construct.
+        (
+            "(function(){function F(){}var c=new Proxy(F,{construct(){return 1}});var r;try{new c()}catch(e){r=e instanceof TypeError};var d=new Proxy(F,{construct(){throw new TypeError()}});var s;try{new d()}catch(e){s=e instanceof TypeError};return ''+r+'|'+s})()",
+            "true|true",
+        ),
+        // A Proxy whose target is a Proxy constructs through both handlers.
+        (
+            "(function(){function F(a){this.a=a}var q=new Proxy(new Proxy(F,{construct(t,a){return new t(a[0])}}),{construct(t,a){return new t(a[0])}});return ''+new q(7).a})()",
+            "7",
+        ),
     ] {
         assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
     }

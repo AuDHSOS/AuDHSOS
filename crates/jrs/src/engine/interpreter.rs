@@ -794,6 +794,14 @@ pub enum Resume {
         /// Root holding the List of arguments the trap reads.
         arguments: Root,
     },
+    /// 10.5.13 called the `construct` of the handler, whose answer step 7
+    /// asks to be an Object.
+    ProxyConstruct {
+        /// Root holding the List of arguments the trap reads.
+        arguments: Root,
+        /// Where the answer of the trap goes.
+        made: Construction,
+    },
     /// 23.1.3.30.1 called the comparator of a sort.
     ///
     /// The clause has no frame of its own, so the merge waits in a record of
@@ -1500,6 +1508,7 @@ impl Resume {
             | Self::Instance { arguments }
             | Self::Job { arguments }
             | Self::ProxyTrap { arguments, .. }
+            | Self::ProxyConstruct { arguments, .. }
             | Self::Executor { arguments, .. } => Some(arguments),
             _ => None,
         }
@@ -8660,6 +8669,74 @@ impl RegisterVM {
     /// chain, outermost bind last, followed by the arguments of the call
     /// site. No frame of the caller holds the two together, so the call
     /// carries the Array 7.3.18 would make.
+    /// `[[Construct]]` of 10.5.13: the `construct` of the handler is called
+    /// with the target, the Array 23.1 makes of the arguments and the
+    /// `newTarget`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a trap opens a frame, which needs what a call needs"
+    )]
+    fn begin_the_proxy_construct(
+        &mut self,
+        proxy: ObjectRef,
+        new_target: Value,
+        call: &Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let (target, handler) = Self::proxy_parts(proxy, heap, realm)?;
+        let trap = Self::proxy_trap(handler, "construct", heap, realm)?;
+        // Step 4 constructs the target itself, for which 10.1.13 reads the
+        // `prototype` of a `newTarget` that is this Proxy.
+        if trap.is_undefined() {
+            return Err(VMError::Unsupported(
+                "a construct forwarded to the target of a Proxy",
+            ));
+        }
+        let made = call.construct.ok_or(VMError::TypeError)?;
+        let mut arguments = Vec::new();
+        for index in 0..call.arg_count {
+            arguments.push(self.call_argument(call, index, heap)?);
+        }
+        // Step 5 makes the List of the arguments an Array of 23.1, which is
+        // the second argument of the trap.
+        let array = Self::array_of(arguments, heap, realm)?;
+        let list = Self::array_of(alloc::vec![target, array, new_target], heap, realm)?;
+        // The List outlives the frame the trap opens, so it is a root of a
+        // scope of its own, which the answer leaves.
+        heap.enter_scope();
+        let arguments = heap.push_root(list)?;
+        let call = Call {
+            receiver: Value::from_object(handler),
+            func: Reg(0),
+            arg_start: Reg(0),
+            arg_count: 3,
+            slot: 0,
+            resume: Some(Resume::ProxyConstruct { arguments, made }),
+            construct: None,
+            return_pc: call.return_pc,
+            caller_code_id: call.caller_code_id,
+            coerced: 0,
+        };
+        let entered = self.enter_call_value(trap, units, active_feedback, heap, realm, call)?;
+        if entered.is_some() {
+            return Ok(entered);
+        }
+        // A trap written in Rust answered without a frame of its own.
+        let answered = self.acc;
+        if answered.as_object().is_none() {
+            return Err(type_error(
+                heap,
+                realm,
+                "the construct of a Proxy answers an object",
+            ));
+        }
+        self.write_construction(made, answered, heap)?;
+        Ok(None)
+    }
+
     /// `[[Call]]` of 10.5.12: the `apply` of the handler is called with the
     /// target, the `this` value and the Array 23.1 makes of the arguments.
     fn begin_the_proxy_call(
@@ -35315,11 +35392,44 @@ impl RegisterVM {
                         self.write_reg(target, self.acc)?;
                         return Ok(None);
                     }
+                    // 10.5.13 answers the construct of a Proxy out of the
+                    // `construct` of its handler, which is a frame this
+                    // instruction opens.
+                    let callee = self.read_reg(func)?;
+                    if let Some(proxy) =
+                        callee.as_object().filter(|object| heap.is_a_proxy(*object))
+                    {
+                        let call = Call {
+                            receiver: VALUE_UNDEFINED,
+                            func,
+                            arg_start,
+                            arg_count,
+                            slot,
+                            return_pc: pc,
+                            resume: None,
+                            caller_code_id: current_code_id,
+                            construct: Some(Construction::Register(target)),
+                            coerced: 0,
+                        };
+                        if let Some(code_id) = self.begin_the_proxy_construct(
+                            proxy,
+                            callee,
+                            &call,
+                            units,
+                            active_feedback,
+                            heap,
+                            realm,
+                        )? {
+                            current_code_id = Some(code_id);
+                            pc = self.pending_pc.take().unwrap_or(0);
+                        }
+                        return Ok(None);
+                    }
                     // 7.3.15 refuses a callee without `[[Construct]]`, which here
                     // is a callee without the `prototype` 10.2.5 installs.
                     // 10.2.2 step 5 creates the object for a base constructor
                     // and leaves a derived one to make its own with 13.3.7.1.
-                    let receiver = if Self::derives(self.read_reg(func)?, units, heap) {
+                    let receiver = if Self::derives(callee, units, heap) {
                         self.write_reg(target, VALUE_UNDEFINED)?;
                         VALUE_UNINITIALIZED
                     } else {
@@ -35826,6 +35936,7 @@ impl RegisterVM {
                                     Resume::Iteration { .. }
                                     | Resume::Capability { .. }
                                     | Resume::ProxyTrap { .. }
+                                    | Resume::ProxyConstruct { .. }
                                     | Resume::Replace { .. }
                                     | Resume::Stringify { .. }
                                     | Resume::Reviver { .. }
@@ -35902,6 +36013,20 @@ impl RegisterVM {
                                     Resume::ProxyTrap { state, .. } => {
                                         let answered = self.acc;
                                         self.finish_the_proxy_trap(state, answered, heap, realm)?;
+                                        None
+                                    }
+                                    // 10.5.13 step 7 asks the answer of the
+                                    // trap to be an Object.
+                                    Resume::ProxyConstruct { made, .. } => {
+                                        let answered = self.acc;
+                                        if answered.as_object().is_none() {
+                                            return Err(type_error(
+                                                heap,
+                                                realm,
+                                                "the construct of a Proxy answers an object",
+                                            ));
+                                        }
+                                        self.write_construction(made, answered, heap)?;
                                         None
                                     }
                                     Resume::Copy { state } => self.step_the_copy(
