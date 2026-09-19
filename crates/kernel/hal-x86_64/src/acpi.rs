@@ -82,7 +82,7 @@ pub unsafe fn find_madt(platform: &X86Platform) -> Result<Madt, TableError> {
     // out is checked against `limit` first.
     let window = unsafe { PhysicalWindow::kernel() };
     let address = platform.acpi_rsdp().ok_or(TableError::NoRootPointer)?;
-    let pointer: [u8; RSDP_LEN] = read_array(window, limit, address)?;
+    let pointer: [u8; RSDP_LEN] = read_array(&window, limit, address)?;
     let rsdp = parse_rsdp(&pointer)?;
     let root_bytes = read_table(&window, limit, rsdp.root())?;
     let root = RootTable::parse(root_bytes)?;
@@ -118,7 +118,7 @@ pub unsafe fn find_mcfg(platform: &X86Platform) -> Result<Mcfg, TableError> {
     // out is checked against `limit` first.
     let window = unsafe { PhysicalWindow::kernel() };
     let address = platform.acpi_rsdp().ok_or(TableError::NoRootPointer)?;
-    let pointer: [u8; RSDP_LEN] = read_array(window, limit, address)?;
+    let pointer: [u8; RSDP_LEN] = read_array(&window, limit, address)?;
     let rsdp = parse_rsdp(&pointer)?;
     let root_bytes = read_table(&window, limit, rsdp.root())?;
     let root = RootTable::parse(root_bytes)?;
@@ -174,18 +174,18 @@ fn read_bytes(
 
 /// The `N` bytes at `start`.
 fn read_array<const N: usize>(
-    window: PhysicalWindow,
+    window: &PhysicalWindow,
     limit: u64,
     start: PhysAddr,
 ) -> Result<[u8; N], TableError> {
-    let bytes = read_bytes(&window, limit, start, N)?;
+    let bytes = read_bytes(window, limit, start, N)?;
     <[u8; N]>::try_from(bytes).map_err(|_| TableError::Unreachable(start))
 }
 
 /// The whole table at `start`: its header says how long it is, so the read
 /// happens twice.
 fn read_table(window: &PhysicalWindow, limit: u64, start: PhysAddr) -> Result<&[u8], TableError> {
-    let head: [u8; SDT_HEADER_LEN] = read_array(*window, limit, start)?;
+    let head: [u8; SDT_HEADER_LEN] = read_array(window, limit, start)?;
     let length = usize::try_from(announced_length(&head)).unwrap_or(usize::MAX);
     read_bytes(window, limit, start, length)
 }
