@@ -67,6 +67,10 @@ pub enum Setting {
     /// because `PragFlg_NoColumns` stands against its name in
     /// `research/sqlite/pragma.h:200`.
     CaseSensitiveLike,
+    /// `PRAGMA database_list`, which answers one row per database the
+    /// connection holds, and is `PragTyp_DATABASE_LIST` of
+    /// `research/sqlite/src/pragma.c:1436`.
+    DatabaseList,
     /// `PRAGMA default_cache_size`, which writes the word at offset 48
     /// of the header and the connection's own cache size together, and
     /// is `PragTyp_DEFAULT_CACHE_SIZE` of
@@ -398,6 +402,7 @@ pub fn of_name(name: &[u8]) -> Option<Setting> {
         b"integrity_check" => Setting::Integrity,
         b"quick_check" => Setting::Quick,
         b"foreign_key_list" => Setting::ForeignKeyList,
+        b"database_list" => Setting::DatabaseList,
         b"foreign_key_check" => Setting::ForeignKeyCheck,
         b"wal_checkpoint" => Setting::WalCheckpoint,
         b"case_sensitive_like" => Setting::CaseSensitiveLike,
@@ -463,6 +468,7 @@ impl Setting {
             | Setting::CaseSensitiveLike
             | Setting::Integrity
             | Setting::Quick
+            | Setting::DatabaseList
             | Setting::ForeignKeyList
             | Setting::ForeignKeyCheck
             | Setting::WalCheckpoint => return None,

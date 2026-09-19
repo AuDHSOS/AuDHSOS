@@ -49,7 +49,7 @@ pub enum Expected {
     CloseParen,
     /// `(`.
     OpenParen,
-    /// `AS`, in a `CAST`.
+    /// `AS`, in a `CAST` or an `ATTACH`.
     As,
     /// `THEN`, in a `CASE`.
     Then,
@@ -1151,6 +1151,12 @@ impl<'a> Parser<'a> {
         if self.eat_keyword(Keyword::Vacuum) {
             return Ok(Definition::Vacuum(self.vacuum()?));
         }
+        if self.eat_keyword(Keyword::Attach) {
+            return Ok(Definition::Attach(self.attach()?));
+        }
+        if self.eat_keyword(Keyword::Detach) {
+            return Ok(Definition::Detach(self.detach()?));
+        }
         self.expect_keyword(Keyword::Create, Expected::Create)?;
         let temporary = self.at_temporary();
         if temporary {
@@ -1168,6 +1174,29 @@ impl<'a> Parser<'a> {
         let unique = self.eat_keyword(Keyword::Unique);
         self.expect_keyword(Keyword::Index, Expected::Table)?;
         Ok(Definition::Index(self.create_index(unique)?))
+    }
+
+    /// `ATTACH [DATABASE] file AS name [KEY key]`, with the word already
+    /// read.
+    ///
+    /// The key is read and nothing is done with it, which is what a
+    /// library built without an encryption extension does.
+    fn attach(&mut self) -> Result<crate::ast::Attach, Error> {
+        self.eat_keyword(Keyword::Database);
+        let file = self.expression()?;
+        self.expect_keyword(Keyword::As, Expected::As)?;
+        let name = self.expression()?;
+        if self.eat_keyword(Keyword::Key) {
+            self.expression()?;
+        }
+        Ok(crate::ast::Attach { file, name })
+    }
+
+    /// `DETACH [DATABASE] name`, with the word already read.
+    fn detach(&mut self) -> Result<crate::ast::Detach, Error> {
+        self.eat_keyword(Keyword::Database);
+        let name = self.expression()?;
+        Ok(crate::ast::Detach { name })
     }
 
     /// `VACUUM [schema] [INTO expr]`, with the word already read.

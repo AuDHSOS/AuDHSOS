@@ -89,6 +89,10 @@ pub enum Action {
     Savepoint,
     /// `SQLITE_RECURSIVE`.
     Recursive,
+    /// `SQLITE_ATTACH`.
+    Attach,
+    /// `SQLITE_DETACH`.
+    Detach,
 }
 
 impl Action {
@@ -125,6 +129,8 @@ impl Action {
             Action::Function => b"SQLITE_FUNCTION",
             Action::Savepoint => b"SQLITE_SAVEPOINT",
             Action::Recursive => b"SQLITE_RECURSIVE",
+            Action::Attach => b"SQLITE_ATTACH",
+            Action::Detach => b"SQLITE_DETACH",
         }
     }
 }
@@ -755,6 +761,17 @@ impl Authorizer<'_> {
                 self.ask(Action::AlterTable, &schema, &table, b"")
             }
             crate::ast::Definition::Vacuum(_) => Ok(Answer::Ok),
+            // `sqlite3Attach` of `research/sqlite/src/attach.c:393`
+            // hands the function the text the statement wrote and
+            // nothing where it wrote an expression of its own.
+            crate::ast::Definition::Attach(asked) => {
+                let file = literal_of(arena, asked.file, sql);
+                self.ask(Action::Attach, &file, b"", b"")
+            }
+            crate::ast::Definition::Detach(asked) => {
+                let name = literal_of(arena, asked.name, sql);
+                self.ask(Action::Detach, &name, b"", b"")
+            }
         }
     }
 
@@ -1114,5 +1131,18 @@ impl Authorizer<'_> {
             }
         }
         Ok(Answer::Ok)
+    }
+}
+
+/// The text of a string the statement wrote, and nothing where it wrote
+/// anything else.
+///
+/// `sqlite3Attach` of `research/sqlite/src/attach.c:387` hands the
+/// function `pAuthArg->u.zToken` for a `TK_STRING` and a null pointer
+/// otherwise, which the empty slice stands for here.
+fn literal_of(arena: &Arena, id: ExprId, sql: &[u8]) -> Vec<u8> {
+    match arena.node(id) {
+        Some(Node::Literal(crate::ast::Literal::Text(span))) => dequote(span.text(sql)),
+        _ => Vec::new(),
     }
 }

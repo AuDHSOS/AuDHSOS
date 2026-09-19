@@ -165,6 +165,13 @@ fn walk_definition(arena: &Arena, definition: Definition) {
                 walk(arena, into, 0);
             }
         }
+        // An `ATTACH` carries the file and the name as expressions, and a
+        // `DETACH` the name.
+        Definition::Attach(attach) => {
+            walk(arena, attach.file, 0);
+            walk(arena, attach.name, 0);
+        }
+        Definition::Detach(detach) => walk(arena, detach.name, 0),
         Definition::Drop(_)
         | Definition::Rename(_)
         | Definition::DropColumn(_)

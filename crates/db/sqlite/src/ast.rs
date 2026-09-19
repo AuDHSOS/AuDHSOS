@@ -813,6 +813,32 @@ pub enum Definition {
     Drop(Drop),
     /// `VACUUM`.
     Vacuum(Vacuum),
+    /// `ATTACH`.
+    Attach(Attach),
+    /// `DETACH`.
+    Detach(Detach),
+}
+
+/// `ATTACH [DATABASE] file AS name [KEY key]`.
+///
+/// Both the file and the name are expressions, which
+/// `cmd ::= ATTACH database_kw_opt expr AS expr key_opt` of
+/// `research/sqlite/src/parse.y:1851` reads them as. The key is read and
+/// nothing is done with it, which is what a library built without an
+/// encryption extension does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Attach {
+    /// The file the statement names.
+    pub file: ExprId,
+    /// The name the database answers to from the statement on.
+    pub name: ExprId,
+}
+
+/// `DETACH [DATABASE] name`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Detach {
+    /// The name an `ATTACH` gave.
+    pub name: ExprId,
 }
 
 /// `VACUUM [schema] [INTO expr]`.

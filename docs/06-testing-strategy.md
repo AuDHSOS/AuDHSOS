@@ -6170,3 +6170,22 @@ Document 16 step Q8.
 - A table that names itself is written again with its own new name.
 - A key that names another table is left as it is.
 - A table whose columns come out of a `SELECT` carries no key.
+
+### 6.6.218 What databases one connection holds (`db-sqlite`)
+
+Document 18 step A2.
+
+- A bare name, a name in quotes and a name an expression answers are all
+  the name the database answers to.
+- `:memory:`, a file name of no bytes and a file of no bytes are each a
+  database of one page.
+- A name the connection already holds a database under is refused, which
+  `main` and `temp` are two of.
+- A file the opening function answers nothing for, a file whose bytes no
+  header reads, and a file whose encoding is not the one of `main` are
+  each refused.
+- The eleventh database of a connection is refused.
+- `DETACH main` is refused, and `DETACH temp` is no database at all.
+- A connection told no opening function attaches a database of its own
+  and no file.
+- `SQLITE_ATTACH` and `SQLITE_DETACH` carry the text the statement wrote.

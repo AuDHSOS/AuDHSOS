@@ -7,6 +7,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` reads `ATTACH` and `DETACH`, holds one database per name,
+  and answers them from `PRAGMA database_list`. D-323 records it. Catalog
+  6.6.218. `auth.test` goes from 142 cases passing to 228.
+
 - `db-sqlite` holds the pages, the header and the journal of one file in
   one struct, which is the first step toward more than one database on
   one connection. D-322 records the track and

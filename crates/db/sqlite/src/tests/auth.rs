@@ -44,6 +44,8 @@ static ACTIONS: &[Action] = &[
     Action::Function,
     Action::Savepoint,
     Action::Recursive,
+    Action::Attach,
+    Action::Detach,
 ];
 
 /// What the function under test refuses: the place of the action in
@@ -147,7 +149,7 @@ fn read(writer: &Writer, sql: &[u8]) -> Result<Vec<Vec<Value>>, alloc::string::S
 /// actions carry one word.
 #[test]
 fn what_word_every_action_is_written_as() {
-    assert_eq!(ACTIONS.len(), 29);
+    assert_eq!(ACTIONS.len(), 31);
     for (at, action) in ACTIONS.iter().enumerate() {
         let word = action.word();
         assert!(word.starts_with(b"SQLITE_"), "a word of its own");
@@ -762,6 +764,42 @@ fn what_a_vacuum_is_asked_for() {
     );
 }
 
+/// `ATTACH` and `DETACH` are asked for under the text the statement
+/// wrote, which `sqlite3Attach` of `research/sqlite/src/attach.c:393`
+/// hands the function, and nothing where the statement wrote an
+/// expression of its own.
+fn what_an_attach_is_asked_for() {
+    let mut writer = told();
+    writer.opens(|_| None);
+    rule(Action::Attach, Answer::Deny);
+    assert_eq!(
+        writer
+            .run(b"ATTACH ':memory:' AS aux")
+            .expect_err("a refusal")
+            .message(),
+        "not authorized"
+    );
+    // A statement that writes no string is asked for under the empty
+    // name, which the rule reads as any name.
+    assert_eq!(
+        writer
+            .run(b"ATTACH ':'||'memory:' AS aux")
+            .expect_err("a refusal")
+            .message(),
+        "not authorized"
+    );
+    allows();
+    writer.run(b"ATTACH ':memory:' AS aux").unwrap();
+    rule(Action::Detach, Answer::Deny);
+    assert_eq!(
+        writer.run(b"DETACH aux").expect_err("a refusal").message(),
+        "not authorized"
+    );
+    allows();
+    writer.run(b"DETACH aux").unwrap();
+    assert!(writer.attached_names().is_empty());
+}
+
 /// The authorizer of a connection, asked for one statement at a time.
 ///
 /// The function the connection is told carries nothing and reads the
@@ -784,4 +822,5 @@ fn what_the_authorizer_of_a_connection_is_asked() {
     what_a_name_no_table_answers_is_asked_for();
     what_a_recursive_term_is_asked_for();
     what_a_vacuum_is_asked_for();
+    what_an_attach_is_asked_for();
 }

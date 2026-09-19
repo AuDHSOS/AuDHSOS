@@ -441,10 +441,34 @@ struct HeldFile {
     began: Option<Header>,
 }
 
+/// One database an `ATTACH` added to a connection.
+struct Attached {
+    /// The name the statement gave, with its quotes taken off.
+    name: Vec<u8>,
+    /// The file name the statement named, which
+    /// `PRAGMA database_list` answers.
+    file: Vec<u8>,
+    /// The file itself.
+    held: HeldFile,
+}
+
+/// The function a connection answers the image of a file name with,
+/// which `ATTACH` calls.
+///
+/// A file name the function answers nothing for is refused `unable to
+/// open database: <file>`. A name of no bytes and the name `:memory:`
+/// reach no function, because both stand for a database of one page.
+pub type Opening = fn(&[u8]) -> Option<Vec<u8>>;
+
 /// A database being written, statement by statement.
 pub struct Writer {
     /// The file the connection holds under the name `main`.
     held: HeldFile,
+    /// The databases an `ATTACH` added, from schema place 2 on.
+    attached: Vec<Attached>,
+    /// The function `ATTACH` answers a file name with, and nothing where
+    /// the caller told the connection none.
+    opening: Option<Opening>,
     /// Where `random` and `randomblob` take their bytes from, which
     /// comes from SQLite's random source as well.
     random: crate::random::Source,
@@ -572,6 +596,8 @@ impl Writer {
                     library_version: LIBRARY_VERSION,
                 },
             },
+            attached: Vec::new(),
+            opening: None,
             random: crate::random::Source::default(),
             clock: None,
             kept: alloc::vec![None; crate::pragma::HELD.len()],
@@ -625,6 +651,8 @@ impl Writer {
                 restarting: false,
                 began: None,
             },
+            attached: Vec::new(),
+            opening: None,
             random: crate::random::Source::default(),
             clock: None,
             kept: alloc::vec![None; crate::pragma::HELD.len()],
@@ -760,10 +788,29 @@ impl Writer {
     /// written a frame back into it.
     #[must_use]
     pub fn written(&self) -> Vec<u8> {
-        match &self.held.origin {
-            Some(bytes) => bytes.clone(),
-            None => self.held.pages.written(&self.held.header),
-        }
+        written_image(&self.held)
+    }
+
+    /// The image of the database the connection holds under `name`, and
+    /// nothing where it holds none under that name.
+    ///
+    /// The client writes the bytes back to the file it answered the
+    /// `ATTACH` of that name with.
+    ///
+    /// Building the image costs O(n) in the pages of that database.
+    #[must_use]
+    pub fn attached_written(&self, name: &[u8]) -> Option<Vec<u8>> {
+        let held = self.attached.iter().find(|held| named_as(held, name))?;
+        Some(written_image(&held.held))
+    }
+
+    /// The names of the databases an `ATTACH` added, in the order they
+    /// were attached.
+    ///
+    /// Reading them costs O(n) in their number.
+    #[must_use]
+    pub fn attached_names(&self) -> Vec<Vec<u8>> {
+        self.attached.iter().map(|held| held.name.clone()).collect()
     }
 
     /// `ALTER TABLE ... ADD COLUMN`: the statement of the table gains
@@ -906,6 +953,123 @@ impl Writer {
         self.rename_sequence(&from, &to)?;
         self.held.header.schema_cookie = self.held.header.schema_cookie.saturating_add(1);
         Ok(())
+    }
+
+    /// `ATTACH [DATABASE] file AS name`: the image the opening function
+    /// answers for the file name becomes the database the connection
+    /// holds under that name, which is `attachFunc` of
+    /// `research/sqlite/src/attach.c:81`.
+    ///
+    /// Reading the image costs O(n) in its pages.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::TooManyAttached`] past the tenth database,
+    /// [`Error::DatabaseInUse`] for a name the connection already holds
+    /// a database under, [`Error::NoDatabaseFile`] for a file name the
+    /// opening function answers nothing for, and
+    /// [`Error::AttachEncoding`] for a file whose encoding is not the one
+    /// of `main`.
+    fn attach(
+        &mut self,
+        arena: &Arena,
+        asked: crate::ast::Attach,
+        sql: &[u8],
+    ) -> Result<(), Error> {
+        let file = self.text_of(arena, asked.file, sql)?;
+        let name = self.text_of(arena, asked.name, sql)?;
+        if self.attached.len() >= crate::db::ATTACHED {
+            return Err(Error::TooManyAttached);
+        }
+        if named_database(&name) || self.attached.iter().any(|held| named_as(held, &name)) {
+            return Err(Error::DatabaseInUse(name));
+        }
+        let held = self.opened_file(&file)?;
+        if held.header.encoding != self.held.header.encoding {
+            return Err(Error::AttachEncoding);
+        }
+        // `sqlite3BtreeGetFilename` answers no name for a database of
+        // this connection's own, which is what `PRAGMA database_list`
+        // writes for one.
+        let file = if fresh_file(&file) { Vec::new() } else { file };
+        self.attached.push(Attached { name, file, held });
+        Ok(())
+    }
+
+    /// The file an `ATTACH` names: a database of one page where the name
+    /// is `:memory:` or no bytes at all, and the image the opening
+    /// function answers otherwise.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoDatabaseFile`] where the connection was told no
+    /// opening function or the function answered nothing, and
+    /// [`Error::Image`] for an image whose header the library refuses.
+    fn opened_file(&self, file: &[u8]) -> Result<HeldFile, Error> {
+        let fresh = || {
+            let held = self.held.header;
+            let made = Writer::new(held.page_size, held.reserved, held.encoding)?;
+            Ok(made.held)
+        };
+        if fresh_file(file) {
+            return fresh();
+        }
+        let missing = || Error::NoDatabaseFile(file.to_vec());
+        let opening = self.opening.ok_or_else(missing)?;
+        let image = opening(file).ok_or_else(missing)?;
+        if image.is_empty() {
+            return fresh();
+        }
+        let header = Header::parse(&image)?;
+        let pages = Pages::opened(&image, &header)?;
+        let mut made = self.opened_file(b":memory:")?;
+        made.pages = pages;
+        made.header = header;
+        Ok(made)
+    }
+
+    /// `DETACH [DATABASE] name`: the database the connection holds under
+    /// that name goes out of the list, which is `detachFunc` of
+    /// `research/sqlite/src/attach.c:290`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::KeptDatabase`] for `main`, and [`Error::NoDatabase`] for
+    /// a name the connection holds no database under, which `temp` is
+    /// one of until the connection makes one.
+    fn detach(
+        &mut self,
+        arena: &Arena,
+        asked: crate::ast::Detach,
+        sql: &[u8],
+    ) -> Result<(), Error> {
+        let name = self.text_of(arena, asked.name, sql)?;
+        let found = self.attached.iter().position(|held| named_as(held, &name));
+        let Some(at) = found else {
+            if name.eq_ignore_ascii_case(b"main") {
+                return Err(Error::KeptDatabase(name));
+            }
+            return Err(Error::NoDatabase(name));
+        };
+        self.attached.remove(at);
+        Ok(())
+    }
+
+    /// The text one expression of a statement answers, which is what
+    /// `sqlite3_value_text` of the argument of `attachFunc` reads.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Eval`] names what the expression refused.
+    fn text_of(&self, arena: &Arena, id: crate::ast::ExprId, sql: &[u8]) -> Result<Vec<u8>, Error> {
+        // `resolveAttachExpr` of `research/sqlite/src/attach.c:35` reads
+        // a bare name as the text of that name and every other
+        // expression as an expression.
+        if let Some(name) = bare_text(arena, id, sql) {
+            return Ok(name);
+        }
+        let value = crate::eval::evaluate(arena, id, sql, self.clock)?;
+        Ok(value.text().unwrap_or_default())
     }
 
     /// `ALTER TABLE ... DROP CONSTRAINT`, and `ALTER TABLE ... ALTER
@@ -2352,6 +2516,9 @@ impl Writer {
                 .map(|value| crate::schema::dequote(value.text(sql)));
             return self.checked_keys(named.as_deref());
         }
+        if setting == crate::pragma::Setting::DatabaseList {
+            return Ok(self.listed_databases());
+        }
         if setting == crate::pragma::Setting::WalCheckpoint {
             let how = asked.value.map(|value| value.text(sql));
             return Ok(self.checkpoint(how));
@@ -2922,6 +3089,37 @@ impl Writer {
     /// `sqlite3_set_authorizer` with a null pointer.
     pub const fn asks_nothing(&mut self) {
         self.asking = None;
+    }
+
+    /// The function `ATTACH` answers a file name with.
+    ///
+    /// This crate reads no file system, so a connection that is told no
+    /// function refuses every `ATTACH` of a file name `unable to open
+    /// database: <file>`.
+    pub const fn opens(&mut self, opening: Opening) {
+        self.opening = Some(opening);
+    }
+
+    /// The databases the connection holds, each as a row of the schema
+    /// place, the name and the file name, which `PRAGMA database_list`
+    /// answers and `PragTyp_DATABASE_LIST` of
+    /// `research/sqlite/src/pragma.c:1436` writes.
+    ///
+    /// Reading them costs O(n) in their number.
+    fn listed_databases(&self) -> Vec<Vec<Value>> {
+        let row = |place: i64, name: &[u8], file: &[u8]| {
+            alloc::vec![
+                Value::Int(place),
+                Value::Text(name.to_vec()),
+                Value::Text(file.to_vec()),
+            ]
+        };
+        let mut out = alloc::vec![row(0, b"main", b"")];
+        for (at, held) in self.attached.iter().enumerate() {
+            let place = i64::try_from(at).unwrap_or(0).saturating_add(2);
+            out.push(row(place, &held.name, &held.file));
+        }
+        out
     }
 
     /// Whether this connection has a transaction open, which
@@ -3643,20 +3841,15 @@ impl Writer {
             }
             Definition::Trigger(trigger) => return self.create_trigger(arena, &trigger, sql),
             Definition::Vacuum(asked) => return self.vacuum(&asked, sql),
+            Definition::Attach(asked) => return self.attach(arena, asked, sql),
+            Definition::Detach(asked) => return self.detach(arena, asked, sql),
             Definition::Table(table) => {
                 if let TableBody::Select(select) = table.body {
                     return self.create_as(arena, &table, select, sql);
                 }
                 let name = crate::schema::dequote(table.name.text(sql));
-                // A table written `WITHOUT ROWID` keeps its rows in the
-                // tree of its key, which is a tree of index pages.
-                let kind = if table.options.without_rowid {
-                    Kind::LeafIndex
-                } else {
-                    Kind::LeafTable
-                };
                 (
-                    Some(kind),
+                    Some(table_kind(table.options.without_rowid)),
                     name.clone(),
                     name,
                     table.if_not_exists,
@@ -8012,5 +8205,58 @@ const fn action_text(action: crate::ast::Action) -> &'static [u8] {
         crate::ast::Action::Cascade => b"CASCADE",
         crate::ast::Action::Restrict => b"RESTRICT",
         crate::ast::Action::NoAction | crate::ast::Action::Unspecified => b"NO ACTION",
+    }
+}
+
+/// Whether a name is one of the two the connection holds a schema place
+/// for whatever it attached, which are `main` and `temp`.
+const fn named_database(name: &[u8]) -> bool {
+    name.eq_ignore_ascii_case(b"main") || name.eq_ignore_ascii_case(b"temp")
+}
+
+/// Whether an attached database answers to `name`.
+fn named_as(held: &Attached, name: &[u8]) -> bool {
+    held.name.eq_ignore_ascii_case(name)
+}
+
+/// The image of one file a connection holds, which is the file as
+/// write-ahead logging began where no checkpoint has written a frame
+/// back into it.
+fn written_image(held: &HeldFile) -> Vec<u8> {
+    match &held.origin {
+        Some(bytes) => bytes.clone(),
+        None => held.pages.written(&held.header),
+    }
+}
+
+/// The kind of page the tree of a table begins with: an index page for a
+/// table written `WITHOUT ROWID`, which keeps its rows in the tree of its
+/// key, and a table page for every other table.
+const fn table_kind(without_rowid: bool) -> Kind {
+    if without_rowid {
+        Kind::LeafIndex
+    } else {
+        Kind::LeafTable
+    }
+}
+
+/// Whether a file name stands for a database of the connection's own
+/// rather than a file the client holds, which `:memory:` and a name of
+/// no bytes both do.
+const fn fresh_file(file: &[u8]) -> bool {
+    file.is_empty() || file.eq_ignore_ascii_case(b":memory:")
+}
+
+/// The text of a bare name, which `resolveAttachExpr` of
+/// `research/sqlite/src/attach.c:35` reads as a string and not as a
+/// column, and nothing for every other expression.
+fn bare_text(arena: &Arena, id: crate::ast::ExprId, sql: &[u8]) -> Option<Vec<u8>> {
+    match arena.node(id) {
+        Some(crate::ast::Node::Column {
+            schema: None,
+            table: None,
+            column,
+        }) => Some(crate::schema::dequote(column.text(sql))),
+        _ => None,
     }
 }

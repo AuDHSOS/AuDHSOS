@@ -874,6 +874,9 @@ Size: L.
 77. The parent a foreign key names, written again where
     `ALTER TABLE ... RENAME TO` renames that table. Built, which D-321
     records.
+78. `ATTACH` and `DETACH`, which say what databases one connection
+    holds. Read, which D-323 records; a statement that names an attached
+    database is open, which A3 of document 18 specifies.
 
 ### Done when
 

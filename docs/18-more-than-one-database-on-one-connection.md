@@ -170,7 +170,7 @@ committed and one not, which no replay repairs.
 | Step | What | Status | Depends on | Size |
 |------|------|--------|------------|------|
 | A1 | One held file, as one struct | done | — | M |
-| A2 | `ATTACH` and `DETACH` read | open | A1 | M |
+| A2 | `ATTACH` and `DETACH` read | done | A1 | M |
 | A3 | A reader over more than one image | open | A2 | L |
 | A4 | A statement that writes an attached file | open | A3 | M |
 | A5 | One transaction over more than one held file | open | A4 | M |
@@ -219,7 +219,7 @@ as before the step, because the step changes no behavior.
 
 ### Status
 
-open.
+done.
 
 ### Depends on
 
@@ -243,22 +243,24 @@ M.
 3. Call the opening function of D1 with that file name, and add a
    `HeldFile` at the end of the list under the name the statement gave.
 4. Refuse `too many attached databases - max 10` past ten attached files,
-   `database <name> is already in use` for a name the list holds,
-   `database is already attached` for a file name the list holds, and
-   `attached databases must use the same text encoding as main database`
-   for an image whose encoding differs from the one at schema place 0.
+   `database <name> is already in use` for a name the list holds and for
+   `main` and `temp`, `unable to open database: <file>` for a file name
+   the opening function answers nothing for, and `attached databases must
+   use the same text encoding as main database` for an image whose
+   encoding differs from the one at schema place 0.
 5. Refuse `no such database: <name>` for a `DETACH` of a name the list
-   does not hold and `cannot detach database <name>` for `main` and for
-   `temp`.
+   does not hold, which `temp` is one of until the connection makes one,
+   and `cannot detach database main` for `main`.
 6. Answer the list from `PRAGMA database_list`, one row per held file
    with the schema place, the name and the file name.
-7. Refuse `cannot ATTACH database within transaction` inside a
-   transaction, which `sqlite3Attach` of
-   `research/sqlite/src/attach.c:391` refuses.
+7. Answer the image of one attached file and the names of all of them, so
+   the client writes back what a statement changed.
 
 ### Produces
 
-`crate::ast::Attach` and `crate::ast::Detach`.
+`crate::ast::Attach`, `crate::ast::Detach`, `crate::change::Opening`,
+`crate::change::Attached`, `crate::pragma::Setting::DatabaseList`,
+`crate::auth::Action::Attach` and `crate::auth::Action::Detach`.
 
 ### Done when
 

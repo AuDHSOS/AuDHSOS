@@ -214,6 +214,22 @@ pub enum Error {
     Reserved(Vec<u8>),
     /// A statement that names a schema this connection does not hold.
     NoSchema(Vec<u8>),
+    /// A `DETACH` of a name the connection holds no database under.
+    NoDatabase(Vec<u8>),
+    /// A `DETACH` of `main` or of `temp`, which no statement takes away.
+    KeptDatabase(Vec<u8>),
+    /// An `ATTACH` past the tenth database of a connection, which
+    /// `SQLITE_MAX_ATTACHED` of `research/sqlite/src/sqliteLimit.h:179`
+    /// holds it to.
+    TooManyAttached,
+    /// An `ATTACH` under a name the connection already holds a database
+    /// under.
+    DatabaseInUse(Vec<u8>),
+    /// An `ATTACH` of a file name the opening function answered nothing
+    /// for.
+    NoDatabaseFile(Vec<u8>),
+    /// An `ATTACH` of a file whose encoding is not the one of `main`.
+    AttachEncoding,
     /// A `VACUUM` on a connection with a transaction open.
     VacuumInTransaction,
     /// A `PRAGMA synchronous = value` on a connection with a transaction
@@ -375,6 +391,32 @@ impl Error {
                 "{} clause should come after {} not before",
                 if *ordered { "ORDER BY" } else { "LIMIT" },
                 shown(&compound_named(*operator))
+            ),
+            _ => return None,
+        })
+    }
+
+    /// The words an `ATTACH` or a `DETACH` is refused with, which
+    /// `attachFunc` and `detachFunc` of `research/sqlite/src/attach.c`
+    /// write, or nothing where the refusal is another.
+    fn databases(&self) -> Option<alloc::string::String> {
+        let shown = |bytes: &[u8]| alloc::string::String::from_utf8_lossy(bytes).into_owned();
+        Some(match self {
+            Error::NoDatabase(name) => alloc::format!("no such database: {}", shown(name)),
+            Error::KeptDatabase(name) => {
+                alloc::format!("cannot detach database {}", shown(name))
+            }
+            Error::TooManyAttached => {
+                alloc::format!("too many attached databases - max {ATTACHED}")
+            }
+            Error::DatabaseInUse(name) => {
+                alloc::format!("database {} is already in use", shown(name))
+            }
+            Error::NoDatabaseFile(name) => {
+                alloc::format!("unable to open database: {}", shown(name))
+            }
+            Error::AttachEncoding => alloc::string::String::from(
+                "attached databases must use the same text encoding as main database",
             ),
             _ => return None,
         })
@@ -658,6 +700,7 @@ impl Error {
             .altered()
             .or_else(|| self.datatypes())
             .or_else(|| self.misused())
+            .or_else(|| self.databases())
             .or_else(|| self.compounds())
         {
             return shown;
@@ -1031,6 +1074,10 @@ struct Scope<'a> {
 /// How many views deep a statement is answered, which is what
 /// `SQLITE_MAX_VIEW_DEPTH` bounds a view that names itself by.
 const VIEW_DEPTH: u32 = 32;
+
+/// How many databases an `ATTACH` may add to one connection, which is
+/// `SQLITE_MAX_ATTACHED` of `research/sqlite/src/sqliteLimit.h:179`.
+pub const ATTACHED: usize = 10;
 
 /// How many rows a `WITH` term that reads itself may answer.
 ///
