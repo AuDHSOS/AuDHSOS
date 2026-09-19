@@ -11975,3 +11975,17 @@ fn an_arrow_reads_the_new_target_of_the_function_around_it() -> Result<(), Error
     }
     Ok(())
 }
+
+#[test]
+fn the_arguments_20_2_1_1_makes_a_function_of_go_through_7_1_17() -> Result<(), Error> {
+    // Steps 8 and 9 of 20.2.1.1 send every argument through 7.1.17, in the
+    // order the call passed them.
+    for source in [
+        "var k=[];function t(n,v){return {toString:function(){k.push(n);return v}}}var f=new Function(t('a','x'),t('b','return x*2'));''+f(21)+'|'+k.join(',')",
+        "function t(v){return {toString:function(){return v}}}''+new Function(t('return 7'))()",
+        "var r;try{new Function({toString:function(){throw new TypeError()}})}catch(e){r=e instanceof TypeError};''+r",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}

@@ -4705,8 +4705,13 @@ impl Intrinsic {
             | Self::StringFromCharCode
             | Self::StringFromCodePoint => Some(PrimitiveHint::Number),
             // 22.1.3.5 reads as many arguments as the call passed, each
-            // through 7.1.17.
-            Self::StringPrototypeConcat => Some(PrimitiveHint::String),
+            // through 7.1.17, and 20.2.1.1 steps 8 and 9 do the same with the
+            // parameters and the body they make a function of.
+            Self::StringPrototypeConcat
+            | Self::FunctionConstructor
+            | Self::GeneratorFunctionConstructor
+            | Self::AsyncFunctionConstructor
+            | Self::AsyncGeneratorFunctionConstructor => Some(PrimitiveHint::String),
             _ => None,
         }
     }
