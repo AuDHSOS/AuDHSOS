@@ -41,7 +41,7 @@ use virtio_queue as _;
 
 use audhsos_abi::layout::PAGE_SIZE;
 use audhsos_abi::{Error, Rights};
-use user_programs::client::{allocate, lookup, release, write_line};
+use user_programs::client::{allocate, lookup, register, release, write_line};
 use user_programs::mapping::{Mapping, SCRATCH};
 use user_proto::parent;
 use user_rt::{EndpointHandle, Line, MemoryHandle, ProcessHandle, Startup, Typed};
@@ -63,6 +63,13 @@ const TOO_MUCH: u64 = 1 << 42;
 /// The badge the console driver trusts, which a client that found the
 /// console under its name must not be able to mint.
 const FORGED_BADGE: u64 = 0xC0_1DE;
+
+/// How many lookups carrying a handle the name server must answer: more
+/// than the sixty-four handles its table holds.
+const CARRIED_LOOKUPS: usize = 80;
+
+/// The name this program registers once the lookups are through.
+const CHECK_NAME: &[u8] = b"checks";
 
 /// How many lines the interleaving check writes.
 ///
@@ -90,6 +97,7 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
 
     missing_name(&mut gate, names, console);
     found_endpoint_rights(&mut gate, names, console);
+    carried_handles(&mut gate, &startup, console);
     zeroed_again(&mut gate, memory, own, console);
     too_much(&mut gate, memory, console);
     interleaved(&mut gate, console);
@@ -219,6 +227,49 @@ fn found_endpoint_rights(gate: &mut Gate, names: EndpointHandle, console: Endpoi
     line.put(answer(outcome).as_bytes());
     line.put(b"\n");
     let _said = write_line(gate, console, line.as_bytes());
+}
+
+/// What a handle a lookup carried costs the name server.
+fn carried_handles(gate: &mut Gate, startup: &Startup, console: EndpointHandle) {
+    let outcome = lookups_that_carry_a_handle(gate, startup);
+    let mut line = Line::<96>::new();
+    line.put(b"[checks] lookups that carry a handle: ");
+    line.put(answer(outcome).as_bytes());
+    line.put(b"\n");
+    let _said = write_line(gate, console, line.as_bytes());
+}
+
+/// Sends [`CARRIED_LOOKUPS`] lookups with a handle in the handle area and
+/// registers a name afterwards.
+///
+/// The kernel installs every handle a message carries in the receiver, so
+/// each of these lookups takes a slot of the name server's table. A server
+/// that keeps those slots has none left to duplicate the endpoint of the
+/// registration into, and the registration is the call that says so.
+fn lookups_that_carry_a_handle(gate: &mut Gate, startup: &Startup) -> Result<(), Error> {
+    use user_proto::name::{Name, Reply, Request};
+    let names = startup.name_server.ok_or(Error::NotFound)?;
+    let own = startup.own_endpoint.ok_or(Error::NotFound)?;
+    let passenger = gate.handle_duplicate(own.handle(), Rights::SEND | Rights::TRANSFER)?;
+    for _ in 0..CARRIED_LOOKUPS {
+        let request = Request::Lookup {
+            name: Name::new(CONSOLE)?,
+        };
+        request.encode(&mut gate.writer())?;
+        let words = gate.reader().message().map_err(Error::from)?.word_count;
+        let mut buffer = gate.writer();
+        if !buffer.set_handle(0, passenger) {
+            return Err(Error::InvalidArgument);
+        }
+        buffer.set_counts(words, 1).map_err(Error::from)?;
+        gate.ipc_call(names)?;
+        match Reply::decode(gate.reader())? {
+            Reply::Found(found) => gate.handle_close(found?)?,
+            Reply::Registered(_) => return Err(Error::InvalidState),
+        }
+    }
+    gate.handle_close(passenger)?;
+    register(gate, names, CHECK_NAME, own)
 }
 
 /// Turns the answer to a call that must be refused into the answer to the

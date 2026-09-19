@@ -197,7 +197,13 @@ fn taking_back_a_name_that_is_not_there_is_refused() {
 #[test]
 fn everything_a_dead_client_registered_goes_with_it() {
     let mut registry = filled();
-    assert_eq!(registry.forget_client(1), 2);
+    let mut table = Table::default();
+    assert_eq!(registry.forget_client(&mut table, 1), 2);
+    assert_eq!(
+        table.closed,
+        vec![handle(30), handle(10)],
+        "the handle of every entry that went, from the back"
+    );
     assert_eq!(registry.len(), 1);
     assert_eq!(registry.lookup(&name(b"memory")).unwrap(), handle(20));
     assert_eq!(
@@ -210,8 +216,10 @@ fn everything_a_dead_client_registered_goes_with_it() {
 #[test]
 fn a_client_that_registered_nothing_leaves_nothing_behind() {
     let mut registry = filled();
-    assert_eq!(registry.forget_client(9), 0);
+    let mut table = Table::default();
+    assert_eq!(registry.forget_client(&mut table, 9), 0);
     assert_eq!(registry.len(), 3);
+    assert!(table.closed.is_empty());
 }
 
 #[test]

@@ -212,13 +212,14 @@ impl Registry {
         Ok(entry.endpoint)
     }
 
-    /// Takes out everything `owner` registered and answers with how many
-    /// names that was.
+    /// Takes out everything `owner` registered, gives the handle of every
+    /// entry it took out up, and answers with how many names that was.
     ///
     /// This is what the root task's report of a dead client leads to: the
     /// names a process left behind would otherwise stand for an endpoint
-    /// nobody answers on.
-    pub fn forget_client(&mut self, owner: u64) -> usize {
+    /// nobody answers on, and each of them holds a slot of the server's
+    /// table.
+    pub fn forget_client<H: Handles>(&mut self, handles: &mut H, owner: u64) -> usize {
         let mut gone = 0usize;
         // Walked from the back, so that removing an entry does not move one
         // that has not been looked at yet.
@@ -228,9 +229,11 @@ impl Registry {
             let held = self
                 .entries
                 .get(index)
-                .is_some_and(|entry| entry.owner == owner);
-            if held {
+                .filter(|entry| entry.owner == owner)
+                .map(|entry| entry.endpoint);
+            if let Some(endpoint) = held {
                 let _removed = self.entries.remove(index);
+                handles.close(endpoint);
                 gone = gone.wrapping_add(1);
             }
         }

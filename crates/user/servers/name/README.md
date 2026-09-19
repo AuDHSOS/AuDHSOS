@@ -18,4 +18,6 @@ the server binary implements on its gate.
 Ownership is by badge, which is the only thing about a sender the kernel
 guarantees. A name may be replaced by the client that registered it and by
 nobody else, and everything a client registered goes when the root task
-reports that the client is gone.
+reports that the client is gone. Every entry the registry stops holding —
+replaced, forgotten, or taken out with a dead client — gives its handle up,
+because the registry holds the only copy the server has.
