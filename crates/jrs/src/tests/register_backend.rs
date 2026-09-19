@@ -9428,6 +9428,31 @@ fn a_species_of_23_1_3_4_that_is_a_constructor_of_the_script() -> Result<(), Err
 }
 
 #[test]
+fn an_exec_of_the_script_answers_the_matches_of_22_2_6_11() -> Result<(), Error> {
+    // 22.2.7.1 step 2 calls an `exec` the object carries, which 22.2.6.11
+    // step 11 does once for every match before step 14 builds anything.
+    for source in [
+        "var r=/x/;r.exec=function(){return {0:'ab',index:1,length:1}};r[Symbol.replace]('zabz','[$&]')",
+        "var r=/x/g;var n=0;r.exec=function(){n++;if(n>2)return null;return {0:'a',index:n-1,length:1}};r[Symbol.replace]('aab','-')+n",
+        "var r=/x/;r.exec=function(){return {0:'b',1:'B',index:1,length:2}};r[Symbol.replace]('abc','<$1>')",
+        "var r=/x/;r.exec=function(){return {0:'b',1:'B',index:1,length:2}};r[Symbol.replace]('abc',function(m,c,p,s){return m+c+p+s})",
+        // Step 11.b takes a null as the end of the matches.
+        "var r=/x/;r.exec=function(){return null};r[Symbol.replace]('abc','-')",
+        // Step 14.i reads the named captures, which `$<name>` names.
+        "var r=/x/;r.exec=function(){return {0:'b',index:1,length:1,groups:{n:'N'}}};r[Symbol.replace]('abc','[$<n>]')",
+        "var r=/x/;r.exec=function(){return {0:'b',index:1,length:1,groups:'123'}};r[Symbol.replace]('ab','[$<length>]')",
+        "var r=/x/;r.exec=function(){return {0:'b',index:1,length:1,groups:{n:'N'}}};r[Symbol.replace]('abc',function(){return arguments.length})",
+        // What the `exec` throws leaves the clause.
+        "var r=/x/;r.exec=function(){throw 'e'};var t;try{r[Symbol.replace]('abc','-')}catch(e){t=e};''+t",
+        // Step 2.b refuses everything but an Object and null.
+        "var r=/x/;r.exec=function(){return 5};var t;try{r[Symbol.replace]('abc','-')}catch(e){t=e instanceof TypeError};''+t",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn a_replace_value_that_is_callable_runs_for_every_match() -> Result<(), Error> {
     // 22.1.3.19 step 5 and 22.2.6.11 step 14.l call the replace value with
     // the match, its captures, where it stands and the whole text, and take

@@ -290,9 +290,15 @@ const JSON_KIND_ARRAY: i32 = 1;
 /// It is the Object of 25.5.2.6.
 const JSON_KIND_OBJECT: i32 = 2;
 
-/// One match of 22.2.6.11 step 11: where it starts, where it ends and the
-/// text of every capture it holds.
-type MatchParts = (usize, usize, Vec<Option<Vec<u16>>>);
+/// One named capture of 22.2.6.11 step 14.i: the name and the text it holds.
+type NamedCapture = (Vec<u16>, Option<Vec<u16>>);
+
+/// One match of 22.2.6.11 step 11: where it starts, the text it matched and
+/// the text of every capture it holds.
+///
+/// The `exec` of the Script answers a match of its own, whose text need not
+/// be the one the position names.
+type MatchParts = (usize, Vec<u16>, Vec<Option<Vec<u16>>>, Value);
 
 /// Index of the text of 22.1.3.19 in the record its replace value waits in.
 const REPLACE_TEXT: u32 = 0;
@@ -312,8 +318,10 @@ const REPLACE_ARGUMENTS: u32 = 6;
 const REPLACE_MATCH_TEXT: u32 = 0;
 /// Index of where it starts in the text.
 const REPLACE_MATCH_POSITION: u32 = 1;
+/// Index of the named captures the match holds.
+const REPLACE_MATCH_GROUPS: u32 = 2;
 /// Index of its first capture.
-const REPLACE_MATCH_CAPTURES: u32 = 2;
+const REPLACE_MATCH_CAPTURES: u32 = 3;
 
 /// The state of one walk of 23.1.3, read out of the object that holds it.
 ///
@@ -1210,8 +1218,18 @@ const REGEXP_RECORD_CONSTRUCTOR: u32 = 8;
 const REGEXP_RECORD_SPECIES: u32 = 9;
 /// What the `@@match` of 7.2.8 answered.
 const REGEXP_RECORD_MATCHER: u32 = 10;
+/// The matches 22.2.6.11 step 11 has taken, where an `exec` of the Script
+/// answers them one at a time.
+const REGEXP_RECORD_MATCHES: u32 = 11;
 /// How many slots the record of a clause of 22.2.6 holds.
-const REGEXP_RECORD_SLOTS: usize = 11;
+const REGEXP_RECORD_SLOTS: usize = 12;
+
+/// The clause has not read `lastIndex` for the first `exec` yet.
+const REGEXP_PHASE_OPENING: i32 = 0;
+/// It has, and the matches of step 11 are still coming.
+const REGEXP_PHASE_MATCHING: i32 = 1;
+/// Every match is in hand, and steps 14 and 15 build the answer.
+const REGEXP_PHASE_MATCHED: i32 = 2;
 /// The walk of 7.4.2 has not called the `@@iterator` yet.
 const ITERATOR_WALK_STARTING: i32 = 0;
 /// It is waiting for the `@@iterator` it called.
@@ -6806,6 +6824,22 @@ impl RegisterVM {
                 self.write_construction(target, self.acc, heap)?;
             }
             return Ok(None);
+        }
+        // 22.2.6.11 step 11 calls the `exec` of the Script for every match,
+        // which the record collects one at a time.
+        if own_exec && replaces {
+            return self.match_with_an_exec_of_the_script(
+                exec,
+                &text,
+                global,
+                record,
+                state,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
         }
         if own_exec {
             return Err(VMError::Unsupported("an exec of the Script"));
@@ -18635,6 +18669,225 @@ impl RegisterVM {
         self.global_match(receiver, &pattern, &text, unicode, heap, realm)
     }
 
+    /// Step 11 of 22.2.6.11 for an `exec` the object carries: every match is
+    /// taken before step 14 builds anything, so the record collects them and
+    /// the clause runs again for each one.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a clause of 22.2.6 runs where a call does, with what a call has"
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function carries every step of 22.2.6.11 an `exec` reaches"
+    )]
+    fn match_with_an_exec_of_the_script(
+        &mut self,
+        exec: Value,
+        text: &[u16],
+        global: bool,
+        record: Value,
+        state: Root,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        if !Self::is_script_function(exec, heap) {
+            return Err(VMError::Unsupported("an exec of a native function"));
+        }
+        let receiver = promise::slot(heap, record, REGEXP_RECORD_RECEIVER);
+        let object = receiver.as_object().ok_or(VMError::TypeError)?;
+        if promise::slot(heap, record, REGEXP_RECORD_MATCHES) == VALUE_UNINITIALIZED {
+            let list = Value::from_object(realm.array(heap, 0)?);
+            promise::set_slot(heap, record, REGEXP_RECORD_MATCHES, list)?;
+        }
+        let taken = promise::slot(heap, record, REGEXP_RECORD_MATCHES);
+        let phase = promise::slot(heap, record, REGEXP_RECORD_PHASE)
+            .as_smi()
+            .unwrap_or(REGEXP_PHASE_OPENING);
+        // The `exec` of the last round answered, which step 11.b takes as the
+        // end of the matches where it is null.
+        let held = promise::slot(heap, record, REGEXP_RECORD_RESULT);
+        let mut done = phase == REGEXP_PHASE_MATCHED;
+        if held != VALUE_UNINITIALIZED && !done {
+            promise::set_slot(heap, record, REGEXP_RECORD_RESULT, VALUE_UNINITIALIZED)?;
+            if held.is_null() {
+                done = true;
+            } else {
+                let Some(found) = held.as_object() else {
+                    return Err(type_error(
+                        heap,
+                        realm,
+                        "the exec of a RegExp answered neither an Object nor null",
+                    ));
+                };
+                let at = promise::length_of(heap, taken);
+                promise::set_slot(heap, taken, at, held)?;
+                if global {
+                    // Step 11.c.iii advances over an empty match.
+                    let matched = property_name_units(
+                        Self::json_property_of(held, Self::index_name(0, heap)?, heap, realm)?,
+                        heap,
+                        realm,
+                    )?;
+                    if matched.is_empty() {
+                        let key = PropertyKey::String(heap.strings.intern("lastIndex")?);
+                        let last = heap
+                            .lookup_named(object, key)?
+                            .map_or(VALUE_UNDEFINED, |property| property.value);
+                        let index = integer_argument(last, heap, realm)?.max(0);
+                        let next = Self::advance_string_index(
+                            text,
+                            usize::try_from(index).unwrap_or(usize::MAX).min(text.len()),
+                            false,
+                        );
+                        Self::set_last_index(
+                            object,
+                            index_value(i64::try_from(next).unwrap_or(i64::MAX)),
+                            heap,
+                            realm,
+                        )?;
+                    }
+                    let _ = found;
+                } else {
+                    done = true;
+                }
+            }
+        }
+        if !done {
+            promise::set_slot(
+                heap,
+                record,
+                REGEXP_RECORD_PHASE,
+                Value::from_smi(REGEXP_PHASE_MATCHING),
+            )?;
+            promise::set_slot(
+                heap,
+                record,
+                REGEXP_RECORD_PENDING,
+                Value::from_smi(i32::try_from(REGEXP_RECORD_RESULT).unwrap_or(0)),
+            )?;
+            let held = self.allocate_string(heap, text)?;
+            let value = heap.push_root(held)?;
+            let exec_call = Call {
+                receiver,
+                func: call.arg_start,
+                arg_start: call.arg_start,
+                arg_count: 1,
+                slot: 0,
+                resume: Some(Resume::Property {
+                    intrinsic: Intrinsic::RegExpPrototypeReplace.id(),
+                    state,
+                    value,
+                    arg_start: call.arg_start,
+                    arg_count: call.arg_count,
+                }),
+                construct: None,
+                return_pc: call.return_pc,
+                caller_code_id: call.caller_code_id,
+                coerced: 0,
+            };
+            return self.enter_call_value(exec, units, active_feedback, heap, realm, exec_call);
+        }
+        promise::set_slot(
+            heap,
+            record,
+            REGEXP_RECORD_PHASE,
+            Value::from_smi(REGEXP_PHASE_MATCHED),
+        )?;
+        // Step 14 reads what each match holds, which is a property of an
+        // ordinary object the `exec` made.
+        let mut found: Vec<MatchParts> = Vec::new();
+        for held in Self::record_values(taken, heap) {
+            found.push(Self::parts_of_one_match(held, text, heap, realm)?);
+        }
+        let given = promise::slot(heap, record, REGEXP_RECORD_SECOND);
+        if Self::is_callable(given, heap) {
+            return self.begin_the_replace(
+                text,
+                given,
+                &found,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
+        let replacement = property_name_units(given, heap, realm)?;
+        self.acc = self.substitute_the_matches(&found, text, &replacement, heap, realm)?;
+        if let Some(target) = call.construct {
+            self.write_construction(target, self.acc, heap)?;
+        }
+        Ok(None)
+    }
+
+    /// The index of a capture as the String 22.2.6.11 step 14.f reads it by.
+    fn index_name(index: u32, heap: &mut GenerationalHeap) -> Result<Value, VMError> {
+        Ok(Value::from_string(heap.intern_index(index)?))
+    }
+
+    /// Steps 14.a to 14.k of 22.2.6.11 for one match: the text it matched,
+    /// where it stands and the text of every capture it holds.
+    fn parts_of_one_match(
+        held: Value,
+        text: &[u16],
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<MatchParts, VMError> {
+        let key = PropertyKey::String(heap.strings.intern("length")?);
+        let object = held.as_object().ok_or(VMError::TypeError)?;
+        let length = match heap.lookup_named(object, key)? {
+            Some(property) if property.flags.is_accessor => {
+                return Err(VMError::Unsupported("a property that is an accessor"));
+            }
+            Some(property) => integer_argument(property.value, heap, realm)?,
+            None => 0,
+        };
+        let captures = length.saturating_sub(1).max(0);
+        let name = Self::index_name(0, heap)?;
+        let matched = property_name_units(
+            Self::json_property_of(held, name, heap, realm)?,
+            heap,
+            realm,
+        )?;
+        let key = PropertyKey::String(heap.strings.intern("index")?);
+        let position = match heap.lookup_named(object, key)? {
+            Some(property) if property.flags.is_accessor => {
+                return Err(VMError::Unsupported("a property that is an accessor"));
+            }
+            Some(property) => integer_argument(property.value, heap, realm)?,
+            None => 0,
+        };
+        let position = usize::try_from(position.max(0))
+            .unwrap_or(usize::MAX)
+            .min(text.len());
+        let mut parts: Vec<Option<Vec<u16>>> = Vec::new();
+        let mut index = 1i64;
+        while index <= captures {
+            let at = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+            let name = Self::index_name(at, heap)?;
+            let value = Self::json_property_of(held, name, heap, realm)?;
+            if value.is_undefined() {
+                parts.push(None);
+            } else {
+                parts.push(Some(property_name_units(value, heap, realm)?));
+            }
+            index = index.saturating_add(1);
+        }
+        // Step 14.i reads the named captures the match holds.
+        let key = PropertyKey::String(heap.strings.intern("groups")?);
+        let groups = match heap.lookup_named(object, key)? {
+            Some(property) if property.flags.is_accessor => {
+                return Err(VMError::Unsupported("a property that is an accessor"));
+            }
+            Some(property) => property.value,
+            None => VALUE_UNDEFINED,
+        };
+        Ok((position, matched, parts, groups))
+    }
+
     /// `RegExp.prototype[@@split]` of 22.2.6.14.
     ///
     /// The splitter 22.2.6.14 constructs differs from the receiver only in
@@ -24222,7 +24475,16 @@ impl RegisterVM {
             return self.allocate_string(heap, &text);
         };
         let mut out: Vec<u16> = text.get(..position).unwrap_or_default().to_vec();
-        Self::append_substitution(&mut out, &search, &text, position, &[], &replacement);
+        Self::append_substitution(
+            &mut out,
+            &search,
+            &text,
+            position,
+            &[],
+            &[],
+            false,
+            &replacement,
+        );
         out.extend_from_slice(
             text.get(position.saturating_add(search.len())..)
                 .unwrap_or_default(),
@@ -24269,10 +24531,12 @@ impl RegisterVM {
     ) -> Result<Option<u32>, VMError> {
         let whole = self.allocate_string(heap, text)?;
         let taken = Value::from_object(realm.array(heap, 0)?);
-        for (at, (start, end, captures)) in found.iter().enumerate() {
-            let matched = self.allocate_string(heap, text.get(*start..*end).unwrap_or_default())?;
+        for (at, (start, text_of, captures, groups)) in found.iter().enumerate() {
+            let matched = self.allocate_string(heap, text_of)?;
             let position = i32::try_from(*start).map_err(|_| VMError::StringLimit)?;
-            let entry = promise::record(heap, realm, &[matched, Value::from_smi(position)])?;
+            // Step 14.l appends the named captures where the match holds any.
+            let entry =
+                promise::record(heap, realm, &[matched, Value::from_smi(position), *groups])?;
             for (slot, capture) in captures.iter().enumerate() {
                 let value = match capture {
                     Some(capture) => self.allocate_string(heap, capture)?,
@@ -24370,10 +24634,28 @@ impl RegisterVM {
             );
             let parts = Self::record_values(entry, heap);
             let mut arguments = Vec::with_capacity(parts.len().saturating_add(1));
-            arguments.push(parts.first().copied().unwrap_or(VALUE_UNDEFINED));
-            arguments.extend(parts.iter().skip(2).copied());
-            arguments.push(parts.get(1).copied().unwrap_or(VALUE_UNDEFINED));
+            arguments.push(
+                parts
+                    .get(REPLACE_MATCH_TEXT as usize)
+                    .copied()
+                    .unwrap_or(VALUE_UNDEFINED),
+            );
+            arguments.extend(parts.iter().skip(REPLACE_MATCH_CAPTURES as usize).copied());
+            arguments.push(
+                parts
+                    .get(REPLACE_MATCH_POSITION as usize)
+                    .copied()
+                    .unwrap_or(VALUE_UNDEFINED),
+            );
             arguments.push(promise::slot(heap, record, REPLACE_TEXT));
+            // Step 14.l appends the named captures where the match holds any.
+            let groups = parts
+                .get(REPLACE_MATCH_GROUPS as usize)
+                .copied()
+                .unwrap_or(VALUE_UNDEFINED);
+            if !groups.is_undefined() {
+                arguments.push(groups);
+            }
             let arg_count = u16::try_from(arguments.len()).unwrap_or(u16::MAX);
             let list = promise::record(heap, realm, &arguments)?;
             promise::set_slot(heap, record, REPLACE_ARGUMENTS, list)?;
@@ -24575,9 +24857,7 @@ impl RegisterVM {
             .filter(|_| search.len() <= text.len())
             .or_else(|| search.is_empty().then_some(0));
         let matches = match found {
-            Some(position) => {
-                Vec::from([(position, position.saturating_add(search.len()), Vec::new())])
-            }
+            Some(position) => Vec::from([(position, search, Vec::new(), VALUE_UNDEFINED)]),
             None => Vec::new(),
         };
         self.begin_the_replace(
@@ -24658,16 +24938,88 @@ impl RegisterVM {
     ) -> Result<Value, VMError> {
         let found =
             self.collect_the_matches(receiver, pattern, text, global, unicode, heap, realm)?;
+        self.substitute_the_matches(&found, text, replacement, heap, realm)
+    }
+
+    /// Steps 14 and 15 of 22.2.6.11 for a replacement that is a text: every
+    /// match takes the text 22.1.3.19.1 makes of it.
+    fn substitute_the_matches(
+        &self,
+        found: &[MatchParts],
+        text: &[u16],
+        replacement: &[u16],
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
         let mut out: Vec<u16> = Vec::new();
         let mut taken = 0usize;
-        for (start, end, captures) in &found {
-            out.extend_from_slice(text.get(taken..*start).unwrap_or_default());
-            let matched = text.get(*start..*end).unwrap_or_default().to_vec();
-            Self::append_substitution(&mut out, &matched, text, *start, captures, replacement);
-            taken = (*end).max(*start);
+        for (start, matched, captures, groups) in found {
+            let start = (*start).min(text.len());
+            // Step 14.r writes a match that stands behind what is written
+            // nowhere at all.
+            if start < taken {
+                continue;
+            }
+            out.extend_from_slice(text.get(taken..start).unwrap_or_default());
+            let named = self.named_captures_of(*groups, replacement, heap, realm)?;
+            Self::append_substitution(
+                &mut out,
+                matched,
+                text,
+                start,
+                captures,
+                &named,
+                !groups.is_undefined(),
+                replacement,
+            );
+            taken = start.saturating_add(matched.len());
         }
-        out.extend_from_slice(text.get(taken..).unwrap_or_default());
+        out.extend_from_slice(text.get(taken.min(text.len())..).unwrap_or_default());
         self.allocate_string(heap, &out)
+    }
+
+    /// Step 14.m of 22.2.6.11: the names and texts the `groups` of a match
+    /// holds, which `$<name>` of 22.1.3.19.1 reads.
+    fn named_captures_of(
+        &self,
+        groups: Value,
+        replacement: &[u16],
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Vec<NamedCapture>, VMError> {
+        if groups.is_undefined() {
+            return Ok(Vec::new());
+        }
+        let holder = Value::from_object(Self::coerce_object(groups, heap, realm)?);
+        let mut named = Vec::new();
+        let mut index = 0;
+        // 22.1.3.19.1 reads a name only where the replacement asks for it.
+        while let Some(&unit) = replacement.get(index) {
+            index = index.saturating_add(1);
+            if unit != 0x24 || replacement.get(index) != Some(&0x3C) {
+                continue;
+            }
+            index = index.saturating_add(1);
+            let Some(end) = replacement
+                .get(index..)
+                .and_then(|rest| rest.iter().position(|unit| *unit == 0x3E))
+            else {
+                break;
+            };
+            let name = replacement
+                .get(index..index.saturating_add(end))
+                .unwrap_or_default()
+                .to_vec();
+            index = index.saturating_add(end).saturating_add(1);
+            let key = self.allocate_string(heap, &name)?;
+            let value = Self::json_property_of(holder, key, heap, realm)?;
+            if value.is_undefined() {
+                named.push((name, None));
+            } else {
+                named.push((name, Some(property_name_units(value, heap, realm)?)));
+            }
+        }
+        Ok(named)
     }
 
     /// Step 11 of 22.2.6.11: every match 22.2.7.1 finds, taken before
@@ -24686,7 +25038,7 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Vec<MatchParts>, VMError> {
-        let mut matches = Vec::new();
+        let mut gathered = Vec::new();
         while let Some(found) = self.regexp_exec(receiver, pattern, text, heap, realm)? {
             let start = found.range.start.min(text.len());
             let end = found.range.end.min(text.len());
@@ -24699,7 +25051,10 @@ impl RegisterVM {
                         .map(|range| text.get(range.clone()).unwrap_or_default().to_vec())
                 })
                 .collect();
-            matches.push((start, end.max(start), captures));
+            let matched = text.get(start..end.max(start)).unwrap_or_default().to_vec();
+            // The pattern this Realm compiles carries no named capture, so
+            // step 14.i of 22.2.6.11 reads undefined off every match of it.
+            gathered.push((start, matched, captures, VALUE_UNDEFINED));
             if !global {
                 break;
             }
@@ -24719,7 +25074,7 @@ impl RegisterVM {
             }
             self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
         }
-        Ok(matches)
+        Ok(gathered)
     }
 
     /// `toLowercase` and `toUppercase` of the Unicode Default Case Conversion,
@@ -24771,12 +25126,18 @@ impl RegisterVM {
     }
 
     /// `GetSubstitution` of 22.1.3.19.1 for a replacement that is a String.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "22.1.3.19.1 reads every part of the match it substitutes"
+    )]
     fn append_substitution(
         out: &mut Vec<u16>,
         matched: &[u16],
         text: &[u16],
         position: usize,
         captures: &[Option<Vec<u16>>],
+        named: &[NamedCapture],
+        has_groups: bool,
         replacement: &[u16],
     ) {
         let tail = position.saturating_add(matched.len());
@@ -24826,6 +25187,27 @@ impl RegisterVM {
                         index = index.saturating_add(1);
                     }
                     if let Some(Some(text)) = captures.get(group.saturating_sub(1)) {
+                        out.extend_from_slice(text);
+                    }
+                }
+                // `$<name>`, which names a capture the `groups` of the match
+                // holds; a match with no `groups` writes the text as it is.
+                0x3C if has_groups => {
+                    let Some(end) = replacement
+                        .get(index..)
+                        .and_then(|rest| rest.iter().position(|unit| *unit == 0x3E))
+                    else {
+                        out.push(0x24);
+                        out.push(next);
+                        continue;
+                    };
+                    let name = replacement
+                        .get(index..index.saturating_add(end))
+                        .unwrap_or_default();
+                    index = index.saturating_add(end).saturating_add(1);
+                    if let Some((_, Some(text))) =
+                        named.iter().find(|(held, _)| held.as_slice() == name)
+                    {
                         out.extend_from_slice(text);
                     }
                 }
