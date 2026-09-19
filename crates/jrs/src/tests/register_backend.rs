@@ -9249,10 +9249,9 @@ fn the_symbol_keyed_methods_of_22_2_6_answer_what_the_string_methods_do() -> Res
             "{source}"
         );
     }
-    // 22.2.7.1 calls the `exec` of the object, and one of the Script is a call
-    // these clauses have no frame to make.
+    // 22.2.6.14 constructs the splitter with `SpeciesConstructor`, and
+    // 22.2.6.9 is not built.
     for source in [
-        "var r=/a/;r.exec=function(){return null};r[Symbol.match]('a')",
         "var r=/a/;r.constructor=function(){};r[Symbol.split]('a')",
         "RegExp.prototype[Symbol.matchAll]",
     ] {
@@ -9423,6 +9422,30 @@ fn a_species_of_23_1_3_4_that_is_a_constructor_of_the_script() -> Result<(), Err
     ] {
         let source = alloc::format!("{made}{source}");
         differential(&source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn the_match_and_the_search_of_22_2_6_read_through_22_2_7_1() -> Result<(), Error> {
+    // 22.2.6.8 and 22.2.6.12 read the object with 22.2.7.1, which calls an
+    // `exec` it carries, whichever object it is.
+    for source in [
+        "''+'abcabc'.match(/b/g)",
+        "''+'abcabc'.match(/b/)",
+        "''+'abc'.search(/c/)",
+        "''+'abc'.search(/z/)",
+        "var r={exec:function(){return null},flags:'',lastIndex:0};''+RegExp.prototype[Symbol.search].call(r,'abc')",
+        "var r={exec:function(){return {0:'x',index:2,length:1}},flags:'',lastIndex:0};''+RegExp.prototype[Symbol.search].call(r,'abc')",
+        "var n=0;var r={exec:function(){n++;if(n>2)return null;return {0:'x',index:n-1,length:1}},flags:'g',lastIndex:0};''+RegExp.prototype[Symbol.match].call(r,'abc')",
+        "var r={exec:function(){return {0:'y',index:1,length:1}},flags:'',lastIndex:0};var m=RegExp.prototype[Symbol.match].call(r,'abc');''+(m&&m[0])",
+        "var r={exec:function(){return null},flags:'g',lastIndex:0};''+RegExp.prototype[Symbol.match].call(r,'abc')",
+        // Step 4 of 22.2.6.12 tells `-0` from `+0`.
+
+        // What the `exec` throws leaves the clause.
+        "var r={exec:function(){throw 'e'},flags:'',lastIndex:0};var t;try{RegExp.prototype[Symbol.search].call(r,'abc')}catch(e){t=e};''+t",
+    ] {
+        differential(source)?;
     }
     Ok(())
 }

@@ -1241,8 +1241,10 @@ const REGEXP_RECORD_SCRATCH: u32 = 15;
 const REGEXP_RECORD_STEP: u32 = 16;
 /// How many captures the match in flight holds.
 const REGEXP_RECORD_CAPTURES: u32 = 17;
+/// The `lastIndex` step 3 of 22.2.6.12 read before the `exec`.
+const REGEXP_RECORD_LAST: u32 = 18;
 /// How many slots the record of a clause of 22.2.6 holds.
-const REGEXP_RECORD_SLOTS: usize = 18;
+const REGEXP_RECORD_SLOTS: usize = 19;
 
 /// Step 14.a reads the `length` of the match.
 const REGEXP_FIELD_LENGTH: i32 = 0;
@@ -5967,6 +5969,8 @@ impl RegisterVM {
             Intrinsic::RegExpPrototypeReplace
                 | Intrinsic::RegExpPrototypeTest
                 | Intrinsic::RegExpPrototypeSplit
+                | Intrinsic::RegExpPrototypeMatch
+                | Intrinsic::RegExpPrototypeSearch
         ) {
             let text = self.call_argument(&call, 0, heap)?;
             let second = self.call_argument(&call, 1, heap)?;
@@ -6744,6 +6748,24 @@ impl RegisterVM {
         } else {
             Vec::new()
         };
+        // 22.2.6.8 and 22.2.6.12 read the object with 22.2.7.1, whichever
+        // object it is.
+        if matches!(
+            intrinsic,
+            Intrinsic::RegExpPrototypeMatch | Intrinsic::RegExpPrototypeSearch
+        ) {
+            return self.match_or_search(
+                intrinsic,
+                &text,
+                record,
+                state,
+                &call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
         // 22.2.6.14 constructs the splitter of steps 3 to 7 before it reads
         // anything else, and walks the text with it.
         if intrinsic == Intrinsic::RegExpPrototypeSplit {
@@ -6868,6 +6890,7 @@ impl RegisterVM {
         // which the record collects one at a time.
         if own_exec && replaces {
             return self.match_with_an_exec_of_the_script(
+                intrinsic,
                 exec,
                 &text,
                 global,
@@ -18708,6 +18731,265 @@ impl RegisterVM {
         self.global_match(receiver, &pattern, &text, unicode, heap, realm)
     }
 
+    /// `RegExp.prototype[@@match]` of 22.2.6.8 and `[@@search]` of 22.2.6.12.
+    ///
+    /// Both read the object with 22.2.7.1, which calls an `exec` it carries:
+    /// the record keeps what each step read, so a getter, a setter and the
+    /// `exec` itself are frames the clause waits in.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a clause of 22.2.6 runs where a call does, with what a call has"
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function carries every step of 22.2.6.8 and 22.2.6.12"
+    )]
+    fn match_or_search(
+        &mut self,
+        intrinsic: Intrinsic,
+        text: &[u16],
+        record: Value,
+        state: Root,
+        call: &Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let receiver = promise::slot(heap, record, REGEXP_RECORD_RECEIVER);
+        let object = receiver.as_object().ok_or(VMError::TypeError)?;
+        let searches = intrinsic == Intrinsic::RegExpPrototypeSearch;
+        // Step 3 of 22.2.6.8 reads the flags, and step 3 of 22.2.6.12 the
+        // `lastIndex` it puts back.
+        let key = PropertyKey::String(heap.strings.intern(if searches {
+            "lastIndex"
+        } else {
+            "flags"
+        })?);
+        let held = match self.cached_property(
+            record,
+            if searches {
+                REGEXP_RECORD_LAST
+            } else {
+                REGEXP_RECORD_FLAGS
+            },
+            REGEXP_RECORD_RECEIVER,
+            key,
+            intrinsic,
+            state,
+            call,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )? {
+            Cached::Value(value) => value,
+            Cached::Entered(entered) => return Ok(entered),
+        };
+        let global = if searches {
+            false
+        } else {
+            property_name_units(held, heap, realm)?.contains(&u16::from(b'g'))
+        };
+        // Step 4 of 22.2.6.12 and step 6.b of 22.2.6.8 write `lastIndex`
+        // before 22.2.7.1 reads the `exec`, and each write runs once however
+        // often the clause runs.
+        let phase = promise::slot(heap, record, REGEXP_RECORD_PHASE)
+            .as_smi()
+            .unwrap_or(REGEXP_PHASE_OPENING);
+        if phase == REGEXP_PHASE_OPENING {
+            if searches {
+                // Step 4 tells `-0` from `+0`, which `ToLength` does not.
+                if !same_value(held, Value::from_smi(0), heap)? {
+                    Self::set_last_index(object, Value::from_smi(0), heap, realm)?;
+                }
+            } else if global {
+                Self::set_last_index(object, Value::from_smi(0), heap, realm)?;
+            }
+            promise::set_slot(
+                heap,
+                record,
+                REGEXP_RECORD_PHASE,
+                Value::from_smi(REGEXP_PHASE_MATCHING),
+            )?;
+        }
+        // 22.2.7.1 step 1 reads `exec` off the object, and step 2 calls it
+        // where it is callable.
+        let key = PropertyKey::String(heap.strings.intern("exec")?);
+        let exec = match self.cached_property(
+            record,
+            REGEXP_RECORD_EXEC,
+            REGEXP_RECORD_RECEIVER,
+            key,
+            intrinsic,
+            state,
+            call,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )? {
+            Cached::Value(value) => value,
+            Cached::Entered(entered) => return Ok(entered),
+        };
+        let own_exec = Self::is_callable(exec, heap)
+            && !Self::is_intrinsic(exec, Intrinsic::RegExpPrototypeExec, heap);
+        if !own_exec {
+            // Step 3 of 22.2.7.1 leaves the read for 22.2.7.2, which takes a
+            // RegExp and no other object.
+            let pattern = Self::regexp_pattern(object, heap)
+                .ok_or_else(|| type_error(heap, realm, "this value is not a RegExp"))?;
+            if searches {
+                return self
+                    .search_without_a_frame(object, &pattern, text, held, call, heap, realm);
+            }
+            if global {
+                let flags = property_name_units(held, heap, realm)?;
+                let unicode = flags.contains(&u16::from(b'u')) || flags.contains(&u16::from(b'v'));
+                self.acc = self.global_match(object, &pattern, text, unicode, heap, realm)?;
+            } else {
+                let matched = self.regexp_exec(object, &pattern, text, heap, realm)?;
+                self.acc = match matched {
+                    Some(matched) => {
+                        self.match_array(text, &matched, pattern.indices, heap, realm)?
+                    }
+                    None => VALUE_NULL,
+                };
+            }
+            if let Some(target) = call.construct {
+                self.write_construction(target, self.acc, heap)?;
+            }
+            return Ok(None);
+        }
+        if !Self::is_script_function(exec, heap) {
+            return Err(VMError::Unsupported("an exec of a native function"));
+        }
+        if let Stepped::Entered(entered) = self.collect_the_matches_of_an_exec(
+            intrinsic,
+            exec,
+            text,
+            global && !searches,
+            record,
+            state,
+            call,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )? {
+            return Ok(entered);
+        }
+        let taken = promise::slot(heap, record, REGEXP_RECORD_MATCHES);
+        let gathered = Self::record_values(taken, heap);
+        if searches {
+            // Steps 6 and 7 put the `lastIndex` back where step 3 found it,
+            // and write nothing where it stands there already.
+            let previous = promise::slot(heap, record, REGEXP_RECORD_LAST);
+            Self::restore_the_last_index(object, previous, heap, realm)?;
+            let Some(first) = gathered.first().copied() else {
+                self.acc = Value::from_smi(-1);
+                if let Some(target) = call.construct {
+                    self.write_construction(target, self.acc, heap)?;
+                }
+                return Ok(None);
+            };
+            let name = Value::from_string(heap.strings.intern("index")?);
+            self.acc = Self::json_property_of(first, name, heap, realm)?;
+            if let Some(target) = call.construct {
+                self.write_construction(target, self.acc, heap)?;
+            }
+            return Ok(None);
+        }
+        // Step 4 of 22.2.6.8 answers the one result where the flags name no
+        // `g`; step 6.f gathers the text of every match otherwise.
+        if !global {
+            self.acc = gathered.first().copied().unwrap_or(VALUE_NULL);
+            if let Some(target) = call.construct {
+                self.write_construction(target, self.acc, heap)?;
+            }
+            return Ok(None);
+        }
+        if let Stepped::Entered(entered) = self.read_the_parts_of_the_matches(
+            intrinsic,
+            record,
+            state,
+            call,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )? {
+            return Ok(entered);
+        }
+        let parts = promise::slot(heap, record, REGEXP_RECORD_PARTS);
+        let mut texts: Vec<Option<Vec<u16>>> = Vec::new();
+        for entry in Self::record_values(parts, heap) {
+            let (_, matched, _, _) = Self::parts_of_one_match(entry, text, heap);
+            texts.push(Some(matched));
+        }
+        if texts.is_empty() {
+            self.acc = VALUE_NULL;
+        } else {
+            let held: Vec<Option<&[u16]>> = texts.iter().map(|part| part.as_deref()).collect();
+            self.acc = self.split_result(&held, heap, realm)?;
+        }
+        if let Some(target) = call.construct {
+            self.write_construction(target, self.acc, heap)?;
+        }
+        Ok(None)
+    }
+
+    /// Steps 6 and 7 of 22.2.6.12: the `lastIndex` goes back where step 3
+    /// found it, and a value that stands there already is written nowhere.
+    fn restore_the_last_index(
+        object: ObjectRef,
+        previous: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let key = PropertyKey::String(heap.strings.intern("lastIndex")?);
+        let found = heap.lookup_named(object, key)?;
+        if found.is_some_and(|property| property.flags.is_accessor) {
+            return Err(VMError::Unsupported("a `lastIndex` that is an accessor"));
+        }
+        let current = found.map_or(VALUE_UNDEFINED, |property| property.value);
+        if same_value(current, previous, heap)? {
+            return Ok(());
+        }
+        Self::set_last_index(object, previous, heap, realm)
+    }
+
+    /// Steps 3 to 9 of 22.2.6.12 for the `exec` of this Realm, which answers
+    /// without a frame.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a clause of 22.2.6 runs where a call does, with what a call has"
+    )]
+    fn search_without_a_frame(
+        &mut self,
+        object: ObjectRef,
+        pattern: &crate::regexp::RegExp,
+        text: &[u16],
+        previous: Value,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let matched = self.regexp_exec(object, pattern, text, heap, realm)?;
+        Self::restore_the_last_index(object, previous, heap, realm)?;
+        self.acc = match matched {
+            Some(matched) => {
+                let start = i32::try_from(matched.range.start).map_err(|_| VMError::StringLimit)?;
+                Value::from_smi(start)
+            }
+            None => Value::from_smi(-1),
+        };
+        if let Some(target) = call.construct {
+            self.write_construction(target, self.acc, heap)?;
+        }
+        Ok(None)
+    }
+
     /// Step 11 of 22.2.6.11 for an `exec` the object carries: every match is
     /// taken before step 14 builds anything, so the record collects them and
     /// the clause runs again for each one.
@@ -18715,12 +18997,9 @@ impl RegisterVM {
         clippy::too_many_arguments,
         reason = "a clause of 22.2.6 runs where a call does, with what a call has"
     )]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one function carries every step of 22.2.6.11 an `exec` reaches"
-    )]
     fn match_with_an_exec_of_the_script(
         &mut self,
+        intrinsic: Intrinsic,
         exec: Value,
         text: &[u16],
         global: bool,
@@ -18732,112 +19011,25 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Option<u32>, VMError> {
-        if !Self::is_script_function(exec, heap) {
-            return Err(VMError::Unsupported("an exec of a native function"));
-        }
-        let receiver = promise::slot(heap, record, REGEXP_RECORD_RECEIVER);
-        let object = receiver.as_object().ok_or(VMError::TypeError)?;
-        if promise::slot(heap, record, REGEXP_RECORD_MATCHES) == VALUE_UNINITIALIZED {
-            let list = Value::from_object(realm.array(heap, 0)?);
-            promise::set_slot(heap, record, REGEXP_RECORD_MATCHES, list)?;
-        }
-        let taken = promise::slot(heap, record, REGEXP_RECORD_MATCHES);
-        let phase = promise::slot(heap, record, REGEXP_RECORD_PHASE)
-            .as_smi()
-            .unwrap_or(REGEXP_PHASE_OPENING);
-        // The `exec` of the last round answered, which step 11.b takes as the
-        // end of the matches where it is null.
-        let held = promise::slot(heap, record, REGEXP_RECORD_RESULT);
-        let mut done = phase == REGEXP_PHASE_MATCHED;
-        if held != VALUE_UNINITIALIZED && !done {
-            promise::set_slot(heap, record, REGEXP_RECORD_RESULT, VALUE_UNINITIALIZED)?;
-            if held.is_null() {
-                done = true;
-            } else {
-                let Some(found) = held.as_object() else {
-                    return Err(type_error(
-                        heap,
-                        realm,
-                        "the exec of a RegExp answered neither an Object nor null",
-                    ));
-                };
-                let at = promise::length_of(heap, taken);
-                promise::set_slot(heap, taken, at, held)?;
-                if global {
-                    // Step 11.c.iii advances over an empty match.
-                    let matched = property_name_units(
-                        Self::json_property_of(held, Self::index_name(0, heap)?, heap, realm)?,
-                        heap,
-                        realm,
-                    )?;
-                    if matched.is_empty() {
-                        let key = PropertyKey::String(heap.strings.intern("lastIndex")?);
-                        let last = heap
-                            .lookup_named(object, key)?
-                            .map_or(VALUE_UNDEFINED, |property| property.value);
-                        let index = integer_argument(last, heap, realm)?.max(0);
-                        let next = Self::advance_string_index(
-                            text,
-                            usize::try_from(index).unwrap_or(usize::MAX).min(text.len()),
-                            false,
-                        );
-                        Self::set_last_index(
-                            object,
-                            index_value(i64::try_from(next).unwrap_or(i64::MAX)),
-                            heap,
-                            realm,
-                        )?;
-                    }
-                    let _ = found;
-                } else {
-                    done = true;
-                }
-            }
-        }
-        if !done {
-            promise::set_slot(
-                heap,
-                record,
-                REGEXP_RECORD_PHASE,
-                Value::from_smi(REGEXP_PHASE_MATCHING),
-            )?;
-            promise::set_slot(
-                heap,
-                record,
-                REGEXP_RECORD_PENDING,
-                Value::from_smi(i32::try_from(REGEXP_RECORD_RESULT).unwrap_or(0)),
-            )?;
-            let held = self.allocate_string(heap, text)?;
-            let value = heap.push_root(held)?;
-            let exec_call = Call {
-                receiver,
-                func: call.arg_start,
-                arg_start: call.arg_start,
-                arg_count: 1,
-                slot: 0,
-                resume: Some(Resume::Property {
-                    intrinsic: Intrinsic::RegExpPrototypeReplace.id(),
-                    state,
-                    value,
-                    arg_start: call.arg_start,
-                    arg_count: call.arg_count,
-                }),
-                construct: None,
-                return_pc: call.return_pc,
-                caller_code_id: call.caller_code_id,
-                coerced: 0,
-            };
-            return self.enter_call_value(exec, units, active_feedback, heap, realm, exec_call);
-        }
-        promise::set_slot(
-            heap,
+        if let Stepped::Entered(entered) = self.collect_the_matches_of_an_exec(
+            intrinsic,
+            exec,
+            text,
+            global,
             record,
-            REGEXP_RECORD_PHASE,
-            Value::from_smi(REGEXP_PHASE_MATCHED),
-        )?;
+            state,
+            &call,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )? {
+            return Ok(entered);
+        }
         // Step 14 reads what each match holds, which a getter of the Script
         // answers and 7.1.1 converts: both are frames the clause waits in.
         if let Stepped::Entered(entered) = self.read_the_parts_of_the_matches(
+            intrinsic,
             record,
             state,
             &call,
@@ -18877,6 +19069,133 @@ impl RegisterVM {
     /// The index of a capture as the String 22.2.6.11 step 14.f reads it by.
     fn index_name(index: u32, heap: &mut GenerationalHeap) -> Result<Value, VMError> {
         Ok(Value::from_string(heap.intern_index(index)?))
+    }
+
+    /// Step 11 of 22.2.6.11 and step 6 of 22.2.6.8: the `exec` of the Script
+    /// answers one match per call, which the record collects.
+    ///
+    /// Answers the frame it left for, and nothing once the `exec` answered
+    /// null or the clause wanted one match alone.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a clause of 22.2.6 runs where a call does, with what a call has"
+    )]
+    fn collect_the_matches_of_an_exec(
+        &mut self,
+        intrinsic: Intrinsic,
+        exec: Value,
+        text: &[u16],
+        global: bool,
+        record: Value,
+        state: Root,
+        call: &Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Stepped, VMError> {
+        let receiver = promise::slot(heap, record, REGEXP_RECORD_RECEIVER);
+        let object = receiver.as_object().ok_or(VMError::TypeError)?;
+        if promise::slot(heap, record, REGEXP_RECORD_MATCHES) == VALUE_UNINITIALIZED {
+            let list = Value::from_object(realm.array(heap, 0)?);
+            promise::set_slot(heap, record, REGEXP_RECORD_MATCHES, list)?;
+        }
+        let taken = promise::slot(heap, record, REGEXP_RECORD_MATCHES);
+        let phase = promise::slot(heap, record, REGEXP_RECORD_PHASE)
+            .as_smi()
+            .unwrap_or(REGEXP_PHASE_OPENING);
+        // The `exec` of the last round answered, which step 11.b takes as the
+        // end of the matches where it is null.
+        let held = promise::slot(heap, record, REGEXP_RECORD_RESULT);
+        let mut done = phase == REGEXP_PHASE_MATCHED;
+        if held != VALUE_UNINITIALIZED && !done {
+            promise::set_slot(heap, record, REGEXP_RECORD_RESULT, VALUE_UNINITIALIZED)?;
+            if held.is_null() {
+                done = true;
+            } else if held.as_object().is_none() {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "the exec of a RegExp answered neither an Object nor null",
+                ));
+            } else {
+                let at = promise::length_of(heap, taken);
+                promise::set_slot(heap, taken, at, held)?;
+                if global {
+                    // Step 11.c.iii advances over an empty match.
+                    let matched = property_name_units(
+                        Self::json_property_of(held, Self::index_name(0, heap)?, heap, realm)?,
+                        heap,
+                        realm,
+                    )?;
+                    if matched.is_empty() {
+                        let key = PropertyKey::String(heap.strings.intern("lastIndex")?);
+                        let found = heap.lookup_named(object, key)?;
+                        if found.is_some_and(|property| property.flags.is_accessor) {
+                            return Err(VMError::Unsupported("a `lastIndex` that is an accessor"));
+                        }
+                        let last = found.map_or(VALUE_UNDEFINED, |property| property.value);
+                        let index = integer_argument(last, heap, realm)?.max(0);
+                        let next = Self::advance_string_index(
+                            text,
+                            usize::try_from(index).unwrap_or(usize::MAX).min(text.len()),
+                            false,
+                        );
+                        Self::set_last_index(
+                            object,
+                            index_value(i64::try_from(next).unwrap_or(i64::MAX)),
+                            heap,
+                            realm,
+                        )?;
+                    }
+                } else {
+                    done = true;
+                }
+            }
+        }
+        if done {
+            promise::set_slot(
+                heap,
+                record,
+                REGEXP_RECORD_PHASE,
+                Value::from_smi(REGEXP_PHASE_MATCHED),
+            )?;
+            return Ok(Stepped::Done);
+        }
+        promise::set_slot(
+            heap,
+            record,
+            REGEXP_RECORD_PHASE,
+            Value::from_smi(REGEXP_PHASE_MATCHING),
+        )?;
+        promise::set_slot(
+            heap,
+            record,
+            REGEXP_RECORD_PENDING,
+            Value::from_smi(i32::try_from(REGEXP_RECORD_RESULT).unwrap_or(0)),
+        )?;
+        let given = self.allocate_string(heap, text)?;
+        let value = heap.push_root(given)?;
+        let exec_call = Call {
+            receiver,
+            func: call.arg_start,
+            arg_start: call.arg_start,
+            arg_count: 1,
+            slot: 0,
+            resume: Some(Resume::Property {
+                intrinsic: intrinsic.id(),
+                state,
+                value,
+                arg_start: call.arg_start,
+                arg_count: call.arg_count,
+            }),
+            construct: None,
+            return_pc: call.return_pc,
+            caller_code_id: call.caller_code_id,
+            coerced: 0,
+        };
+        self.enter_call_value(exec, units, active_feedback, heap, realm, exec_call)
+            .map(Stepped::Entered)
     }
 
     /// Steps 14.a to 14.k of 22.2.6.11 for one match, out of the record the
@@ -18933,6 +19252,7 @@ impl RegisterVM {
     )]
     fn read_the_parts_of_the_matches(
         &mut self,
+        intrinsic: Intrinsic,
         record: Value,
         state: Root,
         call: &Call,
@@ -19036,7 +19356,7 @@ impl RegisterVM {
                         Value::from_smi(i32::try_from(REGEXP_RECORD_SCRATCH).unwrap_or(0)),
                     )?;
                     self.accessor_resume = Some(Resume::Property {
-                        intrinsic: Intrinsic::RegExpPrototypeReplace.id(),
+                        intrinsic: intrinsic.id(),
                         state,
                         value: state,
                         arg_start: call.arg_start,
@@ -19077,6 +19397,7 @@ impl RegisterVM {
                 && value.is_object()
             {
                 if let Stepped::Entered(entered) = self.convert_the_cached(
+                    intrinsic,
                     record,
                     state,
                     value,
@@ -19168,6 +19489,7 @@ impl RegisterVM {
     )]
     fn convert_the_cached(
         &mut self,
+        intrinsic: Intrinsic,
         record: Value,
         state: Root,
         value: Value,
@@ -19233,7 +19555,7 @@ impl RegisterVM {
             arg_count: 0,
             slot: 0,
             resume: Some(Resume::Property {
-                intrinsic: Intrinsic::RegExpPrototypeReplace.id(),
+                intrinsic: intrinsic.id(),
                 state,
                 value: state,
                 arg_start: call.arg_start,
@@ -25789,11 +26111,13 @@ impl RegisterVM {
     ) -> Result<(), VMError> {
         let key = PropertyKey::String(heap.strings.intern("lastIndex")?);
         // 7.3.4 asks 10.1.9.1 to write it and throws where that refuses,
-        // which an own `lastIndex` that is not writable does.
-        let writable = heap
-            .own_named_flags(receiver, key)?
-            .is_none_or(|flags| flags.writable && !flags.is_accessor);
-        if !writable {
+        // which an own `lastIndex` that is not writable does; a setter of the
+        // Script is a call this clause has no frame to make.
+        let flags = heap.own_named_flags(receiver, key)?;
+        if flags.is_some_and(|flags| flags.is_accessor) {
+            return Err(VMError::Unsupported("a `lastIndex` that is an accessor"));
+        }
+        if flags.is_some_and(|flags| !flags.writable) {
             return Err(type_error(heap, realm, "lastIndex is not writable"));
         }
         heap.define_own_named(
