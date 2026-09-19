@@ -116,6 +116,8 @@ struct Machine {
     schedule: Option<Schedule>,
     /// The private value of the key exchange.
     private_key: [u8; 32],
+    /// The identifier the `ClientHello` sent, which the server echoes.
+    session_id: [u8; 32],
     /// Protection for what this client sends during the handshake.
     client_handshake: Option<RecordProtection>,
     /// Protection for what the server sends during the handshake.
@@ -209,6 +211,7 @@ impl<'a> Connection<'a> {
                 suite: None,
                 schedule: None,
                 private_key,
+                session_id,
                 client_handshake: None,
                 server_handshake: None,
                 client_application: None,
@@ -538,10 +541,15 @@ impl Connection<'_> {
                     (ContentType::ChangeCipherSpec, &[][..])
                 }
                 (ContentType::ApplicationData, Some(keys)) => keys.open(&header_copy, body)?,
-                (ContentType::ApplicationData, None) => {
+                // RFC 8446 sections 4.3, 4.4 and 6: before the
+                // `ServerHello` no keys exist, so a protected record is
+                // not the server's; after it the server protects every
+                // handshake message and every alert, so an unprotected
+                // one is not the server's either.
+                (ContentType::ApplicationData, None) | (_, Some(_)) => {
                     return Err(TlsError::UnexpectedMessage);
                 }
-                (kind, _) => (kind, &body[..]),
+                (kind, None) => (kind, &body[..]),
             };
 
             match kind {
@@ -699,7 +707,7 @@ impl Machine {
     ) -> Result<(), TlsError> {
         match (self.state, kind) {
             (State::WaitServerHello, HandshakeType::ServerHello) => {
-                self.take_server_hello(body, whole)
+                self.take_server_hello(config, body, whole)
             }
             (State::WaitEncryptedExtensions, HandshakeType::EncryptedExtensions) => {
                 let extensions = EncryptedExtensions::parse(body)?;
@@ -768,7 +776,12 @@ const MAX_CHAIN: usize = 8;
 impl Machine {
     /// The server's answer: the suite, the shared value, and the keys that
     /// follow from them.
-    fn take_server_hello(&mut self, body: &[u8], whole: &[u8]) -> Result<(), TlsError> {
+    fn take_server_hello(
+        &mut self,
+        config: &ClientConfig<'_>,
+        body: &[u8],
+        whole: &[u8],
+    ) -> Result<(), TlsError> {
         let hello = ServerHello::parse(body)?;
         if hello.is_downgrade() {
             // The server put the sentinel of an older version in its
@@ -779,6 +792,16 @@ impl Machine {
             // This client offers one group, so a retry can only ask for a
             // group it already sent or one it did not offer, and RFC 8446
             // forbids both.
+            return Err(TlsError::IllegalParameter);
+        }
+        if !config.suites.contains(&hello.suite) {
+            // RFC 8446 section 4.1.3: the suite is one of those the
+            // `ClientHello` offered.
+            return Err(TlsError::IllegalParameter);
+        }
+        if hello.session_id != self.session_id.as_slice() {
+            // RFC 8446 section 4.1.3: `legacy_session_id_echo` is the
+            // identifier the `ClientHello` carried.
             return Err(TlsError::IllegalParameter);
         }
 

@@ -1479,11 +1479,22 @@ fn a_hello_that_retries_or_offers_an_older_version_is_refused() {
         )
         .expect("the buffers are big enough");
 
+        // The identifier the client sent, so that the check on the echo
+        // is not what refuses this hello.
         let mut wire = vec![0u8; 4096];
-        client.write_tls(&mut wire).expect("room");
+        let written = client.write_tls(&mut wire).expect("room");
+        let first = wire.get(..written).unwrap_or(&[]).to_vec();
+        let (_, _, hello_len) = record::read(&first)
+            .expect("well formed")
+            .expect("complete");
+        let session_id = session_id_of(first.get(..hello_len).unwrap_or(&[]));
 
         let mut flight = Vec::new();
-        push_plain(&mut flight, ContentType::Handshake, &hello_with(random));
+        push_plain(
+            &mut flight,
+            ContentType::Handshake,
+            &hello_parts(random, &session_id, SUITE),
+        );
         client.read_tls(&flight).expect("room");
         assert_eq!(client.poll(), Err(expected), "{name}");
     }
@@ -1502,8 +1513,9 @@ fn downgrade_random() -> [u8; 32] {
     random
 }
 
-/// A `ServerHello` with the given random, otherwise well formed.
-fn hello_with(random: [u8; 32]) -> Vec<u8> {
+/// A `ServerHello` carrying the given random, session identifier and
+/// suite, otherwise well formed.
+fn hello_parts(random: [u8; 32], session_id: &[u8], suite: CipherSuite) -> Vec<u8> {
     let public = x25519::base_point(&SERVER_EPHEMERAL);
     let mut buffer = [0u8; 256];
     let mut writer = Writer::new(&mut buffer);
@@ -1514,8 +1526,8 @@ fn hello_with(random: [u8; 32]) -> Vec<u8> {
         .vector24(|body| {
             body.u16(0x0303)?;
             body.bytes(&random)?;
-            body.vector8(|id| id.bytes(&[]))?;
-            body.u16(SUITE.code())?;
+            body.vector8(|id| id.bytes(session_id))?;
+            body.u16(suite.code())?;
             body.u8(0)?;
             body.vector16(|extensions| {
                 extensions.u16(43)?;
@@ -1762,4 +1774,162 @@ fn property_any_bytes_from_the_transport_end_in_an_error_or_a_state() {
         }
         Ok(())
     });
+}
+
+/// The session identifier the client put in its `ClientHello`.
+fn session_id_of(hello_record: &[u8]) -> Vec<u8> {
+    let (_, body, _) = record::read(hello_record)
+        .expect("well formed")
+        .expect("complete");
+    let (_, hello, _) = read_message(body).expect("well formed").expect("complete");
+    let mut reader = Reader::new(hello);
+    let _version = reader.u16().expect("a version");
+    let _random = reader.take(32).expect("a random");
+    reader.vector8().expect("a session identifier").to_vec()
+}
+
+#[test]
+fn a_plaintext_record_after_the_server_hello_is_refused() {
+    // RFC 8446 sections 4.3, 4.4 and 6: the server protects every
+    // handshake message after its `ServerHello` and every alert. An
+    // unprotected one is injected by a party that holds no key, and
+    // before this check a seven byte `close_notify` ended the connection
+    // with `Event::PeerClosed` and no error.
+    let root = root();
+    let anchors = trusted(&root);
+    let config = ClientConfig::new(NAME, TrustAnchors::new(&anchors), now());
+
+    for (name, kind, body) in [
+        ("a closing alert", ContentType::Alert, vec![0x01, 0x00]),
+        (
+            "an EncryptedExtensions",
+            ContentType::Handshake,
+            encrypted_extensions(),
+        ),
+    ] {
+        let mut fixture = Fixture::new();
+        let script: Vec<u8> = (0u8..=255).collect();
+        let mut rng = ScriptedRng::new(&script);
+        let mut client = Connection::new(
+            &config,
+            &mut rng,
+            Buffers {
+                incoming: &mut fixture.incoming,
+                outgoing: &mut fixture.outgoing,
+                handshake: &mut fixture.handshake,
+            },
+        )
+        .expect("the buffers are big enough");
+
+        let mut wire = vec![0u8; 4096];
+        let written = client.write_tls(&mut wire).expect("room");
+        let first = wire.get(..written).unwrap_or(&[]).to_vec();
+        let (_, _, hello_len) = record::read(&first)
+            .expect("well formed")
+            .expect("complete");
+
+        // Only the server's first record, which is the `ServerHello` in
+        // the clear; the handshake keys exist once it is read.
+        let mut flight = Vec::new();
+        let _server = Server::answer(first.get(..hello_len).unwrap_or(&[]), &mut flight);
+        let (_, _, hello_record) = record::read(&flight)
+            .expect("well formed")
+            .expect("complete");
+        client
+            .read_tls(flight.get(..hello_record).unwrap_or(&[]))
+            .expect("room");
+        assert_eq!(
+            client.poll(),
+            Ok(Event::WantsRead),
+            "{name}: the hello alone leaves the handshake open"
+        );
+
+        let mut injected = Vec::new();
+        push_plain(&mut injected, kind, &body);
+        client.read_tls(&injected).expect("room");
+        assert_eq!(client.poll(), Err(TlsError::UnexpectedMessage), "{name}");
+    }
+}
+
+#[test]
+fn a_suite_the_caller_did_not_offer_is_refused() {
+    // RFC 8446 section 4.1.3: the client aborts with `illegal_parameter`
+    // when the server names a suite the `ClientHello` did not carry.
+    let root = root();
+    let anchors = trusted(&root);
+    let mut config = ClientConfig::new(NAME, TrustAnchors::new(&anchors), now());
+    config.suites = &[CipherSuite::ChaCha20Poly1305Sha256];
+
+    let mut fixture = Fixture::new();
+    let script: Vec<u8> = (0u8..=255).collect();
+    let mut rng = ScriptedRng::new(&script);
+    let mut client = Connection::new(
+        &config,
+        &mut rng,
+        Buffers {
+            incoming: &mut fixture.incoming,
+            outgoing: &mut fixture.outgoing,
+            handshake: &mut fixture.handshake,
+        },
+    )
+    .expect("the buffers are big enough");
+
+    let mut wire = vec![0u8; 4096];
+    let written = client.write_tls(&mut wire).expect("room");
+    let first = wire.get(..written).unwrap_or(&[]).to_vec();
+    let (_, _, hello_len) = record::read(&first)
+        .expect("well formed")
+        .expect("complete");
+    let session_id = session_id_of(first.get(..hello_len).unwrap_or(&[]));
+
+    // `SUITE` is `TLS_AES_128_GCM_SHA256`, which this caller left out.
+    let mut flight = Vec::new();
+    push_plain(
+        &mut flight,
+        ContentType::Handshake,
+        &hello_parts([0x44; 32], &session_id, SUITE),
+    );
+    client.read_tls(&flight).expect("room");
+    assert_eq!(client.poll(), Err(TlsError::IllegalParameter));
+}
+
+#[test]
+fn a_session_identifier_other_than_the_one_sent_is_refused() {
+    // RFC 8446 section 4.1.3: `legacy_session_id_echo` is the identifier
+    // the `ClientHello` carried, and any other value ends the handshake.
+    let root = root();
+    let anchors = trusted(&root);
+    let config = ClientConfig::new(NAME, TrustAnchors::new(&anchors), now());
+
+    for (name, echo) in [
+        ("an empty echo", Vec::new()),
+        ("another identifier", vec![0x5a; 32]),
+        ("a shorter one", vec![0x5a; 16]),
+    ] {
+        let mut fixture = Fixture::new();
+        let script: Vec<u8> = (0u8..=255).collect();
+        let mut rng = ScriptedRng::new(&script);
+        let mut client = Connection::new(
+            &config,
+            &mut rng,
+            Buffers {
+                incoming: &mut fixture.incoming,
+                outgoing: &mut fixture.outgoing,
+                handshake: &mut fixture.handshake,
+            },
+        )
+        .expect("the buffers are big enough");
+
+        let mut wire = vec![0u8; 4096];
+        client.write_tls(&mut wire).expect("room");
+
+        let mut flight = Vec::new();
+        push_plain(
+            &mut flight,
+            ContentType::Handshake,
+            &hello_parts([0x44; 32], &echo, SUITE),
+        );
+        client.read_tls(&flight).expect("room");
+        assert_eq!(client.poll(), Err(TlsError::IllegalParameter), "{name}");
+    }
 }

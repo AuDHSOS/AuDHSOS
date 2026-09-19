@@ -477,7 +477,10 @@ Modules:
   `WaitEncryptedExtensions`, `WaitCertificate`, `WaitCertificateVerify`,
   `WaitFinished`, `Connected`, `Closed`. It checks the downgrade sentinel
   in `ServerHello.random`, refuses a negotiated version other than 1.3,
-  verifies `CertificateVerify` over the context string
+  refuses a suite the caller did not offer and a session identifier other
+  than the one it sent (RFC 8446 section 4.1.3), refuses an unprotected
+  handshake message or alert once the handshake keys exist (sections 4.3,
+  4.4 and 6), verifies `CertificateVerify` over the context string
   `"TLS 1.3, server CertificateVerify"`, and validates the chain before
   sending its own `Finished`. An error is remembered, so every later call
   returns the same one rather than a new one.
