@@ -4995,6 +4995,15 @@ impl Intrinsic {
                 | Self::NumberConstructor
                 | Self::BooleanConstructor
                 | Self::PromiseConstructor
+                // 24.1.1.1, 24.2.1.1, 24.3.1.1 and 24.4.1.1 make their object
+                // with 10.1.13 too.
+                | Self::MapConstructor
+                | Self::SetConstructor
+                | Self::WeakMapConstructor
+                | Self::WeakSetConstructor
+                | Self::DateConstructor
+                | Self::DataViewConstructor
+                | Self::IteratorConstructor
         )
     }
 

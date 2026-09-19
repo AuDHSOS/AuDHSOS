@@ -11837,3 +11837,32 @@ fn a_write_through_a_super_reference_lands_on_the_this_of_the_call() -> Result<(
     assert_eq!(realm.evaluate(source)?, Value::string("sloppy"), "{source}");
     Ok(())
 }
+
+#[test]
+fn a_super_call_reaches_a_constructor_of_the_realm_written_in_rust() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // 10.1.13 makes the object of a constructor of this Realm from the
+    // `newTarget` of the call, so a derived class takes its own Prototype.
+    for (source, answer) in [
+        (
+            "(function(){class M extends WeakMap{constructor(){super();this.tag='m'}}var m=new M();var k={};m.set(k,1);return m.tag+'|'+m.get(k)+'|'+(m instanceof WeakMap)+'|'+(Object.getPrototypeOf(m)===M.prototype)})()",
+            "m|1|true|true",
+        ),
+        (
+            "(function(){class S extends Set{constructor(a){super(a);this.tag='s'}}var s=new S([1,2]);return s.tag+'|'+s.size+'|'+(s instanceof Set)+'|'+(Object.getPrototypeOf(s)===S.prototype)})()",
+            "s|2|true|true",
+        ),
+        (
+            "(function(){class P extends Map{constructor(){super()}}var p=new P();p.set('a',2);return ''+p.get('a')+'|'+(Object.getPrototypeOf(p)===P.prototype)})()",
+            "2|true",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    // The stack backend carries `WeakMap`, which answers as the engine does.
+    differential(
+        "(function(){class M extends WeakMap{constructor(){super();this.tag='m'}}var m=new M();var k={};m.set(k,1);return m.tag+'|'+m.get(k)+'|'+(m instanceof WeakMap)})()",
+    )?;
+    Ok(())
+}
