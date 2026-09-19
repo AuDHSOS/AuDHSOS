@@ -12051,3 +12051,43 @@ fn step_3_of_20_1_2_24_reads_every_property_through_its_getter() -> Result<(), E
     }
     Ok(())
 }
+
+#[test]
+fn the_get_of_10_5_8_answers_out_of_the_handler() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    // The stack backend has no Proxy of 10.5 at all, so only the engine
+    // answers here.
+    for (source, answer) in [
+        (
+            "(function(){var k=[];var t={a:1,b:2};var p=new Proxy(t,{get(target,key){k.push(key);return key==='a'?9:target[key]}});return ''+p.a+'|'+p.b+'|'+k.join(',')})()",
+            "9|2|a,b",
+        ),
+        // Step 6 forwards to the target where the handler carries no trap.
+        (
+            "(function(){var p=new Proxy({a:1,b:2},{});return ''+p.a+'|'+p.b})()",
+            "1|2",
+        ),
+        (
+            "(function(){var p=new Proxy({a:1},{get(t,k){return 9}});var k='a';return ''+p[k]})()",
+            "9",
+        ),
+        // Step 9 binds the trap to a value the target cannot change.
+        (
+            "(function(){var f={};Object.defineProperty(f,'f',{value:5,writable:false,configurable:false});var b=new Proxy(f,{get(){return 6}});var r;try{b.f}catch(e){r=e instanceof TypeError};return ''+r})()",
+            "true",
+        ),
+        (
+            "(function(){var f={};Object.defineProperty(f,'f',{value:5,writable:false,configurable:false});return ''+new Proxy(f,{get(){return 5}}).f})()",
+            "5",
+        ),
+        // A trap that throws leaves the read.
+        (
+            "(function(){var p=new Proxy({a:1},{get(){throw new TypeError()}});var r;try{p.a}catch(e){r=e instanceof TypeError};return ''+r})()",
+            "true",
+        ),
+    ] {
+        assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
+    }
+    Ok(())
+}

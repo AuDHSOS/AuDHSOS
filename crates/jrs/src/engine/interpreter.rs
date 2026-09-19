@@ -785,6 +785,15 @@ pub enum Resume {
         /// the keys it still has to copy and the one it is at.
         state: Root,
     },
+    /// 10.5.8 or 10.5.9 called the trap of the handler, and the answer takes
+    /// the invariant check the target owes it.
+    ProxyTrap {
+        /// Root holding the record: the target, the key, the value a write
+        /// carries and whether the write is strict.
+        state: Root,
+        /// Root holding the List of arguments the trap reads.
+        arguments: Root,
+    },
     /// 23.1.3.30.1 called the comparator of a sort.
     ///
     /// The clause has no frame of its own, so the merge waits in a record of
@@ -1096,6 +1105,11 @@ const COPY_KEYS: u32 = 2;
 const COPY_POSITION: u32 = 3;
 /// The key a getter of the Script is answering for.
 const COPY_PENDING: u32 = 4;
+
+/// The `[[ProxyTarget]]` of 10.5, in the record of a trap in flight.
+const PROXY_TARGET: u32 = 0;
+/// The key the trap was called for.
+const PROXY_KEY: u32 = 1;
 /// What the walk does with each value it reads.
 const COPY_MODE: u32 = 5;
 /// 7.3.25 defines it on the target under the key it stood at.
@@ -1433,6 +1447,7 @@ impl Resume {
             Self::Spread { arguments }
             | Self::Instance { arguments }
             | Self::Job { arguments }
+            | Self::ProxyTrap { arguments, .. }
             | Self::Executor { arguments, .. } => Some(arguments),
             _ => None,
         }
@@ -10614,6 +10629,179 @@ impl RegisterVM {
             heap,
             realm,
         )
+    }
+
+    /// The `[[ProxyTarget]]` and the `[[ProxyHandler]]` of 10.5, which
+    /// 28.2.2.1 leaves null once the Proxy is revoked.
+    fn proxy_parts(
+        proxy: ObjectRef,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(Value, ObjectRef), VMError> {
+        let Some(ObjectKind::Proxy { target, handler }) =
+            heap.get_object(proxy).map(|entry| entry.kind.clone())
+        else {
+            return Err(VMError::TypeError);
+        };
+        let Some(handler) = handler.as_object() else {
+            return Err(type_error(
+                heap,
+                realm,
+                "an internal method of a revoked Proxy",
+            ));
+        };
+        Ok((target, handler))
+    }
+
+    /// `GetMethod(handler, name)` of 10.5: the trap the handler carries, and
+    /// undefined where it carries none.
+    fn proxy_trap(
+        handler: ObjectRef,
+        name: &str,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let key = PropertyKey::String(heap.strings.intern(name)?);
+        let trap = match heap.lookup_named(handler, key)? {
+            Some(found) => Self::plain_value(found)?,
+            None => VALUE_UNDEFINED,
+        };
+        if trap.is_undefined() || trap.is_null() {
+            return Ok(VALUE_UNDEFINED);
+        }
+        if !Self::is_callable(trap, heap) {
+            return Err(type_error(
+                heap,
+                realm,
+                "the trap of a Proxy is not callable",
+            ));
+        }
+        Ok(trap)
+    }
+
+    /// `[[Get]]` of 10.5.8: the `get` of the handler answers, and the target
+    /// answers where the handler carries none.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a trap opens a frame, which needs what a call needs"
+    )]
+    fn begin_the_proxy_get(
+        &mut self,
+        proxy: ObjectRef,
+        name: PropertyKey,
+        receiver: Value,
+        return_pc: usize,
+        caller_code_id: Option<u32>,
+        code: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let (target, handler) = Self::proxy_parts(proxy, heap, realm)?;
+        let trap = Self::proxy_trap(handler, "get", heap, realm)?;
+        let key = Self::key_value(name);
+        // Step 6 forwards to the target where the handler carries no trap.
+        if trap.is_undefined() {
+            let Some(object) = target.as_object() else {
+                return Err(VMError::TypeError);
+            };
+            let Some(found) = heap.lookup_named(object, name)? else {
+                // A name a Prototype this Realm has not built would own is a
+                // gap of the target, as it is for an ordinary read.
+                let units = name
+                    .as_string()
+                    .and_then(|name| heap.strings.to_utf16(Value::from_string(name)))
+                    .unwrap_or_default();
+                self.acc = Self::absent_property(target, &units, heap, realm)?;
+                return Ok(None);
+            };
+            if found.flags.is_accessor {
+                return self.enter_accessor(
+                    found.value,
+                    receiver,
+                    None,
+                    return_pc,
+                    caller_code_id,
+                    code,
+                    active_feedback,
+                    heap,
+                    realm,
+                );
+            }
+            self.acc = found.value;
+            return Ok(None);
+        }
+        let record = promise::record(heap, realm, &[target, key])?;
+        let arguments = Self::array_of(alloc::vec![target, key, receiver], heap, realm)?;
+        // The record and the List outlive the frame the trap opens, so they
+        // are roots of a scope of their own, which the answer leaves.
+        heap.enter_scope();
+        let state = heap.push_root(record)?;
+        let list = heap.push_root(arguments)?;
+        let call = Call {
+            receiver: Value::from_object(handler),
+            func: Reg(0),
+            arg_start: Reg(0),
+            arg_count: 3,
+            slot: 0,
+            resume: Some(Resume::ProxyTrap {
+                state,
+                arguments: list,
+            }),
+            construct: None,
+            return_pc,
+            caller_code_id,
+            coerced: 0,
+        };
+        let entered = self.enter_call_value(trap, code, active_feedback, heap, realm, call)?;
+        if entered.is_some() {
+            return Ok(entered);
+        }
+        // A trap written in Rust answered without a frame of its own.
+        let answered = self.acc;
+        self.finish_the_proxy_get(state, answered, heap, realm)?;
+        Ok(None)
+    }
+
+    /// Steps 9 and 10 of 10.5.8: a property the target cannot change binds
+    /// the trap to the value it holds.
+    fn finish_the_proxy_get(
+        &mut self,
+        state: Root,
+        answered: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let target = promise::slot(heap, record, PROXY_TARGET);
+        let key = promise::slot(heap, record, PROXY_KEY);
+        heap.exit_scope();
+        let name = property_key(key, heap, realm)?;
+        if let Some(object) = target.as_object()
+            && let Some(flags) = heap.own_named_flags(object, name)?
+            && !flags.configurable
+        {
+            let held = heap
+                .lookup_named(object, name)?
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let refused = if flags.is_accessor {
+                let (get, _) = Self::accessor_parts(held.value, heap)?;
+                get.is_undefined() && !answered.is_undefined()
+            } else {
+                !flags.writable && !same_value(answered, held.value, heap)?
+            };
+            if refused {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "the get of a Proxy answered a value its target refuses",
+                ));
+            }
+        }
+        self.acc = answered;
+        Ok(())
     }
 
     /// Puts one value the walk read where its mode says.
@@ -32064,6 +32252,25 @@ impl RegisterVM {
                     let Some(oref) = target.as_object() else {
                         return Err(property_base_error(target, heap, realm));
                     };
+                    // 10.5.8 answers out of the `get` of the handler, which is
+                    // a frame this instruction opens.
+                    if heap.is_a_proxy(oref) {
+                        if let Some(code_id) = self.begin_the_proxy_get(
+                            oref,
+                            name,
+                            target,
+                            pc,
+                            current_code_id,
+                            code_units,
+                            active_feedback,
+                            heap,
+                            realm,
+                        )? {
+                            current_code_id = Some(code_id);
+                            pc = self.pending_pc.take().unwrap_or(0);
+                        }
+                        return Ok(None);
+                    }
                     // 10.4.5.4: an index of an array of 23.2 is read out of the
                     // block and never off the Shape.
                     if let Some(string) = name.as_string()
@@ -32583,6 +32790,26 @@ impl RegisterVM {
                     let Some(oref) = target.as_object() else {
                         return Err(property_base_error(target, heap, realm));
                     };
+                    // 10.5.8 answers out of the `get` of the handler, which is
+                    // a frame this instruction opens.
+                    if heap.is_a_proxy(oref) {
+                        let name = property_key(key_val, heap, realm)?;
+                        if let Some(code_id) = self.begin_the_proxy_get(
+                            oref,
+                            name,
+                            target,
+                            pc,
+                            current_code_id,
+                            code_units,
+                            active_feedback,
+                            heap,
+                            realm,
+                        )? {
+                            current_code_id = Some(code_id);
+                            pc = self.pending_pc.take().unwrap_or(0);
+                        }
+                        return Ok(None);
+                    }
                     // 10.4.5.4: an index of an array of 23.2 is read out of the
                     // block and never off the Shape.
                     if let Some(element) = Self::typed_array_read(oref, key_val, heap)? {
@@ -34200,6 +34427,7 @@ impl RegisterVM {
                                     | Resume::Coercion { register, .. } => register,
                                     Resume::Iteration { .. }
                                     | Resume::Capability { .. }
+                                    | Resume::ProxyTrap { .. }
                                     | Resume::Replace { .. }
                                     | Resume::Stringify { .. }
                                     | Resume::Reviver { .. }
@@ -34271,6 +34499,13 @@ impl RegisterVM {
                                     // 7.3.25 step 4.c.ii answered, so the copy
                                     // writes that key and goes on with the
                                     // next.
+                                    // 10.5.8 step 9 checks the answer of the
+                                    // trap against the target.
+                                    Resume::ProxyTrap { state, .. } => {
+                                        let answered = self.acc;
+                                        self.finish_the_proxy_get(state, answered, heap, realm)?;
+                                        None
+                                    }
                                     Resume::Copy { state } => self.step_the_copy(
                                         state,
                                         call.return_pc,
