@@ -6326,6 +6326,9 @@ Document 16 step Q8.
 - A row that carries no key takes another where the body of a trigger
   before the row wrote the key it stood to take, and the counters of the
   connection name the key the row took.
+- The keys held at the end of the transaction are counted back to what
+  they were where a statement began wherever that statement leaves the
+  file as it found it.
 
 ### 6.6.229 What columns a pragma answers (`db-sqlite`)
 

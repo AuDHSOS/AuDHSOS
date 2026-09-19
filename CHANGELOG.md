@@ -30,6 +30,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- The tester answers `sqlite3_stmt_readonly`, `sqlite3_stmt_busy` and
+  `sqlite3_stmt_isexplain`, and `db-sqlite` counts the deferred keys of a
+  connection back where a statement leaves the file as it found it. D-338
+  records it. `capi3d.test` goes from 207 cases passing to 281, which is
+  every case of the file.
+
 - `db-sqlite` names the columns every pragma answers, answers the pragmas
   of the schema from a reader as well as a writer, and answers a pragma
   that wrote a schema in front of its name out of that database. D-337

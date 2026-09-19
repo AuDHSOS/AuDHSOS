@@ -810,19 +810,15 @@ impl Session {
                 self.authorizes(first, second);
                 Ok(Vec::new())
             }
-            // `sqlite3_prepare` and the commands that read a statement
-            // it answered.
+            // `sqlite3_prepare`, the commands that read a statement it
+            // answered, and the three that read what it is.
             "prepare" | "autocommit" | "step" | "finalize" | "reset" | "clear_binds" | "bind"
-            | "column" | "stmt" | "next_stmt" => self.of_statement(verb, args),
+            | "column" | "stmt" | "next_stmt" | "readonly" | "busy" | "isexplain" => {
+                self.of_statement(verb, args)
+            }
             // `sqlite3_errcode` and `sqlite3_extended_errcode`.
             "errcode" => Ok(alloc_one(&last_code(first))),
-            // `sqlite3_normalize SQL`, which is the same statement in
-            // lower case and answers nothing for a byte no rule accepts.
-            "normalize" => Ok(alloc_one(
-                &db_sqlite::normalize::normalized(first.as_bytes())
-                    .map(|held| String::from_utf8_lossy(&held).into_owned())
-                    .unwrap_or_default(),
-            )),
+            "normalize" => Ok(alloc_one(&normalized(first))),
             "columnmeta" => self.column_meta(first, second, args.get(2).map_or("", String::as_str)),
             "eval" => self.eval(first, second),
             "names" => self.names(first, second),
@@ -1136,6 +1132,7 @@ impl Session {
             "bind" => self.bind(first, second, third),
             "column" => self.column(first, second, third),
             "next_stmt" => Ok(self.next_statement(first, second)),
+            "readonly" | "busy" | "isexplain" => Ok(alloc_one(&self.statement_is(verb, first))),
             _ => self.stmt_text(first, second, third),
         }
     }
@@ -1198,6 +1195,25 @@ impl Session {
         let name = format!("{:08X}", self.prepared.saturating_add(0x1000_0000));
         self.statements.insert(name.clone(), prepared);
         vec![name, tail, String::new()]
+    }
+
+    /// What one statement is: whether it writes nothing, whether it has
+    /// stepped onto a row it has not left, and whether it is an
+    /// `EXPLAIN`.
+    ///
+    /// A name no statement stands under is the null pointer, which
+    /// `sqlite3_stmt_readonly` answers one for and the two beside it
+    /// nought.
+    fn statement_is(&self, verb: &str, name: &str) -> String {
+        let Some(prepared) = self.statements.get(name) else {
+            return usize::from(verb == "readonly").to_string();
+        };
+        let answered = match verb {
+            "busy" => i64::from(prepared.ran && prepared.row),
+            "isexplain" => explaining(&prepared.sql),
+            _ => i64::from(readonly(&prepared.sql)),
+        };
+        answered.to_string()
     }
 
     /// `sqlite3_next_stmt DB STMT`: the name of the statement of
@@ -2554,6 +2570,89 @@ pub(crate) fn after_name(held: &[String], after: &str) -> String {
             .map(|at| at.saturating_add(1)),
     };
     at.and_then(|at| held.get(at)).cloned().unwrap_or_default()
+}
+
+/// `sqlite3_normalize SQL`: the same statement in lower case, and
+/// nothing for a byte no rule accepts.
+fn normalized(sql: &str) -> String {
+    db_sqlite::normalize::normalized(sql.as_bytes())
+        .map(|held| String::from_utf8_lossy(&held).into_owned())
+        .unwrap_or_default()
+}
+
+/// Whether the statement writes nothing of the database file, which
+/// `sqlite3_stmt_readonly` answers.
+///
+/// A transaction statement writes nothing itself, which `BEGIN`,
+/// `COMMIT`, `ROLLBACK`, `SAVEPOINT` and `RELEASE` are, and `BEGIN
+/// IMMEDIATE` and `BEGIN EXCLUSIVE` take the file and are not. An
+/// `ATTACH` and a `DETACH` change what the connection holds and not
+/// what a file holds. A pragma that sets something writes, and one that
+/// asks does not. An `EXPLAIN` answers what the statement it names
+/// answers, which `sqlite3_stmt_readonly` reads past.
+pub(crate) fn readonly(sql: &str) -> bool {
+    let text = past_explain(sql);
+    if reads(&text) {
+        return true;
+    }
+    let words = words(&text);
+    let first = words
+        .first()
+        .map_or("", String::as_str)
+        .to_ascii_lowercase();
+    let second = words.get(1).map_or("", String::as_str).to_ascii_lowercase();
+    if first == "begin" {
+        return second != "immediate" && second != "exclusive";
+    }
+    if first == "pragma" {
+        // `PRAGMA wal_checkpoint` writes the file the log holds frames
+        // for, and every other pragma that asks writes nothing.
+        return !text.contains('=')
+            && !second.eq_ignore_ascii_case("wal_checkpoint")
+            && !words
+                .get(2)
+                .is_some_and(|word| word.eq_ignore_ascii_case("wal_checkpoint"));
+    }
+    [
+        "attach",
+        "detach",
+        "commit",
+        "end",
+        "rollback",
+        "savepoint",
+        "release",
+    ]
+    .contains(&first.as_str())
+}
+
+/// What `sqlite3_stmt_isexplain` answers: one for an `EXPLAIN`, two for
+/// an `EXPLAIN QUERY PLAN`, and nought for every other statement.
+pub(crate) fn explaining(sql: &str) -> i64 {
+    let words = words(sql);
+    if !words
+        .first()
+        .is_some_and(|word| word.eq_ignore_ascii_case("explain"))
+    {
+        return 0;
+    }
+    let planned = words
+        .get(1)
+        .is_some_and(|word| word.eq_ignore_ascii_case("query"));
+    if planned { 2 } else { 1 }
+}
+
+/// The statement an `EXPLAIN` names, and the text itself where it names
+/// none.
+pub(crate) fn past_explain(sql: &str) -> String {
+    let text = uncommented(sql);
+    let mut rest = text.trim_start();
+    for word in ["explain", "query", "plan"] {
+        let held = rest.get(..word.len()).unwrap_or("");
+        if held.eq_ignore_ascii_case(word) {
+            rest = rest.get(word.len()..).unwrap_or("").trim_start();
+        }
+    }
+    rest.to_owned()
 }
 
 /// Whether the statement is a `PRAGMA`, which names the columns it

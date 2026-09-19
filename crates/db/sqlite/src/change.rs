@@ -2432,6 +2432,13 @@ impl Writer {
             self.held.pages.mark();
         }
         let held = self.held.header;
+        // The keys held at the end of the transaction are counted back
+        // to what they were where the statement began, wherever the
+        // statement leaves the file as it found it, which
+        // `sqlite3VdbeCloseStatement` of
+        // `research/sqlite/src/vdbeaux.c:3140` writes back from
+        // `nStmtDefCons`.
+        let counted = self.deferred;
         // `PRAGMA max_page_count` holds the file to a count of pages
         // from the statement that sets it onward, so the pages are told
         // it where each statement begins.
@@ -2481,6 +2488,7 @@ impl Writer {
                         self.held.pages.undo();
                     }
                     self.held.header = held;
+                    self.deferred = counted;
                 }
                 return Err(error);
             }

@@ -259,3 +259,39 @@ fn what_a_function_answered_is_the_kind_it_named() {
     assert_eq!(named("int", "abc"), Value::Null);
     assert_eq!(valued(&["int".to_owned()]), Value::Null);
 }
+
+/// What `sqlite3_stmt_readonly` and `sqlite3_stmt_isexplain` answer for
+/// one statement, which is read off its text.
+#[test]
+fn what_a_statement_writes_and_whether_it_explains() {
+    use crate::suite::{explaining, readonly};
+    // A statement that reads writes nothing, and one that changes rows
+    // or the schema writes.
+    assert!(readonly("SELECT * FROM t1"));
+    assert!(readonly("  Explain Query Plan SELECT * FROM t1"));
+    assert!(!readonly("CREATE TABLE t1(x)"));
+    assert!(!readonly("EXPLAIN INSERT INTO t1 VALUES(5)"));
+    assert!(!readonly("UPDATE t1 SET x=x+1 WHERE x<0"));
+    assert!(!readonly("VACUUM"));
+    // A transaction statement writes nothing itself, and the two that
+    // take the file do.
+    assert!(readonly("BEGIN"));
+    assert!(readonly("COMMIT"));
+    assert!(readonly("SAVEPOINT one"));
+    assert!(readonly("RELEASE one"));
+    assert!(!readonly("BEGIN IMMEDIATE"));
+    assert!(!readonly("BEGIN EXCLUSIVE"));
+    // An `ATTACH` and a `DETACH` change what the connection holds.
+    assert!(readonly("ATTACH ':memory:' AS mem1"));
+    assert!(readonly("DETACH mem1"));
+    // A pragma that asks writes nothing, and one that sets does.
+    assert!(readonly("PRAGMA integrity_check"));
+    assert!(!readonly("PRAGMA application_id=1234"));
+    assert!(!readonly("PRAGMA journal_mode=WAL"));
+    assert!(!readonly("PRAGMA wal_checkpoint"));
+    assert!(!readonly("PRAGMA main.wal_checkpoint"));
+    // `sqlite3_stmt_isexplain` counts the two forms apart.
+    assert_eq!(explaining("SELECT * FROM sqlite_master"), 0);
+    assert_eq!(explaining(" explain SELECT * FROM sqlite_master"), 1);
+    assert_eq!(explaining("  Explain Query Plan select * FROM t1"), 2);
+}

@@ -897,7 +897,7 @@ foreach cmd {
   file_control_tempfilename file_control_external_reader
   speed_trial speed_trial_init speed_trial_summary
   tcl_variable_type
-  sqlite3_db_filename sqlite3_stmt_readonly
+  sqlite3_db_filename
   vfs_unlink_test vfs_shared_errors
   add_alignment_test_collations add_test_collate add_test_function
   add_test_utf16bin_collate autoinstall_test_functions
@@ -1125,6 +1125,17 @@ proc sqlite3_reset {stmt} {
   return SQLITE_OK
 }
 proc sqlite3_clear_bindings {stmt} { return [harness_send clear_binds $stmt] }
+
+# `sqlite3_stmt_readonly`, `sqlite3_stmt_busy` and
+# `sqlite3_stmt_isexplain`: what the statement the name stands for is,
+# which the harness reads off its text and how far it has run.
+proc sqlite3_stmt_readonly {stmt} {
+  return [lindex [harness_send readonly $stmt] 0]
+}
+proc sqlite3_stmt_busy {stmt} { return [lindex [harness_send busy $stmt] 0] }
+proc sqlite3_stmt_isexplain {stmt} {
+  return [lindex [harness_send isexplain $stmt] 0]
+}
 proc sqlite3_column_count {stmt} { return [lindex [harness_send column $stmt count 0] 0] }
 proc sqlite3_data_count {stmt} { return [lindex [harness_send column $stmt data 0] 0] }
 proc sqlite3_column_name {stmt at} { return [lindex [harness_send column $stmt name $at] 0] }
