@@ -1979,16 +1979,19 @@ impl RegisterLowerer {
     }
 
     fn capture_binding(&mut self, name: &str) -> Option<RegisterBinding> {
-        // 14.7.4.8 gives a Block binding inside a loop a copy per iteration,
-        // and one slot of the context holds one value, so the closures of two
-        // iterations would read the same binding.
-        if !self.loops.is_empty() && self.block_scoped.iter().any(|scope| scope.contains(name)) {
-            self.refuse("a Block binding of a loop, read by a nested function");
-            return None;
-        }
         let binding = *self.bindings.get(name)?;
         if matches!(binding.storage, RegisterBindingStorage::Context { .. }) {
             return Some(binding);
+        }
+        // 14.7.4.8 gives a Block binding inside an iteration statement a copy
+        // per iteration, and one slot of the context holds one value, so the
+        // closures of two iterations would read the same binding. A `switch`
+        // runs its CaseBlock once and needs no copy.
+        if self.loops.iter().any(|frame| !frame.is_switch)
+            && self.block_scoped.iter().any(|scope| scope.contains(name))
+        {
+            self.refuse("a Block binding of a loop, read by a nested function");
+            return None;
         }
         let RegisterBindingStorage::Register(register) = binding.storage else {
             return None;
@@ -7520,31 +7523,7 @@ impl RegisterLowerer {
         let mut flow = RegisterFlow::Empty;
         for statement in body {
             flow = match statement {
-                Stmt::Declare(bindings) => {
-                    if register_lexical_dead_zone_read(bindings)? {
-                        return None;
-                    }
-                    for (pattern, _, initializer) in bindings {
-                        if let Some(initializer) = initializer {
-                            self.initialize_pattern(pattern, initializer)?;
-                        } else {
-                            self.initialize(pattern.identifier()?, None)?;
-                        }
-                        // 14.2.3 leaves the block with the binding, so the
-                        // only thing the lowering needs of it is a type.
-                        let mut names = Vec::new();
-                        pattern.names(&mut names);
-                        if names.iter().any(|name| {
-                            self.bindings
-                                .get(name)
-                                .and_then(|binding| binding.value_type)
-                                .is_none()
-                        }) {
-                            return None;
-                        }
-                    }
-                    RegisterFlow::Empty
-                }
+                Stmt::Declare(bindings) => self.lower_lexical_declaration(bindings)?,
                 // 14.2.3 step 1 already instantiated these.
                 Stmt::Function(_, _) => RegisterFlow::Empty,
                 _ => self.lower_statement(statement)?,
@@ -7567,6 +7546,129 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Ldar(result_register));
         self.release_register(result_register)?;
         Some(result_type.map_or(RegisterFlow::Empty, RegisterFlow::Value))
+    }
+
+    /// Lowers the `StatementList` of one `CaseClause`, and answers whether it
+    /// ended abruptly beside the type its completion value takes.
+    fn lower_case_clause(
+        &mut self,
+        body: &[Stmt],
+        result_register: crate::engine::bytecode::Reg,
+        scoped: &[(
+            String,
+            crate::engine::bytecode::Reg,
+            Option<RegisterBinding>,
+        )],
+        bindings_before: &BTreeMap<String, RegisterBinding>,
+    ) -> Option<(bool, RegisterType)> {
+        let mut value_type = RegisterType::Undefined;
+        for statement in body {
+            let flow = match statement {
+                Stmt::Declare(bindings) => self.lower_lexical_declaration(bindings)?,
+                _ => self.lower_statement(statement)?,
+            };
+            // A name the statement declared is initialized here and nowhere
+            // else: the dispatch enters every other clause past this
+            // declaration, where 9.1.1.1.1 leaves the binding as the
+            // `CaseBlock` made it.
+            for (name, _, _) in scoped {
+                let before = *bindings_before.get(name)?;
+                self.bindings.insert(name.clone(), before);
+            }
+            match flow {
+                RegisterFlow::Value(clause_type) => {
+                    value_type = value_type.merge(clause_type);
+                    self.code
+                        .emit(crate::engine::bytecode::Instruction::Star(result_register));
+                }
+                RegisterFlow::Empty => {}
+                RegisterFlow::Abrupt => return Some((true, value_type)),
+            }
+        }
+        Some((false, value_type))
+    }
+
+    /// Makes the bindings 14.2.3 gives the Environment Record of a
+    /// `CaseBlock`.
+    ///
+    /// Every clause shares the Record, and 9.1.1.1.1 leaves each binding
+    /// uninitialized until its own declaration runs. The dispatch of 14.12.3
+    /// enters a clause past the declarations before it, so a register would
+    /// answer whatever it held: each binding stands in a context slot, where
+    /// a read before the declaration is the `ReferenceError` 9.1.1.1.6
+    /// raises.
+    fn enter_case_block_scope(
+        &mut self,
+        clauses: &[(Option<Expr>, Vec<Stmt>)],
+    ) -> Option<
+        Vec<(
+            String,
+            crate::engine::bytecode::Reg,
+            Option<RegisterBinding>,
+        )>,
+    > {
+        let mut names = BTreeMap::new();
+        for (_, body) in clauses {
+            for (name, mutable) in register_block_local_names(body)? {
+                if names.insert(name, mutable).is_some() {
+                    return None;
+                }
+            }
+        }
+        self.block_scoped
+            .push(names.keys().cloned().collect::<BTreeSet<String>>());
+        let mut scoped = Vec::new();
+        for (name, mutable) in names {
+            let register = self.allocate_register()?;
+            self.active_binding_count = self.active_binding_count.checked_add(1)?;
+            self.max_binding_count = self.max_binding_count.max(self.active_binding_count);
+            let previous = self.bindings.insert(
+                name.clone(),
+                RegisterBinding {
+                    storage: RegisterBindingStorage::Register(register),
+                    // The dispatch enters a clause past every declaration
+                    // before it, so no clause knows what the binding holds.
+                    value_type: Some(RegisterType::Unknown),
+                    mutability: Mutability::of(mutable),
+                    stable_function_identity: false,
+                    initialized: false,
+                },
+            );
+            scoped.push((name.clone(), register, previous));
+            self.capture_binding(&name)?;
+        }
+        Some(scoped)
+    }
+
+    /// `LexicalDeclaration : LetOrConst BindingList` of 14.3.1, whose
+    /// bindings the Environment Record around the statement already carries.
+    fn lower_lexical_declaration(
+        &mut self,
+        bindings: &[(BindingPattern, bool, Option<Expr>)],
+    ) -> Option<RegisterFlow> {
+        if register_lexical_dead_zone_read(bindings)? {
+            return None;
+        }
+        for (pattern, _, initializer) in bindings {
+            if let Some(initializer) = initializer {
+                self.initialize_pattern(pattern, initializer)?;
+            } else {
+                self.initialize(pattern.identifier()?, None)?;
+            }
+            // 14.2.3 leaves the block with the binding, so the only thing the
+            // lowering needs of it is a type.
+            let mut names = Vec::new();
+            pattern.names(&mut names);
+            if names.iter().any(|name| {
+                self.bindings
+                    .get(name)
+                    .and_then(|binding| binding.value_type)
+                    .is_none()
+            }) {
+                return None;
+            }
+        }
+        Some(RegisterFlow::Empty)
     }
 
     fn enter_block_scope(
@@ -7676,12 +7778,12 @@ impl RegisterLowerer {
         clauses: &[(Option<Expr>, Vec<Stmt>)],
     ) -> Option<RegisterFlow> {
         use crate::engine::bytecode::Instruction;
-        // A lexical declaration in a CaseBlock is visible in every clause but
-        // is in its Temporal Dead Zone until its own clause runs, which the
-        // register lowering does not model.
+        // 14.2.2 makes a function declaration of a clause a binding of the
+        // CaseBlock, which B.3.2.4 also writes on the variable scope around
+        // it.
         if clauses.iter().any(|(_, body)| {
             body.iter()
-                .any(|statement| matches!(statement, Stmt::Declare(_) | Stmt::Function(_, _)))
+                .any(|statement| matches!(statement, Stmt::Function(_, _)))
         }) {
             return None;
         }
@@ -7692,6 +7794,9 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Star(result_register));
         self.lower(discriminant)?;
         self.code.emit(Instruction::Star(input_register));
+        // 14.12.4 makes one Environment Record for the whole CaseBlock, after
+        // the discriminant and before the selectors.
+        let scoped = self.enter_case_block_scope(clauses)?;
 
         let bindings_before = self.bindings.clone();
         let layouts_before = self.object_layouts.clone();
@@ -7736,20 +7841,9 @@ impl RegisterLowerer {
             // both cases the accumulator has to hold the value accumulated so
             // far, not the discriminant the dispatch left behind.
             self.code.emit(Instruction::Ldar(result_register));
-            let mut abrupt = false;
-            for statement in body {
-                match self.lower_statement(statement)? {
-                    RegisterFlow::Value(clause_type) => {
-                        value_type = value_type.merge(clause_type);
-                        self.code.emit(Instruction::Star(result_register));
-                    }
-                    RegisterFlow::Empty => {}
-                    RegisterFlow::Abrupt => {
-                        abrupt = true;
-                        break;
-                    }
-                }
-            }
+            let (abrupt, clause_type) =
+                self.lower_case_clause(body, result_register, &scoped, &bindings_before)?;
+            value_type = value_type.merge(clause_type);
             // 14.12.4 falls through to the next clause, which the jumps of the
             // dispatch reach with the bindings of the statement: what falls
             // through has to fit them. A clause that ends abruptly falls
@@ -7783,6 +7877,7 @@ impl RegisterLowerer {
         if !loop_state.continues.is_empty() {
             return None;
         }
+        self.leave_block_scope(scoped)?;
         self.release_register(selector_register)?;
         self.release_register(input_register)?;
         self.release_register(result_register)?;

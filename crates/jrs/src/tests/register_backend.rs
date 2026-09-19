@@ -4721,16 +4721,30 @@ fn register_switch_falls_through_clauses_in_source_order() -> Result<(), Error> 
 }
 
 #[test]
-fn register_lowering_rejects_case_blocks_with_lexical_declarations() -> Result<(), Error> {
+fn a_case_block_carries_the_lexical_declarations_of_every_clause() -> Result<(), Error> {
+    // 14.2.3 makes the bindings of the CaseBlock before the selectors run,
+    // and 9.1.1.1.1 leaves each of them uninitialized until its own clause
+    // does.
     for source in [
-        "switch(1){case 1:let x=1;break}",
-        "switch(1){default:function f(){}}",
+        "switch(0){default:let x=1;x}",
+        "switch(0){case 0:const c=7;c}",
+        "switch(1){case 0:let q=1;break;case 1:'reached'}",
+        // 9.1.1.1.6 refuses a read of a binding the dispatch jumped past.
+        "var r;try{switch(0){case 0:z;default:let z=2}}catch(e){r=e instanceof ReferenceError};''+r",
+        // 9.1.1.1.5 refuses a write to one.
+        "var s;try{switch(0){case 0:w=5;default:let w=2}}catch(e){s=e instanceof ReferenceError};''+s",
+        // The binding belongs to the CaseBlock and not to the scope around it.
+        "let x='outside';switch(0){case 0:let x='inside'}x",
     ] {
-        assert!(
-            !compile(source, Limits::default())?.uses_register_backend(),
-            "{source}"
-        );
+        differential(source)?;
     }
+    // B.3.2.4 writes a function declaration of a clause on the variable scope
+    // around the CaseBlock as well, which this lowering does not make.
+    let source = "switch(1){default:function f(){}}";
+    assert!(
+        !compile(source, Limits::default())?.uses_register_backend(),
+        "{source}"
+    );
     Ok(())
 }
 
