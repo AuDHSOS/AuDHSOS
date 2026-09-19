@@ -6349,3 +6349,15 @@ Document 16 step Q8.
   of every database the connection holds, and one that names a schema
   sets that database alone.
 
+### 6.6.230 What index a statement names (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A `SELECT`, an `UPDATE` and a `DELETE` each take `INDEXED BY name` and
+  `NOT INDEXED` after the name of the table.
+- An index of another table is refused `no such index`.
+- An `UPDATE` or a `DELETE` of a trigger's body that names an index is
+  refused under the clause it wrote.
+- `BEGIN`, `COMMIT` and `ROLLBACK` take a name after the word
+  `TRANSACTION`.
+

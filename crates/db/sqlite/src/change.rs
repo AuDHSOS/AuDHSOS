@@ -3407,14 +3407,26 @@ impl Writer {
         // name of a table alone, so a schema in front of one is
         // refused.
         for step in arena.steps(trigger.body) {
-            let schema = match *step {
-                crate::ast::TriggerStep::Insert(ref statement) => statement.schema,
-                crate::ast::TriggerStep::Update(ref statement) => statement.schema,
-                crate::ast::TriggerStep::Delete(ref statement) => statement.schema,
-                crate::ast::TriggerStep::Select(_) => None,
+            let (schema, indexed) = match *step {
+                crate::ast::TriggerStep::Insert(ref statement) => {
+                    (statement.schema, crate::ast::Indexed::Unspecified)
+                }
+                crate::ast::TriggerStep::Update(ref statement) => {
+                    (statement.schema, statement.indexed)
+                }
+                crate::ast::TriggerStep::Delete(ref statement) => {
+                    (statement.schema, statement.indexed)
+                }
+                crate::ast::TriggerStep::Select(_) => (None, crate::ast::Indexed::Unspecified),
             };
             if schema.is_some() {
                 return Err(Error::QualifiedInTrigger);
+            }
+            // `sqlite3TriggerUpdateStep` and `sqlite3TriggerDeleteStep`
+            // of `research/sqlite/src/trigger.c:436` take no index, so a
+            // body that names one is refused, under the clause it wrote.
+            if indexed != crate::ast::Indexed::Unspecified {
+                return Err(Error::IndexedInTrigger(indexed == crate::ast::Indexed::Not));
             }
         }
         // `sqlite3CreateTrigger`: a table SQLite keeps for itself
@@ -3653,6 +3665,37 @@ impl Writer {
     /// database: <file>`.
     pub const fn opens(&mut self, opening: Opening) {
         self.opening = Some(opening);
+    }
+
+    /// Raises where `INDEXED BY name` names an index the table does not
+    /// hold, which `sqlite3IndexedByLookup` of
+    /// `research/sqlite/src/build.c:4600` refuses.
+    ///
+    /// Reading the indexes of the table costs O(n) in their number.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoObject`] names the index.
+    fn holds_index(
+        &self,
+        table: &[u8],
+        indexed: crate::ast::Indexed,
+        sql: &[u8],
+    ) -> Result<(), Error> {
+        let crate::ast::Indexed::By(span) = indexed else {
+            return Ok(());
+        };
+        let name = crate::schema::dequote(span.text(sql));
+        let bytes = self.images();
+        let database = self.reading_beside(&bytes)?;
+        if database
+            .indexes(table)
+            .iter()
+            .any(|kept| kept.index.name.eq_ignore_ascii_case(&name))
+        {
+            return Ok(());
+        }
+        Err(Error::NoObject(b"index".to_vec(), name))
     }
 
     /// The rows one pragma of the schema answers: the columns of a table,
@@ -7542,6 +7585,7 @@ impl Writer {
         let name = crate::schema::dequote(statement.name.text(sql));
         written_to(&name)?;
         self.located(&name)?;
+        self.holds_index(&name, statement.indexed, sql)?;
         if self.is_view(&name)? {
             return self.delete_view(arena, statement, sql, &name, outer);
         }
@@ -7766,6 +7810,7 @@ impl Writer {
     ) -> Result<i64, Error> {
         let name = crate::schema::dequote(statement.name.text(sql));
         self.located(&name)?;
+        self.holds_index(&name, statement.indexed, sql)?;
         if self.is_view(&name)? {
             return self.update_view(arena, statement, sql, &name, outer);
         }

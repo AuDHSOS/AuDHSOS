@@ -665,17 +665,28 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    /// `INDEXED BY name` and `NOT INDEXED` after a name, which
+    /// `qualified-table-name` of `research/sqlite/src/parse.y:760`
+    /// writes and an `UPDATE` and a `DELETE` carry as well as a table of
+    /// a `FROM`.
+    fn indexed_name(&mut self) -> Result<Indexed, Error> {
+        if self.eat_keyword(Keyword::Indexed) {
+            self.expect_keyword(Keyword::By, Expected::By)?;
+            return Ok(Indexed::By(self.name()?));
+        }
+        if self.at_keyword(Keyword::Not) && self.ahead(1).is_some_and(is_indexed) {
+            self.bump();
+            self.bump();
+            return Ok(Indexed::Not);
+        }
+        Ok(Indexed::Unspecified)
+    }
+
     /// `INDEXED BY name` and `NOT INDEXED`, which only a table may carry.
     fn indexed_by(&mut self, kind: SourceKind) -> Result<SourceKind, Error> {
-        let indexed = if self.eat_keyword(Keyword::Indexed) {
-            self.expect_keyword(Keyword::By, Expected::By)?;
-            Indexed::By(self.name()?)
-        } else if self.at_keyword(Keyword::Not) && self.ahead(1).is_some_and(is_indexed) {
-            self.bump();
-            self.bump();
-            Indexed::Not
-        } else {
-            return Ok(kind);
+        let indexed = match self.indexed_name()? {
+            Indexed::Unspecified => return Ok(kind),
+            held => held,
         };
         match kind {
             SourceKind::Table { schema, name, .. } => Ok(SourceKind::Table {
@@ -1035,6 +1046,7 @@ impl<'a> Parser<'a> {
             Conflict::Unspecified
         };
         let (schema, name) = self.qualified_name()?;
+        let indexed = self.indexed_name()?;
         self.expect_keyword(Keyword::Set, Expected::Set)?;
         let mut sets = Vec::new();
         loop {
@@ -1072,6 +1084,7 @@ impl<'a> Parser<'a> {
             conflict,
             schema,
             name,
+            indexed,
             sets,
             from,
             filter,
@@ -1084,6 +1097,7 @@ impl<'a> Parser<'a> {
         self.expect_keyword(Keyword::Delete, Expected::Delete)?;
         self.expect_keyword(Keyword::From, Expected::From)?;
         let (schema, name) = self.qualified_name()?;
+        let indexed = self.indexed_name()?;
         let filter = if self.eat_keyword(Keyword::Where) {
             Some(self.expression()?)
         } else {
@@ -1093,6 +1107,7 @@ impl<'a> Parser<'a> {
         Ok(Delete {
             schema,
             name,
+            indexed,
             filter,
             returning,
         })
@@ -1253,7 +1268,12 @@ impl<'a> Parser<'a> {
             self.expect_keyword(Keyword::Rollback, Expected::Transaction)?;
             crate::ast::Transaction::Rollback
         };
-        self.eat_keyword(Keyword::Transaction);
+        // `trans_opt ::= TRANSACTION nm`: a name after the word names
+        // nothing and is read past, which
+        // `research/sqlite/src/parse.y:210` writes no code for.
+        if self.eat_keyword(Keyword::Transaction) {
+            let _ = self.name();
+        }
         Ok(read)
     }
 

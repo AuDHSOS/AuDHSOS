@@ -705,6 +705,8 @@ pub struct Delete {
     pub schema: Option<Span>,
     /// The table the rows come out of.
     pub name: Span,
+    /// What the statement says about the index to use.
+    pub indexed: Indexed,
     /// The `WHERE` clause, where one was written; a statement without
     /// one takes every row out.
     pub filter: Option<ExprId>,
@@ -730,6 +732,8 @@ pub struct Update {
     pub schema: Option<Span>,
     /// The table whose rows change.
     pub name: Span,
+    /// What the statement says about the index to use.
+    pub indexed: Indexed,
     /// The columns written, each with what it is written with.
     pub sets: Range,
     /// The tables a `FROM` names, as the statement that answers their

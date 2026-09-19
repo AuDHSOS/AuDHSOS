@@ -28,6 +28,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   D-336 records it. Catalog 6.6.228. `misc2.test` goes from 31 cases
   passing to 32.
 
+### Added
+
+- `db-sqlite` reads `INDEXED BY name` and `NOT INDEXED` after the name of
+  a table in a `SELECT`, an `UPDATE` and a `DELETE`, refusing an index the
+  table does not hold, and takes the name a `BEGIN`, a `COMMIT` or a
+  `ROLLBACK` writes after the word `TRANSACTION`. D-340 records it.
+  Catalog 6.6.230. `indexedby.test` goes from 33 cases passing to 39 and
+  `where9.test` from 29 to 35.
+
 ### Changed
 
 - The tester tells the traces of a connection of each statement it runs,

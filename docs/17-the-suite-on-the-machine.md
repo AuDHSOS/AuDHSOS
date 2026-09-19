@@ -55,7 +55,7 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-108 085 cases of 798 files: 95 266 pass, 3341 answer differently and
+108 081 cases of 798 files: 95 283 pass, 3320 answer differently and
 9478 are refused.
 
 What the 9478 refusals are for, most first: `db status` (2104), which
@@ -76,7 +76,7 @@ What each answers, over the same files:
 
 | Configuration | Passed | Answered differently | Refused |
 |---------------|-------:|---------------------:|--------:|
-| `utf8-4096-delete` | 95 266 | 3341 | 9478 |
+| `utf8-4096-delete` | 95 283 | 3320 | 9478 |
 | `utf16le-4096-delete` | 61 214 | 2392 | 9500 |
 | `utf16be-4096-delete` | 61 229 | 2392 | 9500 |
 | `utf8-512-delete` | 61 073 | 2452 | 9435 |
@@ -88,7 +88,7 @@ What each answers, over the same files:
 
 The counts move between runs of one configuration only where a file
 reaches the deadline, which D-302 sets at three minutes. Only the
-first row is a run after D-286 to D-339, the fourth one after D-296; the
+first row is a run after D-286 to D-340, the fourth one after D-296; the
 other seven were measured before them and are lower than they would read
 now.
 `testfixture` is built with `SQLITE_DEFAULT_PAGE_SIZE=1024`, which

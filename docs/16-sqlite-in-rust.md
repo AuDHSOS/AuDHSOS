@@ -903,6 +903,10 @@ Size: L.
     triggers before the row have run. Built, which D-336 records.
 88. The columns a pragma answers, and the database a pragma that wrote a
     schema answers out of. Built, which D-337 records.
+89. `INDEXED BY name` and `NOT INDEXED` after the name of a table, and
+    the name a transaction statement takes. Built, which D-340 records.
+    The clause names the index the statement uses and the planner reads
+    it for no plan of its own.
 
 ### Done when
 
@@ -912,8 +916,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 108 085 cases in 798 files, 95 266
-pass, 3341 answer differently, and 9478 name something the engine
+under the `tclsh` of the machine. Of 108 081 cases in 798 files, 95 283
+pass, 3320 answer differently, and 9478 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the three-minute
 deadline and are counted with the cases they ran by then. One run over

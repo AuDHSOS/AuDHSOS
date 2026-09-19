@@ -169,6 +169,9 @@ pub enum Error {
     TriggerVariable,
     /// A write of a trigger's body that names a schema.
     QualifiedInTrigger,
+    /// An `UPDATE` or a `DELETE` of a trigger's body that names an
+    /// index, which the flag says was written `NOT INDEXED`.
+    IndexedInTrigger(bool),
     /// A column added to a table that points at a row of another and
     /// falls back to something.
     PointingDefault,
@@ -453,6 +456,10 @@ impl Error {
                 "qualified table names are not allowed on ",
                 "INSERT, UPDATE, and DELETE statements within triggers"
             )),
+            Error::IndexedInTrigger(not) => alloc::format!(
+                "the {} clause is not allowed on UPDATE or DELETE statements within triggers",
+                if *not { "NOT INDEXED" } else { "INDEXED BY" }
+            ),
             Error::Columns(answered, wanted) => {
                 alloc::format!("sub-select returns {answered} columns - expected {wanted}")
             }
@@ -909,6 +916,32 @@ struct Stored {
     places: Vec<usize>,
     /// The indexes over it that this crate can walk.
     indexes: Vec<Kept>,
+}
+
+/// Raises where `INDEXED BY name` names an index the table does not
+/// hold.
+///
+/// `sqlite3IndexedByLookup` of `research/sqlite/src/build.c:4600` reads
+/// the name against the indexes of that table alone, so an index of
+/// another table is one the table does not hold. Reading them costs
+/// O(n) in their number.
+///
+/// # Errors
+///
+/// [`Error::NoObject`] names the index.
+fn indexed_held(stored: &Stored, indexed: crate::ast::Indexed, sql: &[u8]) -> Result<(), Error> {
+    let crate::ast::Indexed::By(span) = indexed else {
+        return Ok(());
+    };
+    let name = dequote(span.text(sql));
+    if stored
+        .indexes
+        .iter()
+        .any(|kept| kept.index.name.eq_ignore_ascii_case(&name))
+    {
+        return Ok(());
+    }
+    Err(Error::NoObject(b"index".to_vec(), name))
 }
 
 /// One index of a table, and where its tree is.
@@ -3018,7 +3051,11 @@ impl<'a> Database<'a> {
             // `sqlite3Dequote` over every identifier the parser keeps.
             let alias = source.alias.map(|span| dequote(span.text(sql)));
             let (shape, from, name, held) = match source.kind {
-                SourceKind::Table { schema, name, .. } => {
+                SourceKind::Table {
+                    schema,
+                    name,
+                    indexed,
+                } => {
                     let named = table_named(schema, name, sql);
                     // A schema in front of the name says which database
                     // of the connection holds the table, which
@@ -3049,6 +3086,7 @@ impl<'a> Database<'a> {
                             Vec::new(),
                         )
                     } else if let Some(stored) = self.located(place, &named.name) {
+                        indexed_held(stored, indexed, sql)?;
                         (
                             shape_of(&stored.table),
                             Source::Table(stored),
