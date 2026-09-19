@@ -274,3 +274,108 @@ fn an_aggregate_the_application_defined_reads_the_rows_of_its_group() {
     let plain = Database::open(&bytes).unwrap();
     assert!(plain.query(b"SELECT joined(a) FROM t").is_err());
 }
+
+/// `REGEXP` and `MATCH` reach the function the application defined under
+/// that name, which the library holds none of.
+#[test]
+fn what_regexp_and_match_reach_of_the_functions_the_application_defined() {
+    /// Whether the value holds the pattern, which is the first argument,
+    /// and nothing where either is null.
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "the shape every function the application defines answers in"
+    )]
+    fn holds(
+        _name: &'static [u8],
+        args: &[Value],
+        _random: Option<&Source>,
+    ) -> Result<Value, crate::eval::Error> {
+        let (Some(pattern), Some(value)) = (
+            args.first().and_then(Value::text),
+            args.get(1).and_then(Value::text),
+        ) else {
+            return Ok(Value::Null);
+        };
+        Ok(Value::Int(i64::from(
+            value
+                .windows(pattern.len().max(1))
+                .any(|held| held == pattern),
+        )))
+    }
+    static MATCHING: &[Defined] = &[
+        Defined {
+            name: b"regexp",
+            count: Some(2),
+            answer: holds,
+        },
+        Defined {
+            name: b"match",
+            count: Some(2),
+            answer: holds,
+        },
+    ];
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(x)").unwrap();
+    writer
+        .run(b"INSERT INTO t VALUES('abcd'),('efgh'),(NULL)")
+        .unwrap();
+    let bytes = writer.written();
+    // A connection told neither name is refused both, which is the
+    // refusal the library answers for them.
+    let plain = Database::open(&bytes).unwrap();
+    assert_eq!(
+        plain
+            .query(b"SELECT x FROM t WHERE x REGEXP 'bc'")
+            .unwrap_err()
+            .message(),
+        "no such function: REGEXP"
+    );
+    assert_eq!(
+        plain
+            .query(b"SELECT x FROM t WHERE x MATCH 'bc'")
+            .unwrap_err()
+            .message(),
+        "no such function: MATCH"
+    );
+    // `x REGEXP y` is `regexp(y, x)`, so the pattern is the first
+    // argument.
+    let database = Database::open(&bytes).unwrap().defining(MATCHING);
+    for sql in [
+        b"SELECT x FROM t WHERE x REGEXP 'bc'".as_slice(),
+        b"SELECT x FROM t WHERE x MATCH 'bc'",
+    ] {
+        assert_eq!(
+            database.query(sql).unwrap().rows,
+            alloc::vec![alloc::vec![Value::Text(b"abcd".to_vec())]]
+        );
+    }
+    // `NOT REGEXP` answers the other rows, and a row of nothing answers
+    // nothing either way.
+    assert_eq!(
+        database
+            .query(b"SELECT x FROM t WHERE x NOT REGEXP 'bc'")
+            .unwrap()
+            .rows,
+        alloc::vec![alloc::vec![Value::Text(b"efgh".to_vec())]]
+    );
+    assert_eq!(
+        database
+            .query(b"SELECT x REGEXP 'bc' FROM t WHERE x IS NULL")
+            .unwrap()
+            .rows,
+        alloc::vec![alloc::vec![Value::Null]]
+    );
+    // A statement that writes reaches the same function.
+    let mut told = Writer::opened(&bytes).unwrap();
+    told.defines(MATCHING);
+    told.run(b"DELETE FROM t WHERE x REGEXP 'bc'").unwrap();
+    let left = told.written();
+    assert_eq!(
+        Database::open(&left)
+            .unwrap()
+            .query(b"SELECT count(*) FROM t")
+            .unwrap()
+            .rows,
+        alloc::vec![alloc::vec![Value::Int(2)]]
+    );
+}

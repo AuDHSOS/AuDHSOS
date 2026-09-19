@@ -6140,3 +6140,14 @@ Document 16 step Q8.
   `INTEGER`.
 - A column that came from an expression carries nothing.
 - Every statement carries one entry per column it answers.
+
+### 6.6.215 What `REGEXP` and `MATCH` reach (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A connection told neither name is refused both.
+- `x REGEXP y` calls `regexp(y, x)`, so the pattern is the first
+  argument, and `x MATCH y` calls `match(y, x)`.
+- `NOT REGEXP` answers the rows the function did not hold for.
+- A row of nothing answers nothing either way.
+- A statement that writes reaches the same function.

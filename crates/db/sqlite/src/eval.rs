@@ -1615,18 +1615,40 @@ fn like(
     row: &dyn Row,
     depth: u32,
 ) -> Result<Answer, Error> {
-    let function = match op {
-        LikeOp::Like => Function::Like,
-        LikeOp::Glob => Function::Glob,
-        LikeOp::Regexp => return Err(Error::NoFunction(b"REGEXP".to_vec())),
-        LikeOp::Match => return Err(Error::NoFunction(b"MATCH".to_vec())),
-    };
     // The pattern is the first argument and the value the second, which
     // is how `A LIKE B` is written as `like(B,A)`.
     let mut args = alloc::vec![
         answer(arena, pattern, sql, row, depth)?.value,
         answer(arena, value, sql, row, depth)?.value,
     ];
+    // `REGEXP` and `MATCH` are names the library holds no function
+    // under, so a connection that was told one of them reaches it and a
+    // connection that was told neither is refused the name.
+    let function = match op {
+        LikeOp::Like => Function::Like,
+        LikeOp::Glob => Function::Glob,
+        LikeOp::Regexp | LikeOp::Match => {
+            let called: &[u8] = if op == LikeOp::Regexp {
+                b"regexp"
+            } else {
+                b"match"
+            };
+            let Some(defined) = row.defined(called, args.len()) else {
+                let named = if op == LikeOp::Regexp {
+                    b"REGEXP".to_vec()
+                } else {
+                    b"MATCH".to_vec()
+                };
+                return Err(Error::NoFunction(named));
+            };
+            let answered = (defined.answer)(defined.name, &args, row.random())?;
+            return Ok(Answer::plain(match (negated, logic(&answered)) {
+                (_, None) => Value::Null,
+                (true, Some(truth)) => Value::Int(i64::from(!truth)),
+                (false, Some(truth)) => Value::Int(i64::from(truth)),
+            }));
+        }
+    };
     if let Some(escape) = escape {
         args.push(answer(arena, escape, sql, row, depth)?.value);
     }

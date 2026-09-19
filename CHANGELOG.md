@@ -7,6 +7,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` reads `X REGEXP Y` and `X MATCH Y` as calls of the function
+  the application defined under that name. D-318 records it. Catalog
+  6.6.215. `e_expr.test` goes from 374 cases passing to 7280.
+
 - `db-sqlite` answers the type the schema declares for every column a
   statement answers, which `sqlite3_column_decltype` reads. D-317 records
   it. Catalog 6.6.214. `capi2.test` goes from 69 cases passing to 103 and
