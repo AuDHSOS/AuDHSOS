@@ -185,7 +185,7 @@ const E2E_TIMEOUT: Duration = Duration::from_secs(180);
 /// archive, the memory server answered, the name server answered, the
 /// console driver took the port, and the application found it and said
 /// something through it.
-const E2E_LINES: [(&str, &str); 23] = [
+const E2E_LINES: [(&str, &str); 24] = [
     (
         "[init] started server-memory",
         "the memory server did not start",
@@ -214,6 +214,10 @@ const E2E_LINES: [(&str, &str); 23] = [
     (
         "[checks] missing name: the requested item does not exist",
         "a lookup of a name nobody registered was not refused with NotFound",
+    ),
+    (
+        "[checks] a found endpoint sends and nothing more: ok",
+        "an endpoint found under a name carried more than SEND and TRANSFER",
     ),
     (
         "[checks] memory comes back zeroed: ok",

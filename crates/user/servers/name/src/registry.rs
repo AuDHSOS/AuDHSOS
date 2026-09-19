@@ -13,17 +13,48 @@
 //! hands it out, and a client cannot forge one — so a name belongs to the
 //! badge that registered it, and to nothing a message says about itself.
 //!
+//! What a client registers is not what the registry stores. The kernel
+//! copies rights and badge onto the handle it installs in the receiver, so
+//! the handle a server sends carries the `RECV` and `BADGE` of the server's
+//! own endpoint; [`Registry::accept`] stores a handle narrowed to
+//! [`HANDED_OUT`] instead, and a lookup hands out nothing above it.
+//!
 //! Invariants: a name appears at most once; every entry has a non-zero
 //! owner, because a message that reaches the server through a capability
 //! without a badge names no client and cannot own anything; a lookup never
 //! changes the registry.
 
-use audhsos_abi::{Error, Handle};
+use audhsos_abi::{Error, Handle, Rights};
 use audhsos_collections::ArrayVec;
 use user_proto::Name;
 
 /// How many names the registry holds.
 pub const CAPACITY: usize = 64;
+
+/// The rights a registered endpoint is stored with, and so the most a
+/// lookup can hand out: a client sends to the server it found and passes
+/// the handle on.
+///
+/// `RECV` would let a client take the requests other clients sent to that
+/// server, and `BADGE` would let it mint the badge the server trusts.
+pub const HANDED_OUT: Rights = Rights::SEND.union(Rights::TRANSFER);
+
+/// The handle calls [`Registry::accept`] makes. The registry itself makes
+/// no system call; the program that serves the registry implements this on
+/// its gate.
+pub trait Handles {
+    /// A second handle to the same object with `rights`.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the kernel answered; [`Error::AccessDenied`] for a handle
+    /// without `DUPLICATE` or for rights above those it carries.
+    fn duplicate(&mut self, handle: Handle, rights: Rights) -> Result<Handle, Error>;
+
+    /// Gives `handle` up. A handle the registry no longer stores is a slot
+    /// of the server's table that stays taken until it is closed.
+    fn close(&mut self, handle: Handle);
+}
 
 /// One name and what it stands for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,10 +105,54 @@ impl Registry {
         self.entries.iter().copied()
     }
 
-    /// Puts `endpoint` under `name` for the client `owner`.
+    /// Takes the endpoint a client sent: stores a handle narrowed to
+    /// [`HANDED_OUT`] under `name` and gives the sent handle up, so that
+    /// the registry holds nothing a lookup may not hand out.
+    ///
+    /// The handle a replaced entry held is given up too.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Registry::register`], and whatever the duplication
+    /// answered. The sent handle is given up in every case.
+    pub fn accept<H: Handles>(
+        &mut self,
+        handles: &mut H,
+        owner: u64,
+        name: Name,
+        endpoint: Handle,
+    ) -> Result<(), Error> {
+        let narrowed = match handles.duplicate(endpoint, HANDED_OUT) {
+            Ok(narrowed) => narrowed,
+            Err(error) => {
+                handles.close(endpoint);
+                return Err(error);
+            }
+        };
+        let outcome = self.register(owner, name, narrowed);
+        handles.close(endpoint);
+        match outcome {
+            Ok(replaced) => {
+                if let Some(old) = replaced {
+                    handles.close(old);
+                }
+                Ok(())
+            }
+            Err(error) => {
+                handles.close(narrowed);
+                Err(error)
+            }
+        }
+    }
+
+    /// Puts `endpoint` under `name` for the client `owner` and answers with
+    /// the handle the entry held before, if it held one.
     ///
     /// A client may replace a name it registered itself, which is what a
     /// server that restarts does. A name another client holds is refused.
+    ///
+    /// Callers that take handles out of messages go through
+    /// [`Registry::accept`]: this one stores what it is given.
     ///
     /// # Errors
     ///
@@ -85,12 +160,17 @@ impl Registry {
     /// message that arrived through a capability without a badge has;
     /// [`Error::AlreadyExists`] for a name another client holds;
     /// [`Error::PoolExhausted`] when the registry is full.
-    pub fn register(&mut self, owner: u64, name: Name, endpoint: Handle) -> Result<(), Error> {
+    pub fn register(
+        &mut self,
+        owner: u64,
+        name: Name,
+        endpoint: Handle,
+    ) -> Result<Option<Handle>, Error> {
         if owner == 0 {
             return Err(Error::InvalidArgument);
         }
         match self.position(&name) {
-            Some(index) => self.replace(index, owner, endpoint),
+            Some(index) => self.replace(index, owner, endpoint).map(Some),
             None => self
                 .entries
                 .push(Registered {
@@ -98,6 +178,7 @@ impl Registry {
                     endpoint,
                     owner,
                 })
+                .map(|()| None)
                 .map_err(|_| Error::PoolExhausted),
         }
     }
@@ -156,14 +237,16 @@ impl Registry {
         gone
     }
 
-    /// Overwrites the entry at `index`, for the client that owns it.
-    fn replace(&mut self, index: usize, owner: u64, endpoint: Handle) -> Result<(), Error> {
+    /// Overwrites the entry at `index`, for the client that owns it, and
+    /// answers with the handle it held.
+    fn replace(&mut self, index: usize, owner: u64, endpoint: Handle) -> Result<Handle, Error> {
         let entry = self.entries.get_mut(index).ok_or(Error::NotFound)?;
         if entry.owner != owner {
             return Err(Error::AlreadyExists);
         }
+        let held = entry.endpoint;
         entry.endpoint = endpoint;
-        Ok(())
+        Ok(held)
     }
 
     /// Where `name` stands in the registry.

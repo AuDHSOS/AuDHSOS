@@ -7,7 +7,7 @@
 
 pub mod registry;
 
-pub use registry::{CAPACITY, Registered, Registry};
+pub use registry::{CAPACITY, HANDED_OUT, Handles, Registered, Registry};
 
 #[cfg(test)]
 mod tests;

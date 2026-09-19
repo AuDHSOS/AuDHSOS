@@ -39,8 +39,8 @@ use server_name as _;
 use user_loader as _;
 use virtio_queue as _;
 
-use audhsos_abi::Error;
 use audhsos_abi::layout::PAGE_SIZE;
+use audhsos_abi::{Error, Rights};
 use user_programs::client::{allocate, lookup, release, write_line};
 use user_programs::mapping::{Mapping, SCRATCH};
 use user_proto::parent;
@@ -59,6 +59,10 @@ const MISSING: &[u8] = b"nothing-is-here";
 /// How much memory the third check asks for: more than any machine this
 /// runs on has, so the answer is an error and the run goes on.
 const TOO_MUCH: u64 = 1 << 42;
+
+/// The badge the console driver trusts, which a client that found the
+/// console under its name must not be able to mint.
+const FORGED_BADGE: u64 = 0xC0_1DE;
 
 /// How many lines the interleaving check writes.
 ///
@@ -85,6 +89,7 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
     };
 
     missing_name(&mut gate, names, console);
+    found_endpoint_rights(&mut gate, names, console);
     zeroed_again(&mut gate, memory, own, console);
     too_much(&mut gate, memory, console);
     interleaved(&mut gate, console);
@@ -103,7 +108,6 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
 /// cleanup. Ends with a live subscription, so the runner must see its watch
 /// cleanup even when it injects no subsequent input event.
 fn input_checks(gate: &mut Gate, startup: &Startup) -> Result<(), Error> {
-    use audhsos_abi::Rights;
     use user_proto::input::{Reply, Request};
     let input = startup.input_server.ok_or(Error::NotFound)?;
     let own = startup.own_process.ok_or(Error::NotFound)?;
@@ -184,6 +188,47 @@ fn input_unsubscribe(gate: &mut Gate, input: EndpointHandle) -> Result<(), Error
     match user_proto::input::Reply::decode(gate.reader())? {
         user_proto::input::Reply::Unsubscribed(result) => result,
         user_proto::input::Reply::Subscribed(_) => Err(Error::InvalidState),
+    }
+}
+
+/// What a client may do with an endpoint it found under a name.
+///
+/// The name server stores a handle narrowed to `SEND | TRANSFER`, so a
+/// client can send to the server it found and pass the handle on. `RECV`
+/// would let it take the requests other clients sent to that server, and
+/// `BADGE` would let it mint the badge the server trusts.
+fn found_endpoint_rights(gate: &mut Gate, names: EndpointHandle, console: EndpointHandle) {
+    let outcome = lookup(gate, names, CONSOLE).and_then(|found| {
+        let taking = refused(gate.ipc_try_recv(found).map(|_message| ()));
+        let minting = refused(match gate.endpoint_badge(found, FORGED_BADGE) {
+            Ok(minted) => {
+                gate.handle_close(minted.handle())?;
+                Ok(())
+            }
+            Err(error) => Err(error),
+        });
+        let widening = refused(
+            gate.handle_duplicate(found.handle(), Rights::RECV | Rights::BADGE)
+                .map(|_wider| ()),
+        );
+        gate.handle_close(found.handle())?;
+        taking.and(minting).and(widening)
+    });
+    let mut line = Line::<96>::new();
+    line.put(b"[checks] a found endpoint sends and nothing more: ");
+    line.put(answer(outcome).as_bytes());
+    line.put(b"\n");
+    let _said = write_line(gate, console, line.as_bytes());
+}
+
+/// Turns the answer to a call that must be refused into the answer to the
+/// check: [`Error::InvalidState`] for a call that went through, and
+/// [`Error::AccessDenied`] alone for a refusal.
+const fn refused(outcome: Result<(), Error>) -> Result<(), Error> {
+    match outcome {
+        Ok(()) => Err(Error::InvalidState),
+        Err(Error::AccessDenied) => Ok(()),
+        Err(other) => Err(other),
     }
 }
 

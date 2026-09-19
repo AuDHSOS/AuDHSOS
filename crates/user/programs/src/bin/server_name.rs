@@ -30,8 +30,8 @@ use server_memory as _;
 use user_loader as _;
 use virtio_queue as _;
 
-use audhsos_abi::Error;
-use server_name::Registry;
+use audhsos_abi::{Error, Handle, Rights};
+use server_name::{Handles, Registry};
 use user_programs::serve::{Serving, receive};
 use user_proto::name::{Reply, Request};
 use user_rt::Startup;
@@ -54,8 +54,9 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
         if receive(&mut gate, endpoint, &mut serving).is_err() {
             gate.thread_exit()
         }
-        let answer = match Request::decode(gate.reader()) {
-            Ok(request) => handle(&mut registry, serving.badge, &request),
+        let decoded = Request::decode(gate.reader());
+        let answer = match decoded {
+            Ok(request) => handle(&mut registry, &mut gate, serving.badge, &request),
             Err(error) => Reply::Registered(Err(Error::from(error))),
         };
         let _written = answer.encode(&mut gate.writer());
@@ -63,11 +64,25 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
 }
 
 /// What the registry says to one request.
-fn handle(registry: &mut Registry, badge: u64, request: &Request) -> Reply {
+fn handle(registry: &mut Registry, gate: &mut Gate, badge: u64, request: &Request) -> Reply {
     match request {
         Request::Register { name, endpoint } => {
-            Reply::Registered(registry.register(badge, *name, *endpoint))
+            let mut handles = GateHandles(gate);
+            Reply::Registered(registry.accept(&mut handles, badge, *name, *endpoint))
         }
         Request::Lookup { name } => Reply::Found(registry.lookup(name)),
+    }
+}
+
+/// The handle calls of the registry, made on the gate.
+struct GateHandles<'gate>(&'gate mut Gate);
+
+impl Handles for GateHandles<'_> {
+    fn duplicate(&mut self, handle: Handle, rights: Rights) -> Result<Handle, Error> {
+        self.0.handle_duplicate(handle, rights)
+    }
+
+    fn close(&mut self, handle: Handle) {
+        let _closed = self.0.handle_close(handle);
     }
 }
