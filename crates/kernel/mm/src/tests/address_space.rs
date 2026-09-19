@@ -5,6 +5,7 @@
 
 #![allow(clippy::arithmetic_side_effects)]
 
+use audhsos_abi::Rights;
 use audhsos_abi::layout::{KERNEL_SPACE_START, PAGE_SIZE, USER_SPACE_END, USER_SPACE_START};
 use kernel_types::{Page, PageRange, VirtAddr};
 use test_support::generators::vec;
@@ -33,6 +34,7 @@ fn region(address: u64, count: u64, backing: u32) -> Region<u32> {
         backing,
         offset: 0,
         perms: Permissions::READ_WRITE.for_user(),
+        rights: Rights::ALL,
     }
 }
 
@@ -499,6 +501,7 @@ fn property_the_table_stays_sorted_disjoint_and_inside_the_user_half() {
                             backing,
                             offset: 0,
                             perms,
+                            rights: Rights::ALL,
                         });
                     }
                     RegionOp::Remove(pages) => {
@@ -601,6 +604,7 @@ fn a_table_with_an_empty_region_fails_its_own_invariant_check() {
         backing: 1,
         offset: 0,
         perms: Permissions::READ_WRITE,
+        rights: Rights::ALL,
     };
     table.insert(region(BASE, 1, 1)).unwrap();
     table.put(0, Some(empty));
@@ -631,6 +635,7 @@ fn window(address: u64, count: u64, backing: u32, offset: u64) -> Region<u32> {
         backing,
         offset,
         perms: Permissions::READ_WRITE.for_user(),
+        rights: Rights::ALL,
     }
 }
 
@@ -680,6 +685,13 @@ fn a_range_that_continues_nothing_is_a_region_of_its_own() {
         (
             window(BASE + 8 * PAGE_SIZE, 2, 1, 8 * PAGE_SIZE),
             "a gap between them",
+        ),
+        (
+            Region {
+                rights: Rights::READ | Rights::MAP,
+                ..window(BASE + 4 * PAGE_SIZE, 2, 1, 4 * PAGE_SIZE)
+            },
+            "other rights",
         ),
     ];
     for (next, why) in cases {

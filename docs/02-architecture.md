@@ -180,7 +180,13 @@ badge.
   back would grind its objects down to single pages (D-90).
 - `memory_map(process, memory, vaddr, offset, len, permissions)` populates
   page tables immediately. Page-table frames come from the kernel reserve
-  and count against the process's kernel-object quota.
+  and count against the process's kernel-object quota. A writable mapping
+  requires `WRITE` on the memory handle and an executable one `EXECUTE`;
+  the region keeps those rights and `memory_protect` checks a later change
+  against them (2.4.3). A mapping a process makes in another address space
+  hands that process no capability to the object, so its region keeps only
+  the rights the permissions already allow, which is what bounds a
+  `memory_protect` the mapped-into process makes.
 - There is no demand paging in the kernel. A page fault becomes a fault
   message; the fault handler may map memory and resume the thread.
 - `memory_info(handle)` returns the physical start address and length and
@@ -189,7 +195,9 @@ badge.
 ### 2.4.3 Address spaces
 
 An address space is a page-table root plus a fixed-capacity sorted array of
-`Region { start, len, memory: ObjectId, offset, permissions }`. Invariants:
+`Region { start, len, memory: ObjectId, offset, permissions, rights }`,
+where `rights` are `READ`, `WRITE`, and `EXECUTE` as the mapping carries
+them. Invariants:
 
 - Regions do not overlap.
 - Every region lies inside the user half of the address space
@@ -198,6 +206,13 @@ An address space is a page-table root plus a fixed-capacity sorted array of
 - Start and length are page-aligned and `start + len` does not overflow.
 - Unmapping the middle of a region splits it into two regions; the region
   quota is checked before the split happens.
+- `memory_protect` refuses a writable mapping when the region's `rights`
+  lack `WRITE` and an executable one when they lack `EXECUTE`, which is the
+  check `memory_map` makes against the handle (2.11).
+- `memory_protect` changes permissions and leaves `rights` as the mapping
+  set them; what takes a mapping back is `memory_unmap`.
+- `memory_protect` asks the region table before it writes a page table, and
+  a page write that fails puts the pages before it back.
 
 The kernel address space (upper half) is managed by the same code. Layout:
 

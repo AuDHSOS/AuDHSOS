@@ -19,7 +19,7 @@ use audhsos_abi::layout::{
     BOOT_INFO_VADDR, BOOT_STACK_PAGES, BOOT_STACK_TOP, KERNEL_BASE, MAX_BOOT_REGIONS,
     MAX_PAGES_PER_CALL, MAX_PHYS_WINDOW_BYTES, PAGE_SIZE, PHYS_WINDOW_BASE, USER_SPACE_END,
 };
-use audhsos_abi::{Ecam, Framebuffer};
+use audhsos_abi::{Ecam, Framebuffer, Rights};
 use audhsos_sync::{Global, UncontendedToken};
 use kernel_hal_api::console::DebugConsole;
 use kernel_hal_api::paging::{FrameAccess, FrameSource, TlbControl};
@@ -359,6 +359,7 @@ impl KernelMemory {
             backing: KernelBacking::Device,
             offset: 0,
             perms: Permissions::READ_WRITE,
+            rights: Rights::ALL,
         })?;
         Ok(base)
     }
@@ -600,6 +601,7 @@ where
             backing,
             offset: 0,
             perms,
+            rights: Rights::ALL,
         })?;
         offset = offset.saturating_add(length);
     }
