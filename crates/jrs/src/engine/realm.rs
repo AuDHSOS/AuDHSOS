@@ -1246,6 +1246,8 @@ pub enum Intrinsic {
     /// `$262.gc`, which the host of the conformance suite exposes and which
     /// no clause of the specification names.
     HostGc,
+    /// `$262.evalScript`, which evaluates the text as a Script of this Realm.
+    HostEvalScript,
     /// `BigInt`, 21.2.1.1.
     BigIntConstructor,
     /// `asIntN`, 21.2.2.1.
@@ -1397,7 +1399,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 484] = [
+    pub const ALL: [Self; 485] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -1857,6 +1859,7 @@ impl Intrinsic {
         Self::IteratorPrototypeToStringTagSet,
         Self::HostDetachArrayBuffer,
         Self::HostGc,
+        Self::HostEvalScript,
         Self::BigIntConstructor,
         Self::BigIntAsIntN,
         Self::BigIntAsUintN,
@@ -2372,7 +2375,8 @@ impl Intrinsic {
             | Self::IteratorConstructor
             | Self::ProxyConstructor
             | Self::HostDetachArrayBuffer
-            | Self::HostGc => IntrinsicHolder::Global,
+            | Self::HostGc
+            | Self::HostEvalScript => IntrinsicHolder::Global,
             Self::ArrayIsArray | Self::ArrayOf | Self::ArrayFrom => {
                 IntrinsicHolder::ArrayConstructor
             }
@@ -2878,6 +2882,7 @@ impl Intrinsic {
             Self::IteratorPrototypeToStringTagSet => 439,
             Self::HostDetachArrayBuffer => 433,
             Self::HostGc => 434,
+            Self::HostEvalScript => 484,
             Self::SharedArrayBufferConstructor => 378,
             Self::SharedArrayBufferPrototypeSlice => 379,
             Self::SharedArrayBufferPrototypeGrow => 380,
@@ -3372,6 +3377,7 @@ impl Intrinsic {
             Self::IteratorPrototypeToStringTagSet => 439,
             Self::HostDetachArrayBuffer => 433,
             Self::HostGc => 434,
+            Self::HostEvalScript => 484,
             Self::SharedArrayBufferConstructor => 378,
             Self::SharedArrayBufferPrototypeSlice => 379,
             Self::SharedArrayBufferPrototypeGrow => 380,
@@ -3867,6 +3873,7 @@ impl Intrinsic {
             439 => Some(Self::IteratorPrototypeToStringTagSet),
             433 => Some(Self::HostDetachArrayBuffer),
             434 => Some(Self::HostGc),
+            484 => Some(Self::HostEvalScript),
             378 => Some(Self::SharedArrayBufferConstructor),
             379 => Some(Self::SharedArrayBufferPrototypeSlice),
             380 => Some(Self::SharedArrayBufferPrototypeGrow),
@@ -4080,6 +4087,7 @@ impl Intrinsic {
             Self::IteratorPrototypeToStringTagSet => "set [Symbol.toStringTag]",
             Self::HostDetachArrayBuffer => "detachArrayBuffer",
             Self::HostGc => "gc",
+            Self::HostEvalScript => "evalScript",
             Self::BigIntConstructor => "BigInt",
             Self::BigIntAsIntN => "asIntN",
             Self::BigIntAsUintN => "asUintN",
@@ -4455,6 +4463,8 @@ impl Intrinsic {
             | Self::StringPrototypeFontcolor
             | Self::StringPrototypeFontsize
             | Self::StringPrototypeLink
+            // The host evaluates the text 19.2.1.1 takes.
+            | Self::HostEvalScript
             // 22.2.6.11 step 2 converts the String it replaces in.
             | Self::RegExpPrototypeReplace
             // 22.1.3.13 and 22.1.3.17 make a RegExp of an argument that
@@ -5431,6 +5441,7 @@ impl Intrinsic {
             | Self::SymbolPrototypeToPrimitive
             | Self::ErrorIsError
             | Self::IteratorPrototypeToStringTagSet
+            | Self::HostEvalScript
             | Self::HostDetachArrayBuffer
             | Self::TypedArrayPrototypeAt
             | Self::TypedArrayPrototypeFill
@@ -6138,12 +6149,11 @@ pub fn typed_array_prototype_owns(name: &[u16]) -> bool {
 }
 
 /// The property names the host object of the conformance suite carries.
-pub const HOST_262_PROPERTIES: [&str; 7] = [
+pub const HOST_262_PROPERTIES: [&str; 6] = [
     "AbstractModuleSource",
     "agent",
     "createRealm",
     "detachArrayBuffer",
-    "evalScript",
     "gc",
     "global",
 ];
@@ -7291,9 +7301,11 @@ impl GlobalEnvironment {
         heap: &GenerationalHeap,
         name: PropertyKey,
     ) -> Result<bool, HeapError> {
-        let Some(flags) = heap.own_named_flags(self.global_object(heap)?, name)? else {
-            // No such property, and every object of this engine is extensible.
-            return Ok(true);
+        let global = self.global_object(heap)?;
+        let Some(flags) = heap.own_named_flags(global, name)? else {
+            // Step 3: a name the global object does not carry needs room for
+            // one.
+            return Ok(heap.is_extensible(global).unwrap_or(true));
         };
         Ok(flags.configurable || (!flags.is_accessor && flags.writable && flags.enumerable))
     }
@@ -8629,6 +8641,7 @@ impl Realm {
                     | Intrinsic::IteratorPrototypeToStringTagSet
                     | Intrinsic::HostDetachArrayBuffer
                     | Intrinsic::HostGc
+                    | Intrinsic::HostEvalScript
                     | Intrinsic::SharedArrayBufferPrototypeByteLength
                     | Intrinsic::SharedArrayBufferPrototypeGrowable
                     | Intrinsic::SharedArrayBufferPrototypeMaxByteLength
@@ -9037,7 +9050,11 @@ impl Realm {
         heap.set_object_kind(host, super::object::ObjectKind::Host262)?;
         let key = PropertyKey::String(heap.strings.intern("global")?);
         heap.define_own_named(host, key, Value::from_object(global), builtin_data())?;
-        for intrinsic in [Intrinsic::HostDetachArrayBuffer, Intrinsic::HostGc] {
+        for intrinsic in [
+            Intrinsic::HostDetachArrayBuffer,
+            Intrinsic::HostGc,
+            Intrinsic::HostEvalScript,
+        ] {
             let function = self.intrinsic(heap, intrinsic)?;
             let key = PropertyKey::String(heap.strings.intern(intrinsic.name())?);
             heap.define_own_named(host, key, function, builtin_data())?;

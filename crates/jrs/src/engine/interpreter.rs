@@ -3480,6 +3480,7 @@ impl RegisterVM {
             // The collector runs at a Safe Point of the interpreter and not
             // here, so the hint of the suite answers without one.
             Intrinsic::FunctionPrototype | Intrinsic::HostGc => Ok(VALUE_UNDEFINED),
+            Intrinsic::HostEvalScript => self.perform_eval_script(&call, heap, realm),
             // 20.1.3.7 is `ToObject(this value)` and nothing else.
             Intrinsic::ObjectPrototypeValueOf => {
                 Self::coerce_object(call.receiver, heap, realm).map(Value::from_object)
@@ -25148,6 +25149,50 @@ impl RegisterVM {
         Ok(VALUE_UNDEFINED)
     }
 
+    /// `$262.evalScript` of the conformance suite, which evaluates the text as
+    /// a Script of this Realm.
+    ///
+    /// 16.1.7 gives a top-level `var` of that Script a binding of the same
+    /// Global Environment Record, which is what the embedding compiles it for;
+    /// the call instruction runs again with what the Script said.
+    fn perform_eval_script(
+        &mut self,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if let Some(compiled) = self.compiled_unit.take() {
+            return match compiled {
+                Compiled::Evaluated(outcome) => outcome,
+                Compiled::Refused => Err(raise(
+                    heap,
+                    realm,
+                    super::realm::NativeErrorKind::SyntaxError,
+                    "invalid eval source",
+                )),
+                Compiled::Unlowered => Err(VMError::Unsupported(
+                    "an eval of a Script the lowering does not take",
+                )),
+                Compiled::Unit(_) | Compiled::Printed => Err(VMError::InvalidFeedbackVector),
+            };
+        }
+        // The nested Script runs on the Realm of the caller, which only a
+        // Script of that Realm has.
+        if !self.entry_is_realm_script {
+            return Err(VMError::Unsupported(
+                "an eval of a Script that has no Realm",
+            ));
+        }
+        let source = self.call_argument(call, 0, heap)?;
+        let text = property_name_units(source, heap, realm)?;
+        self.pending_strict = false;
+        self.pending_script = true;
+        self.pending_source = Some(alloc::rc::Rc::from(text));
+        self.resume_pc = call.return_pc.saturating_sub(1);
+        self.resume_code_id = call.caller_code_id;
+        Ok(VALUE_UNDEFINED)
+    }
+
     /// `CreateDynamicFunction` of 20.2.1.1.
     ///
     /// The source text is built here and compiled by the embedding, which is
@@ -31074,6 +31119,20 @@ impl RegisterVM {
                         .get(index as usize)
                         .ok_or(VMError::InvalidRegister)?;
                     let name = PropertyKey::String(heap.strings.intern_units(units)?);
+                    // 16.1.7 step 4 names a function declaration among the var
+                    // names, so a lexical declaration of this Realm that it
+                    // would shadow is a SyntaxError.
+                    if realm
+                        .global_environment()
+                        .has_lexical_declaration(heap, name)?
+                    {
+                        return Err(raise_message(
+                            heap,
+                            realm,
+                            super::realm::NativeErrorKind::SyntaxError,
+                            "a lexical declaration of this name already exists",
+                        ));
+                    }
                     // 16.1.7 step 9: a global property that cannot take the
                     // function is a TypeError.
                     if !realm

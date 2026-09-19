@@ -11381,8 +11381,10 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // did not make.
         | crate::engine::realm::Intrinsic::ArrayOf
         | crate::engine::realm::Intrinsic::ArrayFrom
-        // 19.2.1 answers whatever the Script it evaluated did.
+        // 19.2.1 answers whatever the Script it evaluated did, and the host
+        // capability of the conformance suite answers the same.
         | crate::engine::realm::Intrinsic::Eval
+        | crate::engine::realm::Intrinsic::HostEvalScript
         // 22.2.6.11 answers the String it built, which no lowering names.
         | crate::engine::realm::Intrinsic::RegExpPrototypeReplace
         // 23.1.3.14, 23.1.3.30, 23.1.3.34 and 23.1.3.35 answer an Array whose
@@ -11618,7 +11620,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // 27.1.3.3.1.2 and 27.1.3.3.15.2 answer nothing where they are written to.
         | crate::engine::realm::Intrinsic::IteratorPrototypeConstructorSet
         | crate::engine::realm::Intrinsic::IteratorPrototypeToStringTagSet
-        // The two host capabilities of the conformance suite answer nothing.
+        // Two of the three host capabilities of the conformance suite answer
+        // nothing.
         | crate::engine::realm::Intrinsic::HostDetachArrayBuffer
         | crate::engine::realm::Intrinsic::HostGc
         // 25.2.5.2 and 25.4.10 answer undefined.
