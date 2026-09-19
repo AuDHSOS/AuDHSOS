@@ -210,3 +210,103 @@ fn what_an_attach_and_a_detach_are_read_as() {
         assert!(crate::parse::definition(sql).is_err(), "{sql:?}");
     }
 }
+
+/// The rows a statement answers out of a database an `ATTACH` added.
+#[test]
+fn what_a_statement_reads_out_of_an_attached_database() {
+    let mut main = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    main.run(b"CREATE TABLE t(a)").unwrap();
+    main.run(b"INSERT INTO t VALUES(1),(2)").unwrap();
+    let mut aux = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    aux.run(b"CREATE TABLE t(a)").unwrap();
+    aux.run(b"INSERT INTO t VALUES(3)").unwrap();
+    aux.run(b"CREATE TABLE u(b PRIMARY KEY) WITHOUT ROWID")
+        .unwrap();
+    aux.run(b"INSERT INTO u VALUES(4)").unwrap();
+    aux.run(b"CREATE INDEX ua ON u(b)").unwrap();
+    aux.run(b"CREATE VIEW v AS SELECT b FROM u").unwrap();
+    let held = main.written();
+    let beside = aux.written();
+    let database = crate::db::Database::open(&held)
+        .unwrap()
+        .attaching(b"aux", &beside)
+        .unwrap();
+    let answered = |sql: &[u8]| {
+        database
+            .query(sql)
+            .map(|answered| {
+                let mut out = alloc::string::String::new();
+                for row in answered.rows {
+                    for value in row {
+                        out.push_str(&alloc::string::String::from_utf8_lossy(
+                            &value.text().unwrap_or_default(),
+                        ));
+                        out.push(',');
+                    }
+                }
+                out
+            })
+            .map_err(|error| error.message())
+    };
+    // A bare name is answered out of `main` first, which
+    // `sqlite3FindTable` reads before the attached databases.
+    assert_eq!(answered(b"SELECT a FROM t ORDER BY a").unwrap(), "1,2,");
+    assert_eq!(
+        answered(b"SELECT a FROM main.t ORDER BY a").unwrap(),
+        "1,2,"
+    );
+    assert_eq!(answered(b"SELECT a FROM aux.t").unwrap(), "3,");
+    // A table only the attached database holds is answered by its bare
+    // name as well, and so are its index, its view and its own schema.
+    assert_eq!(answered(b"SELECT b FROM u").unwrap(), "4,");
+    assert_eq!(answered(b"SELECT b FROM aux.u WHERE b=4").unwrap(), "4,");
+    assert_eq!(answered(b"SELECT b FROM aux.v").unwrap(), "4,");
+    assert_eq!(answered(b"SELECT b FROM v").unwrap(), "4,");
+    assert_eq!(
+        answered(b"SELECT count(*) FROM aux.sqlite_master").unwrap(),
+        "4,"
+    );
+    // A schema in front of a column names the database the side reads.
+    assert_eq!(answered(b"SELECT aux.t.a FROM aux.t").unwrap(), "3,");
+    assert_eq!(
+        answered(b"SELECT main.t.a FROM t ORDER BY a").unwrap(),
+        "1,2,"
+    );
+    assert_eq!(
+        answered(b"SELECT a FROM main.t JOIN aux.u ON b>a ORDER BY a").unwrap(),
+        "1,2,"
+    );
+    assert_eq!(answered(b"SELECT 1 WHERE 3 IN aux.t").unwrap(), "1,");
+    // A schema the connection holds no database under names no table,
+    // and so does a name that database does not hold.
+    assert_eq!(
+        answered(b"SELECT a FROM two.t").unwrap_err(),
+        "no such table: two.t"
+    );
+    assert_eq!(
+        answered(b"SELECT a FROM aux.nope").unwrap_err(),
+        "no such table: aux.nope"
+    );
+    assert_eq!(
+        answered(b"SELECT a FROM main.u").unwrap_err(),
+        "no such table: main.u"
+    );
+    // A name on the right of an `IN` that no database holds is refused
+    // where the statement is read, and `crate::eval::Row::answered`
+    // carries a value or nothing rather than the refusal, so the message
+    // is the one that stands for nothing.
+    assert_eq!(
+        answered(b"SELECT 1 WHERE 3 IN two.t").unwrap_err(),
+        "Unsupported"
+    );
+    assert_eq!(
+        answered(b"SELECT 1 WHERE 3 IN nope").unwrap_err(),
+        "Unsupported"
+    );
+    // A column named under a schema the side does not read is no column
+    // of it.
+    assert_eq!(
+        answered(b"SELECT two.t.a FROM aux.t").unwrap_err(),
+        "no such column: two.t.a"
+    );
+}

@@ -892,6 +892,10 @@ impl From<crate::auth::Error> for Error {
 struct Stored {
     /// The table as its statement describes it.
     table: Table,
+    /// Which database of the connection it stands in, which is nought for
+    /// the one the reader was opened over and one past the place of an
+    /// attached one.
+    place: usize,
     /// The page its tree begins at.
     root: u32,
     /// The `CREATE` text, which a computed column's expression points
@@ -1097,6 +1101,8 @@ struct Viewed {
     rows: Vec<Vec<Value>>,
     /// The name the view is known by.
     name: Vec<u8>,
+    /// Which database of the connection the view stands in.
+    place: usize,
 }
 
 /// What a statement written inside an expression is answered by.
@@ -1133,6 +1139,10 @@ struct Side<'a> {
     shape: Shape,
     /// Where its rows come from.
     source: Source<'a>,
+    /// The name of the database the table it reads stands in, and
+    /// nothing for a statement written inside the `FROM` and for a `WITH`
+    /// term, which no schema names.
+    schema: Vec<u8>,
     /// What the statement calls it: its alias, or the name of the table
     /// or the `WITH` term it reads, or nothing for a statement written
     /// inside the `FROM` with no alias.
@@ -1394,6 +1404,8 @@ fn shape_of(table: &Table) -> Shape {
 pub struct Database<'a> {
     /// The file.
     image: Image<'a>,
+    /// The databases an `ATTACH` added, in the order they were attached.
+    attached: Vec<Attached<'a>>,
     /// Its tables.
     tables: Vec<Stored>,
     /// Its views.
@@ -1460,6 +1472,8 @@ pub(crate) struct Trigger {
 struct View {
     /// The name, with its quotes taken off.
     name: Vec<u8>,
+    /// Which database of the connection it stands in.
+    place: usize,
     /// The `CREATE VIEW` text, which the tree points into.
     sql: Vec<u8>,
     /// The tree that text was parsed into.
@@ -1469,6 +1483,49 @@ struct View {
     /// The names the definition wrote for its columns, where it wrote
     /// them.
     columns: Vec<Vec<u8>>,
+}
+
+/// The name a statement wrote for a table, with the schema in front of it
+/// where it wrote one.
+fn table_named(schema: Option<Span>, name: Span, sql: &[u8]) -> Named {
+    let name = dequote(name.text(sql));
+    let mut shown = Vec::new();
+    if let Some(span) = schema {
+        shown.extend_from_slice(&dequote(span.text(sql)));
+        shown.push(b'.');
+    }
+    shown.extend_from_slice(&name);
+    Named { name, shown }
+}
+
+/// One name a statement wrote for a table: the name itself, and the name
+/// with the schema in front of it where the statement wrote one, which is
+/// what `no such table:` writes.
+struct Named {
+    /// The name, with its quotes taken off.
+    name: Vec<u8>,
+    /// The same with the schema in front of it, where one was written.
+    shown: Vec<u8>,
+}
+
+impl Named {
+    /// One name no statement wrote a schema in front of.
+    fn bare(name: &[u8]) -> Self {
+        Named {
+            name: name.to_vec(),
+            shown: name.to_vec(),
+        }
+    }
+}
+
+/// One database an `ATTACH` added to the connection the reader stands
+/// for: the name it answers to, and the file its trees stand in.
+#[derive(Clone, Debug)]
+struct Attached<'a> {
+    /// The name the `ATTACH` gave, with its quotes taken off.
+    name: Vec<u8>,
+    /// The file.
+    image: Image<'a>,
 }
 
 /// One row of a table as a statement that writes rows reads it: the
@@ -1582,51 +1639,10 @@ impl<'a> Database<'a> {
         collating: &'static [crate::value::Collating],
     ) -> Result<Self, Error> {
         let encoding = image.header().encoding;
-        let mut tables = Vec::new();
-        let mut payload = Vec::new();
-        for row in image.schema() {
-            let row = row?;
-            read_payload(&image, &row.payload, &mut payload)?;
-            let record = record::Record::parse(&payload)?;
-            let text = |at: usize| -> Result<Vec<u8>, Error> {
-                Ok(match record.value(at)? {
-                    Some(record::Value::Text(bytes)) => crate::value::decoded(bytes, encoding),
-                    _ => Vec::new(),
-                })
-            };
-            if text(0)? != b"table" {
-                continue;
-            }
-            let Some(record::Value::Int(root)) = record.value(3)? else {
-                continue;
-            };
-            let sql = text(4)?;
-            if sql.is_empty() {
-                continue;
-            }
-            let Some(stored) =
-                stored_of(sql, u32::try_from(root).unwrap_or(0), encoding, collating)?
-            else {
-                continue;
-            };
-            tables.push(stored);
-        }
-        // `sqlite_schema` is a table of the schema like any other: it
-        // lies on page one and holds the five columns every row of it
-        // is written with, which `sqlite3InitOne` builds in memory
-        // rather than reading out of a row.
-        tables.extend(
-            stored_of(
-                SCHEMA_CREATE.to_vec(),
-                crate::image::SCHEMA_ROOT,
-                encoding,
-                collating,
-            )
-            .ok()
-            .flatten(),
-        );
+        let tables = read_tables(&image, 0, encoding, collating)?;
         let mut database = Database {
             image,
+            attached: Vec::new(),
             tables,
             views: Vec::new(),
             triggers: Vec::new(),
@@ -1643,10 +1659,92 @@ impl<'a> Database<'a> {
             journalled: b"delete",
             collating,
         };
-        database.read_indexes()?;
-        database.read_views()?;
-        database.read_triggers()?;
+        database.read_indexes(&image, 0)?;
+        database.read_views(&image, 0)?;
+        database.read_triggers(&image)?;
         Ok(database)
+    }
+
+    /// The same reader with the database `name` beside it, which an
+    /// `ATTACH` added to the connection.
+    ///
+    /// The tables, views and triggers of that file are read into the same
+    /// lists as the ones of `main` and carry the schema place of the
+    /// file, so a bare name is answered out of `main` first and out of
+    /// the attached databases in the order they were attached, which is
+    /// `sqlite3FindTable` of `research/sqlite/src/build.c:373`.
+    ///
+    /// Reading the schema costs O(n) in its rows.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what it could not read and why.
+    pub fn attaching(mut self, name: &[u8], bytes: &'a [u8]) -> Result<Self, Error> {
+        let image = Image::open(bytes)?;
+        let place = self.attached.len().saturating_add(1);
+        let tables = read_tables(&image, place, self.encoding, self.collating)?;
+        self.tables.extend(tables);
+        self.attached.push(Attached {
+            name: name.to_vec(),
+            image,
+        });
+        self.read_indexes(&image, place)?;
+        self.read_views(&image, place)?;
+        self.read_triggers(&image)?;
+        Ok(self)
+    }
+
+    /// The file the tree of `stored` stands in, which is the one the
+    /// reader was opened over for schema place nought and an attached one
+    /// for every other place.
+    fn imaged(&self, place: usize) -> Image<'a> {
+        match place.checked_sub(1).and_then(|at| self.attached.get(at)) {
+            Some(held) => held.image,
+            None => self.image,
+        }
+    }
+
+    /// The name of the database at `place`, which is `main` for the one
+    /// the reader was opened over.
+    fn named_place(&self, place: usize) -> Vec<u8> {
+        match place.checked_sub(1).and_then(|at| self.attached.get(at)) {
+            Some(held) => held.name.clone(),
+            None => b"main".to_vec(),
+        }
+    }
+
+    /// The table of `name` in the database at `place`, and in every
+    /// database of the connection where the statement named none.
+    fn located(&self, place: Option<usize>, name: &[u8]) -> Option<&Stored> {
+        match place {
+            Some(place) => self.find_in(place, name),
+            None => self.find(name),
+        }
+    }
+
+    /// The table of `name` in the database at `place`.
+    fn find_in(&self, place: usize, name: &[u8]) -> Option<&Stored> {
+        let name = if schema_named(name) {
+            SCHEMA_TABLE
+        } else {
+            name
+        };
+        self.tables
+            .iter()
+            .find(|stored| stored.place == place && stored.table.name.eq_ignore_ascii_case(name))
+    }
+
+    /// The schema place of the database named `schema`, and nothing where
+    /// the connection holds none under that name.
+    fn placed(&self, schema: &[u8]) -> Option<usize> {
+        if is_main(schema) {
+            return Some(0);
+        }
+        let at = self
+            .attached
+            .iter()
+            .position(|held| held.name.eq_ignore_ascii_case(schema))?;
+        Some(at.saturating_add(1))
     }
 
     /// The same database, with `random` and `randomblob` answering the
@@ -1764,12 +1862,12 @@ impl<'a> Database<'a> {
     /// A view names a statement rather than a tree, so it carries no
     /// root page; one whose statement this crate cannot read is passed
     /// over, and a statement that names it then answers no table.
-    fn read_views(&mut self) -> Result<(), Error> {
+    fn read_views(&mut self, image: &Image<'a>, place: usize) -> Result<(), Error> {
         let mut views = Vec::new();
         let mut payload = Vec::new();
-        for row in self.image.schema() {
+        for row in image.schema() {
             let row = row?;
-            read_payload(&self.image, &row.payload, &mut payload)?;
+            read_payload(image, &row.payload, &mut payload)?;
             let record = record::Record::parse(&payload)?;
             let text = |at: usize| -> Result<Vec<u8>, Error> {
                 Ok(match record.value(at)? {
@@ -1794,13 +1892,14 @@ impl<'a> Database<'a> {
                 .collect();
             views.push(View {
                 name: schema::dequote(written.name.text(&sql)),
+                place,
                 select: written.select,
                 sql,
                 arena,
                 columns,
             });
         }
-        self.views = views;
+        self.views.extend(views);
         Ok(())
     }
 
@@ -1809,12 +1908,12 @@ impl<'a> Database<'a> {
     ///
     /// A trigger this crate cannot read is passed over, so a database
     /// that holds one is read for everything else it holds.
-    fn read_triggers(&mut self) -> Result<(), Error> {
+    fn read_triggers(&mut self, image: &Image<'a>) -> Result<(), Error> {
         let mut triggers = Vec::new();
         let mut payload = Vec::new();
-        for row in self.image.schema() {
+        for row in image.schema() {
             let row = row?;
-            read_payload(&self.image, &row.payload, &mut payload)?;
+            read_payload(image, &row.payload, &mut payload)?;
             let record = record::Record::parse(&payload)?;
             let text = |at: usize| -> Result<Vec<u8>, Error> {
                 Ok(match record.value(at)? {
@@ -1840,7 +1939,7 @@ impl<'a> Database<'a> {
                 written,
             });
         }
-        self.triggers = triggers;
+        self.triggers.extend(triggers);
         Ok(())
     }
 
@@ -1878,12 +1977,20 @@ impl<'a> Database<'a> {
     /// a view over a table reads what the table holds now. A view that
     /// names itself, directly or through another, is stopped by the
     /// count of views the statement is already inside.
-    fn viewed(&self, name: &[u8], scope: Scope<'_>) -> Result<Viewed, Error> {
+    fn viewed(
+        &self,
+        place: Option<usize>,
+        named: &Named,
+        scope: Scope<'_>,
+    ) -> Result<Viewed, Error> {
         let view = self
             .views
             .iter()
-            .find(|view| view.name.eq_ignore_ascii_case(name))
-            .ok_or_else(|| Error::NoTable(name.to_vec()))?;
+            .find(|view| {
+                place.is_none_or(|place| view.place == place)
+                    && view.name.eq_ignore_ascii_case(&named.name)
+            })
+            .ok_or_else(|| Error::NoTable(named.shown.clone()))?;
         if scope.views >= VIEW_DEPTH {
             return Err(Error::Unsupported);
         }
@@ -1903,6 +2010,7 @@ impl<'a> Database<'a> {
             shape: answered.shape,
             rows: answered.answer.rows,
             name: view.name.clone(),
+            place: view.place,
         })
     }
 
@@ -1923,7 +2031,7 @@ impl<'a> Database<'a> {
             outer: None,
             views: 0,
         };
-        let viewed = self.viewed(name, scope)?;
+        let viewed = self.viewed(None, &Named::bare(name), scope)?;
         let columns: Vec<Vec<u8>> = viewed
             .shape
             .columns
@@ -2039,11 +2147,11 @@ impl<'a> Database<'a> {
     /// first and the indexes against them. An index this crate cannot
     /// walk is passed over rather than refused: the statement over it
     /// scans, which is slower and just as right.
-    fn read_indexes(&mut self) -> Result<(), Error> {
+    fn read_indexes(&mut self, image: &Image<'a>, place: usize) -> Result<(), Error> {
         let mut payload = Vec::new();
-        for row in self.image.schema() {
+        for row in image.schema() {
             let row = row?;
-            read_payload(&self.image, &row.payload, &mut payload)?;
+            read_payload(image, &row.payload, &mut payload)?;
             let record = record::Record::parse(&payload)?;
             let text = |at: usize| -> Result<Vec<u8>, Error> {
                 Ok(match record.value(at)? {
@@ -2089,11 +2197,9 @@ impl<'a> Database<'a> {
                 continue;
             };
             let over = dequote(written.table.text(&sql));
-            let Some(stored) = self
-                .tables
-                .iter_mut()
-                .find(|stored| stored.table.name.eq_ignore_ascii_case(&over))
-            else {
+            let Some(stored) = self.tables.iter_mut().find(|stored| {
+                stored.place == place && stored.table.name.eq_ignore_ascii_case(&over)
+            }) else {
                 continue;
             };
             let Ok(index) = schema::index(&arena, &written, &sql, &stored.table, self.collating)
@@ -2287,10 +2393,11 @@ impl<'a> Database<'a> {
         }
         let mut out = Vec::new();
         let mut payload = Vec::new();
+        let image = self.imaged(stored.place);
         for step in self.walk(stored, (None, None)) {
             let (rowid, held) = step?;
             let rowid = rowid.ok_or(Error::Unsupported)?;
-            read_payload(&self.image, &held, &mut payload)?;
+            read_payload(&image, &held, &mut payload)?;
             let values = values_of(
                 &payload,
                 stored,
@@ -2345,9 +2452,10 @@ impl<'a> Database<'a> {
         let mut out = Vec::new();
         let mut payload = Vec::new();
         let collation = self.collation();
+        let image = self.imaged(stored.place);
         for step in self.walk(stored, (None, None)) {
             let (_, held) = step?;
-            read_payload(&self.image, &held, &mut payload)?;
+            read_payload(&image, &held, &mut payload)?;
             out.push(values_of(&payload, stored, None, self.encoding, collation)?);
         }
         Ok(out)
@@ -2788,45 +2896,51 @@ impl<'a> Database<'a> {
             // A name is matched with its quotes off, which is
             // `sqlite3Dequote` over every identifier the parser keeps.
             let alias = source.alias.map(|span| dequote(span.text(sql)));
-            let (shape, from, name) = match source.kind {
+            let (shape, from, name, held) = match source.kind {
                 SourceKind::Table { schema, name, .. } => {
-                    if let Some(span) = schema.filter(|span| !is_main(&dequote(span.text(sql)))) {
-                        // Only the one schema a file holds is readable,
-                        // and a name in front of it that is not it names
-                        // no table rather than another database.
-                        let mut written = dequote(span.text(sql));
-                        written.push(b'.');
-                        written.extend_from_slice(&dequote(name.text(sql)));
-                        return Err(Error::NoTable(written));
-                    }
-                    let written = &dequote(name.text(sql));
+                    let named = table_named(schema, name, sql);
+                    // A schema in front of the name says which database
+                    // of the connection holds the table, which
+                    // `sqlite3FindTable` of
+                    // `research/sqlite/src/build.c:343` reads as a place
+                    // of `db->aDb`.
+                    let place = match schema {
+                        Some(span) => match self.placed(&dequote(span.text(sql))) {
+                            Some(place) => Some(place),
+                            None => return Err(Error::NoTable(named.shown)),
+                        },
+                        None => None,
+                    };
                     // A `WITH` term is reached by its bare name; a name
                     // with a schema in front of it is a table.
-                    let found = match schema {
+                    let found = match place {
                         Some(_) => None,
                         None => scope
                             .terms
                             .iter()
-                            .find(|(term, _)| term.eq_ignore_ascii_case(written)),
+                            .find(|(term, _)| term.eq_ignore_ascii_case(&named.name)),
                     };
                     if let Some((term, answered)) = found {
                         (
                             answered.shape.clone(),
                             Source::Rows(answered.answer.rows.clone()),
                             term.clone(),
+                            Vec::new(),
                         )
-                    } else if let Some(stored) = self.find(written) {
+                    } else if let Some(stored) = self.located(place, &named.name) {
                         (
                             shape_of(&stored.table),
                             Source::Table(stored),
                             stored.table.name.clone(),
+                            self.named_place(stored.place),
                         )
                     } else {
                         // A view names a statement, so the rows are the
                         // ones that statement answers, which is what
                         // `sqlite3SelectExpand` puts in its place.
-                        let viewed = self.viewed(written, scope)?;
-                        (viewed.shape, Source::Rows(viewed.rows), viewed.name)
+                        let viewed = self.viewed(place, &named, scope)?;
+                        let held = self.named_place(viewed.place);
+                        (viewed.shape, Source::Rows(viewed.rows), viewed.name, held)
                     }
                 }
                 SourceKind::Select(id) => {
@@ -2834,6 +2948,7 @@ impl<'a> Database<'a> {
                     (
                         answered.shape,
                         Source::Rows(answered.answer.rows),
+                        Vec::new(),
                         Vec::new(),
                     )
                 }
@@ -2880,6 +2995,7 @@ impl<'a> Database<'a> {
             out.push(Side {
                 shape,
                 source: from,
+                schema: held,
                 table,
                 name: alias.unwrap_or(name),
                 kind: source.join.kind,
@@ -2974,15 +3090,20 @@ impl<'a> Database<'a> {
             }
             Used::InTable(value, schema, table, negated) => {
                 let called = dequote(table.text(sql));
-                if schema.is_some_and(|span| !is_main(&dequote(span.text(sql)))) {
-                    return Err(Error::NoTable(called));
-                }
+                let place = match schema {
+                    Some(span) => match self.placed(&dequote(span.text(sql))) {
+                        Some(place) => Some(place),
+                        None => return Err(Error::NoTable(called)),
+                    },
+                    None => None,
+                };
                 let stored = self
-                    .find(&called)
+                    .located(place, &called)
                     .ok_or_else(|| Error::NoTable(called.clone()))?;
                 let side = Side {
                     shape: shape_of(&stored.table),
                     source: Source::Table(stored),
+                    schema: self.named_place(stored.place),
                     table: called.clone(),
                     name: Vec::new(),
                     kind: JoinKind::Inner,
@@ -3307,9 +3428,12 @@ impl<'a> Database<'a> {
             }
             cursor.held.clear();
             for before in sides.iter().take(at) {
-                cursor
-                    .held
-                    .push(Held::empty(&before.shape, &before.name, &before.using));
+                cursor.held.push(Held::empty(
+                    &before.shape,
+                    &before.schema,
+                    &before.name,
+                    &before.using,
+                ));
             }
             // The walk marks what it matches into the same list, so a
             // row a `RIGHT` join at an earlier level already answered
@@ -3341,22 +3465,23 @@ impl<'a> Database<'a> {
             Source::Rows(rows) => return Feed::Rows(rows.iter()),
             Source::Table(stored) => stored,
         };
+        let image = self.imaged(stored.place);
         if let Some((root, key, collations, rowid_at)) = sought(&side.plan, cursor)
             // An entry this walk cannot read whole is one it cannot
             // compare, so the descent gives up and the table is scanned:
             // the same rows, and only the cost is not the same.
             && let Ok(walk) = {
                 let mut scratch = Vec::new();
-                self.image.entries_from(root, &mut |entry| {
+                image.entries_from(root, &mut |entry| {
                     let order =
-                        order_of_entry(&self.image, entry, &key, &collations, self.encoding, &mut scratch)
+                        order_of_entry(&image, entry, &key, &collations, self.encoding, &mut scratch)
                             .map_err(|_| crate::error::Error::Overrun)?;
                     Ok(order == core::cmp::Ordering::Less)
                 })
             }
         {
             return Feed::Keyed(Box::new(Sought {
-                image: self.image,
+                image,
                 stored,
                 walk,
                 key,
@@ -3377,7 +3502,7 @@ impl<'a> Database<'a> {
     /// answer.
     fn scanned<'f>(&self, side: &'f Side<'f>, stored: &'f Stored) -> Feed<'a, 'f> {
         Feed::Tree(Box::new(Tree {
-            image: self.image,
+            image: self.imaged(stored.place),
             stored,
             walk: self.walk(stored, side.range()),
             encoding: self.encoding,
@@ -3388,11 +3513,12 @@ impl<'a> Database<'a> {
 
     /// The rows of a table, whichever kind of tree holds them, each with
     /// the rowid where the table has one.
-    const fn walk(&self, stored: &Stored, range: (Option<i64>, Option<i64>)) -> Walk<'a> {
+    fn walk(&self, stored: &Stored, range: (Option<i64>, Option<i64>)) -> Walk<'a> {
+        let image = self.imaged(stored.place);
         if stored.table.without_rowid {
-            Walk::Index(self.image.entries(stored.root))
+            Walk::Index(image.entries(stored.root))
         } else {
-            Walk::Table(self.image.rows_between(stored.root, range.0, range.1))
+            Walk::Table(image.rows_between(stored.root, range.0, range.1))
         }
     }
 
@@ -3435,6 +3561,7 @@ impl<'a> Database<'a> {
             }
             cursor.held.push(Held {
                 shape: &side.shape,
+                schema: &side.schema,
                 name: &side.name,
                 using: &side.using,
                 rowid,
@@ -3462,9 +3589,12 @@ impl<'a> Database<'a> {
         if spare.is_none() && !any && matches!(side.kind, JoinKind::Left | JoinKind::Full) {
             // A `LEFT JOIN` answers the row on the left once with
             // nothing on the right where nothing on the right matched.
-            cursor
-                .held
-                .push(Held::empty(&side.shape, &side.name, &side.using));
+            cursor.held.push(Held::empty(
+                &side.shape,
+                &side.schema,
+                &side.name,
+                &side.using,
+            ));
             self.nest(sides, deeper, cursor, arena, sql, each, kept, None)?;
             cursor.held.pop();
         }
@@ -3553,7 +3683,7 @@ impl<'a> Database<'a> {
             let held = group.magnet.clone().unwrap_or_else(|| {
                 sides
                     .iter()
-                    .map(|side| Held::empty(&side.shape, &side.name, &side.using))
+                    .map(|side| Held::empty(&side.shape, &side.schema, &side.name, &side.using))
                     .collect()
             });
             let cursor = Cursor {
@@ -3830,13 +3960,19 @@ fn reached(arena: &Arena, id: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Option<
     else {
         return None;
     };
-    if schema.is_some_and(|span| !is_main(&dequote(span.text(sql)))) {
-        return None;
-    }
+    let held = schema.map(|span| dequote(span.text(sql)));
     let named = table.map(|span| dequote(span.text(sql)));
     let column = &dequote(column.text(sql));
     let mut found = None;
     for (at, side) in sides.iter().enumerate() {
+        // A schema in front of the table names the database the side
+        // reads, which a side that reads no table has none of.
+        if held
+            .as_deref()
+            .is_some_and(|held| !side.schema.eq_ignore_ascii_case(held))
+        {
+            continue;
+        }
         if named.as_deref().is_some_and(|named| !side.named(named)) {
             continue;
         }
@@ -5783,6 +5919,7 @@ fn elsewhere(
 /// Reading one statement costs O(n) in its bytes.
 fn stored_of(
     sql: Vec<u8>,
+    place: usize,
     root: u32,
     encoding: Encoding,
     collating: &[crate::value::Collating],
@@ -5805,12 +5942,72 @@ fn stored_of(
     let places = places(&table);
     Ok(Some(Stored {
         table,
+        place,
         root,
         sql,
         arena,
         places,
         indexes: Vec::new(),
     }))
+}
+
+/// The tables one file holds, each carrying the schema place of that
+/// file.
+///
+/// A table whose statement this crate cannot read is passed over, so a
+/// database that holds one is read for everything else it holds.
+///
+/// Reading the schema costs O(n) in its rows.
+fn read_tables(
+    image: &Image<'_>,
+    place: usize,
+    encoding: Encoding,
+    collating: &'static [crate::value::Collating],
+) -> Result<Vec<Stored>, Error> {
+    let mut tables = Vec::new();
+    let mut payload = Vec::new();
+    for row in image.schema() {
+        let row = row?;
+        read_payload(image, &row.payload, &mut payload)?;
+        let record = record::Record::parse(&payload)?;
+        let text = |at: usize| -> Result<Vec<u8>, Error> {
+            Ok(match record.value(at)? {
+                Some(record::Value::Text(bytes)) => crate::value::decoded(bytes, encoding),
+                _ => Vec::new(),
+            })
+        };
+        if text(0)? != b"table" {
+            continue;
+        }
+        let Some(record::Value::Int(root)) = record.value(3)? else {
+            continue;
+        };
+        let sql = text(4)?;
+        if sql.is_empty() {
+            continue;
+        }
+        let root = u32::try_from(root).unwrap_or(0);
+        let Some(stored) = stored_of(sql, place, root, encoding, collating)? else {
+            continue;
+        };
+        tables.push(stored);
+    }
+    // `sqlite_schema` is a table of the schema like any other: it lies
+    // on page one and holds the five columns every row of it is written
+    // with, which `sqlite3InitOne` builds in memory rather than reading
+    // out of a row.
+    tables.extend(
+        stored_of(
+            SCHEMA_CREATE.to_vec(),
+            place,
+            crate::image::SCHEMA_ROOT,
+            encoding,
+            collating,
+        )
+        .ok()
+        .flatten(),
+    );
+    Ok(tables)
 }
 
 /// The name the schema's own table is held under.
@@ -6247,6 +6444,9 @@ const fn binary_of(encoding: Encoding) -> Collation {
 struct Held<'a> {
     /// The columns it answers.
     shape: &'a Shape,
+    /// The name of the database the table it reads stands in, and
+    /// nothing where no schema names it.
+    schema: &'a [u8],
     /// What the statement calls it, which is empty for a statement
     /// written inside the `FROM` with no alias.
     name: &'a [u8],
@@ -6262,9 +6462,10 @@ struct Held<'a> {
 impl<'a> Held<'a> {
     /// The side with no row of it, which is what a `LEFT JOIN` holds
     /// where nothing matched.
-    fn empty(shape: &'a Shape, name: &'a [u8], using: &'a [Vec<u8>]) -> Self {
+    fn empty(shape: &'a Shape, schema: &'a [u8], name: &'a [u8], using: &'a [Vec<u8>]) -> Self {
         Held {
             shape,
+            schema,
             name,
             using,
             rowid: None,
@@ -6404,11 +6605,13 @@ impl<'a> Cursor<'a> {
     /// counting the columns a name matches: it reads every side, so it
     /// is O(sides) per name.
     fn answering(&self, schema: Option<&[u8]>, table: Option<&[u8]>, column: &[u8]) -> Answering {
-        if schema.is_some_and(|named| !is_main(named)) {
-            return Answering::Nothing;
-        }
         let mut found = Answering::Nothing;
         for (at, held) in self.held.iter().enumerate() {
+            // A schema in front of the column names the database the
+            // side reads, which a side that reads no table has none of.
+            if schema.is_some_and(|named| !held.schema.eq_ignore_ascii_case(named)) {
+                continue;
+            }
             // A name in front of a column names a side, or one of the
             // tables inside brackets a side holds the columns of.
             let answered = match table {

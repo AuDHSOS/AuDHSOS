@@ -171,7 +171,7 @@ committed and one not, which no replay repairs.
 |------|------|--------|------------|------|
 | A1 | One held file, as one struct | done | — | M |
 | A2 | `ATTACH` and `DETACH` read | done | A1 | M |
-| A3 | A reader over more than one image | open | A2 | L |
+| A3 | A reader over more than one image | done | A2 | L |
 | A4 | A statement that writes an attached file | open | A3 | M |
 | A5 | One transaction over more than one held file | open | A4 | M |
 | A6 | The temp schema | open | A3 | M |
@@ -271,7 +271,7 @@ the `DETACH` that follows it.
 
 ### Status
 
-open.
+done.
 
 ### Depends on
 
@@ -289,31 +289,32 @@ L.
 
 ### Does
 
-1. Move the image, the tables, the views and the triggers of
-   `Database` into a struct `Schema`, with the name and the schema place
-   beside them.
-2. Hold `Vec<Schema>` in `Database`, built from the held files of the
-   connection.
-3. Answer `Database::table(schema, name)` for a name a statement wrote a
-   schema in front of, and `Database::table(name)` for a bare name by
-   reading schema place 1, then 0, then 2 and up, which is
+1. Read the schema of one more file into the same lists of tables, views
+   and indexes, each row carrying the schema place of the file it came
+   from, which D3 decides.
+2. Answer the file one tree stands in out of that place.
+3. Answer a bare name out of `main` first and out of the attached
+   databases in the order they were attached, which is
    `sqlite3FindTable` of `research/sqlite/src/build.c:373`.
-4. Carry the schema place beside every root page, which D3 decides.
-5. Answer `<name>.sqlite_schema`, `<name>.sqlite_master` and
-   `sqlite_temp_schema` out of the schema they name.
-6. Refuse `no such table: <schema>.<name>` for a schema the list holds
-   and a table it does not, and for a schema the list does not hold.
-7. Read a trigger and a view of the schema the table stands in.
+4. Answer a name with a schema in front of it out of that database alone.
+5. Answer `<name>.sqlite_schema` and `<name>.sqlite_master` out of the
+   database they name.
+6. Refuse `no such table: <schema>.<name>` for a schema the connection
+   holds and a table it does not, and for a schema it holds no database
+   under.
+7. Reach a column written `aux.t.c` through the side that reads `aux.t`,
+   which the side carries the name of the database for.
 
 ### Produces
 
-`Schema` in `crates/db/sqlite/src/db.rs`.
+`crate::db::Database::attaching`, `crate::db::Database::imaged` and
+`crate::db::Side::schema`.
 
 ### Done when
 
 `SELECT * FROM aux.t1 JOIN main.t1` answers the rows of both files, and
 `SELECT * FROM t1` answers the rows of `main` where both files hold a
-`t1`.
+`t1`. A trigger of an attached database is read where A4 writes one.
 
 ## 18.14 A4. A statement that writes an attached file
 

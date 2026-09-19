@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` answers the rows of every database a connection holds: a
+  bare name out of `main` first and out of the attached databases in the
+  order they were attached, and `aux.t` out of that database alone. D-324
+  records it. Catalog 6.6.219.
+
 - `db-sqlite` reads `ATTACH` and `DETACH`, holds one database per name,
   and answers them from `PRAGMA database_list`. D-323 records it. Catalog
   6.6.218. `auth.test` goes from 142 cases passing to 228.

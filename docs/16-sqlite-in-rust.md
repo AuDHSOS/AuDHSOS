@@ -875,8 +875,11 @@ Size: L.
     `ALTER TABLE ... RENAME TO` renames that table. Built, which D-321
     records.
 78. `ATTACH` and `DETACH`, which say what databases one connection
-    holds. Read, which D-323 records; a statement that names an attached
-    database is open, which A3 of document 18 specifies.
+    holds. Read, which D-323 records.
+79. The rows of a database an `ATTACH` added, which a statement reads by
+    a bare name or under the schema. Built, which D-324 records; a
+    statement that writes one is open, which A4 of document 18
+    specifies.
 
 ### Done when
 

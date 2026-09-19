@@ -6189,3 +6189,17 @@ Document 18 step A2.
 - A connection told no opening function attaches a database of its own
   and no file.
 - `SQLITE_ATTACH` and `SQLITE_DETACH` carry the text the statement wrote.
+
+### 6.6.219 What a statement reads out of an attached database (`db-sqlite`)
+
+Document 18 step A3.
+
+- A bare name both databases hold is answered out of `main`.
+- A bare name only the attached database holds is answered out of it,
+  and so are its index, its view and its own schema table.
+- `aux.t` is answered out of that database alone, and `main.u` where only
+  `aux` holds a `u` names no table.
+- A schema the connection holds no database under names no table.
+- `aux.t.a` reaches the side that reads `aux.t`, and a schema the side
+  does not read names no column.
+- A join over two databases answers the rows of both.
