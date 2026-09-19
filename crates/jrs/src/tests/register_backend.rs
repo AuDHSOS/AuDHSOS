@@ -3916,8 +3916,6 @@ fn a_block_scope_is_taken_or_names_what_stops_it() -> Result<(), Error> {
         differential(source)?;
     }
     for source in [
-        "{let x=x;x}",
-        "{let x=y,y=1;x}",
         "{function f(){return 42}f()}",
         // 14.7.4.8 copies a Block binding of a loop per iteration.
         "var r=[];for(var i=0;i<2;i=i+1){let a=i;r.push(function(){return a})}r[0]()",
@@ -7448,19 +7446,18 @@ fn a_number_or_boolean_answers_its_prototype() -> Result<(), Error> {
 }
 
 /// 9.1.1.1.1 leaves a lexical binding in its temporal dead zone until the
-/// declaration initializes it, and the lowering has no zone to check.
+/// declaration initializes it, which 9.1.1.1.6 answers as a `ReferenceError`.
 #[test]
-fn a_lexical_initializer_that_reads_its_own_binding_is_refused() -> Result<(), Error> {
+fn a_lexical_initializer_that_reads_its_own_binding_throws() -> Result<(), Error> {
     for source in [
-        "let i=i++;i++",
-        "let a=b,b=1;a",
-        "let a=[a];a",
-        "function f(){let x=x;return x}f()",
+        "var r;try{let i=i++}catch(e){r=e instanceof ReferenceError};''+r",
+        "var r;try{let a=b,b=1}catch(e){r=e instanceof ReferenceError};''+r",
+        "var r;try{let a=[a]}catch(e){r=e instanceof ReferenceError};''+r",
+        "var r;try{(function(){let x=x})()}catch(e){r=e instanceof ReferenceError};''+r",
+        "var r;try{(function(){{x;let x}})()}catch(e){r=e instanceof ReferenceError};''+r",
+        "var r;try{(function(){typeof w;let w})()}catch(e){r=e instanceof ReferenceError};''+r",
     ] {
-        assert!(
-            !compile(source, Limits::default())?.uses_register_backend(),
-            "{source}"
-        );
+        differential_scripts(&[source])?;
     }
     // A name a nested function reads is read when that function runs, and a
     // `var` has no dead zone at all.

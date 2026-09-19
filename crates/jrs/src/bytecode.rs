@@ -2261,6 +2261,20 @@ impl RegisterLowerer {
             }
             ExprKind::Name(name) => {
                 if let Some(binding) = self.bindings.get(name).copied() {
+                    // 9.1.1.1.6 refuses a read of a binding 9.1.1.1.1 has not
+                    // initialized. A register carries no such state, so the
+                    // binding moves to a context slot, which the frame leaves
+                    // uninitialized until the declaration writes it.
+                    let binding = if binding.value_type.is_none() && !binding.initialized {
+                        let captured = self.capture_binding(name)?;
+                        self.bindings.get_mut(name)?.value_type = Some(RegisterType::Unknown);
+                        RegisterBinding {
+                            value_type: Some(RegisterType::Unknown),
+                            ..captured
+                        }
+                    } else {
+                        binding
+                    };
                     let value_type = binding.value_type?;
                     self.load_binding(binding);
                     value_type
@@ -4399,12 +4413,14 @@ impl RegisterLowerer {
         }
         // 10.2.11 steps 27 and 28: a function with parameter expressions runs
         // the Initializers in an environment of its own, and the names its
-        // body declares with `var` belong to a second one that is made after
-        // them. This lowering gives the frame one environment, so a name an
-        // Initializer reads and the body declares would answer the body's
-        // binding where the clause answers the one around the function.
+        // body declares belong to a second one that is made after them. This
+        // lowering gives the frame one environment, so a name an Initializer
+        // reads and the body declares would answer the body's binding where
+        // the clause answers the one around the function.
         if register_has_parameter_expressions(function) {
-            let separated: BTreeSet<&String> = child.body_var_names.iter().collect();
+            let lexical = register_block_local_names(body)?;
+            let separated: BTreeSet<&String> =
+                child.body_var_names.iter().chain(lexical.keys()).collect();
             let mut read = BTreeSet::new();
             let mut nested = BTreeSet::new();
             for parameter in &function.parameters {
@@ -4416,7 +4432,7 @@ impl RegisterLowerer {
                 .union(&nested)
                 .any(|name| separated.contains(&name.clone()))
             {
-                child.refuse("a var of a body an Initializer of a parameter reads");
+                child.refuse("a name of a body an Initializer of a parameter reads");
                 return None;
             }
         }
@@ -4438,9 +4454,6 @@ impl RegisterLowerer {
         for statement in body {
             flow = match statement {
                 Stmt::Declare(bindings) => {
-                    if register_lexical_dead_zone_read(bindings)? {
-                        return None;
-                    }
                     for (pattern, _, initializer) in bindings {
                         if let Some(initializer) = initializer {
                             child.initialize_pattern(pattern, initializer)?;
@@ -7682,8 +7695,11 @@ impl RegisterLowerer {
                 if let Stmt::Function(name, function) = statement {
                     let value_type = self.lower_function_declaration(name, function)?;
                     let binding = *self.bindings.get(name)?;
-                    self.store_binding(binding);
-                    self.bindings.get_mut(name)?.value_type = Some(value_type);
+                    // 14.2.3 step 1 is the write that initializes the binding.
+                    self.store_binding_as(binding, !binding.initialized);
+                    let entry = self.bindings.get_mut(name)?;
+                    entry.value_type = Some(value_type);
+                    entry.initialized = true;
                 }
             }
         }
@@ -7815,9 +7831,6 @@ impl RegisterLowerer {
         &mut self,
         bindings: &[(BindingPattern, bool, Option<Expr>)],
     ) -> Option<RegisterFlow> {
-        if register_lexical_dead_zone_read(bindings)? {
-            return None;
-        }
         for (pattern, _, initializer) in bindings {
             if let Some(initializer) = initializer {
                 self.initialize_pattern(pattern, initializer)?;
@@ -7863,9 +7876,11 @@ impl RegisterLowerer {
                 RegisterBinding {
                     storage: RegisterBindingStorage::Register(register),
                     value_type: None,
+                    // 9.1.1.1.1 leaves a binding of the Block uninitialized
+                    // until its own declaration runs.
                     mutability: Mutability::of(mutable),
                     stable_function_identity: false,
-                    initialized: true,
+                    initialized: false,
                 },
             );
             scoped.push((name, register, previous));
@@ -8470,9 +8485,6 @@ impl RegisterLowerer {
                         );
                         scoped_registers.push((name, register));
                     }
-                }
-                if register_lexical_dead_zone_read(bindings)? {
-                    return None;
                 }
                 // The copies of 14.7.4.4 hold what the context holds, so
                 // every binding of the head stands there before the
@@ -10928,6 +10940,15 @@ impl RegisterLowerer {
                 return None;
             }
             return self.lower_global_update(name, add, prefix);
+        };
+        // 9.1.1.1.6 refuses a read of a binding 9.1.1.1.1 has not
+        // initialized, which only a context slot carries.
+        let binding = if binding.value_type.is_none() && !binding.initialized {
+            self.capture_binding(name)?;
+            self.bindings.get_mut(name)?.value_type = Some(RegisterType::Unknown);
+            *self.bindings.get(name)?
+        } else {
+            binding
         };
         // 13.4.4.1 takes `ToNumeric` of the old value first, so the operand of
         // the addition is a Number whatever the binding held, and the answer a
@@ -13807,9 +13828,6 @@ fn lower_register_body(
                         lowerer.initialize_global_lexical(pattern, initializer.as_ref())?;
                     }
                 } else {
-                    if register_lexical_dead_zone_read(bindings)? {
-                        return None;
-                    }
                     for (pattern, _, initializer) in bindings {
                         if let Some(initializer) = initializer {
                             lowerer.initialize_pattern(pattern, initializer)?;
@@ -13946,39 +13964,6 @@ fn register_binding_pattern_supported(pattern: &parser::BindingPattern) -> bool 
                 && register_binding_pattern_supported(&property.pattern)
         }),
     }
-}
-
-/// Whether the head of a `for`-`of` or `for`-`in` that declares nothing names
-/// a Reference this lowering writes.
-/// Whether an Initializer of a lexical declaration reads a name the
-/// declaration binds and has not initialized yet.
-///
-/// 9.1.1.1.1 leaves such a name in its temporal dead zone, where a read is a
-/// `ReferenceError`. The lowering writes the binding's register directly and
-/// has no zone to check, so it does not take the declaration at all. A name a
-/// nested function reads is read when that function runs, which is after the
-/// declaration.
-fn register_lexical_dead_zone_read(
-    bindings: &[(BindingPattern, bool, Option<Expr>)],
-) -> Option<bool> {
-    for (at, (_, _, initializer)) in bindings.iter().enumerate() {
-        let Some(initializer) = initializer else {
-            continue;
-        };
-        let mut pending = BTreeSet::new();
-        for (pattern, _, _) in bindings.get(at..)? {
-            let mut names = Vec::new();
-            pattern.names(&mut names);
-            pending.extend(names);
-        }
-        let mut direct = BTreeSet::new();
-        let mut nested = BTreeSet::new();
-        register_expression_references(initializer, &mut direct, &mut nested)?;
-        if direct.intersection(&pending).next().is_some() {
-            return Some(true);
-        }
-    }
-    Some(false)
 }
 
 /// Whether 8.5.2 gives this value the name of the key it is defined under,
