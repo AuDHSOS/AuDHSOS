@@ -13,10 +13,12 @@
 //!
 //! An empty pool is all zeros and its constructor is `const` (D-66). That
 //! is why the generation counts up in [`Pool::allocate`] rather than
-//! starting at one, and why the free list starts empty with a high-water
-//! mark rather than linked through every slot: a pool that is all zeros
-//! reaches the `.bss` of the kernel image without being built on a stack
-//! first, and the kernel's pools are far larger than the boot stack.
+//! starting at one, why the free list starts empty with a high-water mark
+//! rather than linked through every slot, and why a free slot carries a
+//! `#[repr(u32)]` tag rather than an `Option` whose `None` a niche of the
+//! object type would hold (D-185): a pool that is all zeros reaches the
+//! `.bss` of the kernel image without being built on a stack first, and the
+//! kernel's pools are far larger than the boot stack.
 
 use core::fmt;
 use core::marker::PhantomData;
@@ -121,15 +123,78 @@ struct Occupant<T> {
     value: T,
 }
 
-/// One slot of a pool. A slot is free exactly when it has no occupant;
-/// `next_free` links the free slots in the order in which they were
-/// released. [`Slot::FREE`] is all zeros, which is what puts a fresh pool
-/// into the `.bss`.
+/// Whether a slot holds an occupant.
+///
+/// `#[repr(u32)]` with `Free` at discriminant zero is what keeps an empty
+/// pool all zeros. An `Option<Occupant<T>>` encodes `None` in a niche of
+/// `T`, and every object type of this kernel but
+/// [`crate::object::IoPortRange`] has one, so `None` would be a nonzero
+/// byte at the niche's offset and the pool would land in `.data` (D-185).
+/// A `#[repr(u32)]` tag has a fixed offset, no niche, and leaves the
+/// payload bytes unconstrained.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u32)]
+enum Occupancy<T> {
+    /// The slot holds nothing. The zero word, so an array of free slots is
+    /// `.bss`.
+    Free = 0,
+    /// The slot holds an occupant with at least one reference.
+    Held(Occupant<T>) = 1,
+}
+
+impl<T> Occupancy<T> {
+    /// The occupant, if the slot holds one.
+    const fn as_ref(&self) -> Option<&Occupant<T>> {
+        match self {
+            Occupancy::Free => None,
+            Occupancy::Held(occupant) => Some(occupant),
+        }
+    }
+
+    /// The occupant, if the slot holds one, for modification.
+    const fn as_mut(&mut self) -> Option<&mut Occupant<T>> {
+        match self {
+            Occupancy::Free => None,
+            Occupancy::Held(occupant) => Some(occupant),
+        }
+    }
+
+    /// `true` if the slot holds no occupant.
+    const fn is_free(&self) -> bool {
+        matches!(self, Occupancy::Free)
+    }
+
+    /// Frees the slot and says whether it held an occupant. The occupant
+    /// itself does not come back out (D-73).
+    fn clear(&mut self) -> bool {
+        let held = !self.is_free();
+        *self = Occupancy::Free;
+        held
+    }
+}
+
+/// `true` if the free tag of a slot for `T` is a field of its own rather
+/// than a niche of `T`.
+///
+/// [`Occupancy`] is `#[repr(u32)]`, so the tag costs a word and the enum is
+/// larger than [`Occupant`]. An `Option<Occupant<T>>` over a `T` with a
+/// niche is the same size as `Occupant<T>`, and its `None` is a nonzero
+/// byte at the niche's offset, which is what took the pools out of the
+/// `.bss` (D-185).
+#[cfg(test)]
+pub(crate) const fn slot_tag_is_a_field_of_its_own<T>() -> bool {
+    size_of::<Occupancy<T>>() > size_of::<Occupant<T>>()
+}
+
+/// One slot of a pool. A slot is free exactly when its occupancy is
+/// [`Occupancy::Free`]; `next_free` links the free slots in the order in
+/// which they were released. [`Slot::FREE`] is all zeros, which is what
+/// puts a fresh pool into the `.bss`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Slot<T> {
     generation: u32,
     next_free: Option<u32>,
-    occupant: Option<Occupant<T>>,
+    occupancy: Occupancy<T>,
 }
 
 impl<T> Slot<T> {
@@ -139,7 +204,7 @@ impl<T> Slot<T> {
     const FREE: Slot<T> = Slot {
         generation: 0,
         next_free: None,
-        occupant: None,
+        occupancy: Occupancy::Free,
     };
 }
 
@@ -207,7 +272,7 @@ impl<T, const N: usize> Pool<T, N> {
         if slot.generation != id.generation {
             return Err(PoolError::StaleId);
         }
-        slot.occupant.as_ref().ok_or(PoolError::StaleId)
+        slot.occupancy.as_ref().ok_or(PoolError::StaleId)
     }
 
     /// The occupant `id` names, for modification.
@@ -216,7 +281,7 @@ impl<T, const N: usize> Pool<T, N> {
         if slot.generation != id.generation {
             return Err(PoolError::StaleId);
         }
-        slot.occupant.as_mut().ok_or(PoolError::StaleId)
+        slot.occupancy.as_mut().ok_or(PoolError::StaleId)
     }
 
     /// Stores `value` in a free slot and returns its id with one reference.
@@ -235,7 +300,7 @@ impl<T, const N: usize> Pool<T, N> {
         };
         slot.generation = generation;
         slot.next_free = None;
-        slot.occupant = Some(Occupant { refs: 1, value });
+        slot.occupancy = Occupancy::Held(Occupant { refs: 1, value });
         self.live = self.live.saturating_add(1);
         Ok(ObjectId::new(index, generation))
     }
@@ -319,7 +384,7 @@ impl<T, const N: usize> Pool<T, N> {
             return Ok(false);
         }
         let slot = self.slot_mut(id.index).ok_or(PoolError::StaleId)?;
-        let freed = slot.occupant.take().is_some();
+        let freed = slot.occupancy.clear();
         slot.next_free = None;
         self.live = self.live.saturating_sub(1);
         match self.free_tail {
@@ -376,7 +441,7 @@ impl<T, const N: usize> Pool<T, N> {
             .take(used)
             .enumerate()
             .filter_map(|(index, slot)| {
-                let occupant = slot.occupant.as_ref()?;
+                let occupant = slot.occupancy.as_ref()?;
                 let index = u32::try_from(index).ok()?;
                 Some((ObjectId::new(index, slot.generation), &occupant.value))
             })
@@ -405,7 +470,10 @@ impl<T, const N: usize> Pool<T, N> {
     /// can be reached without retaining a slot `u32::MAX` times.
     #[cfg(test)]
     pub(crate) fn set_references(&mut self, index: u32, references: u32) -> bool {
-        match self.slot_mut(index).and_then(|slot| slot.occupant.as_mut()) {
+        match self
+            .slot_mut(index)
+            .and_then(|slot| slot.occupancy.as_mut())
+        {
             Some(occupant) => {
                 occupant.refs = references;
                 true
@@ -419,7 +487,7 @@ impl<T, const N: usize> Pool<T, N> {
     #[cfg(test)]
     pub(crate) fn set_generation(&mut self, index: u32, generation: u32) -> bool {
         match self.slot_mut(index) {
-            Some(slot) if slot.occupant.is_none() => {
+            Some(slot) if slot.occupancy.is_free() => {
                 slot.generation = generation;
                 true
             }

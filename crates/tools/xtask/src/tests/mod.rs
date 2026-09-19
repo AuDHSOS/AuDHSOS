@@ -19,6 +19,7 @@ mod ppm;
 mod process;
 mod qemu;
 mod qmp;
+mod sections;
 mod spdx;
 mod ssh;
 mod symbolize;

@@ -890,6 +890,21 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `kernel-objects`: `Slot<T>` held its occupant as `Option<Occupant<T>>`, whose
+  `None` the compiler encodes in a niche of `T` wherever `T` has one, and every
+  object type but `IoPortRange` has one. That `None` was a byte of value 2 at
+  the niche's offset and not a zero, so an empty pool was not all zeros and
+  `kernel_core::machine::MACHINE` landed in `.data`: the kernel image carried
+  1.37 MiB of pool bytes the loader copies, against the `.bss` D-66 was decided
+  to reach. A `#[repr(u32)]` enum with `Free` at discriminant zero replaces the
+  `Option`, which fixes the tag's offset, forbids niche-filling it, and leaves
+  the payload bytes unconstrained. `.data` falls from 1,437,728 to 11,016 bytes
+  and `MACHINE` moves to the `.bss`. D-185 records the change. Two regression
+  tests cover it: a host test holds that no slot of any pool hides its free tag
+  in a niche, and the new check step `kernel-sections` reads the section table
+  of the built kernel and refuses a `.data` above 64 KiB or a `.bss` below
+  1 MiB.
+
 - `text-raster`: the segment count of a quadratic came from
   `max(|start - control|, |end - control|)` rather than the curve's own second
   difference `start - 2*control + end`, so the polyline left the eighth of a

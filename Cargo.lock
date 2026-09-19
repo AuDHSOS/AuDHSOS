@@ -825,6 +825,7 @@ version = "0.1.0"
 dependencies = [
  "app-canvas",
  "audhsos-abi",
+ "audhsos-elf",
  "audhsos-encoding",
  "audhsos-symbols",
  "audhsos-time",
