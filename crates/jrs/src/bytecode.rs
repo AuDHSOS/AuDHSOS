@@ -2248,6 +2248,13 @@ impl RegisterLowerer {
             // 9.4.3 answers the `[[NewTarget]]` of the call, which the frame
             // holds in a register of its own.
             ExprKind::NewTarget => {
+                // An arrow reads the binding the function around it captured.
+                if let Some(binding) = self.bindings.get(NEW_TARGET_BINDING).copied()
+                    && self.code.new_target_register.is_none()
+                {
+                    self.load_binding(binding);
+                    return Some(RegisterType::Unknown);
+                }
                 let register = self.code.new_target_register?;
                 self.code.emit(Instruction::Ldar(register));
                 RegisterType::Unknown
@@ -3303,6 +3310,17 @@ impl RegisterLowerer {
         // answers its `this` out of the one this function has. The binding is
         // captured like any other name the arrow reads. A Realm Script has
         // none, and 9.4.2 answers the `[[GlobalThisValue]]` there.
+        // 9.4.3 answers the `[[NewTarget]]` of the function an arrow was made
+        // in, which stands in a context slot of that function.
+        if function.arrow
+            && register_body_reads_new_target(&function.body)
+            && self.bindings.contains_key(NEW_TARGET_BINDING)
+        {
+            captures.insert(
+                String::from(NEW_TARGET_BINDING),
+                self.capture_binding(NEW_TARGET_BINDING)?,
+            );
+        }
         if function.arrow
             && register_body_reads_this(&function.body)
             && self.bindings.contains_key(THIS_BINDING)
@@ -4096,18 +4114,21 @@ impl RegisterLowerer {
             child.bindings.remove(GENERATOR_BINDING);
             child.code.generator_register = Some(register);
         }
-        if derived || register_body_reads_new_target(&function.body) {
-            if function.arrow {
-                return None;
-            }
+        // 10.2.1.1 gives an arrow no `[[NewTarget]]` of its own, so 9.4.3
+        // answers the one of the function it was made in, which that function
+        // holds in a context slot like every other name the arrow reads.
+        if !function.arrow && (derived || register_body_reads_new_target(&function.body)) {
             child.declare(NEW_TARGET_BINDING, false)?;
             let RegisterBindingStorage::Register(register) =
                 child.bindings.get(NEW_TARGET_BINDING)?.storage
             else {
                 return None;
             };
-            child.bindings.remove(NEW_TARGET_BINDING);
+            child.bindings.get_mut(NEW_TARGET_BINDING)?.value_type = Some(RegisterType::Unknown);
             child.code.new_target_register = Some(register);
+            if !register_body_reads(&function.body, Reads::ArrowNewTarget) {
+                child.bindings.remove(NEW_TARGET_BINDING);
+            }
         }
         // 13.3.7.3 reads the `[[HomeObject]]` of the running function, which
         // an arrow has none of: 15.3.4 gives it the `super` of the function it
@@ -12498,6 +12519,9 @@ enum Reads {
     Super,
     /// The `[[NewTarget]]` of 9.4.3.
     NewTarget,
+    /// The same, read by an arrow of the body and not by the body itself,
+    /// which 10.2.1.1 answers out of the frame around the arrow.
+    ArrowNewTarget,
 }
 
 fn register_body_reads_this(body: &[Stmt]) -> bool {
@@ -12599,8 +12623,13 @@ fn register_expression_reads(expression: &Expr, what: Reads) -> bool {
         // default constructor of 15.7.14 reads all three.
         // An arrow is the only expression that reads the `this` of the frame
         // around it, so the scan for one stops at every other.
-        ExprKind::Class(_) | ExprKind::DefaultSuper => !matches!(what, Reads::ArrowThis),
-        ExprKind::Super => !matches!(what, Reads::NewTarget | Reads::ArrowThis),
+        ExprKind::Class(_) | ExprKind::DefaultSuper => {
+            !matches!(what, Reads::ArrowThis | Reads::ArrowNewTarget)
+        }
+        ExprKind::Super => !matches!(
+            what,
+            Reads::NewTarget | Reads::ArrowThis | Reads::ArrowNewTarget
+        ),
         ExprKind::NewTarget => matches!(what, Reads::This | Reads::NewTarget),
         ExprKind::This => matches!(what, Reads::This),
         ExprKind::BigInt(..)
@@ -12656,12 +12685,12 @@ fn register_expression_reads(expression: &Expr, what: Reads) -> bool {
             function.arrow
                 && register_body_reads(
                     &function.body,
-                    // Inside the arrow every `this` is the one the frame
-                    // around it holds.
-                    if matches!(what, Reads::ArrowThis) {
-                        Reads::This
-                    } else {
-                        what
+                    // Inside the arrow every `this` and every `new.target`
+                    // is the one the frame around it holds.
+                    match what {
+                        Reads::ArrowThis => Reads::This,
+                        Reads::ArrowNewTarget => Reads::NewTarget,
+                        _ => what,
                     },
                 )
         }
@@ -12978,6 +13007,12 @@ fn register_function_scope(function: &Function) -> Option<RegisterFunctionScope>
     // holds the one it reads in a context, like every other name it captures.
     if !function.arrow && register_body_reads(&function.body, Reads::ArrowThis) {
         scope.captured_names.insert(String::from(THIS_BINDING));
+    }
+    // 10.2.1.1 gives an arrow no `[[NewTarget]]` either.
+    if !function.arrow && register_body_reads(&function.body, Reads::ArrowNewTarget) {
+        scope
+            .captured_names
+            .insert(String::from(NEW_TARGET_BINDING));
     }
     // An Initializer of 8.6.2 runs in the frame of the call, so a name it
     // reads and the body does not is captured just the same.

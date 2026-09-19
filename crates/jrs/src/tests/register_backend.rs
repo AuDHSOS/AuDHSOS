@@ -11963,3 +11963,18 @@ fn the_done_and_the_value_of_7_4_4_reach_a_getter_of_the_script() -> Result<(), 
     );
     Ok(())
 }
+
+#[test]
+fn an_arrow_reads_the_new_target_of_the_function_around_it() -> Result<(), Error> {
+    // 10.2.1.1 gives an arrow no `[[NewTarget]]`, so 9.4.3 answers the one of
+    // the function it was made in.
+    for source in [
+        "(function(){function F(){var f=()=>new.target;return f()}return ''+(new F()===F)+'|'+(F()===undefined)})()",
+        "(function(){function G(){return (()=>(()=>new.target)())()}return ''+(new G()===G)})()",
+        "(function(){class B{constructor(){this.t=(()=>new.target)()}}return ''+(new B().t===B)})()",
+        "(function(){function H(){var g;{g=()=>new.target}return g()}return ''+(new H()===H)})()",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
