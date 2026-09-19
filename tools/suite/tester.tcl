@@ -96,6 +96,11 @@ array set ::hooks {}
 # by connection name.
 array set ::transactions {}
 
+# What `db trace_v2` is told of, as the sum of one for a statement, two
+# for the time it took, four for a row and eight for a close, which
+# `SQLITE_TRACE_STMT` and the three beside it are, by connection name.
+array set ::tracing {}
+
 # Whether each statement the tester prepared was made by
 # `sqlite3_prepare` and not `sqlite3_prepare_v2`.
 array set ::stmt_legacy {}
@@ -225,6 +230,86 @@ proc bound {db sql} {
   return $out
 }
 
+# The statements of one text, each as it was written with the semicolon
+# that ends it, which the trace of a connection is told one of per
+# statement. A semicolon inside a string, a comment or a bracketed name
+# ends no statement.
+proc statements_of {sql} {
+  set out {}
+  set held ""
+  set n [string length $sql]
+  for {set i 0} {$i < $n} {incr i} {
+    set c [string index $sql $i]
+    if {$c eq "'" || $c eq "\"" || $c eq "\[" || $c eq "`"} {
+      set close [expr {$c eq "\[" ? "\]" : $c}]
+      append held $c
+      incr i
+      while {$i < $n} {
+        set d [string index $sql $i]
+        append held $d
+        incr i
+        if {$d eq $close} break
+      }
+      incr i -1
+      continue
+    }
+    if {$c eq "-" && [string index $sql $i+1] eq "-"} {
+      while {$i < $n && [string index $sql $i] ne "\n"} {
+        append held [string index $sql $i]
+        incr i
+      }
+      incr i -1
+      continue
+    }
+    append held $c
+    if {$c ne ";"} { continue }
+    set text [string trim $held]
+    if {$text ne ";"} { lappend out $text }
+    set held ""
+  }
+  set text [string trim $held]
+  if {$text ne ""} { lappend out $text }
+  return $out
+}
+
+# The callbacks the traces of a connection name, told of each statement
+# of the text: `sqlite3_trace` is told the statement alone, and
+# `sqlite3_trace_v2` is told the statement, one call per row, and the
+# time it took, as the mask it was told says. A callback that raises is
+# passed over, which `sqlite3_trace_v2` ignores the answer of.
+# How many rows the text answered, where the trace of the connection is
+# told of each row, and nought where it is not: the count is the values
+# the statement answered over the columns it names.
+proc rows_of {db sql answered} {
+  set mask 0
+  if {[info exists ::tracing($db)]} { set mask $::tracing($db) }
+  if {!($mask & 4)} { return 0 }
+  set w [llength [harness_send names $db $sql]]
+  if {$w == 0} { return 0 }
+  return [expr {[llength $answered] / $w}]
+}
+
+proc traced {db sql rows} {
+  set held ""
+  if {[info exists ::hooks($db,trace)]} { set held $::hooks($db,trace) }
+  set v2 ""
+  if {[info exists ::hooks($db,trace_v2)]} { set v2 $::hooks($db,trace_v2) }
+  if {$held eq "" && $v2 eq ""} { return }
+  set mask 1
+  if {[info exists ::tracing($db)]} { set mask $::tracing($db) }
+  foreach statement [statements_of $sql] {
+    if {$held ne ""} { catch { uplevel #0 [list {*}$held $statement] } }
+    if {$v2 eq ""} { continue }
+    if {$mask & 1} { catch { uplevel #0 [list {*}$v2 1 $statement] } }
+    if {$mask & 4} {
+      for {set at 0} {$at < $rows} {incr at} {
+        catch { uplevel #0 [list {*}$v2 1] }
+      }
+    }
+    if {$mask & 2} { catch { uplevel #0 [list {*}$v2 1 1000] } }
+  }
+}
+
 # One parameter as the literal the interface binds it as: a whole
 # number and a real as themselves, anything else as text, and a
 # parameter whose name begins with `@` as a blob of the bytes of its
@@ -312,6 +397,7 @@ set ::method_args {
   timeout           {1 MILLISECONDS}
   total_changes     {0 {}}
   trace             {{0 1} ?CALLBACK?}
+  trace_v2          {{0 2} {?CALLBACK? ?MASK?}}
   transaction       {{1 2} {[TYPE] SCRIPT}}
   unlock_notify     {{0 1} ?SCRIPT?}
   update_hook       {{0 1} ?CALLBACK?}
@@ -451,7 +537,9 @@ proc sqlite3 {args} {
       eval {
         set sql [bound %N% [lindex $args 0]]
         if {[llength $args] == 1} {
-          return [harness_send eval %N% $sql]
+          set answered [harness_send eval %N% $sql]
+          traced %N% $sql [rows_of %N% $sql $answered]
+          return $answered
         }
         # `eval SQL SCRIPT` names each column as a variable of its own;
         # `eval SQL ARRAY SCRIPT` names them in an array, with `*`
@@ -468,8 +556,10 @@ proc sqlite3 {args} {
         set w [llength $names]
         if {$w == 0} {
           harness_send eval %N% $sql
+          traced %N% $sql 0
           return {}
         }
+        traced %N% $sql [expr {[llength $rows] / $w}]
         if {$array ne ""} {
           uplevel 1 [list set ${array}(*) $names]
         }
@@ -491,8 +581,18 @@ proc sqlite3 {args} {
         }
         return {}
       }
-      one - onecolumn { return [lindex [harness_send eval %N% [bound %N% [lindex $args 0]]] 0] }
-      exists { return [expr {[llength [harness_send eval %N% [bound %N% [lindex $args 0]]]] > 0}] }
+      one - onecolumn {
+        set sql [bound %N% [lindex $args 0]]
+        set answered [harness_send eval %N% $sql]
+        traced %N% $sql [rows_of %N% $sql $answered]
+        return [lindex $answered 0]
+      }
+      exists {
+        set sql [bound %N% [lindex $args 0]]
+        set answered [harness_send eval %N% $sql]
+        traced %N% $sql [rows_of %N% $sql $answered]
+        return [expr {[llength $answered] > 0}]
+      }
       close { return [harness_send close %N%] }
       changes { return [lindex [harness_send changes %N%] 0] }
       total_changes { return [lindex [harness_send total_changes %N%] 0] }
@@ -601,8 +701,38 @@ proc sqlite3 {args} {
         }
         return {}
       }
+      trace_v2 {
+        # The mask is the words `SQLITE_TRACE_STMT` and the three beside
+        # it name, or the number they stand for.
+        if {[llength $args] > 1} {
+          set mask 0
+          foreach word [lindex $args 1] {
+            if {[string is entier -strict $word]} {
+              set mask [expr {$mask | $word}]
+              continue
+            }
+            set which [one_word $word {statement profile row close} "trace type"]
+            set at [lsearch -exact {statement profile row close} $which]
+            set mask [expr {$mask | (1 << $at)}]
+          }
+          set ::tracing(%N%) $mask
+        } else {
+          catch { unset ::tracing(%N%) }
+        }
+        if {[llength $args] == 0} {
+          if {[info exists ::hooks(%N%,trace_v2)]} { return $::hooks(%N%,trace_v2) }
+          return {}
+        }
+        set held [lindex $args 0]
+        if {$held eq ""} {
+          catch { unset ::hooks(%N%,trace_v2) }
+        } else {
+          set ::hooks(%N%,trace_v2) $held
+        }
+        return {}
+      }
       bind_fallback - busy - commit_hook - profile - rollback_hook -
-      trace - trace_v2 - unlock_notify - update_hook - wal_hook {
+      trace - unlock_notify - update_hook - wal_hook {
         # A callback the connection holds, which the method answers
         # where no script follows it.
         if {[llength $args] == 0} {

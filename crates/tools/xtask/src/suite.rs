@@ -1154,6 +1154,12 @@ impl Session {
             at = at.saturating_add(piece.len()).saturating_add(1);
             if !db_sqlite::parse::blank(piece.as_bytes()) {
                 piece.clone_into(&mut text);
+                // The tail begins after the semicolon, so the text of
+                // the statement carries it, which is what
+                // `sqlite3_sql` and `sqlite3_expanded_sql` answer.
+                if sql.get(at.saturating_sub(1)..at) == Some(";") {
+                    text.push(';');
+                }
                 break;
             }
         }

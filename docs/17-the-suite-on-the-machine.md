@@ -55,10 +55,10 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-108 060 cases of 798 files: 95 219 pass, 3368 answer differently and
-9473 are refused.
+108 085 cases of 798 files: 95 266 pass, 3341 answer differently and
+9478 are refused.
 
-What the 9473 refusals are for, most first: `db status` (2104), which
+What the 9478 refusals are for, most first: `db status` (2104), which
 answers counters of memory and of the page cache; `sqlite3_memdebug_fail`
 (1260), which fails one allocation of the C library; `crash_on_write`
 (960) and the crash the harness does not simulate (435); a table an
@@ -76,7 +76,7 @@ What each answers, over the same files:
 
 | Configuration | Passed | Answered differently | Refused |
 |---------------|-------:|---------------------:|--------:|
-| `utf8-4096-delete` | 95 219 | 3368 | 9473 |
+| `utf8-4096-delete` | 95 266 | 3341 | 9478 |
 | `utf16le-4096-delete` | 61 214 | 2392 | 9500 |
 | `utf16be-4096-delete` | 61 229 | 2392 | 9500 |
 | `utf8-512-delete` | 61 073 | 2452 | 9435 |
@@ -88,7 +88,7 @@ What each answers, over the same files:
 
 The counts move between runs of one configuration only where a file
 reaches the deadline, which D-302 sets at three minutes. Only the
-first row is a run after D-286 to D-338, the fourth one after D-296; the
+first row is a run after D-286 to D-339, the fourth one after D-296; the
 other seven were measured before them and are lower than they would read
 now.
 `testfixture` is built with `SQLITE_DEFAULT_PAGE_SIZE=1024`, which
@@ -400,6 +400,9 @@ Size: S.
 17. `sqlite3_stmt_readonly`, `sqlite3_stmt_busy` and
     `sqlite3_stmt_isexplain` answer off the text of the statement and
     how far it has run, which D-338 records.
+18. The traces of a connection are told of each statement of the text it
+    runs, and the text of a prepared statement carries the semicolon
+    that ends it, which D-339 records.
 
 ### Produces
 

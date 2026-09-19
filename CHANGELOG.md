@@ -30,6 +30,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- The tester tells the traces of a connection of each statement it runs,
+  which `sqlite3_trace` and `sqlite3_trace_v2` are told, and the text of a
+  prepared statement carries the semicolon that ends it. D-339 records it.
+  `trace3.test` goes from 11 cases passing to 26 and `trace.test` from 13
+  to 19.
+
 - The tester answers `sqlite3_stmt_readonly`, `sqlite3_stmt_busy` and
   `sqlite3_stmt_isexplain`, and `db-sqlite` counts the deferred keys of a
   connection back where a statement leaves the file as it found it. D-338
