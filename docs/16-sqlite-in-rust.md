@@ -864,6 +864,8 @@ Size: L.
     one file per connection.
 73. One statement written again with every literal as a `?`, in the two
     forms the C library answers. Built, which D-315 records.
+74. The result code every refusal carries, primary and extended. Built,
+    which D-316 records.
 
 ### Done when
 

@@ -41,3 +41,157 @@ fn a_refusal_is_compared_by_what_it_refuses() {
     let copy = error;
     assert_eq!(format!("{error:?}"), format!("{copy:?}"));
 }
+
+/// The result code and the message every refusal of a file carries,
+/// which are the ones `sqlite3ErrStr` and `sqlite3ErrName` write.
+#[test]
+fn what_code_and_message_a_refusal_of_a_file_carries() {
+    use crate::db::Error as Refused;
+    for (error, code, name, message) in [
+        (Error::Magic, 26, "SQLITE_NOTADB", "file is not a database"),
+        (
+            Error::Truncated,
+            26,
+            "SQLITE_NOTADB",
+            "file is not a database",
+        ),
+        (
+            Error::PageSize(300),
+            26,
+            "SQLITE_NOTADB",
+            "file is not a database",
+        ),
+        (
+            Error::Reserved(200),
+            26,
+            "SQLITE_NOTADB",
+            "file is not a database",
+        ),
+        (
+            Error::Fractions,
+            26,
+            "SQLITE_NOTADB",
+            "file is not a database",
+        ),
+        (
+            Error::Encoding(4),
+            26,
+            "SQLITE_NOTADB",
+            "file is not a database",
+        ),
+        (
+            Error::Overrun,
+            11,
+            "SQLITE_CORRUPT",
+            "database disk image is malformed",
+        ),
+        (
+            Error::Varint,
+            11,
+            "SQLITE_CORRUPT",
+            "database disk image is malformed",
+        ),
+        (Error::Full, 13, "SQLITE_FULL", "database or disk is full"),
+    ] {
+        let refused = Refused::Image(error);
+        let held = refused.code();
+        assert_eq!(held.number, code);
+        assert_eq!(held.name, name.as_bytes());
+        assert_eq!(held.extended, code);
+        assert_eq!(held.extended_name, name.as_bytes());
+        assert_eq!(refused.message(), message);
+    }
+}
+
+/// The result code every other refusal carries, which is
+/// `SQLITE_CONSTRAINT` with the constraint the row broke for the rows a
+/// statement could not write and `SQLITE_ERROR` for the statements the
+/// engine could not read.
+#[test]
+fn what_code_a_refusal_of_a_statement_carries() {
+    use crate::db::Error as Refused;
+    for (refused, number, name, extended, extended_name) in [
+        (
+            Refused::Unique(b"t.a".to_vec()),
+            19,
+            "SQLITE_CONSTRAINT",
+            2067,
+            "SQLITE_CONSTRAINT_UNIQUE",
+        ),
+        (
+            Refused::NotNull(b"t.a".to_vec()),
+            19,
+            "SQLITE_CONSTRAINT",
+            1299,
+            "SQLITE_CONSTRAINT_NOTNULL",
+        ),
+        (
+            Refused::Check(b"t".to_vec()),
+            19,
+            "SQLITE_CONSTRAINT",
+            275,
+            "SQLITE_CONSTRAINT_CHECK",
+        ),
+        (
+            Refused::Foreign,
+            19,
+            "SQLITE_CONSTRAINT",
+            787,
+            "SQLITE_CONSTRAINT_FOREIGNKEY",
+        ),
+        (
+            Refused::ForeignMismatch(b"a".to_vec(), b"b".to_vec()),
+            19,
+            "SQLITE_CONSTRAINT",
+            787,
+            "SQLITE_CONSTRAINT_FOREIGNKEY",
+        ),
+        (
+            Refused::StoredType(
+                b"t".to_vec(),
+                b"a".to_vec(),
+                b"INT".to_vec(),
+                b"text".to_vec(),
+            ),
+            19,
+            "SQLITE_CONSTRAINT",
+            3091,
+            "SQLITE_CONSTRAINT_DATATYPE",
+        ),
+        (
+            Refused::Constraint,
+            19,
+            "SQLITE_CONSTRAINT",
+            19,
+            "SQLITE_CONSTRAINT",
+        ),
+        (
+            Refused::HeldConstraint(b"t".to_vec()),
+            19,
+            "SQLITE_CONSTRAINT",
+            19,
+            "SQLITE_CONSTRAINT",
+        ),
+        (
+            Refused::Auth(crate::auth::Error::Denied),
+            23,
+            "SQLITE_AUTH",
+            23,
+            "SQLITE_AUTH",
+        ),
+        (
+            Refused::Mismatch,
+            20,
+            "SQLITE_MISMATCH",
+            20,
+            "SQLITE_MISMATCH",
+        ),
+        (Refused::Incomplete, 1, "SQLITE_ERROR", 1, "SQLITE_ERROR"),
+    ] {
+        let held = refused.code();
+        assert_eq!(held.number, number, "{refused:?}");
+        assert_eq!(held.name, name.as_bytes(), "{refused:?}");
+        assert_eq!(held.extended, extended, "{refused:?}");
+        assert_eq!(held.extended_name, extended_name.as_bytes(), "{refused:?}");
+    }
+}

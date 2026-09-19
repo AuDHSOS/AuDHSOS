@@ -604,6 +604,10 @@ struct Prepared {
     ran: bool,
     /// Whether the last step answered a row.
     row: bool,
+    /// Whether `sqlite3_prepare` and not `sqlite3_prepare_v2` made it,
+    /// which is what makes a step answer `SQLITE_ERROR` rather than the
+    /// code the refusal carries.
+    legacy: bool,
 }
 
 /// One run of one file: the interpreter on one side of the line and the
@@ -809,6 +813,8 @@ impl Session {
             // it answered.
             "prepare" | "autocommit" | "step" | "finalize" | "reset" | "clear_binds" | "bind"
             | "column" | "stmt" => self.of_statement(verb, args),
+            // `sqlite3_errcode` and `sqlite3_extended_errcode`.
+            "errcode" => Ok(alloc_one(&last_code(first))),
             // `sqlite3_normalize SQL`, which is the same statement in
             // lower case and answers nothing for a byte no rule accepts.
             "normalize" => Ok(alloc_one(
@@ -917,7 +923,7 @@ impl Session {
         for (slot, byte) in bytes.iter_mut().skip(at).zip(written.iter()) {
             *slot = *byte;
         }
-        let mut writer = Writer::opened(&bytes).map_err(|error| error.message())?;
+        let mut writer = Writer::opened(&bytes).map_err(|error| refusal(&error))?;
         writer.defines(DEFINED);
         writer.groups(GROUPED);
         self.held.insert(name.to_owned(), writer);
@@ -946,7 +952,7 @@ impl Session {
         let bytes = writer.written();
         let collating = self.collations.get(name).copied().unwrap_or_default();
         let database =
-            Database::open_collating(&bytes, collating).map_err(|error| error.message())?;
+            Database::open_collating(&bytes, collating).map_err(|error| refusal(&error))?;
         let (held, _) = database.table(table.as_bytes()).ok_or_else(missing)?;
         let keyed = !held.without_rowid;
         let at = held
@@ -1120,7 +1126,7 @@ impl Session {
         let second = args.get(1).map_or("", String::as_str);
         let third = args.get(2).map_or("", String::as_str);
         match verb {
-            "prepare" => self.prepare(first, second),
+            "prepare" => Ok(self.prepare(first, second, third == "1")),
             "autocommit" => self.autocommit(first),
             "step" => self.step(first),
             "finalize" => Ok(self.finalize(first)),
@@ -1138,7 +1144,7 @@ impl Session {
     /// A statement that reads is run once with every parameter left
     /// unbound, so that the names of its columns are known before the
     /// first step and a statement the engine refuses is refused here.
-    fn prepare(&mut self, connection: &str, sql: &str) -> Result<Vec<String>, String> {
+    fn prepare(&mut self, connection: &str, sql: &str, legacy: bool) -> Vec<String> {
         // `sqlite3Prepare` reads past the semicolons and the comments no
         // statement stands in, so the first statement of a text is the
         // first one that carries meaning and the tail begins after the
@@ -1162,21 +1168,33 @@ impl Session {
             at: 0,
             ran: false,
             row: false,
+            legacy: false,
         };
+        prepared.legacy = legacy;
+        // A text that holds no statement answers no statement at all,
+        // which is the null pointer `sqlite3_prepare` writes for it.
+        if text.is_empty() {
+            return vec![String::new(), tail, String::new()];
+        }
         if reads(&text) {
-            let answered = self.read_statement(connection, &bound_into(&text, &BTreeMap::new()))?;
-            prepared.names = answered
-                .names
-                .iter()
-                .map(|name| String::from_utf8_lossy(name).into_owned())
-                .collect();
+            let read = self.read_statement(connection, &bound_into(&text, &BTreeMap::new()));
+            match read {
+                Ok(answered) => {
+                    prepared.names = answered
+                        .names
+                        .iter()
+                        .map(|name| String::from_utf8_lossy(name).into_owned())
+                        .collect();
+                }
+                Err(message) => return vec![String::new(), tail, message],
+            }
         }
         self.prepared = self.prepared.saturating_add(1);
         // The name stands for the pointer the C library answers, which
         // a file may read as a run of hexadecimal digits.
         let name = format!("{:08X}", self.prepared.saturating_add(0x1000_0000));
         self.statements.insert(name.clone(), prepared);
-        Ok(alloc_two(name, tail))
+        vec![name, tail, String::new()]
     }
 
     /// The names a statement of `connection` may read, which are the
@@ -1244,7 +1262,14 @@ impl Session {
             .ok_or_else(|| format!("no such statement: {name}"))?;
         if held.ran {
             if let Some(held) = self.statements.get_mut(name) {
-                held.at = held.at.saturating_add(1);
+                // `sqlite3_step` past the last row resets the statement
+                // and answers its first row again, which is the
+                // `SQLITE_OMIT_AUTORESET` the library is built without.
+                if held.row {
+                    held.at = held.at.saturating_add(1);
+                } else {
+                    held.at = 0;
+                }
                 held.row = held.at < held.rows.len();
             }
         } else {
@@ -1254,11 +1279,18 @@ impl Session {
             .statements
             .get(name)
             .ok_or_else(|| format!("no such statement: {name}"))?;
-        Ok(alloc_one(if held.row {
-            "SQLITE_ROW"
-        } else {
-            "SQLITE_DONE"
-        }))
+        Ok(alloc_two(
+            if held.row {
+                String::from("SQLITE_ROW")
+            } else {
+                String::from("SQLITE_DONE")
+            },
+            if held.legacy {
+                String::from("1")
+            } else {
+                String::new()
+            },
+        ))
     }
 
     /// The first step of one statement, which runs it and holds the rows
@@ -1317,10 +1349,13 @@ impl Session {
             .ok_or_else(|| format!("no such database: {path}"))?;
         writer.collates(collating);
         writer.defines(defines);
-        writer
+        let ran = writer
             .run(sql.as_bytes())
             .map(|_| db_sqlite::db::Answer::default())
-            .map_err(|error| shape(sql, error.message()))
+            .map_err(|error| shape(sql, refusal(&error)));
+        let counted = writer.counts();
+        self.counters.insert(connection.to_owned(), counted);
+        ran
     }
 
     /// `sqlite3_finalize STMT`: the statement is let go, and the code it
@@ -1457,7 +1492,7 @@ impl Session {
             return Ok(Vec::new());
         };
         let bytes = held.written();
-        let mut writer = Writer::opened(&bytes).map_err(|error| error.message())?;
+        let mut writer = Writer::opened(&bytes).map_err(|error| refusal(&error))?;
         writer.defines(DEFINED);
         writer.groups(GROUPED);
         self.held.insert(to.to_owned(), writer);
@@ -1566,10 +1601,10 @@ impl Session {
                     None => database,
                 }
             })
-            .map_err(|error| error.message())?;
+            .map_err(|error| refusal(&error))?;
         let answered = database
             .query(last.as_bytes())
-            .map_err(|error| error.message())?;
+            .map_err(|error| refusal(&error))?;
         Ok(answered
             .names
             .iter()
@@ -1629,6 +1664,47 @@ thread_local! {
     /// The connection whose statement is running, which `asking` names
     /// in the call it writes because the function carries nothing.
     static WHO: RefCell<String> = const { RefCell::new(String::new()) };
+
+    /// The result code of the last statement this thread refused, which
+    /// `sqlite3_errcode` and `sqlite3_extended_errcode` answer.
+    static CODE: RefCell<(String, String, i64)> =
+        const { RefCell::new((String::new(), String::new(), 0)) };
+}
+
+/// What one refusal says, with the code it carries kept for
+/// `sqlite3_errcode`.
+fn refusal(error: &db_sqlite::db::Error) -> String {
+    let code = error.code();
+    let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
+    CODE.with(|held| {
+        *held.borrow_mut() = (text(code.name), text(code.extended_name), code.number);
+    });
+    error.message()
+}
+
+/// The code of the last refusal, as the name of the primary code, the
+/// name of the extended one or the number of the primary one, which is
+/// `SQLITE_OK` where the statements of this run all stood.
+fn last_code(which: &str) -> String {
+    CODE.with(|held| {
+        let held = held.borrow();
+        let name = if which == "extended" {
+            &held.1
+        } else {
+            &held.0
+        };
+        if name.is_empty() {
+            return if which == "number" {
+                String::from("0")
+            } else {
+                String::from("SQLITE_OK")
+            };
+        }
+        if which == "number" {
+            return held.2.to_string();
+        }
+        name.clone()
+    })
 }
 
 /// What the authorizer the tester defined answers, which is one `CALL`
@@ -1848,7 +1924,7 @@ fn run_one(
     }
     let rows = writer
         .run(text.as_bytes())
-        .map_err(|error| shape(text, error.message()))?;
+        .map_err(|error| shape(text, refusal(&error)))?;
     for row in &rows {
         out.extend(row.iter().cloned());
     }
@@ -1902,7 +1978,7 @@ fn answered_rows(
                 }
             })
             .and_then(|database| database.query(text.as_bytes()))
-            .map_err(|error| shape(text, error.message()))?;
+            .map_err(|error| shape(text, refusal(&error)))?;
         Ok(answered)
     }
 }

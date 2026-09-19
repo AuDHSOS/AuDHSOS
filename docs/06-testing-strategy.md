@@ -6113,3 +6113,17 @@ Document 16 step Q8.
   in an `ATTACH` is a name.
 - A statement that ends in no semicolon carries one.
 - The lower-case form answers nothing for a byte no rule accepts.
+
+### 6.6.213 The result code a refusal carries (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A file whose header the format forbids carries `SQLITE_NOTADB` and the
+  message `file is not a database`.
+- A byte under the header that the format forbids carries
+  `SQLITE_CORRUPT` and the message `database disk image is malformed`.
+- A file held to a count of pages carries `SQLITE_FULL`.
+- A row that broke a constraint carries `SQLITE_CONSTRAINT` and the
+  extended code of the constraint it broke.
+- A statement the authorizer denied carries `SQLITE_AUTH`.
+- Every statement the engine could not read carries `SQLITE_ERROR`.

@@ -47,6 +47,49 @@ use crate::value::{
 use crate::window::{self, Which};
 use crate::{error, number};
 
+/// The result code one refusal carries: the number and the name
+/// `sqlite3_errcode` answers, and the ones `sqlite3_extended_errcode`
+/// answers.
+///
+/// The numbers are the ones `research/sqlite/src/sqlite.h.in` gives and
+/// the names the ones `sqlite3ErrName` of `research/sqlite/src/main.c`
+/// writes. A refusal that carries no extended code of its own carries
+/// the primary one twice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Code {
+    /// The number `sqlite3_errcode` answers.
+    pub number: i64,
+    /// The name of that number.
+    pub name: &'static [u8],
+    /// The number `sqlite3_extended_errcode` answers.
+    pub extended: i64,
+    /// The name of that number.
+    pub extended_name: &'static [u8],
+}
+
+impl Code {
+    /// One code with no extended code of its own.
+    const fn plain(number: i64, name: &'static [u8]) -> Self {
+        Code {
+            number,
+            name,
+            extended: number,
+            extended_name: name,
+        }
+    }
+
+    /// One `SQLITE_CONSTRAINT` with the extended code that says which
+    /// constraint the row broke.
+    const fn broke(extended: i64, extended_name: &'static [u8]) -> Self {
+        Code {
+            number: 19,
+            name: b"SQLITE_CONSTRAINT",
+            extended,
+            extended_name,
+        }
+    }
+}
+
 /// Why a database could not answer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -374,6 +417,19 @@ impl Error {
             Error::Image(crate::error::Error::Full) => {
                 alloc::string::String::from("database or disk is full")
             }
+            // `sqlite3ErrStr` writes one message for every byte of a
+            // file the format forbids: the header says whether the file
+            // is one at all, and everything under it says the file is
+            // damaged.
+            Error::Image(
+                crate::error::Error::Magic
+                | crate::error::Error::Truncated
+                | crate::error::Error::PageSize(_)
+                | crate::error::Error::Reserved(_)
+                | crate::error::Error::Fractions
+                | crate::error::Error::Encoding(_),
+            ) => alloc::string::String::from("file is not a database"),
+            Error::Image(_) => alloc::string::String::from("database disk image is malformed"),
             Error::NotIndexable(name) => {
                 alloc::format!("table {} may not be indexed", shown(name))
             }
@@ -553,6 +609,41 @@ impl Error {
             ),
             _ => return None,
         })
+    }
+
+    /// The result code the refusal carries, which `sqlite3_errcode` and
+    /// `sqlite3_extended_errcode` answer.
+    ///
+    /// Everything the C library answers `SQLITE_ERROR` for, which is
+    /// every statement it could not read or run, carries that code, so
+    /// the arms below are the refusals that carry another one.
+    #[must_use]
+    pub const fn code(&self) -> Code {
+        match self {
+            // `SQLITE_CONSTRAINT_*` of `sqlite.h.in`, each the primary
+            // code and the constraint the row broke.
+            Error::Unique(_) => Code::broke(2067, b"SQLITE_CONSTRAINT_UNIQUE"),
+            Error::NotNull(_) => Code::broke(1299, b"SQLITE_CONSTRAINT_NOTNULL"),
+            Error::Check(_) => Code::broke(275, b"SQLITE_CONSTRAINT_CHECK"),
+            Error::Foreign | Error::ForeignMismatch(..) => {
+                Code::broke(787, b"SQLITE_CONSTRAINT_FOREIGNKEY")
+            }
+            Error::StoredType(..) => Code::broke(3091, b"SQLITE_CONSTRAINT_DATATYPE"),
+            Error::Constraint | Error::HeldConstraint(_) => Code::plain(19, b"SQLITE_CONSTRAINT"),
+            Error::Auth(_) => Code::plain(23, b"SQLITE_AUTH"),
+            Error::Mismatch => Code::plain(20, b"SQLITE_MISMATCH"),
+            Error::Image(crate::error::Error::Full) => Code::plain(13, b"SQLITE_FULL"),
+            Error::Image(
+                crate::error::Error::Magic
+                | crate::error::Error::Truncated
+                | crate::error::Error::PageSize(_)
+                | crate::error::Error::Reserved(_)
+                | crate::error::Error::Fractions
+                | crate::error::Error::Encoding(_),
+            ) => Code::plain(26, b"SQLITE_NOTADB"),
+            Error::Image(_) => Code::plain(11, b"SQLITE_CORRUPT"),
+            _ => Code::plain(1, b"SQLITE_ERROR"),
+        }
     }
 
     /// The text the C library writes for this refusal, which is what a

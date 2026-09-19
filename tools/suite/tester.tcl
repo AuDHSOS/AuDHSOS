@@ -80,6 +80,10 @@ array set ::functions {}
 # The proc the authorizer of each connection names, by connection name.
 array set ::authorizers {}
 
+# Whether each statement the tester prepared was made by
+# `sqlite3_prepare` and not `sqlite3_prepare_v2`.
+array set ::stmt_legacy {}
+
 # One call the engine wrote onto the line: the name of the collation or
 # the function, then its values, answered by the proc the file named.
 proc harness_call {kind vals} {
@@ -707,49 +711,62 @@ proc harness_try {verb args} {
 # with the text after it written into the variable the caller names. A
 # statement the engine refuses raises `(code) message`, which is what
 # `test_prepare` of `research/sqlite/src/test1.c` writes.
-proc harness_prepare {db sql tailvar} {
-  set answered [harness_try prepare $db $sql]
+proc harness_prepare {db sql tailvar legacy} {
+  set answered [harness_send prepare $db $sql $legacy]
   if {$tailvar ne ""} {
     upvar 2 $tailvar tail
     set tail [lindex $answered 1]
   }
-  if {$::harness_code ne "SQLITE_OK"} { error "(1) $::harness_error" }
+  set ::harness_error [lindex $answered 2]
+  if {$::harness_error ne ""} {
+    set ::harness_code SQLITE_ERROR
+    error "([lindex [harness_send errcode number] 0]) $::harness_error"
+  }
+  set ::harness_code SQLITE_OK
+  set ::stmt_legacy([lindex $answered 0]) $legacy
   return [lindex $answered 0]
 }
 proc sqlite3_prepare {db sql bytes {tailvar ""}} {
-  return [harness_prepare $db $sql $tailvar]
+  return [harness_prepare $db $sql $tailvar 1]
 }
 proc sqlite3_prepare_v2 {db sql bytes {tailvar ""}} {
-  return [harness_prepare $db $sql $tailvar]
+  return [harness_prepare $db $sql $tailvar 0]
 }
 proc sqlite3_prepare_v3 {db sql bytes flags {tailvar ""}} {
-  return [harness_prepare $db $sql $tailvar]
+  return [harness_prepare $db $sql $tailvar 0]
 }
 proc sqlite3_prepare16 {db sql bytes {tailvar ""}} {
-  return [harness_prepare $db $sql $tailvar]
+  return [harness_prepare $db $sql $tailvar 1]
 }
 proc sqlite3_prepare16_v2 {db sql bytes {tailvar ""}} {
-  return [harness_prepare $db $sql $tailvar]
+  return [harness_prepare $db $sql $tailvar 0]
 }
 proc sqlite3_prepare16_v3 {db sql bytes flags {tailvar ""}} {
-  return [harness_prepare $db $sql $tailvar]
+  return [harness_prepare $db $sql $tailvar 0]
 }
 proc sqlite3_step {stmt} {
   set answered [harness_try step $stmt]
-  if {$::harness_code ne "SQLITE_OK"} { return SQLITE_ERROR }
+  if {$::harness_code ne "SQLITE_OK"} {
+    # A statement `sqlite3_prepare` made answers `SQLITE_ERROR` for
+    # every refusal, and `sqlite3_finalize` answers the code it carries.
+    if {[info exists ::stmt_legacy($stmt)] && $::stmt_legacy($stmt) == 1} {
+      return SQLITE_ERROR
+    }
+    return [sqlite3_errcode {}]
+  }
   return [lindex $answered 0]
 }
 proc sqlite3_finalize {stmt} {
   set held $::harness_code
   harness_send finalize $stmt
-  if {$held ne "SQLITE_OK"} { return SQLITE_ERROR }
+  if {$held ne "SQLITE_OK"} { return [sqlite3_errcode {}] }
   return SQLITE_OK
 }
 proc sqlite3_reset {stmt} {
   set held $::harness_code
   harness_send reset $stmt
   set ::harness_code SQLITE_OK
-  if {$held ne "SQLITE_OK"} { return SQLITE_ERROR }
+  if {$held ne "SQLITE_OK"} { return [sqlite3_errcode {}] }
   return SQLITE_OK
 }
 proc sqlite3_clear_bindings {stmt} { return [harness_send clear_binds $stmt] }
@@ -803,11 +820,17 @@ proc sqlite3_sql {stmt} { return [lindex [harness_send stmt $stmt sql] 0] }
 proc sqlite3_normalized_sql {stmt} { return [lindex [harness_send stmt $stmt normalized] 0] }
 proc sqlite3_normalize {sql} { return [lindex [harness_send normalize $sql] 0] }
 proc sqlite3_expanded_sql {stmt} { return [lindex [harness_send stmt $stmt expanded] 0] }
-proc sqlite3_errcode {db} { return $::harness_code }
-proc sqlite3_extended_errcode {db} { return $::harness_code }
+# `sqlite3_errcode` answers the code the last statement was refused
+# with, and `sqlite3_errmsg` the message, which is `not an error` where
+# the statement stood.
+proc sqlite3_errcode {db} { return [lindex [harness_send errcode primary] 0] }
+proc sqlite3_extended_errcode {db} { return [lindex [harness_send errcode extended] 0] }
 proc sqlite3_get_autocommit {db} { return [lindex [harness_send autocommit $db] 0] }
-proc sqlite3_errmsg {db} { return $::harness_error }
-proc sqlite3_errmsg16 {db} { return $::harness_error }
+proc sqlite3_errmsg {db} {
+  if {$::harness_error eq ""} { return "not an error" }
+  return $::harness_error
+}
+proc sqlite3_errmsg16 {db} { return [sqlite3_errmsg $db] }
 
 # `sqlite3_connection_pointer` answers the pointer the C library holds
 # the connection at, which the commands that take one are stand-ins

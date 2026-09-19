@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `db-sqlite` carries the result code the C library answers for every
+  refusal, primary and extended, and names a file the format forbids
+  `file is not a database` or `database disk image is malformed`. D-316
+  records it. Catalog 6.6.213. `capi2.test` goes from 60 cases passing to
+  69.
+
 - `db-sqlite` writes one statement again with every literal as a `?`,
   which `sqlite3_normalize` and `sqlite3_normalized_sql` answer. D-315
   records it. Catalog 6.6.212. `normalize.test` goes from 3 cases passing
