@@ -135,7 +135,7 @@ impl Sink<'_> {
         end: (Fixed, Fixed),
     ) -> Result<(), RasterError> {
         let start = self.at;
-        let count = quadratic_segments(second_difference(start, control, control, end)?);
+        let count = quadratic_segments(length(difference(start, control, end)?));
         for step in 1..=count {
             let t = Fixed::ONE.mul_ratio(i64::from(step), i64::from(count))?;
             let u = Fixed::ONE.checked_sub(t)?;
@@ -171,8 +171,8 @@ impl Sink<'_> {
 }
 
 /// The larger of the two second differences `p0 - 2*p1 + p2` and
-/// `p1 - 2*p2 + p3`, as a length. A quadratic passes its one control point
-/// twice, which makes the two differences equal.
+/// `p1 - 2*p2 + p3` of a cubic, as a length. The one second difference of a
+/// quadratic is `difference(start, control, end)`.
 fn second_difference(
     p0: (Fixed, Fixed),
     p1: (Fixed, Fixed),

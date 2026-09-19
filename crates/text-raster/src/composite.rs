@@ -33,12 +33,12 @@ pub fn composite(mode: CompositeMode, source: Pixel, backdrop: Pixel) -> Pixel {
     if let Some((fa, fb)) = fractions(mode, source.alpha, backdrop.alpha) {
         return weighted(source, fa, backdrop, fb);
     }
-    let mixed = blend(mode, source.straight(), backdrop.straight());
+    let straight = source.straight();
+    let mixed = blend(mode, straight, backdrop.straight());
     // The mixing result is weighted by the backdrop alpha and the outcome is
     // then composited source-over, `docs/w3c/compositing-1.html:1785`.
     let rest = LINEAR_ONE.saturating_sub(backdrop.alpha);
     let colours = [0_usize, 1, 2].map(|index| {
-        let straight = source.straight();
         let own = straight.get(index).copied().unwrap_or(0);
         let mixed = mixed.get(index).copied().unwrap_or(0);
         scale(own, rest).saturating_add(scale(mixed, backdrop.alpha))

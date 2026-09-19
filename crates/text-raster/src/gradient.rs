@@ -249,9 +249,7 @@ impl<'a> Gradient<'a> {
             return colour(stop, foreground, gamma);
         }
         let position = divide(parameter.checked_sub(first.offset)?, span);
-        let Some(position) = extend(position, self.line.extend)? else {
-            return colour(first, foreground, gamma);
-        };
+        let position = extend(position, self.line.extend)?;
         let at = first.offset.checked_add(position.checked_mul(span)?)?;
         let index = self.bracket(at)?;
         let low = self.stop(index)?;
@@ -328,9 +326,8 @@ fn mix(low: Pixel, high: Pixel, weight: Fixed) -> Result<Pixel, RasterError> {
 }
 
 /// A position on the colour line, folded into `[0, 1]` by the extend mode.
-/// `None` means the position is outside a line the mode cannot extend.
-fn extend(position: Fixed, mode: Extend) -> Result<Option<Fixed>, RasterError> {
-    Ok(Some(match mode {
+fn extend(position: Fixed, mode: Extend) -> Result<Fixed, RasterError> {
+    Ok(match mode {
         Extend::Pad => position.clamp(Fixed::ZERO, Fixed::ONE),
         Extend::Repeat => fraction(position),
         Extend::Reflect => {
@@ -341,7 +338,7 @@ fn extend(position: Fixed, mode: Extend) -> Result<Option<Fixed>, RasterError> {
                 folded
             }
         }
-    }))
+    })
 }
 
 /// `value - floor(value)`, which is in `[0, 1)` for either sign.
