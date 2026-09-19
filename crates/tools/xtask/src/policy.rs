@@ -868,9 +868,12 @@ pub(crate) const CRATES: &[Crate] = &[
         path: "crates/user/test-programs",
         // Three programs of Phase 12 raised this from 78: every call a
         // program makes is a site, as it is in every other program here.
+        // `entry_registers` raised it by seven and the assembly by one: it
+        // carries its own naked entry point, because a compiled one may
+        // overwrite a register before its first statement runs.
         kind: Kind::Adapter {
-            unsafe_budget: 105,
-            asm_budget: 1,
+            unsafe_budget: 112,
+            asm_budget: 2,
         },
         deps: &["audhsos-abi", "user-rt", "user-sys-x86_64"],
         coverage_gate: false,

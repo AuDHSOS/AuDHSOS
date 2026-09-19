@@ -462,7 +462,7 @@ binaries (`cargo`, `rustc`, `rustfmt`, `cargo-clippy`, `cargo-miri`,
 | `qemu-runner <elf>` | the Cargo runner for the kernel target: wraps a test kernel into a disk image, runs QEMU with a timeout, parses the serial protocol, maps the exit status |
 | `build-user-tests` | build the user programs the test images run and turn each into a flat binary under `target/user-tests/` |
 | `test [--host] [--qemu] [--e2e] [--release]` | run the selected test levels; default runs the host level; `--release` builds the end-to-end run from the release profile. `--e2e` runs the whole system twice: once with a graphics adapter, where it takes a picture of the screen through the machine protocol and holds it against what the program that draws said it drew, and once with `-vga none`, where the machine has no framebuffer and the run still has to end by itself |
-| `lint` | `rustfmt --check`, `clippy` with the workspace lint set, SPDX header check |
+| `lint` | `rustfmt --check`, `clippy` with the workspace lint set, SPDX header check, the check that no `cli` or `sti` block declares `nomem` (R11 of document 4) |
 | `check-layering` | verify the layering table against `cargo tree`, verify `forbid(unsafe_code)` in every logic crate, reject assembly files, verify the adapter-function-to-QEMU-test tables |
 | `check-deps` | verify that `Cargo.lock` and all manifests reference workspace members only |
 | `unsafe-budget` | count `unsafe` blocks and `asm!` sites per adapter crate against the policy table |

@@ -232,8 +232,14 @@ where
         let entry = self.read(leaf_table, index)?;
         let frame = entry.frame().ok_or(MapError::NotMapped)?;
         self.write(leaf_table, index, F::EMPTY)?;
+        // Intel SDM Vol. 3A, 5.10.4.2 requires the invalidation after the
+        // write of an entry that references another paging structure, so
+        // the flush follows the collection, which clears the parent entry
+        // of every table it releases. The flush runs on the error path
+        // too, because the leaf entry is already cleared.
+        let collected = self.collect_empty_tables(page);
         self.tlb.flush_page(page);
-        self.collect_empty_tables(page)?;
+        collected?;
         Ok(frame)
     }
 
