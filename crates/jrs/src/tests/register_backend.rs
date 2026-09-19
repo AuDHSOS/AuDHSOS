@@ -12007,3 +12007,21 @@ fn a_promise_of_a_derived_class_takes_the_prototype_of_its_new_target() -> Resul
     }
     Ok(())
 }
+
+#[test]
+fn step_2_of_25_5_2_4_reads_a_property_through_its_getter() -> Result<(), Error> {
+    // 7.3.2 runs the getter of an accessor, which the walk opens a frame for
+    // and takes the answer of where it left off.
+    for source in [
+        "var k=[];var o={get a(){k.push('a');return 1},get b(){k.push('b');return {c:2}},d:3};JSON.stringify(o)+'|'+k.join(',')",
+        "var k=[];var a=[];Object.defineProperty(a,'0',{get:function(){k.push('e');return 5},enumerable:true,configurable:true});a.length=2;a[1]=6;JSON.stringify(a)+'|'+k.join(',')",
+        // Step 3 reads the `toJSON` of whatever the getter answered.
+        "JSON.stringify({get x(){return {toJSON:function(){return 'tj'}}}})",
+        // A getter that throws leaves the walk.
+        "var r;try{JSON.stringify({get y(){throw new TypeError()}})}catch(e){r=e instanceof TypeError};''+r",
+        "JSON.stringify({get z(){return 4}},null,1)",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}

@@ -275,6 +275,8 @@ const JSON_PHASE_IDLE: i32 = 0;
 const JSON_PHASE_TOJSON: i32 = 1;
 /// It is waiting for the replacer of 25.5.2.4 step 6.
 const JSON_PHASE_REPLACER: i32 = 2;
+/// It is waiting for the getter step 2 of 25.5.2.4 reads the property with.
+const JSON_PHASE_VALUE: i32 = 3;
 
 /// Index of the holder in one frame of that stack.
 const JSON_FRAME_HOLDER: u32 = 0;
@@ -24507,6 +24509,29 @@ impl RegisterVM {
                     .unwrap_or(JSON_PHASE_IDLE);
                 promise::set_slot(heap, record, JSON_VALUE, value)?;
                 promise::set_slot(heap, record, JSON_PHASE, Value::from_smi(JSON_PHASE_IDLE))?;
+                // Step 3 reads the `toJSON` once the getter of step 2 has
+                // answered.
+                if phase == JSON_PHASE_VALUE {
+                    match self.take_the_json_value(
+                        state,
+                        value,
+                        call,
+                        units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    ) {
+                        Ok(Some(entered)) => return Ok(Some(entered)),
+                        Ok(None) => {
+                            pending = self.json_answered_without_a_frame(state, heap)?;
+                            continue;
+                        }
+                        Err(refused) => {
+                            heap.exit_scope();
+                            return Err(refused);
+                        }
+                    }
+                }
                 // Step 6 calls the replacer once the `toJSON` has answered.
                 let taken = if phase == JSON_PHASE_TOJSON {
                     match self.ask_the_json_replacer(
@@ -24621,7 +24646,61 @@ impl RegisterVM {
         )?;
         let holder = promise::slot(heap, top, JSON_FRAME_HOLDER);
         promise::set_slot(heap, record, JSON_KEY, key)?;
+        // Step 2 reads the property with 7.3.2, which for an accessor is a
+        // getter of the Script.
+        if let Some(pair) = Self::json_property_getter(holder, key, heap, realm)? {
+            promise::set_slot(heap, record, JSON_PHASE, Value::from_smi(JSON_PHASE_VALUE))?;
+            self.accessor_resume = Some(Resume::Stringify { state });
+            let entered = self.enter_accessor(
+                pair,
+                holder,
+                None,
+                call.return_pc,
+                call.caller_code_id,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            )?;
+            if entered.is_some() {
+                return Ok(entered);
+            }
+            self.accessor_resume = None;
+            let value = self.acc;
+            promise::set_slot(heap, record, JSON_PHASE, Value::from_smi(JSON_PHASE_IDLE))?;
+            return self.take_the_json_value(
+                state,
+                value,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
         let value = Self::json_property_of(holder, key, heap, realm)?;
+        self.take_the_json_value(state, value, call, units, active_feedback, heap, realm)
+    }
+
+    /// Steps 3 through 6 of 25.5.2.4 with the value of the property in hand.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the walk opens a frame, which needs what a call needs"
+    )]
+    fn take_the_json_value(
+        &mut self,
+        state: Root,
+        value: Value,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let record = heap
+            .root_value(state)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let key = promise::slot(heap, record, JSON_KEY);
         promise::set_slot(heap, record, JSON_VALUE, value)?;
         // Step 3 calls a `toJSON` the value carries, which is a frame.
         if value.is_object() || value.is_bigint() {
@@ -24648,6 +24727,22 @@ impl RegisterVM {
         }
         self.place_the_json_value(state, heap, realm)?;
         Ok(None)
+    }
+
+    /// The accessor pair step 2 of 25.5.2.4 reads the property through, and
+    /// nothing for a property 7.3.2 answers without a frame.
+    fn json_property_getter(
+        holder: Value,
+        key: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<Value>, VMError> {
+        let object = holder.as_object().ok_or(VMError::TypeError)?;
+        let name = property_key(key, heap, realm)?;
+        let Some(property) = heap.lookup_named(object, name)? else {
+            return Ok(None);
+        };
+        Ok(property.flags.is_accessor.then_some(property.value))
     }
 
     /// Step 2 of 25.5.2.4: the property the holder carries, which a getter of
