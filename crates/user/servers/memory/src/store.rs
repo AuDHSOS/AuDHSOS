@@ -9,7 +9,10 @@
 //! it at the alignment it asks for; what lies before and behind the piece
 //! that goes out is split off and stays free. A release retires the object
 //! until it is exclusively owned, then joins it to neighbours, which keeps the
-//! store from grinding its objects down to single pages (D-90).
+//! store from grinding its objects down to single pages (D-90). A retired
+//! object keeps the slot it had while it was held, so a client that keeps
+//! its handle after a release takes no slot from another client and the
+//! bound on objects out bounds retired objects with them.
 //!
 //! Zeroing happens twice over the same bytes and both are meant. The pass
 //! on return is what keeps what a client wrote out of free memory; the pass
@@ -55,6 +58,11 @@ pub struct Held {
     pub object: Object,
     /// The badge of the client that holds it.
     pub owner: u64,
+    /// The client gave the object back and something else still reaches
+    /// it. The slot stays taken until [`Store::reclaim`] frees it, so a
+    /// release needs no slot of its own and the bound on objects out
+    /// bounds returned ones with them.
+    pub retired: bool,
 }
 
 /// The memory the server has and the memory it has given out.
@@ -64,9 +72,9 @@ pub struct Held {
 #[derive(Debug)]
 pub struct Store<const FREE: usize, const LIVE: usize> {
     free: ArrayVec<Object, FREE>,
+    /// Every object that is out, including the returned ones that are
+    /// still reachable through another handle or mapping.
     live: ArrayVec<Held, LIVE>,
-    /// Returned objects still reachable through another handle or mapping.
-    retired: ArrayVec<Object, LIVE>,
 }
 
 impl<const FREE: usize, const LIVE: usize> Default for Store<FREE, LIVE> {
@@ -82,7 +90,6 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
         Store {
             free: ArrayVec::new(),
             live: ArrayVec::new(),
-            retired: ArrayVec::new(),
         }
     }
 
@@ -94,7 +101,8 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
             .fold(0u64, |total, object| total.saturating_add(object.len))
     }
 
-    /// How many bytes are out.
+    /// How many bytes are out, the returned ones that are still reachable
+    /// included.
     #[must_use]
     pub fn live_bytes(&self) -> u64 {
         self.live
@@ -108,10 +116,17 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
         self.free.len()
     }
 
-    /// How many objects are out.
+    /// How many objects are out, the returned ones that are still
+    /// reachable included.
     #[must_use]
     pub const fn live_objects(&self) -> usize {
         self.live.len()
+    }
+
+    /// How many of them were returned and are still reachable.
+    #[must_use]
+    pub fn retired_objects(&self) -> usize {
+        self.live.iter().filter(|held| held.retired).count()
     }
 
     /// The free objects, lowest address first.
@@ -212,6 +227,7 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
             .push(Held {
                 object: piece,
                 owner,
+                retired: false,
             })
             .map_err(|_| Error::PoolExhausted)?;
         Ok(piece)
@@ -234,7 +250,9 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
     /// release of the same object included; [`Error::AccessDenied`] when
     /// another client holds it; the errors of the zeroing pass and of a
     /// join. Nothing is zeroed in the two cases that are refused. Accepted
-    /// objects remain retired while foreign handles or mappings exist.
+    /// objects remain retired while foreign handles or mappings exist, in
+    /// the slot they already have, so a release needs no slot of its own
+    /// and a client that keeps its handle takes no slot from another.
     pub fn release(
         &mut self,
         pages: &mut impl Pages,
@@ -249,16 +267,12 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
         if held.object.len != returned.len {
             return Err(Error::InvalidArgument);
         }
-        if self.retired.is_full() {
-            return Err(Error::PoolExhausted);
+        if let Some(slot) = self.live.get_mut(index) {
+            slot.retired = true;
         }
-        let _returned = self.live.remove(index);
         if returned.handle != held.object.handle {
             pages.close(returned.handle)?;
         }
-        self.retired
-            .push(held.object)
-            .map_err(|_| Error::PoolExhausted)?;
         self.reclaim(pages)?;
         Ok(held.object)
     }
@@ -272,11 +286,12 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
     /// Errors of zeroing or inserting an exclusively owned object.
     pub fn reclaim(&mut self, pages: &mut impl Pages) -> Result<(), Error> {
         let mut index = 0;
-        while let Some(object) = self.retired.get(index).copied() {
-            if !self.free.is_full() && pages.references(object.handle) == Ok(1) {
-                wipe(pages, object)?;
-                self.put_free(pages, object)?;
-                let _removed = self.retired.remove(index);
+        while let Some(held) = self.live.get(index).copied() {
+            if held.retired && !self.free.is_full() && pages.references(held.object.handle) == Ok(1)
+            {
+                wipe(pages, held.object)?;
+                self.put_free(pages, held.object)?;
+                let _removed = self.live.remove(index);
             } else {
                 index = index.saturating_add(1);
             }
@@ -296,18 +311,14 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
     /// back before the error stays taken back.
     pub fn forget_client(&mut self, pages: &mut impl Pages, owner: u64) -> Result<usize, Error> {
         let mut taken = 0usize;
-        while let Some(index) = self.live.iter().position(|held| held.owner == owner) {
-            let held = *self.live.get(index).ok_or(Error::NotFound)?;
-            if self.retired.is_full() {
-                return Err(Error::PoolExhausted);
+        for held in self.live.iter_mut() {
+            if held.owner != owner || held.retired {
+                continue;
             }
-            let _returned = self.live.remove(index);
-            self.retired
-                .push(held.object)
-                .map_err(|_| Error::PoolExhausted)?;
-            self.reclaim(pages)?;
+            held.retired = true;
             taken = taken.wrapping_add(1);
         }
+        self.reclaim(pages)?;
         Ok(taken)
     }
 
@@ -390,9 +401,14 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
         })
     }
 
-    /// Where the object that begins at `start` stands among the live ones.
+    /// Where the object that begins at `start` stands among the ones a
+    /// client still holds. A retired object is past releasing, so it is
+    /// not found here and a second release of it answers
+    /// [`Error::NotFound`].
     fn position(&self, start: u64) -> Option<usize> {
-        self.live.iter().position(|held| held.object.start == start)
+        self.live
+            .iter()
+            .position(|held| held.object.start == start && !held.retired)
     }
 }
 

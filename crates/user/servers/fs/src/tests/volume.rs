@@ -4,8 +4,9 @@
 //! Tests of `crate::volume` and `crate::partition`.
 
 use audhsos_abi::Error;
+use audhsos_time::UnixTime;
 use fs_fat::doubles::RamDisk;
-use fs_fat::{BlockDevice, FileSystem, FormatOptions, SECTOR};
+use fs_fat::{BlockDevice, FileSystem, FormatOptions, Name, SECTOR};
 use fs_gpt::{ESP_TYPE_GUID, Entry, UNUSED_TYPE_GUID};
 
 use crate::partition::Partition;
@@ -107,4 +108,56 @@ fn a_partition_reads_and_writes_the_sectors_of_the_disk_it_stands_on() {
     let mut into = [0u8; SECTOR];
     disk.read(4, &mut into).unwrap();
     assert_eq!(into, from, "sector zero of the partition is sector four");
+}
+
+/// A disk whose first sector is a legacy master boot record: the boot
+/// signature at its end and one record of type `0x0C`, a FAT32 partition.
+fn legacy_mbr() -> RamDisk {
+    let mut disk = blank();
+    let mut sector = [0u8; SECTOR];
+    sector[446] = 0x80;
+    sector[450] = 0x0C;
+    sector[454..458].copy_from_slice(&2048u32.to_le_bytes());
+    sector[458..462].copy_from_slice(&SECTORS.saturating_sub(2048).to_le_bytes());
+    sector[510] = 0x55;
+    sector[511] = 0xAA;
+    disk.write(0, &sector).unwrap();
+    disk
+}
+
+#[test]
+fn a_disk_with_a_legacy_partition_table_is_refused_and_not_formatted() {
+    let disk = legacy_mbr();
+    let before = disk.bytes().to_vec();
+    let outcome = mount(disk);
+    assert_eq!(
+        outcome.unwrap_err(),
+        Error::InvalidState,
+        "a first sector this system does not read is no blank disk"
+    );
+    assert_eq!(
+        before,
+        legacy_mbr().bytes(),
+        "the records of the legacy table were written over"
+    );
+}
+
+#[test]
+fn a_volume_whose_information_sector_was_damaged_is_mounted_and_not_formatted() {
+    let name = Name::new("KEEP.ME").unwrap();
+    let mut volume = mount(blank()).expect("a blank disk carries a volume once it is formatted");
+    let root = volume.root();
+    let _made = volume
+        .create(root, &name, UnixTime::from_seconds(315_532_800))
+        .unwrap();
+    let mut disk = volume.into_device().device().clone();
+    // The information sector carries a hint and no volume: the boot
+    // sector is what says a volume is there.
+    disk.write(1, &[0u8; SECTOR]).unwrap();
+    let again = mount(disk).expect("the boot sector still names the volume");
+    let root = again.root();
+    assert!(
+        again.find(root, &name).unwrap().is_some(),
+        "the volume was formatted over and its files are gone"
+    );
 }

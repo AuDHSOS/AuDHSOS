@@ -47,6 +47,11 @@ pub struct Entries {
     cluster: u32,
     /// The slot within that cluster.
     slot: u32,
+    /// The first cluster of the walk, which names the chain in a refusal.
+    first: u32,
+    /// How many clusters the walk has entered, compared with the cluster
+    /// count of the volume to refuse a chain that points back into itself.
+    steps: u32,
     /// Whether the walk has reached the end.
     done: bool,
 }
@@ -254,6 +259,8 @@ impl<D: BlockDevice> FileSystem<D> {
         Entries {
             cluster: dir.cluster,
             slot: 0,
+            first: dir.cluster,
+            steps: 0,
             done: false,
         }
     }
@@ -263,8 +270,9 @@ impl<D: BlockDevice> FileSystem<D> {
     /// # Errors
     ///
     /// [`Error::EntryName`] for an entry whose eleven bytes are not a
-    /// name, [`Error::Time`] for one whose date names no day, and the
-    /// errors of the table walk.
+    /// name, [`Error::Time`] for one whose date names no day,
+    /// [`Error::ChainLoop`] for a directory whose chain enters more
+    /// clusters than the volume has, and the errors of the table walk.
     pub fn next_entry(&self, cursor: &mut Entries) -> Result<Option<Entry>, Error> {
         while !cursor.done {
             let location = Location {
@@ -692,12 +700,23 @@ impl<D: BlockDevice> FileSystem<D> {
 
     /// Moves a walk one slot on, following the chain at the end of a
     /// cluster.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ChainLoop`] when the walk has entered more clusters than
+    /// the volume has, which a chain that points back into itself does;
+    /// the errors of the table walk.
     fn step(&self, cursor: &mut Entries) -> Result<(), Error> {
         cursor.slot = cursor.slot.saturating_add(1);
         if cursor.slot < self.slots_per_cluster() {
             return Ok(());
         }
         cursor.slot = 0;
+        cursor.steps = cursor.steps.saturating_add(1);
+        if cursor.steps > self.geometry.clusters {
+            cursor.done = true;
+            return Err(Error::ChainLoop(cursor.first));
+        }
         match table::next(&self.device, &self.geometry, cursor.cluster)? {
             Some(following) => cursor.cluster = following,
             None => cursor.done = true,
