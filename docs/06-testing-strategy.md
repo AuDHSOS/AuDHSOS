@@ -6556,3 +6556,14 @@ Document 17 step T5.
   against the name of a code.
 - `strftime` answers what the C library of the machine writes, `%F`
   among its fields.
+
+### 6.6.244 Which database a statement writes (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A statement that names `main` writes the rows and the indexes of that
+  database where the temp schema holds a table of the same name.
+- A statement that names no schema writes the table the temp schema
+  holds.
+- A trigger of the temp schema and one of `main` carry the same name,
+  and a second trigger of that name in one database is refused.

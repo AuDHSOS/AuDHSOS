@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` writes the rows and the indexes of the database a
+  statement names, where the temp schema held a table of the same name
+  and its indexes were written into the other database, and holds a
+  trigger name against the database the statement named rather than
+  against every one. D-356 records it. Catalog 6.6.244. `e_resolve.test`
+  goes from no case to 29 passing, which is every case of the file.
+
 - The suite tester splits a script at the semicolons `sqlite3_complete`
   ends a statement at, scores `verify_ex_errcode` as a case, answers
   `strftime` out of the C library of the machine, and answers nought for

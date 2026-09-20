@@ -2475,6 +2475,7 @@ impl Writer {
     /// [`Error`] names what the image breaks.
     fn reading<'a>(&self, bytes: &'a [u8]) -> Result<Database<'a>, Error> {
         let database = Database::open_collating(bytes, self.collating)?
+            .writing(true)
             .defining(self.defined)
             .grouping(self.grouped)
             .sensitively(self.truth.sensitive)
@@ -2712,7 +2713,10 @@ impl Writer {
             return Ok(None);
         };
         let bytes = self.images();
-        let database = self.reading_beside(&bytes)?;
+        // `sqlite3FindTable` reads a name the statement wrote under no
+        // schema in the temp schema first, so the database this answers
+        // is the one that database holds the name in.
+        let database = self.reading_beside(&bytes)?.writing(false);
         let held = crate::schema::dequote(name.text(sql));
         let Some(named) = database.holding(&held) else {
             return Ok(None);
@@ -3999,7 +4003,7 @@ impl Writer {
                 return Err(Error::NoTable(named));
             }
             self.reserved(&name)?;
-            if database.trigger(&name).is_some() {
+            if database.held_trigger(&name).is_some() {
                 if trigger.if_not_exists {
                     return Ok(());
                 }

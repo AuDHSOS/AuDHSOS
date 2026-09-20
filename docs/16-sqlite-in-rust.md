@@ -939,6 +939,9 @@ Size: L.
 101. `PRAGMA incremental_vacuum`, the free page a search of the whole
      list answers, and the chain a cell of an index page carries. Built,
      which D-354 records.
+102. Which database a statement writes where the temp schema holds the
+     name, and the database a trigger name stands once in. Built, which
+     D-356 records.
 
 ### Done when
 
@@ -948,8 +951,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 117 336 cases in 824 files, 104 740
-pass, 3299 answer differently, and 9297 name something the engine
+under the `tclsh` of the machine. Of 117 384 cases in 825 files, 104 851
+pass, 3298 answer differently, and 9235 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the three-minute
 deadline and are counted with the cases they ran by then. One run over

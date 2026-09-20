@@ -1586,6 +1586,11 @@ pub struct Database<'a> {
     attached: Vec<Attached<'a>>,
     /// The place of the temp schema, where the reader carries one.
     temp: Option<usize>,
+    /// Whether a name is read in the database at place nought before the
+    /// temp schema, which the connection that writes reads names in,
+    /// because the statement named that database and the rows it writes
+    /// are the ones of its table.
+    writing: bool,
     /// Its tables.
     tables: Vec<Stored>,
     /// Its views.
@@ -1827,6 +1832,7 @@ impl<'a> Database<'a> {
             named: b"main".to_vec(),
             attached: Vec::new(),
             temp: None,
+            writing: false,
             tables,
             views: Vec::new(),
             triggers: Vec::new(),
@@ -2041,6 +2047,15 @@ impl<'a> Database<'a> {
         self
     }
 
+    /// The same database, read as the connection that writes reads it
+    /// where `writing` says so: a name is then read in the database at
+    /// schema place nought before the temp schema.
+    #[must_use]
+    pub const fn writing(mut self, writing: bool) -> Self {
+        self.writing = writing;
+        self
+    }
+
     /// The same database, with `changes()`, `total_changes()` and
     /// `last_insert_rowid()` answering what the connection that writes
     /// has written.
@@ -2211,6 +2226,17 @@ impl<'a> Database<'a> {
         self.triggers
             .iter()
             .find(|trigger| trigger.name.eq_ignore_ascii_case(name))
+    }
+
+    /// The trigger of `name` the database at schema place nought holds.
+    ///
+    /// `sqlite3BeginTrigger` of `research/sqlite/src/trigger.c:150` reads
+    /// the name in the schema the statement named, so a trigger of the
+    /// temp schema and one of `main` may carry the same name.
+    pub(crate) fn held_trigger(&self, name: &[u8]) -> Option<&Trigger> {
+        self.triggers
+            .iter()
+            .find(|trigger| trigger.place == 0 && trigger.name.eq_ignore_ascii_case(name))
     }
 
     /// The rows a view answers, with the shape they carry and the name
@@ -2798,10 +2824,20 @@ impl<'a> Database<'a> {
     /// then `main`, then the attached databases in the order they were
     /// attached.
     ///
+    /// The connection that writes reads the database the statement named
+    /// first, because `sqlite3TwoPartName` of
+    /// `research/sqlite/src/build.c:596` names one database and the rows
+    /// the statement writes are the ones of the table that database
+    /// holds.
+    ///
     /// Reading them costs O(n) in their number.
     fn searching(&self) -> Vec<usize> {
-        let mut out: Vec<usize> = self.temp.into_iter().collect();
-        out.push(0);
+        let (first, second) = if self.writing {
+            (Some(0), self.temp)
+        } else {
+            (self.temp, Some(0))
+        };
+        let mut out: Vec<usize> = first.into_iter().chain(second).collect();
         for place in 1..=self.attached.len() {
             if Some(place) != self.temp {
                 out.push(place);

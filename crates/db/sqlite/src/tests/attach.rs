@@ -664,3 +664,63 @@ fn what_a_transaction_over_more_than_one_database_writes() {
     );
     writer.run(b"COMMIT").unwrap();
 }
+
+/// `e_resolve-1.*` of `test/e_resolve.test`: a statement that names
+/// `main` writes the rows and the indexes of that database, whatever the
+/// temp schema holds under the same name, and a trigger name stands once
+/// per database.
+#[test]
+fn what_a_statement_that_names_main_writes_where_temp_holds_the_name() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TEMP TABLE n1(x, y)".as_slice(),
+        b"CREATE INDEX temp.n4 ON n1(x, y)",
+        b"CREATE TRIGGER temp.n3 AFTER INSERT ON n1 BEGIN SELECT 1; END",
+        b"INSERT INTO n1 VALUES('temp', 'n1')",
+        b"CREATE TABLE main.n1(x, y)",
+        b"CREATE TRIGGER main.n3 BEFORE INSERT ON n1 BEGIN SELECT 1; END",
+        b"INSERT INTO main.n1 VALUES('main', 'n1')",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    // The rows of `main` are the ones the statement that named it wrote,
+    // and the file holds every page it says it does.
+    let held = writer.written();
+    let database = crate::db::Database::open(&held).unwrap();
+    assert_eq!(
+        database.query(b"SELECT x, y FROM n1").unwrap().rows,
+        [alloc::vec![
+            Value::Text(b"main".to_vec()),
+            Value::Text(b"n1".to_vec())
+        ]]
+    );
+    assert_eq!(
+        database.query(b"PRAGMA integrity_check").unwrap().rows,
+        [alloc::vec![Value::Text(b"ok".to_vec())]]
+    );
+    // The temp schema holds the row the statement that named no schema
+    // wrote, and the index it carries.
+    let temp = writer.attached_written(b"temp").expect("the temp schema");
+    let database = crate::db::Database::open(&temp).unwrap();
+    assert_eq!(
+        database
+            .query(b"SELECT x FROM n1 WHERE y='n1'")
+            .unwrap()
+            .rows,
+        [alloc::vec![Value::Text(b"temp".to_vec())]]
+    );
+    assert_eq!(
+        database.query(b"PRAGMA integrity_check").unwrap().rows,
+        [alloc::vec![Value::Text(b"ok".to_vec())]]
+    );
+    // A trigger of the temp schema and one of `main` may carry the same
+    // name, and a second trigger of that name in one database is
+    // refused.
+    assert_eq!(
+        writer
+            .run(b"CREATE TRIGGER main.n3 AFTER INSERT ON n1 BEGIN SELECT 1; END")
+            .unwrap_err()
+            .message(),
+        "trigger n3 already exists"
+    );
+}
