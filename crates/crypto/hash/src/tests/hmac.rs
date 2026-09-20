@@ -3,8 +3,6 @@
 
 //! HMAC against the vectors of RFC 4231, section 4.
 
-use crypto_ct::Choice;
-
 use crate::hmac::Hmac;
 use crate::sha256::Sha256;
 use crate::sha512::{Sha384, Sha512};
@@ -165,28 +163,25 @@ fn verification_accepts_the_right_tag_and_rejects_every_other() {
     let key = [0x0bu8; 20];
     let message = b"Hi There";
     let tag = Hmac::<Sha256>::tag(&key, message);
-    assert_eq!(Hmac::<Sha256>::verify(&key, message, &tag), Choice::YES);
+    assert!(Hmac::<Sha256>::verify(&key, message, &tag).is_true());
 
     for position in 0..tag.len() {
         let mut damaged = tag;
         if let Some(byte) = damaged.get_mut(position) {
             *byte ^= 0x01;
         }
-        assert_eq!(
-            Hmac::<Sha256>::verify(&key, message, &damaged),
-            Choice::NO,
+        assert!(
+            !Hmac::<Sha256>::verify(&key, message, &damaged).is_true(),
             "flipped byte {position}"
         );
     }
 
-    assert_eq!(
-        Hmac::<Sha256>::verify(&key, b"Hi there", &tag),
-        Choice::NO,
+    assert!(
+        !Hmac::<Sha256>::verify(&key, b"Hi there", &tag).is_true(),
         "a changed message must not verify"
     );
-    assert_eq!(
-        Hmac::<Sha256>::verify(&[0x0cu8; 20], message, &tag),
-        Choice::NO,
+    assert!(
+        !Hmac::<Sha256>::verify(&[0x0cu8; 20], message, &tag).is_true(),
         "a changed key must not verify"
     );
 }
@@ -195,11 +190,8 @@ fn verification_accepts_the_right_tag_and_rejects_every_other() {
 fn a_tag_of_the_wrong_length_is_rejected_rather_than_truncated() {
     let key = [0x0bu8; 20];
     let tag = Hmac::<Sha256>::tag(&key, b"Hi There");
-    assert_eq!(
-        Hmac::<Sha256>::verify(&key, b"Hi There", &tag[..16]),
-        Choice::NO
-    );
-    assert_eq!(Hmac::<Sha256>::verify(&key, b"Hi There", &[]), Choice::NO);
+    assert!(!Hmac::<Sha256>::verify(&key, b"Hi There", &tag[..16]).is_true());
+    assert!(!Hmac::<Sha256>::verify(&key, b"Hi There", &[]).is_true());
 }
 
 #[test]

@@ -279,7 +279,7 @@ fn the_two_scalar_products_answer_the_same_scalar() {
     let two = Scalar::from_bytes_reduced(&[0xFEu8; 32]);
     for left in [Scalar::ZERO, one, two] {
         for right in [Scalar::ZERO, one, two] {
-            assert_eq!(left.mul_secret(right), left.mul(right));
+            assert!(left.mul_secret(right).ct_eq(left.mul(right)).is_true());
         }
     }
 }

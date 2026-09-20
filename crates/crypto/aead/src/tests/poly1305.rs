@@ -3,7 +3,6 @@
 
 //! `Poly1305` against the vector of RFC 8439, section 2.5.2.
 
-use crypto_ct::Choice;
 use test_support::generators::bytes;
 use test_support::property::check;
 
@@ -58,25 +57,21 @@ fn a_message_one_byte_past_a_block_is_padded() {
 fn verification_accepts_the_right_tag_and_rejects_every_other() {
     let message = b"Cryptographic Forum Research Group";
     let tag = Poly1305::tag_of(&key(), message);
-    assert_eq!(Poly1305::verify(&key(), message, &tag), Choice::YES);
+    assert!(Poly1305::verify(&key(), message, &tag).is_true());
 
     for position in 0..tag.len() {
         let mut damaged = tag;
         if let Some(byte) = damaged.get_mut(position) {
             *byte ^= 0x01;
         }
-        assert_eq!(
-            Poly1305::verify(&key(), message, &damaged),
-            Choice::NO,
+        assert!(
+            !Poly1305::verify(&key(), message, &damaged).is_true(),
             "flipped byte {position}"
         );
     }
 
-    assert_eq!(
-        Poly1305::verify(&key(), b"another message", &tag),
-        Choice::NO
-    );
-    assert_eq!(Poly1305::verify(&key(), message, &tag[..8]), Choice::NO);
+    assert!(!Poly1305::verify(&key(), b"another message", &tag).is_true());
+    assert!(!Poly1305::verify(&key(), message, &tag[..8]).is_true());
 }
 
 #[test]
