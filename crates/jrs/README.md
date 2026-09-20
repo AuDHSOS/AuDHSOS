@@ -617,9 +617,9 @@ What a switch would cost is those gaps, by the reason the engine names:
 | 30 | a `then` that is not `%Promise.prototype.then%` |
 | 26 | a call |
 | 23 | a binding the global object holds as an accessor |
-| 554 | 73 further reasons, none above 22 variants |
+| 536 | 73 further reasons, none above 22 variants |
 
-The counts above are of `0cb57d7`; the ones in the notes below carry the
+The counts above are of `2af7b1f`; the ones in the notes below carry the
 commit each was measured at.
 
 Where each of those reasons is raised, measured at `3a6e905` by giving
@@ -851,6 +851,7 @@ more than eight variants.
 | `cf56eab` | 1,463 | **0** | 1,463 |
 | `a955f11` | 1,435 | **0** | 1,435 |
 | `0cb57d7` | 1,427 | **0** | 1,427 |
+| `2af7b1f` | 1,409 | **0** | 1,409 |
 
 The list is the join of the two per-variant runs, without `--summary`:
 
@@ -1250,7 +1251,9 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | 13.3.7.1 with a spread element in the argument list (focused) | focused | `03d3688` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/super test/staging/sm/class --summary` | 188 | 371 | 232 (62.53%) | 14 (3.77%) | 125 (33.69%) |
 | The same, on the stack backend (focused) | focused | `03d3688` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/super test/staging/sm/class --summary` | 188 | 371 | 258 (69.54%) | 61 (16.44%) | 52 (14.02%) |
 | Complete pinned suite on the register engine, before the close of 14.7.5.7 step 3.j (outdated) | full | `33ffe90` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 58,747 (57.08%) | 20,543 (19.96%) | 23,635 (22.96%) |
-| Complete pinned suite on the register engine | full | `0cb57d7` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,606 (61.80%) | 19,009 (18.47%) | 20,310 (19.73%) |
+| Complete pinned suite on the register engine | full | `2af7b1f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,624 (61.82%) | 19,119 (18.58%) | 20,182 (19.61%) |
+| A Block of a loop taking the copy of 14.2.3 (focused) | focused | `2af7b1f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/for test/language/statements/for-of test/language/statements/for-in test/language/statements/while --summary` | 1,293 | 2,478 | 2,227 (89.87%) | 30 (1.21%) | 221 (8.92%) |
+| Complete pinned suite on the register engine, before the Block copy of 14.2.3 (outdated) | full | `0cb57d7` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,606 (61.80%) | 19,009 (18.47%) | 20,310 (19.73%) |
 | A Block binding of a loop, read per iteration (focused) | focused | `0cb57d7` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/for test/language/statements/for-of test/language/statements/for-in --summary` | 1,255 | 2,406 | 2,173 (90.32%) | 27 (1.12%) | 206 (8.56%) |
 | Complete pinned suite on the register engine, before the Block binding of a loop (outdated) | full | `a955f11` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,598 (61.79%) | 18,961 (18.42%) | 20,366 (19.79%) |
 | B.3.2.1 and B.3.2.2 in a function body (focused) | focused | `a955f11` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/annexB/language --summary` | 845 | 895 | 237 (26.48%) | 59 (6.59%) | 599 (66.93%) |
