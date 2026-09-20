@@ -867,6 +867,50 @@ impl GenerationalHeap {
         }
     }
 
+    /// Walks the chain of Declarative Environment Records of 9.1.1.1 for the
+    /// record that names this binding, as `ResolveBinding` of 9.4.2 does.
+    ///
+    /// A context the lowering addresses by slot names nothing and is passed
+    /// over, so a frame that carries no eval costs one link per level.
+    #[must_use]
+    pub fn context_binding(&self, context: ContextRef, name: &[u16]) -> Option<(ContextRef, u16)> {
+        let mut current = Some(context);
+        while let Some(reference) = current {
+            let held = self.get_context(reference)?;
+            if let Some(slot) = held.slot_of(name) {
+                return Some((reference, slot));
+            }
+            current = held.parent;
+        }
+        None
+    }
+
+    /// Creates the Declarative Environment Record of 9.1.1.1 whose slots a
+    /// Script may name, which is what a direct eval of 13.3.6.1 shares.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::NurseryFull`] when a Safe Point is required, or
+    /// [`HeapError::ReferenceSpaceExhausted`] when no tagged index remains.
+    pub fn allocate_named_context(
+        &mut self,
+        parent: Option<ContextRef>,
+        names: Vec<alloc::rc::Rc<[u16]>>,
+    ) -> Result<ContextRef, HeapError> {
+        if parent.is_some_and(|parent| self.get_context(parent).is_none()) {
+            return Err(HeapError::InvalidReference);
+        }
+        if self.nursery.contexts_full() {
+            return Err(HeapError::NurseryFull);
+        }
+        let index = young_index(self.nursery.contexts.len())?;
+        self.nursery.contexts.push(YoungContext {
+            value: Context::named(parent, names),
+            age: 0,
+        });
+        Ok(ContextRef::young(index, self.nursery.generation))
+    }
+
     /// Reads one context slot by following `depth` outer links.
     #[must_use]
     pub fn context_slot(&self, mut context: ContextRef, depth: u16, slot: u16) -> Option<Value> {
@@ -3174,6 +3218,25 @@ fn canonical_index(units: &[u16], length: u32) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_walk_of_the_chain_finds_the_record_that_names_the_binding() {
+        let mut heap = GenerationalHeap::new();
+        let outer_name: alloc::rc::Rc<[u16]> = alloc::rc::Rc::from([0x61u16].as_slice());
+        let inner_name: alloc::rc::Rc<[u16]> = alloc::rc::Rc::from([0x62u16].as_slice());
+        let outer = heap
+            .allocate_named_context(None, alloc::vec![alloc::rc::Rc::clone(&outer_name)])
+            .expect("outer record");
+        // A context the lowering addresses by slot names nothing and is
+        // passed over by the walk.
+        let middle = heap.allocate_context(Some(outer), 3).expect("slot context");
+        let inner = heap
+            .allocate_named_context(Some(middle), alloc::vec![alloc::rc::Rc::clone(&inner_name)])
+            .expect("inner record");
+        assert_eq!(heap.context_binding(inner, &inner_name), Some((inner, 0)));
+        assert_eq!(heap.context_binding(inner, &outer_name), Some((outer, 0)));
+        assert_eq!(heap.context_binding(inner, &[0x63u16]), None);
+    }
     use super::*;
 
     fn rooted_object(heap: &GenerationalHeap, root: Root) -> ObjectRef {

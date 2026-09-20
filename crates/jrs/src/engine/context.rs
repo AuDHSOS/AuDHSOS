@@ -4,6 +4,7 @@
 //! Heap contexts for captured lexical bindings.
 
 use super::value::{VALUE_UNDEFINED, Value};
+use alloc::rc::Rc;
 use alloc::vec::Vec;
 
 /// Generation-checked reference to a heap context.
@@ -71,12 +72,21 @@ impl ContextRef {
 }
 
 /// Captured lexical environment with an optional outer context.
+///
+/// A context the lowering addresses by slot carries no names: every read of
+/// it names its slot, which the lowering resolved. The Declarative
+/// Environment Record of 9.1.1.1 a direct eval of 13.3.6.1 shares carries
+/// one name per slot, because the text of the eval is compiled after the
+/// frame around it and names its bindings rather than their slots.
 #[derive(Clone, Debug)]
 pub struct Context {
     /// Outer captured lexical environment.
     pub parent: Option<ContextRef>,
     /// Mutable captured binding cells.
     pub slots: Vec<Value>,
+    /// The name of each slot, for a context a Script may name; empty for one
+    /// every read of addresses by slot.
+    pub names: Vec<Rc<[u16]>>,
 }
 
 impl Context {
@@ -86,7 +96,40 @@ impl Context {
         Self {
             parent,
             slots: alloc::vec![VALUE_UNDEFINED; slot_count],
+            names: Vec::new(),
         }
+    }
+
+    /// Creates a context of 9.1.1.1 whose slots a Script may name.
+    #[must_use]
+    pub fn named(parent: Option<ContextRef>, names: Vec<Rc<[u16]>>) -> Self {
+        Self {
+            parent,
+            slots: alloc::vec![VALUE_UNDEFINED; names.len()],
+            names,
+        }
+    }
+
+    /// `HasBinding` of 9.1.1.1.1 for this record alone: the slot the name
+    /// stands at, where this context names it.
+    #[must_use]
+    pub fn slot_of(&self, name: &[u16]) -> Option<u16> {
+        // The last name wins, because 9.1.1.1.2 replaces a binding a second
+        // declaration of the same name makes.
+        let at = self.names.iter().rposition(|held| held.as_ref() == name)?;
+        u16::try_from(at).ok()
+    }
+
+    /// `CreateMutableBinding` of 9.1.1.1.2: the slot the name takes, which is
+    /// the one it already stands at where this context names it.
+    pub fn declare(&mut self, name: &Rc<[u16]>) -> Option<u16> {
+        if let Some(slot) = self.slot_of(name) {
+            return Some(slot);
+        }
+        let at = u16::try_from(self.names.len()).ok()?;
+        self.names.push(Rc::clone(name));
+        self.slots.push(VALUE_UNDEFINED);
+        Some(at)
     }
 }
 
@@ -109,5 +152,23 @@ mod tests {
         let context = Context::new(Some(old), 2);
         assert_eq!(context.parent, Some(old));
         assert_eq!(context.slots, [VALUE_UNDEFINED; 2]);
+        assert!(context.names.is_empty());
+    }
+
+    #[test]
+    fn a_named_context_answers_the_slot_of_each_name_it_holds() {
+        let first: Rc<[u16]> = Rc::from([0x61u16].as_slice());
+        let second: Rc<[u16]> = Rc::from([0x62u16].as_slice());
+        let mut context = Context::named(None, alloc::vec![Rc::clone(&first)]);
+        assert_eq!(context.slots.len(), 1);
+        assert_eq!(context.slot_of(&first), Some(0));
+        assert_eq!(context.slot_of(&second), None);
+        // 9.1.1.1.2 gives a name the record does not hold a slot of its own.
+        assert_eq!(context.declare(&second), Some(1));
+        assert_eq!(context.slot_of(&second), Some(1));
+        assert_eq!(context.slots.len(), 2);
+        // A name the record holds keeps the slot it stands at.
+        assert_eq!(context.declare(&first), Some(0));
+        assert_eq!(context.names.len(), 2);
     }
 }
