@@ -14,7 +14,9 @@ rekeys itself from its own output after every request, so a state captured
 later does not reveal what was handed out earlier. And it reseeds from its
 entropy source after a fixed number of bytes, mixing the fresh material
 into the key it already has rather than replacing it, so a source that
-turns out to be predictable cannot take the state over.
+turns out to be predictable cannot take the state over. A request wider
+than what is left of that budget is served in runs with a reseed between
+them, so the bound holds per key and not per request.
 
 No product code constructs a generator yet. The crate ships the algorithm
 and the traits; the platform source is specified when the network stack

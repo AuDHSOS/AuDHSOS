@@ -890,6 +890,44 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `crypto-bignum`: `write_be` filled `out`, wrote the low bytes of the
+  result, and only then reported `OutputTooShort`, so `pow` and
+  `pow_wide` left a truncated value in a buffer they had refused. The
+  width of the result is now measured before a byte is written and a
+  refused call leaves `out` as the caller passed it. `pow_secret` checks
+  the width before the ladder and was not affected. A result narrower
+  than the modulus still fits a buffer narrower than the modulus, which
+  is what `crypto-rsa` passes for a key whose byte length is not a
+  multiple of eight. Issue #28.
+
+- `crypto-dh`: `ModpGroup::shared_secret` handed the peer's value to
+  `pow_secret` as it arrived. A value of 513 bytes under a leading zero
+  byte passes `check_public`, and `pow_secret` derives its limb count
+  from the byte length and refused it as `TooWide`, which the caller read
+  as `OutputTooShort`. The exponentiation now takes the value
+  right-aligned in `MAX_BYTES` bytes, which is the form `check_public`
+  already builds, so the two agree on what a value of the group is.
+  Issue #23.
+
+- `crypto-dh`: `shared_secret` returned `DegenerateSharedSecret` with the
+  degenerate value still in `out`, and `public_value` returned
+  `PublicValueOutOfRange` the same way, so a caller that ignored the
+  result kept a value neither may be used. Both wipe `out` before they
+  return, as `crypto-aead::open` does. Issue #29.
+
+- `crypto-rng`: `ChaChaRng::fill` reseeded when a request was wider than
+  the remaining budget and then served the whole request from one key, so
+  a request of 2 MiB produced twice `RESEED_BYTES` under one key against
+  what the crate documents. A request is now served in runs of at most
+  the remaining budget with a reseed between them; a reseed that fails
+  wipes the run already written. Issue #25.
+
+- `crypto-rng`: `fill` reported `RngError::Exhausted` for the
+  `MessageTooLong` of `apply_keystream`, a variant the scripted generator
+  of the test doubles owns. A run is at most `RESEED_BYTES`, which is
+  2^14 blocks, so `fill` now writes the keystream block by block and has
+  no error of its own beyond a failing reseed. Issue #24.
+
 - `kernel-hal-x86_64`: `enter_user_trampoline` ran `iretq` with every
   register but `rdi` as the kernel left it, because `switch` saves and
   restores only the six callee-saved registers. A new thread read the
