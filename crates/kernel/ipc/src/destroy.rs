@@ -28,8 +28,9 @@ pub const fn destroy_notification(notification: &Notification) -> Waiters {
     Waiters::one(notification.waiter, Error::ObjectDestroyed)
 }
 
-/// The caller of a reply object that was dropped without an answer. One
-/// that was answered has already been woken, and there is nobody left.
+/// The caller of a reply object that was dropped while it still waited for
+/// an answer. A consumed object names nobody to wake: its caller was
+/// answered, or a kill, a suspend, or an exit took it out of the wait.
 #[must_use]
 pub const fn destroy_reply(reply: &Reply) -> Waiters {
     let caller = if reply.consumed {

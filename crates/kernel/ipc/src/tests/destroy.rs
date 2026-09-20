@@ -69,6 +69,7 @@ fn the_last_handle_to_an_endpoint_wakes_everyone_on_both_queues() {
         endpoint,
         queue: kernel_objects::object::Queue::Receivers,
         badge: 0,
+        kernel_message: false,
     };
 
     // Closing the last handle destroys the endpoint (D-75): a thread that

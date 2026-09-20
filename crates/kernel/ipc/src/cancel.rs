@@ -53,9 +53,13 @@ pub fn cancel<const NP: usize, const NT: usize, const NM: usize, const NH: usize
                 .with(notification, |held| held.waiter = None);
         }
         // A thread waiting for the answer to a call is in no queue: the
-        // reply object names it. The cleared record is what tells a later
-        // `ipc_reply` that its caller is no longer waiting for one.
-        Wait::Reply { .. } => {}
+        // reply object names it. Marking the object consumed is what tells
+        // a later `ipc_reply` and the destruction of the object that its
+        // caller is no longer waiting for an answer; the cleared record
+        // alone reaches `reply_caller` but not `destroy_reply`.
+        Wait::Reply { reply } => {
+            objects.replies.with(reply, |held| held.consumed = true);
+        }
     }
     objects.threads.with(thread, |held| {
         held.wait = Wait::Nothing;

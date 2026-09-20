@@ -890,6 +890,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `kernel-ipc`: `cancel` marks the reply object of a `Wait::Reply` consumed.
+  It cleared the caller's record alone, which `reply_caller` compares but
+  `destroy_reply` does not, so the server closing its reply handle woke a
+  caller that had stopped waiting for the answer. A caller suspended out of
+  its call and blocked on another endpoint afterwards became ready while its
+  wait links still chained it into that endpoint's queue, and a later send
+  copied a message into a thread that was ready or running; a receive on a
+  third endpoint after that put one thread's links in two queues. Catalog
+  6.6.8 of document 6 carries the item.
+
 - `crypto-hash`: the README stated the round constants and the initial
   values were generated from their definition in FIPS 180-4, while
   `sha256.rs` and `sha512.rs` hold them as literal arrays (issue #26).

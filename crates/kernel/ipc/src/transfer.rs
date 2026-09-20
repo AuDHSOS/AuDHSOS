@@ -16,11 +16,13 @@
 //! installed. A handle without that right therefore fails before any other
 //! handle of the same message is installed.
 //!
-//! The reserved label range is not checked here but at the entry of
-//! `ipc_send` and `ipc_call`, where the message is one a user thread wrote.
-//! The fault message the kernel builds is its own and carries a reserved
-//! label by construction; a check inside this function would refuse exactly
-//! the message it exists for.
+//! The reserved label range is checked here, against `kernel_message`: the
+//! fault message the kernel builds carries a reserved label by construction
+//! and passes `true`, every message a user thread wrote passes `false` and
+//! is refused a label of that range. The check belongs to this function
+//! because the sender's IPC buffer is mapped in the sender's process, where
+//! every thread of that process can write it after the entry of `ipc_send`
+//! or `ipc_call` checked the header and before a queued message is copied.
 
 use audhsos_abi::ipc_buffer::{Buffer, BufferMut, SIZE, WORD, WORDS};
 use audhsos_abi::layout::MAX_MESSAGE_HANDLES;
@@ -49,6 +51,9 @@ pub struct Transferred {
 /// object with the same rights and the same badge, and the object gains a
 /// reference for it.
 ///
+/// `kernel_message` is `true` only for the fault message of
+/// `kernel_syscall::fault`, which the kernel wrote itself.
+///
 /// The two processes may be one process, so the handle list is read out of
 /// the store and written back rather than passed in twice: two mutable
 /// borrows of one list would be two views of the same thing, and whichever
@@ -57,19 +62,24 @@ pub struct Transferred {
 /// # Errors
 ///
 /// [`Error::InvalidArgument`] for a header whose counts are above what the
-/// message area holds; [`Error::InvalidHandle`] for a handle word the
-/// sender does not hold; [`Error::AccessDenied`] for a handle without
+/// message area holds, and for a label of the reserved range when
+/// `kernel_message` is `false`; [`Error::InvalidHandle`] for a handle word
+/// the sender does not hold; [`Error::AccessDenied`] for a handle without
 /// [`Rights::TRANSFER`]. Nothing is copied and nothing is installed in any
-/// of the three cases.
+/// of the four cases.
 pub fn transfer<const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
     from: &[u8; SIZE],
     to: &mut [u8; SIZE],
     objects: &mut Objects<NP, NT, NM, NH>,
     sender: ProcessId,
     receiver: ProcessId,
+    kernel_message: bool,
 ) -> Result<Transferred, Error> {
     let reader = Buffer::new(from);
     let message = reader.message().map_err(Error::from)?;
+    if !kernel_message && message.is_kernel_label() {
+        return Err(Error::InvalidArgument);
+    }
 
     // Every handle first, so that one without `TRANSFER` refuses the
     // message before another of the same message is installed.
