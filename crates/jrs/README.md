@@ -619,6 +619,14 @@ every site of the reason a name of its own and running the suite once:
 | 121 | an internal method of a Proxy | the walks that read a descriptor per key |
 | 56 | `ToPrimitive` of an Object outside a call | sites of 8 variants or fewer |
 | 48 | `ToString` of an Object | ten sites of 4 variants or fewer, and `TestIn` |
+| 32 | a try statement | a Catch Parameter that destructures a thrown object literal |
+
+The try reason is not the Catch Parameter: `try{}catch({x = 1}){}` and
+`try{throw o}catch({x = 1}){}` both lower. What the lowering refuses is
+an object literal thrown in the body of the same statement, as in
+`try{throw {}}catch({x}){}`, whose layout the handler no longer tracks.
+The refusal carries no name of its own, which is why it reports the
+statement around it.
 
 `DefineAccessorByValue` and `DefineMethodByValue` held 20 of that
 reason and now take `convert_key`. `TestIn` holds the remaining 4 and
