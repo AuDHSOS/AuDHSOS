@@ -24,6 +24,10 @@ pub struct ModpGroup {
     /// upper bound of every public value and of every shared secret, and
     /// it is stored rather than computed because both checks want it.
     upper: [u8; MAX_BYTES],
+    /// `(p-1)/2`, right-aligned in [`MAX_BYTES`] bytes. For a safe prime
+    /// it is the order of the subgroup of quadratic residues, and it is
+    /// the exponent [`ModpGroup::in_subgroup`] raises a peer value to.
+    order: [u8; MAX_BYTES],
     /// Bytes a value of this group occupies.
     width: usize,
     /// The generator.
@@ -34,15 +38,30 @@ impl ModpGroup {
     /// The group of the big-endian `prime` and of `generator`.
     ///
     /// The generator is a small integer because every group of RFC 3526
-    /// has two as its generator. Its upper bound needs no check: the
-    /// prime has a non-zero top limb, so it is at least `2^63`, and a
-    /// byte cannot reach `p-1`.
+    /// has two as its generator. It is held to `2 <= g < p-1`, the
+    /// interval every public value of the group lies in; a modulus of
+    /// one limb can be smaller than the largest byte, so the upper end
+    /// is checked and not argued.
+    ///
+    /// The caller vouches for the prime. This function judges the bytes
+    /// against what the arithmetic needs — odd, normalized, narrow
+    /// enough — and against nothing else: a composite modulus, a prime
+    /// that is not a safe prime, and a generator that is not a quadratic
+    /// residue all pass. Deciding otherwise costs a primality test of
+    /// `p` and of `(p-1)/2`, which this crate does not carry. Two
+    /// arguments elsewhere rest on the prime being a safe prime and hold
+    /// for the constants of RFC 3526 alone: the subgroup of order
+    /// `(p-1)/2` that [`ModpGroup::shared_secret`] holds a peer value
+    /// to, and the reading of `1 < v < p-1` in
+    /// [`ModpGroup::check_public`] as excluding every small subgroup.
+    /// [`crate::group14`] builds the group SSH requires.
     ///
     /// # Errors
     ///
-    /// [`DhError::InvalidGenerator`] when the generator is below two, and
-    /// [`DhError::InvalidPrime`] when the prime is even, zero, carries
-    /// leading zero limbs, or is wider than the arithmetic allows.
+    /// [`DhError::InvalidGenerator`] when the generator is below two or
+    /// is not below `p-1`, and [`DhError::InvalidPrime`] when the prime
+    /// is even, zero, carries leading zero limbs, or is wider than the
+    /// arithmetic allows.
     pub fn new(prime: &[u8], generator: u8) -> Result<ModpGroup, DhError> {
         if generator < 2 {
             return Err(DhError::InvalidGenerator);
@@ -55,9 +74,15 @@ impl ModpGroup {
         for slot in upper.iter_mut().rev().take(1) {
             *slot &= 0xFE;
         }
+        let mut as_value = [0u8; MAX_BYTES];
+        fill_right(&[generator], &mut as_value);
+        if as_value >= upper {
+            return Err(DhError::InvalidGenerator);
+        }
         Ok(ModpGroup {
             prime: modulus,
             upper,
+            order: halved(&upper),
             width: modulus.width(),
             generator,
         })
@@ -83,6 +108,11 @@ impl ModpGroup {
     ///
     /// The comparisons are ordinary ones and not constant-time ones. What
     /// they judge came from the network, and so does the refusal.
+    ///
+    /// This is the interval and nothing else.
+    /// [`ModpGroup::shared_secret`] holds a peer value to the subgroup of
+    /// order `(p-1)/2` as well, which costs an exponentiation and belongs
+    /// where the secret exponent is used.
     ///
     /// # Errors
     ///
@@ -120,6 +150,12 @@ impl ModpGroup {
     /// length is not: it sets the number of rounds the ladder runs, eight
     /// per byte. See `GROUP14_SECRET_BYTES` for what to give it.
     ///
+    /// The value is held to the interval and not to the subgroup: the
+    /// generator of a group of RFC 3526 is a quadratic residue, and every
+    /// power of a residue is one, so the second exponentiation
+    /// [`ModpGroup::shared_secret`] spends on a peer's value would answer
+    /// a question this side already knows the answer to.
+    ///
     /// # Errors
     ///
     /// [`DhError::OutputTooShort`] when `out` is shorter than
@@ -150,16 +186,37 @@ impl ModpGroup {
     /// from. That second check is constant time: the shared secret is
     /// secret, and only the refusal is public.
     ///
+    /// The check before the exponentiation is the interval of
+    /// [`ModpGroup::check_public`] and, beyond what RFC 8268, section 4,
+    /// requires, membership in the subgroup of order `(p-1)/2`. A peer
+    /// value of order `2q` is a quadratic non-residue for a safe prime,
+    /// and `v^x` is a residue exactly when `x` is even, so keying from
+    /// such a value hands the peer the low bit of this side's private
+    /// exponent in the Legendre symbol of the shared secret. The check
+    /// costs one exponentiation with a public base and a public exponent.
+    ///
     /// # Errors
     ///
     /// [`DhError::PublicValueOutOfRange`] when the peer's value fails
-    /// [`ModpGroup::check_public`], [`DhError::OutputTooShort`] when
-    /// `out` is shorter than [`ModpGroup::public_len`], and
+    /// [`ModpGroup::check_public`], [`DhError::PeerValueOutsideSubgroup`]
+    /// when it is outside the subgroup of order `(p-1)/2`,
+    /// [`DhError::OutputTooShort`] when `out` is shorter than
+    /// [`ModpGroup::public_len`], and
     /// [`DhError::DegenerateSharedSecret`] when the result is zero, one,
-    /// or `p-1`. A refused value is wiped from `out`, so a caller that
-    /// ignores the result keys from nothing.
+    /// or `p-1`. That last refusal wipes the value from `out`, so a
+    /// caller that ignores the result keys from nothing; the other three
+    /// come before the exponentiation and leave `out` as the caller
+    /// passed it.
     pub fn shared_secret(&self, secret: &[u8], peer: &[u8], out: &mut [u8]) -> Result<(), DhError> {
         let peer = self.checked(peer)?;
+        // Ahead of the subgroup check, so a buffer this side got wrong
+        // is refused without an exponentiation.
+        if out.len() < self.width {
+            return Err(DhError::OutputTooShort);
+        }
+        if !self.in_subgroup(&peer) {
+            return Err(DhError::PeerValueOutsideSubgroup);
+        }
         self.prime
             .pow_secret(&peer, secret, out)
             .map_err(|_| DhError::OutputTooShort)?;
@@ -168,6 +225,19 @@ impl ModpGroup {
             return Err(DhError::DegenerateSharedSecret);
         }
         Ok(())
+    }
+
+    /// Whether `value` lies in the subgroup of order `(p-1)/2`.
+    ///
+    /// For a safe prime that subgroup is the quadratic residues, and
+    /// `v^((p-1)/2)` is one exactly for its members. `value` has passed
+    /// [`ModpGroup::checked`], so it is below the prime and the
+    /// exponentiation accepts it. The base and the exponent are both
+    /// public, so this is `pow_wide` and not the ladder; the exponent is
+    /// the width of the prime, which is where the cost sits.
+    fn in_subgroup(&self, value: &[u8; MAX_BYTES]) -> bool {
+        let mut out = [0u8; MAX_BYTES];
+        self.prime.pow_wide(value, &self.order, &mut out).is_ok() && out == one()
     }
 
     /// Whether `value` is zero, one, or `p-1`.
@@ -188,6 +258,17 @@ impl ModpGroup {
         fill_right(value, &mut buffer);
         ct_eq(&buffer, &[0u8; MAX_BYTES]) | ct_eq(&buffer, &one()) | ct_eq(&buffer, &self.upper)
     }
+}
+
+/// `value` shifted right by one bit, which for `p-1` is `(p-1)/2`.
+fn halved(value: &[u8; MAX_BYTES]) -> [u8; MAX_BYTES] {
+    let mut out = [0u8; MAX_BYTES];
+    let mut carry = 0u8;
+    for (slot, byte) in out.iter_mut().zip(value) {
+        *slot = carry.wrapping_shl(7) | byte.wrapping_shr(1);
+        carry = byte & 1;
+    }
+    out
 }
 
 /// Writes `value` right-aligned into `buffer` with leading zeros, and
