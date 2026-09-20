@@ -35577,6 +35577,53 @@ impl RegisterVM {
                         heap.set_array_element(oref, index, val)?;
                     } else {
                         let name_units = property_name_units(key_val, heap, realm)?;
+                        // 10.4.2.4 sets an Array's `length` and deletes every
+                        // index at or above the new one, which a write under
+                        // a key only the run time knows reaches as much as a
+                        // write under the name does.
+                        if !define
+                            && name_units.as_slice() == LENGTH_NAME
+                            && heap.array_length(oref).is_some()
+                        {
+                            if val.is_object() {
+                                heap.enter_scope();
+                                let object = heap.push_root(Value::from_object(oref))?;
+                                let held = heap.push_root(val)?;
+                                let first = heap.push_root(VALUE_UNDEFINED)?;
+                                let resume = Resume::ArrayLength {
+                                    object,
+                                    held,
+                                    first,
+                                    step: 0,
+                                    phase: 0,
+                                    strict,
+                                };
+                                if let Some(code_id) = self.convert_the_array_length(
+                                    resume,
+                                    pc,
+                                    current_code_id,
+                                    units,
+                                    active_feedback,
+                                    heap,
+                                    realm,
+                                )? {
+                                    current_code_id = Some(code_id);
+                                    pc = self.pending_pc.take().unwrap_or(0);
+                                }
+                                return Ok(None);
+                            }
+                            // 10.1.9.1 step 4.d: a define that answers false
+                            // is a TypeError for a strict write and nothing
+                            // for any other.
+                            if !Self::set_array_length(oref, val, heap, realm)? && strict {
+                                return Err(type_error(
+                                    heap,
+                                    realm,
+                                    "cannot write a property that is not writable",
+                                ));
+                            }
+                            return Ok(None);
+                        }
                         if !define && store_reaches_unbuilt_prototype(oref, &name_units, heap) {
                             return Err(VMError::Unsupported(
                                 "a property write under a name an unbuilt Prototype owns",

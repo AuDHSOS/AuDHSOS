@@ -1931,21 +1931,28 @@ fn a_property_is_written_under_a_key_only_the_run_time_knows() -> Result<(), Err
     // that reaches one names that where it happens instead of shadowing it. A
     // name the object owns is written on the object itself.
     differential("var f=function(o,k){o[k]='x'};var g=function(){};f(g,'name');g.name")?;
-    for source in [
-        "let f=function(o,k){o[k]=1};f({},'__proto__')",
-        "let f=function(o,k){o[k]=1};f([1,2],'length')",
-    ] {
-        let program = compile(source, Limits::default())?;
-        assert!(program.uses_register_backend(), "{source}");
-        assert!(
-            matches!(
-                Runtime::with_backend(Limits::default(), Backend::Engine)
-                    .run(&program, &mut SilentHost),
-                Err(Error::Unsupported { .. })
-            ),
-            "{source}"
-        );
-    }
+    // 10.4.2.4 sets the `length` and deletes every index at or above it,
+    // which a write under a key only the run time knows reaches as much as a
+    // write under the name does.
+    differential(
+        "var f=function(o,k){o[k]=1};var a=[1,2,3];f(a,'length');a.length+'|'+a.join(',')",
+    )?;
+    differential(
+        "var f=function(o,k){o[k]={valueOf:function(){return 2}}};var a=[1,2,3];f(a,'length');''+a.length",
+    )?;
+    // `__proto__` belongs to a Prototype this Realm has not built, so a write
+    // under it names that where it happens instead of shadowing it.
+    let source = "let f=function(o,k){o[k]=1};f({},'__proto__')";
+    let program = compile(source, Limits::default())?;
+    assert!(program.uses_register_backend(), "{source}");
+    assert!(
+        matches!(
+            Runtime::with_backend(Limits::default(), Backend::Engine)
+                .run(&program, &mut SilentHost),
+            Err(Error::Unsupported { .. })
+        ),
+        "{source}"
+    );
     Ok(())
 }
 
