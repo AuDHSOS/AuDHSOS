@@ -3915,16 +3915,16 @@ fn a_block_scope_is_taken_or_names_what_stops_it() -> Result<(), Error> {
     ] {
         differential(source)?;
     }
-    for source in [
-        "{function f(){return 42}f()}",
-        // 14.7.4.8 copies a Block binding of a loop per iteration.
-        "var r=[];for(var i=0;i<2;i=i+1){let a=i;r.push(function(){return a})}r[0]()",
-    ] {
-        let program = compile(source, Limits::default())?;
-        assert!(!program.uses_register_backend(), "{source}");
-        let _ = Runtime::with_backend(Limits::default(), Backend::Engine)
-            .run(&program, &mut SilentHost);
-    }
+    // B.3.2.1 gives the function a `var` binding of the body as well, so both
+    // paths answer the same for a Block that is a statement of it.
+    differential("{function f(){return 42}f()}")?;
+    // 14.7.4.8 copies a Block binding of a loop per iteration, which the
+    // lowering does not take.
+    let source = "var r=[];for(var i=0;i<2;i=i+1){let a=i;r.push(function(){return a})}r[0]()";
+    let program = compile(source, Limits::default())?;
+    assert!(!program.uses_register_backend(), "{source}");
+    let _ =
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost);
     Ok(())
 }
 

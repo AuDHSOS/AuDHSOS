@@ -845,6 +845,14 @@ struct RegisterLowerer {
     /// any function nested inside it, so that every binding it holds takes a
     /// named slot of the record of 9.1.1.1 that the text of the eval reaches.
     carries_a_direct_eval: bool,
+    /// The names of the formal parameters of this body, which B.3.2.1 takes
+    /// no `var` binding of: a function a Block declares under one of them
+    /// writes the binding of the Block and nothing else.
+    parameter_names: BTreeSet<String>,
+    /// How many Blocks stand around the statement being lowered. B.3.2.1
+    /// writes the `var` binding of the body, which is the binding one scope
+    /// out only for a Block that is a statement of the body itself.
+    block_depth: usize,
     loops: Vec<RegisterLoop>,
     /// The labels of 14.13 the statement being lowered carries, which the
     /// frame it opens takes.
@@ -1129,6 +1137,8 @@ impl RegisterLowerer {
             // binding it inherits stands at a depth this would move.
             inherits_at_depth: false,
             carries_a_direct_eval: false,
+            parameter_names: BTreeSet::new(),
+            block_depth: 0,
             loops: Vec::new(),
             pending_labels: Vec::new(),
             block_scoped: Vec::new(),
@@ -1843,7 +1853,7 @@ impl RegisterLowerer {
             // Record, which outlives this Script, so it is no binding of it.
             return Some(());
         }
-        let names = register_body_var_names(body)?;
+        let names = register_body_var_names_of(body, self.code.strict)?;
         let initialized_names = register_body_initialized_var_names(body)?;
         for (index, statement) in body.iter().enumerate() {
             let Stmt::Function(declared_name, function) = statement else {
@@ -4032,15 +4042,21 @@ impl RegisterLowerer {
             child.bindings.get_mut(&name)?.value_type = Some(RegisterType::Unknown);
         }
         for parameter in &function.parameters {
+            let mut bound = Vec::new();
+            parameter.pattern.names(&mut bound);
+            child.parameter_names.extend(bound.iter().cloned());
             if matches!(parameter.pattern, parser::BindingPattern::Name(_)) {
                 continue;
             }
-            let mut bound = Vec::new();
-            parameter.pattern.names(&mut bound);
             for name in bound {
                 child.declare(&name, true)?;
                 child.bindings.get_mut(&name)?.value_type = Some(RegisterType::Unknown);
             }
+        }
+        // 10.4.4 binds `arguments` before the body runs, which B.3.2.1 counts
+        // among the names it takes no `var` binding of.
+        if !function.arrow {
+            child.parameter_names.insert(String::from(ARGUMENTS));
         }
         // 9.4.4 answers the Prototype of the running function, which 13.3.7.1
         // constructs; the entry fills the register with the callee.
@@ -7694,9 +7710,61 @@ impl RegisterLowerer {
         )
     }
 
+    /// Whether B.3.2.1 gives this name a `var` binding of the body.
+    ///
+    /// It does not where the name is a formal parameter, where replacing the
+    /// declaration with a `var` would be an early error, which a lexical
+    /// binding of the body makes it, or where the Block is not a statement of
+    /// the body itself, because the binding one scope out is then some other
+    /// scope's and not the Variable Environment's.
+    fn takes_a_var_binding(
+        &self,
+        name: &str,
+        scoped: &[(
+            String,
+            crate::engine::bytecode::Reg,
+            Option<RegisterBinding>,
+        )],
+    ) -> bool {
+        self.block_depth == 1
+            && !self.parameter_names.contains(name)
+            && self.body_var_names.iter().any(|held| held == name)
+            && scoped
+                .iter()
+                .any(|(bound, _, previous)| bound == name && previous.is_some())
+    }
+
+    /// B.3.2.1: the function the Block binds is written to the `var` binding
+    /// of the body around it, where the declaration of it is evaluated.
+    fn copy_to_the_var_binding(
+        &mut self,
+        name: &str,
+        scoped: &[(
+            String,
+            crate::engine::bytecode::Reg,
+            Option<RegisterBinding>,
+        )],
+    ) -> Option<()> {
+        let held = *self.bindings.get(name)?;
+        let outer = scoped
+            .iter()
+            .find(|(bound, _, _)| bound == name)
+            .and_then(|(_, _, previous)| *previous)?;
+        self.load_binding(held);
+        self.store_binding_as(outer, false);
+        Some(())
+    }
+
     fn lower_block(&mut self, body: &[Stmt]) -> Option<RegisterFlow> {
+        self.block_depth = self.block_depth.checked_add(1)?;
+        let outcome = self.lower_block_body(body);
+        self.block_depth = self.block_depth.saturating_sub(1);
+        outcome
+    }
+
+    fn lower_block_body(&mut self, body: &[Stmt]) -> Option<RegisterFlow> {
         use crate::engine::bytecode::Instruction;
-        let result_register = self.allocate_register()?;
+        let result_register: crate::engine::bytecode::Reg = self.allocate_register()?;
         self.code.emit(Instruction::Star(result_register));
         let scoped_bindings = self.enter_block_scope(body)?;
         // 14.2.3 step 1 instantiates the functions of the Block before its
@@ -7707,7 +7775,16 @@ impl RegisterLowerer {
             .iter()
             .any(|statement| matches!(statement, Stmt::Function(_, _)))
         {
-            if !self.code.strict {
+            // B.3.2.1 gives the name a `var` binding of the body around the
+            // Block as well, which `prepare_var_bindings` made; a Block of a
+            // Script has none, because 16.1.7 keeps a top-level `var` on the
+            // Global Environment Record.
+            if !self.code.strict
+                && body.iter().any(|statement| match statement {
+                    Stmt::Function(name, _) => !self.takes_a_var_binding(name, &scoped_bindings),
+                    _ => false,
+                })
+            {
                 self.refuse("a function declaration in a sloppy Block");
                 return None;
             }
@@ -7729,8 +7806,15 @@ impl RegisterLowerer {
         for statement in body {
             flow = match statement {
                 Stmt::Declare(bindings) => self.lower_lexical_declaration(bindings)?,
-                // 14.2.3 step 1 already instantiated these.
-                Stmt::Function(_, _) => RegisterFlow::Empty,
+                // 14.2.3 step 1 already instantiated these. B.3.2.1 puts the
+                // function the Block holds in the `var` binding of the body
+                // where the declaration is evaluated, and nowhere else.
+                Stmt::Function(name, _) => {
+                    if !self.code.strict && self.takes_a_var_binding(name, &scoped_bindings) {
+                        self.copy_to_the_var_binding(name, &scoped_bindings)?;
+                    }
+                    RegisterFlow::Empty
+                }
                 _ => self.lower_statement(statement)?,
             };
             match flow {
@@ -11963,6 +12047,95 @@ fn register_body_var_names(body: &[Stmt]) -> Option<BTreeSet<String>> {
     Some(names)
 }
 
+/// The same, with the names B.3.2.1 adds in sloppy code.
+fn register_body_var_names_of(body: &[Stmt], strict: bool) -> Option<BTreeSet<String>> {
+    let mut names = register_body_var_names(body)?;
+    // B.3.2.1 gives a function declared in a Block of sloppy code a `var`
+    // binding of the body around it as well, which starts as undefined and
+    // takes the function where the declaration is evaluated. Strict code
+    // keeps the function in the Block alone.
+    if !strict {
+        for statement in body {
+            register_block_function_names(statement, &mut names);
+        }
+    }
+    Some(names)
+}
+
+/// The names B.3.2.1 and B.3.2.2 give a `var` binding of the body: a function
+/// declared in a Block or a `CaseBlock` nested in it.
+///
+/// A declaration of the body itself is not one of them, and the scan stops at
+/// every nested function, whose Blocks name the bindings of that body.
+fn register_block_function_names(statement: &Stmt, names: &mut BTreeSet<String>) {
+    match statement {
+        Stmt::Block(body) => {
+            for inner in body {
+                if let Stmt::Function(name, _) = inner {
+                    names.insert(name.clone());
+                }
+                register_block_function_names(inner, names);
+            }
+        }
+        Stmt::Switch(_, clauses) => {
+            for (_, body) in clauses {
+                for inner in body {
+                    if let Stmt::Function(name, _) = inner {
+                        names.insert(name.clone());
+                    }
+                    register_block_function_names(inner, names);
+                }
+            }
+        }
+        Stmt::If(_, yes, no) => {
+            register_block_function_names(yes, names);
+            if let Some(no) = no {
+                register_block_function_names(no, names);
+            }
+        }
+        Stmt::While(_, body)
+        | Stmt::DoWhile(body, _)
+        | Stmt::Labelled(_, body)
+        | Stmt::ForIn { body, .. }
+        | Stmt::ForOf { body, .. } => {
+            register_block_function_names(body, names);
+        }
+        Stmt::For(initializer, _, _, body) => {
+            register_block_function_names(initializer, names);
+            register_block_function_names(body, names);
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            for inner in body {
+                if let Stmt::Function(name, _) = inner {
+                    names.insert(name.clone());
+                }
+                register_block_function_names(inner, names);
+            }
+            if let Some((_, catch)) = catch {
+                for inner in catch {
+                    if let Stmt::Function(name, _) = inner {
+                        names.insert(name.clone());
+                    }
+                    register_block_function_names(inner, names);
+                }
+            }
+            if let Some(finally) = finally {
+                for inner in finally {
+                    if let Stmt::Function(name, _) = inner {
+                        names.insert(name.clone());
+                    }
+                    register_block_function_names(inner, names);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 fn register_body_initialized_var_names(body: &[Stmt]) -> Option<BTreeSet<String>> {
     let mut names = BTreeSet::new();
     for statement in body {
@@ -13043,7 +13216,7 @@ fn register_function_local_names(function: &Function) -> Option<BTreeSet<String>
     if let Some(name) = &function.name {
         names.insert(name.clone());
     }
-    for name in register_body_var_names(&function.body)? {
+    for name in register_body_var_names_of(&function.body, function.strict)? {
         names.insert(name);
     }
     for statement in &function.body {
