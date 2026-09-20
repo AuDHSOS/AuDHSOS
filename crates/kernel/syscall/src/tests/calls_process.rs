@@ -514,3 +514,52 @@ fn the_quotas_of_a_killed_process_come_back_once() {
         before.kernel_object_quota.used()
     );
 }
+
+#[test]
+fn what_a_killed_process_gave_a_child_of_its_own_stays_charged_until_that_child_dies() {
+    let mut fixture = Fixture::new();
+    let before = *fixture.objects.processes.get(fixture.process).unwrap();
+    let arguments = creation(&fixture);
+    let child = value_of(&mut fixture, request(Syscall::ProcessCreate, &arguments));
+    // The caller makes the second process through the handle to the first,
+    // so the first is its creator and pays for it: eight frames and three
+    // objects of the sixteen and five the caller gave away.
+    let grandchild = value_of(
+        &mut fixture,
+        request(Syscall::ProcessCreate, &[child, 4, 8, 2, 0]),
+    );
+
+    let mut buffer = request(Syscall::ProcessKill, &[child]);
+    let (status, _, _) = call(&mut fixture, &mut buffer);
+    assert_eq!(status.error(), None);
+    let after = fixture.objects.processes.get(fixture.process).unwrap();
+    assert_eq!(
+        after.quota.used(),
+        before.quota.used() + 8,
+        "what the process that is gone gave away is still out"
+    );
+    assert_eq!(
+        after.kernel_object_quota.used(),
+        before.kernel_object_quota.used() + 3
+    );
+    // The charge moved with it, so killing it gives the caller the rest.
+    assert_eq!(
+        fixture
+            .objects
+            .processes
+            .get(process_behind(&fixture, grandchild))
+            .unwrap()
+            .creator,
+        Some(fixture.process)
+    );
+
+    let mut buffer = request(Syscall::ProcessKill, &[grandchild]);
+    let (status, _, _) = call(&mut fixture, &mut buffer);
+    assert_eq!(status.error(), None);
+    let after = fixture.objects.processes.get(fixture.process).unwrap();
+    assert_eq!(after.quota.used(), before.quota.used());
+    assert_eq!(
+        after.kernel_object_quota.used(),
+        before.kernel_object_quota.used()
+    );
+}

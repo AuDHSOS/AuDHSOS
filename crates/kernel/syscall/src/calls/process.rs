@@ -249,6 +249,40 @@ fn give_back<E: Environment, const NP: usize, const NT: usize, const NM: usize, 
     });
 }
 
+/// Writes `creator` on every live process `target` created and answers with
+/// what they hold: their frame limits, and their object limits with the one
+/// object each of them is.
+///
+/// A kill frees what the process itself holds and nothing of what a process
+/// it created holds, so that much of what `target` was given is still out
+/// and is not given back.
+///
+/// The walk costs one pass over the live processes, which is O(P) for P
+/// live processes and is paid once per kill.
+fn hand_over_children<
+    E: Environment,
+    const NP: usize,
+    const NT: usize,
+    const NM: usize,
+    const NH: usize,
+>(
+    machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+    target: ProcessId,
+    creator: Option<ProcessId>,
+) -> (u32, u32) {
+    let mut frames = 0u32;
+    let mut objects = 0u32;
+    for (id, child) in machine.objects.processes.iter_mut() {
+        if id == target || child.creator != Some(target) {
+            continue;
+        }
+        frames = frames.saturating_add(child.quota.limit());
+        objects = objects.saturating_add(child.kernel_object_quota.limit().saturating_add(1));
+        child.creator = creator;
+    }
+    (frames, objects)
+}
+
 /// `process_install_handle`: copies a handle of the caller into another
 /// process, with the rights the call names, and returns the number the
 /// target sees.
@@ -344,8 +378,12 @@ pub fn set_fault_handler<
 }
 
 /// `process_kill`: ends every thread of the process, closes every handle it
-/// holds, takes its address space apart, and gives its creator the quotas
-/// that process cost back.
+/// holds, takes its address space apart, and gives its creator back what
+/// the process cost and no longer holds.
+///
+/// A process the target created outlives the kill, so what that process
+/// holds stays charged: it is written over to the creator of the target,
+/// and a kill of it gives it back there.
 ///
 /// # Errors
 ///
@@ -386,6 +424,11 @@ pub fn kill<E: Environment, const NP: usize, const NT: usize, const NM: usize, c
     // kill takes every thread at once, and what they are told is that the
     // process is gone.
     reschedule |= crate::watch::ended(machine, target)?;
+    // A process this one created outlives it, and what that process holds
+    // was charged here; the charge moves to whoever paid for this process,
+    // which is who a kill of that process gives it back to. What is still
+    // out is therefore not refunded now.
+    let (frames, objects) = hand_over_children(machine, target, holder.creator);
     // The creator charged itself the child's two limits and one object for
     // the child, and a process ends once, so the refund is made once, here.
     // A creator that is itself gone names a free or reused slot, and
@@ -394,8 +437,8 @@ pub fn kill<E: Environment, const NP: usize, const NT: usize, const NM: usize, c
         give_back(
             machine,
             creator,
-            holder.quota.limit(),
-            holder.kernel_object_quota.limit(),
+            holder.quota.limit().saturating_sub(frames),
+            holder.kernel_object_quota.limit().saturating_sub(objects),
         );
     }
     machine.objects.processes.force_release(target);

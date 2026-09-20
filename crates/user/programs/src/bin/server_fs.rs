@@ -641,6 +641,12 @@ fn refuse_everything(shared: &Shared, endpoint: EndpointHandle) -> Result<(), Er
     loop {
         let mut gate = shared.borrow_mut();
         receive(&mut gate, endpoint, &mut serving)?;
+        // A refusal keeps no handle either, and the table of this server
+        // is as finite as it is on a machine that carries a disk.
+        let carried = Carried::read(gate.reader());
+        carried.give_up(&[], |handle| {
+            let _closed = gate.handle_close(handle);
+        });
         let reply = Reply::Flushed(Err(Error::Unavailable));
         let _encoded = reply.encode(&mut gate.writer());
     }

@@ -382,6 +382,23 @@ impl<T, const N: usize> Pool<T, N> {
             })
     }
 
+    /// Every live object with its id, in slot order, to change.
+    ///
+    /// The walk stops at the high-water mark, as [`Pool::iter`] does.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (ObjectId<T>, &mut T)> {
+        let used = usize::try_from(self.high_water).unwrap_or(N);
+        self.slots
+            .iter_mut()
+            .take(used)
+            .enumerate()
+            .filter_map(|(index, slot)| {
+                let generation = slot.generation;
+                let occupant = slot.occupant.as_mut()?;
+                let index = u32::try_from(index).ok()?;
+                Some((ObjectId::new(index, generation), &mut occupant.value))
+            })
+    }
+
     /// The id of every live object, in slot order.
     pub fn ids(&self) -> impl Iterator<Item = ObjectId<T>> + '_ {
         self.iter().map(|(id, _)| id)
