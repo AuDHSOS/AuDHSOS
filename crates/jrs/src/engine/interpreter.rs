@@ -896,6 +896,27 @@ pub enum Resume {
         /// Number of arguments the call passed.
         arg_count: u16,
     },
+    /// Step 3 of 10.4.2.4 converts the value a write of `length` carries,
+    /// which for an Object runs a method of the Script. The write happens
+    /// where the conversion answers, not by running the instruction again.
+    ArrayLength {
+        /// Root holding the Array whose `length` is written.
+        object: Root,
+        /// Root holding the value both conversions read.
+        held: Root,
+        /// Root holding what step 3 answered, while step 4 runs.
+        first: Root,
+        /// Which method 7.1.1 has already asked: 0 before any, 1 after
+        /// `valueOf`, 2 after `toString`.
+        step: u8,
+        /// Which of the two conversions runs: 0 is the `ToUint32` of step 3,
+        /// 1 the `ToNumber` of step 4. Both read the same value, so a method
+        /// of the Script runs twice.
+        phase: u8,
+        /// Whether the write is strict, which 10.1.9.1 step 4.d makes a
+        /// `TypeError` of where the define answered false.
+        strict: bool,
+    },
     /// A job of 9.5 called its handler.
     ///
     /// The frame stands on no caller: the unit that enqueued the job has
@@ -7875,6 +7896,264 @@ impl RegisterVM {
                 | Intrinsic::ArrayPrototypeToSpliced
                 | Intrinsic::ArrayPrototypeToReversed
         )
+    }
+
+    /// Step 3 of 10.4.2.4 where the value is an Object: 7.1.1 asks its
+    /// methods for a primitive, each in a frame of its own.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a conversion opens a frame, which needs what a call needs"
+    )]
+    fn convert_the_array_length(
+        &mut self,
+        resume: Resume,
+        return_pc: usize,
+        caller_code_id: Option<u32>,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let Resume::ArrayLength {
+            object,
+            held,
+            first,
+            mut step,
+            phase,
+            strict,
+        } = resume
+        else {
+            return Ok(None);
+        };
+        loop {
+            let source = heap
+                .root_value(held)
+                .and_then(Value::as_object)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            // 7.1.1 step 1 would pass a hint to `@@toPrimitive`, which needs
+            // a register of the caller this write has none of.
+            if step == 0
+                && heap
+                    .lookup_named(source, super::realm::WellKnownSymbol::ToPrimitive.key())?
+                    .is_some()
+            {
+                heap.exit_scope();
+                return Err(VMError::Unsupported("the @@toPrimitive of a `length`"));
+            }
+            step = step.saturating_add(1);
+            let name = match step {
+                1 => "valueOf",
+                2 => "toString",
+                _ => {
+                    heap.exit_scope();
+                    return Err(type_error(heap, realm, "an object has no primitive value"));
+                }
+            };
+            let key = PropertyKey::String(heap.strings.intern(name)?);
+            let source = heap
+                .root_value(held)
+                .and_then(Value::as_object)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let method = heap
+                .lookup_named(source, key)?
+                .map(Self::plain_value)
+                .transpose()?
+                .filter(|method| Self::is_callable(*method, heap));
+            let Some(method) = method else {
+                continue;
+            };
+            let call = Call {
+                receiver: Value::from_object(source),
+                func: Reg(0),
+                arg_start: Reg(0),
+                arg_count: 0,
+                slot: 0,
+                resume: Some(Resume::ArrayLength {
+                    object,
+                    held,
+                    first,
+                    step,
+                    phase,
+                    strict,
+                }),
+                construct: None,
+                return_pc,
+                caller_code_id,
+                coerced: 0,
+            };
+            if let Some(code_id) =
+                self.enter_call_value(method, units, active_feedback, heap, realm, call)?
+            {
+                return Ok(Some(code_id));
+            }
+            // A method of the Realm answered without a frame of its own.
+            let answered = self.acc;
+            if !answered.is_object() {
+                return self.the_next_conversion_of_a_length(
+                    (object, held, first),
+                    (answered, phase, strict),
+                    (return_pc, caller_code_id),
+                    units,
+                    active_feedback,
+                    heap,
+                    realm,
+                );
+            }
+        }
+    }
+
+    /// Step 3 answered, so step 4 reads the same value again; step 4
+    /// answered, so step 5 compares the two and the write follows.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a conversion opens a frame, which needs what a call needs"
+    )]
+    fn the_next_conversion_of_a_length(
+        &mut self,
+        roots: (Root, Root, Root),
+        answered: (Value, u8, bool),
+        frame: (usize, Option<u32>),
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let (object, held, first) = roots;
+        let (answered, phase, strict) = answered;
+        let (return_pc, caller_code_id) = frame;
+        if phase == 1 {
+            return self.the_array_takes_the_length(
+                (object, first),
+                (answered, strict),
+                heap,
+                realm,
+            );
+        }
+        // Step 4 reads `[[Value]]` a second time, so a method of the Script
+        // runs once for the `ToUint32` and once for the `ToNumber`.
+        heap.set_root(first, answered).map_err(VMError::Heap)?;
+        let resume = Resume::ArrayLength {
+            object,
+            held,
+            first,
+            step: 0,
+            phase: 1,
+            strict,
+        };
+        self.convert_the_array_length(
+            resume,
+            return_pc,
+            caller_code_id,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )
+    }
+
+    /// The answer of one method of 7.1.1, which either is the primitive the
+    /// write takes or sends the conversion to the next method.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a conversion opens a frame, which needs what a call needs"
+    )]
+    fn finish_the_array_length(
+        &mut self,
+        resume: Resume,
+        return_pc: usize,
+        caller_code_id: Option<u32>,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let Resume::ArrayLength {
+            object,
+            held,
+            first,
+            step,
+            phase,
+            strict,
+        } = resume
+        else {
+            return Ok(None);
+        };
+        let answered = self.acc;
+        if answered.is_object() {
+            let resume = Resume::ArrayLength {
+                object,
+                held,
+                first,
+                step,
+                phase,
+                strict,
+            };
+            return self.convert_the_array_length(
+                resume,
+                return_pc,
+                caller_code_id,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
+        self.the_next_conversion_of_a_length(
+            (object, held, first),
+            (answered, phase, strict),
+            (return_pc, caller_code_id),
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )
+    }
+
+    /// Steps 4 to 17 of 10.4.2.4 with the primitive 7.1.1 answered.
+    fn the_array_takes_the_length(
+        &mut self,
+        roots: (Root, Root),
+        answered: (Value, bool),
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let (object, first) = roots;
+        let (answered, strict) = answered;
+        let array = heap
+            .root_value(object)
+            .and_then(Value::as_object)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let counted = heap.root_value(first).unwrap_or(VALUE_UNDEFINED);
+        heap.exit_scope();
+        // Step 3 took the `ToUint32` and step 4 the `ToNumber`; step 5 makes
+        // a `RangeError` of a value the two do not agree on.
+        let wanted = crate::value::number_uint32(primitive_number(counted, heap)?);
+        let number = primitive_number(answered, heap)?;
+        #[expect(
+            clippy::float_cmp,
+            reason = "step 5 asks whether the two are the same Number"
+        )]
+        let differs = f64::from(wanted) != number;
+        if differs {
+            return Err(raise(
+                heap,
+                realm,
+                super::realm::NativeErrorKind::RangeError,
+                "invalid array length",
+            ));
+        }
+        let held = Value::from_f64(f64::from(wanted));
+        // 10.1.9.1 step 4.d: a define that answers false is a `TypeError` for
+        // a strict write and nothing for any other.
+        if !Self::set_array_length(array, held, heap, realm)? && strict {
+            return Err(type_error(
+                heap,
+                realm,
+                "cannot write a property that is not writable",
+            ));
+        }
+        self.acc = answered;
+        Ok(None)
     }
 
     /// Which clause reads the `lastIndex` of 22.2.7.2 step 2 before it does
@@ -34489,6 +34768,35 @@ impl RegisterVM {
                     // index at or above the new one.
                     if units.as_slice() == LENGTH_NAME && heap.array_length(oref).is_some() {
                         let wanted = self.acc;
+                        // Step 3 converts the value with 7.1.6, which for an
+                        // Object runs a method of the Script.
+                        if wanted.is_object() {
+                            heap.enter_scope();
+                            let object = heap.push_root(Value::from_object(oref))?;
+                            let held = heap.push_root(wanted)?;
+                            let first = heap.push_root(VALUE_UNDEFINED)?;
+                            let resume = Resume::ArrayLength {
+                                object,
+                                held,
+                                first,
+                                step: 0,
+                                phase: 0,
+                                strict,
+                            };
+                            if let Some(code_id) = self.convert_the_array_length(
+                                resume,
+                                pc,
+                                current_code_id,
+                                code_units,
+                                active_feedback,
+                                heap,
+                                realm,
+                            )? {
+                                current_code_id = Some(code_id);
+                                pc = self.pending_pc.take().unwrap_or(0);
+                            }
+                            return Ok(None);
+                        }
                         // 10.1.9.1 step 4.d: a define that answers false is a
                         // TypeError for a strict write and nothing for any
                         // other.
@@ -36606,6 +36914,7 @@ impl RegisterVM {
                                     | Resume::IteratorResult { .. }
                                     | Resume::Length { .. }
                                     | Resume::LastIndex { .. }
+                                    | Resume::ArrayLength { .. }
                                     | Resume::Descriptor { .. }
                                     | Resume::Getter
                                     | Resume::Spread { .. }
@@ -36756,6 +37065,15 @@ impl RegisterVM {
                                             call, next, index, units, feedback, heap, realm,
                                         )?
                                     }
+                                    Resume::ArrayLength { .. } => self.finish_the_array_length(
+                                        resume,
+                                        pc,
+                                        current_code_id,
+                                        units,
+                                        feedback,
+                                        heap,
+                                        realm,
+                                    )?,
                                     Resume::LastIndex { .. } => self.finish_the_last_index(
                                         resume,
                                         pc,

@@ -12053,6 +12053,28 @@ fn step_3_of_20_1_2_24_reads_every_property_through_its_getter() -> Result<(), E
 }
 
 #[test]
+fn the_length_of_10_4_2_4_is_converted_twice() -> Result<(), Error> {
+    for source in [
+        // Step 3 converts the value, which for an Object runs a method of
+        // the Script, and every index at or above the answer is deleted.
+        "var a=[1,2,3];a.length={valueOf:function(){return 1}};a.length+'|'+JSON.stringify(a)",
+        // 7.1.1 asks `toString` where `valueOf` answers no primitive.
+        "var b=[1,2,3];b.length={valueOf:null,toString:function(){return '2'}};''+b.length",
+        // A length above the one the Array had leaves the new indices absent.
+        "var f=[1,2];f.length={valueOf:function(){return 5}};f.length+'|'+f[4]",
+        // Step 3 takes the ToUint32 and step 4 the ToNumber, so the method
+        // of the Script runs twice for one write.
+        "var c=0;[].length={valueOf:function(){c++;return 1}};''+c",
+        "var d=0;[].length={toString:function(){d++;return 1},valueOf:null};''+d",
+        // Step 5 refuses a value the two conversions do not agree on.
+        "var n=0;var g=[];var r;try{g.length={valueOf:function(){n++;return n===1?1:2}}}catch(x){r=x instanceof RangeError};r+'|'+n",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn the_last_index_of_22_2_7_2_goes_through_7_1_20() -> Result<(), Error> {
     for source in [
         // Step 2 converts an Object the read answered, which runs a `valueOf`
