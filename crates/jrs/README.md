@@ -596,7 +596,8 @@ passes or names as a gap. What remains is coverage.
 The failure count of `0cb57d7` is 48 higher than that of `a955f11`
 although no variant the engine passed was lost. The refusal of a Block
 binding of a loop stood in front of 47 `intl402` Temporal tests and one
-legacy RegExp accessor: with the Block binding lowered they run and fail
+legacy `RegExp` accessor: with the Block binding lowered they run and
+fail
 on what they actually need, which is a `Temporal` this Realm does not
 build. The stack path fails all 48 as well, and none of them is a
 blocker.

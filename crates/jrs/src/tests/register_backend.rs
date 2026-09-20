@@ -12538,12 +12538,17 @@ fn a_block_binding_of_a_loop_is_read_per_iteration() -> Result<(), Error> {
         "var f=[];for(let i=0;i<3;i++){var v=i;f.push(()=>v)}f.map(g=>g()).join(',')",
         // 14.7.5.6 step 7.f copies where the head is read by a closure.
         "var f=[];for(const x of [1,2]){let a=x;f.push(()=>a+x)}f.map(g=>g()).join(',')",
+        // A loop that makes no copy of its own: the Block makes one.
+        "var f=[];var i=0;while(i<3){let a=i;f.push(()=>a);i++}f.map(g=>g()).join(',')",
+        "var f=[];for(const x of [1,2,3]){let a=x*2;f.push(()=>a)}f.map(g=>g()).join(',')",
+        "var f=[];for(const k in {a:1,b:2}){let v=k;f.push(()=>v)}f.map(g=>g()).join(',')",
+        "var r;for(let q=0;q<1;q++){switch(1){case 1: let z=1; r=()=>z}}r()",
     ] {
         differential(source)?;
     }
     // A closure made before the loop reads the context the copy would take,
     // so the loop is a gap instead.
-    let source = "var o=1;var h=()=>o;for(let i=0;i<2;i++){let a=i;h=()=>a}h()";
+    let source = "var o=1;var h=()=>o;var i=0;while(i<2){let a=i;h=()=>a;i++}h()";
     assert!(
         !compile(source, Limits::default())?.uses_register_backend(),
         "{source}"

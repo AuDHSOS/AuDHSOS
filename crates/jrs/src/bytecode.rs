@@ -911,6 +911,9 @@ struct RegisterLowerer {
     /// How many Block bindings of a loop body reached the frame context,
     /// which the loop has to copy per iteration for 14.2.3 to hold.
     loop_block_captures: usize,
+    /// Whether a Block of a loop body is taking the copy of 14.2.3 itself,
+    /// which is what lets a binding of it reach the frame context.
+    block_takes_the_copy: bool,
     /// Every name 10.2.11 gives the body a `var` binding of, including the
     /// ones an enclosing scope binds already: B.3.2.1 writes to those and
     /// creates no second binding for them.
@@ -1064,6 +1067,10 @@ struct RegisterLoop {
     /// (14.7.4.4, 14.7.5.6 step 7.f), which is what makes a binding a Block
     /// of the body declares per-iteration as 14.2.3 asks.
     copies: bool,
+    /// How many slots the frame context held where the loop began: a copy
+    /// carries every slot, so one made before the loop takes the writes of a
+    /// closure that captured it.
+    context_slots_before: u16,
     /// The labels of 14.13 a `break` or a `continue` names this frame by.
     labels: Vec<String>,
     /// How many iterators of an enclosing `for`-`of` were open where the
@@ -1131,6 +1138,9 @@ struct RegisterSnapshot {
     functions: usize,
     own_context_slot_count: Option<u16>,
     own_context_names: Vec<Vec<u16>>,
+    /// How many slots 9.1.1.1.1 left uninitialized where the pass began: a
+    /// pass the lowering threw away must leave none of its own behind.
+    lexical_context_slots: usize,
     outer_context_slot_counts: Vec<u16>,
     function_returns: BTreeMap<u32, RegisterType>,
     function_parameters: BTreeMap<u32, Vec<RegisterType>>,
@@ -1190,6 +1200,7 @@ impl RegisterLowerer {
             arguments_binding: None,
             body_var_names: Vec::new(),
             loop_block_captures: 0,
+            block_takes_the_copy: false,
             body_binding_names: BTreeSet::new(),
             mapped_parameters: 0,
             maps_arguments: false,
@@ -2084,7 +2095,7 @@ impl RegisterLowerer {
             && self.block_scoped.iter().any(|scope| scope.contains(name))
         {
             self.loop_block_captures = self.loop_block_captures.checked_add(1)?;
-            if !frame.copies {
+            if !frame.copies && !self.block_takes_the_copy {
                 self.refuse("a Block binding of a loop, read by a nested function");
                 return None;
             }
@@ -2186,6 +2197,7 @@ impl RegisterLowerer {
             functions: self.code.functions.len(),
             own_context_slot_count: self.code.own_context_slot_count,
             own_context_names: self.code.own_context_names.clone(),
+            lexical_context_slots: self.code.lexical_context_slots.len(),
             outer_context_slot_counts: self.code.outer_context_slot_counts.clone(),
             function_returns: self.function_returns.clone(),
             function_parameters: self.function_parameters.clone(),
@@ -2214,6 +2226,9 @@ impl RegisterLowerer {
         self.code.functions.truncate(snapshot.functions);
         self.code.own_context_slot_count = snapshot.own_context_slot_count;
         self.code.own_context_names = snapshot.own_context_names;
+        self.code
+            .lexical_context_slots
+            .truncate(snapshot.lexical_context_slots);
         self.code.outer_context_slot_counts = snapshot.outer_context_slot_counts;
         self.function_returns = snapshot.function_returns;
         self.function_parameters = snapshot.function_parameters;
@@ -7930,9 +7945,58 @@ impl RegisterLowerer {
 
     fn lower_block(&mut self, body: &[Stmt]) -> Option<RegisterFlow> {
         self.block_depth = self.block_depth.checked_add(1)?;
-        let outcome = self.lower_block_body(body);
+        let outcome = self.lower_block_in_a_loop(body);
         self.block_depth = self.block_depth.saturating_sub(1);
         outcome
+    }
+
+    /// 14.2.3 gives the Block of an iteration an Environment Record of its
+    /// own, so a binding of it a nested function reads stands in a context no
+    /// later iteration writes.
+    ///
+    /// A loop that copies the frame context per iteration (14.7.4.4) holds
+    /// such a binding already. Every other loop takes the Block twice: the
+    /// first pass counts what the body captured, and the second emits the
+    /// copy of 14.2.3 where the Block begins.
+    fn lower_block_in_a_loop(&mut self, body: &[Stmt]) -> Option<RegisterFlow> {
+        let Some(frame) = self.loops.iter().rev().find(|frame| !frame.is_switch) else {
+            return self.lower_block_body(body);
+        };
+        if frame.copies {
+            return self.lower_block_body(body);
+        }
+        let slots_before_the_loop = frame.context_slots_before;
+        let before = self.snapshot();
+        let captures_before = self.loop_block_captures;
+        let took_the_copy = core::mem::replace(&mut self.block_takes_the_copy, true);
+        let taken = self.lower_block_body(body);
+        self.block_takes_the_copy = took_the_copy;
+        let captures = self.loop_block_captures.saturating_sub(captures_before);
+        if captures == 0 {
+            return taken;
+        }
+        let own = self.code.own_context_slot_count.unwrap_or(0);
+        self.restore(before);
+        // The copy carries every slot of the context, so one the Block did
+        // not make would take the writes of a closure made outside it. The
+        // count stays raised, so a `for` around this Block takes the loop
+        // again with the copies of 14.7.4.4 and holds the binding there.
+        if slots_before_the_loop != 0 || usize::from(own) != captures {
+            self.refuse("a Block binding of a loop, read by a nested function");
+            return None;
+        }
+        self.loop_block_captures = captures_before;
+        self.code
+            .emit(crate::engine::bytecode::Instruction::CopyContext);
+        let took_the_copy = core::mem::replace(&mut self.block_takes_the_copy, true);
+        let taken = self.lower_block_body(body);
+        self.block_takes_the_copy = took_the_copy;
+        let captures = self.loop_block_captures.saturating_sub(captures_before);
+        if taken.is_some() && self.code.own_context_slot_count != u16::try_from(captures).ok() {
+            self.refuse("a capture beside a Block binding of a loop");
+            return None;
+        }
+        taken
     }
 
     fn lower_block_body(&mut self, body: &[Stmt]) -> Option<RegisterFlow> {
@@ -8387,6 +8451,7 @@ impl RegisterLowerer {
         self.loops.push(RegisterLoop {
             is_switch: true,
             copies: false,
+            context_slots_before: self.code.own_context_slot_count.unwrap_or(0),
             labels: core::mem::take(&mut self.pending_labels),
             iterator_depth: self.open_iterators.len(),
             breaks: Vec::new(),
@@ -8489,6 +8554,7 @@ impl RegisterLowerer {
         self.loops.push(RegisterLoop {
             is_switch: true,
             copies: false,
+            context_slots_before: self.code.own_context_slot_count.unwrap_or(0),
             labels: core::mem::take(&mut self.pending_labels),
             iterator_depth: self.open_iterators.len(),
             breaks: Vec::new(),
@@ -8656,6 +8722,7 @@ impl RegisterLowerer {
         self.loops.push(RegisterLoop {
             is_switch: false,
             copies: false,
+            context_slots_before: self.code.own_context_slot_count.unwrap_or(0),
             labels: core::mem::take(&mut self.pending_labels),
             iterator_depth: self.open_iterators.len(),
             breaks: Vec::new(),
@@ -8721,6 +8788,7 @@ impl RegisterLowerer {
         self.loops.push(RegisterLoop {
             is_switch: false,
             copies: false,
+            context_slots_before: self.code.own_context_slot_count.unwrap_or(0),
             labels: core::mem::take(&mut self.pending_labels),
             iterator_depth: self.open_iterators.len(),
             breaks: Vec::new(),
@@ -8946,6 +9014,7 @@ impl RegisterLowerer {
         self.loops.push(RegisterLoop {
             is_switch: false,
             copies,
+            context_slots_before: self.code.own_context_slot_count.unwrap_or(0),
             labels: core::mem::take(&mut self.pending_labels),
             iterator_depth: self.open_iterators.len(),
             breaks: Vec::new(),
@@ -9567,6 +9636,7 @@ impl RegisterLowerer {
         self.loops.push(RegisterLoop {
             is_switch: false,
             copies: matches!(loop_head.scoped, Some(IterationScope::PerIteration(_))),
+            context_slots_before: self.code.own_context_slot_count.unwrap_or(0),
             labels: core::mem::take(&mut self.pending_labels),
             iterator_depth: self.open_iterators.len(),
             breaks: Vec::new(),
