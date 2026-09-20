@@ -8,6 +8,11 @@ files a client holds, what one request of the file protocol does to a
 FAT32 volume, and which refusal of `fs-fat` becomes which refusal of the
 protocol.
 
+A client is the badge of the capability its message came through. Badge
+zero names nobody, so a request under it is refused: the open files of
+every program that found the server by name would otherwise be one table
+(D-185).
+
 The process is a binary of `user-programs`, which brings the disk, the
 endpoint and the clock. This crate is the part that can be tested on the
 host over `fs_fat::doubles::RamDisk`.
