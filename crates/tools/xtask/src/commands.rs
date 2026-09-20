@@ -20,7 +20,9 @@ use crate::session::Session;
 use crate::ssh;
 use crate::symbolize;
 use crate::tls;
-use crate::{artifacts, asm_options, coverage, deps, fs, layering, linker, spdx, unsafe_budget};
+use crate::{
+    artifacts, asm_options, coverage, deps, fs, layering, linker, sections, spdx, unsafe_budget,
+};
 
 /// `rustfmt --check`, `clippy -D warnings` per target group, SPDX
 /// headers, and the barrier options of R11 of document 4.
@@ -3039,11 +3041,12 @@ pub(crate) fn check(root: &Path, channel: &str, options: &[String]) -> Result<()
         }
     }
     note!("toolchain: {channel}");
-    let steps: [(&str, Step); 11] = [
+    let steps: [(&str, Step); 12] = [
         ("lint", lint),
         ("check-layering", check_layering),
         ("check-deps", check_deps),
         ("unsafe-budget", unsafe_budget),
+        ("kernel-sections", check_kernel_sections),
         ("test --host", |root| test(root, &["--host".to_owned()])),
         ("coverage", coverage),
         ("miri", miri),
@@ -3129,6 +3132,45 @@ fn check_base(root: &Path, path: &str, name: &str, expected: u64) -> Result<(), 
         None => vec![format!("{path}: {name} is missing")],
     };
     report("program base", &violations);
+    Error::from_violations(violations)
+}
+
+/// Checks that the statics of the kernel reach the `.bss` and not the image
+/// file.
+///
+/// A `static` whose value is all zeros is `.bss`, which the loader clears
+/// and the file does not carry; one nonzero byte moves the whole cell into
+/// `.data`, which the file carries and the loader copies. The pools of the
+/// machine are 1.4 MiB, so that one byte costs the image 1.4 MiB (D-66,
+/// D-188), and the section table is where it shows.
+///
+/// # Errors
+///
+/// The errors of the build and of reading the kernel; [`Error::Parse`] when
+/// the kernel is not an ELF the reader understands; [`Error::Violations`]
+/// when a section is outside its bound.
+pub(crate) fn check_kernel_sections(root: &Path) -> Result<(), Error> {
+    Cmd::cargo()
+        .cwd(root)
+        .args([
+            "build",
+            "-p",
+            "audhsos-kernel",
+            "--target",
+            "x86_64-unknown-none",
+        ])
+        .run()?;
+    let path = kernel_binary(root, "debug");
+    let bytes = fs::read_bytes(&path)?;
+    let sizes = sections::sizes(&bytes)
+        .map_err(|error| Error::Parse(format!("{}: {error}", path.display())))?;
+    note!(
+        "kernel sections: .data {} bytes, .bss {} bytes",
+        sizes.data,
+        sizes.bss
+    );
+    let violations = sections::violations(sizes);
+    report("kernel sections", &violations);
     Error::from_violations(violations)
 }
 

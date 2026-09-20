@@ -128,7 +128,7 @@ AuDHSOS/
 │   │   ├── stack/             net-stack: interface, demultiplexing, poll
 │   │   └── ssh/               audhsos-ssh: SSH-2 client, sans-I/O: packets, negotiation, key exchange, cipher (document 14, track S)
 │   └── tools/
-│       ├── xtask/             build, image (GPT + FAT32 writer, CRC32), run, test, lint, check-layering, check-deps, unsafe-budget, fuzz, coverage; policy tables
+│       ├── xtask/             build, image (GPT + FAT32 writer, CRC32), run, test, lint, check-layering, check-deps, unsafe-budget, kernel-sections, fuzz, coverage; policy tables
 │       ├── markdown/          doc-markdown: the Markdown parser of this repository's documents
 │       ├── html/              doc-html: the HTML parser of the standards this repository holds
 │       ├── jrs/               jrs-cli: host executable for the JavaScript core
@@ -466,6 +466,7 @@ binaries (`cargo`, `rustc`, `rustfmt`, `cargo-clippy`, `cargo-miri`,
 | `check-layering` | verify the layering table against `cargo tree`, verify `forbid(unsafe_code)` in every logic crate, reject assembly files, verify the adapter-function-to-QEMU-test tables |
 | `check-deps` | verify that `Cargo.lock` and all manifests reference workspace members only |
 | `unsafe-budget` | count `unsafe` blocks and `asm!` sites per adapter crate against the policy table |
+| `kernel-sections` | build the kernel and hold the sizes of `.data` and `.bss` against their bounds, so that a `static` which stopped being all zeros is caught where it costs the image (D-188) |
 | `fuzz [--target <name>] [--time <s>] [--regression] [--merge <directory>] [--minimize <file>]` | build fuzz targets with `-Zsanitizer=fuzzer` and run them; `--regression` replays the stored corpus instead, which is what `check` runs |
 | `coverage` | build host tests with `-C instrument-coverage`, merge profiles with `llvm-profdata`, export LCOV with `llvm-cov`, enforce thresholds |
 | `miri` | run the tests of the `unsafe` modules of the host-executable adapter crates under Miri, after checking that no module holding `unsafe` is left out |

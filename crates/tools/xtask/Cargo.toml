@@ -13,6 +13,7 @@ rust-version.workspace = true
 [dependencies]
 app-canvas.workspace = true
 audhsos-abi.workspace = true
+audhsos-elf.workspace = true
 audhsos-encoding.workspace = true
 audhsos-tls = { workspace = true, features = ["test-server"] }
 audhsos-x509 = { workspace = true, features = ["test-certificates"] }

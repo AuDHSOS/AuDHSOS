@@ -31,7 +31,7 @@ the sections it points to.
 | `kernel-hal-api` | `crates/kernel/hal-api` | traits `paging::{FrameAccess<T>, TlbControl, FrameSource}`, `console::DebugConsole`, `exit::{TestExit, ExitStatus}`, `timer::{Timer, TimerError}`, `interrupt::{InterruptController, InterruptLine, Vector, InterruptError}`, `port::PortAccess` (feature `port-io`), `platform::{Platform, MemoryRegion, MemoryRegionKind}`; doubles in `doubles` behind feature `test-doubles`: `MemoryFrameAccess<T>`, `RecordingTlb`, `CountingFrameSource`, `RecordingConsole`, `RecordingExit`, `FakeTimer`, `FakeInterruptController`, `RecordingPorts`, `ScriptedPlatform` |
 | `audhsos-sync` | `crates/sync` | `Global<T>` with `init`, `borrow(&impl ExclusiveToken)`, `GlobalRef`; `UncontendedToken`; adapter crate with exactly two `unsafe` sites |
 | `test-support` | `crates/support/testing` | `generators::{range, just, one_of, bool, pair, vec, bytes, option, Generator, BoxGen}`, `property::{check, check_with, Config, Failure, seed_for}`, `model::{ModelTest, run_model_test, run_model_test_with}`, `rng::Rng`, `tree::Tree` |
-| `xtask` | `crates/tools/xtask` | `lint`, `check-layering`, `check-deps`, `unsafe-budget`, `test`, `coverage`, `miri`, `doc`, `fuzz`, `check`; policy tables in `src/policy.rs` |
+| `xtask` | `crates/tools/xtask` | `lint`, `check-layering`, `check-deps`, `unsafe-budget`, `kernel-sections`, `test`, `coverage`, `miri`, `doc`, `fuzz`, `check`; policy tables in `src/policy.rs` |
 
 ### 10.0.3 Rules that apply to every phase
 
