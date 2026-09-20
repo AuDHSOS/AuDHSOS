@@ -7825,14 +7825,19 @@ impl RegisterLowerer {
             Option<RegisterBinding>,
         )],
     ) -> bool {
-        if self.block_depth != 1 || self.parameter_names.contains(name) {
+        if self.parameter_names.contains(name) {
             return false;
         }
         // 16.1.7 keeps a top-level `var` of a Script on the Global
-        // Environment Record, so the write goes there and not to a binding
-        // one scope out.
+        // Environment Record, so the write names it wherever the declaration
+        // stands and asks nothing of the scopes between.
         if self.script_globals {
             return self.script_var_names.contains(name);
+        }
+        // A binding of a body is the one scope out only for a Block that is a
+        // statement of the body itself.
+        if self.block_depth != 1 {
+            return false;
         }
         self.body_var_names.iter().any(|held| held == name)
             && scoped
@@ -12280,16 +12285,32 @@ fn register_block_function_names_under(
                 register_block_function_names_under(no, names, outer);
             }
         }
-        Stmt::While(_, body)
-        | Stmt::DoWhile(body, _)
-        | Stmt::Labelled(_, body)
-        | Stmt::ForIn { body, .. }
-        | Stmt::ForOf { body, .. } => {
+        Stmt::While(_, body) | Stmt::DoWhile(body, _) | Stmt::Labelled(_, body) => {
             register_block_function_names_under(body, names, outer);
         }
+        // 14.7.4.3 and 14.7.5.4 bind the head of the loop in a scope of its
+        // own around the body, so a name it binds lexically is one of the
+        // scopes B.3.2.1 asks about.
+        Stmt::ForIn { binding, body, .. } | Stmt::ForOf { binding, body, .. } => {
+            let mut inner = outer.clone();
+            if let Some((pattern, _)) = binding {
+                let mut bound = Vec::new();
+                pattern.names(&mut bound);
+                inner.extend(bound);
+            }
+            register_block_function_names_under(body, names, &inner);
+        }
         Stmt::For(initializer, _, _, body) => {
-            register_block_function_names_under(initializer, names, outer);
-            register_block_function_names_under(body, names, outer);
+            let mut inner = outer.clone();
+            if let Stmt::Declare(bindings) = initializer.as_ref() {
+                for (pattern, _, _) in bindings {
+                    let mut bound = Vec::new();
+                    pattern.names(&mut bound);
+                    inner.extend(bound);
+                }
+            }
+            register_block_function_names_under(initializer, names, &inner);
+            register_block_function_names_under(body, names, &inner);
         }
         Stmt::Try {
             body,
