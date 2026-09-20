@@ -2353,7 +2353,7 @@ fn a_row_written_before_a_column_was_added_answers_what_it_falls_back_to() {
 #[test]
 fn what_adding_a_column_refuses() {
     use crate::change::Writer;
-    use crate::db::Error;
+    use crate::db::{Added, Error};
     let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
     writer.run(b"CREATE TABLE t(a,b)").unwrap();
     // A table the database does not hold.
@@ -2362,28 +2362,120 @@ fn what_adding_a_column_refuses() {
         Err(Error::NoTable(b"nosuch".to_vec()))
     );
     // `sqlite3AlterFinishAddColumn` refuses a column that would need an
-    // index over the rows the table already holds, and one that may not
-    // be nothing where the rows hold nothing for it.
+    // index over the rows the table already holds, whether or not the
+    // table holds one.
     assert_eq!(
         writer.run(b"ALTER TABLE t ADD COLUMN c UNIQUE"),
-        Err(Error::Unsupported)
+        Err(Error::Added(Added::Unique))
     );
     assert_eq!(
         writer.run(b"ALTER TABLE t ADD COLUMN c PRIMARY KEY"),
-        Err(Error::Unsupported)
+        Err(Error::Added(Added::PrimaryKey))
+    );
+    // A view holds no row of its own, and a name the table already holds
+    // is refused as a `CREATE TABLE` refuses it.
+    writer.run(b"CREATE VIEW v AS SELECT 1").unwrap();
+    assert_eq!(
+        writer.run(b"ALTER TABLE v ADD COLUMN c"),
+        Err(Error::Added(Added::View))
     );
     assert_eq!(
-        writer.run(b"ALTER TABLE t ADD COLUMN c NOT NULL"),
-        Err(Error::Unsupported)
+        writer.run(b"ALTER TABLE t ADD COLUMN a"),
+        Err(Error::Schema(crate::schema::Error::DuplicateColumn(
+            b"a".to_vec()
+        )))
+    );
+    // `sqlite3ErrorIfNotEmpty`: a column that may not be nothing stands
+    // over a table that holds no row, and it and one whose default is no
+    // value of its own are refused over one that does.
+    writer.run(b"ALTER TABLE t ADD COLUMN c NOT NULL").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1,2,3)").unwrap();
+    assert_eq!(
+        writer.run(b"ALTER TABLE t ADD COLUMN f NOT NULL"),
+        Err(Error::Added(Added::NotNull))
+    );
+    assert_eq!(
+        writer.run(b"ALTER TABLE t ADD COLUMN f NOT NULL DEFAULT NULL"),
+        Err(Error::Added(Added::NotNull))
+    );
+    assert_eq!(
+        writer.run(b"ALTER TABLE t ADD COLUMN f DEFAULT CURRENT_TIME"),
+        Err(Error::Added(Added::NonConstant))
     );
     // One that may not be nothing and falls back to something is
-    // allowed, because every row then holds one.
+    // allowed, because every row then holds one, and a sign before a
+    // number is a value of its own.
     writer
         .run(b"ALTER TABLE t ADD COLUMN d DEFAULT 3 NOT NULL")
         .unwrap();
-    // The row the statement writes again is found by name and by kind,
-    // so the walk passes over a table of another name and over a row
-    // that is not a table at all.
+    writer
+        .run(b"ALTER TABLE t ADD COLUMN g DEFAULT -3")
+        .unwrap();
+    // A generated column reaches neither check, because the rows the
+    // table holds carry what it computes.
+    writer
+        .run(b"ALTER TABLE t ADD COLUMN h NOT NULL GENERATED ALWAYS AS (a+1)")
+        .unwrap();
+    // A column that points at a row of another table is refused only
+    // where the connection holds the keys.
+    writer.run(b"CREATE TABLE p(x PRIMARY KEY)").unwrap();
+    writer
+        .run(b"ALTER TABLE t ADD COLUMN r REFERENCES p DEFAULT 5")
+        .unwrap();
+    writer.run(b"PRAGMA foreign_keys=ON").unwrap();
+    assert_eq!(
+        writer.run(b"ALTER TABLE t ADD COLUMN s REFERENCES p DEFAULT 5"),
+        Err(Error::PointingDefault)
+    );
+    // One that falls back to nothing points at no row, so it stands.
+    writer
+        .run(b"ALTER TABLE t ADD COLUMN u REFERENCES p")
+        .unwrap();
+    writer.run(b"PRAGMA foreign_keys=OFF").unwrap();
+    // A constraint that is neither a key, a default, a `NOT NULL`, a
+    // `REFERENCES` nor a generated column is passed over.
+    writer
+        .run(b"ALTER TABLE t ADD COLUMN v COLLATE NOCASE")
+        .unwrap();
+    // A default that is an expression is no value of its own, whether it
+    // is the expression itself, another operator before a literal, or a
+    // sign before an expression. A sign before a literal is one, which is
+    // why `DEFAULT -'x'` stands.
+    for sql in [
+        b"ALTER TABLE t ADD COLUMN w DEFAULT (1+2)".as_slice(),
+        b"ALTER TABLE t ADD COLUMN w DEFAULT (~3)",
+        b"ALTER TABLE t ADD COLUMN w DEFAULT (-(1+2))",
+    ] {
+        assert_eq!(
+            writer.run(sql).unwrap_err().message(),
+            "Cannot add a column with non-constant default",
+            "{sql:?}"
+        );
+    }
+    writer
+        .run(b"ALTER TABLE t ADD COLUMN w DEFAULT -'x'")
+        .unwrap();
+    // The words each refusal carries.
+    assert_eq!(Added::PrimaryKey.words(), "Cannot add a PRIMARY KEY column");
+    assert_eq!(Added::Unique.words(), "Cannot add a UNIQUE column");
+    assert_eq!(
+        Added::NotNull.words(),
+        "Cannot add a NOT NULL column with default value NULL"
+    );
+    assert_eq!(
+        Added::NonConstant.words(),
+        "Cannot add a column with non-constant default"
+    );
+    assert_eq!(Added::View.words(), "Cannot add a column to a view");
+}
+
+/// The row of the schema an `ALTER TABLE` writes again, which is found by
+/// name and by kind.
+#[test]
+fn which_row_of_the_schema_an_alter_writes_again() {
+    use crate::change::Writer;
+    // The walk passes over a table of another name and over a row that is
+    // not a table at all.
     let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
     writer.run(b"CREATE TABLE t(a)").unwrap();
     writer.run(b"CREATE INDEX ta ON t(a)").unwrap();

@@ -6427,3 +6427,20 @@ Document 16 step Q8.
 - A hex literal too big to read names the literal as it was written, an
   `ESCAPE` of more than one character and an integer that overflows each
   carry their own words.
+
+### 6.6.235 The columns an `ALTER TABLE` may not add (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A `PRIMARY KEY` column and a `UNIQUE` column are refused whether or not
+  the table holds a row.
+- A `NOT NULL` column with no default other than nothing, and a column
+  whose default is no value of its own, stand over a table that holds no
+  row and are refused over one that does.
+- A generated column reaches neither refusal.
+- A view and a name the table already holds are refused before the column
+  is read.
+- `DEFAULT -'x'` stands; `DEFAULT (1+2)`, `DEFAULT (~3)` and
+  `DEFAULT (-(1+2))` do not.
+- A column that points at a row of another table is refused only where the
+  connection holds the keys and the table holds a row.

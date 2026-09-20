@@ -90,6 +90,39 @@ impl Code {
     }
 }
 
+/// What `sqlite3AlterFinishAddColumn` of `research/sqlite/src/alter.c:330`
+/// refuses a column an `ALTER TABLE ... ADD COLUMN` writes for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Added {
+    /// `PRIMARY KEY` on the column, whose index would hold the rows the
+    /// table already has.
+    PrimaryKey,
+    /// `UNIQUE` on the column, the same.
+    Unique,
+    /// `NOT NULL` where the column falls back to nothing, the rows the
+    /// table already has holding nothing for it.
+    NotNull,
+    /// A default the connection reads as no value of its own, which
+    /// `sqlite3ValueFromExpr` answers nothing for.
+    NonConstant,
+    /// A view, which holds no row of its own.
+    View,
+}
+
+impl Added {
+    /// The words the refusal carries.
+    #[must_use]
+    pub const fn words(self) -> &'static str {
+        match self {
+            Added::PrimaryKey => "Cannot add a PRIMARY KEY column",
+            Added::Unique => "Cannot add a UNIQUE column",
+            Added::NotNull => "Cannot add a NOT NULL column with default value NULL",
+            Added::NonConstant => "Cannot add a column with non-constant default",
+            Added::View => "Cannot add a column to a view",
+        }
+    }
+}
+
 /// Why a database could not answer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -175,6 +208,9 @@ pub enum Error {
     /// A column added to a table that points at a row of another and
     /// falls back to something.
     PointingDefault,
+    /// A column an `ALTER TABLE ... ADD COLUMN` may not add, and which of
+    /// the four it is.
+    Added(Added),
     /// Two `WITH` terms of one statement under one name.
     DuplicateTerm(Vec<u8>),
     /// `WITH` terms that read each other.
@@ -510,6 +546,7 @@ impl Error {
             Error::PointingDefault => alloc::string::String::from(
                 "Cannot add a REFERENCES column with non-NULL default value",
             ),
+            Error::Added(added) => alloc::string::String::from(added.words()),
             Error::DuplicateTerm(name) => {
                 alloc::format!("duplicate WITH table name: {}", shown(name))
             }

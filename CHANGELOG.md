@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` refuses the five columns an `ALTER TABLE ... ADD COLUMN` may
+  not add with the words the C library writes, and adds a `NOT NULL`
+  column and one whose default is no value of its own over a table that
+  holds no row. A view and a name the table already holds are refused
+  before the column is read. D-347 records it. Catalog 6.6.235.
+  `alter4.test` goes from 43 cases passing to 51, `alter3.test` from 32 to
+  39 and `alter.test` from 79 to 85.
+
 - `db-sqlite` writes the words the C library writes for eleven refusals
   that carried the name of the variant, among them
   `duplicate column name: a`, `table "t" has more than one primary key`,

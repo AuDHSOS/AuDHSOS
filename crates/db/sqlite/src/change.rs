@@ -38,41 +38,81 @@ fn refused_column(
     arena: &Arena,
     asked: &crate::ast::AddColumn,
     sql: &[u8],
-    holding: bool,
+    (rows, keys): (bool, bool),
 ) -> Result<(), Error> {
-    let mut fallback = false;
     let mut points = false;
+    let mut not_null = false;
+    let mut generated = false;
     let mut falls_back_to = None;
+    let mut falls_back = None;
     for constraint in arena.column_constraints(asked.column.constraints) {
         match constraint {
-            crate::ast::ColumnConstraint::PrimaryKey { .. }
-            | crate::ast::ColumnConstraint::Unique(_) => return Err(Error::Unsupported),
-            crate::ast::ColumnConstraint::Default { text, .. } => {
-                fallback = true;
+            crate::ast::ColumnConstraint::PrimaryKey { .. } => {
+                return Err(Error::Added(crate::db::Added::PrimaryKey));
+            }
+            crate::ast::ColumnConstraint::Unique(_) => {
+                return Err(Error::Added(crate::db::Added::Unique));
+            }
+            crate::ast::ColumnConstraint::Default { text, value } => {
                 falls_back_to = Some(text);
+                falls_back = Some(value);
             }
-            crate::ast::ColumnConstraint::NotNull(_) if !fallback => {
-                return Err(Error::Unsupported);
-            }
+            crate::ast::ColumnConstraint::NotNull(_) => not_null = true,
             crate::ast::ColumnConstraint::References(_) => points = true,
+            crate::ast::ColumnConstraint::Generated { .. } => generated = true,
             _ => {}
         }
+    }
+    // A default written as the literal `NULL` is no default at all,
+    // which `sqlite3AlterFinishAddColumn` reads before the two checks
+    // below, and a generated column reaches neither.
+    let written_null = falls_back_to
+        .is_some_and(|text| crate::schema::dequote(text.text(sql)).eq_ignore_ascii_case(b"null"));
+    if generated || !rows {
+        return Ok(());
     }
     // `sqlite3AlterFinishAddColumn` of
     // `research/sqlite/src/alter.c:373`: a column that points at a row of
     // another table falls back to nothing, the rows the table already
     // holds gaining no value of their own and pointing at no row. The
-    // refusal stands where the connection holds the keys and the table
-    // holds a row, which `sqlite3ErrorIfNotEmpty` reads.
-    if holding
-        && points
-        && falls_back_to.is_some_and(|text| {
-            !crate::schema::dequote(text.text(sql)).eq_ignore_ascii_case(b"null")
-        })
-    {
+    // refusal stands where the connection holds the keys, and it comes
+    // before the two below.
+    if keys && points && falls_back_to.is_some() && !written_null {
         return Err(Error::PointingDefault);
     }
+    if not_null && (falls_back_to.is_none() || written_null) {
+        return Err(Error::Added(crate::db::Added::NotNull));
+    }
+    // `sqlite3ValueFromExpr` reads a literal and a sign before one, and
+    // answers nothing for every other expression, `CURRENT_TIME` among
+    // them.
+    if let Some(value) = falls_back.filter(|_| !written_null)
+        && !constant_value(arena, *value)
+    {
+        return Err(Error::Added(crate::db::Added::NonConstant));
+    }
     Ok(())
+}
+
+/// Whether the connection reads the expression as a value of its own,
+/// which `sqlite3ValueFromExpr` of `research/sqlite/src/vdbemem.c` does
+/// for a literal and for a sign before one, which is why
+/// `DEFAULT -'x'` stands and answers nought.
+///
+/// Reading costs O(1), because a sign reaches one operand.
+fn constant_value(arena: &Arena, value: crate::ast::ExprId) -> bool {
+    match arena.node(value) {
+        Some(crate::ast::Node::Literal(literal)) => {
+            !matches!(literal, crate::ast::Literal::CurrentTime(_))
+        }
+        Some(crate::ast::Node::Unary { op, operand }) => {
+            matches!(
+                op,
+                crate::ast::UnaryOp::Negate | crate::ast::UnaryOp::Identity
+            ) && matches!(arena.node(operand), Some(crate::ast::Node::Literal(_)))
+        }
+        _ => false,
+    }
 }
 
 /// Whether a column of a `sqlite_schema` row is the text `wanted`.
@@ -1105,8 +1145,30 @@ impl Writer {
     ) -> Result<(), Error> {
         let name = crate::schema::dequote(asked.table.text(sql));
         let written = asked.written.text(sql).to_vec();
-        refused_column(arena, asked, sql, self.holding() && self.holds_rows(&name)?)?;
-        let rowid = self.row_of(&name)?;
+        let added = crate::schema::dequote(asked.column.name.text(sql));
+        {
+            let bytes = self.image();
+            let database = self.reading(&bytes)?;
+            // `sqlite3AlterBeginAddColumn` builds the table again with
+            // the column written into it, so a view and a name the
+            // table already holds are both refused before the column is
+            // read.
+            if database.view(&name).is_some() {
+                return Err(Error::Added(crate::db::Added::View));
+            }
+            let (table, _) = database
+                .table(&name)
+                .ok_or_else(|| Error::NoTable(name.clone()))?;
+            if table
+                .columns
+                .iter()
+                .any(|column| column.name.eq_ignore_ascii_case(&added))
+            {
+                return Err(Error::Schema(crate::schema::Error::DuplicateColumn(added)));
+            }
+        }
+        refused_column(arena, asked, sql, (self.holds_rows(&name)?, self.holding()))?;
+        let rowid = self.row_of(&name)?.ok_or(Error::NoTable(Vec::new()))?;
         let image = self.image();
         let database = Database::open(&image)?;
         // The row of the schema was found above, so the table and the
@@ -1167,12 +1229,14 @@ impl Writer {
     }
 
     /// Which row of `sqlite_schema` names the table, which is the row a
-    /// statement that changes the table writes again.
-    fn row_of(&self, name: &[u8]) -> Result<i64, Error> {
+    /// statement that changes the table writes again, and nothing where
+    /// no row of the schema names it.
+    fn row_of(&self, name: &[u8]) -> Result<Option<i64>, Error> {
         let bytes = self.image();
         let image = crate::image::Image::open(&bytes)?;
         let encoding = image.header().encoding;
         let mut payload = Vec::new();
+        let mut found = None;
         for row in image.schema() {
             let row = row?;
             payload.resize(row.payload.total, 0);
@@ -1181,10 +1245,11 @@ impl Writer {
             if is_text(record.value(0)?, b"table", encoding)
                 && is_text(record.value(1)?, name, encoding)
             {
-                return Ok(row.rowid);
+                found = Some(row.rowid);
+                break;
             }
         }
-        Err(Error::NoTable(name.to_vec()))
+        Ok(found)
     }
 
     /// `ALTER TABLE ... RENAME TO`: every row of `sqlite_schema` that
@@ -1437,7 +1502,7 @@ impl Writer {
                 crate::constraint::with(statement, None, written.text(sql))
             }
         };
-        let schema_rowid = self.row_of(&name)?;
+        let schema_rowid = self.row_of(&name)?.ok_or(Error::NoTable(Vec::new()))?;
         drop(database);
         let value = |bytes: &[u8]| Value::Text(bytes.to_vec());
         let row = crate::record::write_in(
@@ -1639,7 +1704,7 @@ impl Writer {
             .map(|(_, held)| held.affinity)
             .collect();
         let rows = database.rows_of(&name)?;
-        let schema_rowid = self.row_of(&name)?;
+        let schema_rowid = self.row_of(&name)?.ok_or(Error::NoTable(Vec::new()))?;
         drop(database);
         let value = |bytes: &[u8]| Value::Text(bytes.to_vec());
         let row = crate::record::write_in(
