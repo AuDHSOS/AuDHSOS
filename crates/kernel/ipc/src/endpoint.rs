@@ -296,6 +296,28 @@ pub fn received<const NP: usize, const NT: usize, const NM: usize, const NH: usi
     Ok(mine.waking(Wakeup::ok(sender, [0, 0])).switching(switch))
 }
 
+/// Wakes a queued sender whose message this receiver could not copy, with
+/// the refusal in its status, instead of putting it back into its queue.
+///
+/// The sender's message is refused for what the sender wrote — a handle
+/// word naming nothing, or one without [`Rights::TRANSFER`] — so every
+/// receiver after this one would be refused the same message. Putting it
+/// back at the front of the queue would hand that refusal to every later
+/// receiver and leave the endpoint unusable; the sender learns why
+/// instead, and the next sender is served.
+pub fn refuse<const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
+    objects: &mut Objects<NP, NT, NM, NH>,
+    scheduler: &mut Scheduler,
+    sender: ThreadId,
+    error: Error,
+) -> Outcome {
+    forget(objects, sender);
+    let switch = wake(&mut objects.threads, scheduler, sender).unwrap_or(false);
+    Outcome::DONE
+        .waking(Wakeup::failed(sender, error))
+        .switching(switch)
+}
+
 /// Puts the caller of a queued rendezvous back where it was, for a copy
 /// that was refused: the peer is off its queue and has to go back into it,
 /// or nobody can ever meet it again.

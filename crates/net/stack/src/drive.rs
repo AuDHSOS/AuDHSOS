@@ -10,10 +10,19 @@
 //! outgoing queue. What `poll_at` answers is the earliest of their
 //! answers, so a server never polls in a loop and a test never sleeps.
 //!
-//! The layers are asked only when the queue is empty. That is what makes
-//! a transmit buffer of one frame enough: the caller drains what has been
-//! written before anything new is written, and nothing is lost or
-//! reordered because nothing is produced while there is a backlog.
+//! The layers are asked when the outgoing queue was empty as `poll`
+//! began, which keeps a backlog from growing while it is being drained,
+//! and whenever one of them has work due at `now`, which a backlog does
+//! not postpone. Both are read before the received frame reaches
+//! `on_frame`: an answer to that frame is not a backlog this call has to
+//! drain first, and a peer whose every frame earns an answer would
+//! otherwise keep the queue non-empty and stop every timer of the stack.
+//!
+//! The cost of the second rule: a layer driven onto a backlog can find
+//! the queue full, and the queue then drops the frame and counts it,
+//! which the layer says again at its next deadline. The rule not taken,
+//! a fixed budget of frames between drives, leaves every timer late by
+//! the size of the budget instead.
 
 use audhsos_time::Instant;
 use crypto_rng::Rng;
@@ -54,10 +63,14 @@ impl<const SOCKETS: usize, const CONNECTIONS: usize> Stack<'_, SOCKETS, CONNECTI
         tx: &'t mut [u8],
         rng: &mut R,
     ) -> Result<Option<&'t [u8]>, StackError> {
+        // Both read before `on_frame`: an answer it writes is not a
+        // backlog this call has to drain first.
+        let idle = self.out.is_empty();
+        let due = self.work_at(now).is_some_and(|at| at <= now);
         if let Some(frame) = rx {
             self.on_frame(frame, now);
         }
-        if self.out.is_empty() {
+        if idle || due {
             self.drive(now, rng)?;
         }
         Ok(self.out.pop_into(tx))
@@ -69,6 +82,14 @@ impl<const SOCKETS: usize, const CONNECTIONS: usize> Stack<'_, SOCKETS, CONNECTI
         if !self.out.is_empty() {
             return Some(now);
         }
+        self.work_at(now)
+    }
+
+    /// When a layer next has timed work, which is what [`poll_at`] answers
+    /// for a stack with an empty queue.
+    ///
+    /// [`poll_at`]: Stack::poll_at
+    fn work_at(&self, now: Instant) -> Option<Instant> {
         [
             self.neighbors.poll_at(),
             self.fragments.poll_at(),

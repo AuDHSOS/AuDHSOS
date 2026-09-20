@@ -691,3 +691,66 @@ fn check_given(given: Object, out: &[Object], kernel: &RecordingPages) -> Result
         other => Err(format!("{other:?} is no single pass over {}", given.len)),
     }
 }
+
+#[test]
+fn a_client_that_keeps_its_handles_after_releasing_takes_no_slot_from_another_client() {
+    /// Four objects out at once over eight pages, so the table is
+    /// exhausted while memory is left.
+    type Small = Store<8, 4>;
+    let mut store = Small::new();
+    let mut pages = RecordingPages::new();
+    store.adopt(&mut pages, object(1, 0, 8)).unwrap();
+    pages.forget();
+    // The greedy client gives every object back and closes no handle, so
+    // none of the four is reclaimed.
+    for _ in 0..4 {
+        let page = store.allocate(&mut pages, 5, PAGE_SIZE, PAGE_SIZE).unwrap();
+        pages.shared.push(page.handle);
+        store.release(&mut pages, 5, page).unwrap();
+    }
+    assert_eq!(store.retired_objects(), 4);
+    assert_eq!(
+        store.live_objects(),
+        4,
+        "a retired object keeps the slot it had"
+    );
+    assert!(store.free_bytes() >= 4 * PAGE_SIZE, "and memory is left");
+    // The table is what is exhausted, and the refusal reaches the client
+    // that filled it. No client is handed memory it could not give back.
+    assert_eq!(
+        store.allocate(&mut pages, 5, PAGE_SIZE, PAGE_SIZE),
+        Err(Error::PoolExhausted)
+    );
+    assert_eq!(
+        store.allocate(&mut pages, 6, PAGE_SIZE, PAGE_SIZE),
+        Err(Error::PoolExhausted)
+    );
+    pages.shared.clear();
+    store.reclaim(&mut pages).unwrap();
+    assert_eq!(store.live_objects(), 0, "every slot came back");
+    let page = store.allocate(&mut pages, 6, PAGE_SIZE, PAGE_SIZE).unwrap();
+    assert_eq!(store.release(&mut pages, 6, page), Ok(page));
+    assert_eq!(store.live_objects(), 0, "and that one went straight back");
+}
+
+#[test]
+fn a_second_release_of_an_object_that_is_still_retired_is_refused() {
+    let (mut store, mut pages) = adopted(1);
+    let page = store.allocate(&mut pages, 5, PAGE_SIZE, PAGE_SIZE).unwrap();
+    pages.shared.push(page.handle);
+    store.release(&mut pages, 5, page).unwrap();
+    pages.forget();
+    assert_eq!(store.release(&mut pages, 5, page), Err(Error::NotFound));
+    assert_eq!(store.retired_objects(), 1, "and it is retired once");
+    assert!(pages.calls().is_empty(), "a refused release zeroes nothing");
+}
+
+#[test]
+fn a_dead_client_whose_objects_are_all_retired_leaves_nothing_to_take_back() {
+    let (mut store, mut pages) = adopted(2);
+    let page = store.allocate(&mut pages, 5, PAGE_SIZE, PAGE_SIZE).unwrap();
+    pages.shared.push(page.handle);
+    store.release(&mut pages, 5, page).unwrap();
+    assert_eq!(store.forget_client(&mut pages, 5), Ok(0));
+    assert_eq!(store.retired_objects(), 1, "and it is still retired once");
+}
