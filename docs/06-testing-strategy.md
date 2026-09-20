@@ -3273,12 +3273,22 @@ alone:
 - `sshd` starts on a free port of the loopback with every algorithm of
   14.5 named, so the run cannot pass on a set the two sides happened to
   prefer.
+- The configuration admits a public key of `root` where the check runs as
+  `root` and refuses `root` otherwise (D-189), which is what a container
+  of the cloud runner needs; the host tests read both directives out of
+  the text. The account is what `USER` or `LOGNAME` names, or what
+  `id -un` prints where neither does, and a run as `root` makes
+  `/run/sshd`, which `sshd` under that account chroots into.
 - The scratch disk of the run carries the trust file, the client's seed
   and the port, written by the host onto a FAT32 volume the file system
   server mounts rather than formats.
 - The client of the image connects to the gateway, gets through the key
   exchange, the host key, `publickey` and the session channel, and says
   the command started.
+- The network server and `app-net` are checkpoints in front of the line
+  that says `app-ssh` started, each with the timeout of a line to itself,
+  because `app-ssh` is the fifteenth program the root task starts and
+  eleven of the fifteen are read off the scratch volume (D-92).
 - It reads what the command wrote on standard output and on standard
   error, and takes an exit status that is not zero, so a client that
   reads one stream and one that reports no status both fail.
