@@ -809,6 +809,19 @@ impl Execution<'_> {
         };
         let program = match crate::bytecode::compile_eval(&text, self.limits, strict_caller) {
             Ok(program) => program,
+            // 19.2.1.1 step 8 raises a `SyntaxError` for a text that is no
+            // Script. The parser refuses a text it does not take with the
+            // same answer, and the two are not told apart here, so a direct
+            // eval names the gap rather than answering an error the text may
+            // not have earned.
+            Err(error) if direct => {
+                let _ = &error;
+                return crate::engine::interpreter::Compiled::Evaluated(Err(
+                    crate::engine::interpreter::VMError::Unsupported(
+                        "a text of a direct eval the parser does not take",
+                    ),
+                ));
+            }
             Err(error) => return Self::refused_source(&error),
         };
         let Some(code) = program.register_code.as_ref() else {

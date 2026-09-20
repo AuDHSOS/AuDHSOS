@@ -737,9 +737,9 @@ impl Parser {
             self.need("(")?;
             let cond = self.sequence()?;
             self.need(")")?;
-            let yes = self.single_statement()?;
+            let yes = self.single_statement_of(true)?;
             let no = if self.eat("else") {
-                Some(Box::new(self.single_statement()?))
+                Some(Box::new(self.single_statement_of(true)?))
             } else {
                 None
             };
@@ -920,6 +920,28 @@ impl Parser {
     }
 
     fn single_statement(&mut self) -> Result<Stmt, Error> {
+        self.single_statement_of(false)
+    }
+
+    /// The Statement of a compound statement, where `clause` says it is one
+    /// of the two clauses of an `if` that B.3.4 speaks of.
+    fn single_statement_of(&mut self, clause: bool) -> Result<Stmt, Error> {
+        // B.3.4 lets a FunctionDeclaration stand as the Statement of an `if`
+        // outside strict code, where 14.1 refuses every other Declaration and
+        // refuses that one too in strict code. It covers the two clauses of
+        // an `if` and no loop body, so a function there stays the
+        // `SyntaxError` 14.1 makes of it. The lowering does not take the form
+        // B.3.4 allows, so that one is a gap.
+        if clause
+            && self.is("function")
+            && !self.strict
+            && !self
+                .tokens
+                .get(self.at.saturating_add(1))
+                .is_some_and(|token| matches!(&token.kind, Kind::Punct(p) if *p == "*"))
+        {
+            return Err(Self::unsupported("a function declaration as a Statement"));
+        }
         if self.is("let")
             || self.is("const")
             || self.is("function")
