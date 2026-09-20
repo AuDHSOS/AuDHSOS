@@ -12053,6 +12053,20 @@ fn step_3_of_20_1_2_24_reads_every_property_through_its_getter() -> Result<(), E
 }
 
 #[test]
+fn a_callee_the_lowering_named_as_no_function_throws_where_it_stands() -> Result<(), Error> {
+    for source in [
+        // 13.3.6.1 step 4 raises a TypeError for a callee that is not
+        // callable, which the call instruction does where the call stands.
+        "var x=1;var r;try{x()}catch(e){r=e instanceof TypeError};''+r",
+        "var r;try{'s'()}catch(e){r=e instanceof TypeError};''+r",
+        "var b=true;var r;try{b()}catch(e){r=e instanceof TypeError};''+r",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn an_arrow_reads_the_super_of_the_frame_around_it() -> Result<(), Error> {
     for source in [
         // 15.3.4 gives an arrow the `[[HomeObject]]` of the function it was

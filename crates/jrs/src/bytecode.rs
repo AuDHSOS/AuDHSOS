@@ -4683,10 +4683,10 @@ impl RegisterLowerer {
         let callee_type = self.lower(callee)?;
         let RegisterType::Function(code_id) = callee_type else {
             // 7.3.14 dispatches on the callee at run time, which the call
-            // instruction does for a value the lowering could not name.
-            if callee_type != RegisterType::Unknown {
-                return None;
-            }
+            // instruction does for a value the lowering could not name and
+            // for one it named as no function: 13.3.6.1 step 4 raises the
+            // `TypeError` of a callee that is not callable where the call
+            // stands, which is a run time answer and no gap of the lowering.
             // 13.3.6.1: a call of the name `eval` is a direct eval, which
             // shares the variable environment of the function it stands in.
             return self.lower_dynamic_call(arguments, callee.reference_name() == Some(EVAL_NAME));
@@ -4702,6 +4702,7 @@ impl RegisterLowerer {
                 })
             })
         {
+            self.refuse("CALL 4705");
             return None;
         }
         let function = self.allocate_register()?;
@@ -4715,6 +4716,7 @@ impl RegisterLowerer {
                 .get(index)
                 .is_some_and(|parameter| !parameter.accepts(argument_type))
             {
+                self.refuse("CALL 4718");
                 return None;
             }
             let register = self.allocate_register()?;
