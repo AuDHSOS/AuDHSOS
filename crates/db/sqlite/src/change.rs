@@ -3519,6 +3519,9 @@ impl Writer {
         if setting == crate::pragma::Setting::DatabaseList {
             return Ok(self.listed_databases());
         }
+        if setting == crate::pragma::Setting::LockStatus {
+            return Ok(self.locks_held());
+        }
         if let Some(listed) = self.schema_rows(setting, asked, sql)? {
             return Ok(listed);
         }
@@ -3565,7 +3568,7 @@ impl Writer {
         }
         let (table, root) = database
             .table(asked.table)
-            .ok_or_else(|| Error::NoTable(asked.table.to_vec()))?;
+            .ok_or_else(|| Error::NoTable(blob_named(asked, &self.called.name)))?;
         if table.without_rowid {
             return Err(Error::BlobKeyed(asked.table.to_vec()));
         }
@@ -3673,7 +3676,11 @@ impl Writer {
                 self.attached
                     .iter()
                     .position(|held| named_as(held, named))
-                    .ok_or_else(|| Error::NoSchema(named.to_vec()))?,
+                    // `sqlite3LocateTable` of
+                    // `research/sqlite/src/build.c:408` names the
+                    // database and the table together, whichever of the
+                    // two the connection does not hold.
+                    .ok_or_else(|| Error::NoTable(blob_named(asked, &self.called.name)))?,
             ),
         };
         if let Some(place) = place {
@@ -4566,6 +4573,30 @@ impl Writer {
         for held in self.in_place() {
             let place = i64::try_from(held.called.place).unwrap_or(0);
             out.push(row(place, &held.called.name, &held.called.file));
+        }
+        out
+    }
+
+    /// `PRAGMA lock_status`: the lock each database of the connection is
+    /// held under, which `PragTyp_LOCK_STATUS` of
+    /// `research/sqlite/src/pragma.c:1877` answers out of the pager of
+    /// each.
+    ///
+    /// This engine holds no file and takes no lock, so every database it
+    /// holds answers `unlocked`; the temp schema answers `closed` until
+    /// a statement opens it. Reading them costs O(n) in their number.
+    fn locks_held(&self) -> Vec<Vec<Value>> {
+        let row = |name: &[u8], held: &[u8]| {
+            alloc::vec![Value::Text(name.to_vec()), Value::Text(held.to_vec())]
+        };
+        let mut out = alloc::vec![row(b"main", b"unlocked")];
+        let temp = self.attached.iter().any(|held| named_as(held, b"temp"));
+        out.push(row(b"temp", if temp { b"unlocked" } else { b"closed" }));
+        for held in self.in_place() {
+            if named_as(held, b"temp") {
+                continue;
+            }
+            out.push(row(&held.called.name, b"unlocked"));
         }
         out
     }
@@ -9793,6 +9824,16 @@ pub struct Blob<'a> {
     pub rowid: i64,
     /// Whether the handle writes the value rather than reading it.
     pub writing: bool,
+}
+
+/// The table a blob handle names, written under the database it names,
+/// which `sqlite3_blob_open` refuses `no such table: <database>.<table>`
+/// for.
+fn blob_named(asked: &Blob<'_>, held: &[u8]) -> Vec<u8> {
+    let mut out = asked.schema.unwrap_or(held).to_vec();
+    out.push(b'.');
+    out.extend_from_slice(asked.table);
+    out
 }
 
 /// Where the bytes of the value a blob handle names lie: the tree of

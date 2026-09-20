@@ -947,6 +947,9 @@ Size: L.
 104. The bytes of every page the b-tree layer may not use, which a
      pragma writes, and the options the library was built with. Built,
      which D-358 records.
+105. What a command of a blob handle answers, and the lock every
+     database of the connection is held under. Built, which D-359
+     records.
 
 ### Done when
 
@@ -956,8 +959,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 118 187 cases in 846 files, 105 404
-pass, 3443 answer differently, and 9340 name something the engine
+under the `tclsh` of the machine. Of 118 191 cases in 846 files, 105 447
+pass, 3433 answer differently, and 9311 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the three-minute
 deadline and are counted with the cases they ran by then. One run over

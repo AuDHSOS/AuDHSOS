@@ -1420,6 +1420,10 @@ proc blob_call {id verb args} {
 # holds it flushed and read again from its first byte, which
 # `blobHandleFromObj` of `research/sqlite/src/test_blob.c:52` does.
 proc blob_held {id} {
+  # `blobHandleFromObj` of `research/sqlite/src/test_blob.c:52` reads an
+  # empty name as a handle of nothing, which every command but the close
+  # of it answers `SQLITE_MISUSE`.
+  if {$id eq ""} { blob_refused SQLITE_MISUSE }
   if {![info exists ::blobs($id)]} { error "no such blob handle: $id" }
   # A handle whose reopen was refused reaches no row from there on,
   # which `sqlite3_blob_reopen` of `research/sqlite/src/vdbeblob.c:405`
@@ -1454,20 +1458,67 @@ proc sqlite3_blob_open {db database table column rowid flags {varname ""}} {
 
 proc sqlite3_blob_bytes {id} { return [blob_call [blob_held $id] blob_bytes] }
 
+# What a command of a blob handle is refused with: the words
+# `sqlite3_errmsg` answers for the code, which `sqlite3Error` of
+# `research/sqlite/src/main.c` leaves for a code that carries no message
+# of its own.
+proc blob_refused {code} {
+  set ::harness_code $code
+  switch -exact -- $code {
+    SQLITE_READONLY {
+      set ::harness_error "attempt to write a readonly database"
+      set number 8
+    }
+    SQLITE_ABORT {
+      set ::harness_error ""
+      set number 4
+    }
+    SQLITE_MISUSE {
+      set ::harness_error "bad parameter or other API misuse"
+      set number 21
+    }
+    default {
+      set ::harness_error "SQL logic error"
+      set number 1
+    }
+  }
+  harness_send refused $code $number
+  error $code
+}
+
+# How many bytes the value holds, where a row the handle no longer
+# reaches ends the handle rather than naming the key it was opened
+# under.
+proc blob_len {id} {
+  set out [blob_try $id blob_bytes]
+  if {[lindex $out 0] eq "SQLITE_OK"} { return [lindex $out 1] }
+  if {[string match "no such rowid*" [lindex $out 2]]} { blob_refused SQLITE_ABORT }
+  blob_refused [lindex $out 0]
+}
+
 proc sqlite3_blob_read {id offset count} {
-  return [binary format H* [blob_call [blob_held $id] blob_read $offset $count]]
+  blob_held $id
+  if {$offset < 0 || $count < 0} { blob_refused SQLITE_ERROR }
+  # `blobReadWrite` of `research/sqlite/src/vdbeblob.c:392` reads how
+  # far the value reaches before it reads whether the handle stands.
+  if {$offset + $count > [blob_len $id]} { blob_refused SQLITE_ERROR }
+  return [binary format H* [blob_call $id blob_read $offset $count]]
 }
 
 proc sqlite3_blob_write {id offset data {count -1}} {
   blob_held $id
-  if {![lindex $::blobs($id) 5]} { error SQLITE_READONLY }
   binary scan $data H* digits
   if {$count >= 0} { set digits [string range $digits 0 [expr {$count*2-1}]] }
+  set written [expr {[string length $digits] / 2}]
+  if {$offset < 0 || $count < -1} { blob_refused SQLITE_ERROR }
+  if {$offset + $written > [blob_len $id]} { blob_refused SQLITE_ERROR }
+  if {![lindex $::blobs($id) 5]} { blob_refused SQLITE_READONLY }
   blob_call $id blob_write $offset $digits
   return ""
 }
 
 proc sqlite3_blob_close {id} {
+  if {$id eq ""} { return "" }
   if {[info exists ::blobs($id)] && [string match "rc*" $id]} { close $id }
   unset -nocomplain ::blobs($id)
   return ""

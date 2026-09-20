@@ -159,7 +159,7 @@ fn what_a_blob_handle_is_refused_for() {
             }
         )
         .message(),
-        "no such table: nosuch"
+        "no such table: main.nosuch"
     );
     assert_eq!(
         refused(
@@ -361,13 +361,17 @@ fn what_database_a_blob_handle_names() {
             .unwrap(),
         b"main"
     );
-    // A name the connection holds no database under is refused.
+    // A name the connection holds no database under names no table of
+    // that database either.
     assert_eq!(
-        writer.blob_bytes(&Blob {
-            schema: Some(b"nosuch"),
-            ..asked(false)
-        }),
-        Err(Error::NoSchema(b"nosuch".to_vec()))
+        writer
+            .blob_bytes(&Blob {
+                schema: Some(b"nosuch"),
+                ..asked(false)
+            })
+            .unwrap_err()
+            .message(),
+        "no such table: nosuch.t"
     );
     // A write reaches the database the handle names and leaves the
     // other as it stands.

@@ -95,6 +95,10 @@ pub enum Setting {
     /// is `PragTyp_DEFAULT_CACHE_SIZE` of
     /// `research/sqlite/src/pragma.c:553`.
     DefaultCacheSize,
+    /// `PRAGMA lock_status`, which answers the lock each database of the
+    /// connection is held under, and is `PragTyp_LOCK_STATUS` of
+    /// `research/sqlite/src/pragma.c:1877`.
+    LockStatus,
     /// `PRAGMA incremental_vacuum(N)`, which gives up as many as N pages
     /// at the end of a file that vacuums itself incrementally, and is
     /// `PragTyp_INCREMENTAL_VACUUM` of
@@ -469,6 +473,7 @@ pub fn of_name(name: &[u8]) -> Option<Setting> {
         b"case_sensitive_like" => Setting::CaseSensitiveLike,
         b"default_cache_size" => Setting::DefaultCacheSize,
         b"incremental_vacuum" => Setting::IncrementalVacuum,
+        b"lock_status" => Setting::LockStatus,
         // `PRAGMA default_synchronous` is a pragma no version of the
         // library still holds, and `sqlite3Pragma` answers no row for a
         // name it does not know.
@@ -641,6 +646,7 @@ impl Setting {
             | Setting::ForeignKeyList
             | Setting::ForeignKeyCheck
             | Setting::WalCheckpoint
+            | Setting::LockStatus
             | Setting::IncrementalVacuum => return None,
         })
     }

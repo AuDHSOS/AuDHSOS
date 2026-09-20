@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` answers `PRAGMA lock_status`, and a blob handle reads how
+  far the value reaches before it reads whether the handle stands, so an
+  offset past the value, a row the handle no longer reaches and a write
+  over a handle that reads each carry the code the C library answers.
+  D-359 records it. Catalog 6.6.247. `e_blobopen.test` goes from 171
+  cases passing to 188 and `e_blobwrite.test` from 35 to 47.
+
 - `db-sqlite` reads and writes the bytes of one value where they lie,
   which a blob handle opens: `Writer::blob_bytes`, `blob_read` and
   `blob_write` answer the three commands of `sqlite3_blob_open`, and the

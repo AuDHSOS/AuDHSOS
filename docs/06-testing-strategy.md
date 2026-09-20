@@ -6595,3 +6595,12 @@ Document 16 step Q8.
 - A count no byte holds is refused, and one that leaves a page too
   little room is refused.
 - `PRAGMA compile_options` answers no row.
+
+### 6.6.247 What a command of a blob handle answers (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `PRAGMA lock_status` answers one row per database of the connection,
+  with `closed` for a temp schema no statement has opened.
+- A handle names the database and the table together where the
+  connection holds neither.

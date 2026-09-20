@@ -724,3 +724,32 @@ fn what_a_statement_that_names_main_writes_where_temp_holds_the_name() {
         "trigger n3 already exists"
     );
 }
+
+/// `e_blobclose-1.*` of `test/e_blobclose.test`: `PRAGMA lock_status`
+/// answers the lock every database of the connection is held under.
+#[test]
+fn what_lock_every_database_of_a_connection_is_held_under() {
+    let mut writer = opened();
+    writer.run(b"ATTACH 'one.db' AS held").unwrap();
+    let text = |bytes: &[u8]| Value::Text(bytes.to_vec());
+    // This engine holds no file, so every database it holds answers
+    // `unlocked` and the temp schema answers `closed` until a statement
+    // opens it.
+    assert_eq!(
+        writer.run(b"PRAGMA lock_status").unwrap(),
+        [
+            alloc::vec![text(b"main"), text(b"unlocked")],
+            alloc::vec![text(b"temp"), text(b"closed")],
+            alloc::vec![text(b"held"), text(b"unlocked")],
+        ]
+    );
+    writer.run(b"CREATE TEMP TABLE t(a)").unwrap();
+    assert_eq!(
+        writer.run(b"PRAGMA lock_status").unwrap(),
+        [
+            alloc::vec![text(b"main"), text(b"unlocked")],
+            alloc::vec![text(b"temp"), text(b"unlocked")],
+            alloc::vec![text(b"held"), text(b"unlocked")],
+        ]
+    );
+}

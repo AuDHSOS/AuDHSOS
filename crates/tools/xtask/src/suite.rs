@@ -842,7 +842,7 @@ impl Session {
             // `sqlite3_blob_open`, `sqlite3_blob_bytes`,
             // `sqlite3_blob_read` and `sqlite3_blob_write` of
             // `research/sqlite/src/test_blob.c`.
-            "blob_bytes" | "blob_read" | "blob_write" => self.blob(verb, args),
+            "blob_bytes" | "blob_read" | "blob_write" | "refused" => self.blob(verb, args),
             "names" => self.names(first, second),
             "changes" | "total_changes" | "rowid" => self.counted(verb, first),
             // What the engine's writer does not answer. A case that
@@ -961,6 +961,12 @@ impl Session {
     /// another key is the same six with that key.
     fn blob(&mut self, verb: &str, args: &[String]) -> Result<Vec<String>, String> {
         let held = |at: usize| args.get(at).map_or("", String::as_str);
+        // What the tester refused a command of a blob handle with, which
+        // `sqlite3_errcode` answers as every other refusal.
+        if verb == "refused" {
+            refused_as(held(0), held(1));
+            return Ok(Vec::new());
+        }
         let name = held(0);
         let path = self
             .connections
@@ -995,7 +1001,10 @@ impl Session {
                 .map(|()| String::new()),
         };
         Ok(match answered {
-            Ok(held) => vec!["SQLITE_OK".to_owned(), held, String::new()],
+            Ok(held) => {
+                stood();
+                vec!["SQLITE_OK".to_owned(), held, String::new()]
+            }
             Err(error) => {
                 let code = String::from_utf8_lossy(error.code().extended_name).into_owned();
                 vec![code, String::new(), refusal(&error)]
@@ -1961,6 +1970,26 @@ fn refusal(error: &db_sqlite::db::Error) -> String {
         *held.borrow_mut() = (text(code.name), text(code.extended_name), code.number);
     });
     error.message()
+}
+
+/// Records the code the tester refused a call with, which the harness
+/// itself did not answer.
+fn refused_as(name: &str, number: &str) {
+    CODE.with(|held| {
+        *held.borrow_mut() = (
+            name.to_owned(),
+            name.to_owned(),
+            number.parse().unwrap_or(1),
+        );
+    });
+}
+
+/// Records that the last call of the connection stood, which
+/// `sqlite3_errcode` answers `SQLITE_OK` for.
+fn stood() {
+    CODE.with(|held| {
+        *held.borrow_mut() = (String::new(), String::new(), 0);
+    });
 }
 
 /// Records that the schema of the connection changed since the statement
