@@ -30,11 +30,10 @@ use server_memory as _;
 use user_loader as _;
 use virtio_queue as _;
 
-use audhsos_abi::ipc_buffer::Buffer;
-use audhsos_abi::layout::MAX_MESSAGE_HANDLES;
 use audhsos_abi::{Error, Handle, Rights};
 use server_name::{Handles, Registry};
 use user_programs::serve::{Serving, receive};
+use user_proto::handles::Carried;
 use user_proto::name::{Reply, Request};
 use user_rt::Startup;
 use user_sys_x86_64::{self as sys, Gate};
@@ -56,7 +55,7 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
         if receive(&mut gate, endpoint, &mut serving).is_err() {
             gate.thread_exit()
         }
-        let carried = carried(gate.reader());
+        let carried = Carried::read(gate.reader());
         let decoded = Request::decode(gate.reader());
         let taken = match decoded {
             Ok(Request::Register { endpoint, .. }) => Some(endpoint),
@@ -66,7 +65,13 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
             Ok(request) => handle(&mut registry, &mut gate, serving.badge, &request),
             Err(error) => Reply::Registered(Err(Error::from(error))),
         };
-        close_rest(&mut gate, &carried, taken);
+        // The handle of a lookup, and one of a message that did not
+        // decode, belongs to nobody here and would hold a slot of this
+        // program's table for as long as it runs. `Registry::accept` gives
+        // up the one a register took itself.
+        carried.give_up(taken.as_slice(), |handle| {
+            let _closed = gate.handle_close(handle);
+        });
         let _written = answer.encode(&mut gate.writer());
     }
 }
@@ -79,35 +84,6 @@ fn handle(registry: &mut Registry, gate: &mut Gate, badge: u64, request: &Reques
             Reply::Registered(registry.accept(&mut handles, badge, *name, *endpoint))
         }
         Request::Lookup { name } => Reply::Found(registry.lookup(name)),
-    }
-}
-
-/// The handles the message carried, read before any call of this program
-/// writes the buffer.
-fn carried(buffer: Buffer<'_>) -> [Option<Handle>; MAX_MESSAGE_HANDLES] {
-    let mut held = [None; MAX_MESSAGE_HANDLES];
-    let Ok(message) = buffer.message() else {
-        return held;
-    };
-    for (index, slot) in held.iter_mut().enumerate().take(message.handle_count) {
-        *slot = buffer.handle(index);
-    }
-    held
-}
-
-/// Gives up every handle the message carried but `taken`, which
-/// [`Registry::accept`] gives up itself. A handle of a lookup, and one of a
-/// message that did not decode, belongs to nobody here and would hold a
-/// slot of this program's table for as long as it runs.
-fn close_rest(
-    gate: &mut Gate,
-    carried: &[Option<Handle>; MAX_MESSAGE_HANDLES],
-    taken: Option<Handle>,
-) {
-    for handle in carried.iter().flatten() {
-        if Some(*handle) != taken {
-            let _closed = gate.handle_close(*handle);
-        }
     }
 }
 

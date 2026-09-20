@@ -60,6 +60,7 @@ use user_programs::mapping::Mapping;
 use user_programs::registers::{BLOCK_WINDOW, Window};
 use user_programs::serve::{Serving, receive};
 use user_proto::file::{Reply, Request};
+use user_proto::handles::Carried;
 use user_rt::startup::{Device, MAX_BLOCK_DEVICES};
 use user_rt::{
     EndpointHandle, InterruptHandle, Line, MemoryHandle, NotificationHandle, ProcessHandle, Startup,
@@ -597,7 +598,17 @@ fn serve(
         }
         let (decoded, now) = {
             let mut gate = shared.borrow_mut();
+            // No request of this protocol takes a handle, and the kernel
+            // installs whatever the sender attached; one left installed
+            // costs a slot of a table of sixty-four and holds a reference
+            // to what the sender chose. The message is read out first,
+            // because closing a handle is a call and a call overwrites the
+            // buffer the message stands in.
+            let carried = Carried::read(gate.reader());
             let decoded = Request::decode(gate.reader());
+            carried.give_up(&[], |handle| {
+                let _closed = gate.handle_close(handle);
+            });
             let now = gate
                 .clock_wall()
                 .map_or_else(|_| moment(0), |(micros, _)| moment(micros));

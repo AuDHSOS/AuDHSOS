@@ -57,6 +57,8 @@ use user_programs::client::{allocate, register, write_line};
 use user_programs::mapping::Mapping;
 use user_programs::serve::{Serving, receive};
 use user_proto::display::{Mode, Reply, Request, Surface as Given};
+use user_proto::handles::Carried;
+use user_proto::label::ProtoError;
 use user_rt::{EndpointHandle, MemoryHandle, NotificationHandle, ProcessHandle, Startup, Typed};
 use user_sys_x86_64::{self as sys, Gate};
 
@@ -223,7 +225,11 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
             release_gone(&mut gate, &startup, &mut display, &mut held, gone);
             continue;
         }
-        let answer = match Request::decode(gate.reader()) {
+        // The handle area is read before anything else, because the calls
+        // a request makes overwrite the buffer it lies in.
+        let carried = Carried::read(gate.reader());
+        let decoded = Request::decode(gate.reader());
+        let answer = match decoded {
             Ok(request) => {
                 let mut server = Server {
                     display: &mut display,
@@ -241,6 +247,15 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
             }
             Err(error) => Reply::Presented(Err(Error::from(error))),
         };
+        // A surface that was made keeps the process handle of its client,
+        // which is what the end of that client is watched through. Every
+        // other handle the message carried is given up: no other request of
+        // this protocol takes one, and the kernel installs what the sender
+        // attached whatever the request is.
+        let kept = kept_by(&decoded, &answer);
+        carried.give_up(kept.as_slice(), |handle| {
+            let _closed = gate.handle_close(handle);
+        });
         let _written = answer.encode(&mut gate.writer());
     }
 }
@@ -251,6 +266,14 @@ fn map_framebuffer(gate: &mut Gate, startup: &Startup) -> Option<Mapping> {
     let memory = startup.framebuffer?;
     let info = gate.memory_info(memory).ok()?;
     Mapping::new(gate, process, memory, FRAMEBUFFER, info.length).ok()
+}
+
+/// The handle the answered request took, if it took one.
+const fn kept_by(decoded: &Result<Request, ProtoError>, answer: &Reply) -> Option<Handle> {
+    match (decoded, answer) {
+        (Ok(Request::CreateSurface { process, .. }), Reply::Created(Ok(_))) => Some(*process),
+        _ => None,
+    }
 }
 
 /// Says what went wrong, in one line.
