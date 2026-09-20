@@ -84,6 +84,8 @@ implements it rather than reopening it.
 | 11 | Remote invalidation. `LocalTlb` invalidates on the calling processor and nowhere else. | `crates/kernel/hal-x86_64/src/paging.rs`, line 24 | S10 |
 | 12 | A clock that counts once. `TICKS` is one counter, and `acknowledge` raises it through `record_tick` for a timer vector, whichever processor took it. | `crates/kernel/hal-x86_64/src/timer.rs`, line 81; `crates/kernel/hal-x86_64/src/interrupts.rs`, line 195 | S6 |
 | 13 | The kernel's token at the eight cells taken alone. They keep `UncontendedToken`, whose owner is `0` for every processor, so a second processor is refused rather than made to wait, and loses what the cell carries. | `crates/kernel/hal-x86_64/src/traps.rs`, lines 74, 78 and 97; `crates/kernel/hal-x86_64/src/testing.rs`, lines 35, 42, 51 and 54; `crates/kernel/core/src/state.rs`, line 62 | S6 |
+| 14 | A gate for each of the two vectors the IPIs carry. `device_handlers!` declares a handler for 0x20 to 0x30 and for 0x40 to 0x7F, so 0x31 and 0x32 have no entry, and `interrupts::bring_up` requires a handler for every vector of the plan. | `crates/kernel/hal-x86_64/src/traps.rs`, lines 241 to 255; `crates/kernel/hal-x86_64/src/interrupts.rs`, line 98 | S4 |
+| 15 | A wait of a given length, which the start-up sequence needs twice. `arm_interval_timer` and `wait_for_interval_timer` are private, and `calibrate` is the one public caller of both. | `crates/kernel/hal-x86_64/src/timer.rs`, lines 141 and 176 | S7 |
 
 ## 16.5 Decision D1: how a processor finds its own data
 
@@ -352,6 +354,12 @@ borrowed in `descriptors::install` alone, which runs once on the boot
 processor (`crates/kernel/hal-x86_64/src/descriptors.rs`, lines 29 to 38
 and 118).
 
+`OWN` (`crates/kernel/core/src/tests/machine.rs`, line 34) is a cell of
+`kernel-core` that the budget scan reads, because the scan reads
+`<crate>/src` whole. It is outside the sixteen and keeps
+`UncontendedToken`, for the reason `SEEN`, `PAGES` and `LOG` keep it: it
+is borrowed from a host test body, which no application processor runs.
+
 **The one cycle a wait would create, and what removes it.** A processor
 waiting for a cell waits with interrupts off, so it answers no IPI; a
 processor that waits for every other to acknowledge a remote invalidation
@@ -413,15 +421,15 @@ their budget today, so the first commit of S6 fails
 
 | Crate | Now | After | Where the budget stands |
 |-------|-----|-------|-------------------------|
-| `audhsos-sync` | 4 unsafe, 0 asm | 4 unsafe, 0 asm | `crates/tools/xtask/src/policy.rs`, line 454 |
-| `kernel-hal-x86_64` | 152 unsafe, 30 asm | 170 unsafe, 31 asm | `crates/tools/xtask/src/policy.rs`, line 691 |
-| `audhsos-kernel` | 33 unsafe, 0 asm | 37 unsafe, 0 asm | `crates/tools/xtask/src/policy.rs`, line 712 |
+| `audhsos-sync` | 4 unsafe, 0 asm | 4 unsafe, 0 asm | `crates/tools/xtask/src/policy.rs`, line 462 |
+| `kernel-hal-x86_64` | 152 unsafe, 30 asm | 174 unsafe, 31 asm | `crates/tools/xtask/src/policy.rs`, line 699 |
+| `audhsos-kernel` | 33 unsafe, 0 asm | 37 unsafe, 0 asm | `crates/tools/xtask/src/policy.rs`, line 720 |
 
 `audhsos-sync` gains nothing: the wait replaces one compare-and-exchange
 with a loop around it and reaches the value through the `slot` that is
 already there.
 
-The eighteen new `unsafe` sites of `kernel-hal-x86_64`:
+The twenty-two new `unsafe` sites of `kernel-hal-x86_64`:
 
 | Sites | Step | What they do |
 |-------|------|--------------|
@@ -430,6 +438,7 @@ The eighteen new `unsafe` sites of `kernel-hal-x86_64`:
 | 2 | S6 | Construct a second `LocalApic` over the window the boot processor mapped, and enable it. |
 | 1 | S6 | Read the local APIC identifier register through `APIC_WINDOW`, which is `processor()` of D1. |
 | 6 | S7 | Copy the start-up code into the page, write the parameter block, read the two section symbols, take the address of the Rust entry, enter the kernel from the start-up page, and the `#[unsafe(naked)]` attribute of D2, which the counter reads as an `unsafe` keyword (`crates/tools/xtask/src/unsafe_budget.rs`, line 50). |
+| 4 | S7 | The wait of a given length: the function, the call that arms channel two, the call that waits for it, and the write that puts the gate back. |
 | 2 | S10 | Invalidate a page named by another processor; read the request word of this processor. |
 
 The one new `asm!` site is the `naked_asm!` of D2, in S7.
@@ -439,7 +448,7 @@ application processor lands on, the switch into its idle thread, and the
 two calls that turn interrupts on and off around them.
 
 **The option not taken: a budget stated as a total rather than site by
-site.** A named count is checkable: a nineteenth site in
+site.** A named count is checkable: a twenty-third site in
 `kernel-hal-x86_64` is a change to this decision and not to a number.
 
 ## 16.13 The order of the steps
@@ -641,6 +650,8 @@ Size: M.
   table encoding are built the same way.
 - `kernel_x86_tables::vectors`, whose plan has 0x31 to 0x3F free between
   the timer and the first I/O APIC line.
+- `device_handlers!`, which declares one gate per device vector and routes
+  each to `deliver` (`crates/kernel/hal-x86_64/src/traps.rs`, line 218).
 
 ### Does
 
@@ -661,6 +672,16 @@ Size: M.
 4. Add two vectors to the plan: `RESCHEDULE = 0x31` and
    `INVALIDATE = 0x32`, with the `const` assertions the file already
    makes for every other range.
+5. Declare a gate for each of the two in `device_handlers!`
+   (`crates/kernel/hal-x86_64/src/traps.rs`, line 241), which today
+   declares 0x20 to 0x30 and 0x40 to 0x7F and leaves 0x31 to 0x3F
+   without an entry. The reason: the safety contract of
+   `interrupts::bring_up` (`crates/kernel/hal-x86_64/src/interrupts.rs`,
+   line 98) requires a handler for every vector of the plan, and a
+   processor sent a vector whose entry is absent takes a general
+   protection fault instead. The two gates reach `deliver`, as every
+   other device gate does, so neither adds an `unsafe` site to the
+   numbers D8 states.
 
 ### Produces
 
@@ -678,7 +699,10 @@ numbers.
 3. A host test finds no overlap between the two new vectors and any range
    of the plan, which is a `const` assertion and therefore a compile
    error rather than a test failure.
-4. 6.6.16 of [document 6](06-testing-strategy.md) lists the cases.
+4. A kernel test in QEMU sends the boot processor `RESCHEDULE` and then
+   `INVALIDATE` with the `Self` shorthand and reaches the device handler
+   twice, which is the gate of step 5 and not the encoding of step 3.
+5. 6.6.16 of [document 6](06-testing-strategy.md) lists the cases.
 
 ## 16.18 S5. The borrow that waits
 
@@ -878,7 +902,15 @@ Size: XL.
 7. Send `INIT`, wait 10 ms, send `STARTUP` with the page number, wait
    200 µs, send `STARTUP` again — *Intel SDM* Vol. 3A, 11.4.4.1, step 15,
    the right-hand column, because this kernel knows how many processors
-   it expects.
+   it expects. The two waits are one-shot runs of channel two of the
+   interval timer: `arm_interval_timer` takes the count as an argument in
+   place of the fixed `CALIBRATION_COUNT`, and `timer` offers
+   `wait_micros` over it and `wait_for_interval_timer`
+   (`crates/kernel/hal-x86_64/src/timer.rs`, lines 141 and 176), which
+   `calibrate` then calls with `CALIBRATION_COUNT` as well. The channel
+   counts at `1_193_182` hertz, so 200 µs is 239 counts and 10 ms is
+   `CALIBRATION_COUNT`. Step 9 is what keeps the one channel to
+   one caller.
 8. Wait for the processor to raise its own entry of a started-flag array,
    with a deadline. A processor that does not report inside 100 ms is
    left alone and counted as not started.
@@ -1029,8 +1061,10 @@ Size: L.
 
 - `TlbControl`, a trait with two methods, which `kernel-mm` calls and
   never implements (`crates/kernel/hal-api/src/paging.rs`, line 51).
-- `LocalTlb`, the one implementation, at six call sites in the kernel
-  binary (`crates/kernel/hal-x86_64/src/paging.rs`, line 24).
+- `LocalTlb`, the one implementation, at seven call sites in the kernel
+  binary: `crates/kernel/bin/src/main.rs`, lines 197 and 353, and
+  `crates/kernel/bin/src/task.rs`, lines 74, 142, 256, 282 and 351
+  (`crates/kernel/hal-x86_64/src/paging.rs`, line 24).
 - `AddressSpaceControl::activate`, the one place a page-table root is
   loaded (`crates/kernel/hal-x86_64/src/paging.rs`, line 108).
 
@@ -1047,7 +1081,7 @@ Size: L.
    other processor whose published root is this address space, writes the
    request, sends `INVALIDATE`, and waits for the acknowledgement. Its
    `flush_all` does the same with a whole-space request.
-3. Replace `LocalTlb` with `SharedTlb` at the six call sites. `LocalTlb`
+3. Replace `LocalTlb` with `SharedTlb` at the seven call sites. `LocalTlb`
    stays for the bring-up, which runs before any other processor exists.
 4. Add `remote::poll`: perform the pending request of the calling
    processor and raise its acknowledgement counter. It takes no
@@ -1140,7 +1174,7 @@ on four processors, and stays whole otherwise.
 | 4 | Two processors take two cells in opposite orders. | Both wait forever. | D6 fixes the order, names the four sites that already nest, and puts the eight cells taken alone last. A seventeenth cell is a change to D6. |
 | 5 | The `-smp 4` run under TCG is slower and finds new flakes. | The check takes longer and fails intermittently. | `-smp 1` stays the default of every existing run (S2). A run with more processors is the acceptance of this track and not of everything else. |
 | 6 | Round robin gives one processor the busy threads. | One processor is loaded and another idles. | D4 states the cost and names work stealing as what removes it, after S11 has measured. |
-| 7 | Remote invalidation is missed on a path that changes a page table without `TlbControl`. | A processor reads memory through a translation that no longer exists. | R5 of [document 4](04-safety-policy.md) keeps every page-table change in `kernel-mm`, which reaches the hardware only through `TlbControl`, `FrameAccess` and `activate`. S10 replaces the implementation at all six call sites and leaves `LocalTlb` reachable only from the bring-up. |
+| 7 | Remote invalidation is missed on a path that changes a page table without `TlbControl`. | A processor reads memory through a translation that no longer exists. | R5 of [document 4](04-safety-policy.md) keeps every page-table change in `kernel-mm`, which reaches the hardware only through `TlbControl`, `FrameAccess` and `activate`. S10 replaces the implementation at all seven call sites and leaves `LocalTlb` reachable only from the bring-up. |
 | 8 | A user process has two threads on two processors and shares state between them. | Its own data races, in userland. | The userland runtime holds no `static` and each thread gets its own IPC buffer. What a program shares, it shares through a memory object it asked for, which is the program's business and not the kernel's. |
 | 9 | The calibration of two processors runs at once. | Channel two of the interval timer is driven by two callers and both read nonsense. | S7 step 9 starts one processor at a time. |
 | 10 | An invalidation reaches a processor that is inside the kernel with interrupts off and is waiting for nothing. | The sender waits until that processor returns to user mode. | Every system call is bounded (2.5.4 of [document 2](02-architecture.md)), so the wait is bounded by one system call. S10 states the three states a target can be in and what each costs. |
