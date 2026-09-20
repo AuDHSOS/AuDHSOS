@@ -928,9 +928,9 @@ proc copy_file {from to} { harness_send copy $from $to }
 proc file_exists {f} { return [lindex [harness_send exists $f] 0] }
 
 # The harness holds the database, the log and the journal, and the
-# machine holds no file of them, so `file size` and `file exists` over
-# one of those names answer out of the harness and every other name
-# reaches TCL's own command.
+# machine holds no file of them, so `file size`, `file exists` and
+# `file isfile` over one of those names answer out of the harness and
+# every other name reaches TCL's own command.
 if {[info commands ::tcl_file] eq ""} { rename file ::tcl_file }
 proc file {command args} {
   set name [lindex $args 0]
@@ -938,7 +938,7 @@ proc file {command args} {
     set bytes [lindex [harness_send size $name] 0]
     if {$bytes >= 0} { return $bytes }
   }
-  if {$command eq "exists"} {
+  if {$command eq "exists" || $command eq "isfile"} {
     if {[lindex [harness_send exists $name] 0]} { return 1 }
   }
   return [uplevel 1 [list ::tcl_file $command {*}$args]]
@@ -1048,7 +1048,10 @@ proc fpnum_compare {a b} {
 
 proc do_test {name script expected} {
   fix_testname name
-  set rc [catch { uplevel 1 $script } result]
+  # `do_test` of the suite's own tester runs the body at the outermost
+  # level, so a body inside a proc reads the globals and not the proc's
+  # own variables.
+  set rc [catch { uplevel #0 "$script;\n" } result]
   if {$rc} {
     harness_send case $name refused $result
   } elseif {[matches $result $expected]} {
@@ -1454,6 +1457,39 @@ proc sqlite3_errmsg16 {db} { return [sqlite3_errmsg $db] }
 # the connection at, which the commands that take one are stand-ins
 # for here, so the name of the connection stands for it.
 proc sqlite3_connection_pointer {name} { return $name }
+
+# How many connections `sqlite3_open` has opened, which names the next.
+set ::opened 0
+
+# `sqlite3_open FILENAME ?VFS?` of `test1.c:1683` opens a connection of
+# its own and answers the pointer it stands at, which is the name the
+# harness holds it under. The file is there once the connection is open,
+# which `sqlite3_open` writes the first page of.
+proc sqlite3_open {{file :memory:} {vfs {}}} {
+  incr ::opened
+  set name "::open$::opened"
+  harness_send open $name $file
+  return $name
+}
+proc sqlite3_open_v2 {file flags vfs args} { return [sqlite3_open $file $vfs] }
+
+# `sqlite3_open16` takes the name as UTF-16 with two bytes of nought
+# after it.
+proc sqlite3_open16 {file {vfs {}}} {
+  binary scan $file c* bytes
+  if {[lindex $bytes end] == 0 && [lindex $bytes end-1] == 0} {
+    set file [binary format c* [lrange $bytes 0 end-2]]
+  }
+  return [sqlite3_open [encoding convertfrom unicode $file] $vfs]
+}
+
+# `sqlite3_close` and `sqlite3_close_v2` take the pointer away, which
+# leaves the file where it stands.
+proc sqlite3_close {db} {
+  harness_send close $db
+  return SQLITE_OK
+}
+proc sqlite3_close_v2 {db} { return [sqlite3_close $db] }
 
 # `sqlite3_table_column_metadata DB SCHEMA TABLE COLUMN`: what the
 # schema says about one column. The connection stands for the pointer,

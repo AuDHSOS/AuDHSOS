@@ -58,6 +58,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- The tester runs the body of a case at the outermost level, answers
+  `sqlite3_open`, `sqlite3_open16`, `sqlite3_open_v2`, `sqlite3_close` and
+  `sqlite3_close_v2`, and answers `file isfile` over a name the harness
+  holds. D-344 records it. `capi3e.test` goes from 29 cases passing to 113,
+  `capi3c.test` from 23 to 82, `close.test` from 1 to 10 and `capi3.test`
+  from 11 to 13.
+
 - The tester refuses a statement `sqlite3_prepare` made with `SQLITE_SCHEMA`
   where the schema, a function, a collation, an authorizer or a `DETACH`
   changed since the statement was made, and answers `sqlite3_expired` off
