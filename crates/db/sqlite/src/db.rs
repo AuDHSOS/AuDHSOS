@@ -211,6 +211,12 @@ pub enum Error {
     /// A column an `ALTER TABLE ... ADD COLUMN` may not add, and which of
     /// the four it is.
     Added(Added),
+    /// A `VACUUM ... INTO` whose file the client already holds bytes for,
+    /// which `sqlite3RunVacuum` of `research/sqlite/src/vacuum.c:130`
+    /// refuses rather than writing over.
+    OutputExists,
+    /// A `VACUUM ... INTO` whose expression answers other than text.
+    NonTextFilename,
     /// Two `WITH` terms of one statement under one name.
     DuplicateTerm(Vec<u8>),
     /// `WITH` terms that read each other.
@@ -579,6 +585,8 @@ impl Error {
             ) => alloc::string::String::from("file is not a database"),
             Error::Image(_) => alloc::string::String::from("database disk image is malformed"),
             Error::NoSchema(name) => alloc::format!("unknown database {}", shown(name)),
+            Error::OutputExists => alloc::string::String::from("output file already exists"),
+            Error::NonTextFilename => alloc::string::String::from("non-text filename"),
             Error::VacuumInTransaction => {
                 alloc::string::String::from("cannot VACUUM from within a transaction")
             }

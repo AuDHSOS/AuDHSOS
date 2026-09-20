@@ -708,6 +708,10 @@ pub struct Writer {
     /// The function `ATTACH` answers a file name with, and nothing where
     /// the caller told the connection none.
     opening: Option<Opening>,
+    /// The files a `VACUUM ... INTO` wrote, each with the name the
+    /// statement gave it, which the client writes beside the databases
+    /// the connection attached.
+    made: Vec<(Vec<u8>, Vec<u8>)>,
     /// Where `random` and `randomblob` take their bytes from, which
     /// comes from SQLite's random source as well.
     random: crate::random::Source,
@@ -864,6 +868,7 @@ impl Writer {
             },
             attached: Vec::new(),
             opening: None,
+            made: Vec::new(),
             random: crate::random::Source::default(),
             clock: None,
             kept: alloc::vec![None; crate::pragma::HELD.len()],
@@ -928,6 +933,7 @@ impl Writer {
             },
             attached: Vec::new(),
             opening: None,
+            made: Vec::new(),
             random: crate::random::Source::default(),
             clock: None,
             kept: alloc::vec![None; crate::pragma::HELD.len()],
@@ -1099,15 +1105,18 @@ impl Writer {
     ///
     /// The client writes the bytes back to the file it answered the
     /// `ATTACH` with, so a second connection over that file reads what
-    /// this one wrote. Building them costs O(n) in the pages of those
-    /// databases.
+    /// this one wrote. The file a `VACUUM ... INTO` wrote stands among
+    /// them. Building them costs O(n) in the pages of those databases.
     #[must_use]
     pub fn attached_files(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
-        self.attached
+        let mut out: Vec<(Vec<u8>, Vec<u8>)> = self
+            .attached
             .iter()
             .filter(|held| !held.called.file.is_empty())
             .map(|held| (held.called.file.clone(), written_image(&held.held)))
-            .collect()
+            .collect();
+        out.extend(self.made.iter().cloned());
+        out
     }
 
     /// The names of the databases an `ATTACH` added, in the order they
@@ -2157,9 +2166,6 @@ impl Writer {
     /// connection does not hold, and [`Error::Unsupported`] for
     /// `VACUUM INTO`, which writes a file this crate hands no caller.
     fn vacuum(&mut self, asked: &crate::ast::Vacuum, sql: &[u8]) -> Result<(), Error> {
-        if asked.into.is_some() {
-            return Err(Error::Unsupported);
-        }
         if let Some(schema) = asked.schema {
             let named = crate::schema::dequote(schema.text(sql));
             if !named.eq_ignore_ascii_case(b"main") && !named.eq_ignore_ascii_case(b"temp") {
@@ -2169,6 +2175,36 @@ impl Writer {
         if self.held.began.is_some() {
             return Err(Error::VacuumInTransaction);
         }
+        if let Some(text) = asked.text {
+            let named = self.named_file(text.text(sql))?;
+            let fresh = self.vacuumed()?;
+            self.made.push((named, fresh.written()));
+            return Ok(());
+        }
+        let held = self.held.header;
+        let fresh = self.vacuumed()?;
+        self.held.pages = fresh.held.pages;
+        self.held.header.page_size = fresh.held.header.page_size;
+        self.held.header.pages = fresh.held.header.pages;
+        self.held.header.freelist = fresh.held.header.freelist;
+        self.held.header.freelist_pages = fresh.held.header.freelist_pages;
+        self.held.header.largest_root = fresh.held.header.largest_root;
+        self.held.header.schema_cookie = held.schema_cookie.saturating_add(1);
+        self.held.header.change_counter = held.change_counter.saturating_add(1);
+        self.held.header.version_valid_for = self.held.header.change_counter;
+        Ok(())
+    }
+
+    /// The database written again into a file of its own, which is what
+    /// a `VACUUM` keeps and what a `VACUUM ... INTO` writes out.
+    ///
+    /// Writing the rows again costs O(n) in the rows of the database and
+    /// O(k log n) in the entries of its indexes.
+    ///
+    /// # Errors
+    ///
+    /// Whatever reading the schema or writing one of the rows refuses.
+    fn vacuumed(&self) -> Result<Writer, Error> {
         let held = self.held.header;
         let size = self.held.wanted_page.unwrap_or(held.page_size);
         let mut fresh = Writer::new(size, held.reserved, held.encoding)?;
@@ -2209,17 +2245,48 @@ impl Writer {
             }
         }
         fresh.making_own = false;
-        drop(database);
-        self.held.pages = fresh.held.pages;
-        self.held.header.page_size = fresh.held.header.page_size;
-        self.held.header.pages = fresh.held.header.pages;
-        self.held.header.freelist = fresh.held.header.freelist;
-        self.held.header.freelist_pages = fresh.held.header.freelist_pages;
-        self.held.header.largest_root = fresh.held.header.largest_root;
-        self.held.header.schema_cookie = held.schema_cookie.saturating_add(1);
-        self.held.header.change_counter = held.change_counter.saturating_add(1);
-        self.held.header.version_valid_for = self.held.header.change_counter;
-        Ok(())
+        Ok(fresh)
+    }
+
+    /// The file a `VACUUM ... INTO` writes, which is what the expression
+    /// after `INTO` answers as text.
+    ///
+    /// Answering the expression costs what one statement over the
+    /// database costs.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NonTextFilename`] where the expression answers other
+    /// than text, [`Error::OutputExists`] where the client already holds
+    /// bytes under that name, and whatever answering the expression
+    /// refuses.
+    fn named_file(&self, text: &[u8]) -> Result<Vec<u8>, Error> {
+        let bytes = self.images();
+        let database = self.reading_beside(&bytes)?;
+        let mut sql = b"SELECT ".to_vec();
+        sql.extend_from_slice(text);
+        let answered = database.query(&sql)?;
+        let value = answered
+            .rows
+            .first()
+            .and_then(|row| row.first())
+            .cloned()
+            .unwrap_or(Value::Null);
+        let Value::Text(named) = value else {
+            return Err(Error::NonTextFilename);
+        };
+        // `sqlite3RunVacuum` opens the file and refuses one that holds a
+        // page already, which the function the caller told the
+        // connection answers the bytes of.
+        let held = named.eq_ignore_ascii_case(b":memory:")
+            || self
+                .opening
+                .and_then(|opening| opening(&named))
+                .is_none_or(|bytes| bytes.is_empty());
+        if held {
+            return Ok(named);
+        }
+        Err(Error::OutputExists)
     }
 
     /// The rows of the schema, in the order the schema tree holds them:

@@ -853,6 +853,8 @@ pub struct Vacuum {
     /// The file `INTO` names, and nothing where the statement writes the
     /// database it was run on.
     pub into: Option<ExprId>,
+    /// The text of that expression, as the statement wrote it.
+    pub text: Option<Span>,
 }
 
 /// What a `DROP` takes away.

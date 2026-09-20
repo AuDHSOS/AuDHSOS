@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` writes `VACUUM ... INTO`: the expression after `INTO` is
+  answered against the databases the connection holds, a value that is no
+  text is refused `non-text filename`, a name the client holds bytes for
+  is refused `output file already exists`, and the file joins the ones the
+  client writes back. D-350 records it. Catalog 6.6.238.
+  `vacuum-into.test` goes from 1 case passing to 14, which is every case of
+  the file.
+
 - `db-sqlite` walks every database the connection holds for
   `PRAGMA integrity_check`, spends one count of problems across all of
   them, writes the problems of the pages of each as one row under

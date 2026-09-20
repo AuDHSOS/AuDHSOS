@@ -173,7 +173,6 @@ fn what_a_vacuum_is_refused_for() {
         writer.run(b"VACUUM aux"),
         Err(Error::NoSchema(b"aux".to_vec()))
     );
-    assert_eq!(writer.run(b"VACUUM INTO 'out.db'"), Err(Error::Unsupported));
     writer.run(b"BEGIN").unwrap();
     assert_eq!(writer.run(b"VACUUM"), Err(Error::VacuumInTransaction));
     writer.run(b"COMMIT").unwrap();
@@ -193,6 +192,47 @@ fn what_a_vacuum_is_refused_for() {
         Error::VacuumInTransaction.message(),
         "cannot VACUUM from within a transaction"
     );
+}
+
+/// `VACUUM ... INTO` writes the database again into the file the
+/// expression after `INTO` names.
+#[test]
+fn what_a_vacuum_into_writes() {
+    let mut writer = ran(&["CREATE TABLE t(a)", "INSERT INTO t VALUES(1),(2)"]);
+    writer.run(b"VACUUM main INTO 'out.db'").unwrap();
+    // The file stands beside the databases the connection attached, and
+    // holds the rows the database holds.
+    let (named, bytes) = writer
+        .attached_files()
+        .into_iter()
+        .find(|(name, _)| name == b"out.db")
+        .expect("the file the statement wrote");
+    assert_eq!(named, b"out.db");
+    let database = Database::open(&bytes).unwrap();
+    assert_eq!(
+        database.query(b"SELECT count(*) FROM t").unwrap().rows,
+        [alloc::vec![Value::Int(2)]]
+    );
+    // The expression is answered against the database, so a name no
+    // column carries and a value that is no text are both refused, and
+    // a file the client holds bytes for is not written over.
+    assert_eq!(writer.run(b"VACUUM INTO null"), Err(Error::NonTextFilename));
+    assert_eq!(
+        writer.run(b"VACUUM INTO x").unwrap_err().message(),
+        "no such column: x"
+    );
+    writer.run(b"VACUUM INTO (SELECT 'other.db')").unwrap();
+    writer.opens(|name| (name == b"out.db").then(|| alloc::vec![0_u8]));
+    assert_eq!(
+        writer.run(b"VACUUM INTO 'out.db'"),
+        Err(Error::OutputExists)
+    );
+    // A database of one page is no file, so it is written whatever the
+    // client holds.
+    writer.run(b"VACUUM INTO ':memory:'").unwrap();
+    // The two refusals carry the text the C library writes.
+    assert_eq!(Error::OutputExists.message(), "output file already exists");
+    assert_eq!(Error::NonTextFilename.message(), "non-text filename");
 }
 
 /// `PRAGMA default_synchronous`: a name no version of the library holds

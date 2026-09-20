@@ -1225,11 +1225,17 @@ impl<'a> Parser<'a> {
             _ => false,
         });
         let schema = named.then(|| self.name()).transpose()?;
-        let into = self
-            .eat_keyword(Keyword::Into)
-            .then(|| self.expression())
-            .transpose()?;
-        Ok(crate::ast::Vacuum { schema, into })
+        let mut into = None;
+        let mut text = None;
+        if self.eat_keyword(Keyword::Into) {
+            let start = self.peek().map_or(self.end, |token| token.start);
+            into = Some(self.expression()?);
+            text = Some(Span {
+                start,
+                len: self.end.saturating_sub(start),
+            });
+        }
+        Ok(crate::ast::Vacuum { schema, into, text })
     }
 
     /// Whether `TEMP` or `TEMPORARY` stands here as the word and not as

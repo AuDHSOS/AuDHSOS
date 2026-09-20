@@ -1638,8 +1638,10 @@ impl Session {
 
     /// The statements of one text, in order, answered as one list.
     fn eval(&mut self, name: &str, sql: &str) -> Result<Vec<String>, String> {
-        if may_attach(sql) {
+        if names_file(sql) {
             self.telling_files();
+        }
+        if names_word(sql, b"attach") {
             // `sqlite3DetachDatabase` makes every statement of the
             // connection again, because the databases it reads have
             // moved.
@@ -2356,14 +2358,20 @@ fn opening(file: &[u8]) -> Option<Vec<u8>> {
     FILES.with(|files| Some(files.borrow().get(file).cloned().unwrap_or_default()))
 }
 
-/// Whether a text may attach a file, which is what the session tells the
-/// files it holds for.
+/// Whether a text may name a file of its own, which an `ATTACH` and a
+/// `VACUUM ... INTO` are the two of, and which is what the session tells
+/// the files it holds for.
 ///
 /// Reading the text costs O(n) in its bytes.
-fn may_attach(sql: &str) -> bool {
+fn names_file(sql: &str) -> bool {
+    names_word(sql, b"attach") || names_word(sql, b"vacuum")
+}
+
+/// Whether the text holds `word`, whatever case it is written in.
+fn names_word(sql: &str, word: &[u8]) -> bool {
     sql.as_bytes()
-        .windows(6)
-        .any(|window| window.eq_ignore_ascii_case(b"attach"))
+        .windows(word.len())
+        .any(|window| window.eq_ignore_ascii_case(word))
 }
 
 /// The images of the databases an `ATTACH` added to a connection, each

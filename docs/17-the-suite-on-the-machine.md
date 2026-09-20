@@ -55,10 +55,10 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-108 072 cases of 798 files: 95 651 pass, 3177 answer differently and
-9244 are refused.
+108 091 cases of 798 files: 95 680 pass, 3170 answer differently and
+9241 are refused.
 
-What the 9244 refusals are for, most first: `db status` (2106), which
+What the 9241 refusals are for, most first: `db status` (2106), which
 answers counters of memory and of the page cache; `sqlite3_memdebug_fail`
 (1260), which fails one allocation of the C library; `crash_on_write`
 (960) and the crash the harness does not simulate (435); a table an
@@ -76,7 +76,7 @@ What each answers, over the same files:
 
 | Configuration | Passed | Answered differently | Refused |
 |---------------|-------:|---------------------:|--------:|
-| `utf8-4096-delete` | 95 651 | 3177 | 9244 |
+| `utf8-4096-delete` | 95 680 | 3170 | 9241 |
 | `utf16le-4096-delete` | 61 214 | 2392 | 9500 |
 | `utf16be-4096-delete` | 61 229 | 2392 | 9500 |
 | `utf8-512-delete` | 61 073 | 2452 | 9435 |

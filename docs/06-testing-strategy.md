@@ -6469,3 +6469,15 @@ Document 16 step Q8.
   a table of it, and no other database is read.
 - A name no database holds a table of is refused, the name of an index
   among them.
+
+### 6.6.238 What `VACUUM ... INTO` writes (`db-sqlite`)
+
+Document 16 step Q8.
+
+- The file holds the rows the database holds and joins the files the
+  client writes back.
+- The expression after `INTO` is answered against the database, so a
+  column no table carries is refused `no such column`.
+- A value that is no text is refused `non-text filename`.
+- A name the client holds bytes for is refused `output file already
+  exists`, and `:memory:` is written whatever the client holds.
