@@ -14,6 +14,7 @@ mod ambiguous;
 mod attach;
 mod auth;
 mod balance;
+mod blob;
 mod bytes;
 mod caching;
 mod checkpoint;

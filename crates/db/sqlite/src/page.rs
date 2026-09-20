@@ -320,18 +320,20 @@ impl<'a> Page<'a> {
         }
     }
 
-    /// The page the payload of cell `index` runs onto and where in this
-    /// page the cell holds that number, and nothing where the payload is
-    /// whole or the cell carries none.
+    /// Where in the page the payload of cell `index` begins, how many
+    /// of its bytes the page holds, and the page the rest of it runs
+    /// onto.
     ///
-    /// `ptrmapPutOvflPtr` of `research/sqlite/src/btree.c` reads the same
-    /// number, which lies after the bytes of the payload this page holds.
-    /// Reading it costs what reading the cell costs.
+    /// Nothing for a cell of an interior table page, which carries no
+    /// payload. Reading it costs what reading the cell costs.
     ///
     /// # Errors
     ///
     /// The errors of [`Page::cell`].
-    pub fn overflow(&self, index: usize) -> Result<Option<(u32, usize)>, Error> {
+    pub fn payload_place(
+        &self,
+        index: usize,
+    ) -> Result<Option<(usize, usize, Option<u32>)>, Error> {
         let offset = self.cell_offset(index)?;
         let cell = self.bytes.get(offset..self.usable).unwrap_or_default();
         // The head of a cell is what stands before the payload: the
@@ -351,10 +353,29 @@ impl<'a> Page<'a> {
                 (payload, varint(rest)?.1.saturating_add(4))
             }
         };
-        let at = offset
-            .saturating_add(head)
-            .saturating_add(payload.local.len());
-        Ok(payload.overflow.map(|head| (head, at)))
+        Ok(Some((
+            offset.saturating_add(head),
+            payload.local.len(),
+            payload.overflow,
+        )))
+    }
+
+    /// The page the payload of cell `index` runs onto and where in this
+    /// page the cell holds that number, and nothing where the payload is
+    /// whole or the cell carries none.
+    ///
+    /// `ptrmapPutOvflPtr` of `research/sqlite/src/btree.c` reads the same
+    /// number, which lies after the bytes of the payload this page holds.
+    /// Reading it costs what reading the cell costs.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Page::cell`].
+    pub fn overflow(&self, index: usize) -> Result<Option<(u32, usize)>, Error> {
+        let Some((at, local, chain)) = self.payload_place(index)? else {
+            return Ok(None);
+        };
+        Ok(chain.map(|head| (head, at.saturating_add(local))))
     }
 
     /// The entry of cell `index`: the record an index page carries.

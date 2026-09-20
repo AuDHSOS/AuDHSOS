@@ -6567,3 +6567,31 @@ Document 16 step Q8.
   holds.
 - A trigger of the temp schema and one of `main` carry the same name,
   and a second trigger of that name in one database is refused.
+
+### 6.6.245 The bytes of one value, read where they lie (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A blob handle answers how many bytes the value holds, reads them from
+  an offset, and writes over them.
+- A value that runs onto a chain of overflow pages is read and written
+  page by page, and the length it carries stands.
+- A read or a write that reaches past the value is refused.
+- A handle over a view, over a table written `WITHOUT ROWID`, over a
+  column the table does not hold, over a key no row carries and over a
+  value that is neither text nor bytes is each refused with the words
+  the C library writes.
+- A handle that writes a column an index or a foreign key holds is
+  refused, and one that reads it is not.
+- A handle names the database it reads, which the temp schema is one of.
+- A row written before a column was added holds no value for it.
+
+### 6.6.246 The bytes a page keeps back (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `PRAGMA reserved_bytes = N` stands before the first table and is what
+  the file is written under.
+- A count no byte holds is refused, and one that leaves a page too
+  little room is refused.
+- `PRAGMA compile_options` answers no row.

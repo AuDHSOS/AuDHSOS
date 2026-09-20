@@ -307,6 +307,23 @@ pub enum Error {
     /// An `ALTER TABLE ... DROP COLUMN` of a column the table does not
     /// hold, with the name as it was written.
     NoSuchColumn(Vec<u8>),
+    /// A blob handle over a view, with the name of the view.
+    BlobView(Vec<u8>),
+    /// A blob handle over a table written `WITHOUT ROWID`, with the name
+    /// of the table.
+    BlobKeyed(Vec<u8>),
+    /// A blob handle that writes a column an index, the primary key or a
+    /// foreign key holds, with which of the three holds it.
+    BlobColumn(Vec<u8>),
+    /// A blob handle over a value that is neither text nor bytes, with
+    /// the name of the type it carries.
+    BlobValue(Vec<u8>),
+    /// A blob handle over a key no row of the table carries, with that
+    /// key.
+    NoRowid(i64),
+    /// A read or a write of a blob handle that reaches past the value,
+    /// which carries no message of its own.
+    BlobRange,
     /// An `INSERT` that names a column the table does not hold, with the
     /// table and the column.
     NoNamedColumn(Vec<u8>, Vec<u8>),
@@ -731,6 +748,31 @@ impl Error {
         })
     }
 
+    /// What a statement that names a table it may not reach is refused
+    /// with, a blob handle among them, which `sqlite3_blob_open` of
+    /// `research/sqlite/src/vdbeblob.c:74` writes, and nothing for every
+    /// other refusal.
+    fn opened(&self) -> Option<alloc::string::String> {
+        let shown = |name: &[u8]| alloc::string::String::from_utf8_lossy(name).into_owned();
+        Some(match self {
+            Error::NoTable(name) => alloc::format!("no such table: {}", shown(name)),
+            Error::ViewWrite(name) => {
+                alloc::format!("cannot modify {} because it is a view", shown(name))
+            }
+            Error::BlobView(name) => alloc::format!("cannot open view: {}", shown(name)),
+            Error::BlobKeyed(name) => {
+                alloc::format!("cannot open table without rowid: {}", shown(name))
+            }
+            Error::BlobColumn(held) => {
+                alloc::format!("cannot open {} column for writing", shown(held))
+            }
+            Error::BlobValue(kind) => alloc::format!("cannot open value of type {}", shown(kind)),
+            Error::NoRowid(rowid) => alloc::format!("no such rowid: {rowid}"),
+            Error::BlobRange => alloc::string::String::from("SQL logic error"),
+            _ => return None,
+        })
+    }
+
     fn altered(&self) -> Option<alloc::string::String> {
         use alloc::string::ToString as _;
         Some(match self {
@@ -839,6 +881,7 @@ impl Error {
         use alloc::string::ToString as _;
         if let Some(shown) = self
             .altered()
+            .or_else(|| self.opened())
             .or_else(|| self.datatypes())
             .or_else(|| self.defining())
             .or_else(|| self.misused())
@@ -848,14 +891,6 @@ impl Error {
             return shown;
         }
         match self {
-            Error::NoTable(name) => alloc::format!(
-                "no such table: {}",
-                alloc::string::String::from_utf8_lossy(name)
-            ),
-            Error::ViewWrite(name) => alloc::format!(
-                "cannot modify {} because it is a view",
-                alloc::string::String::from_utf8_lossy(name)
-            ),
             Error::Syntax(token) => alloc::format!(
                 "near \"{}\": syntax error",
                 alloc::string::String::from_utf8_lossy(token)

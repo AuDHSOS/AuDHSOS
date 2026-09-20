@@ -3540,6 +3540,229 @@ impl Writer {
         self.pragma_write(setting, value.text(sql), asked.schema.is_none())
     }
 
+    /// The place of the value one blob handle names: the tree of its
+    /// table, the key of its row, and where in the payload of that row
+    /// the bytes of the value lie.
+    ///
+    /// `sqlite3_blob_open` of `research/sqlite/src/vdbeblob.c:74` reads
+    /// the table, the column and the row this way, and refuses each of
+    /// them in this order. Reading the row costs O(log n) in the rows.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoTable`] for a table no database holds,
+    /// [`Error::BlobView`] for a view, [`Error::BlobKeyed`] for a table
+    /// written `WITHOUT ROWID`, [`Error::NoSuchColumn`] for a column the
+    /// table does not hold, [`Error::BlobColumn`] for a column an index,
+    /// a primary key or a foreign key holds where the handle writes,
+    /// [`Error::NoRowid`] for a key no row carries, and
+    /// [`Error::BlobValue`] for a value that is neither text nor bytes.
+    fn blob_place(&self, asked: &Blob<'_>) -> Result<Placed, Error> {
+        let bytes = self.image();
+        let database = self.reading(&bytes)?;
+        if database.view(asked.table).is_some() {
+            return Err(Error::BlobView(asked.table.to_vec()));
+        }
+        let (table, root) = database
+            .table(asked.table)
+            .ok_or_else(|| Error::NoTable(asked.table.to_vec()))?;
+        if table.without_rowid {
+            return Err(Error::BlobKeyed(asked.table.to_vec()));
+        }
+        let column = table
+            .columns
+            .iter()
+            .position(|held| held.name.eq_ignore_ascii_case(asked.column))
+            .ok_or_else(|| Error::NoSuchColumn(asked.column.to_vec()))?;
+        if asked.writing
+            && let Some(held) = held_column(&database, table, column, self.holding())
+        {
+            return Err(Error::BlobColumn(held.to_vec()));
+        }
+        let row = database
+            .image()
+            .rows(root)
+            .find_map(|row| match row {
+                Ok(row) if row.rowid == asked.rowid => Some(Ok(row)),
+                Ok(_) => None,
+                Err(error) => Some(Err(error)),
+            })
+            .transpose()?
+            .ok_or(Error::NoRowid(asked.rowid))?;
+        let mut payload = alloc::vec![0_u8; row.payload.total];
+        database.image().read_payload(&row.payload, &mut payload)?;
+        // A row written before the column was added holds no value for
+        // it, which `sqlite3VdbeMemFromBtree` of
+        // `research/sqlite/src/vdbeaux.c` reads as a null.
+        let (at, len, serial) =
+            crate::record::placed(&payload, column)?.unwrap_or((0, 0, crate::record::Serial::Null));
+        match serial {
+            crate::record::Serial::Text(_) | crate::record::Serial::Blob(_) => {}
+            crate::record::Serial::Null => return Err(Error::BlobValue(b"null".to_vec())),
+            crate::record::Serial::Real => return Err(Error::BlobValue(b"real".to_vec())),
+            crate::record::Serial::Int(_)
+            | crate::record::Serial::Zero
+            | crate::record::Serial::One => {
+                return Err(Error::BlobValue(b"integer".to_vec()));
+            }
+        }
+        Ok(Placed {
+            root,
+            at,
+            len,
+            payload,
+        })
+    }
+
+    /// How many bytes the value one blob handle names holds, which
+    /// `sqlite3_blob_bytes` answers.
+    ///
+    /// # Errors
+    ///
+    /// What the place of the value is refused with.
+    pub fn blob_bytes(&mut self, asked: &Blob<'_>) -> Result<usize, Error> {
+        let (len, _) = self.blob_asked(asked, &Asking::Bytes)?;
+        Ok(len)
+    }
+
+    /// The bytes of that value from `at`, as many as `len`, which
+    /// `sqlite3_blob_read` answers.
+    ///
+    /// Reading them costs O(n) in the bytes of the value.
+    ///
+    /// # Errors
+    ///
+    /// What the place of the value is refused with, and
+    /// [`Error::BlobRange`] where the value ends before the bytes asked
+    /// for do.
+    pub fn blob_read(&mut self, asked: &Blob<'_>, at: usize, len: usize) -> Result<Vec<u8>, Error> {
+        let (_, read) = self.blob_asked(asked, &Asking::Read(at, len))?;
+        Ok(read)
+    }
+
+    /// Writes `bytes` over that value from `at`, which
+    /// `sqlite3_blob_write` does: the value keeps the length it had, so
+    /// no page moves and no index is written again.
+    ///
+    /// # Errors
+    ///
+    /// What the place of the value is refused with, and
+    /// [`Error::BlobRange`] where the value ends before the bytes do.
+    pub fn blob_write(&mut self, asked: &Blob<'_>, at: usize, bytes: &[u8]) -> Result<(), Error> {
+        self.blob_asked(asked, &Asking::Write(at, bytes))?;
+        Ok(())
+    }
+
+    /// What one command of a blob handle answers: how many bytes the
+    /// value holds and what the command read of it.
+    ///
+    /// # Errors
+    ///
+    /// What the place of the value is refused with, and
+    /// [`Error::BlobRange`] where the value ends before the bytes the
+    /// command names.
+    fn blob_asked(
+        &mut self,
+        asked: &Blob<'_>,
+        doing: &Asking<'_>,
+    ) -> Result<(usize, Vec<u8>), Error> {
+        let place = match asked.schema {
+            None => None,
+            Some(named) if self.called.name.eq_ignore_ascii_case(named) => None,
+            Some(named) => Some(
+                self.attached
+                    .iter()
+                    .position(|held| named_as(held, named))
+                    .ok_or_else(|| Error::NoSchema(named.to_vec()))?,
+            ),
+        };
+        if let Some(place) = place {
+            self.switch(place);
+        }
+        let answered = self.blob_held(asked, doing);
+        if let Some(place) = place {
+            self.switch(place);
+        }
+        answered
+    }
+
+    /// The same over the database the connection writes, which the one
+    /// the handle names has become.
+    ///
+    /// # Errors
+    ///
+    /// What the place of the value is refused with, and
+    /// [`Error::BlobRange`] where the value ends before the bytes the
+    /// command names.
+    fn blob_held(
+        &mut self,
+        asked: &Blob<'_>,
+        doing: &Asking<'_>,
+    ) -> Result<(usize, Vec<u8>), Error> {
+        let placed = self.blob_place(asked)?;
+        let (at, wanted) = match doing {
+            Asking::Bytes => (0, 0),
+            Asking::Read(at, len) => (*at, *len),
+            Asking::Write(at, bytes) => (*at, bytes.len()),
+        };
+        if at.saturating_add(wanted) > placed.len {
+            return Err(Error::BlobRange);
+        }
+        let from = placed.at.saturating_add(at);
+        match doing {
+            Asking::Bytes => Ok((placed.len, Vec::new())),
+            Asking::Read(..) => Ok((
+                placed.len,
+                placed
+                    .payload
+                    .get(from..from.saturating_add(wanted))
+                    .unwrap_or_default()
+                    .to_vec(),
+            )),
+            Asking::Write(_, bytes) => {
+                crate::tree::put_payload(
+                    &mut self.held.pages,
+                    placed.root,
+                    asked.rowid,
+                    from,
+                    bytes,
+                )?;
+                Ok((placed.len, Vec::new()))
+            }
+        }
+    }
+
+    /// `PRAGMA auto_vacuum` over a file that holds a table: which of the
+    /// two ways the file vacuums itself.
+    ///
+    /// `sqlite3BtreeSetAutoVacuum` of `research/sqlite/src/btree.c`
+    /// writes the incremental flag of a file that vacuums itself
+    /// already, and leaves the vacuuming as it is once the page size is
+    /// fixed, so the word names the second and not the first.
+    fn vacuuming_as(&mut self, text: &[u8]) {
+        let which = crate::pragma::vacuum_of(text);
+        if which != 0 {
+            self.held.header.incremental_vacuum = u32::from(which == 2);
+        }
+    }
+
+    /// `PRAGMA reserved_bytes = N`: how many bytes of every page the
+    /// b-tree layer may not use, which `SQLITE_FCNTL_RESERVE_BYTES` of
+    /// `research/sqlite/src/btree.c` writes and the first table is
+    /// written under.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unsupported`] for a count no byte holds, and
+    /// [`Error::Image`] for one that leaves a page too little room.
+    fn reserving(&mut self, text: &[u8]) -> Result<(), Error> {
+        let bytes = crate::pragma::whole_number(text).ok_or(Error::Unsupported)?;
+        let bytes = u8::try_from(bytes).map_err(|_| Error::Unsupported)?;
+        self.held.pages = Pages::new(self.held.header.page_size, bytes)?;
+        self.held.header.reserved = bytes;
+        Ok(())
+    }
+
     /// `PRAGMA incremental_vacuum(N)`: the file gives up as many as `N`
     /// pages at its end and the pragma answers one row of no column per
     /// page it gave up.
@@ -3638,19 +3861,11 @@ impl Writer {
             self.truth.counting = crate::pragma::truth(text).ok_or(Error::Unsupported)?;
             return Ok(Vec::new());
         }
-        // `sqlite3BtreeSetAutoVacuum` of `research/sqlite/src/btree.c`
-        // writes the incremental flag of a file that vacuums itself
-        // already, and leaves the vacuuming as it is once the page size
-        // is fixed, so a file with a table takes the second word and not
-        // the first.
         if setting == crate::pragma::Setting::AutoVacuum
             && self.held.header.schema_cookie != 0
             && self.held.header.largest_root != 0
         {
-            let which = crate::pragma::vacuum_of(text);
-            if which != 0 {
-                self.held.header.incremental_vacuum = u32::from(which == 2);
-            }
+            self.vacuuming_as(text);
             return Ok(Vec::new());
         }
         if self.held.header.schema_cookie != 0 && setting != crate::pragma::Setting::JournalMode {
@@ -3668,6 +3883,7 @@ impl Writer {
                 self.held.pages = Pages::new(size, self.held.header.reserved)?;
                 self.held.header.page_size = size;
             }
+            crate::pragma::Setting::Reserved => self.reserving(text)?,
             crate::pragma::Setting::Encoding => {
                 self.held.header.encoding =
                     crate::pragma::encoding_of(text).ok_or(Error::Unsupported)?;
@@ -9557,6 +9773,80 @@ fn asked_steps(text: Option<&[u8]>) -> u32 {
         Some(most) if most > 0 => most.cast_unsigned(),
         _ => EVERY,
     }
+}
+
+/// What a blob handle names: the database, the table, the column and the
+/// key of the row, with whether the handle writes.
+///
+/// `sqlite3_blob_open` of `research/sqlite/src/vdbeblob.c:74` takes the
+/// same five.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Blob<'a> {
+    /// The database the table stands in, and nothing for the one the
+    /// connection writes.
+    pub schema: Option<&'a [u8]>,
+    /// The name of the table.
+    pub table: &'a [u8],
+    /// The name of the column.
+    pub column: &'a [u8],
+    /// The key of the row.
+    pub rowid: i64,
+    /// Whether the handle writes the value rather than reading it.
+    pub writing: bool,
+}
+
+/// Where the bytes of the value a blob handle names lie: the tree of
+/// its table, where in the payload of its row the value begins, how many
+/// bytes it holds, and the payload itself.
+struct Placed {
+    /// The page the tree of the table begins on.
+    root: u32,
+    /// Where in the payload the value begins.
+    at: usize,
+    /// How many bytes the value holds.
+    len: usize,
+    /// The payload of the row, whole.
+    payload: Vec<u8>,
+}
+
+/// What one command of a blob handle does: answer how many bytes the
+/// value holds, read bytes of it from an offset, or write bytes over it
+/// from an offset.
+enum Asking<'a> {
+    /// `sqlite3_blob_bytes`.
+    Bytes,
+    /// `sqlite3_blob_read`, with where to read from and how many bytes.
+    Read(usize, usize),
+    /// `sqlite3_blob_write`, with where to write from and the bytes.
+    Write(usize, &'a [u8]),
+}
+
+/// What holds the column at `at` of `table` where a handle may not write
+/// it: a foreign key of the table where `keys` says the rows are held to
+/// them, or an index over the column or over an expression.
+///
+/// `sqlite3_blob_open` of `research/sqlite/src/vdbeblob.c:211` reads the
+/// foreign keys and then the indexes, and names the index where both
+/// hold the column.
+fn held_column(
+    database: &Database<'_>,
+    table: &crate::schema::Table,
+    at: usize,
+    keys: bool,
+) -> Option<&'static [u8]> {
+    let mut held = None;
+    if keys && table.foreign.iter().any(|key| key.columns.contains(&at)) {
+        held = Some(b"foreign key".as_slice());
+    }
+    if database.indexes(&table.name).iter().any(|kept| {
+        kept.index
+            .columns
+            .iter()
+            .any(|keyed| keyed.place().is_none_or(|place| place == at))
+    }) {
+        held = Some(b"indexed".as_slice());
+    }
+    held
 }
 
 /// The kind of page the tree of a table begins with: an index page for a

@@ -7,6 +7,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` reads and writes the bytes of one value where they lie,
+  which a blob handle opens: `Writer::blob_bytes`, `blob_read` and
+  `blob_write` answer the three commands of `sqlite3_blob_open`, and the
+  suite tester answers the commands of `test_blob.c` and `DB incrblob`.
+  `PRAGMA reserved_bytes = N` stands before the first table and
+  `PRAGMA compile_options` answers no row. D-357 and D-358 record it.
+  Catalog 6.6.245 and 6.6.246. 16 files that ran no case run, among them
+  `e_blobopen.test` with 171 cases passing, `incrblob2.test` with 62 and
+  `pager1.test` with 49.
+
 - `db-sqlite` writes the rows and the indexes of the database a
   statement names, where the temp schema held a table of the same name
   and its indexes were written into the other database, and holds a

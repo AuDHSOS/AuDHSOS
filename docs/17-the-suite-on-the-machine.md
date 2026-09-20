@@ -55,10 +55,10 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-117 384 cases of 825 files: 104 851 pass, 3298 answer differently and
-9235 are refused.
+118 187 cases of 846 files: 105 404 pass, 3443 answer differently and
+9340 are refused.
 
-What the 9235 refusals are for, most first: `db status` (2106), which
+What the 9340 refusals are for, most first: `db status` (2106), which
 answers counters of memory and of the page cache; `sqlite3_memdebug_fail`
 (1260), which fails one allocation of the C library; `crash_on_write`
 (960) and the crash the harness does not simulate (435); a table an
@@ -76,7 +76,7 @@ What each answers, over the same files:
 
 | Configuration | Passed | Answered differently | Refused |
 |---------------|-------:|---------------------:|--------:|
-| `utf8-4096-delete` | 104 851 | 3298 | 9235 |
+| `utf8-4096-delete` | 105 404 | 3443 | 9340 |
 | `utf16le-4096-delete` | 61 214 | 2392 | 9500 |
 | `utf16be-4096-delete` | 61 229 | 2392 | 9500 |
 | `utf8-512-delete` | 61 073 | 2452 | 9435 |
@@ -432,6 +432,10 @@ Size: S.
     what the C library of the machine writes, and the commands that
     size what the C library keeps for itself answer nought rather than
     raising, which D-355 records.
+26. The commands of `test_blob.c` answer the name of the code they
+    carry, `DB incrblob` answers a channel of the interpreter's own
+    making, and `ifcapable incrblob` answers that this engine has it,
+    which D-357 records.
 
 ### Produces
 

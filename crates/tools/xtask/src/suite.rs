@@ -267,7 +267,7 @@ const LOOPING: usize = 5000;
 
 /// The capabilities an `ifcapable` may name that this engine does not
 /// have. Every other name is answered as held.
-const MISSING: [&str; 19] = [
+const MISSING: [&str; 18] = [
     "vtab",
     "fts1",
     "fts2",
@@ -276,7 +276,6 @@ const MISSING: [&str; 19] = [
     "fts5",
     "rtree",
     "icu",
-    "incrblob",
     "shared_cache",
     "memdebug",
     "crashtest",
@@ -840,6 +839,10 @@ impl Session {
             "normalize" => Ok(alloc_one(&normalized(first))),
             "columnmeta" => self.column_meta(first, second, args.get(2).map_or("", String::as_str)),
             "eval" => self.eval(first, second),
+            // `sqlite3_blob_open`, `sqlite3_blob_bytes`,
+            // `sqlite3_blob_read` and `sqlite3_blob_write` of
+            // `research/sqlite/src/test_blob.c`.
+            "blob_bytes" | "blob_read" | "blob_write" => self.blob(verb, args),
             "names" => self.names(first, second),
             "changes" | "total_changes" | "rowid" => self.counted(verb, first),
             // What the engine's writer does not answer. A case that
@@ -944,6 +947,60 @@ impl Session {
         writer.groups(GROUPED);
         self.held.insert(name.to_owned(), writer);
         Ok(vec![written.len().to_string()])
+    }
+
+    /// The blob handle commands of `research/sqlite/src/test_blob.c`,
+    /// which answer the name of the code they carry, what they read as
+    /// hexadecimal digits, and what the refusal says.
+    ///
+    /// The values are the connection, the schema, the table, the column,
+    /// the key of the row and whether the handle writes, then the offset
+    /// and either how many bytes to read or the digits to write. The
+    /// handle itself is the tester's, which holds the six and hands them
+    /// back with every command, so a handle that is reopened under
+    /// another key is the same six with that key.
+    fn blob(&mut self, verb: &str, args: &[String]) -> Result<Vec<String>, String> {
+        let held = |at: usize| args.get(at).map_or("", String::as_str);
+        let name = held(0);
+        let path = self
+            .connections
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("no such connection: {name}"))?;
+        let rowid: i64 = held(4).parse().unwrap_or(0);
+        let at = number_of(held(6)).unwrap_or(0);
+        let schema = held(1).as_bytes().to_vec();
+        let table = held(2).as_bytes().to_vec();
+        let column = held(3).as_bytes().to_vec();
+        let written = binary(held(7));
+        let wanted = number_of(held(7)).unwrap_or(0);
+        let writer = self
+            .held
+            .get_mut(&path)
+            .ok_or_else(|| format!("no such database: {path}"))?;
+        let asked = db_sqlite::change::Blob {
+            schema: (!schema.is_empty()).then_some(schema.as_slice()),
+            table: &table,
+            column: &column,
+            rowid,
+            writing: held(5) != "0",
+        };
+        let answered = match verb {
+            "blob_bytes" => writer.blob_bytes(&asked).map(|held| held.to_string()),
+            "blob_read" => writer
+                .blob_read(&asked, at, wanted)
+                .map(|bytes| digits(&bytes)),
+            _ => writer
+                .blob_write(&asked, at, &written)
+                .map(|()| String::new()),
+        };
+        Ok(match answered {
+            Ok(held) => vec!["SQLITE_OK".to_owned(), held, String::new()],
+            Err(error) => {
+                let code = String::from_utf8_lossy(error.code().extended_name).into_owned();
+                vec![code, String::new(), refusal(&error)]
+            }
+        })
     }
 
     /// `sqlite3_table_column_metadata`: what the schema says about one
@@ -2753,6 +2810,20 @@ const fn ticked(writer: &mut Writer, clock: Option<i64>) {
 fn number_of(text: &str) -> Result<usize, String> {
     text.parse::<usize>()
         .map_err(|source| format!("a place in a file is a whole number: {source}"))
+}
+
+/// The hexadecimal digits of `bytes`, which is how the line carries what
+/// no text holds.
+///
+/// Writing them costs O(n) in the bytes.
+fn digits(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len().saturating_mul(2));
+    for byte in bytes {
+        for half in [byte >> 4, byte & 0xf] {
+            out.push(char::from_digit(u32::from(half), 16).unwrap_or('0'));
+        }
+    }
+    out.to_uppercase()
 }
 
 /// The bytes a run of hexadecimal digits names, which is

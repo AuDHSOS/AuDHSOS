@@ -477,6 +477,11 @@ pub fn of_name(name: &[u8]) -> Option<Setting> {
         | b"legacy_alter_table"
         | b"cache_spill"
         | b"shrink_memory"
+        // `PRAGMA compile_options` answers one row per option the C
+        // library was built with, which `PragTyp_COMPILE_OPTIONS` of
+        // `research/sqlite/src/pragma.c:1105` reads out of
+        // `sqlite3_compileoption_get`. This crate is built with none.
+        | b"compile_options"
         | b"optimize" => Setting::Ignored,
         _ => {
             let at = HELD

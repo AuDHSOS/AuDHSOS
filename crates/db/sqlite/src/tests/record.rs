@@ -302,3 +302,21 @@ fn a_file_written_before_the_fourth_format_spells_a_zero_and_a_one_out() {
         crate::record::write(&[Owned::Int(2)], &[Affinity::None], 4)
     );
 }
+
+/// Where in a record the value of one column begins, which a blob
+/// handle reads to know where the bytes of that column lie.
+#[test]
+fn where_in_a_record_the_value_of_a_column_begins() {
+    use crate::record::{Serial, placed};
+    // Two columns: a header of three bytes, an integer of one byte, and
+    // then three bytes of text.
+    let payload = [3, 1, 19, 42, b'a', b'b', b'c'];
+    assert_eq!(placed(&payload, 0).unwrap(), Some((3, 1, Serial::Int(1))));
+    assert_eq!(placed(&payload, 1).unwrap(), Some((4, 3, Serial::Text(3))));
+    // A column the record does not hold.
+    assert_eq!(placed(&payload, 2).unwrap(), None);
+    // A header the payload ends before, and one shorter than the byte
+    // that says how long it is.
+    assert_eq!(placed(&[9, 1, 15], 0), Err(crate::error::Error::Overrun));
+    assert_eq!(placed(&[0], 0), Err(crate::error::Error::Overrun));
+}

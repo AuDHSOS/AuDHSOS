@@ -2618,9 +2618,16 @@ fn what_a_pragma_refuses() {
         writer.run(b"PRAGMA page_count=7").unwrap(),
         [[Value::Int(1)]]
     );
-    // The bytes the b-tree layer may not use and the format the schema
-    // was written under are read and never set.
-    assert!(writer.run(b"PRAGMA reserved_bytes=5").is_err());
+    // The bytes the b-tree layer may not use stand before the first
+    // table, and a count no page holds room for is refused.
+    assert!(writer.run(b"PRAGMA reserved_bytes=5").unwrap().is_empty());
+    assert_eq!(
+        writer.run(b"PRAGMA reserved_bytes").unwrap(),
+        [[Value::Int(5)]]
+    );
+    assert!(writer.run(b"PRAGMA reserved_bytes=300").is_err());
+    writer.run(b"PRAGMA reserved_bytes=0").unwrap();
+    // The format the schema was written under is read and never set.
     assert!(writer.run(b"PRAGMA schema_format=3").is_err());
     // The three that say how the first table is written stand before
     // it, and one written after it changes nothing.

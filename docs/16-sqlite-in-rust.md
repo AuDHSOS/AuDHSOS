@@ -942,6 +942,11 @@ Size: L.
 102. Which database a statement writes where the temp schema holds the
      name, and the database a trigger name stands once in. Built, which
      D-356 records.
+103. The bytes of one value, read and written where they lie, which a
+     blob handle opens. Built, which D-357 records.
+104. The bytes of every page the b-tree layer may not use, which a
+     pragma writes, and the options the library was built with. Built,
+     which D-358 records.
 
 ### Done when
 
@@ -951,8 +956,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 117 384 cases in 825 files, 104 851
-pass, 3298 answer differently, and 9235 name something the engine
+under the `tclsh` of the machine. Of 118 187 cases in 846 files, 105 404
+pass, 3443 answer differently, and 9340 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the three-minute
 deadline and are counted with the cases they ran by then. One run over

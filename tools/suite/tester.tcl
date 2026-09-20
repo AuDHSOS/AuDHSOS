@@ -580,6 +580,9 @@ proc sqlite3 {args} {
     }
     check_args %N% $written $method $args
     switch -exact -- $method {
+      incrblob {
+        return [blob_channel %N% {*}$args]
+      }
       eval {
         set sql [bound %N% [lindex $args 0]]
         if {[llength $args] == 1} {
@@ -1195,7 +1198,7 @@ foreach cmd {
   register_fs_module register_dbstat_vtab register_schema_module
   run_thread_tests test_cli_invocation
   test_find_cli test_find_sqldiff
-  file_control_chunksize_test file_control_sizehint_test file_control_lockproxy_test
+  file_control_sizehint_test file_control_lockproxy_test
   file_control_persist_wal file_control_powersafe_overwrite
   file_control_tempfilename file_control_external_reader
   speed_trial speed_trial_init speed_trial_summary
@@ -1203,7 +1206,7 @@ foreach cmd {
   sqlite3_db_filename
   vfs_unlink_test vfs_shared_errors
   add_alignment_test_collations add_test_collate add_test_function
-  add_test_utf16bin_collate autoinstall_test_functions
+  add_test_utf16bin_collate
   sqlite3_snapshot_get sqlite3_snapshot_open sqlite3_snapshot_free
   sqlite3_wal_autocheckpoint
 } {
@@ -1334,6 +1337,10 @@ proc sqlite3_config_uri {args} { return 0 }
 proc sqlite3_register_cksumvfs {args} { return 0 }
 proc sqlite3_multiplex_initialize {args} { return 0 }
 proc sqlite3_config_pmasz {args} { return 0 }
+proc sqlite3_config_pagecache {args} { return 0 }
+proc sqlite3_config_scratch {args} { return 0 }
+proc autoinstall_test_functions {args} { return 0 }
+proc file_control_chunksize_test {args} { return 0 }
 proc sqlite3_config_lookaside {args} { return 0 }
 proc sqlite3_config_memstatus {args} { return 0 }
 proc sqlite3_config_alt_pcache {args} { return 0 }
@@ -1369,6 +1376,190 @@ proc file_control_reservebytes {db {bytes -1}} {
 proc strftime {format seconds} {
   set held [string map [list %% \x00 %F %Y-%m-%d] $format]
   return [clock format $seconds -format [string map [list \x00 %%] $held] -gmt 1]
+}
+
+# The blob handles of this interpreter, by the name each answers to:
+# the connection, the schema, the table, the column, the key of the row,
+# whether the handle writes, where the next read or write stands,
+# whether a channel holds it, and whether a refused reopen ended it.
+array set ::blobs {}
+
+# The six a `chan create` hands the handler of the channel it makes,
+# which the handler reads under the name the channel is given.
+set ::blob_pending {}
+
+# One request of a blob handle: the name of the code, what it read, and
+# what the refusal says.
+proc blob_try {id verb args} {
+  set held $::blobs($id)
+  set out [harness_send $verb [lindex $held 0] [lindex $held 1] \
+    [lindex $held 2] [lindex $held 3] [lindex $held 4] [lindex $held 5] {*}$args]
+  # `sqlite3_errmsg` answers what the last call of the connection left,
+  # which a blob handle writes as every other command does.
+  set ::harness_code [lindex $out 0]
+  set ::harness_error [lindex $out 2]
+  return $out
+}
+
+# The same, which answers what it read and raises the name of the code
+# where the engine refused it, as the commands of `test_blob.c` do.
+proc blob_call {id verb args} {
+  set out [blob_try $id $verb {*}$args]
+  if {[lindex $out 0] eq "SQLITE_OK"} { return [lindex $out 1] }
+  # A row the handle no longer reaches ends the handle, which
+  # `sqlite3_blob_read` and `sqlite3_blob_write` answer `SQLITE_ABORT`
+  # for where `invalidateIncrblobCursors` of
+  # `research/sqlite/src/btree.c` ended it.
+  if {$verb ne "blob_bytes" && [string match "no such rowid*" [lindex $out 2]]} {
+    error SQLITE_ABORT
+  }
+  error [lindex $out 0]
+}
+
+# The handle a command of `test_blob.c` was given, with the channel that
+# holds it flushed and read again from its first byte, which
+# `blobHandleFromObj` of `research/sqlite/src/test_blob.c:52` does.
+proc blob_held {id} {
+  if {![info exists ::blobs($id)]} { error "no such blob handle: $id" }
+  # A handle whose reopen was refused reaches no row from there on,
+  # which `sqlite3_blob_reopen` of `research/sqlite/src/vdbeblob.c:405`
+  # leaves it in.
+  if {[lindex $::blobs($id) 9]} { error SQLITE_ABORT }
+  if {[lindex $::blobs($id) 7]} {
+    if {[lindex $::blobs($id) 5]} { flush $id }
+    # The seek is the channel's own, so what it holds of an earlier read
+    # is given up with it.
+    seek $id 0 start
+  }
+  return $id
+}
+
+# `sqlite3_blob_open DB DATABASE TABLE COLUMN ROWID FLAGS VARNAME` of
+# `research/sqlite/src/test_blob.c:97`, which writes the name of the
+# handle into the variable and raises the name of the code where the
+# engine refused the value.
+proc sqlite3_blob_open {db database table column rowid flags {varname ""}} {
+  set id "blob[incr ::blob_count]"
+  set ::blobs($id) [list $db $database $table $column $rowid \
+    [expr {$flags ? 1 : 0}] 0 0 0 0]
+  if {$varname ne ""} { uplevel 1 [list set $varname $id] }
+  set out [blob_try $id blob_bytes]
+  if {[lindex $out 0] ne "SQLITE_OK"} {
+    unset -nocomplain ::blobs($id)
+    if {$varname ne ""} { uplevel 1 [list set $varname 0] }
+    error [lindex $out 0]
+  }
+  return ""
+}
+
+proc sqlite3_blob_bytes {id} { return [blob_call [blob_held $id] blob_bytes] }
+
+proc sqlite3_blob_read {id offset count} {
+  return [binary format H* [blob_call [blob_held $id] blob_read $offset $count]]
+}
+
+proc sqlite3_blob_write {id offset data {count -1}} {
+  blob_held $id
+  if {![lindex $::blobs($id) 5]} { error SQLITE_READONLY }
+  binary scan $data H* digits
+  if {$count >= 0} { set digits [string range $digits 0 [expr {$count*2-1}]] }
+  blob_call $id blob_write $offset $digits
+  return ""
+}
+
+proc sqlite3_blob_close {id} {
+  if {[info exists ::blobs($id)] && [string match "rc*" $id]} { close $id }
+  unset -nocomplain ::blobs($id)
+  return ""
+}
+
+proc sqlite3_blob_reopen {id rowid} {
+  blob_held $id
+  lset ::blobs($id) 4 $rowid
+  set out [blob_try $id blob_bytes]
+  if {[lindex $out 0] ne "SQLITE_OK"} {
+    lset ::blobs($id) 9 1
+    error [lindex $out 0]
+  }
+  return ""
+}
+
+# The channel `DB incrblob` answers, which
+# `research/sqlite/src/tclsqlite.c:284` gives the bytes of one value:
+# a read and a write reach the value where it lies, and the channel
+# holds where the next one stands.
+proc blob_handler {cmd id args} {
+  switch -exact -- $cmd {
+    initialize {
+      set ::blobs($id) $::blob_pending
+      return {initialize finalize watch read write seek configure blocking}
+    }
+    finalize {
+      unset -nocomplain ::blobs($id)
+      return
+    }
+    watch - blocking - configure { return }
+    seek {
+      lassign $args offset base
+      set held [blob_call $id blob_bytes]
+      set at [lindex $::blobs($id) 6]
+      switch -exact -- $base {
+        start { set to $offset }
+        current { set to [expr {$at + $offset}] }
+        end { set to [expr {$held + $offset}] }
+        default { set to $offset }
+      }
+      lset ::blobs($id) 6 $to
+      return $to
+    }
+    read {
+      lassign $args count
+      set held [blob_call $id blob_bytes]
+      set at [lindex $::blobs($id) 6]
+      if {$at >= $held} { return "" }
+      if {$at + $count > $held} { set count [expr {$held - $at}] }
+      set out [binary format H* [blob_call $id blob_read $at $count]]
+      lset ::blobs($id) 6 [expr {$at + $count}]
+      return $out
+    }
+    write {
+      lassign $args data
+      set at [lindex $::blobs($id) 6]
+      binary scan $data H* digits
+      blob_call $id blob_write $at $digits
+      set count [expr {[string length $digits] / 2}]
+      lset ::blobs($id) 6 [expr {$at + $count}]
+      return $count
+    }
+  }
+  return
+}
+
+# `DB incrblob ?-readonly? ?DATABASE? TABLE COLUMN ROWID`.
+proc blob_channel {db args} {
+  set readonly 0
+  if {[lindex $args 0] eq "-readonly"} {
+    set readonly 1
+    set args [lrange $args 1 end]
+  }
+  if {[llength $args] == 4} {
+    lassign $args database table column rowid
+  } else {
+    set database main
+    lassign $args table column rowid
+  }
+  set ::blob_pending [list $db $database $table $column $rowid \
+    [expr {$readonly ? 0 : 1}] 0 1 0 0]
+  set id [chan create [expr {$readonly ? {read} : {read write}}] blob_handler]
+  # `DB incrblob` raises what the refusal says, where the commands of
+  # `test_blob.c` raise the name of the code.
+  set out [blob_try $id blob_bytes]
+  if {[lindex $out 0] ne "SQLITE_OK"} {
+    close $id
+    error [lindex $out 2]
+  }
+  fconfigure $id -translation binary -buffering none
+  return $id
 }
 
 # `sqlite3_prepare` and the commands that read a statement it answered.
@@ -1816,7 +2007,7 @@ set ::bitmask_size 64
 # The compile options a file reads to skip a case its build cannot
 # reach, which `ifcapable` answers for as well.
 foreach option {
-  fts3 fts5 rtree icu vtab incrblob shared_cache codec atomicwrite vacuum
+  fts3 fts5 rtree icu vtab shared_cache codec atomicwrite vacuum
   explain session setlk_timeout configslower
   memorymanage threadsafe
 } { set ::sqlite_options($option) 0 }
@@ -1824,7 +2015,7 @@ foreach option {
   wal utf16 integrityck casesensitivelike trigger view subquery compound attach
   foreignkey json1 like_match_blobs pragma reindex analyze altertable
   cast check conflict datetime floatingpoint or_opt stat4 update_delete_limit
-  autovacuum
+  autovacuum incrblob
 } { set ::sqlite_options($option) 1 }
 set ::sqlite_options(default_autovacuum) 0
 

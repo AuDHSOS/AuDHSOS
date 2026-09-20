@@ -328,6 +328,42 @@ impl<'a> Record<'a> {
     }
 }
 
+/// Where in `payload` the value of the column at `index` begins, how
+/// many bytes it holds, and the serial type it carries.
+///
+/// `sqlite3BtreePayloadSize` and the walk of `sqlite3VdbeMemFromBtree`
+/// read a value out of a record this way, which is what
+/// `sqlite3_blob_open` of `research/sqlite/src/vdbeblob.c:74` reads to
+/// know where the bytes of one column lie. Nothing where the record
+/// holds fewer columns. The walk is O(n) in the columns before `index`.
+///
+/// # Errors
+///
+/// [`Error::Varint`] for a header that does not end inside the payload,
+/// [`Error::Overrun`] where the header it names is longer than the
+/// payload, and [`Error::SerialType`] for a code no type answers.
+pub fn placed(payload: &[u8], index: usize) -> Result<Option<(usize, usize, Serial)>, Error> {
+    let (declared, read) = varint(payload)?;
+    let header = size(declared);
+    if header < read || header > payload.len() {
+        return Err(Error::Overrun);
+    }
+    let mut at = read;
+    let mut body = header;
+    let mut column = 0;
+    while at < header {
+        let (code, used) = varint(payload.get(at..).ok_or(Error::Overrun)?)?;
+        let serial = Serial::from_code(code)?;
+        if column == index {
+            return Ok(Some((body, serial.len(), serial)));
+        }
+        body = body.saturating_add(serial.len());
+        at = at.saturating_add(used);
+        column = column.saturating_add(1);
+    }
+    Ok(None)
+}
+
 /// The values of a record, read as the iterator walks its header.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Values<'a> {

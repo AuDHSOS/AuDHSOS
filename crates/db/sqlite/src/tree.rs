@@ -2093,6 +2093,78 @@ pub(crate) fn quick(pages: &mut Pages, parent: u32, page: u32, cell: &[u8]) -> R
     Ok(true)
 }
 
+/// Writes `bytes` over the payload of the row `rowid` from `at`, which
+/// is `sqlite3BtreePutData` of `research/sqlite/src/btree.c:11090`: the
+/// bytes the cell holds on its own page and then the pages of its
+/// chain, with nothing moved and no page freed, because the payload
+/// keeps the length it had.
+///
+/// The descent to the row is O(log n) in the rows and the write is O(n)
+/// in the bytes it writes.
+///
+/// # Errors
+///
+/// [`Error::Overrun`] where the cell the descent reaches carries no
+/// payload, and whatever reading or writing a page refuses.
+pub fn put_payload(
+    pages: &mut Pages,
+    root: u32,
+    rowid: i64,
+    at: usize,
+    bytes: &[u8],
+) -> Result<(), Error> {
+    let path = place(pages, root, rowid)?;
+    let (leaf, index) = *path.last().ok_or(Error::Depth)?;
+    // The caller read the row out of the same tree, so the descent
+    // reaches the cell that holds it.
+    let (start, local, chain) = {
+        let page = pages.page(leaf)?;
+        page.payload_place(index)?.ok_or(Error::Overrun)?
+    };
+    let mut written = 0;
+    let mut skipped = at;
+    if skipped < local {
+        let take = local.saturating_sub(skipped).min(bytes.len());
+        pages.put(
+            leaf,
+            start.saturating_add(skipped),
+            bytes.get(..take).unwrap_or_default(),
+        );
+        written = take;
+        skipped = 0;
+    } else {
+        skipped = skipped.saturating_sub(local);
+    }
+    // Every page of the chain carries the number of the next one and
+    // then the bytes of the payload. The payload was read before the
+    // write, so its chain holds every byte the write reaches and the
+    // walk ends where the bytes do.
+    let held = pages.usable.saturating_sub(4);
+    let mut number = chain.unwrap_or(0);
+    while written < bytes.len() {
+        let after = pages.word(number, 0)?;
+        if skipped >= held {
+            skipped = skipped.saturating_sub(held);
+            number = after;
+            continue;
+        }
+        let take = held
+            .saturating_sub(skipped)
+            .min(bytes.len().saturating_sub(written));
+        pages.put(
+            number,
+            skipped.saturating_add(4),
+            bytes
+                .get(written..written.saturating_add(take))
+                .unwrap_or_default(),
+        );
+        written = written.saturating_add(take);
+        skipped = 0;
+        number = after;
+    }
+    Ok(())
+}
+
 /// Whether the table tree at `root` holds a row under `rowid`, which is
 /// what `sqlite3BtreeTableMoveto` answers for the key of a row about to
 /// be written. One walk is O(log n) in the rows.
