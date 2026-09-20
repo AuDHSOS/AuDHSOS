@@ -780,6 +780,10 @@ pub enum Wait {
         /// the receiver that meets it later sees. Zero for a receiver, which
         /// has no capability of anyone else's in its hand.
         badge: u64,
+        /// `true` for a queued sender whose message the kernel built, which
+        /// is the only sender allowed a label of the reserved range. `false`
+        /// for a receiver and for every message a user thread wrote.
+        kernel_message: bool,
     },
     /// The thread waits for the answer to a call.
     Reply {

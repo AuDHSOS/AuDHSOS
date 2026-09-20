@@ -3,9 +3,9 @@
 
 //! Tests of `crate::transfer`.
 
-use audhsos_abi::ipc_buffer::{Buffer, BufferMut, SIZE};
+use audhsos_abi::ipc_buffer::{Buffer, BufferMut, KERNEL_LABEL_BASE, SIZE, fault_label};
 use audhsos_abi::layout::{MAX_MESSAGE_HANDLES, MAX_MESSAGE_WORDS};
-use audhsos_abi::{Error, Handle, ObjectType, Rights};
+use audhsos_abi::{Error, FaultKind, Handle, ObjectType, Rights};
 use kernel_objects::object::AnyObjectId;
 
 use super::fixture::{Fixture, message};
@@ -21,7 +21,15 @@ fn a_message_of_no_words_carries_its_label_and_nothing_else() {
     let receiver = fixture.process(8);
     let from = message(7, 0, &[]);
     let mut to = [0; SIZE];
-    let moved = transfer(&from, &mut to, &mut fixture.objects, sender, receiver).unwrap();
+    let moved = transfer(
+        &from,
+        &mut to,
+        &mut fixture.objects,
+        sender,
+        receiver,
+        false,
+    )
+    .unwrap();
     assert_eq!(
         moved,
         Transferred {
@@ -43,7 +51,15 @@ fn a_message_of_the_widest_payload_arrives_word_for_word() {
     let receiver = fixture.process(8);
     let from = message(1, MAX_MESSAGE_WORDS, &[]);
     let mut to = [0; SIZE];
-    let moved = transfer(&from, &mut to, &mut fixture.objects, sender, receiver).unwrap();
+    let moved = transfer(
+        &from,
+        &mut to,
+        &mut fixture.objects,
+        sender,
+        receiver,
+        false,
+    )
+    .unwrap();
     assert_eq!(moved.words, u16::try_from(MAX_MESSAGE_WORDS).unwrap());
     let view = Buffer::new(&to);
     assert_eq!(view.message().unwrap().word_count, MAX_MESSAGE_WORDS);
@@ -73,10 +89,76 @@ fn a_word_count_above_the_area_is_refused_before_anything_is_copied() {
     write_raw(&mut from, audhsos_abi::ipc_buffer::WORD_COUNT, raw);
     let mut to = [0; SIZE];
     assert_eq!(
-        transfer(&from, &mut to, &mut fixture.objects, sender, receiver),
+        transfer(
+            &from,
+            &mut to,
+            &mut fixture.objects,
+            sender,
+            receiver,
+            false
+        ),
         Err(Error::InvalidArgument)
     );
     assert_eq!(to, [0; SIZE], "not a byte of the receiver's buffer changed");
+}
+
+#[test]
+fn a_reserved_label_a_user_thread_wrote_is_refused_before_anything_is_copied() {
+    let mut fixture = Fixture::new();
+    let sender = fixture.process(8);
+    let receiver = fixture.process(8);
+    let from = message(KERNEL_LABEL_BASE, 2, &[]);
+    let mut to = [0; SIZE];
+    assert_eq!(
+        transfer(
+            &from,
+            &mut to,
+            &mut fixture.objects,
+            sender,
+            receiver,
+            false
+        ),
+        Err(Error::InvalidArgument)
+    );
+    assert_eq!(to, [0; SIZE], "not a byte of the receiver's buffer changed");
+}
+
+#[test]
+fn the_label_below_the_reserved_range_passes_for_a_user_thread() {
+    let mut fixture = Fixture::new();
+    let sender = fixture.process(8);
+    let receiver = fixture.process(8);
+    let from = message(KERNEL_LABEL_BASE - 1, 0, &[]);
+    let mut to = [0; SIZE];
+    let moved = transfer(
+        &from,
+        &mut to,
+        &mut fixture.objects,
+        sender,
+        receiver,
+        false,
+    )
+    .unwrap();
+    assert_eq!(moved.words, 0);
+    assert_eq!(
+        Buffer::new(&to).message().unwrap().label,
+        KERNEL_LABEL_BASE - 1
+    );
+}
+
+#[test]
+fn a_reserved_label_passes_for_the_message_the_kernel_wrote() {
+    let mut fixture = Fixture::new();
+    let sender = fixture.process(8);
+    let receiver = fixture.process(8);
+    let label = fault_label(FaultKind::PageFault);
+    let from = message(label, 3, &[]);
+    let mut to = [0; SIZE];
+    let moved = transfer(&from, &mut to, &mut fixture.objects, sender, receiver, true).unwrap();
+    assert_eq!(moved.words, 3);
+    let header = Buffer::new(&to).message().unwrap();
+    assert_eq!(header.label, label);
+    assert!(header.is_kernel_label());
 }
 
 #[test]
@@ -91,7 +173,14 @@ fn a_handle_count_above_the_area_is_refused() {
     write_raw(&mut from, audhsos_abi::ipc_buffer::HANDLE_COUNT, raw);
     let mut to = [0; SIZE];
     assert_eq!(
-        transfer(&from, &mut to, &mut fixture.objects, sender, receiver),
+        transfer(
+            &from,
+            &mut to,
+            &mut fixture.objects,
+            sender,
+            receiver,
+            false
+        ),
         Err(Error::InvalidArgument)
     );
     assert_eq!(to, [0; SIZE]);
@@ -111,7 +200,15 @@ fn four_handles_travel_with_their_rights_their_badge_and_a_reference() {
     }
     let from = message(3, 1, &sent);
     let mut to = [0; SIZE];
-    let moved = transfer(&from, &mut to, &mut fixture.objects, sender, receiver).unwrap();
+    let moved = transfer(
+        &from,
+        &mut to,
+        &mut fixture.objects,
+        sender,
+        receiver,
+        false,
+    )
+    .unwrap();
     assert_eq!(moved.handles, 4);
     assert!(!moved.truncated);
     let view = Buffer::new(&to);
@@ -148,7 +245,15 @@ fn a_badged_handle_keeps_its_badge_across_the_transfer() {
         .badge = 0x5EED;
     let from = message(1, 0, &[handle]);
     let mut to = [0; SIZE];
-    transfer(&from, &mut to, &mut fixture.objects, sender, receiver).unwrap();
+    transfer(
+        &from,
+        &mut to,
+        &mut fixture.objects,
+        sender,
+        receiver,
+        false,
+    )
+    .unwrap();
     let arrived = Buffer::new(&to).handle(0).unwrap();
     let entry = fixture.objects.handles.lookup(receiver, arrived).unwrap();
     assert_eq!(entry.badge, 0x5EED);
@@ -167,7 +272,14 @@ fn a_handle_without_transfer_refuses_the_message_before_any_is_installed() {
     let from = message(1, 1, &[travels, stays]);
     let mut to = [0; SIZE];
     assert_eq!(
-        transfer(&from, &mut to, &mut fixture.objects, sender, receiver),
+        transfer(
+            &from,
+            &mut to,
+            &mut fixture.objects,
+            sender,
+            receiver,
+            false
+        ),
         Err(Error::AccessDenied)
     );
     assert_eq!(fixture.handle_count(receiver), 0, "not one arrived");
@@ -184,7 +296,14 @@ fn a_handle_the_sender_does_not_hold_refuses_the_message() {
     let from = message(1, 1, &[nothing]);
     let mut to = [0; SIZE];
     assert_eq!(
-        transfer(&from, &mut to, &mut fixture.objects, sender, receiver),
+        transfer(
+            &from,
+            &mut to,
+            &mut fixture.objects,
+            sender,
+            receiver,
+            false
+        ),
         Err(Error::InvalidHandle)
     );
     assert_eq!(to, [0; SIZE]);
@@ -199,7 +318,14 @@ fn a_handle_word_that_names_no_handle_refuses_the_message() {
     write_raw(&mut from, audhsos_abi::ipc_buffer::HANDLE_COUNT, 1);
     let mut to = [0; SIZE];
     assert_eq!(
-        transfer(&from, &mut to, &mut fixture.objects, sender, receiver),
+        transfer(
+            &from,
+            &mut to,
+            &mut fixture.objects,
+            sender,
+            receiver,
+            false
+        ),
         Err(Error::InvalidHandle),
         "a zero word is no handle"
     );
@@ -222,7 +348,15 @@ fn a_receiver_with_room_for_fewer_handles_gets_what_fits_and_the_flag() {
     ];
     let from = message(1, 2, &sent);
     let mut to = [0; SIZE];
-    let moved = transfer(&from, &mut to, &mut fixture.objects, sender, receiver).unwrap();
+    let moved = transfer(
+        &from,
+        &mut to,
+        &mut fixture.objects,
+        sender,
+        receiver,
+        false,
+    )
+    .unwrap();
     assert_eq!(moved.handles, 1);
     assert!(moved.truncated, "the message is delivered all the same");
     let view = Buffer::new(&to);
@@ -239,7 +373,7 @@ fn a_message_between_two_threads_of_one_process_moves_all_the_same() {
     let handle = fixture.install(both, AnyObjectId::of(memory), TRAVELS);
     let from = message(4, 3, &[handle]);
     let mut to = [0; SIZE];
-    let moved = transfer(&from, &mut to, &mut fixture.objects, both, both).unwrap();
+    let moved = transfer(&from, &mut to, &mut fixture.objects, both, both, false).unwrap();
     assert_eq!(moved.handles, 1);
     assert_eq!(
         fixture.handle_count(both),

@@ -363,6 +363,105 @@ fn a_fault_reaches_the_handler_as_a_call_with_the_reserved_label() {
 }
 
 #[test]
+fn a_fault_that_waits_in_the_queue_keeps_its_reserved_label() {
+    // The handler receives after the fault, so the message waits in the
+    // senders queue and is copied out of the faulting thread's buffer by
+    // the receive. The reserved label the kernel wrote has to survive that.
+    let mut fixture = Fixture::new();
+    let (_id, handle) = handler(&mut fixture);
+    let own = fixture.process;
+    let taker = fixture.running(own, 4);
+
+    let faulted = fixture.thread;
+    let mut buffer = [0; SIZE];
+    deliver(&mut fixture.machine(), faulted, page_fault(), &mut buffer);
+    // The kernel builds the message in the faulting thread's own buffer,
+    // which the gate hands it as the frame itself; the double holds the
+    // two apart, so the frame is given what `deliver` wrote.
+    fixture.write_buffer(faulted, &buffer);
+    assert_eq!(
+        fixture.objects.threads.get(faulted).unwrap().state,
+        ThreadState::BlockedSend,
+        "nobody waited on the handler endpoint"
+    );
+
+    let mut waiting = [0; SIZE];
+    {
+        let mut writer = audhsos_abi::ipc_buffer::BufferMut::new(&mut waiting);
+        writer.set_syscall_number(u64::from(Syscall::IpcRecv.number()));
+        assert!(writer.set_argument(0, handle.raw()));
+    }
+    fixture.write_buffer(taker, &waiting);
+    crate::dispatch::dispatch(&mut fixture.machine(), taker, &mut waiting);
+
+    // The receive answered in place, so the message is in the buffer the
+    // dispatch was given.
+    let view = Buffer::new(&waiting);
+    let message = view.message().unwrap();
+    assert!(message.is_kernel_label());
+    assert_eq!(fault_kind_of(message.label), Some(FaultKind::PageFault));
+    assert_eq!(view.word(0), Some(page_fault().address));
+    assert_eq!(
+        fixture.objects.threads.get(faulted).unwrap().state,
+        ThreadState::BlockedReply,
+        "the faulting thread waits for the answer"
+    );
+}
+
+#[test]
+fn a_queued_fault_message_a_sibling_thread_rewrote_arrives_as_the_kernel_wrote_it() {
+    // The fault message waits in the faulting thread's IPC buffer, which
+    // every thread of its process can write. The handler reads the fault
+    // that happened, not what the sibling left.
+    let mut fixture = Fixture::new();
+    let (_id, handle) = handler(&mut fixture);
+    let own = fixture.process;
+    let taker = fixture.running(own, 4);
+
+    let faulted = fixture.thread;
+    let mut buffer = [0; SIZE];
+    deliver(&mut fixture.machine(), faulted, page_fault(), &mut buffer);
+    fixture.write_buffer(faulted, &buffer);
+    assert_eq!(
+        fixture.objects.threads.get(faulted).unwrap().state,
+        ThreadState::BlockedSend
+    );
+
+    let mut forged = [0; SIZE];
+    {
+        let mut writer = audhsos_abi::ipc_buffer::BufferMut::new(&mut forged);
+        writer.set_label(audhsos_abi::ipc_buffer::fault_label(
+            FaultKind::GeneralProtection,
+        ));
+        assert!(writer.set_counts(3, 0).is_ok());
+        writer.set_word(0, 0xDEAD_BEEF);
+        writer.set_word(1, 0xFEED_FACE);
+        writer.set_word(2, 0xFFFF);
+    }
+    fixture.write_buffer(faulted, &forged);
+
+    let mut waiting = [0; SIZE];
+    {
+        let mut writer = audhsos_abi::ipc_buffer::BufferMut::new(&mut waiting);
+        writer.set_syscall_number(u64::from(Syscall::IpcRecv.number()));
+        assert!(writer.set_argument(0, handle.raw()));
+    }
+    fixture.write_buffer(taker, &waiting);
+    crate::dispatch::dispatch(&mut fixture.machine(), taker, &mut waiting);
+
+    let view = Buffer::new(&waiting);
+    let message = view.message().unwrap();
+    assert_eq!(
+        fault_kind_of(message.label),
+        Some(FaultKind::PageFault),
+        "the kind of the fault that happened"
+    );
+    assert_eq!(view.word(0), Some(page_fault().address));
+    assert_eq!(view.word(1), Some(page_fault().instruction_pointer));
+    assert_eq!(view.word(2), Some(page_fault().error_code));
+}
+
+#[test]
 fn a_fault_reaches_the_handler_under_the_badge_of_the_capability_that_named_it() {
     let mut fixture = Fixture::new();
     let raw = value_of(&mut fixture, request(Syscall::EndpointCreate, &[]));

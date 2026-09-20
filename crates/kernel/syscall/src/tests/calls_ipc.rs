@@ -918,7 +918,8 @@ fn a_receive_whose_sender_shares_its_buffer_puts_the_sender_back() {
         kernel_objects::object::Wait::Endpoint {
             endpoint: endpoint_id,
             queue: kernel_objects::object::Queue::Senders,
-            badge: BADGE
+            badge: BADGE,
+            kernel_message: false,
         },
         "with the badge it sent through"
     );
@@ -956,6 +957,116 @@ fn closing_a_reply_handle_without_answering_wakes_the_caller() {
     assert_eq!(
         fixture.objects.threads.get(caller).unwrap().wait,
         kernel_objects::object::Wait::Nothing
+    );
+}
+
+#[test]
+fn a_queued_sender_that_rewrites_its_label_into_the_reserved_range_is_refused() {
+    // The trigger of the report: T1 queues an ordinary message, a sibling
+    // thread of the same process writes a reserved label into T1's IPC
+    // buffer, and the receiver copies what is there now.
+    let mut fixture = Fixture::new();
+    let (endpoint_id, handle) = endpoint(&mut fixture);
+    let client = fixture.process(8);
+    let sender = fixture.running(client, 4);
+    let theirs = install_endpoint(&mut fixture, client, endpoint_id, Rights::SEND);
+    let mut theirs_buffer = message(7, 1, &[]);
+    with_call(&mut theirs_buffer, Syscall::IpcCall, &[theirs.raw()]);
+    fixture.write_buffer(sender, &theirs_buffer);
+    crate::dispatch::dispatch(&mut fixture.machine(), sender, &mut theirs_buffer);
+    assert_eq!(
+        fixture.objects.threads.get(sender).unwrap().state,
+        ThreadState::BlockedSend,
+        "no receiver waited, so the message waits in the queue"
+    );
+
+    let forged = message(fault_label(FaultKind::PageFault), 3, &[]);
+    fixture.write_buffer(sender, &forged);
+
+    let mut ours = [0; SIZE];
+    with_call(&mut ours, Syscall::IpcRecv, &[handle.raw()]);
+    let (status, _, _) = call(&mut fixture, &mut ours);
+    assert_eq!(
+        status.error(),
+        None,
+        "the receiver has no message and blocks"
+    );
+    assert_eq!(
+        fixture.objects.threads.get(fixture.thread).unwrap().state,
+        ThreadState::BlockedRecv,
+        "nothing was delivered"
+    );
+    assert_eq!(
+        fixture.status_of(sender).error(),
+        Some(Error::InvalidArgument),
+        "the thread that queued the message learns why it was refused"
+    );
+    assert_eq!(
+        fixture.objects.threads.get(sender).unwrap().state,
+        ThreadState::Ready,
+        "and it is out of the queue"
+    );
+    assert_eq!(
+        fixture.objects.replies.live(),
+        0,
+        "no reply object was made"
+    );
+}
+
+#[test]
+fn a_send_of_a_reserved_label_that_meets_a_receiver_is_refused() {
+    let mut fixture = Fixture::new();
+    let (endpoint_id, handle) = endpoint(&mut fixture);
+    let client = fixture.process(8);
+    let sender = fixture.running(client, 4);
+    let theirs = install_endpoint(&mut fixture, client, endpoint_id, Rights::SEND);
+    let mut ours = [0; SIZE];
+    with_call(&mut ours, Syscall::IpcRecv, &[handle.raw()]);
+    call(&mut fixture, &mut ours);
+    assert_eq!(
+        fixture.objects.threads.get(fixture.thread).unwrap().state,
+        ThreadState::BlockedRecv
+    );
+
+    let mut theirs_buffer = message(KERNEL_LABEL_BASE, 1, &[]);
+    with_call(&mut theirs_buffer, Syscall::IpcSend, &[theirs.raw()]);
+    fixture.write_buffer(sender, &theirs_buffer);
+    crate::dispatch::dispatch(&mut fixture.machine(), sender, &mut theirs_buffer);
+    assert_eq!(
+        Buffer::new(&theirs_buffer).status().unwrap().error(),
+        Some(Error::InvalidArgument)
+    );
+    assert_eq!(
+        fixture.objects.threads.get(fixture.thread).unwrap().state,
+        ThreadState::BlockedRecv,
+        "the receiver waits on, and its buffer was never written"
+    );
+    assert_eq!(
+        Buffer::new(fixture.buffer_of(fixture.thread))
+            .message()
+            .unwrap()
+            .label,
+        0
+    );
+}
+
+#[test]
+fn a_reply_of_a_reserved_label_is_refused() {
+    let mut fixture = Fixture::new();
+    let (endpoint_id, handle) = endpoint(&mut fixture);
+    let client = fixture.process(8);
+    let caller = fixture.running(client, 4);
+    let theirs = install_endpoint(&mut fixture, client, endpoint_id, Rights::SEND);
+    let reply = queue_a_call(&mut fixture, caller, theirs, handle);
+
+    let mut answer = message(fault_label(FaultKind::PageFault), 1, &[]);
+    with_call(&mut answer, Syscall::IpcReply, &[reply.raw()]);
+    let (status, _, _) = call(&mut fixture, &mut answer);
+    assert_eq!(status.error(), Some(Error::InvalidArgument));
+    assert_eq!(
+        fixture.objects.threads.get(caller).unwrap().state,
+        ThreadState::BlockedReply,
+        "the caller waits on for an answer it can use"
     );
 }
 
