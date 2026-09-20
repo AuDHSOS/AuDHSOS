@@ -7533,6 +7533,12 @@ impl RegisterLowerer {
             .chain(opaque.then_some(RegisterType::Unknown))
             .reduce(RegisterType::merge)
             .unwrap_or(RegisterType::Primitive);
+        // The handler holds the layouts of before the range, so a thrown
+        // value naming one the range made takes the top type instead.
+        let value_type = match value_type.object_id() {
+            Some(id) if !self.object_layouts.contains_key(&id) => RegisterType::Unknown,
+            _ => value_type,
+        };
         let mut handler_flow = RegisterFlow::Abrupt;
         let mut bindings_after_handler = bindings_after_body.clone();
         let mut layouts_after_handler = layouts_after_body.clone();
@@ -12341,8 +12347,20 @@ fn register_block_function_names_under(
             finally,
         } => {
             of_a_list(&[body], names, outer);
-            if let Some((_, catch)) = catch {
-                of_a_list(&[catch], names, outer);
+            if let Some((parameter, catch)) = catch {
+                // 14.15.1 makes a `var` of a name the Catch Parameter binds
+                // an early error, so B.3.2.1 leaves that name out. B.3.4
+                // takes the error back for a `BindingIdentifier`, which
+                // keeps its name in.
+                let mut inner = outer.clone();
+                if let Some(parameter) = parameter
+                    && parameter.identifier().is_none()
+                {
+                    let mut bound = Vec::new();
+                    parameter.names(&mut bound);
+                    inner.extend(bound);
+                }
+                of_a_list(&[catch], names, &inner);
             }
             if let Some(finally) = finally {
                 of_a_list(&[finally], names, outer);

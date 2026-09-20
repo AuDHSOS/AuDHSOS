@@ -12466,3 +12466,35 @@ fn a_block_function_a_lexical_declaration_takes_out() -> Result<(), Error> {
     // `var` is an early error; the CaseBlock still lowers.
     differential_scripts(&["let f = 123; switch (1) { case 1: function f() {} } f;"])
 }
+
+#[test]
+fn a_catch_parameter_reads_a_value_thrown_from_a_layout_of_the_range() -> Result<(), Error> {
+    // The handler holds the layouts of before the protected range, so the
+    // thrown value takes the top type and every read of it runs.
+    for source in [
+        "var m;try{throw {}}catch({a=5}){m=a}m",
+        "var m;try{throw {}}catch(e){m=typeof e.a}m",
+        "var m;try{throw {a:1}}catch({a=5}){m=a}m",
+        "var m;try{throw {b:1}}catch({a:c=7}){m=c}m",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn a_destructuring_catch_parameter_takes_its_names_out_of_b_3_2_1() -> Result<(), Error> {
+    // 14.15.1 makes a `var` of a name a destructuring Catch Parameter binds
+    // an early error; B.3.4 takes the error back for a `BindingIdentifier`.
+    differential_scripts(&["try { throw {}; } catch ({ f }) { { function f() {} } } typeof f;"])?;
+    // A `BindingIdentifier` keeps the copy, which the stack path omits.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    let answer =
+        realm.evaluate("try { throw null; } catch (f) { { function f() {} } } typeof f;")?;
+    assert!(same_value(
+        &answer,
+        &Value::String("function".encode_utf16().collect())
+    ));
+    Ok(())
+}
