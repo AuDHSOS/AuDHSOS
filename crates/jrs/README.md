@@ -584,8 +584,8 @@ negative-test passes. Other parser/builtin completeness gaps remain open.
 The engine is the target of the migration and the stack backend the
 source (architecture, section 17.1). What gates the switch is not the
 count either path reaches but the set of variants the stack path passes
-and the engine does not. At `a1adb83` that set holds 1,686 variants:
-none of them the engine fails, and 1,686 it names as gaps. The engine
+and the engine does not. At `849ba4e` that set holds 1,666 variants:
+none of them the engine fails, and 1,666 it names as gaps. The engine
 passes 25,539 variants the stack path does not. Only the failures are
 breaches of the equality duty; a gap costs coverage and answers nothing
 wrongly.
@@ -602,7 +602,7 @@ What a switch would cost is those gaps, by the reason the engine names:
 | 121 | an internal method of a Proxy |
 | 56 | `ToPrimitive` of an Object outside a call |
 | 76 | an eval of a Script the lowering does not take |
-| 68 | `ToString` of an Object |
+| 48 | `ToString` of an Object |
 | 46 | a frame of a call the lowering does not prepare |
 | 36 | a call |
 | 34 | a splitter of a constructor that is not `%RegExp%` |
@@ -618,17 +618,11 @@ every site of the reason a name of its own and running the suite once:
 | 194 | a property that is an accessor | about thirty call sites, the largest 22 |
 | 121 | an internal method of a Proxy | the walks that read a descriptor per key |
 | 56 | `ToPrimitive` of an Object outside a call | sites of 8 variants or fewer |
-| 68 | `ToString` of an Object | 26 `property_key`, the rest in ten sites of 4 or fewer |
+| 48 | `ToString` of an Object | ten sites of 4 variants or fewer, and `TestIn` |
 
-The 26 of `property_key` stand at three instructions, each of which
-holds the key in a register: `DefineAccessorByValue` (12),
-`DefineMethodByValue` (8) and `TestIn` (4). The first two take
-`convert_key` the way `SetByValue` and `DeleteByValue` do, and
-answered alike for an object literal; inside a class body the
-instruction that runs again answers `invalid bytecode`, twelve
-variants of it, so the conversion waits until the re-entry of a class
-body is understood. `TestIn` holds its key in the accumulator, which
-`convert_key` does not read.
+`DefineAccessorByValue` and `DefineMethodByValue` held 20 of that
+reason and now take `convert_key`. `TestIn` holds the remaining 4 and
+keeps its key in the accumulator, which `convert_key` does not read.
 
 The two largest sites of that reason are closed: the `lastIndex` of
 22.2.7.2 by `Resume::LastIndex` and the `length` of 10.4.2.4 by
@@ -779,6 +773,7 @@ more than eight variants.
 | `3a6e905` | 1,712 | **0** | 1,712 |
 | `11d78f0` | 1,694 | **0** | 1,694 |
 | `a1adb83` | 1,686 | **0** | 1,686 |
+| `849ba4e` | 1,666 | **0** | 1,666 |
 
 The list is the join of the two per-variant runs, without `--summary`:
 
@@ -1178,7 +1173,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | 13.3.7.1 with a spread element in the argument list (focused) | focused | `03d3688` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/super test/staging/sm/class --summary` | 188 | 371 | 232 (62.53%) | 14 (3.77%) | 125 (33.69%) |
 | The same, on the stack backend (focused) | focused | `03d3688` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/super test/staging/sm/class --summary` | 188 | 371 | 258 (69.54%) | 61 (16.44%) | 52 (14.02%) |
 | Complete pinned suite on the register engine, before the close of 14.7.5.7 step 3.j (outdated) | full | `33ffe90` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 58,747 (57.08%) | 20,543 (19.96%) | 23,635 (22.96%) |
-| Complete pinned suite on the register engine | full | `a1adb83` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,207 (61.41%) | 18,961 (18.42%) | 20,757 (20.17%) |
+| Complete pinned suite on the register engine | full | `849ba4e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,227 (61.43%) | 18,961 (18.42%) | 20,737 (20.15%) |
+| A computed key of a method through 7.1.19 (focused) | focused | `849ba4e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/computed-property-names --summary` | 48 | 96 | 96 (100.00%) | 0 (0.00%) | 0 (0.00%) |
+| The same, on the stack backend (focused) | focused | `849ba4e` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/computed-property-names --summary` | 48 | 96 | 86 (89.58%) | 6 (6.25%) | 4 (4.17%) |
+| Complete pinned suite on the register engine, before a computed key through 7.1.19 (outdated) | full | `a1adb83` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,207 (61.41%) | 18,961 (18.42%) | 20,757 (20.17%) |
 | The `length` of 10.4.2.4 through 7.1.6 (focused) | focused | `a1adb83` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 5,524 (90.31%) | 46 (0.75%) | 547 (8.94%) |
 | The same, on the stack backend (focused) | focused | `a1adb83` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 5,066 (82.82%) | 983 (16.07%) | 68 (1.11%) |
 | Complete pinned suite on the register engine, before the `length` of 10.4.2.4 (outdated) | full | `11d78f0` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,199 (61.40%) | 18,961 (18.42%) | 20,765 (20.18%) |
