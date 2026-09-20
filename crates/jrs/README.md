@@ -584,9 +584,9 @@ negative-test passes. Other parser/builtin completeness gaps remain open.
 The engine is the target of the migration and the stack backend the
 source (architecture, section 17.1). What gates the switch is not the
 count either path reaches but the set of variants the stack path passes
-and the engine does not. At `c996abf` that set holds 1,592 variants:
+and the engine does not. At `edc120e` that set holds 1,592 variants:
 none of them the engine fails, and 1,592 it names as gaps. The engine
-passes 25,570 variants the stack path does not. Only the failures are
+passes 25,573 variants the stack path does not. Only the failures are
 breaches of the equality duty; a gap costs coverage and answers nothing
 wrongly.
 
@@ -644,11 +644,11 @@ B.3.2.2 for a `CaseBlock` was written and measured and does not ship.
 In a function body it closes two variants of its own reason and moves
 them to another, leaving the suite unchanged, because every test of
 the clause is of a Script or of an eval. The Script path gains 100
-variants and answers 18 wrongly, six of them because 19.2.1.1 step
-5.d.ii creates the binding of an eval with `CreateGlobalVarBinding(vn,
-true)` while 16.1.7 creates the one of a Script with `false`, which
-the unit of an eval does not tell apart from a Script; the rest are a
-tail of their own.
+variants and answers 18 wrongly. Six of them were 19.2.1.1 step 5.d.ii
+asking `CreateGlobalVarBinding` for a deletable binding where 16.1.7
+asks for one that is not, which `edc120e` has since closed, so the
+next attempt at the clause meets twelve and not eighteen; those twelve
+are a tail of their own.
 
 All 24 of `a name of a function body the scan does not reach` come
 from `register_body_scope` and none from `register_function_local_names`,
@@ -825,6 +825,7 @@ more than eight variants.
 | `8d8e63a` | 1,616 | **0** | 1,616 |
 | `cf63fa6` | 1,602 | **0** | 1,602 |
 | `c996abf` | 1,592 | **0** | 1,592 |
+| `edc120e` | 1,592 | **0** | 1,592 |
 
 The list is the join of the two per-variant runs, without `--summary`:
 
@@ -1224,7 +1225,8 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | 13.3.7.1 with a spread element in the argument list (focused) | focused | `03d3688` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/super test/staging/sm/class --summary` | 188 | 371 | 232 (62.53%) | 14 (3.77%) | 125 (33.69%) |
 | The same, on the stack backend (focused) | focused | `03d3688` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/super test/staging/sm/class --summary` | 188 | 371 | 258 (69.54%) | 61 (16.44%) | 52 (14.02%) |
 | Complete pinned suite on the register engine, before the close of 14.7.5.7 step 3.j (outdated) | full | `33ffe90` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 58,747 (57.08%) | 20,543 (19.96%) | 23,635 (22.96%) |
-| Complete pinned suite on the register engine | full | `c996abf` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,332 (61.53%) | 18,961 (18.42%) | 20,632 (20.05%) |
+| Complete pinned suite on the register engine | full | `edc120e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,335 (61.54%) | 18,958 (18.42%) | 20,632 (20.05%) |
+| Complete pinned suite on the register engine, before the deletable `var` of an eval (outdated) | full | `c996abf` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,332 (61.53%) | 18,961 (18.42%) | 20,632 (20.05%) |
 | Complete pinned suite on the register engine, before a callee named as no function (outdated) | full | `cf63fa6` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,322 (61.52%) | 18,961 (18.42%) | 20,642 (20.06%) |
 | An arrow that reads `super` (focused) | focused | `cf63fa6` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/arrow-function --summary` | 343 | 643 | 535 (83.20%) | 2 (0.31%) | 106 (16.49%) |
 | The same, on the stack backend (focused) | focused | `cf63fa6` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/arrow-function --summary` | 343 | 643 | 508 (79.00%) | 32 (4.98%) | 103 (16.02%) |
