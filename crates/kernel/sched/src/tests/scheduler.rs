@@ -793,3 +793,232 @@ fn a_thread_the_pool_does_not_hold_leaves_no_queue() {
     assert_eq!(scheduler.ready_bitmap(), queued);
     assert_eq!(state(&threads, waiting), ThreadState::Ready);
 }
+
+#[test]
+fn a_displaced_thread_returns_to_the_head_of_its_queue_with_its_ticks() {
+    let mut threads = Threads::new();
+    let mut scheduler = Scheduler::new();
+    let first = ready(&mut scheduler, &mut threads, 3);
+    let second = ready(&mut scheduler, &mut threads, 3);
+    let third = ready(&mut scheduler, &mut threads, 3);
+    let higher = ready(&mut scheduler, &mut threads, 7);
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(higher));
+    scheduler
+        .on_block(&mut threads, higher, Event::BlockNotification)
+        .unwrap();
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(first));
+    assert_eq!(scheduler.tick(&mut threads), Outcome::NOTHING);
+    assert_eq!(
+        scheduler.on_wake(&mut threads, higher),
+        Ok(Outcome::RESCHEDULE)
+    );
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(higher));
+    assert_eq!(state(&threads, first), ThreadState::Ready);
+    assert_eq!(
+        threads.get(first).unwrap().time_slice,
+        DEFAULT_TIME_SLICE_TICKS - 1,
+        "displacement leaves the ticks the thread had not spent"
+    );
+    scheduler
+        .on_block(&mut threads, higher, Event::BlockNotification)
+        .unwrap();
+    assert_eq!(
+        scheduler.pick_next(&mut threads),
+        Ok(first),
+        "the displaced thread is ahead of its peers again"
+    );
+    assert_eq!(
+        threads.get(first).unwrap().time_slice,
+        DEFAULT_TIME_SLICE_TICKS - 1,
+        "and it is not handed a fresh slice"
+    );
+    let _ = (second, third);
+}
+
+#[test]
+fn a_thread_displaced_on_every_tick_still_runs_its_whole_slice() {
+    let mut threads = Threads::new();
+    let mut scheduler = Scheduler::new();
+    let first = ready(&mut scheduler, &mut threads, 3);
+    let second = ready(&mut scheduler, &mut threads, 3);
+    let third = ready(&mut scheduler, &mut threads, 3);
+    let higher = ready(&mut scheduler, &mut threads, 7);
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(higher));
+    scheduler
+        .on_block(&mut threads, higher, Event::BlockNotification)
+        .unwrap();
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(first));
+    // One tick charged against the slice, then a wake of the higher
+    // priority that takes the processor and gives it straight back.
+    for tick in 1..DEFAULT_TIME_SLICE_TICKS {
+        assert_eq!(scheduler.tick(&mut threads), Outcome::NOTHING);
+        scheduler.on_wake(&mut threads, higher).unwrap();
+        assert_eq!(scheduler.pick_next(&mut threads), Ok(higher));
+        scheduler
+            .on_block(&mut threads, higher, Event::BlockNotification)
+            .unwrap();
+        assert_eq!(
+            scheduler.pick_next(&mut threads),
+            Ok(first),
+            "displacement {tick} handed the processor to a peer"
+        );
+    }
+    assert_eq!(scheduler.tick(&mut threads), Outcome::RESCHEDULE);
+    assert_eq!(
+        scheduler.pick_next(&mut threads),
+        Ok(second),
+        "the peer runs once the whole slice is spent"
+    );
+    assert_eq!(
+        threads.get(first).unwrap().time_slice,
+        0,
+        "and the thread that ran carries nothing over"
+    );
+    let _ = third;
+}
+
+#[test]
+fn a_thread_whose_slice_ran_out_goes_to_the_tail_with_a_fresh_slice() {
+    let mut threads = Threads::new();
+    let mut scheduler = Scheduler::new();
+    let first = ready(&mut scheduler, &mut threads, 3);
+    let second = ready(&mut scheduler, &mut threads, 3);
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(first));
+    for _ in 0..DEFAULT_TIME_SLICE_TICKS {
+        scheduler.tick(&mut threads);
+    }
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(second));
+    assert_eq!(
+        threads.get(second).unwrap().time_slice,
+        DEFAULT_TIME_SLICE_TICKS
+    );
+    assert_eq!(threads.get(first).unwrap().time_slice, 0);
+}
+
+#[test]
+fn a_slice_that_ends_on_the_tick_that_wakes_a_higher_priority_goes_to_the_tail() {
+    let mut threads = Threads::new();
+    let mut scheduler = Scheduler::new();
+    let first = ready(&mut scheduler, &mut threads, 3);
+    let second = ready(&mut scheduler, &mut threads, 3);
+    let higher = ready(&mut scheduler, &mut threads, 7);
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(higher));
+    scheduler
+        .on_block(&mut threads, higher, Event::BlockNotification)
+        .unwrap();
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(first));
+    for _ in 0..DEFAULT_TIME_SLICE_TICKS {
+        scheduler.tick(&mut threads);
+    }
+    scheduler.on_wake(&mut threads, higher).unwrap();
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(higher));
+    scheduler
+        .on_block(&mut threads, higher, Event::BlockNotification)
+        .unwrap();
+    assert_eq!(
+        scheduler.pick_next(&mut threads),
+        Ok(second),
+        "a spent slice is a spent slice, whoever asked for the switch"
+    );
+}
+
+#[test]
+fn a_displaced_thread_of_a_priority_nobody_else_holds_keeps_its_ticks() {
+    let mut threads = Threads::new();
+    let mut scheduler = Scheduler::new();
+    let alone = ready(&mut scheduler, &mut threads, 3);
+    let higher = ready(&mut scheduler, &mut threads, 7);
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(higher));
+    scheduler
+        .on_block(&mut threads, higher, Event::BlockNotification)
+        .unwrap();
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(alone));
+    scheduler.tick(&mut threads);
+    scheduler.tick(&mut threads);
+    scheduler.on_wake(&mut threads, higher).unwrap();
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(higher));
+    assert_eq!(scheduler.ready_bitmap(), 1 << 3);
+    scheduler
+        .on_block(&mut threads, higher, Event::BlockNotification)
+        .unwrap();
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(alone));
+    assert_eq!(
+        threads.get(alone).unwrap().time_slice,
+        DEFAULT_TIME_SLICE_TICKS - 2
+    );
+}
+
+#[test]
+fn a_thread_displaced_out_of_an_empty_queue_is_its_head_and_its_tail() {
+    let mut threads = Threads::new();
+    let mut scheduler = Scheduler::new();
+    let lower = ready(&mut scheduler, &mut threads, 3);
+    let higher = ready(&mut scheduler, &mut threads, 7);
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(higher));
+    scheduler
+        .on_block(&mut threads, higher, Event::BlockNotification)
+        .unwrap();
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(lower));
+    scheduler.tick(&mut threads);
+    scheduler.on_wake(&mut threads, higher).unwrap();
+    scheduler.pick_next(&mut threads).unwrap();
+    // The queue of priority three held nobody, so the displaced thread is
+    // both of its ends; a joiner has to land behind it.
+    let joiner = ready(&mut scheduler, &mut threads, 3);
+    scheduler
+        .on_block(&mut threads, higher, Event::BlockNotification)
+        .unwrap();
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(lower));
+    for _ in 0..DEFAULT_TIME_SLICE_TICKS {
+        scheduler.tick(&mut threads);
+    }
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(joiner));
+}
+
+#[test]
+fn displacement_does_not_move_a_thread_the_idle_thread_left_behind() {
+    let mut threads = Threads::new();
+    let mut scheduler = Scheduler::new();
+    let idle = add(&mut threads, 0);
+    scheduler.set_idle(idle);
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(idle));
+    let first = ready(&mut scheduler, &mut threads, 3);
+    let second = ready(&mut scheduler, &mut threads, 3);
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(first));
+    assert_eq!(state(&threads, idle), ThreadState::Inactive);
+    for _ in 0..DEFAULT_TIME_SLICE_TICKS {
+        scheduler.tick(&mut threads);
+    }
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(second));
+}
+
+#[test]
+fn a_thread_that_lowers_itself_enters_its_new_queue_behind_the_waiters() {
+    let mut threads = Threads::new();
+    let mut scheduler = Scheduler::new();
+    let waiting = ready(&mut scheduler, &mut threads, 2);
+    let behind = ready(&mut scheduler, &mut threads, 2);
+    let stepping = ready(&mut scheduler, &mut threads, 9);
+    let displacing = ready(&mut scheduler, &mut threads, 3);
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(stepping));
+    scheduler.tick(&mut threads);
+    assert_eq!(
+        scheduler.set_priority(&mut threads, stepping, 2),
+        Ok(Outcome::RESCHEDULE)
+    );
+    assert_eq!(
+        threads.get(stepping).unwrap().time_slice,
+        0,
+        "the ticks were earned at priority nine and buy nothing at two"
+    );
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(displacing));
+    scheduler
+        .on_block(&mut threads, displacing, Event::BlockNotification)
+        .unwrap();
+    assert_eq!(
+        scheduler.pick_next(&mut threads),
+        Ok(waiting),
+        "the thread that stepped down did not jump the queue it entered"
+    );
+    let _ = behind;
+}

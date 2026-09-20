@@ -175,8 +175,13 @@ fn only_a_stopped_thread_resumes() {
 }
 
 #[test]
-fn only_the_running_thread_is_preempted_yields_or_faults() {
-    for event in [Event::Preempt, Event::Yield, Event::Fault] {
+fn only_the_running_thread_leaves_the_processor_on_its_own_events() {
+    for event in [
+        Event::SliceExpired,
+        Event::Displaced,
+        Event::Yield,
+        Event::Fault,
+    ] {
         for &state in ThreadState::ALL {
             let expected = state == ThreadState::Running;
             assert_eq!(
@@ -189,7 +194,11 @@ fn only_the_running_thread_is_preempted_yields_or_faults() {
         }
     }
     assert_eq!(
-        next(ThreadState::Running, Event::Preempt),
+        next(ThreadState::Running, Event::SliceExpired),
+        Ok(ThreadState::Ready)
+    );
+    assert_eq!(
+        next(ThreadState::Running, Event::Displaced),
         Ok(ThreadState::Ready)
     );
     assert_eq!(
@@ -235,5 +244,5 @@ fn a_thread_that_is_not_dead_can_be_suspended() {
 fn every_event_has_a_name_and_they_are_unique() {
     let names: HashSet<&str> = Event::ALL.iter().map(|event| event.name()).collect();
     assert_eq!(names.len(), Event::ALL.len());
-    assert_eq!(Event::ALL.len(), 13);
+    assert_eq!(Event::ALL.len(), 14);
 }

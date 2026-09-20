@@ -17,9 +17,11 @@ pub enum Event {
     Start,
     /// The scheduler picked the thread.
     Schedule,
-    /// A thread of higher priority took the processor, or the time slice
-    /// ran out.
-    Preempt,
+    /// The time slice of the thread ran out.
+    SliceExpired,
+    /// A thread of higher priority took the processor while the slice of
+    /// this one still had ticks.
+    Displaced,
     /// The thread gave up the rest of its time slice.
     Yield,
     /// The thread waits for a receiver on an endpoint.
@@ -48,7 +50,8 @@ impl Event {
     pub const ALL: &[Event] = &[
         Event::Start,
         Event::Schedule,
-        Event::Preempt,
+        Event::SliceExpired,
+        Event::Displaced,
         Event::Yield,
         Event::BlockSend,
         Event::BlockRecv,
@@ -67,7 +70,8 @@ impl Event {
         match self {
             Event::Start => "Start",
             Event::Schedule => "Schedule",
-            Event::Preempt => "Preempt",
+            Event::SliceExpired => "SliceExpired",
+            Event::Displaced => "Displaced",
             Event::Yield => "Yield",
             Event::BlockSend => "BlockSend",
             Event::BlockRecv => "BlockRecv",
@@ -111,7 +115,12 @@ pub const TRANSITIONS: &[(ThreadState, Event, ThreadState)] = &[
     (ThreadState::Ready, Event::Suspend, ThreadState::Suspended),
     (ThreadState::Ready, Event::Exit, ThreadState::Exited),
     // On the processor.
-    (ThreadState::Running, Event::Preempt, ThreadState::Ready),
+    (
+        ThreadState::Running,
+        Event::SliceExpired,
+        ThreadState::Ready,
+    ),
+    (ThreadState::Running, Event::Displaced, ThreadState::Ready),
     (ThreadState::Running, Event::Yield, ThreadState::Ready),
     (
         ThreadState::Running,

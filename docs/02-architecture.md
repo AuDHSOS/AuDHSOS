@@ -330,6 +330,10 @@ a panic.
   into the thread pool. Higher priority always preempts lower priority.
   Equal priorities share the CPU round-robin with a time slice measured in
   timer ticks.
+- A thread leaves the CPU on one of two events. Its slice ran out, and it
+  enters the tail of its queue and is handed a whole slice when it is picked
+  again; or a higher priority took the CPU while it still held ticks, and it
+  enters the head of its queue and keeps them (D-191).
 - The idle thread has the lowest priority and never blocks. Its kernel stack
   is the boot stack the loader provided.
 - A thread may only create threads with priority up to its own maximum
