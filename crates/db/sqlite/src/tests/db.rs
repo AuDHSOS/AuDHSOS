@@ -1023,7 +1023,6 @@ fn the_schema_is_a_table_that_is_read_and_not_written() {
         b"INSERT INTO sqlite_master VALUES('x','y','z',1,'w')".as_slice(),
         b"UPDATE sqlite_schema SET name='q'",
         b"DELETE FROM sqlite_master",
-        b"DROP TABLE sqlite_master",
     ] {
         assert_eq!(
             writer.run(sql).err(),
@@ -1032,6 +1031,29 @@ fn the_schema_is_a_table_that_is_read_and_not_written() {
             alloc::string::String::from_utf8_lossy(sql)
         );
     }
+    // A name SQLite keeps for itself is one no `DROP TABLE` takes away,
+    // which `tableMayNotBeDropped` refuses before it reads whether the
+    // schema holds the name.
+    for name in [b"sqlite_master".as_slice(), b"sqlite_schema", b"sqlite_x"] {
+        let mut sql = b"DROP TABLE ".to_vec();
+        sql.extend_from_slice(name);
+        assert_eq!(
+            writer.run(&sql).err(),
+            Some(crate::db::Error::NotDroppable(name.to_vec()))
+        );
+    }
+    // `ANALYZE` writes `sqlite_stat1` and the shell `sqlite_parameters`,
+    // which a statement takes away.
+    writer.run(b"CREATE TABLE u(a)").unwrap();
+    writer.run(b"ANALYZE").unwrap();
+    writer.run(b"DROP TABLE sqlite_stat1").unwrap();
+    assert_eq!(
+        writer.run(b"DROP TABLE sqlite_parameters").err(),
+        Some(crate::db::Error::NoObject(
+            b"table".to_vec(),
+            b"sqlite_parameters".to_vec()
+        ))
+    );
 }
 
 #[test]

@@ -374,6 +374,10 @@ pub enum Error {
     /// The function `sqlite3_commit_hook` told the connection answered
     /// true, which sends the transaction back.
     CommitHook,
+    /// A `DROP TABLE` or a `DROP VIEW` over a name SQLite keeps for
+    /// itself, which `tableMayNotBeDropped` of
+    /// `research/sqlite/src/build.c:3476` refuses.
+    NotDroppable(Vec<u8>),
 }
 
 impl Error {
@@ -424,6 +428,32 @@ impl Error {
             Error::AttachEncoding => alloc::string::String::from(
                 "attached databases must use the same text encoding as main database",
             ),
+            _ => return None,
+        })
+    }
+
+    /// The words a definition is refused with, from a name SQLite keeps
+    /// for itself to a key that counts up where no key of the table does,
+    /// or nothing where the refusal is another.
+    fn defining(&self) -> Option<alloc::string::String> {
+        let shown = |bytes: &[u8]| alloc::string::String::from_utf8_lossy(bytes).into_owned();
+        Some(match self {
+            Error::NotIndexable(name) => {
+                alloc::format!("table {} may not be indexed", shown(name))
+            }
+            Error::NotDroppable(name) => {
+                alloc::format!("table {} may not be dropped", shown(name))
+            }
+            Error::IndexedView => alloc::string::String::from("views may not be indexed"),
+            Error::ConstraintIndex => alloc::string::String::from(
+                "index associated with UNIQUE or PRIMARY KEY constraint cannot be dropped",
+            ),
+            Error::Schema(schema::Error::Autoincrement) => alloc::string::String::from(
+                "AUTOINCREMENT is only allowed on an INTEGER PRIMARY KEY",
+            ),
+            Error::Schema(schema::Error::AutoincrementWithoutRowid) => {
+                alloc::string::String::from("AUTOINCREMENT not allowed on WITHOUT ROWID tables")
+            }
             _ => return None,
         })
     }
@@ -482,9 +512,6 @@ impl Error {
                 | crate::error::Error::Encoding(_),
             ) => alloc::string::String::from("file is not a database"),
             Error::Image(_) => alloc::string::String::from("database disk image is malformed"),
-            Error::NotIndexable(name) => {
-                alloc::format!("table {} may not be indexed", shown(name))
-            }
             Error::NoSchema(name) => alloc::format!("unknown database {}", shown(name)),
             Error::VacuumInTransaction => {
                 alloc::string::String::from("cannot VACUUM from within a transaction")
@@ -495,10 +522,6 @@ impl Error {
             Error::NoEncoding(name) => alloc::format!(
                 "unsupported encoding: {}",
                 alloc::string::String::from_utf8_lossy(name)
-            ),
-            Error::IndexedView => alloc::string::String::from("views may not be indexed"),
-            Error::ConstraintIndex => alloc::string::String::from(
-                "index associated with UNIQUE or PRIMARY KEY constraint cannot be dropped",
             ),
             Error::Schema(schema::Error::IndexColumn(name)) => {
                 alloc::format!("no such column: {}", shown(name))
@@ -710,6 +733,7 @@ impl Error {
         if let Some(shown) = self
             .altered()
             .or_else(|| self.datatypes())
+            .or_else(|| self.defining())
             .or_else(|| self.misused())
             .or_else(|| self.databases())
             .or_else(|| self.compounds())

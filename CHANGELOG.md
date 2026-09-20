@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` refuses a `DROP TABLE` or a `DROP VIEW` over a name SQLite
+  keeps for itself with `table <name> may not be dropped`, beside
+  `sqlite_stat` and `sqlite_parameters`, writes the row of
+  `sqlite_sequence` at the end of every `INSERT` over a table that counts
+  up whether or not the statement wrote a row, never counts that row back
+  down, and names what `AUTOINCREMENT` is refused for. D-345 records it.
+  Catalog 6.6.233. `autoinc.test` goes from 33 cases passing to 78.
+
 - `db-sqlite` writes the database a statement named in front of a table and
   locates the table in that database alone, so an `INSERT INTO temp.t` over
   a table of `main` is refused `no such table: temp.t` rather than leaving

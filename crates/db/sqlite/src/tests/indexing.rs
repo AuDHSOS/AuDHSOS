@@ -56,6 +56,33 @@ fn what_a_create_index_is_refused_with() {
     }
 }
 
+/// A `DROP TABLE` over a name SQLite keeps for itself, and a key that
+/// counts up where no key of the table holds it.
+#[test]
+fn what_a_name_sqlite_keeps_and_a_key_that_counts_up_are_refused_with() {
+    let mut writer = writing();
+    for (sql, message) in [
+        (
+            b"DROP TABLE sqlite_master".as_slice(),
+            "table sqlite_master may not be dropped",
+        ),
+        (
+            b"DROP VIEW sqlite_master",
+            "table sqlite_master may not be dropped",
+        ),
+        (
+            b"CREATE TABLE t9(a TEXT PRIMARY KEY AUTOINCREMENT)",
+            "AUTOINCREMENT is only allowed on an INTEGER PRIMARY KEY",
+        ),
+        (
+            b"CREATE TABLE t9(a INTEGER PRIMARY KEY AUTOINCREMENT, b) WITHOUT ROWID",
+            "AUTOINCREMENT not allowed on WITHOUT ROWID tables",
+        ),
+    ] {
+        assert_eq!(refused(&mut writer, sql), message, "{sql:?}");
+    }
+}
+
 /// A `DROP INDEX` of an index that is not there and of one a `UNIQUE`
 /// made.
 #[test]

@@ -1811,6 +1811,13 @@ impl Writer {
     /// reading or freeing a page refuses.
     fn drop_object(&mut self, asked: &crate::ast::Drop, sql: &[u8]) -> Result<(), Error> {
         let name = crate::schema::dequote(asked.name.text(sql));
+        if matches!(
+            asked.kind,
+            crate::ast::Dropped::Table | crate::ast::Dropped::View
+        ) && kept_name(&name)
+        {
+            return Err(Error::NotDroppable(name));
+        }
         let (rowids, mut roots) = self.named(&name, asked.kind)?;
         if rowids.is_empty() {
             return if asked.if_exists {
@@ -1842,11 +1849,6 @@ impl Writer {
     /// destroys: a table takes its indexes with it, an index takes only
     /// itself.
     fn named(&self, name: &[u8], kind: crate::ast::Dropped) -> Result<(Vec<i64>, Vec<u32>), Error> {
-        // `sqlite3SchemaMayNotBeModified`: the schema's own table is
-        // read and not written, whatever the statement says.
-        if crate::db::schema_named(name) {
-            return Err(Error::Unsupported);
-        }
         let bytes = self.image();
         let database = self.reading(&bytes)?;
         let mut roots: Vec<u32> = Vec::new();
@@ -3141,6 +3143,25 @@ impl Writer {
     fn commit(&mut self, was: &Header) -> Result<(), Error> {
         commit_file(&mut self.held, was)
     }
+}
+
+/// Whether the name is one a `DROP TABLE` may not take away, which
+/// `tableMayNotBeDropped` of `research/sqlite/src/build.c:3476` is: a name
+/// that begins `sqlite_` is one SQLite keeps for itself, beside
+/// `sqlite_stat` and `sqlite_parameters`, which `ANALYZE` and the shell
+/// write and a statement may take away.
+fn kept_name(name: &[u8]) -> bool {
+    let Some(tail) = name.get(..7).and_then(|head| {
+        head.eq_ignore_ascii_case(b"sqlite_")
+            .then(|| name.get(7..).unwrap_or_default())
+    }) else {
+        return false;
+    };
+    let named = |word: &[u8]| {
+        tail.get(..word.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(word))
+    };
+    !named(b"stat") && !named(b"parameters")
 }
 
 /// The row an `UPDATE` fires its triggers over: what it holds now under
@@ -6684,11 +6705,10 @@ impl Writer {
             }
         }
         // `autoIncrementEnd` writes the largest key the table ever held
-        // back into `sqlite_sequence`, where the statement wrote a row.
-        if let Some(held) = counted
-            && written > 0
-            && next > held
-        {
+        // back into `sqlite_sequence` at the end of the statement, which
+        // it does whether or not the statement wrote a row, so an
+        // `INSERT` that wrote none still makes the row.
+        if counted.is_some() {
             self.count_up(&name, next)?;
         }
         Ok(written)
@@ -7153,17 +7173,26 @@ impl Writer {
     /// Writing one row costs O(log n).
     fn count_up(&mut self, name: &[u8], held: i64) -> Result<(), Error> {
         let wanted = crate::value::stored(name, self.held.header.encoding);
-        let (root, rowid) = {
+        let (root, rowid, stood) = {
             let bytes = self.image();
             let database = self.reading(&bytes)?;
             let (_, root) = database.table(SEQUENCE).ok_or(Error::NoTable(Vec::new()))?;
-            let rowid = database
+            let found = database
                 .rows_of(SEQUENCE)?
                 .iter()
                 .find(|(_, values)| named_row(values, &wanted))
-                .map(|(rowid, _)| *rowid);
-            (root, rowid)
+                .map(|(rowid, values)| (*rowid, values.get(1).map_or(0, Value::to_integer)));
+            (
+                root,
+                found.map(|(rowid, _)| rowid),
+                found.map_or(0, |(_, seq)| seq),
+            )
         };
+        // A trigger's body that writes the same table counts the keys up
+        // further than the statement that fired it, and
+        // `autoIncrementEnd` writes one register per table, so the row
+        // never counts back down.
+        let held = held.max(stood);
         let record = crate::record::write_in(
             &[Value::Text(wanted), Value::Int(held)],
             &[Affinity::None; 2],

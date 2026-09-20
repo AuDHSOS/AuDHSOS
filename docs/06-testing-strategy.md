@@ -6397,3 +6397,16 @@ Document 16 step Q8.
   statement stands.
 - A row the triggers before it took away is told once, and the statement
   writes nothing over it.
+
+### 6.6.233 The names a statement may not take away (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A `DROP TABLE` and a `DROP VIEW` over a name that begins `sqlite_` are
+  refused, and the refusal comes before the schema is read.
+- `DROP TABLE sqlite_stat1` and `DROP TABLE sqlite_parameters` stand.
+- An `INSERT` over a table that counts up writes the row of
+  `sqlite_sequence` whether or not it wrote a row.
+- The row of `sqlite_sequence` never counts back down.
+- `AUTOINCREMENT` off an `INTEGER PRIMARY KEY` and over a `WITHOUT ROWID`
+  table each carry the words `sqlite3AddPrimaryKey` writes.

@@ -914,6 +914,9 @@ Size: L.
 91. The preupdate hook a connection is told, which every row a statement
     is about to write tells with the two keys, the depth, the values the
     row holds and the values it will hold. Built, which D-343 records.
+92. The names a `DROP TABLE` may not take away, and the row of
+    `sqlite_sequence` a statement writes at its end. Built, which D-345
+    records.
 
 ### Done when
 
@@ -923,8 +926,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 108 084 cases in 798 files, 95 546
-pass, 3264 answer differently, and 9274 name something the engine
+under the `tclsh` of the machine. Of 108 093 cases in 798 files, 95 601
+pass, 3246 answer differently, and 9246 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the three-minute
 deadline and are counted with the cases they ran by then. One run over
