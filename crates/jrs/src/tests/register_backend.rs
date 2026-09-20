@@ -12257,6 +12257,21 @@ fn the_internal_methods_of_10_5_answer_out_of_the_handler() -> Result<(), Error>
             "(function(){var v={};var x=new Proxy(v,{preventExtensions(o){Object.preventExtensions(o);return true}});var a=Object.preventExtensions(x)===x;var y=new Proxy({},{preventExtensions(){return true}});var r;try{Object.preventExtensions(y)}catch(e){r=e instanceof TypeError};var z=new Proxy({},{preventExtensions(){return false}});return ''+a+'|'+Object.isExtensible(v)+'|'+r+'|'+Reflect.preventExtensions(z)})()",
             "true|false|true|false",
         ),
+        // Step 4 of each follows the chain: a target that is itself a Proxy
+        // answers out of its own handler, and the walk ends at the first one
+        // that carries the trap.
+        (
+            "(function(){var t={a:1};var i=new Proxy(t,{has(o,n){return n==='k'}});var o=new Proxy(i,{});return ''+('k' in o)+'|'+('a' in o)})()",
+            "true|false",
+        ),
+        (
+            "(function(){var t={};var i=new Proxy(t,{ownKeys(){return ['z']},getOwnPropertyDescriptor(){return {value:1,configurable:true,enumerable:true}}});var o=new Proxy(i,{});return Object.getOwnPropertyNames(o).join('')})()",
+            "z",
+        ),
+        (
+            "(function(){var r={};var i=new Proxy({},{getPrototypeOf(){return r}});var o=new Proxy(i,{});return ''+(Object.getPrototypeOf(o)===r)})()",
+            "true",
+        ),
         // Step 4 of each: a handler with no trap answers out of the target.
         (
             "(function(){var r={};var n=new Proxy(Object.create(r),{});return ''+(Object.getPrototypeOf(n)===r)+'|'+Object.isExtensible(n)})()",

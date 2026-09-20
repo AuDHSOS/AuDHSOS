@@ -11614,6 +11614,34 @@ impl RegisterVM {
         Ok((target, handler))
     }
 
+    /// The Proxy of the chain whose handler carries this trap, with its parts.
+    ///
+    /// Step 4 of every internal method of 10.5 forwards to the target where
+    /// the handler carries no trap, and a target that is itself a Proxy
+    /// answers out of its own handler. The walk therefore follows the chain
+    /// until a handler carries the trap or a target is no Proxy, which ends
+    /// because a target is made before the Proxy that names it.
+    ///
+    /// Answers the target to forward to and the trap to call, of which at
+    /// most one is used: where the trap is undefined the target is no Proxy.
+    fn the_proxy_that_answers(
+        proxy: ObjectRef,
+        name: &str,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(Value, ObjectRef, Value), VMError> {
+        let mut current = proxy;
+        loop {
+            let (target, handler) = Self::proxy_parts(current, heap, realm)?;
+            let trap = Self::proxy_trap(handler, name, heap, realm)?;
+            let inner = target.as_object().filter(|object| heap.is_a_proxy(*object));
+            match inner {
+                Some(inner) if trap.is_undefined() => current = inner,
+                _ => return Ok((target, handler, trap)),
+            }
+        }
+    }
+
     /// `GetMethod(handler, name)` of 10.5: the trap the handler carries, and
     /// undefined where it carries none.
     fn proxy_trap(
@@ -11660,17 +11688,19 @@ impl RegisterVM {
     ) -> Result<Option<u32>, VMError> {
         let (target, handler) = Self::proxy_parts(proxy, heap, realm)?;
         let trap = Self::proxy_trap(handler, "get", heap, realm)?;
+        // A read forwarded to a target that is itself a Proxy reaches that
+        // Proxy's own `[[Get]]` with the receiver this one was given, which
+        // the walk of the chain does not carry.
+        if trap.is_undefined()
+            && target
+                .as_object()
+                .is_some_and(|object| heap.is_a_proxy(object))
+        {
+            return Err(VMError::Unsupported("an internal method of a Proxy"));
+        }
         let key = Self::key_value(name);
         // Step 6 forwards to the target where the handler carries no trap.
         if trap.is_undefined() {
-            // Forwarding to a target that is itself a Proxy is that Proxy's own
-            // internal method, which is a second trap.
-            if target
-                .as_object()
-                .is_some_and(|object| heap.is_a_proxy(object))
-            {
-                return Err(VMError::Unsupported("an internal method of a Proxy"));
-            }
             let Some(object) = target.as_object() else {
                 return Err(VMError::TypeError);
             };
@@ -11762,8 +11792,7 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Option<u32>, VMError> {
         let (value, receiver, strict) = written;
-        let (target, handler) = Self::proxy_parts(proxy, heap, realm)?;
-        let trap = Self::proxy_trap(handler, "set", heap, realm)?;
+        let (target, handler, trap) = Self::the_proxy_that_answers(proxy, "set", heap, realm)?;
         // Step 4 forwards to the target, where 10.1.9.2 writes on the Proxy
         // itself and reaches its `defineProperty`.
         if trap.is_undefined() {
@@ -12014,18 +12043,10 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Option<u32>, VMError> {
         let (answer, throws) = answered;
-        let (target, handler) = Self::proxy_parts(proxy, heap, realm)?;
-        let trap = Self::proxy_trap(handler, "defineProperty", heap, realm)?;
+        let (target, handler, trap) =
+            Self::the_proxy_that_answers(proxy, "defineProperty", heap, realm)?;
         // Step 6 forwards to the target where the handler carries no trap.
         if trap.is_undefined() {
-            // Forwarding to a target that is itself a Proxy is that Proxy's own
-            // internal method, which is a second trap.
-            if target
-                .as_object()
-                .is_some_and(|object| heap.is_a_proxy(object))
-            {
-                return Err(VMError::Unsupported("an internal method of a Proxy"));
-            }
             let Some(object) = target.as_object() else {
                 return Err(VMError::TypeError);
             };
@@ -12107,16 +12128,7 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Option<u32>, VMError> {
-        let (target, handler) = Self::proxy_parts(proxy, heap, realm)?;
-        let trap = Self::proxy_trap(handler, "ownKeys", heap, realm)?;
-        // Reading what the target owns is its own `[[OwnPropertyKeys]]`,
-        // which for a target that is itself a Proxy is a second trap.
-        if target
-            .as_object()
-            .is_some_and(|object| heap.is_a_proxy(object))
-        {
-            return Err(VMError::Unsupported("an internal method of a Proxy"));
-        }
+        let (target, handler, trap) = Self::the_proxy_that_answers(proxy, "ownKeys", heap, realm)?;
         let Some(object) = target.as_object() else {
             return Err(VMError::TypeError);
         };
@@ -12292,9 +12304,8 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Option<u32>, VMError> {
         let (return_pc, caller_code_id) = frame;
-        let (target, handler) = Self::proxy_parts(proxy, heap, realm)?;
-        let trap = Self::proxy_trap(
-            handler,
+        let (target, handler, trap) = Self::the_proxy_that_answers(
+            proxy,
             if kind == PROXY_KIND_HAS {
                 "has"
             } else {
@@ -12303,14 +12314,6 @@ impl RegisterVM {
             heap,
             realm,
         )?;
-        // Reading what the target owns is its own `[[GetOwnProperty]]`, which
-        // for a target that is itself a Proxy is a second trap.
-        if target
-            .as_object()
-            .is_some_and(|object| heap.is_a_proxy(object))
-        {
-            return Err(VMError::Unsupported("an internal method of a Proxy"));
-        }
         let Some(object) = target.as_object() else {
             return Err(VMError::TypeError);
         };
@@ -12444,16 +12447,8 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Option<u32>, VMError> {
-        let (target, handler) = Self::proxy_parts(proxy, heap, realm)?;
-        let trap = Self::proxy_trap(handler, "getOwnPropertyDescriptor", heap, realm)?;
-        // Reading what the target owns is its own `[[GetOwnProperty]]`, which
-        // for a target that is itself a Proxy is a second trap.
-        if target
-            .as_object()
-            .is_some_and(|object| heap.is_a_proxy(object))
-        {
-            return Err(VMError::Unsupported("an internal method of a Proxy"));
-        }
+        let (target, handler, trap) =
+            Self::the_proxy_that_answers(proxy, "getOwnPropertyDescriptor", heap, realm)?;
         let Some(object) = target.as_object() else {
             return Err(VMError::TypeError);
         };
@@ -12628,16 +12623,7 @@ impl RegisterVM {
             PROXY_KIND_EXTENSIBLE => "isExtensible",
             _ => "preventExtensions",
         };
-        let (target, handler) = Self::proxy_parts(proxy, heap, realm)?;
-        let trap = Self::proxy_trap(handler, name, heap, realm)?;
-        // A target that is itself a Proxy answers each of these out of a
-        // second handler, which is the trap this frame does not open.
-        if target
-            .as_object()
-            .is_some_and(|object| heap.is_a_proxy(object))
-        {
-            return Err(VMError::Unsupported("an internal method of a Proxy"));
-        }
+        let (target, handler, trap) = Self::the_proxy_that_answers(proxy, name, heap, realm)?;
         if trap.is_undefined() {
             return self
                 .the_target_answers_without_a_trap(kind, target, prototype, answered, heap, realm);
@@ -19873,6 +19859,28 @@ impl RegisterVM {
     }
 
     /// Whether the miss is an answer or a gap, for either reach.
+    /// Whether a Proxy stands on the Prototype Chain of this object, whose
+    /// `[[Get]]` of 10.5.8 answers for every name the chain resolves on it.
+    fn a_proxy_stands_on_the_chain(object: ObjectRef, heap: &GenerationalHeap) -> bool {
+        let mut current = Some(object);
+        let mut depth = 0u16;
+        while let Some(reference) = current {
+            if heap.is_a_proxy(reference) {
+                return true;
+            }
+            // A chain of 10.1.2 is acyclic, and the bound keeps a heap this
+            // engine did not build from turning the walk into a loop.
+            depth = depth.saturating_add(1);
+            if depth == u16::MAX {
+                return true;
+            }
+            current = heap
+                .get_object(reference)
+                .and_then(|entry| entry.prototype.as_object());
+        }
+        false
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "one function names every Prototype that owes a name"
@@ -19885,6 +19893,15 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Value, VMError> {
         let chain = matches!(reach, Reach::Chain);
+        // 10.5.8 answers for a Proxy of the Prototype Chain out of its
+        // handler, which a walk in Rust does not run: a name the walk did not
+        // find is the answer of that trap and not undefined.
+        if chain
+            && let Some(object) = target.as_object()
+            && Self::a_proxy_stands_on_the_chain(object, heap)
+        {
+            return Err(VMError::Unsupported("an internal method of a Proxy"));
+        }
         if target.is_string() {
             if chain && super::realm::string_prototype_owns(name) {
                 return Err(VMError::Unsupported("a property of %String.prototype%"));
