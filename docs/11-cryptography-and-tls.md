@@ -301,8 +301,10 @@ so a state captured after a request says nothing about the bytes that
 request produced. A reseed mixes the fresh material into the key with an
 exclusive-or rather than replacing it, so a source that turns out to be
 predictable cannot take the state over, and it happens after a fixed byte
-budget or on demand. A request that would cross the budget when the source
-fails produces nothing at all.
+budget or on demand. A request wider than what is left of the budget is
+served in runs with a reseed between them, so the budget bounds the output
+of one key and not of one request. A request whose reseed fails produces
+nothing at all: the run already written is wiped.
 
 Behind `test-doubles` — the name the workspace already uses for doubles —
 the crate ships `ScriptedRng`, which replays a byte string and reports

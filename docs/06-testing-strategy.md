@@ -1009,6 +1009,12 @@ done until every applicable item has a test. Items are added, never removed.
   caller's buffer untouched; a reseed on demand changes the stream; a
   seeded generator differs from one that took the same bytes as a seed,
   because seeding mixes rather than replaces.
+- A request of twice the budget is served in two runs with one reseed
+  between them, and the two runs are the bytes the same generator
+  produces for two requests of the budget; a request of three budgets and
+  seven bytes costs three reseeds. A reseed that fails inside a request
+  wipes the run already produced and leaves the rest of the buffer as the
+  caller passed it.
 - `ScriptedRng` returns the scripted bytes, refuses a request longer than
   what is left without consuming any of it, and reports exhaustion instead
   of repeating.
@@ -1967,6 +1973,11 @@ follows the catalog rather than the layer, as 6.6.54 records.
   the arithmetic, and an output buffer narrower than the modulus are each
   refused; the last is refused before the ladder starts, because
   refusing afterwards would be a decision about the value.
+- A refused output buffer is left as the caller passed it: `pow` over a
+  buffer of eight bytes reports `OutputTooShort` and writes no byte of
+  the truncated result. A result narrower than the modulus is written
+  into the end of a buffer narrower than the modulus, which is the case
+  the width check must not refuse.
 - The masked product: `montgomery_secret` against `montgomery` over every
   case of the final subtraction, the one it happens in and the one it
   does not, and separately against the definition, so that the two
@@ -2503,6 +2514,12 @@ covered by 6.6.55.
   are produced rather than passed to a caller.
 - Both operations refuse an output buffer narrower than the group, and a
   public value may be written into one wider than it.
+- A peer value of 513 bytes under leading zeros reaches the same shared
+  secret as the same value at the width of the group, because the
+  exponentiation reads the padded form and not the buffer as it arrived.
+- A refused public value and a refused shared secret leave zeros in the
+  output buffer, so a caller that ignores the result finds nothing
+  usable.
 - A group whose generator is below two, and one whose prime the
   arithmetic cannot hold, are refused by the constructor.
 - Every refusal renders a sentence of its own.

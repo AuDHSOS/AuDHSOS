@@ -94,6 +94,8 @@ impl Modulus {
     /// three or sixty-five thousand five hundred and thirty-seven, and
     /// both fit here.
     ///
+    /// A refused call leaves `out` untouched.
+    ///
     /// # Errors
     ///
     /// [`BignumError::TooWide`] when the base needs more than
@@ -364,16 +366,41 @@ fn read_be(bytes: &[u8], limbs: &mut [u64; MAX_LIMBS]) -> Result<usize, BignumEr
 
 /// The big-endian encoding of the limbs, right-aligned in `out` and
 /// padded with leading zeros.
+///
+/// The width of the value is measured before a byte is written, so `out`
+/// is untouched when the value does not fit and no caller finds a
+/// truncated result behind a refusal.
+///
+/// The measurement runs only for an `out` narrower than the limbs, which
+/// is a comparison of two buffer lengths and so is public.
+/// [`Modulus::pow_secret`] refuses such an `out` before the ladder, so
+/// the secret path reaches no work that depends on the value.
 fn write_be(limbs: &[u64], out: &mut [u8]) -> Result<(), BignumError> {
-    out.fill(0);
-    let mut source = limbs.iter().copied().flat_map(u64::to_le_bytes);
-    for (slot, byte) in out.iter_mut().rev().zip(source.by_ref()) {
-        *slot = byte;
-    }
-    if source.any(|byte| byte != 0) {
+    if out.len() < limbs.len().saturating_mul(8) && significant_bytes(limbs) > out.len() {
         return Err(BignumError::OutputTooShort);
     }
+    out.fill(0);
+    let source = limbs.iter().copied().flat_map(u64::to_le_bytes);
+    for (slot, byte) in out.iter_mut().rev().zip(source) {
+        *slot = byte;
+    }
     Ok(())
+}
+
+/// Bytes the big-endian encoding of the limbs occupies without its
+/// leading zeros.
+///
+/// Every byte is read and the loop runs a fixed number of rounds, but
+/// which round sets the width depends on the value, so only
+/// [`write_be`] calls this and only for a value it may refuse.
+fn significant_bytes(limbs: &[u64]) -> usize {
+    let mut width = 0usize;
+    for (index, byte) in limbs.iter().copied().flat_map(u64::to_le_bytes).enumerate() {
+        if byte != 0 {
+            width = index.saturating_add(1);
+        }
+    }
+    width
 }
 
 /// How many bits the big-endian encoding actually carries.
