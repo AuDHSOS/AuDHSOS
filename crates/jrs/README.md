@@ -621,12 +621,14 @@ every site of the reason a name of its own and running the suite once:
 | 48 | `ToString` of an Object | ten sites of 4 variants or fewer, and `TestIn` |
 | 32 | a try statement | a Catch Parameter that destructures a thrown object literal |
 
-The try reason is not the Catch Parameter: `try{}catch({x = 1}){}` and
-`try{throw o}catch({x = 1}){}` both lower. What the lowering refuses is
-an object literal thrown in the body of the same statement, as in
-`try{throw {}}catch({x}){}`, whose layout the handler no longer tracks.
-The refusal carries no name of its own, which is why it reports the
-statement around it.
+The try reason is not the Catch Parameter. These lower:
+`try{}catch({x = 1}){}`, `try{throw o}catch({x = 1}){}` for a variable
+`o`, `try{throw {}}catch(e){}`, and `try{throw {a:1}}catch({a}){}`.
+This one does not: `try{throw {}}catch({x}){}`, where the Catch
+Parameter names a property the thrown literal does not carry. The
+refusal carries no name of its own, which is why it reports the
+statement around it; it is not the one `lower_property_from_register`
+raises for a missing name, which was measured and ruled out.
 
 `DefineAccessorByValue` and `DefineMethodByValue` held 20 of that
 reason and now take `convert_key`. `TestIn` holds the remaining 4 and
