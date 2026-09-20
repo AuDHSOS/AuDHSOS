@@ -55,10 +55,10 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-108 091 cases of 798 files: 95 680 pass, 3170 answer differently and
-9241 are refused.
+108 093 cases of 798 files: 95 710 pass, 3169 answer differently and
+9214 are refused.
 
-What the 9241 refusals are for, most first: `db status` (2106), which
+What the 9214 refusals are for, most first: `db status` (2106), which
 answers counters of memory and of the page cache; `sqlite3_memdebug_fail`
 (1260), which fails one allocation of the C library; `crash_on_write`
 (960) and the crash the harness does not simulate (435); a table an
@@ -76,7 +76,7 @@ What each answers, over the same files:
 
 | Configuration | Passed | Answered differently | Refused |
 |---------------|-------:|---------------------:|--------:|
-| `utf8-4096-delete` | 95 680 | 3170 | 9241 |
+| `utf8-4096-delete` | 95 710 | 3169 | 9214 |
 | `utf16le-4096-delete` | 61 214 | 2392 | 9500 |
 | `utf16be-4096-delete` | 61 229 | 2392 | 9500 |
 | `utf8-512-delete` | 61 073 | 2452 | 9435 |
@@ -421,6 +421,10 @@ Size: S.
     answers `sqlite3_open`, `sqlite3_open16`, `sqlite3_open_v2`,
     `sqlite3_close` and `sqlite3_close_v2`, and `file isfile` over a name
     the harness holds answers one, which D-344 records.
+23. `sqlite3_exec_printf`, `sqlite_exec_printf` and
+    `sqlite3_get_table_printf` write their format with one argument and
+    answer as `test1.c` writes them, and the pointer `sqlite3_open`
+    answers is a connection of the tester's own, which D-351 records.
 
 ### Produces
 

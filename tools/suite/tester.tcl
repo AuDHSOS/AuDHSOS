@@ -897,6 +897,78 @@ proc sqlite3_exec {db sql} {
 # `sqlite3_exec_nr DB SQL`, which drops what the statement answered.
 proc sqlite3_exec_nr {db sql} { return [lindex [sqlite3_exec $db $sql] 0] }
 
+# `sqlite3_mprintf` of `research/sqlite/src/printf.c` over one argument,
+# which is what the commands that take a format hand it: `%s` writes the
+# argument, `%q` doubles every single quote in it, `%Q` does the same and
+# puts quotes round it, `%d` writes it as a whole number, and `%%` writes
+# one per cent.
+proc mprintf {format arg} {
+  set out ""
+  set n [string length $format]
+  for {set i 0} {$i < $n} {incr i} {
+    set c [string index $format $i]
+    if {$c ne "%"} {
+      append out $c
+      continue
+    }
+    incr i
+    switch -- [string index $format $i] {
+      % { append out "%" }
+      s { append out $arg }
+      d { append out [expr {int($arg)}] }
+      q { append out [string map {' ''} $arg] }
+      Q { append out '[string map {' ''} $arg]' }
+      default { append out "%" [string index $format $i] }
+    }
+  }
+  return $out
+}
+
+# `sqlite3_exec_printf DB FORMAT STRING` of `research/sqlite/src/test1.c`:
+# the format written with the string and run as `sqlite3_exec` runs a
+# text.
+proc sqlite3_exec_printf {db format {arg {}}} {
+  return [sqlite3_exec $db [mprintf $format $arg]]
+}
+proc sqlite_exec_printf {db format {arg {}}} {
+  return [sqlite3_exec_printf $db $format $arg]
+}
+
+# `sqlite3_get_table_printf DB FORMAT STRING ?COUNT?`: the code, how many
+# rows and how many columns the statement answered, then the names of the
+# columns and the values of the rows. A count answers that many values
+# and neither of the two numbers, which `test_get_table_printf` of
+# `research/sqlite/src/test1.c:568` writes.
+proc sqlite3_get_table_printf {db format {arg {}} args} {
+  set sql [mprintf $format $arg]
+  # `sqlite3_get_table` writes the word `NULL` for a value the statement
+  # answered nothing for, whatever the connection was told to print one
+  # as.
+  set held [$db nullvalue]
+  $db nullvalue NULL
+  set rc [catch { set rows [$db eval $sql] } msg]
+  set names [$db names $sql]
+  $db nullvalue $held
+  if {$rc} { return [list 1 $msg] }
+  # The callback the C command hands `sqlite3_get_table` runs once per
+  # row, so a statement that answered none names no column either,
+  # unless `PRAGMA empty_result_callbacks` is on.
+  set empty 0
+  catch {
+    set told [$db eval {PRAGMA empty_result_callbacks}]
+    if {[llength $told] > 0} { set empty [lindex $told 0] }
+  }
+  if {[llength $rows] == 0 && !$empty} { set names {} }
+  set cols [llength $names]
+  set values [concat $names $rows]
+  if {[llength $args] > 0} {
+    return [concat [list 0] [lrange $values 0 [expr {[lindex $args 0] - 1}]]]
+  }
+  set count 0
+  if {$cols > 0} { set count [expr {[llength $rows] / $cols}] }
+  return [concat [list 0 $count $cols] $values]
+}
+
 proc db_eval {sql} { return [db eval $sql] }
 # `stepsql` of the suite's own tester: every statement of the text
 # prepared and stepped in turn, answering nought and then the values.
@@ -1467,8 +1539,11 @@ set ::opened 0
 # which `sqlite3_open` writes the first page of.
 proc sqlite3_open {{file :memory:} {vfs {}}} {
   incr ::opened
-  set name "::open$::opened"
-  harness_send open $name $file
+  set name "open$::opened"
+  # The pointer stands for a connection of the tester's own, so it is
+  # opened as `sqlite3 NAME FILE` opens one and answers to that name as a
+  # command of its own.
+  sqlite3 $name $file
   return $name
 }
 proc sqlite3_open_v2 {file flags vfs args} { return [sqlite3_open $file $vfs] }

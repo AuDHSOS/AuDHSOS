@@ -105,6 +105,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- The tester answers `sqlite3_exec_printf`, `sqlite_exec_printf` and
+  `sqlite3_get_table_printf`, opens the pointer `sqlite3_open` answers as
+  a connection of its own, and `db-sqlite` holds
+  `PRAGMA empty_result_callbacks` as a truth value. D-351 records it.
+  Catalog 6.6.239. `tableapi.test` goes from 1 case passing to 27 and
+  `laststmtchanges.test` from 25 to 27.
+
 - The tester runs the body of a case at the outermost level, answers
   `sqlite3_open`, `sqlite3_open16`, `sqlite3_open_v2`, `sqlite3_close` and
   `sqlite3_close_v2`, and answers `file isfile` over a name the harness

@@ -6481,3 +6481,11 @@ Document 16 step Q8.
 - A value that is no text is refused `non-text filename`.
 - A name the client holds bytes for is refused `output file already
   exists`, and `:memory:` is written whatever the client holds.
+
+### 6.6.239 The pragma that names the columns of no row (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `PRAGMA empty_result_callbacks` answers the truth value the connection
+  holds, and nought where no statement set it.
+- Setting it answers no row.

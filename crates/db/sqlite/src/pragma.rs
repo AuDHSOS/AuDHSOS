@@ -349,6 +349,13 @@ pub static HELD: &[Keeps] = &[
         answers: false,
         fixed: false,
     },
+    Keeps {
+        name: b"empty_result_callbacks",
+        fallback: 0,
+        written: Written::Truth,
+        answers: false,
+        fixed: false,
+    },
 ];
 
 /// What a pragma the connection keeps answers for `value`.
@@ -462,7 +469,6 @@ pub fn of_name(name: &[u8]) -> Option<Setting> {
         b"default_synchronous"
         | b"legacy_file_format"
         | b"legacy_alter_table"
-        | b"empty_result_callbacks"
         | b"cache_spill"
         | b"shrink_memory"
         | b"optimize" => Setting::Ignored,
