@@ -640,6 +640,16 @@ record is the text's own declarations, which step 5.d of 19.2.1.1
 places in the Variable Environment, and the `arguments` of 10.4.4,
 which no slot of the record holds.
 
+B.3.2.2 for a `CaseBlock` was written and measured and does not ship.
+In a function body it closes two variants of its own reason and moves
+them to another, leaving the suite unchanged, because every test of
+the clause is of a Script or of an eval. The Script path gains 100
+variants and answers 18 wrongly, six of them because 19.2.1.1 step
+5.d.ii creates the binding of an eval with `CreateGlobalVarBinding(vn,
+true)` while 16.1.7 creates the one of a Script with `false`, which
+the unit of an eval does not tell apart from a Script; the rest are a
+tail of their own.
+
 All 24 of `a name of a function body the scan does not reach` come
 from `register_body_scope` and none from `register_function_local_names`,
 which was measured by naming the two apart. The scan covers every
