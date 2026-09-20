@@ -36,6 +36,7 @@ use audhsos_abi::Error;
 use server_memory::{Object, Pages, Store};
 use user_programs::mapping::{Mapping, SCRATCH};
 use user_programs::serve::{Serving, receive};
+use user_proto::handles::Carried;
 use user_proto::memory::{Reply, Request};
 use user_rt::{MemoryHandle, ProcessHandle, Startup, Typed};
 use user_sys_x86_64::{self as sys, Gate};
@@ -72,10 +73,23 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
         if receive(&mut gate, endpoint, &mut serving).is_err() {
             gate.thread_exit()
         }
-        let answer = match Request::decode(gate.reader()) {
+        // The handle area is read before anything else, because the calls
+        // of a release overwrite the buffer it lies in.
+        let carried = Carried::read(gate.reader());
+        let decoded = Request::decode(gate.reader());
+        // A release gives the capability it names up itself, on every path;
+        // no other request of this protocol takes a handle.
+        let kept = match decoded {
+            Ok(Request::Release { memory }) => Some(memory),
+            _ => None,
+        };
+        let answer = match decoded {
             Ok(request) => handle(&mut gate, own, &mut store, serving.badge, &request),
             Err(error) => Reply::Released(Err(Error::from(error))),
         };
+        carried.give_up(kept.as_slice(), |handle| {
+            let _closed = gate.handle_close(handle);
+        });
         let _written = answer.encode(&mut gate.writer());
     }
 }
@@ -99,9 +113,15 @@ fn handle(
         // is what says which object it is; the server asks the kernel
         // rather than trusting a number the client chose.
         Request::Release { memory } => Reply::Released(
-            describe(pages.gate, MemoryHandle::from_handle(*memory))
-                .and_then(|object| store.release(&mut pages, badge, object))
-                .map(|_object| ()),
+            match describe(pages.gate, MemoryHandle::from_handle(*memory)) {
+                Ok(object) => store.release(&mut pages, badge, object).map(|_object| ()),
+                // The store gives the capability up on every path of a
+                // release; one the store never saw is given up here.
+                Err(error) => {
+                    let _closed = pages.gate.handle_close(*memory);
+                    Err(error)
+                }
+            },
         ),
     }
 }

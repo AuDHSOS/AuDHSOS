@@ -228,29 +228,40 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
     /// already has one here and a second reference would stop it ever being
     /// joined to its neighbours (D-90).
     ///
+    /// A refused release gives the capability up too: the handle arrived in
+    /// a message and the client may send one per message, so a refusal that
+    /// left it open would fill the server's table.
+    ///
     /// # Errors
     ///
     /// [`Error::NotFound`] for memory this store did not hand out, a second
     /// release of the same object included; [`Error::AccessDenied`] when
-    /// another client holds it; the errors of the zeroing pass and of a
-    /// join. Nothing is zeroed in the two cases that are refused. Accepted
-    /// objects remain retired while foreign handles or mappings exist.
+    /// another client holds it; [`Error::InvalidArgument`] for a length
+    /// that is not the object's; [`Error::PoolExhausted`] when nothing may
+    /// retire; the errors of the zeroing pass and of a join. Nothing is
+    /// zeroed in the cases that are refused. Accepted objects remain
+    /// retired while foreign handles or mappings exist.
     pub fn release(
         &mut self,
         pages: &mut impl Pages,
         owner: u64,
         returned: Object,
     ) -> Result<Object, Error> {
-        let index = self.position(returned.start).ok_or(Error::NotFound)?;
-        let held = *self.live.get(index).ok_or(Error::NotFound)?;
+        let Some(index) = self.position(returned.start) else {
+            return Err(refuse(pages, returned.handle, None, Error::NotFound));
+        };
+        let Some(held) = self.live.get(index).copied() else {
+            return Err(refuse(pages, returned.handle, None, Error::NotFound));
+        };
+        let mine = Some(held.object.handle);
         if held.owner != owner {
-            return Err(Error::AccessDenied);
+            return Err(refuse(pages, returned.handle, mine, Error::AccessDenied));
         }
         if held.object.len != returned.len {
-            return Err(Error::InvalidArgument);
+            return Err(refuse(pages, returned.handle, mine, Error::InvalidArgument));
         }
         if self.retired.is_full() {
-            return Err(Error::PoolExhausted);
+            return Err(refuse(pages, returned.handle, mine, Error::PoolExhausted));
         }
         let _returned = self.live.remove(index);
         if returned.handle != held.object.handle {
@@ -404,6 +415,19 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
 /// than the kernel reserve holds, and the window is reused, so the tables
 /// are built once and then stand.
 pub const WINDOW: u64 = 64 * PAGE_SIZE;
+
+/// Gives up the capability a refused release arrived with and answers with
+/// the error to send back.
+///
+/// `mine` is the name this store holds for the object, when it holds one:
+/// a client that sends the very handle the store hands out gives up
+/// nothing, and closing it would take the store's own reference.
+fn refuse(pages: &mut impl Pages, returned: Handle, mine: Option<Handle>, error: Error) -> Error {
+    if Some(returned) != mine {
+        let _closed = pages.close(returned);
+    }
+    error
+}
 
 /// Fills `object` with zeros, in windows.
 ///
