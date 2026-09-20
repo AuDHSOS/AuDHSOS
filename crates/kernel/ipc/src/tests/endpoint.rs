@@ -1118,7 +1118,8 @@ fn a_reply_object_left_by_a_suspended_caller_wakes_nobody_when_it_is_dropped() {
         Wait::Endpoint {
             endpoint: second,
             queue: Queue::Receivers,
-            badge: 0
+            badge: 0,
+            kernel_message: false
         }
     );
 }
