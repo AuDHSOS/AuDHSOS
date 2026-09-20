@@ -584,8 +584,8 @@ negative-test passes. Other parser/builtin completeness gaps remain open.
 The engine is the target of the migration and the stack backend the
 source (architecture, section 17.1). What gates the switch is not the
 count either path reaches but the set of variants the stack path passes
-and the engine does not. At `0bed44d` that set holds 1,498 variants:
-none of them the engine fails, and 1,498 it names as gaps. The engine
+and the engine does not. At `cf56eab` that set holds 1,463 variants:
+none of them the engine fails, and 1,463 it names as gaps. The engine
 passes 25,664 variants the stack path does not. Only the failures are
 breaches of the equality duty; a gap costs coverage and answers nothing
 wrongly.
@@ -603,13 +603,13 @@ What a switch would cost is those gaps, by the reason the engine names:
 | 56 | `ToPrimitive` of an Object outside a call |
 | 48 | `ToString` of an Object |
 | 34 | a splitter of a constructor that is not `%RegExp%` |
-| 32 | a try statement |
 | 30 | a name of a body an Initializer of a parameter reads |
 | 30 | a frame of a call the lowering does not prepare |
 | 30 | a `then` that is not `%Promise.prototype.then%` |
-| 643 | 74 further reasons, none above 26 variants |
+| 26 | a call |
+| 614 | 74 further reasons, none above 24 variants |
 
-The counts above are of `0bed44d`; the ones in the notes below carry the
+The counts above are of `cf56eab`; the ones in the notes below carry the
 commit each was measured at.
 
 Where each of those reasons is raised, measured at `3a6e905` by giving
@@ -622,7 +622,6 @@ every site of the reason a name of its own and running the suite once:
 | 121 | an internal method of a Proxy | the walks that read a descriptor per key |
 | 56 | `ToPrimitive` of an Object outside a call | sites of 8 variants or fewer |
 | 48 | `ToString` of an Object | ten sites of 4 variants or fewer, and `TestIn` |
-| 32 | a try statement | a Catch Parameter that destructures a thrown object literal |
 
 The direct eval gap has been lifted and measured five times, and each
 time the engine answered more variants wrongly than it gained. The
@@ -839,6 +838,7 @@ more than eight variants.
 | `a6249d4` | 1,555 | **0** | 1,555 |
 | `64025a3` | 1,555 | **0** | 1,555 |
 | `0bed44d` | 1,498 | **0** | 1,498 |
+| `cf56eab` | 1,463 | **0** | 1,463 |
 
 The list is the join of the two per-variant runs, without `--summary`:
 
@@ -1238,7 +1238,9 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | 13.3.7.1 with a spread element in the argument list (focused) | focused | `03d3688` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/super test/staging/sm/class --summary` | 188 | 371 | 232 (62.53%) | 14 (3.77%) | 125 (33.69%) |
 | The same, on the stack backend (focused) | focused | `03d3688` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/super test/staging/sm/class --summary` | 188 | 371 | 258 (69.54%) | 61 (16.44%) | 52 (14.02%) |
 | Complete pinned suite on the register engine, before the close of 14.7.5.7 step 3.j (outdated) | full | `33ffe90` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 58,747 (57.08%) | 20,543 (19.96%) | 23,635 (22.96%) |
-| Complete pinned suite on the register engine | full | `0bed44d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,520 (61.72%) | 18,961 (18.42%) | 20,444 (19.86%) |
+| Complete pinned suite on the register engine | full | `cf56eab` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,555 (61.75%) | 18,961 (18.42%) | 20,409 (19.83%) |
+| A Catch Parameter reading a thrown value (focused) | focused | `cf56eab` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/try test/annexB/language --summary` | 1,046 | 1,283 | 550 (42.87%) | 64 (4.99%) | 669 (52.14%) |
+| Complete pinned suite on the register engine, before the Catch Parameter read (outdated) | full | `0bed44d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,520 (61.72%) | 18,961 (18.42%) | 20,444 (19.86%) |
 | Complete pinned suite on the stack backend | full | `0bed44d` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 39,354 (38.24%) | 38,101 (37.02%) | 25,470 (24.75%) |
 | B.3.2.1 skips a name of a Script (focused) | focused | `0bed44d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/annexB/language --summary` | 845 | 895 | 187 (20.89%) | 59 (6.59%) | 649 (72.51%) |
 | Complete pinned suite on the register engine, before B.3.2.1 skips a name of a Script (outdated) | full | `64025a3` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,450 (61.65%) | 18,961 (18.42%) | 20,514 (19.93%) |
