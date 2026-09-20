@@ -254,6 +254,8 @@ fn a_second_release_of_the_same_object_is_refused_and_zeroes_nothing() {
         store.release(&mut kernel, 7, given).unwrap_err(),
         Error::NotFound
     );
+    // The handle names the object the store took back, which the store
+    // holds, so the refusal keeps it and touches nothing.
     assert!(
         kernel.calls().is_empty(),
         "a refused release zeroes nothing"
@@ -278,7 +280,13 @@ fn a_release_of_an_object_this_store_never_handed_out_is_refused() {
             .unwrap_err(),
         Error::NotFound
     );
-    assert!(kernel.calls().is_empty());
+    assert_eq!(
+        kernel.calls(),
+        [Call::Close {
+            handle: handle(4242)
+        }],
+        "the capability the message carried was given up"
+    );
 }
 
 #[test]
@@ -690,6 +698,76 @@ fn check_given(given: Object, out: &[Object], kernel: &RecordingPages) -> Result
         [(_, len)] if *len == given.len => Ok(()),
         other => Err(format!("{other:?} is no single pass over {}", given.len)),
     }
+}
+
+#[test]
+fn every_refused_release_gives_the_capability_the_message_carried_up() {
+    // The handle a release arrives with is a name of the receiver's own,
+    // and the client may send one per message; a refusal that left it open
+    // would fill the server's table.
+    let sent = handle(9999);
+    for (owner, returned, expected) in [
+        (
+            7,
+            Object {
+                handle: sent,
+                start: 0xDEAD_0000,
+                len: PAGE_SIZE,
+            },
+            Error::NotFound,
+        ),
+        (
+            9,
+            Object {
+                handle: sent,
+                start: 0,
+                len: PAGE_SIZE,
+            },
+            Error::AccessDenied,
+        ),
+        (
+            7,
+            Object {
+                handle: sent,
+                start: 0,
+                len: 2 * PAGE_SIZE,
+            },
+            Error::InvalidArgument,
+        ),
+    ] {
+        let (mut store, mut kernel) = adopted(8);
+        let _given = store
+            .allocate(&mut kernel, 7, PAGE_SIZE, PAGE_SIZE)
+            .unwrap();
+        kernel.forget();
+        assert_eq!(
+            store.release(&mut kernel, owner, returned).unwrap_err(),
+            expected
+        );
+        assert_eq!(
+            kernel.calls(),
+            [Call::Close { handle: sent }],
+            "{expected:?} left the capability installed"
+        );
+        assert_eq!(store.live_objects(), 1, "and the object is still out");
+    }
+}
+
+#[test]
+fn a_refused_release_of_the_store_s_own_handle_keeps_it() {
+    // A client that sends back the very handle the store hands out names
+    // the store's own reference; closing it would take the object away.
+    let (mut store, mut kernel) = adopted(8);
+    let given = store
+        .allocate(&mut kernel, 7, PAGE_SIZE, PAGE_SIZE)
+        .unwrap();
+    kernel.forget();
+    assert_eq!(
+        store.release(&mut kernel, 9, given).unwrap_err(),
+        Error::AccessDenied
+    );
+    assert!(kernel.calls().is_empty());
+    assert_eq!(store.live_objects(), 1);
 }
 
 #[test]

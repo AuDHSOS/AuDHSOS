@@ -55,6 +55,7 @@ use user_net_programs::net_registers::{NET_DMA, NET_WINDOW, Window};
 use user_programs::client::{allocate, register, write_line};
 use user_programs::mapping::Mapping;
 use user_programs::serve::{Serving, receive};
+use user_proto::handles::Carried;
 use user_proto::ring::SOCKET_PAGE_LEN;
 use user_proto::socket::{Reply, Request, refuse};
 use user_rt::startup::Device;
@@ -346,11 +347,20 @@ fn serve(
     tell_the_timer(gate, server, now);
     loop {
         receive(gate, endpoint, &mut serving)?;
+        // No request of this protocol takes a handle, and the kernel
+        // installs whatever the sender attached; one left installed costs a
+        // slot of a table of sixty-four and holds a reference the sender
+        // chose. The message is read out first, because closing a handle is
+        // a call and a call overwrites the buffer it stands in.
+        let carried = Carried::read(gate.reader());
         let now = Instant::from_micros(gate.clock_now().unwrap_or(0));
         let decoded = match serving.badge {
             DEVICE_BADGE | TICK_BADGE => None,
             _client => Some(Request::decode(gate.reader())),
         };
+        carried.give_up(&[], |handle| {
+            let _closed = gate.handle_close(handle);
+        });
         // The buffer that carries a reply is the buffer a line to the
         // console goes through, so the line is written after the request
         // is read and before the reply is put in: one is reported a round
@@ -448,10 +458,16 @@ fn refuse_everything(gate: &mut Gate, endpoint: EndpointHandle) -> Result<(), Er
     let mut serving = Serving::default();
     loop {
         receive(gate, endpoint, &mut serving)?;
-        let reply = Request::decode(gate.reader())
-            .map_or(Reply::Closed(Err(Error::Unavailable)), |request| {
-                refuse(&request, Error::Unavailable)
-            });
+        // A refusal keeps no handle either, and the table of this server is
+        // as finite as it is on a machine that carries a device.
+        let carried = Carried::read(gate.reader());
+        let decoded = Request::decode(gate.reader());
+        carried.give_up(&[], |handle| {
+            let _closed = gate.handle_close(handle);
+        });
+        let reply = decoded.map_or(Reply::Closed(Err(Error::Unavailable)), |request| {
+            refuse(&request, Error::Unavailable)
+        });
         let _encoded = reply.encode(&mut gate.writer());
     }
 }

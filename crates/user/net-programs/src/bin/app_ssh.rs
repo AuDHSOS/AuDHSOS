@@ -51,9 +51,6 @@ use user_sys_x86_64::{self as sys, Gate};
 
 sys::program!(main);
 
-/// The name the file system server registered itself under.
-const FILES: &[u8] = b"files";
-
 /// The name the console driver registered itself under.
 const CONSOLE: &[u8] = b"console";
 
@@ -412,7 +409,7 @@ fn report_data(gate: &mut Gate, voice: Option<EndpointHandle>, stderr: bool, byt
 
 /// What the scratch volume says, or `None` when it says nothing.
 fn setup(gate: &mut Gate, startup: &Startup) -> Result<Option<Setup>, Error> {
-    let Some(files) = volume(gate, startup) else {
+    let Some(files) = volume(startup) else {
         return Ok(None);
     };
     let mut text = [0u8; MAX_CONFIG];
@@ -649,10 +646,12 @@ fn network(gate: &mut Gate, startup: &Startup) -> Option<EndpointHandle> {
     lookup(gate, names, b"net").ok()
 }
 
-/// The endpoint of the file system server.
-fn volume(gate: &mut Gate, startup: &Startup) -> Option<EndpointHandle> {
-    let names = startup.name_server?;
-    lookup(gate, names, FILES).ok()
+/// The endpoint of the file system server, badged by the root task.
+///
+/// A capability found under the name `files` carries no badge, and the
+/// server refuses a request that names nobody (D-185).
+const fn volume(startup: &Startup) -> Option<EndpointHandle> {
+    startup.file_server
 }
 
 /// The endpoint the lines go to.

@@ -49,9 +49,6 @@ use user_sys_x86_64::{self as sys, Gate};
 
 sys::program!(main);
 
-/// The name the file system server registered itself under.
-const FILES: &[u8] = b"files";
-
 /// The name the console driver registered itself under.
 const CONSOLE: &[u8] = b"console";
 
@@ -285,7 +282,7 @@ fn report_run<'a>(
 /// What the run wrote onto the scratch volume, or `None` where no run
 /// wrote anything: the port, the name, and the root in `into` (D-150).
 fn read_run(gate: &mut Gate, startup: &Startup, into: &mut [u8]) -> Result<Option<Run>, Error> {
-    let Some(files) = volume(gate, startup) else {
+    let Some(files) = volume(startup) else {
         return Ok(None);
     };
     let mut text = [0u8; MAX_RUN_CONFIG];
@@ -388,7 +385,7 @@ fn read_root_file(
 
 /// The bytes of the table, or `None` where the volume carries none.
 fn read_table(gate: &mut Gate, startup: &Startup, into: &mut [u8]) -> Result<Option<usize>, Error> {
-    let Some(files) = volume(gate, startup) else {
+    let Some(files) = volume(startup) else {
         return Ok(None);
     };
     let Some(directory) = open(gate, files, ROOT, DIRECTORY)? else {
@@ -471,10 +468,13 @@ fn file_call(
     FileReply::decode(gate.reader()).map_err(Error::from)
 }
 
-/// The file system server, if this machine has one.
-fn volume(gate: &mut Gate, startup: &Startup) -> Option<EndpointHandle> {
-    let names = startup.name_server?;
-    lookup(gate, names, FILES).ok()
+/// The file system server, badged by the root task, if this machine has
+/// one.
+///
+/// A capability found under the name `files` carries no badge, and the
+/// server refuses a request that names nobody (D-185).
+const fn volume(startup: &Startup) -> Option<EndpointHandle> {
+    startup.file_server
 }
 
 /// The endpoint the lines go to.

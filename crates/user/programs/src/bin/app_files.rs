@@ -43,9 +43,6 @@ use user_sys_x86_64::{self as sys, Gate};
 
 sys::program!(main);
 
-/// The name the file system server registered itself under.
-const FILES: &[u8] = b"files";
-
 /// The name the console driver registered itself under.
 const CONSOLE: &[u8] = b"console";
 
@@ -73,7 +70,7 @@ type Report = Line<160>;
 )]
 fn main(mut gate: Gate, startup: Startup) -> ! {
     let voice = voice(&mut gate, &startup);
-    match server(&mut gate, &startup) {
+    match server(&startup) {
         Some(files) => {
             if let Err(error) = work(&mut gate, files, voice) {
                 say(
@@ -361,10 +358,12 @@ fn call(gate: &mut Gate, files: EndpointHandle, request: &Request) -> Result<Rep
     Reply::decode(gate.reader()).map_err(Error::from)
 }
 
-/// The endpoint of the file system server, looked up by name.
-fn server(gate: &mut Gate, startup: &Startup) -> Option<EndpointHandle> {
-    let names = startup.name_server?;
-    lookup(gate, names, FILES).ok()
+/// The endpoint of the file system server, badged by the root task.
+///
+/// A capability found under the name `files` carries no badge, and the
+/// server refuses a request that names nobody (D-185).
+const fn server(startup: &Startup) -> Option<EndpointHandle> {
+    startup.file_server
 }
 
 /// The endpoint the lines go to.

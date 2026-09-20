@@ -130,6 +130,8 @@ pub struct Startup {
     pub net: Option<Device>,
     /// The endpoint of the network server.
     pub net_server: Option<EndpointHandle>,
+    /// The endpoint of the file system server.
+    pub file_server: Option<EndpointHandle>,
 }
 
 /// How many virtio block devices a process can be given. The reference
@@ -235,6 +237,7 @@ impl Startup {
             blocks: ArrayVec::new(),
             net: None,
             net_server: None,
+            file_server: None,
         }
     }
 
@@ -400,6 +403,7 @@ impl Startup {
                 once(&mut device.notification, role, handle)
             }
             Role::NetServer => once(&mut self.net_server, role, handle),
+            Role::FileServer => once(&mut self.file_server, role, handle),
             Role::FramebufferGeometry
             | Role::FramebufferLine
             | Role::EcamBuses

@@ -157,6 +157,7 @@ roles! {
     NetNotification = 36, handle => "The notification the message interrupt is bound to.",
     NetVectorBit = 37, value => "The bit of that notification the message interrupt sets. It closes the description `NetRegisters` opened.",
     NetServer = 38, handle => "The endpoint of the network server, badged with what that server is to know this process by. A program that uses a socket receives one, as a program that draws receives `DisplayServer`.",
+    FileServer = 39, handle => "The endpoint of the file system server, badged with what that server is to know this process by. A program that opens files receives one; the server keeps an open-file table per client and refuses a request that names nobody, so a program that finds the server by name instead reaches nothing (D-185).",
 }
 
 /// Why a startup message could not be read.

@@ -9,6 +9,11 @@ next sixteen, and the message in the low sixteen, so a server can tell a
 message of a version it does not speak from one it does before it looks at
 a single word.
 
+`handles::Carried` is the one part that is not a message: the capabilities
+the kernel installed for a received message, read out before any other
+call of the program overwrites the buffer, so that a server can give up
+every handle its request did not take (D-187).
+
 Every reply begins with a status word — zero, or the code of the error the
 server answers with — so that a client reads the outcome of a request from
 the same place whatever the request was. The parent protocol has no reply:

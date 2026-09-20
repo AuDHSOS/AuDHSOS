@@ -14,7 +14,7 @@ pub mod volume;
 pub use error::{refusal, table_refusal};
 pub use open::{Clients, MAX_CLIENTS, MAX_OPEN, ROOTS, Which};
 pub use partition::Partition;
-pub use serve::{Volumes, answer, moment};
+pub use serve::{NOBODY, Volumes, answer, moment};
 pub use volume::{is_partitioned, mount};
 
 #[cfg(test)]

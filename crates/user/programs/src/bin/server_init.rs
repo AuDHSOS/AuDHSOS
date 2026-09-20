@@ -129,6 +129,10 @@ struct Program {
     /// network server, for the same reason: the server keeps a socket
     /// table per client.
     talks: bool,
+    /// Whether it may open files, which is a badged capability to the file
+    /// system server, for the same reason: the server keeps an open-file
+    /// table per client and refuses a request that names nobody.
+    files: bool,
     /// Whether it reports to this program when it is done. The machine
     /// ends when every program that reports has reported.
     reports: bool,
@@ -152,6 +156,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        files: false,
         reports: false,
     },
     Program {
@@ -166,6 +171,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        files: false,
         reports: false,
     },
     Program {
@@ -180,6 +186,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        files: false,
         reports: false,
     },
     // The file system server drives the block device: the register
@@ -200,6 +207,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        files: false,
         reports: false,
     },
     // The display server maps the framebuffer, which is four mebibytes on
@@ -217,6 +225,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        files: false,
         reports: false,
     },
     // The input server owns the PS/2 controller and both of its lines. It
@@ -234,6 +243,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        files: false,
         reports: false,
     },
     Program {
@@ -248,6 +258,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        files: false,
         reports: true,
     },
     Program {
@@ -262,6 +273,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: true,
         talks: false,
+        files: false,
         reports: true,
     },
     Program {
@@ -276,6 +288,7 @@ const PROGRAMS: [Program; 18] = [
         draws: true,
         listens: false,
         talks: false,
+        files: false,
         reports: true,
     },
     Program {
@@ -290,6 +303,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: true,
         talks: false,
+        files: false,
         reports: true,
     },
     // The canvas draws and listens at once, and its surface is the size of
@@ -307,6 +321,7 @@ const PROGRAMS: [Program; 18] = [
         draws: true,
         listens: true,
         talks: false,
+        files: false,
         reports: true,
     },
     // The bus walk maps one mebibyte of the configuration window at a time,
@@ -324,6 +339,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        files: false,
         reports: true,
     },
     // The network server drives the network device: the register window,
@@ -344,6 +360,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        files: false,
         reports: false,
     },
     // The program that uses the network server. It starts after the bus
@@ -360,6 +377,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: true,
+        files: false,
         reports: true,
     },
     // The Secure Shell client. It talks through the network server and
@@ -376,6 +394,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: true,
+        files: true,
         reports: true,
     },
     // The program that holds the trust anchors. It reads one file off the
@@ -393,6 +412,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        files: true,
         reports: true,
     },
     // The program that uses the file system server. It starts after the
@@ -409,6 +429,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        files: true,
         reports: true,
     },
     // It faults and its thread stops there, so it never reports and the
@@ -425,6 +446,7 @@ const PROGRAMS: [Program; 18] = [
         draws: false,
         listens: false,
         talks: false,
+        files: false,
         reports: false,
     },
 ];
@@ -492,6 +514,7 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
         display: None,
         input: None,
         net: None,
+        files: None,
         console_for_self: None,
         files_for_self: None,
         bin: None,
@@ -536,6 +559,8 @@ struct World {
     input: Option<EndpointHandle>,
     /// The endpoint of the network server.
     net: Option<EndpointHandle>,
+    /// The endpoint of the file system server, as the root task holds it.
+    files: Option<EndpointHandle>,
     /// The same, badged for the root task's own lines.
     console_for_self: Option<EndpointHandle>,
     /// The endpoint of the file system server, badged for the root task's
@@ -1011,6 +1036,17 @@ fn install_all(
         let marked = gate.endpoint_badge(net, badge)?;
         let handle = gate.process_install_handle(child, marked.handle(), ObjectRights::SEND)?;
         push(&mut given, &mut count, Role::NetServer, handle)?;
+    }
+    // A program that opens files is known to the file system server the
+    // same way: the server keeps an open-file table per client, and a
+    // request without a badge would reach the table of every program that
+    // found the server by name (D-185).
+    if program.files
+        && let Some(files) = world.files
+    {
+        let marked = gate.endpoint_badge(files, badge)?;
+        let handle = gate.process_install_handle(child, marked.handle(), ObjectRights::SEND)?;
+        push(&mut given, &mut count, Role::FileServer, handle)?;
     }
     // Everyone but the console driver gets the console as its log. The
     // driver is the console: a line it sent itself would be a call on the
@@ -2033,6 +2069,7 @@ fn remember(
             world.console_for_self = Some(gate.endpoint_badge(endpoint, INIT_BADGE)?);
         }
         b"server-fs" => {
+            world.files = Some(endpoint);
             world.files_for_self = Some(gate.endpoint_badge(endpoint, INIT_BADGE)?);
         }
         b"server-display" => world.display = Some(endpoint),

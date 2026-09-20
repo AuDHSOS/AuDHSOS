@@ -244,12 +244,17 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
     /// already has one here and a second reference would stop it ever being
     /// joined to its neighbours (D-90).
     ///
+    /// A refused release gives the capability up too: the handle arrived in
+    /// a message and the client may send one per message, so a refusal that
+    /// left it open would fill the server's table.
+    ///
     /// # Errors
     ///
     /// [`Error::NotFound`] for memory this store did not hand out, a second
     /// release of the same object included; [`Error::AccessDenied`] when
-    /// another client holds it; the errors of the zeroing pass and of a
-    /// join. Nothing is zeroed in the two cases that are refused. Accepted
+    /// another client holds it; [`Error::InvalidArgument`] for a length
+    /// that is not the object's; the errors of the zeroing pass and of a
+    /// join. Nothing is zeroed in the cases that are refused. Accepted
     /// objects remain retired while foreign handles or mappings exist, in
     /// the slot they already have, so a release needs no slot of its own
     /// and a client that keeps its handle takes no slot from another.
@@ -259,13 +264,17 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
         owner: u64,
         returned: Object,
     ) -> Result<Object, Error> {
-        let index = self.position(returned.start).ok_or(Error::NotFound)?;
-        let held = *self.live.get(index).ok_or(Error::NotFound)?;
+        let Some(index) = self.position(returned.start) else {
+            return Err(self.refuse(pages, returned.handle, Error::NotFound));
+        };
+        let Some(held) = self.live.get(index).copied() else {
+            return Err(self.refuse(pages, returned.handle, Error::NotFound));
+        };
         if held.owner != owner {
-            return Err(Error::AccessDenied);
+            return Err(self.refuse(pages, returned.handle, Error::AccessDenied));
         }
         if held.object.len != returned.len {
-            return Err(Error::InvalidArgument);
+            return Err(self.refuse(pages, returned.handle, Error::InvalidArgument));
         }
         if let Some(slot) = self.live.get_mut(index) {
             slot.retired = true;
@@ -409,6 +418,28 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
         self.live
             .iter()
             .position(|held| held.object.start == start && !held.retired)
+    }
+
+    /// Gives up the capability a refused release arrived with and answers
+    /// with the error to send back.
+    ///
+    /// The handle arrived in a message and a client may send one per
+    /// message, so a refusal that left it open would fill the server's
+    /// table. A client that sends the very handle this store hands out
+    /// names a reference of this store's own, and closing that would take
+    /// the object away, so a handle this store holds is kept.
+    fn refuse(&self, pages: &mut impl Pages, returned: Handle, error: Error) -> Error {
+        if !self.holds(returned) {
+            let _closed = pages.close(returned);
+        }
+        error
+    }
+
+    /// Whether `returned` is a name this store holds for an object of its
+    /// own, retired objects and free ones included.
+    fn holds(&self, returned: Handle) -> bool {
+        self.live.iter().any(|held| held.object.handle == returned)
+            || self.free.iter().any(|object| object.handle == returned)
     }
 }
 
