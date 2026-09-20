@@ -10,8 +10,9 @@
 //! block. TLS never uses one, so this crate refuses it rather than carrying
 //! a path nothing exercises.
 //!
-//! Invariant: `open` computes the tag over the received ciphertext and
-//! compares it before it decrypts anything.
+//! Invariants: `open` computes the tag over the received ciphertext and
+//! compares it before it decrypts anything; the hash key is overwritten
+//! when the mode goes out of scope.
 
 use crypto_ct::{ct_eq, wipe};
 
@@ -34,7 +35,7 @@ const FIRST_COUNTER: u32 = 2;
 
 /// What the two key lengths have in common.
 #[derive(Clone)]
-struct AesGcm {
+pub(crate) struct AesGcm {
     /// The block cipher.
     cipher: Aes,
     /// The hash key: the encryption of the zero block.
@@ -43,10 +44,15 @@ struct AesGcm {
 
 impl AesGcm {
     /// The mode over `cipher`.
-    fn new(cipher: Aes) -> AesGcm {
+    pub(crate) fn new(cipher: Aes) -> AesGcm {
         let mut hash_key = [0u8; BLOCK_LEN];
         cipher.encrypt_block(&mut hash_key);
         AesGcm { cipher, hash_key }
+    }
+
+    /// Overwrites the hash key with zeros. `Drop` calls this.
+    pub(crate) fn clear(&mut self) {
+        wipe(&mut self.hash_key);
     }
 
     /// The counter block for `counter`.
@@ -177,6 +183,20 @@ fn bit_length(bytes: usize) -> Result<u64, AeadError> {
         .ok()
         .and_then(|value| value.checked_mul(8))
         .ok_or(AeadError::MessageTooLong)
+}
+
+#[cfg(test)]
+impl AesGcm {
+    /// The hash key, for the test of the overwrite.
+    pub(crate) const fn hash_key(&self) -> &[u8; BLOCK_LEN] {
+        &self.hash_key
+    }
+}
+
+impl Drop for AesGcm {
+    fn drop(&mut self) {
+        self.clear();
+    }
 }
 
 /// AES-128-GCM.

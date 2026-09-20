@@ -9,7 +9,10 @@
 //! Invariants: `buffered` is smaller than `BLOCK_LEN` between calls;
 //! `length` counts the bytes the core has seen. The message schedule is a
 //! rolling window of sixteen words, so every index into it is a literal on
-//! a fixed-size array.
+//! a fixed-size array. The chaining words are overwritten when the core
+//! goes out of scope.
+
+use crypto_ct::{wipe, wipe_u64};
 
 use crate::hash::Hash;
 
@@ -156,6 +159,15 @@ impl Core {
             buffered: 0,
             length: 0,
         }
+    }
+
+    /// Overwrites the chaining words and the partial block with zeros.
+    /// `Drop` calls this.
+    fn clear(&mut self) {
+        wipe_u64(&mut self.state);
+        wipe(&mut self.buffer);
+        self.buffered = 0;
+        self.length = 0;
     }
 
     /// Adds `bytes` to the message.
@@ -318,11 +330,12 @@ impl Sha384 {
     /// of the core's output.
     #[must_use]
     pub fn finish(self) -> [u8; OUTPUT_LEN_384] {
-        let full = self.core.finish();
+        let mut full = self.core.finish();
         let mut digest = [0u8; OUTPUT_LEN_384];
         for (slot, byte) in digest.iter_mut().zip(full) {
             *slot = byte;
         }
+        wipe(&mut full);
         digest
     }
 
@@ -490,4 +503,26 @@ const fn sigma0(x: u64) -> u64 {
 /// The second of the two functions of the message schedule.
 const fn sigma1(x: u64) -> u64 {
     x.rotate_right(19) ^ x.rotate_right(61) ^ x.wrapping_shr(6)
+}
+
+#[cfg(test)]
+impl Sha512 {
+    /// Overwrites the core, for the test of the overwrite.
+    pub(crate) fn clear(&mut self) {
+        self.core.clear();
+    }
+}
+
+#[cfg(test)]
+impl Sha384 {
+    /// Overwrites the core, for the test of the overwrite.
+    pub(crate) fn clear(&mut self) {
+        self.core.clear();
+    }
+}
+
+impl Drop for Core {
+    fn drop(&mut self) {
+        self.clear();
+    }
 }

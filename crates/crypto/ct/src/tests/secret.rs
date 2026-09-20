@@ -92,3 +92,23 @@ fn debug_shows_the_length_and_no_content() {
     assert!(!rendered.contains('A'));
     assert!(!rendered.contains("65"));
 }
+
+#[test]
+fn wiping_words_overwrites_every_one_of_them() {
+    let mut words = [0xDEAD_BEEFu32; 8];
+    crate::wipe_u32(&mut words);
+    assert_eq!(words, [0u32; 8]);
+}
+
+#[test]
+fn wiping_wide_words_overwrites_every_one_of_them() {
+    let mut words = [0xDEAD_BEEF_CAFE_F00Du64; 64];
+    crate::wipe_u64(&mut words);
+    assert_eq!(words, [0u64; 64]);
+}
+
+#[test]
+fn wiping_an_empty_slice_changes_nothing() {
+    crate::wipe_u32(&mut []);
+    crate::wipe_u64(&mut []);
+}

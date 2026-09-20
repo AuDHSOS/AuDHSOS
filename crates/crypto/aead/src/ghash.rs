@@ -12,7 +12,10 @@
 //!
 //! Invariants: `buffered` is smaller than `BLOCK_LEN` between calls; a
 //! caller that feeds the parts GCM prescribes, each padded to a block,
-//! never leaves a partial block behind.
+//! never leaves a partial block behind; the hash key and the accumulator
+//! are overwritten when the computation goes out of scope.
+
+use crypto_ct::wipe;
 
 /// Bytes the hash consumes at a time.
 pub const BLOCK_LEN: usize = 16;
@@ -43,6 +46,17 @@ impl GHash {
             buffer: [0u8; BLOCK_LEN],
             buffered: 0,
         }
+    }
+
+    /// Overwrites the hash key, the accumulator, and the partial block with
+    /// zeros. `Drop` calls this; a cleared computation hashes under the
+    /// all-zero key and is for dropping only.
+    pub(crate) fn clear(&mut self) {
+        self.key = 0;
+        self.accumulator = 0;
+        self.buffered = 0;
+        wipe(&mut self.buffer);
+        let _ = core::hint::black_box(&self.key);
     }
 
     /// Adds `data` to the message.
@@ -95,6 +109,12 @@ impl GHash {
     fn block(&mut self, block: &[u8; BLOCK_LEN]) {
         self.accumulator ^= u128::from_be_bytes(*block);
         self.accumulator = multiply(self.accumulator, self.key);
+    }
+}
+
+impl Drop for GHash {
+    fn drop(&mut self) {
+        self.clear();
     }
 }
 

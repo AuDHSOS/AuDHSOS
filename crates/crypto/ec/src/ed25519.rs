@@ -26,11 +26,13 @@
 //! that only passes the cofactored equation is rejected, which is what
 //! makes a signature one string of bytes rather than a family of them.
 //!
-//! Invariant: `Point` always holds a point of the curve in extended
-//! coordinates, `x = X/Z`, `y = Y/Z`, `xy = T/Z`. The only constructor
-//! from bytes checks the curve equation.
+//! Invariants: `Point` always holds a point of the curve in extended
+//! coordinates, `x = X/Z`, `y = Y/Z`, `xy = T/Z`; the only constructor
+//! from bytes checks the curve equation; `expand`, [`sign`], and
+//! [`public_key`] overwrite the scalar, the prefix, the nonce, and the
+//! product of the challenge with the scalar before they return.
 
-use crypto_ct::Choice;
+use crypto_ct::{Choice, wipe};
 use crypto_hash::Sha512;
 
 use crate::error::EcError;
@@ -347,8 +349,11 @@ pub fn verify(
 /// [`Point::mul_secret`], not [`Point::mul`].
 #[must_use]
 pub fn public_key(secret: &[u8; 32]) -> [u8; PUBLIC_LEN] {
-    let (scalar, _) = expand(secret);
-    Point::base().mul_secret(scalar).compress()
+    let (mut scalar, mut prefix) = expand(secret);
+    let compressed = Point::base().mul_secret(scalar).compress();
+    scalar.clear();
+    wipe(&mut prefix);
+    compressed
 }
 
 /// The signature of `message` under `secret`.
@@ -357,7 +362,9 @@ pub fn public_key(secret: &[u8; 32]) -> [u8; PUBLIC_LEN] {
 /// nonce is a hash of the secret's prefix and the message, and a repeated
 /// message signs to the same bytes.
 ///
-/// Three values here are secret — the scalar, the prefix, and the nonce —
+/// Four values here are secret — the scalar, the prefix, the nonce, and
+/// the product of the challenge with the scalar, from which the public
+/// challenge recovers the scalar —
 /// and each drives the arithmetic that hides it: [`Point::mul_secret`] for
 /// the two multiples of the base point, and [`Scalar::mul_secret`] for the
 /// product of the challenge with the scalar. The message, the commitment
@@ -365,13 +372,15 @@ pub fn public_key(secret: &[u8; 32]) -> [u8; PUBLIC_LEN] {
 /// hidden.
 #[must_use]
 pub fn sign(secret: &[u8; 32], message: &[u8]) -> [u8; SIGNATURE_LEN] {
-    let (scalar, prefix) = expand(secret);
+    let (mut scalar, mut prefix) = expand(secret);
     let public = Point::base().mul_secret(scalar).compress();
 
     let mut hash = Sha512::new();
     hash.update(&prefix);
     hash.update(message);
-    let r = Scalar::from_wide(&hash.finish());
+    let mut nonce_digest = hash.finish();
+    let mut r = Scalar::from_wide(&nonce_digest);
+    wipe(&mut nonce_digest);
     let commitment = Point::base().mul_secret(r).compress();
 
     let mut hash = Sha512::new();
@@ -379,7 +388,8 @@ pub fn sign(secret: &[u8; 32], message: &[u8]) -> [u8; SIGNATURE_LEN] {
     hash.update(&public);
     hash.update(message);
     let k = Scalar::from_wide(&hash.finish());
-    let s = r.add(k.mul_secret(scalar));
+    let mut residue = k.mul_secret(scalar);
+    let s = r.add(residue);
 
     let mut signature = [0u8; SIGNATURE_LEN];
     for (slot, byte) in signature.iter_mut().zip(commitment) {
@@ -388,6 +398,11 @@ pub fn sign(secret: &[u8; 32], message: &[u8]) -> [u8; SIGNATURE_LEN] {
     for (slot, byte) in signature.iter_mut().skip(32).zip(s.to_bytes()) {
         *slot = byte;
     }
+
+    scalar.clear();
+    r.clear();
+    residue.clear();
+    wipe(&mut prefix);
     signature
 }
 
@@ -395,7 +410,7 @@ pub fn sign(secret: &[u8; 32], message: &[u8]) -> [u8; SIGNATURE_LEN] {
 /// the clamping of RFC 8032, section 5.1.5, is bit work over the digest
 /// with no branch on it.
 fn expand(secret: &[u8; 32]) -> (Scalar, [u8; 32]) {
-    let digest = Sha512::digest(secret);
+    let mut digest = Sha512::digest(secret);
     let (low, high) = digest.split_at(32);
     let mut clamped = [0u8; 32];
     for (slot, byte) in clamped.iter_mut().zip(low) {
@@ -409,5 +424,9 @@ fn expand(secret: &[u8; 32]) -> (Scalar, [u8; 32]) {
     for (slot, byte) in prefix.iter_mut().zip(high) {
         *slot = *byte;
     }
-    (Scalar::from_bytes_reduced(&clamped), prefix)
+
+    let scalar = Scalar::from_bytes_reduced(&clamped);
+    wipe(&mut clamped);
+    wipe(&mut digest);
+    (scalar, prefix)
 }

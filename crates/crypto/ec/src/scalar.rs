@@ -17,9 +17,12 @@
 //! doubling ends with takes its difference behind a mask in a fixed two
 //! rounds, rather than stopping once the value has fallen below the
 //! order: signing a message runs that reduction more than five hundred
-//! times over bits nobody may learn.
+//! times over bits nobody may learn. The limbs of a secret scalar reach
+//! no formatter, and [`Scalar::clear`] overwrites them.
 
-use crypto_ct::{Choice, ct_select_u64};
+use core::fmt;
+
+use crypto_ct::{Choice, ct_select_u64, wipe_u64};
 
 /// Bytes of an encoded scalar.
 pub const BYTES: usize = 32;
@@ -43,12 +46,27 @@ const ORDER: [u64; 4] = [
 /// use crypto_ec::Scalar;
 /// let _ = Scalar::ZERO == Scalar::ZERO;
 /// ```
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct Scalar([u64; 4]);
+
+impl fmt::Debug for Scalar {
+    /// Prints the type name and no limb: a scalar may be the Ed25519
+    /// secret scalar or a signing nonce.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Scalar")
+    }
+}
 
 impl Scalar {
     /// Zero.
     pub const ZERO: Scalar = Scalar([0; 4]);
+
+    /// Overwrites the limbs with zeros, for a caller that holds a secret
+    /// scalar and is done with it. `Scalar` is `Copy`, so it cannot have a
+    /// `Drop` and the caller has to say when.
+    pub fn clear(&mut self) {
+        wipe_u64(&mut self.0);
+    }
 
     /// The scalar the bytes encode, or `None` when the value is at or above
     /// the order. RFC 8032 requires a signature to carry the canonical

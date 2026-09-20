@@ -445,3 +445,24 @@ fn an_output_narrower_than_the_modulus_holds_a_result_that_fits() {
         .expect("forty-nine fits in two bytes");
     assert_eq!(out, vec![0x00u8, 0x31u8]);
 }
+
+#[test]
+fn a_secret_exponentiation_wipes_its_registers_and_repeats_its_answer() {
+    let modulus = Modulus::new(&fixed(1024)).expect("the fixed modulus is well formed");
+    let base = fixed(1016);
+    let exponent = unhex(RFC8448_PRIVATE);
+    let mut first = vec![0u8; 128];
+    modulus
+        .pow_secret(&base, &exponent, &mut first)
+        .expect("the base is below the modulus");
+    let mut second = vec![0u8; 128];
+    modulus
+        .pow_secret(&base, &exponent, &mut second)
+        .expect("the base is below the modulus");
+    assert_eq!(
+        hex(&first),
+        hex(&second),
+        "the wipe left the modulus intact"
+    );
+    assert_eq!(hex(&exponent), hex(&unhex(RFC8448_PRIVATE)));
+}

@@ -103,3 +103,35 @@ fn four_lanes_encrypt_what_four_single_blocks_encrypt() {
         assert_eq!(blocks.get(group), Some(&alone), "lane group {group}");
     }
 }
+
+#[test]
+fn clearing_a_key_leaves_no_round_key_to_tell_two_ciphers_apart() {
+    let mut first = Aes::new_128(&[0x11u8; 16]);
+    let mut second = Aes::new_128(&[0x22u8; 16]);
+    let mut block = [0x33u8; 16];
+    let mut other = block;
+    first.encrypt_block(&mut block);
+    second.encrypt_block(&mut other);
+    assert_ne!(hex(&block), hex(&other), "different keys before the clear");
+
+    first.clear();
+    second.clear();
+    let mut block = [0x33u8; 16];
+    let mut other = block;
+    first.encrypt_block(&mut block);
+    second.encrypt_block(&mut other);
+    assert_eq!(hex(&block), hex(&other), "the round keys are gone");
+}
+
+#[test]
+fn clearing_a_256_bit_key_leaves_no_round_key_either() {
+    let mut first = Aes::new_256(&[0x44u8; 32]);
+    let mut second = Aes::new_256(&[0x55u8; 32]);
+    first.clear();
+    second.clear();
+    let mut block = [0x66u8; 16];
+    let mut other = block;
+    first.encrypt_block(&mut block);
+    second.encrypt_block(&mut other);
+    assert_eq!(hex(&block), hex(&other));
+}

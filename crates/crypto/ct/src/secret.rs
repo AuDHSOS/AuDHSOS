@@ -81,6 +81,24 @@ pub fn wipe(bytes: &mut [u8]) {
     let _ = black_box(&*bytes);
 }
 
+/// Overwrites `words` with zeros.
+///
+/// [`wipe`] takes a byte slice and cannot take the word arrays a cipher
+/// keeps its key in, such as the eight state words of `ChaCha20`.
+pub fn wipe_u32(words: &mut [u32]) {
+    words.fill(0);
+    let _ = black_box(&words);
+}
+
+/// Overwrites `words` with zeros.
+///
+/// The counterpart of [`wipe_u32`] for the limb arrays of modular
+/// exponentiation and the bit planes of a sliced AES round key.
+pub fn wipe_u64(words: &mut [u64]) {
+    words.fill(0);
+    let _ = black_box(&words);
+}
+
 impl<const N: usize> Drop for Secret<N> {
     fn drop(&mut self) {
         self.clear();

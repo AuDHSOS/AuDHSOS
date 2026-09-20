@@ -16,6 +16,13 @@ the initial values are generated from their definition in FIPS 180-4,
 the fractional parts of the square and cube roots of the first primes,
 rather than copied from a table.
 
+Key material is overwritten where it is held: `Sha256` and the SHA-512
+core zero their chaining words and partial block on drop, `Hmac` zeros
+the padded key and the digest of an over-long key, and `Prk` zeros its
+bytes on drop. `Prk` is not `Copy`, so a hand-over to the next key
+schedule step is a move or an explicit `clone` rather than a silent
+second copy.
+
 Message lengths are counted in bytes in a 64-bit counter. A message
 longer than 2^61 bytes would overflow the bit length the padding
 encodes; no caller in this system produces one.

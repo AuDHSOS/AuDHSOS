@@ -333,3 +333,16 @@ fn a_reseed_that_fails_inside_a_request_wipes_what_it_produced() {
         "the rest of the buffer is untouched"
     );
 }
+
+#[test]
+fn the_rekey_wipes_its_block_and_leaves_the_stream_documented() {
+    let mut first = ChaChaRng::from_seed(&seed(), CountingEntropy::new(0));
+    let mut second = ChaChaRng::from_seed(&seed(), CountingEntropy::new(0));
+    for _ in 0..4 {
+        let mut left = [0u8; 32];
+        let mut right = [0u8; 32];
+        first.fill(&mut left).expect("the budget is untouched");
+        second.fill(&mut right).expect("the budget is untouched");
+        assert_eq!(hex(&left), hex(&right), "the new key survived the wipe");
+    }
+}
