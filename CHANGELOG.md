@@ -893,9 +893,9 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 - `xtask`: the Secure Shell interop run waited for `[init] started app-ssh`
   under one `E2E_TIMEOUT` of 180 seconds, which had to cover the firmware, the
   kernel and the fifteen programs up to it, eleven of them read off the scratch
-  volume; the run in CI reached `app-net` and lost the budget there. The network server and
-  `app-net` go in front of that line as checkpoints, each with a timeout to
-  itself, as the TLS run already has (D-92).
+  volume; the run in CI reached `app-net` and lost the budget there. The
+  network server and `app-net` go in front of that line as checkpoints, each
+  with a timeout to itself, as the TLS run already has (D-92).
 
 - `xtask`: the `sshd` of that run wrote `PermitRootLogin no` and authenticates
   the account that started the check (D-146), so the run failed at `publickey`
@@ -903,7 +903,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   The configuration now writes `PermitRootLogin prohibit-password` for `root`
   and keeps `no` for every other account; password and keyboard-interactive
   authentication stay off, so the directive admits the one public key alone.
-  D-189 records the change, with two host tests over the text.
+  D-189 records the change, with two host tests over the text. The run as
+  `root` also makes `/run/sshd`, which `sshd` under that account chroots into
+  and a container does not carry, and `ssh::account` asks `id -un` where
+  neither `USER` nor `LOGNAME` names an account.
 
 - `kernel-objects`: `Slot<T>` held its occupant as `Option<Occupant<T>>`, whose
   `None` the compiler encodes in a niche of `T` wherever `T` has one, and every

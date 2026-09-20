@@ -3276,7 +3276,9 @@ alone:
 - The configuration admits a public key of `root` where the check runs as
   `root` and refuses `root` otherwise (D-189), which is what a container
   of the cloud runner needs; the host tests read both directives out of
-  the text.
+  the text. The account is what `USER` or `LOGNAME` names, or what
+  `id -un` prints where neither does, and a run as `root` makes
+  `/run/sshd`, which `sshd` under that account chroots into.
 - The scratch disk of the run carries the trust file, the client's seed
   and the port, written by the host onto a FAT32 volume the file system
   server mounts rather than formats.
