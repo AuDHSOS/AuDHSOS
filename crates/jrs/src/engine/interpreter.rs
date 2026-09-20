@@ -35959,6 +35959,21 @@ impl RegisterVM {
                     key,
                     enumerable,
                 } => {
+                    // 7.1.19 of an Object key runs a `toString` of the
+                    // Script, and the method waits in the accumulator, which
+                    // the frame of that call takes; the root gives it back.
+                    if self.convert_key(
+                        key,
+                        Some(self.acc),
+                        &mut pc,
+                        &mut current_code_id,
+                        units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    )? {
+                        return Ok(None);
+                    }
                     let name = property_key(self.read_reg(key)?, heap, realm)?;
                     // 15.7.14 and 13.2.5.5 name a method after the key only
                     // the run time knows, which 10.2.10 does here.
@@ -35971,6 +35986,19 @@ impl RegisterVM {
                     setter,
                     enumerable,
                 } => {
+                    // The same, with the accessor in the accumulator.
+                    if self.convert_key(
+                        key,
+                        Some(self.acc),
+                        &mut pc,
+                        &mut current_code_id,
+                        units,
+                        active_feedback,
+                        heap,
+                        realm,
+                    )? {
+                        return Ok(None);
+                    }
                     let name = property_key(self.read_reg(key)?, heap, realm)?;
                     self.name_from_key(name, Some(setter), heap)?;
                     self.define_accessor(obj, name, setter, enumerable, heap, realm)?;

@@ -12053,6 +12053,25 @@ fn step_3_of_20_1_2_24_reads_every_property_through_its_getter() -> Result<(), E
 }
 
 #[test]
+fn a_computed_key_of_a_method_goes_through_7_1_19() -> Result<(), Error> {
+    for source in [
+        // 7.1.19 of an Object key runs a `toString` of the Script, and the
+        // method waits in the accumulator while it does.
+        "var k={toString:function(){return 'm'}};var o={[k](){return 1}};''+o.m()",
+        "var k={toString:function(){return 'm'}};var g={get [k](){return 2}};''+g.m",
+        "var k={toString:function(){return 'm'}};var s={set [k](v){this.got=v}};s.m=5;''+s.got",
+        // The key is read once, where the clause reads it.
+        "var l=[];var t={toString:function(){l.push('t');return 'n'}};var q={[t](){return 4}};q.n()+'|'+l.join('')",
+        // A class body defines its methods the same way, which
+        // test/language/computed-property-names covers on the suite; the
+        // lowering does not take a class expression of a Script here.
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn the_length_of_10_4_2_4_is_converted_twice() -> Result<(), Error> {
     for source in [
         // Step 3 converts the value, which for an Object runs a method of
