@@ -95,6 +95,11 @@ pub enum Setting {
     /// is `PragTyp_DEFAULT_CACHE_SIZE` of
     /// `research/sqlite/src/pragma.c:553`.
     DefaultCacheSize,
+    /// `PRAGMA incremental_vacuum(N)`, which gives up as many as N pages
+    /// at the end of a file that vacuums itself incrementally, and is
+    /// `PragTyp_INCREMENTAL_VACUUM` of
+    /// `research/sqlite/src/pragma.c:854`.
+    IncrementalVacuum,
 }
 
 /// What a pragma the connection keeps a value for is written as.
@@ -463,6 +468,7 @@ pub fn of_name(name: &[u8]) -> Option<Setting> {
         b"wal_checkpoint" => Setting::WalCheckpoint,
         b"case_sensitive_like" => Setting::CaseSensitiveLike,
         b"default_cache_size" => Setting::DefaultCacheSize,
+        b"incremental_vacuum" => Setting::IncrementalVacuum,
         // `PRAGMA default_synchronous` is a pragma no version of the
         // library still holds, and `sqlite3Pragma` answers no row for a
         // name it does not know.
@@ -629,7 +635,8 @@ impl Setting {
             | Setting::CollationList
             | Setting::ForeignKeyList
             | Setting::ForeignKeyCheck
-            | Setting::WalCheckpoint => return None,
+            | Setting::WalCheckpoint
+            | Setting::IncrementalVacuum => return None,
         })
     }
 }
@@ -700,14 +707,21 @@ pub fn encoding_of(text: &[u8]) -> Option<Encoding> {
 /// What a `PRAGMA auto_vacuum` names: nought for none, one for a file
 /// that vacuums itself whole, two for one that vacuums a step at a
 /// time.
+///
+/// `getAutoVacuum` of `research/sqlite/src/pragma.c:126` reads the three
+/// words, then the number the text begins with, and answers none for
+/// every other text, so no value is refused.
 #[must_use]
-pub fn vacuum_of(text: &[u8]) -> Option<u32> {
+pub fn vacuum_of(text: &[u8]) -> u32 {
     let text: Vec<u8> = crate::schema::dequote(text).to_ascii_lowercase();
     match text.as_slice() {
-        b"none" | b"0" | b"off" | b"false" => Some(0),
-        b"full" | b"1" => Some(1),
-        b"incremental" | b"2" => Some(2),
-        _ => None,
+        b"none" => 0,
+        b"full" => 1,
+        b"incremental" => 2,
+        digits => signed_number(digits)
+            .and_then(|number| u32::try_from(number).ok())
+            .filter(|number| *number <= 2)
+            .unwrap_or(0),
     }
 }
 

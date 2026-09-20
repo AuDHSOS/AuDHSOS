@@ -247,3 +247,313 @@ fn a_pragma_the_library_does_not_know_answers_no_row() {
     // A name this crate holds nothing for at all is still refused.
     assert_eq!(writer.run(b"PRAGMA bogus_name"), Err(Error::Unsupported));
 }
+
+/// `autovacuum-1.*` of `test/autovacuum.test`: a file that vacuums
+/// itself whole holds every page it has not given up after a row with
+/// overflow pages is deleted.
+#[test]
+fn a_file_that_vacuums_itself_holds_every_page_after_a_delete() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.vacuuming(false);
+    writer.run(b"CREATE TABLE av1(a)").unwrap();
+    writer.run(b"CREATE INDEX av1_idx ON av1(a)").unwrap();
+    for row in 1..=20_i64 {
+        let text = alloc::string::String::from_utf8(alloc::vec![b'a'; 3500]).unwrap();
+        writer
+            .run(alloc::format!("INSERT INTO av1(oid, a) VALUES({row}, '{text}')").as_bytes())
+            .unwrap();
+    }
+    assert_eq!(
+        answered(&writer, "PRAGMA integrity_check"),
+        [alloc::vec![Value::Text(b"ok".to_vec())]]
+    );
+    for row in 1..=20_i64 {
+        writer
+            .run(alloc::format!("DELETE FROM av1 WHERE oid={row}").as_bytes())
+            .unwrap();
+        assert_eq!(
+            answered(&writer, "PRAGMA integrity_check"),
+            [alloc::vec![Value::Text(b"ok".to_vec())]],
+            "after deleting row {row}"
+        );
+    }
+    // Every page the rows took is given up, so the file is the header,
+    // the map, the table and the index.
+    assert_eq!(
+        answered(&writer, "PRAGMA page_count"),
+        [alloc::vec![Value::Int(4)]]
+    );
+    assert_eq!(writer.written().len(), 4 * 1024);
+}
+
+/// `incrvacuum-4.*` of `test/incrvacuum.test`: `PRAGMA
+/// incremental_vacuum` gives up the pages at the end of the file one at
+/// a time and answers one row of no column per page it gave up.
+#[test]
+fn what_an_incremental_vacuum_gives_up() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.vacuuming(true);
+    let text = alloc::string::String::from_utf8(alloc::vec![b'x'; 1100]).unwrap();
+    for sql in [
+        "CREATE TABLE t(a)".to_string(),
+        alloc::format!("INSERT INTO t VALUES('{text}'),('{text}'),('{text}')"),
+    ] {
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    let held = answered(&writer, "PRAGMA page_count")[0][0].clone();
+    writer.run(b"DELETE FROM t").unwrap();
+    // The pages the rows took are on the free list, and the file is as
+    // long as it was.
+    assert_eq!(answered(&writer, "PRAGMA page_count"), [alloc::vec![held]]);
+    let Value::Int(free) = answered(&writer, "PRAGMA freelist_count")[0][0] else {
+        panic!("the pragma answers a number")
+    };
+    // Two steps give up two pages and answer two rows of no column.
+    assert_eq!(
+        writer.run(b"PRAGMA incremental_vacuum(2)").unwrap(),
+        [alloc::vec![], alloc::vec![]]
+    );
+    assert_eq!(
+        answered(&writer, "PRAGMA freelist_count"),
+        [alloc::vec![Value::Int(free - 2)]]
+    );
+    // Every page of the free list is given up where the statement names
+    // no count, and the file holds the header, the map and the table.
+    assert_eq!(
+        writer.run(b"PRAGMA incremental_vacuum").unwrap().len(),
+        usize::try_from(free - 2).unwrap()
+    );
+    assert_eq!(
+        answered(&writer, "PRAGMA page_count"),
+        [alloc::vec![Value::Int(3)]]
+    );
+    assert_eq!(
+        answered(&writer, "PRAGMA integrity_check"),
+        [alloc::vec![Value::Text(b"ok".to_vec())]]
+    );
+    // A file that holds no free page gives up none, and so does one that
+    // does not vacuum itself.
+    assert!(writer.run(b"PRAGMA incremental_vacuum").unwrap().is_empty());
+    let mut plain = ran(&[
+        "CREATE TABLE t(a)",
+        "INSERT INTO t VALUES(1)",
+        "DELETE FROM t",
+    ]);
+    assert!(plain.run(b"PRAGMA incremental_vacuum").unwrap().is_empty());
+}
+
+/// `incrvacuum-6.*`: how many pages a `PRAGMA incremental_vacuum` gives
+/// up is what `sqlite3GetInt32` reads after the name, and every page of
+/// the free list where that is no number above nought.
+#[test]
+fn how_many_pages_an_incremental_vacuum_is_asked_for() {
+    let text = alloc::string::String::from_utf8(alloc::vec![b'x'; 1100]).unwrap();
+    let steps = |asked: &str| {
+        let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+        writer.vacuuming(true);
+        for sql in [
+            "CREATE TABLE t(a)".to_string(),
+            alloc::format!(
+                "INSERT INTO t VALUES('{text}'),('{text}'),('{text}'),('{text}'),('{text}')"
+            ),
+            "DELETE FROM t".to_string(),
+            alloc::format!("PRAGMA incremental_vacuum{asked}"),
+        ] {
+            let rows = writer.run(sql.as_bytes()).unwrap();
+            if sql.starts_with("PRAGMA") {
+                return rows.len();
+            }
+        }
+        0
+    };
+    let every = steps("(0)");
+    assert!(every > 3, "the file holds free pages to give up");
+    assert_eq!(steps("(1)"), 1);
+    assert_eq!(steps("('1')"), 1);
+    assert_eq!(steps("(\"+3\")"), 3);
+    assert_eq!(steps(" = 2"), 2);
+    // A count past what a signed word holds, one that is no number at
+    // all, and one that is nought or below all name every page.
+    assert_eq!(steps("(2147483649)"), every);
+    assert_eq!(steps("(bogus)"), every);
+    assert_eq!(steps("=-1"), every);
+}
+
+/// `incrvacuum-3.4`: `PRAGMA auto_vacuum` over a file that vacuums
+/// itself already writes which of the two ways it does, and a word no
+/// way carries names none.
+#[test]
+fn what_an_auto_vacuum_over_a_file_with_a_table_writes() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.vacuuming(true);
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    assert_eq!(
+        answered(&writer, "PRAGMA auto_vacuum"),
+        [alloc::vec![Value::Int(2)]]
+    );
+    // The file vacuums itself whole from here on, so the pages a delete
+    // frees are given up at the commit.
+    assert!(writer.run(b"PRAGMA auto_vacuum=1").unwrap().is_empty());
+    assert_eq!(
+        answered(&writer, "PRAGMA auto_vacuum"),
+        [alloc::vec![Value::Int(1)]]
+    );
+    let text = alloc::string::String::from_utf8(alloc::vec![b'x'; 1100]).unwrap();
+    writer
+        .run(alloc::format!("INSERT INTO t VALUES('{text}')").as_bytes())
+        .unwrap();
+    let held = answered(&writer, "PRAGMA page_count");
+    writer.run(b"DELETE FROM t").unwrap();
+    assert_ne!(answered(&writer, "PRAGMA page_count"), held);
+    assert_eq!(
+        answered(&writer, "PRAGMA freelist_count"),
+        [alloc::vec![Value::Int(0)]]
+    );
+    // A word no way carries names none, which changes nothing, and
+    // `none` over a file that vacuums itself changes nothing either.
+    assert!(writer.run(b"PRAGMA auto_vacuum=bogus").unwrap().is_empty());
+    assert!(writer.run(b"PRAGMA auto_vacuum=none").unwrap().is_empty());
+    assert_eq!(
+        answered(&writer, "PRAGMA auto_vacuum"),
+        [alloc::vec![Value::Int(1)]]
+    );
+    // A file that vacuums itself not at all is left as it stands.
+    let mut plain = ran(&["CREATE TABLE t(a)"]);
+    assert!(plain.run(b"PRAGMA auto_vacuum=2").unwrap().is_empty());
+    assert_eq!(
+        answered(&plain, "PRAGMA auto_vacuum"),
+        [alloc::vec![Value::Int(0)]]
+    );
+}
+
+/// `incrvacuum-5.3.*`: a step moves the page at the end of the file into
+/// a free page below it, taking that page off the free list wherever the
+/// list holds it.
+#[test]
+fn what_a_step_moves_the_last_page_into() {
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.vacuuming(true);
+    writer.run(b"CREATE TABLE t(a, b)").unwrap();
+    writer.run(b"CREATE INDEX i ON t(b)").unwrap();
+    let text = alloc::string::String::from_utf8(alloc::vec![b'y'; 400]).unwrap();
+    let long = alloc::string::String::from_utf8(alloc::vec![b'w'; 1500]).unwrap();
+    for row in 1..=300_i64 {
+        // Every fifth row runs onto a chain of overflow pages and the
+        // others do not, so a page holds a cell of each.
+        let held = if row % 5 == 0 { &long } else { &text };
+        writer
+            .run(alloc::format!("INSERT INTO t VALUES({row}, '{held}')").as_bytes())
+            .unwrap();
+    }
+    // The rows below the last hundred are deleted, so the free list holds
+    // the pages they took and the pages at the end of the file are the
+    // ones the table still holds. The list runs over more than one trunk,
+    // because a trunk of a page of 512 bytes carries 120 leaves.
+    writer.run(b"DELETE FROM t WHERE a<=200").unwrap();
+    let Value::Int(free) = answered(&writer, "PRAGMA freelist_count")[0][0] else {
+        panic!("the pragma answers a number")
+    };
+    assert!(free > 120, "the free list runs over more than one trunk");
+    let steps = writer.run(b"PRAGMA incremental_vacuum").unwrap().len();
+    assert!(steps > 120, "every page of the list is given up");
+    assert_eq!(
+        answered(&writer, "PRAGMA freelist_count"),
+        [alloc::vec![Value::Int(0)]]
+    );
+    assert_eq!(
+        answered(&writer, "PRAGMA integrity_check"),
+        [alloc::vec![Value::Text(b"ok".to_vec())]]
+    );
+    // Every row the delete left stands, and the index answers for it.
+    assert_eq!(
+        answered(&writer, "SELECT count(*) FROM t"),
+        [alloc::vec![Value::Int(100)]]
+    );
+    assert_eq!(
+        answered(&writer, "SELECT a FROM t WHERE b=x'00' OR a=300"),
+        [alloc::vec![Value::Int(300)]]
+    );
+}
+
+/// What a step refuses over a file whose pointer map or whose free list
+/// says what the pages of the file do not.
+#[test]
+fn what_a_step_refuses_over_a_file_that_says_what_it_does_not_hold() {
+    let held = || {
+        let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+        writer.vacuuming(true);
+        writer.run(b"CREATE TABLE t(a, b)").unwrap();
+        let text = alloc::string::String::from_utf8(alloc::vec![b'z'; 1100]).unwrap();
+        for row in 1..=4_i64 {
+            writer
+                .run(alloc::format!("INSERT INTO t VALUES({row}, '{text}')").as_bytes())
+                .unwrap();
+        }
+        writer.run(b"DELETE FROM t WHERE a<=2").unwrap();
+        writer.written()
+    };
+    // The map says the last page is the root of a tree, which no page
+    // past the end the file is cut back to is.
+    let mut image = held();
+    let last = image.len() / 1024;
+    let at = 1024 + (last - 3) * 5;
+    image[at] = 1;
+    let mut writer = Writer::opened(&image).unwrap();
+    assert_eq!(
+        writer.run(b"PRAGMA incremental_vacuum"),
+        Err(Error::Image(crate::error::Error::Page(
+            u32::try_from(last).unwrap()
+        )))
+    );
+    // The free list names no page at or below the end, because the
+    // header says it begins nowhere.
+    let mut image = held();
+    for byte in image.iter_mut().take(36).skip(32) {
+        *byte = 0;
+    }
+    let mut writer = Writer::opened(&image).unwrap();
+    assert_eq!(
+        writer.run(b"PRAGMA incremental_vacuum"),
+        Err(Error::Image(crate::error::Error::Balance))
+    );
+    // The header counts more free pages than the file holds pages.
+    let mut image = held();
+    for (at, byte) in (36..40).enumerate() {
+        image[byte] = [0xff, 0xff, 0xff, 0xff][at];
+    }
+    let mut writer = Writer::opened(&image).unwrap();
+    assert!(writer.run(b"PRAGMA incremental_vacuum").is_err());
+}
+
+/// A file that ends on a pointer-map page gives that page up and moves
+/// nothing, because the map page carries the entries of the pages the
+/// file gave up before it.
+#[test]
+fn what_a_step_over_a_file_that_ends_on_a_map_page_gives_up() {
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.vacuuming(true);
+    writer.run(b"CREATE TABLE t(a, b)").unwrap();
+    let text = alloc::string::String::from_utf8(alloc::vec![b'y'; 400]).unwrap();
+    for row in 1..=150_i64 {
+        writer
+            .run(alloc::format!("INSERT INTO t VALUES({row}, '{text}')").as_bytes())
+            .unwrap();
+    }
+    // A page of 512 bytes carries 102 entries, so page 105 is the second
+    // map page. The image is cut back to it and the header counts the
+    // pages and the free list of the file it names.
+    let mut image = writer.written();
+    image.truncate(105 * 512);
+    for (at, byte) in (28..32).enumerate() {
+        image[byte] = 105_u32.to_be_bytes()[at];
+    }
+    for (at, byte) in (36..40).enumerate() {
+        image[byte] = 50_u32.to_be_bytes()[at];
+    }
+    let mut writer = Writer::opened(&image).unwrap();
+    assert_eq!(
+        writer.run(b"PRAGMA incremental_vacuum(1)").unwrap().len(),
+        1
+    );
+    assert_eq!(writer.written().len(), 104 * 512);
+}

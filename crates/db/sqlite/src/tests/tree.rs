@@ -2599,7 +2599,14 @@ fn what_a_pragma_refuses() {
     // A pragma this crate does not answer, and a value it does not
     // name.
     assert!(writer.run(b"PRAGMA nosuch=1").is_err());
-    assert!(writer.run(b"PRAGMA auto_vacuum=sometimes").is_err());
+    // `PRAGMA auto_vacuum` is not among them: `getAutoVacuum` names
+    // none for a word no way carries.
+    assert!(
+        writer
+            .run(b"PRAGMA auto_vacuum=sometimes")
+            .unwrap()
+            .is_empty()
+    );
     assert!(writer.run(b"PRAGMA journal_mode=nosuch").is_err());
     assert!(writer.run(b"PRAGMA encoding='UTF-32'").is_err());
     assert!(writer.run(b"PRAGMA page_size=five").is_err());

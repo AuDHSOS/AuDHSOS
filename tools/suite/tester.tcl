@@ -1780,13 +1780,14 @@ set ::bitmask_size 64
 # reach, which `ifcapable` answers for as well.
 foreach option {
   fts3 fts5 rtree icu vtab incrblob shared_cache codec atomicwrite vacuum
-  explain autovacuum session setlk_timeout configslower
+  explain session setlk_timeout configslower
   memorymanage threadsafe
 } { set ::sqlite_options($option) 0 }
 foreach option {
   wal utf16 integrityck casesensitivelike trigger view subquery compound attach
   foreignkey json1 like_match_blobs pragma reindex analyze altertable
   cast check conflict datetime floatingpoint or_opt stat4 update_delete_limit
+  autovacuum
 } { set ::sqlite_options($option) 1 }
 set ::sqlite_options(default_autovacuum) 0
 

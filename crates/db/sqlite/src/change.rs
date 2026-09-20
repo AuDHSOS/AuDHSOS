@@ -3522,6 +3522,10 @@ impl Writer {
             let how = asked.value.map(|value| value.text(sql));
             return Ok(self.checkpoint(how));
         }
+        if setting == crate::pragma::Setting::IncrementalVacuum {
+            let most = asked_steps(asked.value.map(|value| value.text(sql)));
+            return self.vacuumed_steps(most);
+        }
         if let Some(quick) = quick {
             let asked = crate::check::checking(asked.value.map(|value| value.text(sql)));
             return self.integrity(quick, &asked);
@@ -3530,6 +3534,30 @@ impl Writer {
             return self.pragma_read(setting);
         };
         self.pragma_write(setting, value.text(sql), asked.schema.is_none())
+    }
+
+    /// `PRAGMA incremental_vacuum(N)`: the file gives up as many as `N`
+    /// pages at its end and the pragma answers one row of no column per
+    /// page it gave up.
+    ///
+    /// `PragTyp_INCREMENTAL_VACUUM` of
+    /// `research/sqlite/src/pragma.c:854` writes a loop of
+    /// `OP_IncrVacuum` and an `OP_ResultRow` of no column, which ends
+    /// where the step answers `SQLITE_DONE`. Giving up one page costs
+    /// O(n) in the pages of the free list.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the step refuses.
+    fn vacuumed_steps(&mut self, most: u32) -> Result<Vec<Vec<Value>>, Error> {
+        let mut rows = Vec::new();
+        for _ in 0..most {
+            if !self.held.pages.vacuum_incremental()? {
+                break;
+            }
+            rows.push(Vec::new());
+        }
+        Ok(rows)
     }
 
     /// `PRAGMA name = value`, with `text` for what is written.
@@ -3606,6 +3634,21 @@ impl Writer {
             self.truth.counting = crate::pragma::truth(text).ok_or(Error::Unsupported)?;
             return Ok(Vec::new());
         }
+        // `sqlite3BtreeSetAutoVacuum` of `research/sqlite/src/btree.c`
+        // writes the incremental flag of a file that vacuums itself
+        // already, and leaves the vacuuming as it is once the page size
+        // is fixed, so a file with a table takes the second word and not
+        // the first.
+        if setting == crate::pragma::Setting::AutoVacuum
+            && self.held.header.schema_cookie != 0
+            && self.held.header.largest_root != 0
+        {
+            let which = crate::pragma::vacuum_of(text);
+            if which != 0 {
+                self.held.header.incremental_vacuum = u32::from(which == 2);
+            }
+            return Ok(Vec::new());
+        }
         if self.held.header.schema_cookie != 0 && setting != crate::pragma::Setting::JournalMode {
             // `sqlite3BtreeSetPageSize` keeps the size the pragma named
             // for the next `VACUUM`, which is the only thing that can
@@ -3625,12 +3668,10 @@ impl Writer {
                 self.held.header.encoding =
                     crate::pragma::encoding_of(text).ok_or(Error::Unsupported)?;
             }
-            crate::pragma::Setting::AutoVacuum => {
-                match crate::pragma::vacuum_of(text).ok_or(Error::Unsupported)? {
-                    0 => {}
-                    which => self.vacuuming(which == 2),
-                }
-            }
+            crate::pragma::Setting::AutoVacuum => match crate::pragma::vacuum_of(text) {
+                0 => {}
+                which => self.vacuuming(which == 2),
+            },
             crate::pragma::Setting::JournalMode => {
                 // `sqlite3PragmaJournalMode` leaves the mode as it is
                 // where the connection has a transaction open, so the
@@ -9489,6 +9530,28 @@ fn written_image(held: &HeldFile) -> Vec<u8> {
     match &held.origin {
         Some(bytes) => bytes.clone(),
         None => held.pages.written(&held.header),
+    }
+}
+
+/// How many pages a `PRAGMA incremental_vacuum` gives up, which is what
+/// `sqlite3GetInt32` of `research/sqlite/src/util.c` reads of the text
+/// after the name.
+///
+/// `PragTyp_INCREMENTAL_VACUUM` gives up every page of the free list
+/// where the text names no number above nought, which a number past
+/// what a signed word holds is one of.
+fn asked_steps(text: Option<&[u8]>) -> u32 {
+    const EVERY: u32 = 0x7fff_ffff;
+    let held = text
+        .map(crate::schema::dequote)
+        .and_then(|text| {
+            let digits = text.strip_prefix(b"+").unwrap_or(&text).to_vec();
+            crate::pragma::signed_number(&digits)
+        })
+        .and_then(|number| i32::try_from(number).ok());
+    match held {
+        Some(most) if most > 0 => most.cast_unsigned(),
+        _ => EVERY,
     }
 }
 

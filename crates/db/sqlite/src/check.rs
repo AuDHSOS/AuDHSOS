@@ -307,6 +307,11 @@ fn free_pages(image: &Image<'_>, seen: &mut [u8], found: &mut Found) -> Result<(
 
 /// The pages of the pointer map, which a file that vacuums itself has
 /// one of every `usable / 5 + 1` pages.
+///
+/// `ptrmapPageno` of `research/sqlite/src/btree.c` counts one entry per
+/// five usable bytes and one page for the map itself, so the map pages
+/// lie at page two and every that many pages after it, which
+/// [`crate::tree::map_page`] answers for one page.
 fn map_pages(image: &Image<'_>) -> Vec<u32> {
     if image.header().largest_root == 0 {
         return Vec::new();
@@ -319,7 +324,7 @@ fn map_pages(image: &Image<'_>) -> Vec<u32> {
     let mut number = 2_u32;
     while number <= image.pages() {
         out.push(number);
-        number = number.saturating_add(u32::try_from(span).unwrap_or(1).saturating_add(1));
+        number = number.saturating_add(u32::try_from(span).unwrap_or(1));
     }
     out
 }

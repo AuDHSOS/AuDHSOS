@@ -7,6 +7,20 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` writes `PRAGMA incremental_vacuum(N)`, which gives up as
+  many as N pages at the end of a file that vacuums itself and answers
+  one row of no column per page, and reads the page a cell of an index
+  page carries its payload on where a file that vacuums itself moves
+  pages, which every delete of a long index key was refused over before.
+  `PRAGMA auto_vacuum` refuses no value and writes which of the two ways
+  a file with a table vacuums itself. `PRAGMA integrity_check` counts the
+  pointer-map pages of a file as the C library lays them out, so a file
+  with more than one of them is no longer read as holding pages never
+  used. D-354 records it. Catalog 6.6.242.
+  The harness holds the `autovacuum` capability, so `autovacuum.test`
+  goes from no case to 297 passing, `tkt1667.test` to 1004 and
+  `incrvacuum.test` to 30.
+
 - `db-sqlite` refuses a `RAISE` outside the body of a trigger with
   `RAISE() may only be used within a trigger-program` and refuses the
   statement a trigger fired for with the message the `RAISE` carries,

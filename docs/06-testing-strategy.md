@@ -6518,3 +6518,29 @@ Document 16 step Q8.
 - A message the engine cannot answer takes the place of the refusal.
 - A `RAISE` outside the body of a trigger is refused where the statement
   is read.
+
+### 6.6.242 The pages an incremental vacuum gives up (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `PRAGMA incremental_vacuum` gives up the pages at the end of the file
+  one at a time and answers one row of no column per page.
+- How many pages the statement names is the number after it, a quoted
+  number and a signed number among them.
+- A number past what a signed word holds, a word that is no number, and
+  a number at or below nought all name every page of the free list.
+- A file that holds no free page and one that does not vacuum itself
+  each give up none.
+- A file that vacuums itself holds every page after a row with overflow
+  pages is deleted, the chain of a long index key among them.
+- `PRAGMA auto_vacuum` over a file that holds a table writes which of
+  the two ways the file vacuums itself and turns the vacuuming neither
+  on nor off.
+- A word no way carries names none and changes nothing.
+- A step moves the page at the end of the file into a free page below it,
+  wherever the free list holds that page, and a file that ends on a
+  pointer-map page gives that page up and moves nothing.
+- A step refuses a file whose map names the last page the root of a tree
+  and one whose free list holds no page at or below the end.
+- `PRAGMA integrity_check` over a file with more than one pointer-map
+  page names no page never used.

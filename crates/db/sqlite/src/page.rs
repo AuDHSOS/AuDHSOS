@@ -320,6 +320,43 @@ impl<'a> Page<'a> {
         }
     }
 
+    /// The page the payload of cell `index` runs onto and where in this
+    /// page the cell holds that number, and nothing where the payload is
+    /// whole or the cell carries none.
+    ///
+    /// `ptrmapPutOvflPtr` of `research/sqlite/src/btree.c` reads the same
+    /// number, which lies after the bytes of the payload this page holds.
+    /// Reading it costs what reading the cell costs.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Page::cell`].
+    pub fn overflow(&self, index: usize) -> Result<Option<(u32, usize)>, Error> {
+        let offset = self.cell_offset(index)?;
+        let cell = self.bytes.get(offset..self.usable).unwrap_or_default();
+        // The head of a cell is what stands before the payload: the
+        // length of the payload, the key of a table leaf, and the child
+        // of an index branch. A cell of an interior table page carries
+        // no payload at all.
+        let (payload, head) = match self.cell(index)? {
+            Cell::TableInterior { .. } => return Ok(None),
+            Cell::TableLeaf { payload, .. } => {
+                let (_, read) = varint(cell)?;
+                let (_, key) = varint(cell.get(read..).unwrap_or_default())?;
+                (payload, read.saturating_add(key))
+            }
+            Cell::IndexLeaf { payload } => (payload, varint(cell)?.1),
+            Cell::IndexInterior { payload, .. } => {
+                let rest = cell.get(4..).unwrap_or_default();
+                (payload, varint(rest)?.1.saturating_add(4))
+            }
+        };
+        let at = offset
+            .saturating_add(head)
+            .saturating_add(payload.local.len());
+        Ok(payload.overflow.map(|head| (head, at)))
+    }
+
     /// The entry of cell `index`: the record an index page carries.
     ///
     /// # Errors

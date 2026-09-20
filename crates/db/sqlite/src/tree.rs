@@ -316,7 +316,6 @@ impl Pages {
         {
             let page = self.page(number)?;
             let interior = page.kind().is_interior();
-            let over = matches!(page.kind(), Kind::LeafIndex | Kind::InteriorIndex);
             if interior {
                 for index in 0..page.cells() {
                     named.push((page.child(index)?, Point::Branch));
@@ -328,13 +327,7 @@ impl Pages {
             // index page carries one on every cell it has and a table
             // page only on its leaves.
             for index in 0..page.cells() {
-                let head = if over {
-                    page.entry(index)?.overflow
-                } else if interior {
-                    None
-                } else {
-                    page.row(index)?.1.overflow
-                };
+                let head = page.overflow(index)?.map(|(head, _)| head);
                 named.extend(head.map(|head| (head, Point::Head)));
             }
         }
@@ -530,12 +523,175 @@ impl Pages {
         self.keep(1);
         self.freelist = 0;
         self.freelist_count = 0;
+        self.shorten(last);
+        Ok(())
+    }
+
+    /// One page at the end of the file moved into a free page below it,
+    /// with the file shortened by that page, and whether the file gave
+    /// one up at all, which is `incrVacuumStep` of
+    /// `research/sqlite/src/btree.c:4038` with no commit under way.
+    ///
+    /// The free list keeps the pages it holds, so one call gives up one
+    /// page. `sqlite3BtreeIncrVacuum` of
+    /// `research/sqlite/src/btree.c:4165` answers `SQLITE_DONE` for a
+    /// file that vacuums itself whole or holds no free page, which is
+    /// `false` here. One call costs O(n) in the pages of the free list,
+    /// which is walked trunk by trunk for the page to move into.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Page`] where the map names the last page a root page or
+    /// the free list holds more pages than the file, [`Error::Balance`]
+    /// where the list holds no page at or below the end, and whatever
+    /// reading or writing a page refuses.
+    pub fn vacuum_incremental(&mut self) -> Result<bool, Error> {
+        let origin = self.count();
+        let free = self.freelist_count;
+        if !self.vacuum || free == 0 {
+            return Ok(false);
+        }
+        // `sqlite3BtreeIncrVacuum` refuses a file whose free list holds
+        // more pages than the file has. Its other test, for an end past
+        // the pages the file holds, is what `final_size` cannot answer
+        // here, because the count it takes away saturates at nought.
+        if free >= origin {
+            return Err(Error::Page(origin));
+        }
+        let last = final_size(self.usable, origin, free);
+        if !self.is_map(origin) {
+            let (kind, parent) = self.point_of(origin)?;
+            match kind {
+                Point::Root => return Err(Error::Page(origin)),
+                // The last page is on the free list already, so it comes
+                // off the list and is given up with the end of the file.
+                Point::Free => {
+                    self.searched(origin, true)?.ok_or(Error::Balance)?;
+                }
+                Point::Head | Point::Tail | Point::Branch => {
+                    let into = self.searched(last, false)?.ok_or(Error::Balance)?;
+                    self.relocate(origin, kind, parent, into)?;
+                }
+            }
+        }
+        // A pointer-map page at the end is given up with the pages it
+        // carried the entries of, which `incrVacuumStep` steps past.
+        let mut end = origin.saturating_sub(1);
+        while self.is_map(end) {
+            end = end.saturating_sub(1);
+        }
+        self.keep(1);
+        self.shorten(end);
+        Ok(true)
+    }
+
+    /// The free page `wanted` names where the list holds it, or the
+    /// first page the list holds at or below it, taken off the list.
+    ///
+    /// This is `allocateBtreePage` of `research/sqlite/src/btree.c:6514`
+    /// under `BTALLOC_EXACT` for `exact` and under `BTALLOC_LE` for the
+    /// other, each of which walks every trunk of the list rather than
+    /// the first alone, so one call costs O(n) in the pages of the list.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Overrun`] where a trunk names a word outside the page,
+    /// and [`Error::Page`] where it names a page the file does not hold.
+    fn searched(&mut self, wanted: u32, exact: bool) -> Result<Option<u32>, Error> {
+        let mut before = 0;
+        let mut trunk = self.freelist;
+        for _ in 0..self.freelist_count {
+            if trunk == 0 {
+                break;
+            }
+            let next = self.word(trunk, 0)?;
+            let leaves = self.word(trunk, 4)?;
+            if fits(trunk, wanted, exact) {
+                self.took_trunk(before, trunk, (next, leaves))?;
+                return Ok(Some(trunk));
+            }
+            if let Some(leaf) = self.took_leaf(trunk, leaves, (wanted, exact))? {
+                return Ok(Some(leaf));
+            }
+            before = trunk;
+            trunk = next;
+        }
+        Ok(None)
+    }
+
+    /// The trunk page itself taken off the free list, with `before` for
+    /// the trunk that names it and nought where page one names it.
+    ///
+    /// The first leaf of the trunk becomes the trunk in its place and
+    /// carries the leaves after it, which `allocateBtreePage` writes for
+    /// a trunk the caller asked for by number.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Overrun`] where the trunk names a word outside the page.
+    fn took_trunk(&mut self, before: u32, trunk: u32, list: (u32, u32)) -> Result<(), Error> {
+        let (next, leaves) = list;
+        self.keep(1);
+        self.freelist_count = self.freelist_count.saturating_sub(1);
+        let into = if leaves == 0 {
+            next
+        } else {
+            let fresh = self.word(trunk, slot(0))?;
+            let mut rest = Vec::new();
+            for index in 1..leaves {
+                rest.extend(self.word(trunk, slot(index))?.to_be_bytes());
+            }
+            self.put(fresh, 0, &next.to_be_bytes());
+            self.put(fresh, 4, &leaves.saturating_sub(1).to_be_bytes());
+            self.put(fresh, slot(0), &rest);
+            fresh
+        };
+        if before == 0 {
+            self.freelist = into;
+        } else {
+            self.put(before, 0, &into.to_be_bytes());
+        }
+        Ok(())
+    }
+
+    /// The first leaf of `trunk` that `wanted` names taken off the free
+    /// list, and nothing where the trunk holds no such leaf.
+    ///
+    /// The last leaf takes the place of the one that was taken, which
+    /// `allocateBtreePage` does to leave the array whole.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Overrun`] where the trunk names a word outside the page.
+    fn took_leaf(
+        &mut self,
+        trunk: u32,
+        leaves: u32,
+        asked: (u32, bool),
+    ) -> Result<Option<u32>, Error> {
+        let (wanted, exact) = asked;
+        for index in 0..leaves {
+            let leaf = self.word(trunk, slot(index))?;
+            if !fits(leaf, wanted, exact) {
+                continue;
+            }
+            let last = self.word(trunk, slot(leaves.saturating_sub(1)))?;
+            self.put(trunk, slot(index), &last.to_be_bytes());
+            self.put(trunk, 4, &leaves.saturating_sub(1).to_be_bytes());
+            self.keep(1);
+            self.freelist_count = self.freelist_count.saturating_sub(1);
+            return Ok(Some(leaf));
+        }
+        Ok(None)
+    }
+
+    /// The file cut back to `last` pages.
+    fn shorten(&mut self, last: u32) {
         self.held.truncate(size(u64::from(last)));
         self.before.truncate(size(u64::from(last)));
         self.started.truncate(size(u64::from(last)));
         self.skipped.truncate(size(u64::from(last)));
         self.freed.truncate(size(u64::from(last)));
-        Ok(())
     }
 
     /// One page past the end the file is cut back to moved into a free
@@ -596,19 +752,16 @@ impl Pages {
             let mut found = None;
             for index in 0..page.cells() {
                 if kind == Point::Head {
-                    let (rowid, payload) = page.row(index)?;
-                    if payload.overflow != Some(from) {
-                        continue;
+                    // A cell of an index page carries a chain as a cell
+                    // of a table leaf does, so the page the chain begins
+                    // on is read from the cell and not from the row.
+                    if let Some((head, at)) = page.overflow(index)?
+                        && head == from
+                    {
+                        found = Some(at);
+                        break;
                     }
-                    let head =
-                        crate::bytes::varint_len(u64::try_from(payload.total).unwrap_or(u64::MAX))
-                            .saturating_add(crate::bytes::varint_len(rowid.cast_unsigned()));
-                    found = Some(
-                        page.cell_offset(index)?
-                            .saturating_add(head)
-                            .saturating_add(payload.local.len()),
-                    );
-                    break;
+                    continue;
                 }
                 if page.child(index)? == from {
                     found = Some(page.cell_offset(index)?);
@@ -768,7 +921,6 @@ impl Pages {
         }
         // The leaf nearest the page the caller named, which keeps a
         // tree it grows out of pages that lie near each other.
-        let slot = |index: u32| size(u64::from(index)).saturating_mul(4).saturating_add(8);
         let mut closest = 0;
         if nearby > 0 {
             let mut dist = self.word(trunk, slot(0))?.abs_diff(nearby);
@@ -1077,6 +1229,23 @@ impl Pages {
             )
             .collect();
         crate::image::write(&header, &pages)
+    }
+}
+
+/// Where a trunk of the free list holds the leaf at `index`, which is
+/// the word after the two the trunk begins with.
+fn slot(index: u32) -> usize {
+    size(u64::from(index)).saturating_mul(4).saturating_add(8)
+}
+
+/// Whether the free page `page` is the one `wanted` names, which for
+/// `exact` is that page alone and for the other is every page at or
+/// below it.
+const fn fits(page: u32, wanted: u32, exact: bool) -> bool {
+    if exact {
+        page == wanted
+    } else {
+        page <= wanted
     }
 }
 

@@ -267,7 +267,7 @@ const LOOPING: usize = 5000;
 
 /// The capabilities an `ifcapable` may name that this engine does not
 /// have. Every other name is answered as held.
-const MISSING: [&str; 20] = [
+const MISSING: [&str; 19] = [
     "vtab",
     "fts1",
     "fts2",
@@ -283,7 +283,6 @@ const MISSING: [&str; 20] = [
     "codec",
     "atomicwrite",
     "explain",
-    "autovacuum",
     "compound_select",
     "unlock_notify",
     "session",
