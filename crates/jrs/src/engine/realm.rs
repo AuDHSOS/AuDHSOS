@@ -7275,6 +7275,7 @@ impl GlobalEnvironment {
         &self,
         heap: &mut GenerationalHeap,
         name: PropertyKey,
+        deletable: bool,
     ) -> Result<(), HeapError> {
         let global = self.global_object(heap)?;
         if heap.own_named_flags(global, name)?.is_some() {
@@ -7289,7 +7290,7 @@ impl GlobalEnvironment {
             PropertyFlags {
                 writable: true,
                 enumerable: true,
-                configurable: false,
+                configurable: deletable,
                 is_accessor: false,
             },
         )?;

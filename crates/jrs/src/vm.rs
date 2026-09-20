@@ -728,7 +728,11 @@ impl Execution<'_> {
                     }
                     compiled = Some(crate::engine::interpreter::Compiled::Printed);
                 }
-                Ok(crate::engine::interpreter::Outcome::Evaluate(source, strict, direct)) => {
+                Ok(crate::engine::interpreter::Outcome::Evaluate(
+                    source,
+                    strict,
+                    (direct, as_script),
+                )) => {
                     self.fuel = vm.fuel;
                     // 19.2.1.1 step 5 evaluates the text of a direct eval
                     // against the Variable Environment of the frame the call
@@ -737,7 +741,7 @@ impl Execution<'_> {
                     let answer = self.evaluate_nested_script(
                         agent,
                         &source,
-                        (strict, direct),
+                        (strict, direct, !as_script),
                         shared,
                         depth,
                     );
@@ -759,19 +763,19 @@ impl Execution<'_> {
         &mut self,
         agent: &mut crate::engine::agent::Agent,
         source: &[u16],
-        how: (bool, bool),
+        how: (bool, bool, bool),
         shared: Option<crate::engine::context::ContextRef>,
         depth: usize,
     ) -> crate::engine::interpreter::Compiled {
         /// How deep one run nests evals before the budget is the answer.
         const NESTING_LIMIT: usize = 8;
-        let (strict_caller, direct) = how;
+        let (strict_caller, direct, evaluated) = how;
         if depth >= NESTING_LIMIT {
             return crate::engine::interpreter::Compiled::Evaluated(Err(
                 crate::engine::interpreter::VMError::CallStackOverflow,
             ));
         }
-        let compiled = self.compile_eval_unit(source, strict_caller, direct);
+        let compiled = self.compile_eval_unit(source, strict_caller, (direct, evaluated));
         let crate::engine::interpreter::Compiled::Unit(unit) = compiled else {
             return compiled;
         };
@@ -799,31 +803,33 @@ impl Execution<'_> {
         &mut self,
         source: &[u16],
         strict_caller: bool,
-        direct: bool,
+        how: (bool, bool),
     ) -> crate::engine::interpreter::Compiled {
+        let (direct, evaluated) = how;
         // A text no Script accepts is the `SyntaxError` of 19.2.1.1 step 8; a
         // Script the register lowering does not take is a gap of the migration
         // and no error of the Script, so the two answer apart.
         let Ok(text) = alloc::string::String::from_utf16(source) else {
             return crate::engine::interpreter::Compiled::Refused;
         };
-        let program = match crate::bytecode::compile_eval(&text, self.limits, strict_caller) {
-            Ok(program) => program,
-            // 19.2.1.1 step 8 raises a `SyntaxError` for a text that is no
-            // Script. The parser refuses a text it does not take with the
-            // same answer, and the two are not told apart here, so a direct
-            // eval names the gap rather than answering an error the text may
-            // not have earned.
-            Err(error) if direct => {
-                let _ = &error;
-                return crate::engine::interpreter::Compiled::Evaluated(Err(
-                    crate::engine::interpreter::VMError::Unsupported(
-                        "a text of a direct eval the parser does not take",
-                    ),
-                ));
-            }
-            Err(error) => return Self::refused_source(&error),
-        };
+        let program =
+            match crate::bytecode::compile_eval(&text, self.limits, (strict_caller, evaluated)) {
+                Ok(program) => program,
+                // 19.2.1.1 step 8 raises a `SyntaxError` for a text that is no
+                // Script. The parser refuses a text it does not take with the
+                // same answer, and the two are not told apart here, so a direct
+                // eval names the gap rather than answering an error the text may
+                // not have earned.
+                Err(error) if direct => {
+                    let _ = &error;
+                    return crate::engine::interpreter::Compiled::Evaluated(Err(
+                        crate::engine::interpreter::VMError::Unsupported(
+                            "a text of a direct eval the parser does not take",
+                        ),
+                    ));
+                }
+                Err(error) => return Self::refused_source(&error),
+            };
         let Some(code) = program.register_code.as_ref() else {
             return crate::engine::interpreter::Compiled::Unlowered;
         };

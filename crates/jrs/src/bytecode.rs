@@ -528,13 +528,25 @@ pub(crate) fn compile_dynamic_expression(source: &str, limits: Limits) -> Result
 pub(crate) fn compile_eval(
     source: &str,
     limits: Limits,
-    strict_caller: bool,
+    how: (bool, bool),
 ) -> Result<Program, Error> {
+    let (strict_caller, evaluated) = how;
     let body = parser::parse_eval(source, limits, strict_caller)?;
-    compile_parsed(&body, limits, true)
+    compile_parsed_as(&body, limits, true, evaluated)
 }
 
 fn compile_parsed(body: &[Stmt], limits: Limits, realm: bool) -> Result<Program, Error> {
+    compile_parsed_as(body, limits, realm, false)
+}
+
+/// The same, where `evaluated` says the text is the one of an eval, whose
+/// `var` bindings step 5.d.ii of 19.2.1.1 makes deletable.
+fn compile_parsed_as(
+    body: &[Stmt],
+    limits: Limits,
+    realm: bool,
+    evaluated: bool,
+) -> Result<Program, Error> {
     let mut compiler = Compiler {
         program: Program {
             code: Vec::new(),
@@ -573,7 +585,7 @@ fn compile_parsed(body: &[Stmt], limits: Limits, realm: bool) -> Result<Program,
     compiler.finish();
     let (register_code, register_refusal) = lower_register_script(
         body,
-        realm,
+        (realm, evaluated),
         u64::try_from(compiler.program.total_instructions).unwrap_or(u64::MAX),
         limits.properties,
     );
@@ -14081,13 +14093,14 @@ fn register_directive_prologue_is_strict(body: &[Stmt]) -> bool {
 
 fn lower_register_script(
     body: &[Stmt],
-    realm: bool,
+    how: (bool, bool),
     entry_fuel_cost: u64,
     property_limit: usize,
 ) -> (
     Option<crate::engine::bytecode::BytecodeFunction>,
     Option<&'static str>,
 ) {
+    let (realm, evaluated) = how;
     if body
         .iter()
         .any(register_statement_has_unsupported_binding_pattern)
@@ -14104,6 +14117,7 @@ fn lower_register_script(
     lowerer.code.strict = register_directive_prologue_is_strict(body);
     lowerer.realm = realm;
     lowerer.script_globals = realm;
+    lowerer.code.deletable_globals = evaluated;
     let mut code = lower_register_body(&mut lowerer, body, realm, saw_declaration, saw_function);
     if let Some(code) = code.as_mut() {
         code.realm_script = realm;

@@ -1079,6 +1079,11 @@ pub struct BytecodeFunction {
     /// function declarations are bindings of the Global Environment Record
     /// (16.1.7), which is what a direct `eval` of 19.2.1 writes into.
     pub realm_script: bool,
+    /// Whether the `var` bindings this unit creates on that record are
+    /// deletable. Step 5.d.ii of 19.2.1.1 asks `CreateGlobalVarBinding` for a
+    /// deletable binding where the text is an eval, and step 18 of 16.1.7
+    /// asks for one that is not where it is a Script.
+    pub deletable_globals: bool,
 }
 
 impl BytecodeFunction {
@@ -1115,6 +1120,7 @@ impl BytecodeFunction {
             name: None,
             source: None,
             realm_script: false,
+            deletable_globals: false,
             own_context_slot_count: None,
             own_context_names: Vec::new(),
             lexical_context_slots: Vec::new(),

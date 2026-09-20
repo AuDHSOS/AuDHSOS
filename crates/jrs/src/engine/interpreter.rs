@@ -1713,6 +1713,10 @@ pub struct RegisterVM {
     /// 13.3.6.1, which runs against the record chain of the frame it stands
     /// in rather than against the global environment alone.
     pending_direct: bool,
+    /// Whether the text waiting to be compiled is a Script of the Realm and
+    /// no eval, which 16.1.7 step 18 gives `var` bindings that cannot be
+    /// deleted where 19.2.1.1 step 5.d.ii gives ones that can.
+    pending_as_script: bool,
     /// The `lastIndex` of 22.2.7.2 step 2, once 7.1.20 has converted an
     /// Object the read answered. The clause runs again and takes it in place
     /// of the read, and nothing of the Script runs between the two.
@@ -1813,7 +1817,7 @@ pub enum Outcome {
     /// `strictCaller` of 19.2.1.1, the second whether 13.3.6.1 makes the call
     /// a direct eval, which 19.2.1.1 step 5 evaluates against the Variable
     /// Environment of the frame the call stands in.
-    Evaluate(alloc::rc::Rc<[u16]>, bool, bool),
+    Evaluate(alloc::rc::Rc<[u16]>, bool, (bool, bool)),
     /// The Script called `print`, which only the embedding can answer: it
     /// writes the line and the call instruction runs again.
     Print(alloc::rc::Rc<[u16]>),
@@ -1871,6 +1875,7 @@ impl RegisterVM {
             direct_eval_strict: false,
             pending_strict: false,
             pending_direct: false,
+            pending_as_script: false,
             pending_last_index: None,
             pending_print: false,
             resume_pc: 0,
@@ -27811,6 +27816,9 @@ impl RegisterVM {
         let text = property_name_units(source, heap, realm)?;
         self.pending_strict = false;
         self.pending_script = true;
+        // The suite evaluates the text as a Script of this Realm, which
+        // 16.1.7 gives `var` bindings that cannot be deleted.
+        self.pending_as_script = true;
         self.pending_source = Some(alloc::rc::Rc::from(text));
         self.resume_pc = call.return_pc.saturating_sub(1);
         self.resume_code_id = call.caller_code_id;
@@ -33444,7 +33452,10 @@ impl RegisterVM {
             return Some(Outcome::Evaluate(
                 source,
                 core::mem::take(&mut self.pending_strict),
-                core::mem::take(&mut self.pending_direct),
+                (
+                    core::mem::take(&mut self.pending_direct),
+                    core::mem::take(&mut self.pending_as_script),
+                ),
             ));
         }
         Some(Outcome::Compile(source))
@@ -33971,9 +33982,11 @@ impl RegisterVM {
                         .get(index as usize)
                         .ok_or(VMError::InvalidRegister)?;
                     let name = PropertyKey::String(heap.strings.intern_units(units)?);
-                    realm
-                        .global_environment()
-                        .create_global_var_binding(heap, name)?;
+                    realm.global_environment().create_global_var_binding(
+                        heap,
+                        name,
+                        active_code.deletable_globals,
+                    )?;
                 }
                 Instruction::VerifyGlobalFunction(index) => {
                     let units = active_code

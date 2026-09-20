@@ -97,7 +97,7 @@ fn a_global_function_binding_replaces_a_var_and_keeps_a_fixed_property() {
             .unwrap()
     );
     environment
-        .create_global_var_binding(&mut heap, declared)
+        .create_global_var_binding(&mut heap, declared, false)
         .unwrap();
     assert!(
         environment
@@ -160,7 +160,7 @@ fn a_global_var_binding_is_writable_enumerable_and_not_configurable() {
     // 9.1.1.4.14 answers true here, so 9.1.1.4.16 defines the property of
     // 9.1.1.2.2 with deletable false.
     environment
-        .create_global_var_binding(&mut heap, name)
+        .create_global_var_binding(&mut heap, name, false)
         .unwrap();
     let global = environment.global_object(&heap).unwrap();
     let flags = heap.own_named_flags(global, name).unwrap().unwrap();
@@ -188,7 +188,7 @@ fn a_global_var_binding_is_writable_enumerable_and_not_configurable() {
         .unwrap()
         .unwrap();
     environment
-        .create_global_var_binding(&mut heap, name)
+        .create_global_var_binding(&mut heap, name, false)
         .unwrap();
     assert_eq!(
         environment.get_binding_value(&heap, name).unwrap(),

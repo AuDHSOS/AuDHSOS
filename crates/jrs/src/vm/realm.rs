@@ -566,7 +566,8 @@ impl Execution<'_> {
                 alloc::string::String::from_utf16(units).map_err(|_| Error::Unsupported {
                     feature: "lone-surrogate Script source",
                 })?;
-            let program = crate::bytecode::compile_eval(&source, self.limits, strict_caller)?;
+            let program =
+                crate::bytecode::compile_eval(&source, self.limits, (strict_caller, true))?;
             self.charge(u64::try_from(program.instruction_count()).unwrap_or(u64::MAX))?;
             self.execute_nested_script(program)
         })();
