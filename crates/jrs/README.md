@@ -584,9 +584,9 @@ negative-test passes. Other parser/builtin completeness gaps remain open.
 The engine is the target of the migration and the stack backend the
 source (architecture, section 17.1). What gates the switch is not the
 count either path reaches but the set of variants the stack path passes
-and the engine does not. At `64025a3` that set holds 1,555 variants:
-none of them the engine fails, and 1,555 it names as gaps. The engine
-passes 25,651 variants the stack path does not. Only the failures are
+and the engine does not. At `0bed44d` that set holds 1,498 variants:
+none of them the engine fails, and 1,498 it names as gaps. The engine
+passes 25,664 variants the stack path does not. Only the failures are
 breaches of the equality duty; a gap costs coverage and answers nothing
 wrongly.
 
@@ -600,7 +600,6 @@ What a switch would cost is those gaps, by the reason the engine names:
 | 314 | a direct eval inside a function |
 | 194 | a property that is an accessor |
 | 87 | an internal method of a Proxy |
-| 60 | an eval of a Script the lowering does not take |
 | 56 | `ToPrimitive` of an Object outside a call |
 | 48 | `ToString` of an Object |
 | 34 | a splitter of a constructor that is not `%RegExp%` |
@@ -608,9 +607,9 @@ What a switch would cost is those gaps, by the reason the engine names:
 | 30 | a name of a body an Initializer of a parameter reads |
 | 30 | a frame of a call the lowering does not prepare |
 | 30 | a `then` that is not `%Promise.prototype.then%` |
-| 730 | 77 further reasons, none above 30 variants |
+| 643 | 74 further reasons, none above 26 variants |
 
-The counts above are of `a6249d4`; the ones in the notes below carry the
+The counts above are of `0bed44d`; the ones in the notes below carry the
 commit each was measured at.
 
 Where each of those reasons is raised, measured at `3a6e905` by giving
@@ -839,6 +838,7 @@ more than eight variants.
 | `96af43c` | 1,559 | **0** | 1,559 |
 | `a6249d4` | 1,555 | **0** | 1,555 |
 | `64025a3` | 1,555 | **0** | 1,555 |
+| `0bed44d` | 1,498 | **0** | 1,498 |
 
 The list is the join of the two per-variant runs, without `--summary`:
 
@@ -1238,7 +1238,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | 13.3.7.1 with a spread element in the argument list (focused) | focused | `03d3688` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/super test/staging/sm/class --summary` | 188 | 371 | 232 (62.53%) | 14 (3.77%) | 125 (33.69%) |
 | The same, on the stack backend (focused) | focused | `03d3688` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/super test/staging/sm/class --summary` | 188 | 371 | 258 (69.54%) | 61 (16.44%) | 52 (14.02%) |
 | Complete pinned suite on the register engine, before the close of 14.7.5.7 step 3.j (outdated) | full | `33ffe90` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 58,747 (57.08%) | 20,543 (19.96%) | 23,635 (22.96%) |
-| Complete pinned suite on the register engine | full | `64025a3` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,450 (61.65%) | 18,961 (18.42%) | 20,514 (19.93%) |
+| Complete pinned suite on the register engine | full | `0bed44d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,520 (61.72%) | 18,961 (18.42%) | 20,444 (19.86%) |
+| Complete pinned suite on the stack backend | full | `0bed44d` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 39,354 (38.24%) | 38,101 (37.02%) | 25,470 (24.75%) |
+| B.3.2.1 skips a name of a Script (focused) | focused | `0bed44d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/annexB/language --summary` | 845 | 895 | 187 (20.89%) | 59 (6.59%) | 649 (72.51%) |
+| Complete pinned suite on the register engine, before B.3.2.1 skips a name of a Script (outdated) | full | `64025a3` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,450 (61.65%) | 18,961 (18.42%) | 20,514 (19.93%) |
 | Complete pinned suite on the register engine, before B.3.2.1 at any depth (outdated) | full | `a6249d4` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,441 (61.64%) | 18,961 (18.42%) | 20,523 (19.94%) |
 | B.3.2.2 for a clause of a `switch` (focused) | focused | `a6249d4` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/annexB/language --summary` | 845 | 895 | 112 (12.51%) | 59 (6.59%) | 724 (80.89%) |
 | Complete pinned suite on the register engine, before B.3.2.2 for a clause (outdated) | full | `96af43c` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,393 (61.59%) | 18,961 (18.42%) | 20,571 (19.99%) |
