@@ -451,3 +451,66 @@ fn installing_a_badged_handle_carries_the_badge_with_it() {
     assert_eq!(entry.badge, 0x5EED, "the badge did not travel");
     assert_eq!(entry.rights, Rights::SEND);
 }
+
+#[test]
+fn killing_a_process_gives_its_quotas_back_to_its_creator() {
+    let mut fixture = Fixture::new();
+    let arguments = creation(&fixture);
+    let before = *fixture.objects.processes.get(fixture.process).unwrap();
+    let child_handle = value_of(&mut fixture, request(Syscall::ProcessCreate, &arguments));
+    let mut buffer = request(Syscall::ProcessKill, &[child_handle]);
+    let (status, _, _) = call(&mut fixture, &mut buffer);
+    assert_eq!(status.error(), None);
+
+    let after = fixture.objects.processes.get(fixture.process).unwrap();
+    assert_eq!(
+        after.quota.used(),
+        before.quota.used(),
+        "the frames the child cost came back"
+    );
+    assert_eq!(
+        after.kernel_object_quota.used(),
+        before.kernel_object_quota.used(),
+        "and its objects, the child itself included"
+    );
+}
+
+#[test]
+fn a_creator_makes_and_kills_more_children_than_its_object_quota_holds_at_once() {
+    // Three of these children fit in the creator's quota of sixteen
+    // objects at five each; six in a row say that a kill gives back.
+    let mut fixture = Fixture::new();
+    let arguments = creation(&fixture);
+    for round in 0..6 {
+        let child_handle = value_of(&mut fixture, request(Syscall::ProcessCreate, &arguments));
+        let mut buffer = request(Syscall::ProcessKill, &[child_handle]);
+        let (status, _, _) = call(&mut fixture, &mut buffer);
+        assert_eq!(status.error(), None, "round {round}");
+    }
+}
+
+#[test]
+fn the_quotas_of_a_killed_process_come_back_once() {
+    let mut fixture = Fixture::new();
+    let arguments = creation(&fixture);
+    let before = *fixture.objects.processes.get(fixture.process).unwrap();
+    let child_handle = value_of(&mut fixture, request(Syscall::ProcessCreate, &arguments));
+    let second = fixture
+        .install(
+            AnyObjectId::of(process_behind(&fixture, child_handle)),
+            Rights::MANAGE,
+        )
+        .raw();
+    let mut buffer = request(Syscall::ProcessKill, &[child_handle]);
+    let (status, _, _) = call(&mut fixture, &mut buffer);
+    assert_eq!(status.error(), None);
+    // The second handle names a slot that is free, so the kill through it
+    // is refused and nothing is refunded twice.
+    assert!(error_of(&mut fixture, request(Syscall::ProcessKill, &[second])).is_some());
+    let after = fixture.objects.processes.get(fixture.process).unwrap();
+    assert_eq!(after.quota.used(), before.quota.used());
+    assert_eq!(
+        after.kernel_object_quota.used(),
+        before.kernel_object_quota.used()
+    );
+}

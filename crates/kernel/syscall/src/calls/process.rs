@@ -129,7 +129,9 @@ pub fn unwatch<
 }
 
 /// `process_create`: a process with an address space of its own, a handle
-/// capacity, and quotas, all of them within what the creator holds.
+/// capacity, and quotas, all of them within what the creator holds. The
+/// child records its creator, which is who [`kill`] gives the quotas back
+/// to.
 ///
 /// # Errors
 ///
@@ -198,6 +200,12 @@ pub fn create<
             return Err(Error::from(error));
         }
     };
+    // What the creator gave away is written on the child, because a kill
+    // gives it back and the child is what the kill names.
+    machine
+        .objects
+        .processes
+        .with(id, |child| child.creator = Some(parent));
     let entry = Entry::new(
         AnyObjectId::of(id),
         Rights::MANAGE
@@ -223,7 +231,11 @@ pub fn create<
     }
 }
 
-/// Returns what a refused `process_create` had already taken.
+/// Returns to `parent` what one `process_create` took from it: the two
+/// quotas of the child and the one object the child itself is.
+///
+/// A refused `process_create` calls this, and so does the kill of a process
+/// that was created.
 fn give_back<E: Environment, const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
     machine: &mut Machine<'_, E, NP, NT, NM, NH>,
     parent: ProcessId,
@@ -332,7 +344,8 @@ pub fn set_fault_handler<
 }
 
 /// `process_kill`: ends every thread of the process, closes every handle it
-/// holds, and takes its address space apart.
+/// holds, takes its address space apart, and gives its creator the quotas
+/// that process cost back.
 ///
 /// # Errors
 ///
@@ -373,6 +386,18 @@ pub fn kill<E: Environment, const NP: usize, const NT: usize, const NM: usize, c
     // kill takes every thread at once, and what they are told is that the
     // process is gone.
     reschedule |= crate::watch::ended(machine, target)?;
+    // The creator charged itself the child's two limits and one object for
+    // the child, and a process ends once, so the refund is made once, here.
+    // A creator that is itself gone names a free or reused slot, and
+    // `give_back` reaches neither.
+    if let Some(creator) = holder.creator {
+        give_back(
+            machine,
+            creator,
+            holder.quota.limit(),
+            holder.kernel_object_quota.limit(),
+        );
+    }
     machine.objects.processes.force_release(target);
     let reply = Reply::DONE;
     Ok(if reschedule {
