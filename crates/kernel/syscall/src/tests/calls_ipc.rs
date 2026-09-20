@@ -958,3 +958,133 @@ fn closing_a_reply_handle_without_answering_wakes_the_caller() {
         kernel_objects::object::Wait::Nothing
     );
 }
+
+#[test]
+fn a_queued_sender_whose_message_cannot_be_copied_is_refused_and_the_next_one_is_served() {
+    let mut fixture = Fixture::new();
+    let (endpoint_id, handle) = endpoint(&mut fixture);
+    let client = fixture.process(8);
+    let unusable = fixture.running(client, 4);
+    let ordinary = fixture.running(client, 2);
+    let theirs = install_endpoint(&mut fixture, client, endpoint_id, Rights::SEND);
+
+    // The first client names a handle it does not hold. The header is
+    // what `ipc_send` checks, so the message queues and the handle word
+    // is resolved by whoever receives it.
+    let stale = Handle::new(0x00FF_FFFF, 1).unwrap();
+    let mut first = message(1, 0, &[stale]);
+    with_call(&mut first, Syscall::IpcSend, &[theirs.raw()]);
+    fixture.write_buffer(unusable, &first);
+    crate::dispatch::dispatch(&mut fixture.machine(), unusable, &mut first);
+    assert_eq!(
+        fixture.objects.threads.get(unusable).unwrap().state,
+        ThreadState::BlockedSend
+    );
+
+    // The second client's message can be copied and waits behind it.
+    let mut second = message(9, 1, &[]);
+    with_call(&mut second, Syscall::IpcSend, &[theirs.raw()]);
+    fixture.write_buffer(ordinary, &second);
+    crate::dispatch::dispatch(&mut fixture.machine(), ordinary, &mut second);
+    assert_eq!(
+        fixture.objects.threads.get(ordinary).unwrap().state,
+        ThreadState::BlockedSend
+    );
+
+    // One receive answers the server with the message behind the
+    // unusable one, and the client that wrote it learns why.
+    let mut ours = [0; SIZE];
+    with_call(&mut ours, Syscall::IpcRecv, &[handle.raw()]);
+    let (status, _, _) = call(&mut fixture, &mut ours);
+    assert_eq!(status.error(), None, "the endpoint still serves");
+    assert_eq!(Buffer::new(&ours).message().unwrap().label, 9);
+    assert_eq!(
+        fixture.status_of(unusable).error(),
+        Some(Error::InvalidHandle),
+        "the client that wrote the handle word was told"
+    );
+    assert_eq!(
+        fixture.objects.threads.get(unusable).unwrap().state,
+        ThreadState::Ready,
+        "and it is out of the queue"
+    );
+    assert_eq!(
+        fixture.objects.threads.get(ordinary).unwrap().state,
+        ThreadState::Ready
+    );
+
+    // Nobody is left waiting: a second receive finds the endpoint empty.
+    let mut again = [0; SIZE];
+    with_call(&mut again, Syscall::IpcTryRecv, &[handle.raw()]);
+    let (status, _, _) = call(&mut fixture, &mut again);
+    assert_eq!(status.error(), Some(Error::WouldBlock));
+}
+
+#[test]
+fn a_sender_without_transfer_is_refused_and_does_not_wedge_the_endpoint() {
+    let mut fixture = Fixture::new();
+    let (endpoint_id, handle) = endpoint(&mut fixture);
+    let client = fixture.process(8);
+    let sender = fixture.running(client, 4);
+    let theirs = install_endpoint(&mut fixture, client, endpoint_id, Rights::SEND);
+    let stays = install_endpoint(&mut fixture, client, endpoint_id, Rights::SEND);
+
+    let mut buffer = message(1, 0, &[stays]);
+    with_call(&mut buffer, Syscall::IpcSend, &[theirs.raw()]);
+    fixture.write_buffer(sender, &buffer);
+    crate::dispatch::dispatch(&mut fixture.machine(), sender, &mut buffer);
+    assert_eq!(
+        fixture.objects.threads.get(sender).unwrap().state,
+        ThreadState::BlockedSend
+    );
+
+    let mut ours = [0; SIZE];
+    with_call(&mut ours, Syscall::IpcTryRecv, &[handle.raw()]);
+    let (status, _, _) = call(&mut fixture, &mut ours);
+    assert_eq!(
+        status.error(),
+        Some(Error::WouldBlock),
+        "the endpoint is empty, not refused over and over"
+    );
+    assert_eq!(
+        fixture.status_of(sender).error(),
+        Some(Error::AccessDenied),
+        "the sender was told what its handle lacked"
+    );
+}
+
+#[test]
+fn a_refused_sender_that_outranks_the_receiver_earns_the_switch_the_refusal_carries() {
+    let mut fixture = Fixture::new();
+    let (endpoint_id, handle) = endpoint(&mut fixture);
+    let client = fixture.process(8);
+    // A priority above the receiver's four, so waking it asks for a switch.
+    let sender = fixture.running(client, 7);
+    let theirs = install_endpoint(&mut fixture, client, endpoint_id, Rights::SEND);
+
+    let stale = Handle::new(0x00FF_FFFF, 1).unwrap();
+    let mut buffer = message(1, 0, &[stale]);
+    with_call(&mut buffer, Syscall::IpcSend, &[theirs.raw()]);
+    fixture.write_buffer(sender, &buffer);
+    crate::dispatch::dispatch(&mut fixture.machine(), sender, &mut buffer);
+    assert_eq!(
+        fixture.objects.threads.get(sender).unwrap().state,
+        ThreadState::BlockedSend
+    );
+
+    // The receiver is answered `WouldBlock` and still yields to the
+    // sender it woke.
+    let mut ours = [0; SIZE];
+    with_call(&mut ours, Syscall::IpcTryRecv, &[handle.raw()]);
+    let receiver = fixture.thread;
+    let outcome = crate::dispatch::dispatch(&mut fixture.machine(), receiver, &mut ours);
+    assert_eq!(
+        Buffer::new(&ours).status().unwrap().error(),
+        Some(Error::WouldBlock)
+    );
+    assert_eq!(outcome, kernel_sched::Outcome::RESCHEDULE);
+    assert_eq!(
+        fixture.status_of(sender).error(),
+        Some(Error::InvalidHandle)
+    );
+}

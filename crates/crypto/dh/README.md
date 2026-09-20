@@ -42,7 +42,10 @@ the range wrong. RFC 8268, section 4, corrects it to the open interval:
 otherwise. That is what `check_public` enforces, and the reason the
 document gives is the one that matters — a value of one or of `p-1`
 forces the exchange into a subgroup with one or two elements, and the
-shared secret is then known to anybody watching.
+shared secret is then known to anybody watching. A refused value is
+wiped from the output buffer, as `crypto-aead` wipes a plaintext whose
+tag did not verify, so a caller that ignores the result holds nothing it
+could use.
 
 ## The length of the private exponent
 

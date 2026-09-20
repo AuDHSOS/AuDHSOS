@@ -891,11 +891,13 @@ indices, in the form of the kernel's handles; and `poll_at(now)`.
 Four things came out of writing it, and D-88 records them.
 
 The frames that have been written wait in a queue in the caller's memory,
-as self-describing records, and the layers are asked for new work only
-when that queue is empty. That is what makes a transmit buffer of one
-frame enough: nothing is produced while there is a backlog, so nothing is
-lost and nothing overtakes anything. One received frame can make several
-go out, and a driver with a full ring can take none of them at that
+as self-describing records, and the layers are asked for new work when
+that queue was empty as the poll began, or when one of them has work due
+at that instant. The first keeps a backlog from growing while it is being
+drained; the second keeps a peer whose every frame earns an answer from
+stopping every timer of the stack, which is what a queue state read after
+the answer was written would do. One received frame can make several go
+out, and a driver with a full ring can take none of them at that
 moment.
 
 A handle is an index and the generation of the slot it names. A bare index

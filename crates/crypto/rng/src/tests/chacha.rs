@@ -275,3 +275,61 @@ fn property_the_seed_decides_the_stream_whatever_the_request_pattern() {
         },
     );
 }
+
+/// A request wider than the budget is served in runs of at most
+/// [`RESEED_BYTES`], with a reseed between them, so no more than the
+/// budget ever comes out of one key. The run after the reseed is the one
+/// a generator produces when the caller asks in two requests.
+#[test]
+fn a_request_wider_than_the_budget_reseeds_inside_it() {
+    let full = usize::try_from(RESEED_BYTES).expect("the budget fits an address");
+    let mut whole = ChaChaRng::from_seed(&seed(), CountingEntropy::new(0));
+    let mut both = vec![0u8; full.saturating_mul(2)];
+    whole.fill(&mut both).expect("the source delivers");
+    assert_eq!(whole.source_calls(), 1, "one reseed inside the request");
+
+    let mut split = ChaChaRng::from_seed(&seed(), CountingEntropy::new(0));
+    let mut first = vec![0u8; full];
+    let mut second = vec![0u8; full];
+    split.fill(&mut first).expect("the budget is untouched");
+    split.fill(&mut second).expect("the source delivers");
+    assert_eq!(split.source_calls(), 1);
+
+    let (head, tail) = both.split_at(full);
+    assert_eq!(hex(head), hex(&first), "the first run is one key of output");
+    assert_eq!(hex(tail), hex(&second), "the second run is a reseeded key");
+}
+
+/// The budget bounds every run, so a request of any width reaches the
+/// block counter of no run beyond its range and `fill` cannot refuse a
+/// long request.
+#[test]
+fn a_request_of_several_budgets_is_served() {
+    let full = usize::try_from(RESEED_BYTES).expect("the budget fits an address");
+    let mut generator = ChaChaRng::from_seed(&seed(), CountingEntropy::new(0));
+    let mut out = vec![0u8; full.saturating_mul(3).saturating_add(7)];
+    assert_eq!(generator.fill(&mut out), Ok(()));
+    assert_eq!(generator.source_calls(), 3);
+}
+
+/// A reseed that fails in the middle of a request wipes what the request
+/// produced before it, so the caller reads no key material out of a
+/// buffer the call refused to fill.
+#[test]
+fn a_reseed_that_fails_inside_a_request_wipes_what_it_produced() {
+    let full = usize::try_from(RESEED_BYTES).expect("the budget fits an address");
+    let mut generator = ChaChaRng::from_seed(&seed(), FailingEntropy);
+    let mut out = vec![0xAAu8; full.saturating_add(16)];
+    assert_eq!(
+        generator.fill(&mut out),
+        Err(RngError::Entropy(EntropyError::Unavailable))
+    );
+    assert!(
+        out.iter().take(full).all(|byte| *byte == 0),
+        "the produced run is wiped"
+    );
+    assert!(
+        out.iter().skip(full).all(|byte| *byte == 0xAA),
+        "the rest of the buffer is untouched"
+    );
+}

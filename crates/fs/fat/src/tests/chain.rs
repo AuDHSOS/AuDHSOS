@@ -6,6 +6,7 @@
 
 use crate::boot::ROOT_CLUSTER;
 use crate::device::{BlockDevice, SECTOR, put};
+use crate::dir::DELETED;
 use crate::doubles::RamDisk;
 use crate::error::Error;
 use crate::fs::FileSystem;
@@ -259,4 +260,46 @@ fn a_table_entry_keeps_the_four_bits_that_are_not_the_crates() {
             .expect("four bytes"),
     );
     assert_eq!(raw, 0xF000_0000 | END_OF_CHAIN);
+}
+
+/// Fills every slot of `cluster` with the deleted marker, so that an
+/// entry walk reads the whole cluster and stops at none of them.
+fn fill_deleted(disk: &mut RamDisk, sector: u32, sectors: u32) {
+    let mut buffer = [0u8; SECTOR];
+    for slot in buffer.chunks_mut(32) {
+        slot[0] = DELETED;
+    }
+    for offset in 0..sectors {
+        disk.write(sector.saturating_add(offset), &buffer)
+            .expect("write");
+    }
+}
+
+#[test]
+fn a_directory_whose_chain_loops_refuses_the_entry_walk_instead_of_running_on() {
+    let fs = volume();
+    let start = fs.geometry().fat_start(0);
+    let per_cluster = fs.geometry().sectors_per_cluster;
+    let first = fs.geometry().cluster_sector(ROOT_CLUSTER);
+    let second = fs.geometry().cluster_sector(ROOT_CLUSTER + 1);
+    let root = fs.root();
+    let mut disk = fs.into_device();
+    // Two clusters that point at each other, every slot of both deleted:
+    // the walk stops at no entry and the chain never ends.
+    set_raw(&mut disk, start, ROOT_CLUSTER, ROOT_CLUSTER + 1);
+    set_raw(&mut disk, start, ROOT_CLUSTER + 1, ROOT_CLUSTER);
+    fill_deleted(&mut disk, first, per_cluster);
+    fill_deleted(&mut disk, second, per_cluster);
+    let fs = FileSystem::mount(disk).expect("mount");
+    let mut cursor = fs.entries(root);
+    assert_eq!(
+        fs.next_entry(&mut cursor),
+        Err(Error::ChainLoop(ROOT_CLUSTER)),
+        "the walk ran on instead of counting the clusters it entered"
+    );
+    assert_eq!(
+        fs.find(root, &Name::new("ANY.BIN").expect("name")),
+        Err(Error::ChainLoop(ROOT_CLUSTER)),
+        "a lookup under such a directory is refused and does not run on"
+    );
 }

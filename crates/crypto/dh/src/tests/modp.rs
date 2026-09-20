@@ -366,3 +366,49 @@ fn every_refusal_renders_a_sentence_of_its_own() {
         seen.push(rendered);
     }
 }
+
+/// A peer value may arrive wider than the widest value the arithmetic
+/// holds as long as what hangs over the front is zeros, which is what
+/// [`ModpGroup::check_public`] accepts. The exponentiation reads the same
+/// value out of it and reaches the same secret.
+#[test]
+fn the_exchange_accepts_a_peer_value_wider_than_the_arithmetic() {
+    let group = group();
+    let peer = prime_less(2);
+    let mut padded = vec![0u8; 513 - peer.len()];
+    padded.extend_from_slice(&peer);
+
+    let mut narrow = vec![0u8; GROUP14_PRIME_BYTES];
+    let mut wide = vec![0u8; GROUP14_PRIME_BYTES];
+    group
+        .shared_secret(&[7u8; 4], &peer, &mut narrow)
+        .expect("the peer value is inside the interval");
+    assert_eq!(
+        group.shared_secret(&[7u8; 4], &padded, &mut wide),
+        Ok(()),
+        "a value under leading zeros is the same value"
+    );
+    assert_eq!(hex(&wide), hex(&narrow));
+}
+
+#[test]
+fn a_refused_shared_secret_leaves_nothing_in_the_output() {
+    let group = group();
+    let mut out = vec![0u8; GROUP14_PRIME_BYTES];
+    assert_eq!(
+        group.shared_secret(&[0u8; GROUP14_SECRET_BYTES], &power_of_two(1), &mut out),
+        Err(DhError::DegenerateSharedSecret)
+    );
+    assert_eq!(hex(&out), hex(&vec![0u8; GROUP14_PRIME_BYTES]));
+}
+
+#[test]
+fn a_refused_public_value_leaves_nothing_in_the_output() {
+    let group = group();
+    let mut out = vec![0u8; GROUP14_PRIME_BYTES];
+    assert_eq!(
+        group.public_value(&[0u8; GROUP14_SECRET_BYTES], &mut out),
+        Err(DhError::PublicValueOutOfRange)
+    );
+    assert_eq!(hex(&out), hex(&vec![0u8; GROUP14_PRIME_BYTES]));
+}

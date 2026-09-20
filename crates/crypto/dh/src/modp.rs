@@ -5,7 +5,7 @@
 //! check that has to happen before a received value is used.
 
 use crypto_bignum::{MAX_BYTES, Modulus};
-use crypto_ct::{Choice, ct_eq};
+use crypto_ct::{Choice, ct_eq, wipe};
 
 use crate::error::DhError;
 
@@ -90,11 +90,26 @@ impl ModpGroup {
     /// interval, and when it carries a non-zero byte above the widest
     /// value the arithmetic holds.
     pub fn check_public(&self, value: &[u8]) -> Result<(), DhError> {
+        self.checked(value).map(|_| ())
+    }
+
+    /// `value` right-aligned in [`MAX_BYTES`] bytes when it passes
+    /// [`ModpGroup::check_public`].
+    ///
+    /// The exponentiation takes the padded form rather than the value as
+    /// it arrived, because a value that is wider than [`MAX_BYTES`] under
+    /// leading zeros passes the check and the arithmetic refuses that
+    /// width.
+    ///
+    /// # Errors
+    ///
+    /// As [`ModpGroup::check_public`].
+    fn checked(&self, value: &[u8]) -> Result<[u8; MAX_BYTES], DhError> {
         let padded = padded(value).ok_or(DhError::PublicValueOutOfRange)?;
         if padded <= one() || padded >= self.upper {
             return Err(DhError::PublicValueOutOfRange);
         }
-        Ok(())
+        Ok(padded)
     }
 
     /// The public value of `secret`: the generator raised to it, written
@@ -112,12 +127,17 @@ impl ModpGroup {
     /// refuse, since the generator is a byte and every byte is below the
     /// prime. [`DhError::PublicValueOutOfRange`] when the value the
     /// secret produces is one or `p-1`; a secret of zero does that, and
-    /// such a value must not be sent.
+    /// such a value must not be sent. A refused value is wiped from
+    /// `out`, so a caller that ignores the result sends nothing.
     pub fn public_value(&self, secret: &[u8], out: &mut [u8]) -> Result<(), DhError> {
         self.prime
             .pow_secret(&[self.generator], secret, out)
             .map_err(|_| DhError::OutputTooShort)?;
-        self.check_public(out)
+        if let Err(error) = self.check_public(out) {
+            wipe(out);
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// The shared secret of `secret` and the peer's public value: the
@@ -136,13 +156,15 @@ impl ModpGroup {
     /// [`ModpGroup::check_public`], [`DhError::OutputTooShort`] when
     /// `out` is shorter than [`ModpGroup::public_len`], and
     /// [`DhError::DegenerateSharedSecret`] when the result is zero, one,
-    /// or `p-1`.
+    /// or `p-1`. A refused value is wiped from `out`, so a caller that
+    /// ignores the result keys from nothing.
     pub fn shared_secret(&self, secret: &[u8], peer: &[u8], out: &mut [u8]) -> Result<(), DhError> {
-        self.check_public(peer)?;
+        let peer = self.checked(peer)?;
         self.prime
-            .pow_secret(peer, secret, out)
+            .pow_secret(&peer, secret, out)
             .map_err(|_| DhError::OutputTooShort)?;
         if self.degenerate(out).is_true() {
+            wipe(out);
             return Err(DhError::DegenerateSharedSecret);
         }
         Ok(())

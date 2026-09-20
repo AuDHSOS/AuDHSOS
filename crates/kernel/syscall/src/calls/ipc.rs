@@ -216,6 +216,10 @@ pub fn deliver<
 
 /// `ipc_recv` and `ipc_try_recv`.
 ///
+/// A sender whose message cannot be copied is refused and woken with the
+/// reason, and the next sender is taken, so that one client's unusable
+/// message costs that client its call and not the endpoint.
+///
 /// # Errors
 ///
 /// [`Error::InvalidHandle`] for an endpoint that is gone;
@@ -231,24 +235,129 @@ pub fn recv<E: Environment, const NP: usize, const NT: usize, const NM: usize, c
     buffer: &mut [u8; SIZE],
     blocking: bool,
 ) -> Result<Reply, Error> {
-    let found = endpoint::recv(
-        machine.objects,
-        machine.scheduler,
-        caller,
-        endpoint,
-        blocking,
-    )?;
-    let Reception::Sender {
+    // Every turn of this loop takes one sender out of the queue for
+    // good, so the loop runs at most as often as the endpoint has
+    // senders queued: O(NT) in the thread count, and no thread it
+    // refuses can queue itself again before this call returns.
+    //
+    // `switch` carries what the refused senders earned. A refusal
+    // returned as `Err` carries no outcome, so every return below that
+    // could lose one answers with [`Reply::failed`] instead.
+    let mut switch = false;
+    loop {
+        let found = endpoint::recv(
+            machine.objects,
+            machine.scheduler,
+            caller,
+            endpoint,
+            blocking,
+        )?;
+        let Reception::Sender {
+            sender,
+            wants_reply,
+            badge,
+        } = found
+        else {
+            if matches!(found, Reception::Empty) {
+                return Ok(refusal(Error::WouldBlock, switch));
+            }
+            return Ok(Reply::BLOCKED);
+        };
+        let queued = Queued {
+            sender,
+            wants_reply,
+            badge,
+        };
+        let taken = match take_message(machine, caller, process, endpoint, buffer, queued) {
+            Ok(taken) => taken,
+            Err(error) => return Ok(refusal(error, switch)),
+        };
+        match taken {
+            Taken::Message(outcome) => {
+                let mut reply = apply(machine, outcome)?;
+                // A sender this call refused may outrank the receiver,
+                // and its switch is owed whatever the rendezvous left.
+                if switch {
+                    reply.outcome = Outcome::RESCHEDULE;
+                }
+                return Ok(reply);
+            }
+            Taken::Refused(error) => {
+                // The message is refused for what its sender wrote, so
+                // every receiver would be refused it. The sender learns
+                // why and leaves the queue; the next one is taken.
+                let outcome = endpoint::refuse(machine.objects, machine.scheduler, sender, error);
+                switch |= outcome.reschedule;
+                apply(machine, outcome)?;
+            }
+        }
+    }
+}
+
+/// A refusal for the receiver that also carries the switch a sender this
+/// call woke earned.
+const fn refusal(error: Error, switch: bool) -> Reply {
+    let reply = Reply::failed(error);
+    if switch {
+        return Reply {
+            outcome: Outcome::RESCHEDULE,
+            ..reply
+        };
+    }
+    reply
+}
+
+/// The sender a rendezvous took off the queue.
+#[derive(Clone, Copy)]
+struct Queued {
+    /// The thread whose message it is.
+    sender: ThreadId,
+    /// Whether it used `ipc_call` and waits for the answer.
+    wants_reply: bool,
+    /// The badge of the capability it sent through.
+    badge: u64,
+}
+
+/// What one rendezvous of [`recv`] came to.
+enum Taken {
+    /// The message was copied, and this is what the two threads leave.
+    Message(IpcOutcome),
+    /// The copy was refused for what the sender wrote. The sender is off
+    /// its queue and waits to be woken with the reason.
+    Refused(Error),
+}
+
+/// Copies the message of one queued sender into the receiver's buffer.
+///
+/// The sender is off its queue when this is called. It goes back into it
+/// for a refusal the receiver caused, and stays off it for one the sender
+/// caused, which the answer says.
+///
+/// # Errors
+///
+/// [`Error::InvalidArgument`] when the two threads share an IPC buffer;
+/// [`Error::QuotaExceeded`] or [`Error::OutOfHandles`] when the receiver
+/// has no slot for the reply handle. The sender is back in its queue in
+/// all three.
+fn take_message<
+    E: Environment,
+    const NP: usize,
+    const NT: usize,
+    const NM: usize,
+    const NH: usize,
+>(
+    machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+    caller: ThreadId,
+    process: ProcessId,
+    endpoint: EndpointId,
+    buffer: &mut [u8; SIZE],
+    queued: Queued,
+) -> Result<Taken, Error> {
+    let Queued {
         sender,
         wants_reply,
         badge,
-    } = found
-    else {
-        if matches!(found, Reception::Empty) {
-            return Err(Error::WouldBlock);
-        }
-        return Ok(Reply::BLOCKED);
-    };
+    } = queued;
     let queue = if wants_reply {
         Queue::Callers
     } else {
@@ -284,8 +393,7 @@ pub fn recv<E: Environment, const NP: usize, const NT: usize, const NM: usize, c
             if let Some((reply, handle)) = opened {
                 endpoint::close_reply(machine.objects, reply, process, handle);
             }
-            endpoint::undo_meeting(machine.objects, endpoint, sender, queue, badge);
-            return Err(error);
+            return Ok(Taken::Refused(error));
         }
     };
     let handover = Handover {
@@ -294,7 +402,7 @@ pub fn recv<E: Environment, const NP: usize, const NT: usize, const NM: usize, c
         status: status_of(moved.truncated),
     };
     let outcome = endpoint::received(machine.objects, machine.scheduler, sender, caller, handover)?;
-    apply(machine, outcome)
+    Ok(Taken::Message(outcome))
 }
 
 /// `ipc_recv` and `ipc_try_recv` as the dispatcher reaches them.
