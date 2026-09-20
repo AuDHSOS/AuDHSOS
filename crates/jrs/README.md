@@ -584,9 +584,9 @@ negative-test passes. Other parser/builtin completeness gaps remain open.
 The engine is the target of the migration and the stack backend the
 source (architecture, section 17.1). What gates the switch is not the
 count either path reaches but the set of variants the stack path passes
-and the engine does not. At `96af43c` that set holds 1,559 variants:
-none of them the engine fails, and 1,559 it names as gaps. The engine
-passes 25,598 variants the stack path does not. Only the failures are
+and the engine does not. At `a6249d4` that set holds 1,555 variants:
+none of them the engine fails, and 1,555 it names as gaps. The engine
+passes 25,642 variants the stack path does not. Only the failures are
 breaches of the equality duty; a gap costs coverage and answers nothing
 wrongly.
 
@@ -600,7 +600,7 @@ What a switch would cost is those gaps, by the reason the engine names:
 | 314 | a direct eval inside a function |
 | 194 | a property that is an accessor |
 | 87 | an internal method of a Proxy |
-| 62 | an eval of a Script the lowering does not take |
+| 60 | an eval of a Script the lowering does not take |
 | 56 | `ToPrimitive` of an Object outside a call |
 | 48 | `ToString` of an Object |
 | 34 | a splitter of a constructor that is not `%RegExp%` |
@@ -608,9 +608,9 @@ What a switch would cost is those gaps, by the reason the engine names:
 | 30 | a name of a body an Initializer of a parameter reads |
 | 30 | a frame of a call the lowering does not prepare |
 | 30 | a `then` that is not `%Promise.prototype.then%` |
-| 732 | 77 further reasons, none above 30 variants |
+| 730 | 77 further reasons, none above 30 variants |
 
-The counts above are of `96af43c`; the ones in the notes below carry the
+The counts above are of `a6249d4`; the ones in the notes below carry the
 commit each was measured at.
 
 Where each of those reasons is raised, measured at `3a6e905` by giving
@@ -644,7 +644,7 @@ places in the Variable Environment, and the `arguments` of 10.4.4,
 which no slot of the record holds.
 
 B.3.2.1 and B.3.2.2 on the Global Environment Record ship at
-`9352736`. Three variants moved out of a gap of their own into a
+`9352736`, and the clause for a `switch` at `a6249d4`. Three variants moved out of a gap of their own into a
 failure of the harness, which compiles a tagged template and a
 regular-expression literal the lowering does not take; none of them is
 a blocker and none is a wrong answer of the clause.
@@ -837,6 +837,7 @@ more than eight variants.
 | `edc120e` | 1,592 | **0** | 1,592 |
 | `9352736` | 1,585 | **0** | 1,585 |
 | `96af43c` | 1,559 | **0** | 1,559 |
+| `a6249d4` | 1,555 | **0** | 1,555 |
 
 The list is the join of the two per-variant runs, without `--summary`:
 
@@ -1236,7 +1237,9 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | 13.3.7.1 with a spread element in the argument list (focused) | focused | `03d3688` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/super test/staging/sm/class --summary` | 188 | 371 | 232 (62.53%) | 14 (3.77%) | 125 (33.69%) |
 | The same, on the stack backend (focused) | focused | `03d3688` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/super test/staging/sm/class --summary` | 188 | 371 | 258 (69.54%) | 61 (16.44%) | 52 (14.02%) |
 | Complete pinned suite on the register engine, before the close of 14.7.5.7 step 3.j (outdated) | full | `33ffe90` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 58,747 (57.08%) | 20,543 (19.96%) | 23,635 (22.96%) |
-| Complete pinned suite on the register engine | full | `96af43c` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,393 (61.59%) | 18,961 (18.42%) | 20,571 (19.99%) |
+| Complete pinned suite on the register engine | full | `a6249d4` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,441 (61.64%) | 18,961 (18.42%) | 20,523 (19.94%) |
+| B.3.2.2 for a clause of a `switch` (focused) | focused | `a6249d4` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/annexB/language --summary` | 845 | 895 | 112 (12.51%) | 59 (6.59%) | 724 (80.89%) |
+| Complete pinned suite on the register engine, before B.3.2.2 for a clause (outdated) | full | `96af43c` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,393 (61.59%) | 18,961 (18.42%) | 20,571 (19.99%) |
 | Complete pinned suite on the register engine, before the `length` under a computed key (outdated) | full | `9352736` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,367 (61.57%) | 18,961 (18.42%) | 20,597 (20.01%) |
 | B.3.2.1 and B.3.2.2 on the global record (focused) | focused | `9352736` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/annexB/language --summary` | 845 | 895 | 66 (7.37%) | 59 (6.59%) | 770 (86.03%) |
 | The same, on the stack backend (focused) | focused | `9352736` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/annexB/language --summary` | 845 | 895 | 176 (19.66%) | 207 (23.13%) | 512 (57.21%) |
