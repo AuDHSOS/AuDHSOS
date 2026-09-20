@@ -7972,8 +7972,15 @@ impl RegisterLowerer {
             let flow = match statement {
                 Stmt::Declare(bindings) => self.lower_lexical_declaration(bindings)?,
                 // 14.2.3 step 1 instantiated these where the CaseBlock was
-                // entered, so the clause itself runs nothing for them.
-                Stmt::Function(_, _) => RegisterFlow::Empty,
+                // entered. B.3.2.2 puts the function in the `var` binding of
+                // the body where the declaration is evaluated, and nowhere
+                // else.
+                Stmt::Function(name, _) => {
+                    if !self.code.strict && self.takes_a_var_binding(name, scoped) {
+                        self.copy_to_the_var_binding(name, scoped)?;
+                    }
+                    RegisterFlow::Empty
+                }
                 _ => self.lower_statement(statement)?,
             };
             // A name the statement declared is initialized here and nowhere
@@ -8198,7 +8205,41 @@ impl RegisterLowerer {
         Some(())
     }
 
+    /// Whether B.3.2.2 gives every function the clauses declare a `var`
+    /// binding of the body around the `CaseBlock`, which strict code needs
+    /// none of because the function stays in the record of 14.12.4.
+    fn the_case_block_takes_its_functions(
+        &self,
+        clauses: &[(Option<Expr>, Vec<Stmt>)],
+        scoped: &[(
+            String,
+            crate::engine::bytecode::Reg,
+            Option<RegisterBinding>,
+        )],
+    ) -> bool {
+        self.code.strict
+            || clauses.iter().all(|(_, body)| {
+                body.iter().all(|statement| match statement {
+                    Stmt::Function(name, _) => self.takes_a_var_binding(name, scoped),
+                    _ => true,
+                })
+            })
+    }
+
     fn lower_switch(
+        &mut self,
+        discriminant: &Expr,
+        clauses: &[(Option<Expr>, Vec<Stmt>)],
+    ) -> Option<RegisterFlow> {
+        // 14.12.4 makes one Environment Record for the whole CaseBlock, which
+        // B.3.2.2 counts as the scope a function of a clause is declared in.
+        self.block_depth = self.block_depth.checked_add(1)?;
+        let outcome = self.lower_switch_body(discriminant, clauses);
+        self.block_depth = self.block_depth.saturating_sub(1);
+        outcome
+    }
+
+    fn lower_switch_body(
         &mut self,
         discriminant: &Expr,
         clauses: &[(Option<Expr>, Vec<Stmt>)],
@@ -8212,10 +8253,6 @@ impl RegisterLowerer {
             body.iter()
                 .any(|statement| matches!(statement, Stmt::Function(_, _)))
         });
-        if carries_a_function && !self.code.strict {
-            self.refuse("a function declaration in a sloppy CaseBlock");
-            return None;
-        }
         let result_register = self.allocate_register()?;
         let input_register = self.allocate_register()?;
         let selector_register = self.allocate_register()?;
@@ -8226,6 +8263,10 @@ impl RegisterLowerer {
         // 14.12.4 makes one Environment Record for the whole CaseBlock, after
         // the discriminant and before the selectors.
         let scoped = self.enter_case_block_scope(clauses)?;
+        if carries_a_function && !self.the_case_block_takes_its_functions(clauses, &scoped) {
+            self.refuse("a function declaration in a sloppy CaseBlock");
+            return None;
+        }
         if carries_a_function {
             self.instantiate_case_block_functions(clauses)?;
         }
