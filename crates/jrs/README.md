@@ -605,6 +605,7 @@ What a switch would cost is those gaps, by the reason the engine names:
 | 48 | `ToString` of an Object |
 | 30 | a frame of a call the lowering does not prepare |
 | 26 | a call |
+| 24 | a name of a function body the scan does not reach |
 | 34 | a splitter of a constructor that is not `%RegExp%` |
 | 32 | a try statement |
 | 713 | 76 further reasons, none above 30 variants |
@@ -620,6 +621,12 @@ every site of the reason a name of its own and running the suite once:
 | 56 | `ToPrimitive` of an Object outside a call | sites of 8 variants or fewer |
 | 48 | `ToString` of an Object | ten sites of 4 variants or fewer, and `TestIn` |
 | 32 | a try statement | a Catch Parameter that destructures a thrown object literal |
+
+All 24 of `a name of a function body the scan does not reach` come
+from `register_body_scope` and none from `register_function_local_names`,
+which was measured by naming the two apart. The scan covers every
+statement of the body, so what it does not reach is inside one of the
+scoped forms `register_scoped_statement_references` walks.
 
 The try reason is not the Catch Parameter. These lower:
 `try{}catch({x = 1}){}`, `try{throw o}catch({x = 1}){}` for a variable
