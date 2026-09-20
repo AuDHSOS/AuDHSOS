@@ -584,14 +584,22 @@ negative-test passes. Other parser/builtin completeness gaps remain open.
 The engine is the target of the migration and the stack backend the
 source (architecture, section 17.1). What gates the switch is not the
 count either path reaches but the set of variants the stack path passes
-and the engine does not. At `a955f11` that set holds 1,435 variants:
-none of them the engine fails, and 1,435 it names as gaps. The engine
+and the engine does not. At `0cb57d7` that set holds 1,427 variants:
+none of them the engine fails, and 1,427 it names as gaps. The engine
 passes 25,679 variants the stack path does not. Only the failures are
 breaches of the equality duty; a gap costs coverage and answers nothing
 wrongly.
 
 No failure is left: every variant the stack path passes, the engine
 passes or names as a gap. What remains is coverage.
+
+The failure count of `0cb57d7` is 48 higher than that of `a955f11`
+although no variant the engine passed was lost. The refusal of a Block
+binding of a loop stood in front of 47 `intl402` Temporal tests and one
+legacy RegExp accessor: with the Block binding lowered they run and fail
+on what they actually need, which is a `Temporal` this Realm does not
+build. The stack path fails all 48 as well, and none of them is a
+blocker.
 
 What a switch would cost is those gaps, by the reason the engine names:
 
@@ -607,9 +615,10 @@ What a switch would cost is those gaps, by the reason the engine names:
 | 30 | a frame of a call the lowering does not prepare |
 | 30 | a `then` that is not `%Promise.prototype.then%` |
 | 26 | a call |
-| 585 | 74 further reasons, none above 24 variants |
+| 23 | a binding the global object holds as an accessor |
+| 554 | 73 further reasons, none above 22 variants |
 
-The counts above are of `a955f11`; the ones in the notes below carry the
+The counts above are of `0cb57d7`; the ones in the notes below carry the
 commit each was measured at.
 
 Where each of those reasons is raised, measured at `3a6e905` by giving
@@ -840,6 +849,7 @@ more than eight variants.
 | `0bed44d` | 1,498 | **0** | 1,498 |
 | `cf56eab` | 1,463 | **0** | 1,463 |
 | `a955f11` | 1,435 | **0** | 1,435 |
+| `0cb57d7` | 1,427 | **0** | 1,427 |
 
 The list is the join of the two per-variant runs, without `--summary`:
 
@@ -1239,7 +1249,9 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | 13.3.7.1 with a spread element in the argument list (focused) | focused | `03d3688` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/super test/staging/sm/class --summary` | 188 | 371 | 232 (62.53%) | 14 (3.77%) | 125 (33.69%) |
 | The same, on the stack backend (focused) | focused | `03d3688` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/super test/staging/sm/class --summary` | 188 | 371 | 258 (69.54%) | 61 (16.44%) | 52 (14.02%) |
 | Complete pinned suite on the register engine, before the close of 14.7.5.7 step 3.j (outdated) | full | `33ffe90` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 58,747 (57.08%) | 20,543 (19.96%) | 23,635 (22.96%) |
-| Complete pinned suite on the register engine | full | `a955f11` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,598 (61.79%) | 18,961 (18.42%) | 20,366 (19.79%) |
+| Complete pinned suite on the register engine | full | `0cb57d7` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,606 (61.80%) | 19,009 (18.47%) | 20,310 (19.73%) |
+| A Block binding of a loop, read per iteration (focused) | focused | `0cb57d7` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/for test/language/statements/for-of test/language/statements/for-in --summary` | 1,255 | 2,406 | 2,173 (90.32%) | 27 (1.12%) | 206 (8.56%) |
+| Complete pinned suite on the register engine, before the Block binding of a loop (outdated) | full | `a955f11` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,598 (61.79%) | 18,961 (18.42%) | 20,366 (19.79%) |
 | B.3.2.1 and B.3.2.2 in a function body (focused) | focused | `a955f11` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/annexB/language --summary` | 845 | 895 | 237 (26.48%) | 59 (6.59%) | 599 (66.93%) |
 | Complete pinned suite on the register engine, before B.3.2.1 in a function body (outdated) | full | `cf56eab` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,555 (61.75%) | 18,961 (18.42%) | 20,409 (19.83%) |
 | A Catch Parameter reading a thrown value (focused) | focused | `cf56eab` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/try test/annexB/language --summary` | 1,046 | 1,283 | 550 (42.87%) | 64 (4.99%) | 669 (52.14%) |
