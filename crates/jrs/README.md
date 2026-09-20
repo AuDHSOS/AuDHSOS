@@ -597,7 +597,7 @@ What a switch would cost is those gaps, by the reason the engine names:
 
 | Variants | Gap |
 |---:|---|
-| 310 | a direct eval inside a function |
+| 313 | a direct eval inside a function |
 | 194 | a property that is an accessor |
 | 87 | an internal method of a Proxy |
 | 56 | `ToPrimitive` of an Object outside a call |
@@ -615,12 +615,30 @@ every site of the reason a name of its own and running the suite once:
 
 | Variants | Reason | Raised at |
 |---:|---|---|
-| 310 | a direct eval inside a function | one site, `perform_eval` |
+| 313 | a direct eval inside a function | one site, `perform_eval` |
 | 194 | a property that is an accessor | about thirty call sites, the largest 22 |
 | 121 | an internal method of a Proxy | the walks that read a descriptor per key |
 | 56 | `ToPrimitive` of an Object outside a call | sites of 8 variants or fewer |
 | 48 | `ToString` of an Object | ten sites of 4 variants or fewer, and `TestIn` |
 | 32 | a try statement | a Catch Parameter that destructures a thrown object literal |
+
+The direct eval gap has been lifted and measured five times, and each
+time the engine answered more variants wrongly than it gained. The
+placement of the bindings is not the only thing missing:
+
+| What was added before lifting it | Passes | Wrong answers |
+|---|---:|---:|
+| nothing; the record and the name instructions alone | +283 | 269 |
+| every binding of the body captured at its setup | +198 | 213 |
+| a parser refusal of the text named as a gap | +9 | 46 |
+| every binding captured where the call stands | +22 | 409 |
+
+The last is the worst because a capture there moves a binding a
+Script already read from its register, which every later read of it in
+that body then reads from the wrong place. What remains after the
+record is the text's own declarations, which step 5.d of 19.2.1.1
+places in the Variable Environment, and the `arguments` of 10.4.4,
+which no slot of the record holds.
 
 All 24 of `a name of a function body the scan does not reach` come
 from `register_body_scope` and none from `register_function_local_names`,
