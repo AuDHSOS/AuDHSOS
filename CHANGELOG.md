@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` answers the `ieee754` family, which reads a binary64
+  number apart into a mantissa and an exponent of two and writes it back,
+  and answers `sqlite_compileoption_used` and
+  `sqlite_compileoption_get` for a build that carries no option names.
+  The suite tester answers `DB serialize`. D-361 records it. Catalog
+  6.6.248. `ieee754.test` goes from no case to 35 passing, which is every
+  case of the file, and `memdb1.test` to 8.
+
 - The suite tester reads the text `dbtotxt` writes as the bytes of a
   database file and writes them back as the database of the connection,
   so a file that holds a database broken in one place reaches the

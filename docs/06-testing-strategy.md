@@ -6604,3 +6604,16 @@ Document 16 step Q8.
   with `closed` for a temp schema no statement has opened.
 - A handle names the database and the table together where the
   connection holds neither.
+
+### 6.6.248 The bits of a binary64 number (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `ieee754(X)` answers the mantissa and the exponent of two the number
+  is, and the two-argument form answers the number they name.
+- A nought, a nought that carries the sign, and a pair that names no
+  number each answer what the C library answers.
+- `ieee754_to_blob` and `ieee754_from_blob` write the eight bytes of a
+  number and read them back, and every other value answers nothing.
+- `sqlite_compileoption_used` answers nought and
+  `sqlite_compileoption_get` answers nothing.

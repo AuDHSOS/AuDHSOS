@@ -55,10 +55,10 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-118 219 cases of 846 files: 105 508 pass, 3421 answer differently and
-9290 are refused.
+118 304 cases of 847 files: 105 607 pass, 3425 answer differently and
+9272 are refused.
 
-What the 9290 refusals are for, most first: `db status` (2106), which
+What the 9272 refusals are for, most first: `db status` (2106), which
 answers counters of memory and of the page cache; `sqlite3_memdebug_fail`
 (1260), which fails one allocation of the C library; `crash_on_write`
 (960) and the crash the harness does not simulate (435); a table an
@@ -76,7 +76,7 @@ What each answers, over the same files:
 
 | Configuration | Passed | Answered differently | Refused |
 |---------------|-------:|---------------------:|--------:|
-| `utf8-4096-delete` | 105 508 | 3421 | 9290 |
+| `utf8-4096-delete` | 105 607 | 3425 | 9272 |
 | `utf16le-4096-delete` | 61 214 | 2392 | 9500 |
 | `utf16be-4096-delete` | 61 229 | 2392 | 9500 |
 | `utf8-512-delete` | 61 073 | 2452 | 9435 |
@@ -441,6 +441,8 @@ Size: S.
 28. `decode_hexdb` reads the text `dbtotxt` writes as the bytes of a
     database file and `DB deserialize` writes them back as the database
     of the connection, which D-360 records.
+29. `DB serialize` answers the bytes of the database of the connection,
+    which D-361 records.
 
 ### Produces
 

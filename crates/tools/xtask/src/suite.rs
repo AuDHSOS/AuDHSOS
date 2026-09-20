@@ -843,7 +843,8 @@ impl Session {
             // `research/sqlite/src/tclsqlite.c`: the database of the
             // connection is read again from the bytes the tester hands
             // over, which it carries as hexadecimal digits.
-            "deserialize" => self.deserialize(first, second),
+            "deserialize" | "serialize" => self.deserialize(verb, first, second),
+
             // `sqlite3_blob_open`, `sqlite3_blob_bytes`,
             // `sqlite3_blob_read` and `sqlite3_blob_write` of
             // `research/sqlite/src/test_blob.c`.
@@ -1017,16 +1018,24 @@ impl Session {
         })
     }
 
-    /// The database of a connection, read again from the bytes the
-    /// tester handed over.
+    /// `DB serialize` answers the bytes of the database of a connection,
+    /// and `DB deserialize` reads the database again from the bytes the
+    /// tester hands over, each as hexadecimal digits.
     ///
-    /// Reading them costs O(n) in the bytes.
-    fn deserialize(&mut self, name: &str, data: &str) -> Result<Vec<String>, String> {
+    /// Either costs O(n) in the bytes of the database.
+    fn deserialize(&mut self, verb: &str, name: &str, data: &str) -> Result<Vec<String>, String> {
         let path = self
             .connections
             .get(name)
             .cloned()
             .ok_or_else(|| format!("no such connection: {name}"))?;
+        if verb == "serialize" {
+            let writer = self
+                .held
+                .get(&path)
+                .ok_or_else(|| format!("no such database: {path}"))?;
+            return Ok(vec![digits(&writer.written())]);
+        }
         let bytes = binary(data);
         let mut writer = Writer::opened(&bytes).map_err(|error| refusal(&error))?;
         writer.defines(DEFINED);

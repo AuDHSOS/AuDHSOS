@@ -950,6 +950,8 @@ Size: L.
 105. What a command of a blob handle answers, and the lock every
      database of the connection is held under. Built, which D-359
      records.
+106. The mantissa and the exponent of two a binary64 number is, and the
+     names a build of the library carries. Built, which D-361 records.
 
 ### Done when
 
@@ -959,8 +961,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 118 219 cases in 846 files, 105 508
-pass, 3421 answer differently, and 9290 name something the engine
+under the `tclsh` of the machine. Of 118 304 cases in 847 files, 105 607
+pass, 3425 answer differently, and 9272 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the three-minute
 deadline and are counted with the cases they ran by then. One run over

@@ -231,3 +231,107 @@ fn a_pattern_that_branches_at_every_step_still_answers() {
         Some(b"integer".to_vec())
     );
 }
+
+/// `ieee754.test`: the `ieee754` family reads a binary64 number apart
+/// into a mantissa and an exponent of two and writes it back.
+#[test]
+fn what_the_ieee754_family_answers() {
+    let answered = |sql: &str| {
+        let writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+        let bytes = writer.written();
+        crate::db::Database::open(&bytes)
+            .unwrap()
+            .query(sql.as_bytes())
+            .unwrap()
+            .rows
+            .remove(0)
+            .remove(0)
+    };
+    let text = |held: &str| Value::Text(held.as_bytes().to_vec());
+    assert_eq!(answered("SELECT ieee754(2.0)"), text("ieee754(2,0)"));
+    assert_eq!(answered("SELECT ieee754(45.25)"), text("ieee754(181,-2)"));
+    assert_eq!(answered("SELECT ieee754(-0.5)"), text("ieee754(-1,-1)"));
+    assert_eq!(answered("SELECT ieee754(0.0)"), text("ieee754(0,-1075)"));
+    // A nought that carries the sign is the one pair the bits of no
+    // mantissa answer.
+    assert_eq!(answered("SELECT ieee754(-0.0)"), text("ieee754(-1,-3071)"));
+    // A number the bits hold no whole mantissa for, which is every
+    // number below the smallest one the bits name whole.
+    assert_eq!(answered("SELECT ieee754(5e-324)"), text("ieee754(1,-1074)"));
+    // A mantissa past what the bits hold is shifted down, and one the
+    // exponent leaves below the smallest number is shifted away.
+    assert_eq!(
+        answered("SELECT ieee754(9223372036854775807, 0)"),
+        Value::Real(9.223_372_036_854_775e18)
+    );
+    assert_eq!(answered("SELECT ieee754(1, -1074)"), Value::Real(5e-324));
+    assert_eq!(answered("SELECT ieee754(1, -1080)"), Value::Real(0.0));
+    // A number the bits hold no whole mantissa for, which is every
+    // number below the smallest one the bits name whole.
+    assert_eq!(answered("SELECT ieee754(5e-324)"), text("ieee754(1,-1074)"));
+    // A mantissa past what the bits hold is shifted down, and one the
+    // exponent leaves below the smallest number is shifted away.
+    assert_eq!(
+        answered("SELECT ieee754(9223372036854775807, 0)"),
+        Value::Real(9.223_372_036_854_775e18)
+    );
+    assert_eq!(answered("SELECT ieee754(1, -1074)"), Value::Real(5e-324));
+    assert_eq!(answered("SELECT ieee754(1, -1080)"), Value::Real(0.0));
+    // A blob of another width than a binary64 number is read as the
+    // number the value stands for, which is nought.
+    assert_eq!(answered("SELECT ieee754(x'00')"), text("ieee754(0,-1075)"));
+    // A mantissa of nought the exponent leaves outside the numbers a
+    // nought names answers the largest number and the smallest.
+    assert_eq!(
+        answered("SELECT ieee754(0, 2000)"),
+        Value::Real(f64::INFINITY)
+    );
+    assert_eq!(answered("SELECT ieee754(0, -2000)"), Value::Real(0.0));
+    // A mantissa and an exponent that name no number answer nothing.
+    assert_eq!(
+        answered("SELECT ieee754(4503599627370495, 973)"),
+        Value::Null
+    );
+    assert_eq!(
+        answered("SELECT ieee754(9007199254740992.0)"),
+        text("ieee754(4503599627370496,1)")
+    );
+    // The two-argument form answers the number the mantissa and the
+    // exponent name.
+    assert_eq!(answered("SELECT ieee754(2, 0)"), Value::Real(2.0));
+    assert_eq!(answered("SELECT ieee754(181, -2)"), Value::Real(45.25));
+    assert_eq!(answered("SELECT ieee754(0, 0)"), Value::Real(0.0));
+    assert_eq!(answered("SELECT ieee754(-181, -2)"), Value::Real(-45.25));
+    // An exponent past what a binary64 number holds answers the largest
+    // and the smallest it holds.
+    assert_eq!(
+        answered("SELECT ieee754(1, 20000)"),
+        Value::Real(f64::INFINITY)
+    );
+    assert_eq!(answered("SELECT ieee754(1, -20000)"), Value::Real(0.0));
+    // The mantissa and the exponent alone.
+    assert_eq!(answered("SELECT ieee754_mantissa(45.25)"), Value::Int(181));
+    assert_eq!(answered("SELECT ieee754_exponent(45.25)"), Value::Int(-2));
+    // The eight bytes of a number, and the number they are.
+    assert_eq!(
+        answered("SELECT ieee754_to_blob(1.0)"),
+        Value::Blob(alloc::vec![0x3f, 0xf0, 0, 0, 0, 0, 0, 0])
+    );
+    assert_eq!(
+        answered("SELECT ieee754_from_blob(x'3ff0000000000000')"),
+        Value::Real(1.0)
+    );
+    assert_eq!(
+        answered("SELECT ieee754(x'3ff0000000000000')"),
+        text("ieee754(1,0)")
+    );
+    // A value of another kind and a blob of another width answer
+    // nothing, and so does every option the build carries none of.
+    assert_eq!(answered("SELECT ieee754_to_blob('x')"), Value::Null);
+    assert_eq!(answered("SELECT ieee754_from_blob(x'00')"), Value::Null);
+    assert_eq!(
+        answered("SELECT sqlite_compileoption_used('THREADSAFE')"),
+        Value::Int(0)
+    );
+    assert_eq!(answered("SELECT sqlite_compileoption_get(0)"), Value::Null);
+}

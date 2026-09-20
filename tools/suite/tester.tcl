@@ -854,9 +854,12 @@ proc sqlite3 {args} {
         harness_send deserialize %N% $digits
         return {}
       }
+      serialize {
+        return [binary format H* [lindex [harness_send serialize %N%] 0]]
+      }
       copy - collation_needed - enable_load_extension - interrupt -
       rekey - timeout - version - config -
-      serialize - backup - restore {
+      backup - restore {
         return {}
       }
       default { error "no such method: $method" }

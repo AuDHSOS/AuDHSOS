@@ -92,6 +92,17 @@ pub enum Function {
     },
     /// `ceil(X)` and `ceiling(X)`.
     Ceil,
+    /// `ieee754(X)`, `ieee754_mantissa(X)` and `ieee754_exponent(X)`,
+    /// which read a binary64 number apart, and `ieee754(Y, Z)`, which
+    /// answers the number `Y * pow(2, Z)`.
+    Ieee754(Ieee),
+    /// `ieee754_to_blob(X)`, which writes a binary64 number as its eight
+    /// bytes, and `ieee754_from_blob(B)`, which reads them back.
+    Ieee754Blob(bool),
+    /// `sqlite_compileoption_used(X)`, which answers whether the library
+    /// was built with the option, and `sqlite_compileoption_get(N)`,
+    /// which names the option at that place.
+    CompileOption(bool),
     /// `char(...)`.
     Char,
     /// `degrees(X)`.
@@ -204,6 +215,19 @@ const RADIANS: f64 = core::f64::consts::PI / 180.0;
 
 /// The longest blob a value holds, which is `SQLITE_MAX_LENGTH`.
 pub const MAX_LENGTH: usize = 1_000_000_000;
+
+/// What one of the `ieee754` family answers of a binary64 number, which
+/// is the `iVariant` of `ieee754func` of
+/// `research/sqlite/ext/misc/ieee754.c:56`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Ieee {
+    /// The text `ieee754(M,E)`, with the mantissa and the exponent.
+    Text,
+    /// The mantissa alone.
+    Mantissa,
+    /// The exponent alone.
+    Exponent,
+}
 
 /// The table, which is `aBuiltinFunc` for what is written here.
 const TABLE: &[Entry] = &[
@@ -700,6 +724,48 @@ const TABLE: &[Entry] = &[
         function: Function::Radians,
     },
     Entry {
+        name: b"ieee754",
+        least: 1,
+        most: Some(2),
+        function: Function::Ieee754(Ieee::Text),
+    },
+    Entry {
+        name: b"ieee754_mantissa",
+        least: 1,
+        most: Some(1),
+        function: Function::Ieee754(Ieee::Mantissa),
+    },
+    Entry {
+        name: b"ieee754_exponent",
+        least: 1,
+        most: Some(1),
+        function: Function::Ieee754(Ieee::Exponent),
+    },
+    Entry {
+        name: b"ieee754_to_blob",
+        least: 1,
+        most: Some(1),
+        function: Function::Ieee754Blob(true),
+    },
+    Entry {
+        name: b"ieee754_from_blob",
+        least: 1,
+        most: Some(1),
+        function: Function::Ieee754Blob(false),
+    },
+    Entry {
+        name: b"sqlite_compileoption_used",
+        least: 1,
+        most: Some(1),
+        function: Function::CompileOption(true),
+    },
+    Entry {
+        name: b"sqlite_compileoption_get",
+        least: 1,
+        most: Some(1),
+        function: Function::CompileOption(false),
+    },
+    Entry {
         name: b"sign",
         least: 1,
         most: Some(1),
@@ -988,6 +1054,20 @@ pub fn call(
                 )),
             },
             Function::Pi => Value::Real(core::f64::consts::PI),
+            Function::Ieee754(which) => ieee754(which, &first, args),
+            Function::Ieee754Blob(writing) => ieee754_blob(writing, first),
+            // `sqlite3_compileoption_used` of
+            // `research/sqlite/src/ctime.c` reads the names the build
+            // carries, which this crate carries none of, and
+            // `sqlite3_compileoption_get` names the one at a place,
+            // which is nothing for every place.
+            Function::CompileOption(used) => {
+                if used {
+                    Value::Int(0)
+                } else {
+                    Value::Null
+                }
+            }
             Function::Format => crate::format::format(args)?,
             // `sqlite3_changes`, `sqlite3_total_changes` and
             // `sqlite3_last_insert_rowid`, which the connection carries
@@ -1956,4 +2036,140 @@ fn remainder(left: f64, right: f64) -> f64 {
     // What is left carries the sign of what it was taken out of, which a
     // zero carries as well.
     if left.is_sign_negative() { -rest } else { rest }
+}
+
+/// What one of the `ieee754` family answers, which `ieee754func` of
+/// `research/sqlite/ext/misc/ieee754.c:56` writes: one argument reads a
+/// binary64 number apart into a mantissa and an exponent of two, and two
+/// arguments answer the number those two name.
+///
+/// Reading a number apart shifts the mantissa down while it is even, so
+/// one call costs O(1) in the bits of a binary64 number.
+fn ieee754(which: Ieee, first: &Value, args: &[Value]) -> Value {
+    if let [mantissa, exponent] = args {
+        return real_or_null(ieee754_of(mantissa.to_integer(), exponent.to_integer()));
+    }
+    let held = match first {
+        Value::Blob(bytes) if bytes.len() == 8 => {
+            f64::from_bits(u64::from_be_bytes(core::array::from_fn(|at| {
+                bytes.get(at).copied().unwrap_or(0)
+            })))
+        }
+        value => value.to_real(),
+    };
+    let (mantissa, exponent) = ieee754_apart(held);
+    match which {
+        Ieee::Text => Value::Text(alloc::format!("ieee754({mantissa},{exponent})").into_bytes()),
+        Ieee::Mantissa => Value::Int(mantissa),
+        Ieee::Exponent => Value::Int(i64::from(exponent)),
+    }
+}
+
+/// The mantissa and the exponent of two a binary64 number is, which
+/// `ieee754func` reads out of its bits: the number is the mantissa times
+/// two to the exponent.
+fn ieee754_apart(held: f64) -> (i64, i32) {
+    let negative = held < 0.0;
+    // `ieee754func` negates a number below nought, so the bits of a
+    // nought that carries the sign stand as they are.
+    let held = if negative { -held } else { held };
+    let bits = held.to_bits().cast_signed();
+    if bits == 0 {
+        return (0, -1075);
+    }
+    // The bits of the largest binary64 number carry no mantissa the
+    // shift below ends on, which the C library answers this pair for.
+    if bits == i64::MIN {
+        return (-1, -3071);
+    }
+    let mut exponent = bits >> 52;
+    let mut mantissa = bits & ((1 << 52) - 1);
+    if exponent == 0 {
+        mantissa <<= 1;
+    } else {
+        mantissa |= 1 << 52;
+    }
+    while exponent < 1075 && mantissa & 1 == 0 {
+        mantissa >>= 1;
+        exponent = exponent.saturating_add(1);
+    }
+    if negative {
+        mantissa = mantissa.saturating_neg();
+    }
+    (
+        mantissa,
+        i32::try_from(exponent.saturating_sub(1075)).unwrap_or(i32::MIN),
+    )
+}
+
+/// The binary64 number `mantissa` times two to `exponent`, which the two
+/// argument form of `ieee754` answers.
+fn ieee754_of(mantissa: i64, exponent: i64) -> f64 {
+    let mut mantissa = mantissa;
+    let mut exponent = exponent.clamp(-10000, 10000);
+    let negative = mantissa < 0;
+    if negative {
+        mantissa = mantissa.checked_neg().unwrap_or(i64::MAX);
+    } else if mantissa == 0 && (-1000..1000).contains(&exponent) {
+        return 0.0;
+    }
+    // The mantissa is shifted until it lies where the bits of a binary64
+    // number hold it, which is the twelfth bit from the top.
+    while (mantissa >> 32) & 0xffe0_0000 != 0 {
+        mantissa >>= 1;
+        exponent = exponent.saturating_add(1);
+    }
+    while mantissa != 0 && (mantissa >> 32) & 0xfff0_0000 == 0 {
+        mantissa <<= 1;
+        exponent = exponent.saturating_sub(1);
+    }
+    exponent = exponent.saturating_add(1075);
+    if exponent <= 0 {
+        let shift = 1_i64.saturating_sub(exponent);
+        mantissa = if shift >= 64 {
+            0
+        } else {
+            mantissa >> u32::try_from(shift).unwrap_or(0)
+        };
+        exponent = 0;
+    } else if exponent > 0x7ff {
+        exponent = 0x7ff;
+    }
+    let mut bits = mantissa & ((1 << 52) - 1);
+    bits |= exponent << 52;
+    let bits = bits.cast_unsigned() | (u64::from(negative) << 63);
+    f64::from_bits(bits)
+}
+
+/// The eight bytes of a binary64 number, or the number those bytes are,
+/// which `ieee754func_to_blob` and `ieee754func_from_blob` of
+/// `research/sqlite/ext/misc/ieee754.c` answer.
+///
+/// Every other value answers nothing, which the C library answers by
+/// writing no result at all.
+fn ieee754_blob(writing: bool, value: Value) -> Value {
+    if writing {
+        return match value {
+            Value::Int(_) | Value::Real(_) => {
+                Value::Blob(value.to_real().to_bits().to_be_bytes().to_vec())
+            }
+            _ => Value::Null,
+        };
+    }
+    match value {
+        Value::Blob(bytes) if bytes.len() == 8 => real_or_null(f64::from_bits(u64::from_be_bytes(
+            core::array::from_fn(|at| bytes.get(at).copied().unwrap_or(0)),
+        ))),
+        _ => Value::Null,
+    }
+}
+
+/// The value a function answers for a binary64 number, which
+/// `sqlite3_result_double` of `research/sqlite/src/vdbeapi.c` writes as
+/// nothing for a number no number is.
+const fn real_or_null(held: f64) -> Value {
+    if held.is_nan() {
+        return Value::Null;
+    }
+    Value::Real(held)
 }
