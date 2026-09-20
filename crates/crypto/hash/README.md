@@ -11,11 +11,20 @@ can be generic over the hash its cipher suite selects.
 None of the code here branches or indexes on message content. A hash has
 no secret input of its own, but HMAC does, and the message schedule and
 the compression rounds are shared, so the property is established where
-the data enters rather than argued about later. The round constants and
-the initial values are generated from their definition in FIPS 180-4,
-the fractional parts of the square and cube roots of the first primes,
-rather than copied from a table.
+the data enters rather than argued about later.
 
-Message lengths are counted in bytes in a 64-bit counter. A message
-longer than 2^61 bytes would overflow the bit length the padding
-encodes; no caller in this system produces one.
+The round constants and the initial values are literal tables, the
+digits FIPS 180-4, sections 4.2.2, 4.2.3 and 5.3.3 to 5.3.5, print.
+`tests::constants` derives all 168 of them from their definition — the
+fractional parts of the square and cube roots of the first primes — in
+256-bit integer arithmetic and compares, so a mistyped digit fails a
+test and not a handshake.
+
+Message lengths are counted in bytes in a 64-bit counter, which
+saturates. FIPS 180-4, section 1, defines SHA-256 for messages below
+2^61 bytes, and `Sha256::update` clamps its counter there; it defines
+SHA-512 far past what a 64-bit byte counter reaches, so there the
+counter is its own bound. A message at or past either bound pads with a
+length no shorter message pads with, rather than with a wrapped one, and
+what comes out is no SHA-256 or SHA-512 digest. No caller in this system
+produces one.

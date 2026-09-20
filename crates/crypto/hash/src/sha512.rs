@@ -24,8 +24,9 @@ pub const OUTPUT_LEN_384: usize = 48;
 const LENGTH_LEN: usize = 16;
 
 /// The SHA-512 initial state: the fractional parts of the square roots of
-/// the first eight primes.
-const INITIAL_512: [u64; 8] = [
+/// the first eight primes, as FIPS 180-4, section 5.3.5, prints them.
+/// `tests::constants` derives the same eight values from the primes.
+pub(crate) const INITIAL_512: [u64; 8] = [
     0x6a09_e667_f3bc_c908,
     0xbb67_ae85_84ca_a73b,
     0x3c6e_f372_fe94_f82b,
@@ -37,8 +38,9 @@ const INITIAL_512: [u64; 8] = [
 ];
 
 /// The SHA-384 initial state: the fractional parts of the square roots of
-/// the ninth to the sixteenth prime.
-const INITIAL_384: [u64; 8] = [
+/// the ninth to the sixteenth prime, as FIPS 180-4, section 5.3.4, prints
+/// them. `tests::constants` derives the same eight values from the primes.
+pub(crate) const INITIAL_384: [u64; 8] = [
     0xcbbb_9d5d_c105_9ed8,
     0x629a_292a_367c_d507,
     0x9159_015a_3070_dd17,
@@ -50,8 +52,9 @@ const INITIAL_384: [u64; 8] = [
 ];
 
 /// The round constants: the fractional parts of the cube roots of the first
-/// eighty primes.
-const K: [u64; 80] = [
+/// eighty primes, as FIPS 180-4, section 4.2.3, prints them.
+/// `tests::constants` derives the same eighty values from the primes.
+pub(crate) const K: [u64; 80] = [
     0x428a_2f98_d728_ae22,
     0x7137_4491_23ef_65cd,
     0xb5c0_fbcf_ec4d_3b2f,
@@ -159,15 +162,35 @@ impl Core {
     }
 
     /// Adds `bytes` to the message.
+    ///
+    /// The counter saturates at `u64::MAX` bytes. FIPS 180-4, section 1,
+    /// gives SHA-512 a domain of `2^128 - 1` bits, wider than a 64-bit
+    /// byte counter reaches, so the counter is the only bound and no
+    /// caller in this system reaches it; saturating keeps a message past
+    /// it out of the length range a shorter message pads with, which a
+    /// wrapping counter did not.
     fn update(&mut self, bytes: &[u8]) {
         let added = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-        self.length = self.length.wrapping_add(added);
+        self.length = self.length.saturating_add(added);
         self.absorb(bytes);
+    }
+
+    /// Bytes the core has counted, for the test that drives the counter
+    /// to its bound without feeding the bytes.
+    #[cfg(test)]
+    const fn counted(&self) -> u64 {
+        self.length
+    }
+
+    /// Sets the counter, for the same test.
+    #[cfg(test)]
+    const fn set_counted(&mut self, bytes: u64) {
+        self.length = bytes;
     }
 
     /// Pads the message and returns the full digest.
     fn finish(mut self) -> [u8; OUTPUT_LEN_512] {
-        let bits = u128::from(self.length).wrapping_mul(8);
+        let bits = u128::from(self.length).saturating_mul(8);
         self.absorb(&[0x80]);
         while self.buffered != BLOCK_LEN.wrapping_sub(LENGTH_LEN) {
             self.absorb(&[0x00]);
@@ -246,9 +269,23 @@ impl Sha512 {
         }
     }
 
-    /// Adds `bytes` to the message.
+    /// Adds `bytes` to the message. The counter saturates at `u64::MAX`
+    /// bytes, which no caller in this system reaches.
     pub fn update(&mut self, bytes: &[u8]) {
         self.core.update(bytes);
+    }
+
+    /// Bytes the state has counted, for the test that drives the counter
+    /// to its bound without feeding the bytes.
+    #[cfg(test)]
+    pub(crate) const fn counted(&self) -> u64 {
+        self.core.counted()
+    }
+
+    /// Sets the counter, for the same test.
+    #[cfg(test)]
+    pub(crate) const fn set_counted(&mut self, bytes: u64) {
+        self.core.set_counted(bytes);
     }
 
     /// Pads the message and returns the digest.

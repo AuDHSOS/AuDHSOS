@@ -7,7 +7,7 @@ use test_support::generators::bytes;
 use test_support::property::check;
 
 use crate::hash::Hash;
-use crate::sha256::Sha256;
+use crate::sha256::{MAX_MESSAGE_LEN, Sha256};
 use crate::tests::hex;
 
 #[test]
@@ -144,4 +144,22 @@ fn property_byte_at_a_time_matches_the_one_shot_digest() {
             Err("byte-wise hashing differs".to_owned())
         }
     });
+}
+
+/// The counter clamps at the end of the domain FIPS 180-4, section 1,
+/// gives SHA-256. It used to wrap, which put a message of 2^61 bytes at
+/// the bit length of a short one and so under that message's digest.
+#[test]
+fn the_byte_counter_clamps_at_the_end_of_the_domain() {
+    let mut state = Sha256::new();
+    state.set_counted(MAX_MESSAGE_LEN.saturating_sub(64));
+    state.update(&[0u8; 64]);
+    assert_eq!(state.counted(), MAX_MESSAGE_LEN);
+    state.update(&[0u8; 64]);
+    assert_eq!(state.counted(), MAX_MESSAGE_LEN);
+    assert_eq!(
+        MAX_MESSAGE_LEN.checked_mul(8),
+        Some(u64::MAX.wrapping_sub(7)),
+        "the clamped counter still fits the bit length the padding encodes"
+    );
 }

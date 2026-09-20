@@ -224,3 +224,16 @@ fn property_any_split_of_a_message_gives_the_same_digest() {
         Ok(())
     });
 }
+
+/// The counter saturates rather than wrapping. SHA-512 is defined far
+/// past what a 64-bit byte counter reaches, so the counter is its own
+/// bound and a message at that bound must not pad as a short one.
+#[test]
+fn the_byte_counter_saturates_at_its_own_bound() {
+    let mut state = Sha512::new();
+    state.set_counted(u64::MAX.wrapping_sub(128));
+    state.update(&[0u8; 128]);
+    assert_eq!(state.counted(), u64::MAX);
+    state.update(&[0u8; 128]);
+    assert_eq!(state.counted(), u64::MAX);
+}

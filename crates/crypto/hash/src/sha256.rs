@@ -18,9 +18,15 @@ pub const OUTPUT_LEN: usize = 32;
 /// Bytes of length the padding appends.
 const LENGTH_LEN: usize = 8;
 
+/// Bytes of the longest message SHA-256 is defined for. FIPS 180-4,
+/// section 1, bounds the message at `2^64 - 1` bits, which is what the
+/// eight length bytes of the padding encode.
+pub const MAX_MESSAGE_LEN: u64 = 0x1FFF_FFFF_FFFF_FFFF;
+
 /// The initial state: the fractional parts of the square roots of the first
-/// eight primes.
-const INITIAL: [u32; 8] = [
+/// eight primes, as FIPS 180-4, section 5.3.3, prints them.
+/// `tests::constants` derives the same eight values from the primes.
+pub(crate) const INITIAL: [u32; 8] = [
     0x6a09_e667,
     0xbb67_ae85,
     0x3c6e_f372,
@@ -32,8 +38,9 @@ const INITIAL: [u32; 8] = [
 ];
 
 /// The round constants: the fractional parts of the cube roots of the first
-/// sixty-four primes.
-const K: [u32; 64] = [
+/// sixty-four primes, as FIPS 180-4, section 4.2.2, prints them.
+/// `tests::constants` derives the same sixty-four values from the primes.
+pub(crate) const K: [u32; 64] = [
     0x428a_2f98,
     0x7137_4491,
     0xb5c0_fbcf,
@@ -126,16 +133,36 @@ impl Sha256 {
     }
 
     /// Adds `bytes` to the message.
+    ///
+    /// The counter saturates at [`MAX_MESSAGE_LEN`]. A message that long
+    /// is outside the domain FIPS 180-4, section 1, gives SHA-256, and
+    /// what this returns for one is not a SHA-256 digest; saturating
+    /// keeps every such message out of the length range an in-domain
+    /// message pads with, which a wrapping counter did not. No caller in
+    /// this system reaches the bound.
     pub fn update(&mut self, bytes: &[u8]) {
         let added = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-        self.length = self.length.wrapping_add(added);
+        self.length = self.length.saturating_add(added).min(MAX_MESSAGE_LEN);
         self.absorb(bytes);
+    }
+
+    /// Bytes the state has counted, for the test that drives the counter
+    /// to its bound without feeding the bytes.
+    #[cfg(test)]
+    pub(crate) const fn counted(&self) -> u64 {
+        self.length
+    }
+
+    /// Sets the counter, for the same test.
+    #[cfg(test)]
+    pub(crate) const fn set_counted(&mut self, bytes: u64) {
+        self.length = bytes;
     }
 
     /// Pads the message and returns the digest.
     #[must_use]
     pub fn finish(mut self) -> [u8; OUTPUT_LEN] {
-        let bits = self.length.wrapping_mul(8);
+        let bits = self.length.saturating_mul(8);
         self.absorb(&[0x80]);
         while self.buffered != BLOCK_LEN.wrapping_sub(LENGTH_LEN) {
             self.absorb(&[0x00]);
