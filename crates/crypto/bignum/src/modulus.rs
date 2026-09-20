@@ -4,7 +4,7 @@
 //! A modulus that arrives at run time, with the two constants Montgomery
 //! arithmetic needs derived from it, and exponentiation over it.
 
-use crypto_ct::{Choice, ct_swap_u64};
+use crypto_ct::{Choice, ct_swap_u64, wipe_u64};
 
 use crate::error::BignumError;
 use crate::limbs::{is_less, montgomery, montgomery_secret, shift_left_one, subtract};
@@ -217,6 +217,9 @@ impl Modulus {
     /// below the modulus, and [`BignumError::OutputTooShort`] when `out`
     /// is narrower than [`Modulus::width`]. All three are decided before
     /// the ladder runs and none of them looks at the exponent.
+    ///
+    /// The ladder registers hold values derived from the exponent, so they
+    /// are overwritten before the call returns.
     pub fn pow_secret(
         &self,
         base: &[u8],
@@ -289,7 +292,18 @@ impl Modulus {
             self.n0inv,
             prefix_mut(&mut result, used),
         );
-        write_be(prefix(&result, used), out)
+        let written = write_be(prefix(&result, used), out);
+        for register in [
+            &mut value,
+            &mut power,
+            &mut ahead,
+            &mut product,
+            &mut square,
+            &mut result,
+        ] {
+            wipe_u64(register);
+        }
+        written
     }
 }
 

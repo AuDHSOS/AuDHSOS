@@ -13,7 +13,7 @@ pub use choice::Choice;
 pub use compare::{
     ct_copy, ct_eq, ct_select_u8, ct_select_u32, ct_select_u64, ct_swap, ct_swap_u64,
 };
-pub use secret::{Secret, wipe};
+pub use secret::{Secret, wipe, wipe_u32, wipe_u64};
 
 #[cfg(test)]
 mod tests;

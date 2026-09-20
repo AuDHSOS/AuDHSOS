@@ -8,9 +8,10 @@
 //! associated data, the ciphertext, each padded to a multiple of sixteen,
 //! and the two lengths.
 //!
-//! Invariant: `open` computes the tag over the received ciphertext and
+//! Invariants: `open` computes the tag over the received ciphertext and
 //! compares it before it decrypts anything, so plaintext exists only after
-//! authentication has succeeded.
+//! authentication has succeeded; the one-time key and the keystream block
+//! it is taken from are overwritten before they go out of scope.
 
 use crypto_ct::{ct_eq, wipe};
 
@@ -43,11 +44,12 @@ impl ChaCha20Poly1305 {
     /// The one-time authentication key for `nonce`: the first thirty-two
     /// bytes of the keystream block at counter zero.
     fn authentication_key(&self, nonce: &[u8; NONCE_LEN]) -> [u8; poly1305::KEY_LEN] {
-        let block = self.cipher.block(nonce, 0);
+        let mut block = self.cipher.block(nonce, 0);
         let mut key = [0u8; poly1305::KEY_LEN];
         for (slot, byte) in key.iter_mut().zip(block) {
             *slot = byte;
         }
+        wipe(&mut block);
         key
     }
 

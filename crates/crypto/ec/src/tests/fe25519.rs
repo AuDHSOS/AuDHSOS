@@ -174,3 +174,17 @@ fn selection_and_exchange_follow_the_choice() {
         (b.to_bytes(), a.to_bytes())
     );
 }
+
+#[test]
+fn clearing_an_element_overwrites_its_limbs() {
+    let mut element = Fe::from_bytes(&[0x5Au8; 32]);
+    element.clear();
+    assert_eq!(hex(&element.to_bytes()), hex(&Fe::ZERO.to_bytes()));
+}
+
+#[test]
+fn debug_names_the_type_and_shows_no_limb() {
+    let rendered = format!("{:?}", Fe::from_bytes(&[0x5Au8; 32]));
+    assert_eq!(rendered, "Fe");
+    assert!(!rendered.chars().any(|c| c.is_ascii_digit()));
+}

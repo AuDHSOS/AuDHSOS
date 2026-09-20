@@ -124,12 +124,30 @@ fn a_pseudorandom_key_can_be_taken_from_a_previous_step() {
     let derived = <Sha256 as Hash>::digest(b"a secret from the schedule");
     let prk = Prk::<Sha256>::from_output(derived);
     assert_eq!(prk.as_bytes(), derived.as_ref());
-    let copy = prk;
-    assert_eq!(copy.as_bytes(), prk.as_bytes());
+    let clone = prk.clone();
+    assert_eq!(clone.as_bytes(), prk.as_bytes());
 }
 
 #[test]
 fn the_error_renders_a_message() {
     assert!(!format!("{}", HashError::OutputTooLong).is_empty());
     assert!(!format!("{:?}", HashError::OutputTooLong).is_empty());
+}
+
+#[test]
+fn clearing_a_pseudorandom_key_overwrites_its_bytes() {
+    let derived = <Sha256 as Hash>::digest(b"a secret from the schedule");
+    let mut prk = Prk::<Sha256>::from_output(derived);
+    prk.clear();
+    assert_eq!(hex(prk.as_bytes()), hex(&[0u8; 32]));
+}
+
+#[test]
+fn a_clone_of_a_pseudorandom_key_clears_independently() {
+    let derived = <Sha256 as Hash>::digest(b"a secret from the schedule");
+    let prk = Prk::<Sha256>::from_output(derived);
+    let mut clone = prk.clone();
+    clone.clear();
+    assert_eq!(hex(prk.as_bytes()), hex(derived.as_ref()));
+    assert_eq!(hex(clone.as_bytes()), hex(&[0u8; 32]));
 }

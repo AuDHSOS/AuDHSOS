@@ -50,6 +50,9 @@ as the exponent. What stays public is what a length is: the width of the
 modulus and the length of the exponent buffer, both of which set loop
 counts and neither of which is a secret.
 
+The ladder registers hold values derived from the exponent, so
+`pow_secret` overwrites all six before it returns.
+
 The boundary is the exponent, and it is the caller who knows which side
 of it a call is on. Only `pow_secret` protects one, and it is the only
 name here that claims to; a caller reaching for `pow` or `pow_wide` with

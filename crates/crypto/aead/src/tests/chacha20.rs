@@ -125,3 +125,27 @@ fn property_applying_the_keystream_twice_restores_the_message() {
         }
     });
 }
+
+#[test]
+fn clearing_a_cipher_leaves_the_keystream_of_a_zero_key() {
+    let mut cipher = ChaCha20::new(&[0x42u8; 32]);
+    cipher.clear();
+    let zero = ChaCha20::new(&[0u8; 32]);
+    assert_eq!(
+        hex(&cipher.block(&[7u8; 12], 1)),
+        hex(&zero.block(&[7u8; 12], 1)),
+        "the key words are gone"
+    );
+}
+
+#[test]
+fn clearing_two_ciphers_under_different_keys_makes_them_equal() {
+    let mut first = ChaCha20::new(&[1u8; 32]);
+    let mut second = ChaCha20::new(&[2u8; 32]);
+    first.clear();
+    second.clear();
+    assert_eq!(
+        hex(&first.block(&[0u8; 12], 0)),
+        hex(&second.block(&[0u8; 12], 0))
+    );
+}

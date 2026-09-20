@@ -203,3 +203,14 @@ fn a_clone_of_a_code_continues_the_same_message() {
     assert_eq!(clone.finish(), Hmac::<Sha256>::tag(b"key", b"abc"));
     assert_eq!(mac.finish(), Hmac::<Sha256>::tag(b"key", b"abcdef"));
 }
+
+#[test]
+fn a_key_longer_than_one_block_still_matches_its_digest_as_a_key() {
+    let long = [0xAAu8; 200];
+    let digested = <Sha256 as crate::hash::Hash>::digest(&long);
+    assert_eq!(
+        hex(Hmac::<Sha256>::tag(&long, b"message").as_ref()),
+        hex(Hmac::<Sha256>::tag(digested.as_ref(), b"message").as_ref()),
+        "the digest of the key is wiped after it is padded, not before"
+    );
+}

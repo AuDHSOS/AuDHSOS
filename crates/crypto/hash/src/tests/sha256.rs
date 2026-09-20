@@ -163,3 +163,29 @@ fn the_byte_counter_clamps_at_the_end_of_the_domain() {
         "the clamped counter still fits the bit length the padding encodes"
     );
 }
+
+#[test]
+fn clearing_a_state_drops_the_chaining_words_and_the_partial_block() {
+    let mut first = Sha256::new();
+    first.update(b"one message");
+    let mut second = Sha256::new();
+    second.update(b"a different message, longer than the first");
+    first.clear();
+    second.clear();
+    assert_eq!(
+        hex(&first.finish()),
+        hex(&second.finish()),
+        "nothing of either message is left"
+    );
+}
+
+#[test]
+fn a_cleared_state_is_not_a_fresh_state() {
+    let mut cleared = Sha256::new();
+    cleared.clear();
+    assert_ne!(
+        hex(&cleared.finish()),
+        hex(&Sha256::digest(b"")),
+        "the initial words are overwritten, not restored"
+    );
+}

@@ -17,8 +17,9 @@ pub trait Hash: Clone + Sized {
     /// exactly one block and cannot name `[u8; Self::BLOCK_LEN]`.
     const ZERO_BLOCK: Self::Block;
 
-    /// The digest.
-    type Output: AsRef<[u8]> + Copy;
+    /// The digest. `AsMut` is there so that a caller holding a digest of
+    /// key material can overwrite it.
+    type Output: AsRef<[u8]> + AsMut<[u8]> + Copy;
     /// One block of input.
     type Block: AsRef<[u8]> + AsMut<[u8]> + Copy;
 

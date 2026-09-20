@@ -5,7 +5,10 @@
 //!
 //! Invariants: the cipher branches on nothing but lengths and the block
 //! counter, both public; the counter never wraps, because a message that
-//! would need it is refused before a byte is touched.
+//! would need it is refused before a byte is touched; the key words are
+//! overwritten when the cipher goes out of scope.
+
+use crypto_ct::wipe_u32;
 
 use crate::error::AeadError;
 
@@ -36,6 +39,12 @@ impl ChaCha20 {
             *word = u32::from_le_bytes(*chunk);
         }
         ChaCha20 { key: words }
+    }
+
+    /// Overwrites the key words with zeros. `Drop` calls this; a cleared
+    /// cipher encrypts under the all-zero key and is for dropping only.
+    pub(crate) fn clear(&mut self) {
+        wipe_u32(&mut self.key);
     }
 
     /// The keystream block for `counter`.
@@ -109,6 +118,12 @@ impl ChaCha20 {
             *slot = u32::from_le_bytes(*chunk);
         }
         state
+    }
+}
+
+impl Drop for ChaCha20 {
+    fn drop(&mut self) {
+        self.clear();
     }
 }
 

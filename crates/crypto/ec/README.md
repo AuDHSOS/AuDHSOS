@@ -42,6 +42,13 @@ for the same reason. Nothing enforces the boundary: a caller that hands a
 secret to the public multiplication is wrong, and the name is all that
 says so.
 
+Constant time keeps a secret out of the timing; it leaves the value in
+memory. `sign`, `public_key`, `expand`, and the X25519 ladder overwrite
+the scalar, the prefix, the nonce, and the working registers before they
+return. `Scalar` and `Fe` are `Copy` and cannot carry a `Drop`, so they
+offer `clear` and the caller says when; neither reaches a formatter,
+because `Debug` prints the type name only.
+
 ## Where the numbers come from
 
 The P-256 constants are the ones NIST publishes for that curve. The P-384

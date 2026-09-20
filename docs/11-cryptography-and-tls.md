@@ -127,6 +127,8 @@ pub fn ct_select_u64(c: Choice, a: u64, b: u64) -> u64;
 pub fn ct_swap<const N: usize>(c: Choice, a: &mut [u8; N], b: &mut [u8; N]);
 pub fn ct_copy<const N: usize>(c: Choice, destination: &mut [u8; N], source: &[u8; N]);
 pub fn wipe(bytes: &mut [u8]);
+pub fn wipe_u32(words: &mut [u32]);          // key words of a stream cipher
+pub fn wipe_u64(words: &mut [u64]);          // limbs and bit planes
 pub struct Secret<const N: usize>([u8; N]);  // Debug prints the length only
 ```
 
@@ -140,6 +142,12 @@ would only push the same decision somewhere less visible.
 mismatch is a compile error instead of a silent operation on the common
 prefix. `wipe` is the erase of `Secret<N>` for buffers whose length the
 type system does not carry, such as the padded key inside HMAC.
+
+Every primitive that holds key material overwrites it: `ChaCha20`, `Aes`,
+`GHash`, `AesGcm`, `Poly1305`, `Sha256`, the SHA-512 core, and `Prk` on
+drop; `pow_secret`, the X25519 ladder, `sign`, and `expand` before they
+return. `Scalar` and `Fe` are `Copy`, cannot carry a `Drop`, and offer
+`clear` instead.
 
 `Secret<N>` has no `PartialEq`; comparison is `ct_eq`. Its `Drop`
 overwrites the bytes and passes the buffer through

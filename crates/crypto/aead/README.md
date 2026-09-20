@@ -13,6 +13,12 @@ arithmetic in GF(2^8) rather than reading it from a table, and why the
 multiplication GCM needs is a masked shift-and-exclusive-or rather than
 the usual precomputed products.
 
+Every primitive that holds key material overwrites it when it goes out of
+scope: `ChaCha20` its key words, `Aes` its round keys, `GHash` its hash
+key and accumulator, `Poly1305` its multiplier and addend. The key
+schedule `Aes::new_128` and `Aes::new_256` expand is overwritten before
+the constructor returns.
+
 `open` verifies before it decrypts, so unauthenticated plaintext never
 exists, and it clears the buffer when verification fails, so a caller
 that ignores the result finds nothing usable there.

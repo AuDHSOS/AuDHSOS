@@ -66,3 +66,20 @@ fn any_split_of_the_message_hashes_the_same() {
         assert_eq!(pieces.finish(), expected, "split at {split}");
     }
 }
+
+#[test]
+fn clearing_a_computation_drops_the_hash_key_and_the_accumulator() {
+    let mut hash = GHash::new(&hash_key());
+    hash.update(&[0xAAu8; 24]);
+    hash.clear();
+    assert_eq!(hex(&hash.finish()), hex(&[0u8; BLOCK_LEN]));
+}
+
+#[test]
+fn a_cleared_computation_keeps_no_partial_block() {
+    let mut hash = GHash::new(&[0x99u8; BLOCK_LEN]);
+    hash.update(&[0x01u8; 5]);
+    hash.clear();
+    let empty = GHash::new(&[0u8; BLOCK_LEN]);
+    assert_eq!(hex(&hash.finish()), hex(&empty.finish()));
+}

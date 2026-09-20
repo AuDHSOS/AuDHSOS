@@ -6,7 +6,10 @@
 //! Invariants: `buffered` is smaller than `BLOCK_LEN` between calls;
 //! `length` counts the bytes the state has seen. The message schedule is a
 //! rolling window of sixteen words, so every index into it is a literal on
-//! a fixed-size array and no access can leave the array.
+//! a fixed-size array and no access can leave the array. The chaining
+//! words are overwritten when the state goes out of scope.
+
+use crypto_ct::{wipe, wipe_u32};
 
 use crate::hash::Hash;
 
@@ -130,6 +133,16 @@ impl Sha256 {
             buffered: 0,
             length: 0,
         }
+    }
+
+    /// Overwrites the chaining words and the partial block with zeros.
+    /// `Drop` calls this; a cleared state has no initial words and is for
+    /// dropping only.
+    pub(crate) fn clear(&mut self) {
+        wipe_u32(&mut self.state);
+        wipe(&mut self.buffer);
+        self.buffered = 0;
+        self.length = 0;
     }
 
     /// Adds `bytes` to the message.
@@ -388,4 +401,10 @@ const fn sigma0(x: u32) -> u32 {
 /// The second of the two functions of the message schedule.
 const fn sigma1(x: u32) -> u32 {
     x.rotate_right(17) ^ x.rotate_right(19) ^ x.wrapping_shr(10)
+}
+
+impl Drop for Sha256 {
+    fn drop(&mut self) {
+        self.clear();
+    }
 }

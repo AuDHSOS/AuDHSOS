@@ -4,9 +4,12 @@
 //! HKDF from RFC 5869: extract a pseudorandom key from input key material,
 //! then expand it into as much output as the caller asks for.
 //!
-//! Invariant: `expand` writes every byte of its output buffer or returns an
-//! error and writes none, so a caller cannot mistake a partial derivation
-//! for a complete one.
+//! Invariants: `expand` writes every byte of its output buffer or returns
+//! an error and writes none, so a caller cannot mistake a partial
+//! derivation for a complete one; a pseudorandom key and the previous
+//! output block are overwritten before they go out of scope.
+
+use crypto_ct::wipe;
 
 use crate::error::HashError;
 use crate::hash::Hash;
@@ -18,21 +21,23 @@ const MAX_BLOCKS: usize = 255;
 
 /// The pseudorandom key that [`extract`] produces and [`expand`] consumes.
 ///
-/// It is key material. It carries no `Debug`, and the protocol keeps it only
-/// as long as the schedule step that needs it.
+/// It is key material. It carries no `Debug`, it is not `Copy`, so that a
+/// hand-over to the next schedule step is a move or an explicit `clone`
+/// rather than a silent second copy, and it overwrites its bytes when it
+/// goes out of scope.
 #[derive(Clone)]
 pub struct Prk<H: Hash> {
     /// The output of the extraction step.
     bytes: H::Output,
 }
 
-/// The derived key is a fixed-size array, so a pseudorandom key copies even
-/// though the hash state it came from does not. The key schedule of the
-/// protocol passes one step's key into the next, and a move would make that
-/// read as a transfer of ownership that it is not.
-impl<H: Hash> Copy for Prk<H> {}
-
 impl<H: Hash> Prk<H> {
+    /// Overwrites the bytes with zeros. `Drop` calls this; a cleared key
+    /// expands to output under an all-zero key and is for dropping only.
+    pub(crate) fn clear(&mut self) {
+        wipe(self.bytes.as_mut());
+    }
+
     /// Takes a pseudorandom key that was derived elsewhere, which is what a
     /// key schedule does when it feeds one step into the next.
     #[must_use]
@@ -44,6 +49,12 @@ impl<H: Hash> Prk<H> {
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         self.bytes.as_ref()
+    }
+}
+
+impl<H: Hash> Drop for Prk<H> {
+    fn drop(&mut self) {
+        self.clear();
     }
 }
 
@@ -79,12 +90,19 @@ pub fn expand<H: Hash>(prk: &Prk<H>, info: &[u8], out: &mut [u8]) -> Result<(), 
         }
         mac.update(info);
         mac.update(&[counter]);
-        let block = mac.finish();
+        let mut block = mac.finish();
         for (slot, byte) in chunk.iter_mut().zip(block.as_ref()) {
             *slot = *byte;
         }
+        if let Some(stale) = previous.as_mut() {
+            wipe(stale.as_mut());
+        }
         previous = Some(block);
+        wipe(block.as_mut());
         counter = counter.wrapping_add(1);
+    }
+    if let Some(last) = previous.as_mut() {
+        wipe(last.as_mut());
     }
     Ok(())
 }

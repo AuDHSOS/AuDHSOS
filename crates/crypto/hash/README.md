@@ -13,6 +13,13 @@ no secret input of its own, but HMAC does, and the message schedule and
 the compression rounds are shared, so the property is established where
 the data enters rather than argued about later.
 
+Key material is overwritten where it is held: `Sha256` and the SHA-512
+core zero their chaining words and partial block on drop, `Hmac` zeros
+the padded key and the digest of an over-long key, and `Prk` zeros its
+bytes on drop. `Prk` is not `Copy`, so a hand-over to the next key
+schedule step is a move or an explicit `clone` rather than a silent
+second copy.
+
 The round constants and the initial values are literal tables, the
 digits FIPS 180-4, sections 4.2.2, 4.2.3 and 5.3.3 to 5.3.5, print.
 `tests::constants` derives all 168 of them from their definition — the
