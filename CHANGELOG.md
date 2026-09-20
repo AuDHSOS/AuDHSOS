@@ -7,6 +7,18 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` carries the matcher of `ext/misc/regexp.c` as
+  `crate::regexp`, and the suite tester registers `regexp(P,S)` and
+  `regexpi(P,S)` on the connection `load_static_extension db regexp`
+  names, so `S REGEXP P` reaches a matcher. D-362 records it. Catalog
+  6.6.249. `regexp1.test` goes from 3 cases passing to 101, which is
+  every case of the file, and `regexp2.test` from 1 to 30.
+
+- The suite runner sets the system encoding of the interpreter to UTF-8,
+  which `tclsqlite.c:4582` sets for `testfixture`, so a file that writes
+  a character past 127 reaches the engine with the bytes the file holds.
+  D-363 records it.
+
 - `db-sqlite` answers the `ieee754` family, which reads a binary64
   number apart into a mantissa and an exponent of two and writes it back,
   and answers `sqlite_compileoption_used` and

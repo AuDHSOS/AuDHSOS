@@ -805,16 +805,11 @@ impl Session {
                 usize::from(db_sqlite::token::complete(second.as_bytes())).to_string(),
             ]),
             "copy" => self.copy(first, second),
-            // `sqlite3_create_collation`: the tester names a proc, and
-            // the engine reaches that proc back over the line.
-            "collate" => {
-                self.collates(first, second);
-                Ok(Vec::new())
-            }
-            // `sqlite3_create_function`: the tester names a proc, and
-            // the engine reaches that proc back over the line.
-            "function" => {
-                self.functions(first, second);
+            // `sqlite3_create_collation` and `sqlite3_create_function`
+            // name a proc the engine reaches back over the line, and
+            // `load_static_extension` names a module.
+            "collate" | "function" | "extension" => {
+                self.told(verb, first, second);
                 Ok(Vec::new())
             }
             "null" => {
@@ -1219,6 +1214,41 @@ impl Session {
             count: None,
             answer: called,
         });
+        *held = Box::leak(defined.into_boxed_slice());
+    }
+
+    /// The name `sqlite3_create_collation`, `sqlite3_create_function`
+    /// or `load_static_extension` adds to the connection, which the
+    /// statements of the connection reach from there on.
+    fn told(&mut self, verb: &str, connection: &str, name: &str) {
+        match verb {
+            "collate" => self.collates(connection, name),
+            "function" => self.functions(connection, name),
+            _ => self.extension(connection, name),
+        }
+    }
+
+    /// `load_static_extension`: the functions the module named carries,
+    /// where this harness holds them, registered on the connection the
+    /// way `sqlite3_regexp_init` registers its own.
+    ///
+    /// A module this harness holds none of leaves the connection as it
+    /// stands, so the functions it carries stay missing.
+    fn extension(&mut self, connection: &str, module: &str) {
+        if module != "regexp" {
+            return;
+        }
+        self.stamped(connection);
+        let held = self.functions.entry(connection.to_owned()).or_default();
+        let mut defined: Vec<Defined> = held
+            .iter()
+            .filter(|one| !EXTENDED.iter().any(|carried| carried.name == one.name))
+            .copied()
+            .collect();
+        if defined.is_empty() {
+            defined.extend_from_slice(DEFINED);
+        }
+        defined.extend_from_slice(EXTENDED);
         *held = Box::leak(defined.into_boxed_slice());
     }
 
@@ -2315,6 +2345,43 @@ static DEFINED: &[Defined] = &[Defined {
     count: Some(2),
     answer: randstr,
 }];
+
+/// The functions `ext/misc/regexp.c` registers, which
+/// `load_static_extension db regexp` reaches.
+static EXTENDED: &[Defined] = &[
+    Defined {
+        name: b"regexp",
+        count: Some(2),
+        answer: regexp,
+    },
+    Defined {
+        name: b"regexpi",
+        count: Some(2),
+        answer: regexp,
+    },
+];
+
+/// `regexp(P,S)` and `regexpi(P,S)` of `ext/misc/regexp.c`: whether `S`
+/// holds a run the pattern `P` matches, where `regexpi` reads a capital
+/// and its small letter as one character.
+///
+/// A null argument answers nothing, which is the result
+/// `re_sql_func` leaves unset.
+fn regexp(
+    name: &'static [u8],
+    args: &[Value],
+    _: Option<&Source>,
+) -> Result<Value, db_sqlite::eval::Error> {
+    let Some(pattern) = args.first().and_then(Value::text) else {
+        return Ok(Value::Null);
+    };
+    let compiled = db_sqlite::regexp::compile(&pattern, name == b"regexpi")
+        .map_err(db_sqlite::eval::Error::Regexp)?;
+    let Some(text) = args.get(1).and_then(Value::text) else {
+        return Ok(Value::Null);
+    };
+    Ok(Value::Int(i64::from(compiled.matches(&text))))
+}
 
 /// The aggregates `testfixture` defines that this harness answers.
 static GROUPED: &[db_sqlite::func::Grouped] = &[db_sqlite::func::Grouped {

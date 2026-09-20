@@ -5,6 +5,12 @@
 # tester, and read one file of the suite. The arguments are the file to
 # read and the port the harness listens on.
 
+# `tclsqlite.c:4582` sets the system encoding of the interpreter to
+# UTF-8, which is what the files of the suite are written in; a `tclsh`
+# whose system encoding is another one reads a byte past 127 as one
+# character of that encoding.
+encoding system utf-8
+
 set ::testdir [file dirname [info script]]
 set ::harness_port [lindex $argv 1]
 set ::harness [socket 127.0.0.1 $::harness_port]

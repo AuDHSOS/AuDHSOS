@@ -1894,9 +1894,14 @@ proc sqlite3_table_column_metadata {db schema table column} {
 }
 
 # `load_static_extension` links a module of the C library into the
-# connection, which this engine holds none of, so the functions the
-# module carries stay missing.
-proc load_static_extension {args} { return "" }
+# connection. The harness holds the functions of `regexp`; the functions
+# of every other module stay missing.
+proc load_static_extension {name args} {
+  foreach module $args {
+    harness_send extension $name $module
+  }
+  return ""
+}
 proc extra_schema_checks {args} { return 1 }
 proc test_restore_config_pagecache {args} { return 0 }
 proc unregister_devsim {args} { return "" }

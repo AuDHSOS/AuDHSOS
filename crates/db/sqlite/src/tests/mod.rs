@@ -58,6 +58,7 @@ mod page;
 mod parse;
 mod percentile;
 mod record;
+mod regexp;
 mod rename;
 mod renamecol;
 mod reopen;

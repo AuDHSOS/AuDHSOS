@@ -104,6 +104,9 @@ pub enum Error {
     TooBig,
     /// What a JSON function refuses, which carries its own message.
     Json(crate::json::Refused),
+    /// What the matcher of `crate::regexp` refuses a pattern for, which
+    /// carries its own message.
+    Regexp(&'static str),
 }
 
 impl Error {
@@ -156,6 +159,7 @@ impl Error {
             Error::BadEscape => "ESCAPE expression must be a single character".to_string(),
             Error::Overflow => "integer overflow".to_string(),
             Error::Json(refused) => refused.message(),
+            Error::Regexp(why) => (*why).to_string(),
             other => alloc::format!("{other:?}"),
         }
     }

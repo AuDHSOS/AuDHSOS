@@ -952,6 +952,9 @@ Size: L.
      records.
 106. The mantissa and the exponent of two a binary64 number is, and the
      names a build of the library carries. Built, which D-361 records.
+107. Whether a text holds a run a regular expression matches, which the
+     `regexp` extension registers `regexp` and `regexpi` for. Built,
+     which D-362 records.
 
 ### Done when
 
@@ -961,8 +964,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 118 304 cases in 847 files, 105 607
-pass, 3425 answer differently, and 9272 name something the engine
+under the `tclsh` of the machine. Of 118 303 cases in 847 files, 105 763
+pass, 3387 answer differently, and 9153 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the three-minute
 deadline and are counted with the cases they ran by then. One run over

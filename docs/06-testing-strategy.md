@@ -6617,3 +6617,17 @@ Document 16 step Q8.
   number and read them back, and every other value answers nothing.
 - `sqlite_compileoption_used` answers nought and
   `sqlite_compileoption_get` answers nothing.
+
+### 6.6.249 The regular expression matcher (`db-sqlite`)
+
+Document 16 step Q8.
+
+- Every operator of the grammar: `*`, `+`, `?`, `{m,n}`, `(X)`, `|`,
+  `^`, `$`, `.`, a character class, and the classes a `\` names.
+- A pattern that names a character by its value, as `\uXXXX` and
+  `\xXX`, and the six characters written no other way.
+- Bytes that are not UTF-8, which read as the replacement character.
+- A step that reads past the last character of the text.
+- The bytes every match begins with, which a match skips ahead to.
+- A pattern the matcher refuses, once for each message.
+- A pattern whose program asks for more steps than one holds.
