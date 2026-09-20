@@ -1181,6 +1181,9 @@ const PROXY_PRESENT: u32 = 11;
 const PROXY_KIND_GET: i32 = 0;
 /// The `[[Set]]` of 10.5.9.
 const PROXY_KIND_SET: i32 = 1;
+/// The same, where 28.1.13 asked and takes the answer of the trap itself
+/// rather than the value the write carried.
+const PROXY_KIND_SET_REFLECT: i32 = 11;
 /// The `[[DefineOwnProperty]]` of 10.5.6.
 const PROXY_KIND_DEFINE: i32 = 2;
 /// The `[[GetPrototypeOf]]` of 10.5.1.
@@ -6133,6 +6136,37 @@ impl RegisterVM {
                 proxy,
                 intrinsic,
                 &call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
+        // 28.1.13 reaches `[[Set]]`, which for a Proxy is the `set` of its
+        // handler. It answers whether the write happened, so no refusal of it
+        // is the `TypeError` 6.2.5.6 makes of a strict assignment.
+        if intrinsic == Intrinsic::ReflectSet
+            && let Some(proxy) = self
+                .call_argument(&call, 0, heap)?
+                .as_object()
+                .filter(|object| heap.is_a_proxy(*object))
+        {
+            let key = self.call_argument(&call, 1, heap)?;
+            let name = property_key(key, heap, realm)?;
+            let value = self.call_argument(&call, 2, heap)?;
+            // Step 3: the receiver is the target where the call passed none.
+            let receiver = if call.arg_count > 3 {
+                self.call_argument(&call, 3, heap)?
+            } else {
+                Value::from_object(proxy)
+            };
+            return self.begin_the_proxy_set(
+                proxy,
+                name,
+                (value, receiver, false),
+                PROXY_KIND_SET_REFLECT,
+                call.return_pc,
+                call.caller_code_id,
                 units,
                 active_feedback,
                 heap,
@@ -11719,6 +11753,7 @@ impl RegisterVM {
         proxy: ObjectRef,
         name: PropertyKey,
         written: (Value, Value, bool),
+        kind: i32,
         return_pc: usize,
         caller_code_id: Option<u32>,
         code: CodeUnits<'_>,
@@ -11743,7 +11778,7 @@ impl RegisterVM {
             &[
                 target,
                 key,
-                Value::from_smi(PROXY_KIND_SET),
+                Value::from_smi(kind),
                 value,
                 Value::from_bool(strict),
             ],
@@ -12808,6 +12843,32 @@ impl RegisterVM {
         Ok(())
     }
 
+    /// Step 6 of 10.5.9: a trap that answers false wrote nothing at all.
+    ///
+    /// 6.2.5.6 step 6.e makes a `TypeError` of that in strict code; 28.1.13
+    /// answers whether the write happened, and an assignment of 13.15.2
+    /// answers the value it carried.
+    fn the_set_of_a_proxy_refused(
+        kind: i32,
+        written: Value,
+        strict: bool,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if strict {
+            return Err(type_error(
+                heap,
+                realm,
+                "the set of a Proxy refused the write",
+            ));
+        }
+        Ok(if kind == PROXY_KIND_SET_REFLECT {
+            VALUE_FALSE
+        } else {
+            written
+        })
+    }
+
     /// The invariant the target of a Proxy owes the answer of its trap.
     fn finish_the_proxy_trap(
         &mut self,
@@ -12835,6 +12896,7 @@ impl RegisterVM {
             kind,
             PROXY_KIND_GET
                 | PROXY_KIND_SET
+                | PROXY_KIND_SET_REFLECT
                 | PROXY_KIND_DEFINE
                 | PROXY_KIND_OWN
                 | PROXY_KIND_HAS
@@ -12844,15 +12906,10 @@ impl RegisterVM {
         heap.exit_scope();
         // Step 6 of 10.5.9: a trap that answers false wrote nothing at all,
         // which 6.2.5.6 step 6.e makes a `TypeError` of in strict code.
-        if kind == PROXY_KIND_SET && !Self::to_boolean(answered, heap)? {
-            if strict {
-                return Err(type_error(
-                    heap,
-                    realm,
-                    "the set of a Proxy refused the write",
-                ));
-            }
-            self.acc = written;
+        if matches!(kind, PROXY_KIND_SET | PROXY_KIND_SET_REFLECT)
+            && !Self::to_boolean(answered, heap)?
+        {
+            self.acc = Self::the_set_of_a_proxy_refused(kind, written, strict, heap, realm)?;
             return Ok(());
         }
         // Reading what the target owns is its own `[[GetOwnProperty]]`, which
@@ -12916,10 +12973,10 @@ impl RegisterVM {
             return Ok(());
         }
         Self::the_target_takes_the_value(kind, target, name, (answered, written), heap, realm)?;
-        self.acc = if kind == PROXY_KIND_SET {
-            written
-        } else {
-            answered
+        self.acc = match kind {
+            PROXY_KIND_SET => written,
+            PROXY_KIND_SET_REFLECT => VALUE_TRUE,
+            _ => answered,
         };
         Ok(())
     }
@@ -12948,14 +13005,15 @@ impl RegisterVM {
         let found = heap
             .lookup_named(object, name)?
             .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let writes = matches!(kind, PROXY_KIND_SET | PROXY_KIND_SET_REFLECT);
         let refused = if flags.is_accessor {
             let (get, set) = Self::accessor_parts(found.value, heap)?;
-            if kind == PROXY_KIND_SET {
+            if writes {
                 set.is_undefined()
             } else {
                 get.is_undefined() && !answered.is_undefined()
             }
-        } else if kind == PROXY_KIND_SET {
+        } else if writes {
             !flags.writable && !same_value(written, found.value, heap)?
         } else {
             !flags.writable && !same_value(answered, found.value, heap)?
@@ -34749,6 +34807,7 @@ impl RegisterVM {
                             oref,
                             name,
                             (value, target, strict),
+                            PROXY_KIND_SET,
                             pc,
                             current_code_id,
                             code_units,
@@ -35369,6 +35428,7 @@ impl RegisterVM {
                             oref,
                             name,
                             (value, target, strict),
+                            PROXY_KIND_SET,
                             pc,
                             current_code_id,
                             code_units,

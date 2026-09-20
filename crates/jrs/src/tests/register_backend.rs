@@ -12171,6 +12171,18 @@ fn the_read_and_the_write_of_10_5_answer_out_of_the_handler() -> Result<(), Erro
             "(function(){var p=new Proxy({a:1},{set(){throw new TypeError()}});var r;try{p.a=1}catch(e){r=e instanceof TypeError};return ''+r})()",
             "true",
         ),
+        // 28.1.13 reaches the same trap and answers whether the write
+        // happened, where an assignment of 13.15.2 answers the value.
+        (
+            "(function(){var l=[];var t={};var p=new Proxy(t,{set(o,n,v){l.push(n+'='+v);o[n]=v;return true}});var f=new Proxy({},{set(){return false}});return ''+Reflect.set(p,'a',1)+'|'+t.a+'|'+l.join('')+'|'+Reflect.set(f,'x',1)})()",
+            "true|1|a=1|false",
+        ),
+        // Step 3 gives the trap the target as its receiver where 28.1.13 was
+        // passed none, and a fourth argument where it was.
+        (
+            "(function(){var w=new Proxy({},{set(o,n,v,r){return r===w}});var u={};var q=new Proxy({},{set(o,n,v,r){return r===u}});return ''+Reflect.set(w,'k',1)+'|'+Reflect.set(q,'k',1,u)})()",
+            "true|true",
+        ),
     ] {
         assert_eq!(realm.evaluate(source)?, Value::string(answer), "{source}");
     }
