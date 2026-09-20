@@ -12053,6 +12053,22 @@ fn step_3_of_20_1_2_24_reads_every_property_through_its_getter() -> Result<(), E
 }
 
 #[test]
+fn an_arrow_reads_the_super_of_the_frame_around_it() -> Result<(), Error> {
+    for source in [
+        // 15.3.4 gives an arrow the `[[HomeObject]]` of the function it was
+        // made in, and 13.3.7.3 reads the property through that `this`.
+        "var b={m(){return 'base'}};var d={__proto__:b,m(){var f=()=>super.m();return f()}};d.m()",
+        // The arrow reads it wherever it stands, including from a nested one.
+        "var b={m(){return 'b'}};var d={__proto__:b,m(){var f=()=>()=>super.m();return f()()}};d.m()",
+        // A name the base holds as a property, not a method.
+        "var b={v:'x'};var d={__proto__:b,m(){var f=()=>super.v;return f()}};d.m()",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn a_computed_key_of_a_method_goes_through_7_1_19() -> Result<(), Error> {
     for source in [
         // 7.1.19 of an Object key runs a `toString` of the Script, and the

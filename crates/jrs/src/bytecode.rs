@@ -3365,6 +3365,15 @@ impl RegisterLowerer {
             );
         }
         if function.arrow
+            && register_body_reads_super(&function.body)
+            && self.bindings.contains_key(HOME_BINDING)
+        {
+            captures.insert(
+                String::from(HOME_BINDING),
+                self.capture_binding(HOME_BINDING)?,
+            );
+        }
+        if function.arrow
             && register_body_reads_this(&function.body)
             && self.bindings.contains_key(THIS_BINDING)
         {
@@ -4184,8 +4193,40 @@ impl RegisterLowerer {
         // an arrow has none of: 15.3.4 gives it the `super` of the function it
         // was made in, and this engine has not built that.
         if register_body_reads_super(&function.body) {
+            // 15.3.4: an arrow reads the `[[HomeObject]]` of the function it
+            // was made in, which that function captured into the context. The
+            // prologue puts it in a register, which is where 13.3.7.3 reads
+            // the home of the running frame.
             if function.arrow {
-                return None;
+                // 13.3.7.1 binds the `this` of the constructor the arrow
+                // stands in, which the frame of the arrow does not hold.
+                if register_body_reads(&function.body, Reads::SuperCall) {
+                    return None;
+                }
+                let binding = *child.bindings.get(HOME_BINDING)?;
+                if !matches!(binding.storage, RegisterBindingStorage::Context { .. }) {
+                    return None;
+                }
+                let register = child.allocate_register()?;
+                child.load_binding(binding);
+                child
+                    .code
+                    .emit(crate::engine::bytecode::Instruction::Star(register));
+                child.code.home_register = Some(register);
+                // 13.3.7.3 reads the property of the base through the `this`
+                // of the running frame, which the arrow holds in a slot of
+                // the same context.
+                let this = *child.bindings.get(THIS_BINDING)?;
+                if !matches!(this.storage, RegisterBindingStorage::Context { .. }) {
+                    return None;
+                }
+                let this_register = child.allocate_register()?;
+                child.load_binding(this);
+                child
+                    .code
+                    .emit(crate::engine::bytecode::Instruction::Star(this_register));
+                child.code.this_register = Some(this_register);
+                return Some((child, self_register));
             }
             child.declare(HOME_BINDING, false)?;
             let RegisterBindingStorage::Register(register) =
@@ -4194,13 +4235,27 @@ impl RegisterLowerer {
                 return None;
             };
             child.bindings.get_mut(HOME_BINDING)?.value_type = Some(RegisterType::Unknown);
-            child.bindings.remove(HOME_BINDING);
             child.code.home_register = Some(register);
+            // 15.3.4 gives an arrow of this body the `[[HomeObject]]` of this
+            // function, which it reads out of a context slot; a body no arrow
+            // reads it in keeps it in the register alone.
+            if register_body_reads(&function.body, Reads::ArrowSuper) {
+                child.capture_binding(HOME_BINDING)?;
+            } else {
+                child.bindings.remove(HOME_BINDING);
+            }
         }
         // 10.2.1.1 gives an arrow no Function Environment Record of its own,
         // so its `this` is the binding the enclosing function captured into
         // the context and not the receiver of its call.
-        if (derived || register_body_reads_this(&function.body)) && !function.arrow {
+        // An arrow of the body reads the `this` of this function, and 13.3.7.3
+        // reads it for a `super` an arrow carries, so the binding is here for
+        // the arrow to capture even where the body itself names neither.
+        if (derived
+            || register_body_reads_this(&function.body)
+            || register_body_reads(&function.body, Reads::ArrowThis))
+            && !function.arrow
+        {
             child.declare(THIS_BINDING, false)?;
             let RegisterBindingStorage::Register(register) =
                 child.bindings.get(THIS_BINDING)?.storage
@@ -4214,8 +4269,10 @@ impl RegisterLowerer {
             // 13.3.7.1 has made it, which 9.1.1.1.1 says of every binding a
             // context slot holds uninitialized: an arrow reads it there and
             // the super call writes it.
-            if derived && register_body_reads(&function.body, Reads::ArrowThis) {
-                child.bindings.get_mut(THIS_BINDING)?.initialized = false;
+            if register_body_reads(&function.body, Reads::ArrowThis) {
+                if derived {
+                    child.bindings.get_mut(THIS_BINDING)?.initialized = false;
+                }
                 child.capture_binding(THIS_BINDING)?;
             }
         }
@@ -12766,6 +12823,12 @@ enum Reads {
     /// The same, read by an arrow of the body and not by the body itself,
     /// which 10.2.1.1 answers out of the frame around the arrow.
     ArrowNewTarget,
+    /// The `[[HomeObject]]` read by an arrow of the body and not by the body
+    /// itself, which 15.3.4 answers out of the frame around the arrow.
+    ArrowSuper,
+    /// A super call of 13.3.7.1, which binds the `this` of the constructor it
+    /// stands in and not one of the frame it runs in.
+    SuperCall,
     /// A call written as the name `eval`, which 13.3.6.1 makes a direct eval
     /// of and 19.2.1.1 step 5 evaluates against the Variable Environment of
     /// the frame it stands in.
@@ -12886,13 +12949,24 @@ fn register_expression_reads(expression: &Expr, what: Reads) -> bool {
         // around it, so the scan for one stops at every other.
         // A class body the lowering does not take carries no call the scan
         // could find, and every other question about it answers true.
+        // 15.7.14 step 10 makes the default constructor a super call of its
+        // own arguments, which is one of the calls the scan looks for.
+        ExprKind::DefaultSuper if matches!(what, Reads::SuperCall) => true,
         ExprKind::Class(_) | ExprKind::DefaultSuper => !matches!(
             what,
-            Reads::ArrowThis | Reads::ArrowNewTarget | Reads::DirectEval
+            Reads::ArrowThis
+                | Reads::ArrowNewTarget
+                | Reads::ArrowSuper
+                | Reads::SuperCall
+                | Reads::DirectEval
         ),
         ExprKind::Super => !matches!(
             what,
-            Reads::NewTarget | Reads::ArrowThis | Reads::ArrowNewTarget
+            Reads::NewTarget
+                | Reads::ArrowThis
+                | Reads::ArrowNewTarget
+                | Reads::ArrowSuper
+                | Reads::SuperCall
         ),
         ExprKind::NewTarget => matches!(what, Reads::This | Reads::NewTarget),
         ExprKind::This => matches!(what, Reads::This),
@@ -12926,9 +13000,13 @@ fn register_expression_reads(expression: &Expr, what: Reads) -> bool {
                 || register_expression_reads(no, what)
         }
         ExprKind::Call(callee, arguments) | ExprKind::Construct(callee, arguments) => {
-            // 13.3.6.1 tells a direct eval from every other call by the name
-            // the callee is written as, which is what the scan asks for.
-            (matches!(what, Reads::DirectEval)
+            // 13.3.7.1 is the call whose callee is written `super`.
+            (matches!(what, Reads::SuperCall)
+                && matches!(expression.kind, ExprKind::Call(..))
+                && matches!(callee.kind, ExprKind::Super))
+                // 13.3.6.1 tells a direct eval from every other call by the
+                // name the callee is written as, which the scan asks for.
+                || (matches!(what, Reads::DirectEval)
                 && matches!(expression.kind, ExprKind::Call(..))
                 && callee.reference_name() == Some(EVAL_NAME))
                 || register_expression_reads(callee, what)
@@ -12959,6 +13037,7 @@ fn register_expression_reads(expression: &Expr, what: Reads) -> bool {
                     match what {
                         Reads::ArrowThis => Reads::This,
                         Reads::ArrowNewTarget => Reads::NewTarget,
+                        Reads::ArrowSuper => Reads::Super,
                         _ => what,
                     },
                 )
@@ -13274,6 +13353,11 @@ fn register_function_scope(function: &Function) -> Option<RegisterFunctionScope>
     let mut scope = register_body_scope(&function.body, &local_names)?;
     // 10.2.1.1 gives an arrow no `this` of its own, so the frame around it
     // holds the one it reads in a context, like every other name it captures.
+    // 15.3.4 gives an arrow the `super` of the function it was made in, which
+    // that function holds in a context slot like every other name it reads.
+    if !function.arrow && register_body_reads(&function.body, Reads::ArrowSuper) {
+        scope.captured_names.insert(String::from(HOME_BINDING));
+    }
     if !function.arrow && register_body_reads(&function.body, Reads::ArrowThis) {
         scope.captured_names.insert(String::from(THIS_BINDING));
     }
