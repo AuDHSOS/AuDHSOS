@@ -609,6 +609,23 @@ What a switch would cost is those gaps, by the reason the engine names:
 | 32 | a try statement |
 | 713 | 76 further reasons, none above 30 variants |
 
+Where each of those reasons is raised, measured at `3a6e905` by giving
+every site of the reason a name of its own and running the suite once:
+
+| Variants | Reason | Raised at |
+|---:|---|---|
+| 310 | a direct eval inside a function | one site, `perform_eval` |
+| 194 | a property that is an accessor | about thirty call sites, the largest 22 |
+| 121 | an internal method of a Proxy | the walks that read a descriptor per key |
+| 82 | `ToPrimitive` of an Object outside a call | 38 `array_length_of`, 36 `integer_argument`, 8 elsewhere |
+| 68 | `ToString` of an Object | 26 `property_key`, the rest in ten sites of 4 or fewer |
+
+`integer_argument` is mostly the `lastIndex` of 22.2.7.2, which 7.1.20
+converts and which a `valueOf` of the Script answers for an Object;
+`array_length_of` is the `length` of an array-like that 7.3.18 reads.
+Both need the frame `Resume::Length` opens for the receiver of 23.1.3,
+which reaches neither.
+
 | Commit | Blockers | Failures | Gaps |
 |---|---:|---:|---:|
 | `ba076ca` | 4,111 | 747 | 3,364 |
