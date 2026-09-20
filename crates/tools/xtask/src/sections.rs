@@ -7,7 +7,7 @@
 //! in the file and the loader clears it. One nonzero byte in that value
 //! moves the whole cell into `.data`, which the file carries and the loader
 //! copies. The pools of the machine are 1.4 MiB, so the bound on `.data` is
-//! what D-66 and D-185 are checked by rather than stated in a comment.
+//! what D-66 and D-188 are checked by rather than stated in a comment.
 
 use audhsos_elf::ElfError;
 

@@ -13,7 +13,7 @@ use fs_fat::{ATTR_DIRECTORY, FileSystem};
 use user_proto::file::{Data, MAX_DATA, Name, ROOT, Reply, Request, START};
 
 use crate::open::Clients;
-use crate::serve::{Volumes, answer, moment};
+use crate::serve::{NOBODY, Volumes, answer, moment};
 use crate::tests::support::{now, volume};
 
 /// The badge of the client every test speaks as.
@@ -680,4 +680,68 @@ fn a_listing_of_the_root_walks_it_once_and_not_once_per_entry() {
         panic!("the second client read no entry");
     };
     assert_eq!(entry.name, name(b"A.TXT"));
+}
+
+#[test]
+fn a_request_without_a_badge_is_refused_whatever_it_asks_for() {
+    let mut fs = volume();
+    let mut clients = Clients::new();
+    let file = make(&mut fs, &mut clients, b"A.TXT");
+    for request in vec![
+        Request::Open {
+            parent: ROOT,
+            name: name(b"A.TXT"),
+        },
+        Request::Create {
+            parent: ROOT,
+            name: name(b"B.TXT"),
+            directory: false,
+        },
+        Request::Read {
+            file,
+            offset: 0,
+            len: 1,
+        },
+        Request::Write {
+            file,
+            offset: 0,
+            data: Data::new(b"x").unwrap(),
+        },
+        Request::ReadDir {
+            dir: ROOT,
+            cursor: START,
+        },
+        Request::Stat { file },
+        Request::Remove {
+            parent: ROOT,
+            name: name(b"A.TXT"),
+        },
+        Request::Close { file },
+        Request::Flush,
+    ] {
+        let refused = as_client(&mut fs, &mut clients, NOBODY, &request);
+        assert_eq!(
+            error_of(&refused),
+            Some(Error::AccessDenied),
+            "{request:?} under no badge"
+        );
+    }
+    // What the client with a badge opened is still open.
+    let Reply::Stat(Ok(_)) = ask(&mut fs, &mut clients, &Request::Stat { file }) else {
+        panic!("the badged client lost its file");
+    };
+}
+
+/// The error of a reply, whatever kind of reply it is.
+fn error_of(reply: &Reply) -> Option<Error> {
+    match reply {
+        Reply::Opened(outcome) => outcome.as_ref().err().copied(),
+        Reply::Created(outcome) | Reply::Written(outcome) => outcome.as_ref().err().copied(),
+        Reply::Read(outcome) => outcome.as_ref().err().copied(),
+        Reply::Entry(outcome) => outcome.as_ref().err().copied(),
+        Reply::Stat(outcome) => outcome.as_ref().err().copied(),
+        Reply::Removed(outcome) | Reply::Closed(outcome) | Reply::Flushed(outcome) => {
+            outcome.as_ref().err().copied()
+        }
+    }
 }

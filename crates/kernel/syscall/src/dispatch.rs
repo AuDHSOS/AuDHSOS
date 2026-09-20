@@ -60,6 +60,12 @@ pub struct Reply {
     /// dispatcher writes neither the status word nor the return words, and
     /// the thread that completes the rendezvous writes them later.
     pub blocked: bool,
+    /// The call refused its caller and the status word carries this error
+    /// instead of the return words. It is what a call that also made
+    /// another thread ready answers with, because a refusal returned as
+    /// `Err` carries no [`Outcome`] and the switch that thread earned
+    /// would be lost.
+    pub failure: Option<Error>,
     /// What the caller should do before it returns to user mode.
     pub outcome: Outcome,
 }
@@ -78,8 +84,19 @@ impl Reply {
         word_count: None,
         partial: false,
         blocked: false,
+        failure: None,
         outcome: Outcome::NOTHING,
     };
+
+    /// A call that refused its caller with `error` and still says what the
+    /// caller should do before it returns to user mode.
+    #[must_use]
+    pub const fn failed(error: Error) -> Self {
+        Reply {
+            failure: Some(error),
+            ..Reply::DONE
+        }
+    }
 
     /// A call whose caller blocks and asks for a switch. Nothing of the
     /// result area is written: there is no result yet.
@@ -333,6 +350,10 @@ pub fn dispatch<
     writer.clear_result();
     match result {
         Ok(reply) => {
+            if let Some(error) = reply.failure {
+                writer.set_status(Status::failed(error));
+                return reply.outcome;
+            }
             writer.set_status(if reply.partial {
                 Status::PARTIAL
             } else {

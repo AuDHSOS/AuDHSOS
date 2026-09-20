@@ -207,6 +207,9 @@ pub struct Process {
     /// it is the only thing in the message that says whose fault this is,
     /// exactly as it is for every other message a server receives.
     pub fault_handler: Option<(EndpointId, u64)>,
+    /// The process whose quotas paid for this one, which a kill gives them
+    /// back to. The root task has none: nobody created it.
+    pub creator: Option<ProcessId>,
     /// Who is to be told when the process ends.
     watchers: [Option<Watch>; WATCHERS_PER_PROCESS],
     /// Whether the end has already been told. A process ends once, so the
@@ -237,6 +240,7 @@ impl Process {
             quota,
             kernel_object_quota,
             fault_handler: None,
+            creator: None,
             watchers: [None; WATCHERS_PER_PROCESS],
             ended: false,
         }

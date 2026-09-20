@@ -248,7 +248,7 @@ the `.bss` of the kernel image, sized by the constants in
 constructors are `const`, so a pool is never built on the boot stack and
 never moved into its cell (D-66). The free tag of a slot is a
 `#[repr(u32)]` field and not a niche of the object type, which is what the
-zeros need (D-185).
+zeros need (D-188).
 
 ### 2.4.4 Memory management in safe Rust
 

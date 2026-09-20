@@ -292,7 +292,7 @@ done until every applicable item has a test. Items are added, never removed.
   object type, for each type separately. A niche holds the free tag as a
   nonzero byte, which takes the pool out of the `.bss`; the crate forbids
   `unsafe` and cannot read the bytes, so the checkable form is that the tag
-  costs a field of its own (D-185). `cargo xtask kernel-sections` holds the
+  costs a field of its own (D-188). `cargo xtask kernel-sections` holds the
   bytes themselves, in 6.6.20.
 - The message of `Unavailable` names no one caller: the entropy source,
   the wall clock, the file system server, the network server and a
@@ -619,7 +619,7 @@ done until every applicable item has a test. Items are added, never removed.
 - Quiet mode: a command that succeeds under `--quiet` prints nothing and
   is still an `Ok`, a command that fails is still an error.
 - Kernel sections: the measured sizes of the built kernel pass both bounds;
-  the sizes D-185 records for the layout before it, a `.data` of 1,437,728
+  the sizes D-188 records for the layout before it, a `.data` of 1,437,728
   bytes and a `.bss` of 20,824, break both; each bound is broken on its own
   by one byte; a section the table does not name counts as zero bytes and
   breaks the `.bss` bound.

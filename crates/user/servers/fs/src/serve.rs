@@ -69,10 +69,20 @@ impl<D: BlockDevice> Volumes<'_, D> {
     }
 }
 
+/// The badge of a message that arrived through a capability without one.
+///
+/// Every client that found this server by name would speak under it, and
+/// the open files of one are the open files of all, so it names nobody and
+/// is refused.
+pub const NOBODY: u64 = 0;
+
 /// Answers `request`, which arrived under `badge`.
 ///
 /// `now` is what a new entry is stamped with; it comes from the wall clock
 /// of the process (D-137).
+///
+/// A request under [`NOBODY`] is refused with [`Error::AccessDenied`],
+/// whatever it asks for.
 pub fn answer<D: BlockDevice>(
     volumes: &mut Volumes<'_, D>,
     clients: &mut Clients,
@@ -80,6 +90,9 @@ pub fn answer<D: BlockDevice>(
     request: &Request,
     now: UnixTime,
 ) -> Reply {
+    if badge == NOBODY {
+        return refused(request, Error::AccessDenied);
+    }
     match request {
         Request::Open { parent, name } => {
             Reply::Opened(open(volumes, clients, badge, *parent, name))
@@ -106,6 +119,21 @@ pub fn answer<D: BlockDevice>(
         }
         Request::Close { file } => Reply::Closed(close(clients, badge, *file)),
         Request::Flush => Reply::Flushed(flush(volumes)),
+    }
+}
+
+/// Refuses `request` with `error`, in the reply the client waits for.
+const fn refused(request: &Request, error: Error) -> Reply {
+    match request {
+        Request::Open { .. } => Reply::Opened(Err(error)),
+        Request::Create { .. } => Reply::Created(Err(error)),
+        Request::Read { .. } => Reply::Read(Err(error)),
+        Request::Write { .. } => Reply::Written(Err(error)),
+        Request::ReadDir { .. } => Reply::Entry(Err(error)),
+        Request::Stat { .. } => Reply::Stat(Err(error)),
+        Request::Remove { .. } => Reply::Removed(Err(error)),
+        Request::Close { .. } => Reply::Closed(Err(error)),
+        Request::Flush => Reply::Flushed(Err(error)),
     }
 }
 

@@ -53,6 +53,7 @@ use user_programs::client::allocate;
 use user_programs::mapping::Mapping;
 use user_programs::serve::{Serving, receive};
 use user_proto::console::{Chunk, Reply, Request};
+use user_proto::handles::Carried;
 use user_rt::{
     EndpointHandle, InterruptHandle, IoPortHandle, NotificationHandle, ReplyHandle, Startup,
     Typed as _,
@@ -141,7 +142,17 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
             wake(&mut console, &mut held_read);
             continue;
         }
+        // No request of this protocol takes a handle, and the kernel
+        // installs whatever the sender attached before this thread sees the
+        // message; a handle left installed costs a slot of a table of
+        // sixty-four and holds a reference the sender chose. The message is
+        // read out first, because closing a handle is a call and a call
+        // overwrites the buffer the message stands in.
+        let carried = Carried::read(held(&mut console).reader());
         let request = Request::decode(held(&mut console).reader());
+        carried.give_up(&[], |handle| {
+            let _closed = held(&mut console).handle_close(handle);
+        });
         // A read of an empty ring is held instead of answered, and the
         // reply object goes with it. Taking it out of `serving` is what
         // makes the next receive a bare one: `receive` answers the call it

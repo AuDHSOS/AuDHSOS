@@ -401,7 +401,7 @@ fn destroying_an_object_that_is_already_gone_says_so() {
 fn no_slot_of_any_pool_hides_its_free_tag_in_a_niche() {
     // A niche of `T` holds `None` as a nonzero byte, so a pool of such
     // slots is not all zeros and the machine lands in `.data` instead of
-    // `.bss`, which costs the kernel image 1.4 MiB (D-66, D-185). Every
+    // `.bss`, which costs the kernel image 1.4 MiB (D-66, D-188). Every
     // object type but `IoPortRange` has a niche.
     assert!(slot_tag_is_a_field_of_its_own::<Process>());
     assert!(slot_tag_is_a_field_of_its_own::<Thread>());

@@ -16,7 +16,7 @@
 //! starting at one, why the free list starts empty with a high-water mark
 //! rather than linked through every slot, and why a free slot carries a
 //! `#[repr(u32)]` tag rather than an `Option` whose `None` a niche of the
-//! object type would hold (D-185): a pool that is all zeros reaches the
+//! object type would hold (D-188): a pool that is all zeros reaches the
 //! `.bss` of the kernel image without being built on a stack first, and the
 //! kernel's pools are far larger than the boot stack.
 
@@ -129,7 +129,7 @@ struct Occupant<T> {
 /// pool all zeros. An `Option<Occupant<T>>` encodes `None` in a niche of
 /// `T`, and every object type of this kernel but
 /// [`crate::object::IoPortRange`] has one, so `None` would be a nonzero
-/// byte at the niche's offset and the pool would land in `.data` (D-185).
+/// byte at the niche's offset and the pool would land in `.data` (D-188).
 /// A `#[repr(u32)]` tag has a fixed offset, no niche, and leaves the
 /// payload bytes unconstrained.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -180,7 +180,7 @@ impl<T> Occupancy<T> {
 /// larger than [`Occupant`]. An `Option<Occupant<T>>` over a `T` with a
 /// niche is the same size as `Occupant<T>`, and its `None` is a nonzero
 /// byte at the niche's offset, which is what took the pools out of the
-/// `.bss` (D-185).
+/// `.bss` (D-188).
 #[cfg(test)]
 pub(crate) const fn slot_tag_is_a_field_of_its_own<T>() -> bool {
     size_of::<Occupancy<T>>() > size_of::<Occupant<T>>()
@@ -444,6 +444,23 @@ impl<T, const N: usize> Pool<T, N> {
                 let occupant = slot.occupancy.as_ref()?;
                 let index = u32::try_from(index).ok()?;
                 Some((ObjectId::new(index, slot.generation), &occupant.value))
+            })
+    }
+
+    /// Every live object with its id, in slot order, to change.
+    ///
+    /// The walk stops at the high-water mark, as [`Pool::iter`] does.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (ObjectId<T>, &mut T)> {
+        let used = usize::try_from(self.high_water).unwrap_or(N);
+        self.slots
+            .iter_mut()
+            .take(used)
+            .enumerate()
+            .filter_map(|(index, slot)| {
+                let generation = slot.generation;
+                let occupant = slot.occupancy.as_mut()?;
+                let index = u32::try_from(index).ok()?;
+                Some((ObjectId::new(index, generation), &mut occupant.value))
             })
     }
 

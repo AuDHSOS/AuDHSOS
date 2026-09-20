@@ -3142,7 +3142,7 @@ fn check_base(root: &Path, path: &str, name: &str, expected: u64) -> Result<(), 
 /// and the file does not carry; one nonzero byte moves the whole cell into
 /// `.data`, which the file carries and the loader copies. The pools of the
 /// machine are 1.4 MiB, so that one byte costs the image 1.4 MiB (D-66,
-/// D-185), and the section table is where it shows.
+/// D-188), and the section table is where it shows.
 ///
 /// # Errors
 ///

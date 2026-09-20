@@ -896,3 +896,34 @@ fn the_stack_says_which_ports_are_taken_before_a_buffer_is_lent() {
     assert!(!stack.is_bound(Port::new(9998)));
     assert!(!stack.listens_on(Port::new(81)));
 }
+
+#[test]
+fn a_peer_that_earns_an_answer_to_every_frame_does_not_stop_the_timers() {
+    let mut outgoing = [0u8; 8192];
+    let mut stack: Stack<'_, 4, 2> = configured(&mut outgoing);
+    let mut rng = rng();
+    let mut now = start();
+    stack.configure(now);
+    // One frame in and one frame out per call, as the serving thread's
+    // round does. Every request earns an ARP reply, so the outgoing
+    // queue is never empty when a call begins.
+    let mut tx = [0u8; FRAME_LEN];
+    let mut discovers = 0usize;
+    let mut replies = 0usize;
+    for _ in 0..64 {
+        let answer = stack
+            .poll(now, Some(&arp_request(HERE)), &mut tx, &mut rng)
+            .expect("a poll");
+        match answer.map(ether_type_of) {
+            Some(EtherType::ARP) => replies = replies.saturating_add(1),
+            Some(EtherType::IPV4) => discovers = discovers.saturating_add(1),
+            _ => {}
+        }
+        now = now.saturating_add(Duration::from_millis(500));
+    }
+    assert!(replies > 0, "the requests earned no answer");
+    assert!(
+        discovers > 1,
+        "the address client said one word in thirty-two seconds: {discovers}"
+    );
+}

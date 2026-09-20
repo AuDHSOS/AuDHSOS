@@ -10,12 +10,13 @@
 //! disk is mounted and never formatted — the boot disk of this machine is
 //! one, and a format there is the loader and the kernel gone.
 //!
-//! A disk that carries no table is one nothing has written. It is
-//! formatted, which is what the scratch disk of the reference machine
-//! needs on its first boot (D-136).
+//! A disk that carries no table and whose first sector carries no boot
+//! signature is one nothing has written. It is formatted, which is what
+//! the scratch disk of the reference machine needs on its first boot
+//! (D-136).
 //!
 //! Invariant: [`mount`] writes a file system onto a disk only where it
-//! found neither a partition table nor a volume.
+//! found neither a partition table nor a boot sector.
 
 use audhsos_abi::Error;
 use fs_fat::{BlockDevice, FileSystem, FormatOptions};
@@ -70,12 +71,25 @@ pub fn mount<D: BlockDevice>(device: D) -> Result<FileSystem<Partition<D>>, Erro
 }
 
 /// The volume over the whole disk, formatted where there is none.
+///
+/// The boot sector decides, because it is the sector that says whether a
+/// volume is there (Microsoft FAT32 File System Specification 1.03,
+/// "Boot Sector and BPB"). Only [`fs_fat::Error::Signature`], a first
+/// sector without `0x55 0xAA`, is a disk nothing has written; every other
+/// refusal is a first sector carrying something this system does not
+/// read, and such a disk is refused rather than formatted. The
+/// information sector is a hint whose fields are ignored when its
+/// signatures are wrong (same specification, "FAT32 `FSInfo` Sector
+/// Structure and Backup Boot Sector"), so a volume whose sector 1 was
+/// damaged still mounts.
 fn whole<D: BlockDevice>(device: D) -> Result<FileSystem<Partition<D>>, Error> {
     let last = u64::from(device.sectors().saturating_sub(1));
     let window = Partition::new(device, 0, last).ok_or(Error::InvalidArgument)?;
-    match fs_fat::info(&window) {
-        Ok(Some(_)) => FileSystem::mount(window).map_err(refusal),
-        Ok(None) => FileSystem::format(window, &FormatOptions::default()).map_err(refusal),
+    match fs_fat::read_geometry(&window) {
+        Ok(_) => FileSystem::mount(window).map_err(refusal),
+        Err(fs_fat::Error::Signature) => {
+            FileSystem::format(window, &FormatOptions::default()).map_err(refusal)
+        }
         Err(error) => Err(refusal(error)),
     }
 }

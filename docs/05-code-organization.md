@@ -466,7 +466,7 @@ binaries (`cargo`, `rustc`, `rustfmt`, `cargo-clippy`, `cargo-miri`,
 | `check-layering` | verify the layering table against `cargo tree`, verify `forbid(unsafe_code)` in every logic crate, reject assembly files, verify the adapter-function-to-QEMU-test tables |
 | `check-deps` | verify that `Cargo.lock` and all manifests reference workspace members only |
 | `unsafe-budget` | count `unsafe` blocks and `asm!` sites per adapter crate against the policy table |
-| `kernel-sections` | build the kernel and hold the sizes of `.data` and `.bss` against their bounds, so that a `static` which stopped being all zeros is caught where it costs the image (D-185) |
+| `kernel-sections` | build the kernel and hold the sizes of `.data` and `.bss` against their bounds, so that a `static` which stopped being all zeros is caught where it costs the image (D-188) |
 | `fuzz [--target <name>] [--time <s>] [--regression] [--merge <directory>] [--minimize <file>]` | build fuzz targets with `-Zsanitizer=fuzzer` and run them; `--regression` replays the stored corpus instead, which is what `check` runs |
 | `coverage` | build host tests with `-C instrument-coverage`, merge profiles with `llvm-profdata`, export LCOV with `llvm-cov`, enforce thresholds |
 | `miri` | run the tests of the `unsafe` modules of the host-executable adapter crates under Miri, after checking that no module holding `unsafe` is left out |
