@@ -584,8 +584,8 @@ negative-test passes. Other parser/builtin completeness gaps remain open.
 The engine is the target of the migration and the stack backend the
 source (architecture, section 17.1). What gates the switch is not the
 count either path reaches but the set of variants the stack path passes
-and the engine does not. At `9352736` that set holds 1,585 variants:
-none of them the engine fails, and 1,585 it names as gaps. The engine
+and the engine does not. At `96af43c` that set holds 1,559 variants:
+none of them the engine fails, and 1,559 it names as gaps. The engine
 passes 25,598 variants the stack path does not. Only the failures are
 breaches of the equality duty; a gap costs coverage and answers nothing
 wrongly.
@@ -597,18 +597,21 @@ What a switch would cost is those gaps, by the reason the engine names:
 
 | Variants | Gap |
 |---:|---|
-| 313 | a direct eval inside a function |
+| 314 | a direct eval inside a function |
 | 194 | a property that is an accessor |
 | 87 | an internal method of a Proxy |
+| 62 | an eval of a Script the lowering does not take |
 | 56 | `ToPrimitive` of an Object outside a call |
-| 68 | an eval of a Script the lowering does not take |
 | 48 | `ToString` of an Object |
-| 30 | a frame of a call the lowering does not prepare |
-| 26 | a call |
-| 24 | a name of a function body the scan does not reach |
 | 34 | a splitter of a constructor that is not `%RegExp%` |
 | 32 | a try statement |
-| 713 | 76 further reasons, none above 30 variants |
+| 30 | a name of a body an Initializer of a parameter reads |
+| 30 | a frame of a call the lowering does not prepare |
+| 30 | a `then` that is not `%Promise.prototype.then%` |
+| 732 | 77 further reasons, none above 30 variants |
+
+The counts above are of `96af43c`; the ones in the notes below carry the
+commit each was measured at.
 
 Where each of those reasons is raised, measured at `3a6e905` by giving
 every site of the reason a name of its own and running the suite once:
@@ -833,6 +836,7 @@ more than eight variants.
 | `c996abf` | 1,592 | **0** | 1,592 |
 | `edc120e` | 1,592 | **0** | 1,592 |
 | `9352736` | 1,585 | **0** | 1,585 |
+| `96af43c` | 1,559 | **0** | 1,559 |
 
 The list is the join of the two per-variant runs, without `--summary`:
 
@@ -1232,7 +1236,8 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | 13.3.7.1 with a spread element in the argument list (focused) | focused | `03d3688` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/super test/staging/sm/class --summary` | 188 | 371 | 232 (62.53%) | 14 (3.77%) | 125 (33.69%) |
 | The same, on the stack backend (focused) | focused | `03d3688` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/super test/staging/sm/class --summary` | 188 | 371 | 258 (69.54%) | 61 (16.44%) | 52 (14.02%) |
 | Complete pinned suite on the register engine, before the close of 14.7.5.7 step 3.j (outdated) | full | `33ffe90` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 58,747 (57.08%) | 20,543 (19.96%) | 23,635 (22.96%) |
-| Complete pinned suite on the register engine | full | `9352736` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,367 (61.57%) | 18,961 (18.42%) | 20,597 (20.01%) |
+| Complete pinned suite on the register engine | full | `96af43c` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,393 (61.59%) | 18,961 (18.42%) | 20,571 (19.99%) |
+| Complete pinned suite on the register engine, before the `length` under a computed key (outdated) | full | `9352736` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,367 (61.57%) | 18,961 (18.42%) | 20,597 (20.01%) |
 | B.3.2.1 and B.3.2.2 on the global record (focused) | focused | `9352736` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/annexB/language --summary` | 845 | 895 | 66 (7.37%) | 59 (6.59%) | 770 (86.03%) |
 | The same, on the stack backend (focused) | focused | `9352736` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/annexB/language --summary` | 845 | 895 | 176 (19.66%) | 207 (23.13%) | 512 (57.21%) |
 | Complete pinned suite on the register engine, before B.3.2.1 on the global record (outdated) | full | `edc120e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,335 (61.54%) | 18,958 (18.42%) | 20,632 (20.05%) |
