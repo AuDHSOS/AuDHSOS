@@ -12555,3 +12555,35 @@ fn a_block_binding_of_a_loop_is_read_per_iteration() -> Result<(), Error> {
     );
     Ok(())
 }
+
+#[test]
+fn an_escape_writes_an_identifier_name_and_never_a_keyword() -> Result<(), Error> {
+    // 12.7.2 defines a reserved word as a literal sequence of source
+    // characters, so a name an escape wrote is an `IdentifierName` and no
+    // keyword.
+    for source in [
+        "var \\u0061 = 7; a",
+        "var o = { \\u0069f: 5 }; o.if",
+        "var o = {}; o.\\u0063lass = 4; o.class",
+        "var \\u0061sync = 3; async",
+    ] {
+        differential(source)?;
+    }
+    // A name whose StringValue is a reserved word stands where no name may.
+    for source in [
+        "var \\u0069f = 1;",
+        "\\u0069f (true) { 1 }",
+        "v\\u0061r x = 1;",
+        "var \\u0074rue = 1;",
+        "\\u0061sync function f(){}",
+    ] {
+        assert!(
+            matches!(
+                compile(source, Limits::default()),
+                Err(Error::Syntax { .. } | Error::UnverifiedSyntax { .. })
+            ),
+            "{source}"
+        );
+    }
+    Ok(())
+}

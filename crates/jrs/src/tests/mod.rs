@@ -659,7 +659,6 @@ fn unsupported_syntax_is_distinct_from_syntax_errors() {
         "with(1){}",
         "class C{ static {} }",
         "label: function f(){}",
-        "let \\u0069f=1",
     ] {
         assert!(
             matches!(
@@ -669,6 +668,12 @@ fn unsupported_syntax_is_distinct_from_syntax_errors() {
             "{source}"
         );
     }
+    // 12.7.2: an escape writes no reserved word, so the name it wrote stands
+    // where no name may and 13.1.1 refuses it.
+    assert!(matches!(
+        compile("let \\u0069f=1", Limits::default()),
+        Err(Error::Syntax { .. })
+    ));
     assert!(matches!(
         compile("1 +", Limits::default()),
         Err(Error::UnverifiedSyntax { .. })

@@ -6802,9 +6802,18 @@ impl RegisterLowerer {
     /// object each time it is evaluated.
     fn lower_regexp(&mut self, pattern: &str, flags: &str) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
-        let compiled = crate::regexp::RegExp::compile(pattern.encode_utf16().collect(), flags)
-            .ok()
-            .map(alloc::rc::Rc::new)?;
+        // 22.2.3.4 makes the RegExp where the literal is compiled, so a
+        // pattern the engine has not built is named here and not as the
+        // literal that carries it.
+        let compiled = match crate::regexp::RegExp::compile(pattern.encode_utf16().collect(), flags)
+        {
+            Ok(compiled) => alloc::rc::Rc::new(compiled),
+            Err(crate::Error::Unsupported { feature }) => {
+                self.refuse(feature);
+                return None;
+            }
+            Err(_) => return None,
+        };
         let index = u16::try_from(self.code.regex_constants.len()).ok()?;
         self.code.regex_constants.push(compiled);
         self.code.emit(Instruction::CreateRegExp(index));

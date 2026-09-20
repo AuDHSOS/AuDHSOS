@@ -13,6 +13,14 @@ use alloc::{string::String, vec::Vec};
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Kind {
     Word(String),
+    /// An `IdentifierName` of 12.7 a `\ UnicodeEscapeSequence` wrote whose
+    /// `StringValue` is a reserved word of 12.7.2 or one of the words 13.1
+    /// gives a meaning in place.
+    ///
+    /// 12.7.2 defines a reserved word as a literal sequence of source
+    /// characters, so such a name is no keyword and stands only where an
+    /// `IdentifierName` stands.
+    EscapedWord(String),
     /// `PrivateIdentifier` of 12.7, whose name carries the `#`.
     Private(String),
     Literal(Value),
@@ -477,10 +485,22 @@ impl Lexer<'_> {
             if reserved_word(&text)
                 || matches!(
                     text.as_str(),
-                    "async" | "get" | "set" | "of" | "as" | "from" | "target" | "accessor"
+                    "async"
+                        | "get"
+                        | "set"
+                        | "of"
+                        | "as"
+                        | "from"
+                        | "target"
+                        | "accessor"
+                        | "let"
+                        | "static"
+                        | "true"
+                        | "false"
+                        | "null"
                 )
             {
-                return Err(Self::unsupported("an escaped keyword"));
+                return Ok(Kind::EscapedWord(text));
             }
             return Ok(Kind::Word(text));
         }

@@ -635,7 +635,10 @@ impl Parser {
     }
 
     fn name(&mut self) -> Result<String, Error> {
-        let Kind::Word(name) = &self.token()?.kind else {
+        // 12.7.2 defines a reserved word as a literal sequence of source
+        // characters, so a name an escape wrote is no keyword; 13.1.1 refuses
+        // it where its `StringValue` is one all the same.
+        let (Kind::Word(name) | Kind::EscapedWord(name)) = &self.token()?.kind else {
             return Err(self.error("expected binding identifier"));
         };
         if !self.identifier_reference_allowed(name) || (self.strict && strict_binding(name)) {
@@ -647,7 +650,14 @@ impl Parser {
     }
 
     fn identifier_reference_allowed(&self, name: &str) -> bool {
-        !reserved(name) || name == "yield" && !self.strict
+        // 12.7.2 counts the three literal words among the reserved ones, and
+        // 13.2.3 gives them their own productions, so neither is a name.
+        if matches!(name, "true" | "false" | "null") {
+            return false;
+        }
+        // 13.1.1: `yield` is a name only where no [Yield] parameter stands,
+        // which 15.5 gives every production of a generator.
+        !reserved(name) || name == "yield" && !self.strict && !self.generator_context
     }
     fn statements(&mut self, block: bool) -> Result<Vec<Stmt>, Error> {
         let mut body = Vec::new();
@@ -1829,7 +1839,9 @@ impl Parser {
             Kind::BigInt(digits, radix) => {
                 self.make(ExprKind::BigInt(digits.into(), radix), 1, token.offset)?
             }
-            Kind::Word(name) if !reserved(&name) => {
+            Kind::Word(name) | Kind::EscapedWord(name)
+                if !reserved(&name) && !matches!(name.as_str(), "true" | "false" | "null") =>
+            {
                 self.make(ExprKind::Name(name), 1, token.offset)?
             }
             Kind::Punct("(") => {
@@ -1880,7 +1892,9 @@ impl Parser {
                 }
                 if !matches!(
                     self.token()?.kind,
-                    Kind::Word(_) | Kind::Literal(Value::Boolean(_) | Value::Null)
+                    Kind::Word(_)
+                        | Kind::EscapedWord(_)
+                        | Kind::Literal(Value::Boolean(_) | Value::Null)
                 ) {
                     return Err(self.error("dot requires IdentifierName"));
                 }
@@ -1949,11 +1963,16 @@ impl Parser {
 
     fn function_expression(&mut self, offset: usize) -> Result<Expr, Error> {
         let generator = self.eat("*");
+        // 15.2.1 gives the BindingIdentifier of a FunctionExpression a
+        // [~Yield] parameter, whatever the function around it is.
+        let outer_generator = core::mem::replace(&mut self.generator_context, false);
         let name = if self.is("(") {
             None
         } else {
-            Some(self.name()?)
+            Some(self.name())
         };
+        self.generator_context = outer_generator;
+        let name = name.transpose()?;
         let mut function = self.generator_function(name, generator)?;
         function.source = Some(self.source_since(offset)?);
         self.make(ExprKind::Function(function), 1, offset)
@@ -2058,7 +2077,9 @@ impl Parser {
 
     fn property_name(&mut self) -> Result<Value, Error> {
         let value = match &self.token()?.kind {
-            Kind::Word(name) => Value::string(name),
+            // 13.2.5 and 13.3.2 take an `IdentifierName`, which 12.7.2 lets
+            // a `\ UnicodeEscapeSequence` write whatever word it spells.
+            Kind::Word(name) | Kind::EscapedWord(name) => Value::string(name),
             Kind::Literal(value) => Value::String(value.units()),
             _ => return Err(self.unverified_error("expected property name")),
         };
