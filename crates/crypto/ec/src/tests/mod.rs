@@ -9,6 +9,7 @@ mod fe25519;
 mod p256;
 mod p384;
 mod reference;
+mod scalar;
 mod x25519;
 
 /// Renders bytes as lower-case hexadecimal, so that a failing vector prints

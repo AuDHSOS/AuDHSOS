@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-use crate::Secret;
+use crate::{Secret, wipe};
 
 #[test]
 fn a_new_secret_holds_the_bytes_it_was_given() {
@@ -50,6 +50,38 @@ fn a_clone_is_independent_of_its_original() {
     clone.clear();
     assert_eq!(secret.as_bytes(), &[5u8; 4]);
     assert_eq!(clone.as_bytes(), &[0u8; 4]);
+}
+
+/// Regression, issue #44: the barrier `wipe` places after the fill takes
+/// the buffer, not the `&&mut [u8]` that named it.
+///
+/// Both spellings zero the same bytes, so no call can observe the
+/// difference; the guard reads the source, as the one for issue #43 does.
+#[test]
+fn wipe_places_the_barrier_on_the_buffer() {
+    let source = include_str!("../secret.rs");
+    assert!(source.contains("let _ = black_box(&*bytes);"));
+    assert!(!source.contains("black_box(&bytes)"));
+}
+
+#[test]
+fn wipe_overwrites_every_byte_of_a_slice() {
+    let mut buffer = [0xABu8; 64];
+    wipe(&mut buffer);
+    assert_eq!(buffer, [0u8; 64]);
+
+    let mut padded = [0xFFu8; 131];
+    if let Some(tail) = padded.get_mut(3..) {
+        wipe(tail);
+    }
+    assert_eq!(padded.get(..3), Some(&[0xFFu8, 0xFF, 0xFF][..]));
+    assert!(
+        padded
+            .get(3..)
+            .is_some_and(|tail| tail.iter().all(|b| *b == 0))
+    );
+
+    wipe(&mut []);
 }
 
 #[test]
