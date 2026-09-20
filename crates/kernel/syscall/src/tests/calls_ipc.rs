@@ -1250,7 +1250,7 @@ fn closing_a_reply_handle_leaves_a_caller_that_waits_on_an_endpoint_where_it_is(
             endpoint: second_id,
             queue: kernel_objects::object::Queue::Receivers,
             badge: 0,
-            kernel_message: false,
+            kernel_message: false
         }
     );
     assert_eq!(

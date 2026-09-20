@@ -1119,7 +1119,7 @@ fn a_reply_object_left_by_a_suspended_caller_wakes_nobody_when_it_is_dropped() {
             endpoint: second,
             queue: Queue::Receivers,
             badge: 0,
-            kernel_message: false,
+            kernel_message: false
         }
     );
 }
