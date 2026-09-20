@@ -56,6 +56,18 @@ impl Queue {
     }
 }
 
+/// Which end of the queue of its priority a thread enters.
+#[derive(Clone, Copy, Debug)]
+enum Placement {
+    /// Behind everyone of the same priority, which is what a thread that
+    /// spent its slice, woke, or yielded gets.
+    Tail,
+    /// Before everyone of the same priority, which is what a thread
+    /// displaced by a higher priority with ticks left gets, so that it
+    /// finishes its slice rather than hand the processor to a peer (D-191).
+    Head,
+}
+
 /// What a call to the scheduler asks the caller to do.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Outcome {
@@ -212,6 +224,18 @@ impl Scheduler {
         threads: &mut Pool<Thread, N>,
         id: ThreadId,
     ) -> Result<(), Error> {
+        self.link(threads, id, Placement::Tail)
+    }
+
+    /// Puts `id` into the queue of its priority at `placement`: the idle
+    /// thread, a priority the table has no queue for, and a thread already
+    /// in a queue are refused, and a refused call links nothing.
+    fn link<const N: usize>(
+        &mut self,
+        threads: &mut Pool<Thread, N>,
+        id: ThreadId,
+        placement: Placement,
+    ) -> Result<(), Error> {
         if self.idle == Some(id) {
             return Err(Error::InvalidArgument);
         }
@@ -223,32 +247,60 @@ impl Scheduler {
         if !thread.queue_links.is_unlinked() {
             return Err(Error::InvalidState);
         }
+        let head = self.queue(priority).and_then(|queue| queue.head);
         let tail = self.queue(priority).and_then(|queue| queue.tail);
-        if self
-            .queue(priority)
-            .is_some_and(|queue| queue.head == Some(id))
-        {
+        if head == Some(id) {
             return Err(Error::InvalidState);
         }
-        thread.queue_links = Links {
-            next: None,
-            previous: tail,
+        // The neighbour is the end the thread attaches to; the far end of
+        // the queue names the thread when the queue was empty.
+        let neighbour = match placement {
+            Placement::Tail => tail,
+            Placement::Head => head,
         };
-        match tail {
-            Some(previous) => {
-                let before = threads
-                    .get_mut(previous)
+        // The neighbour is read before the links of the thread are written,
+        // so that a neighbour the pool no longer holds leaves the thread
+        // unlinked. Written first it would leave a thread that is in no
+        // queue and says it is in one, which `enqueue` refuses for ever
+        // after and `dequeue` cannot correct.
+        if let Some(neighbour) = neighbour {
+            threads.get(neighbour).map_err(|_| Error::InvalidHandle)?;
+        }
+        let thread = threads.get_mut(id).map_err(|_| Error::InvalidHandle)?;
+        thread.queue_links = match placement {
+            Placement::Tail => Links {
+                next: None,
+                previous: tail,
+            },
+            Placement::Head => Links {
+                next: head,
+                previous: None,
+            },
+        };
+        match neighbour {
+            Some(neighbour) => {
+                let entry = threads
+                    .get_mut(neighbour)
                     .map_err(|_| Error::InvalidHandle)?;
-                before.queue_links.next = Some(id);
+                match placement {
+                    Placement::Tail => entry.queue_links.next = Some(id),
+                    Placement::Head => entry.queue_links.previous = Some(id),
+                }
             }
             None => {
                 if let Some(queue) = self.queue_mut(priority) {
-                    queue.head = Some(id);
+                    match placement {
+                        Placement::Tail => queue.head = Some(id),
+                        Placement::Head => queue.tail = Some(id),
+                    }
                 }
             }
         }
         if let Some(queue) = self.queue_mut(priority) {
-            queue.tail = Some(id);
+            match placement {
+                Placement::Tail => queue.tail = Some(id),
+                Placement::Head => queue.head = Some(id),
+            }
         }
         self.mark_ready(priority, true);
         Ok(())
@@ -299,10 +351,19 @@ impl Scheduler {
 
     /// The thread that should run now: the first thread of the highest
     /// priority that holds one, or the idle thread when every queue is
-    /// empty. The picked thread leaves its queue, its state becomes
-    /// [`ThreadState::Running`], and it receives a fresh time slice; the
-    /// thread that was running goes back into a queue when it is still
-    /// ready.
+    /// empty. The picked thread leaves its queue and its state becomes
+    /// [`ThreadState::Running`]; it receives a fresh time slice unless it
+    /// carries ticks a displacement left it. The thread that was running
+    /// goes back into a queue when it is still ready.
+    ///
+    /// Two events take the running thread off the processor here, and they
+    /// differ in where the thread lands. A thread whose slice ran out
+    /// leaves on [`Event::SliceExpired`] to the tail of its queue with no
+    /// ticks; a thread a higher priority took the processor from leaves on
+    /// [`Event::Displaced`] to the head of its queue, keeping the ticks it
+    /// had. Without the second case a thread displaced once per tick runs
+    /// one tick per turn, however long `DEFAULT_TIME_SLICE_TICKS` is
+    /// (D-191).
     ///
     /// # Errors
     ///
@@ -318,9 +379,21 @@ impl Scheduler {
             && thread.state == ThreadState::Running
             && Some(current) != self.idle
         {
-            let outgoing = self.apply(threads, current, Event::Preempt);
-            if outgoing.is_ok() {
-                self.enqueue(threads, current)?;
+            let (ticks, priority) = (thread.time_slice, thread.priority);
+            let displaced = ticks > 0
+                && self
+                    .highest_ready()
+                    .is_some_and(|highest| highest > priority);
+            let (event, placement) = if displaced {
+                (Event::Displaced, Placement::Head)
+            } else {
+                (Event::SliceExpired, Placement::Tail)
+            };
+            if self.apply(threads, current, event).is_ok() {
+                if !displaced {
+                    Self::spend_slice(threads, current);
+                }
+                self.link(threads, current, placement)?;
             }
         }
         let Some(priority) = self.highest_ready() else {
@@ -335,7 +408,9 @@ impl Scheduler {
         self.dequeue(threads, id)?;
         let thread = threads.get_mut(id).map_err(|_| Error::InvalidHandle)?;
         thread.state = next(thread.state, Event::Schedule)?;
-        thread.time_slice = DEFAULT_TIME_SLICE_TICKS;
+        if thread.time_slice == 0 {
+            thread.time_slice = DEFAULT_TIME_SLICE_TICKS;
+        }
         self.current = Some(id);
         Ok(id)
     }
@@ -775,11 +850,20 @@ impl Scheduler {
             return Err(Error::InvalidArgument);
         }
         let queued = thread.state == ThreadState::Ready;
+        let moves = thread.priority != priority;
         if queued {
             self.dequeue(threads, id)?;
         }
         let thread = threads.get_mut(id).map_err(|_| Error::InvalidHandle)?;
         thread.priority = priority;
+        if moves {
+            // The ticks were earned at the priority the thread left and buy
+            // it nothing at the one it enters: a running thread that lowers
+            // itself below a waiter would otherwise reach the head of the
+            // queue of its new priority on the displacement that follows,
+            // ahead of everyone who waited there (D-191).
+            Self::spend_slice(threads, id);
+        }
         if queued {
             self.enqueue(threads, id)?;
             return Ok(self.preempts_current(threads, id));

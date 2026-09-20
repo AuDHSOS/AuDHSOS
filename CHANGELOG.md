@@ -890,6 +890,18 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `kernel-sched`: `Scheduler::pick_next` applied one event, `Event::Preempt`,
+  to the outgoing thread for both a slice that ran out and a loss of the
+  processor to a higher priority, sent it to the tail of its queue, and handed
+  the picked thread a whole slice, so every displacement rotated the queue and
+  discarded the remaining ticks. A thread of higher priority that wakes once
+  per timer tick therefore cut the run of each peer to one tick, whatever
+  `DEFAULT_TIME_SLICE_TICKS` says. The event splits into `Event::SliceExpired`,
+  which keeps the tail placement and the fresh slice, and `Event::Displaced`,
+  which puts the thread at the head of its queue with the ticks it had; the
+  pick refreshes a slice only when it is zero. D-191 records the change, with
+  eight host tests over `pick_next` and `set_priority`. Issue #54.
+
 - `kernel-ipc`: `cancel` marks the reply object of a `Wait::Reply` consumed.
   It cleared the caller's record alone, which `reply_caller` compares but
   `destroy_reply` does not, so the server closing its reply handle woke a
