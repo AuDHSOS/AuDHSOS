@@ -535,8 +535,9 @@ impl Endpoint {
 pub struct Reply {
     /// The thread that waits for the answer.
     pub caller: ThreadId,
-    /// Whether the answer has been given, after which the object refuses a
-    /// second one.
+    /// Whether the object owes its caller nothing: the answer was given, or
+    /// a kill, a suspend, or an exit took the caller out of the wait. The
+    /// object refuses an answer either way.
     pub consumed: bool,
 }
 
@@ -780,6 +781,10 @@ pub enum Wait {
         /// the receiver that meets it later sees. Zero for a receiver, which
         /// has no capability of anyone else's in its hand.
         badge: u64,
+        /// `true` for a queued sender whose message the kernel built, which
+        /// is the only sender allowed a label of the reserved range. `false`
+        /// for a receiver and for every message a user thread wrote.
+        kernel_message: bool,
     },
     /// The thread waits for the answer to a call.
     Reply {

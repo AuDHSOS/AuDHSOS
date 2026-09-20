@@ -902,6 +902,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   pick refreshes a slice only when it is zero. D-191 records the change, with
   eight host tests over `pick_next` and `set_priority`. Issue #54.
 
+- `kernel-ipc`: `cancel` marks the reply object of a `Wait::Reply` consumed.
+  It cleared the caller's record alone, which `reply_caller` compares but
+  `destroy_reply` does not, so the server closing its reply handle woke a
+  caller that had stopped waiting for the answer. A caller suspended out of
+  its call and blocked on another endpoint afterwards became ready while its
+  wait links still chained it into that endpoint's queue, and a later send
+  copied a message into a thread that was ready or running; a receive on a
+  third endpoint after that put one thread's links in two queues. Catalog
+  6.6.8 of document 6 carries the item.
+
 - `xtask`: the Secure Shell interop run waited for `[init] started app-ssh`
   under one `E2E_TIMEOUT` of 180 seconds, which had to cover the firmware, the
   kernel and the fifteen programs up to it, eleven of them read off the scratch

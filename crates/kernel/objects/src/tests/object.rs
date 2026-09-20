@@ -345,6 +345,7 @@ fn the_wait_record_names_the_queue_and_what_it_asked_for() {
         endpoint: ObjectId::new(1, 1),
         queue: Queue::Callers,
         badge: 7,
+        kernel_message: false,
     };
     assert!(!waiting.is_nothing());
 }

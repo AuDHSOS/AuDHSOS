@@ -333,6 +333,9 @@ done until every applicable item has a test. Items are added, never removed.
   handles than it started with.
 - `reply` on a reply object whose caller was killed fails without touching
   memory; dropping a reply object wakes the caller with `ReplyDropped`.
+- Dropping the reply object of a call the caller was suspended out of wakes
+  nobody: `cancel` consumed the object, and a caller that blocked on another
+  endpoint afterwards stays in that endpoint's queue.
 - Messages with zero words, the maximum number of words, and one more than
   the maximum (rejected before any copy).
 - Zero handles, four handles, five handles (rejected).

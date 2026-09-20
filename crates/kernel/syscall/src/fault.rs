@@ -57,7 +57,7 @@ pub fn deliver<
         thread,
         process,
         handler,
-        Intent::call(badge),
+        Intent::kernel_call(badge),
         buffer,
     );
     match outcome {
@@ -163,12 +163,16 @@ fn hexadecimal(into: &mut [u8; 18], value: u64) -> usize {
     len
 }
 
-/// Builds the fault message: the reserved label of its kind, three words,
-/// and no handle.
-fn write_message(buffer: &mut [u8; SIZE], fault: Fault) {
+/// The payload words of a fault message: the address, the instruction
+/// pointer, and the error code.
+pub(crate) const WORDS: usize = 3;
+
+/// Builds the fault message: the reserved label of its kind, [`WORDS`]
+/// words, and no handle.
+pub(crate) fn write_message(buffer: &mut [u8; SIZE], fault: Fault) {
     let mut writer = BufferMut::new(buffer);
     writer.set_label(fault_label(fault.kind));
-    let _ = writer.set_counts(3, 0);
+    let _ = writer.set_counts(WORDS, 0);
     writer.set_word(0, fault.address);
     writer.set_word(1, fault.instruction_pointer);
     writer.set_word(2, fault.error_code);
