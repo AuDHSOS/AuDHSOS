@@ -3925,14 +3925,9 @@ fn a_block_scope_is_taken_or_names_what_stops_it() -> Result<(), Error> {
     // B.3.2.1 gives the function a `var` binding of the body as well, so both
     // paths answer the same for a Block that is a statement of it.
     differential("{function f(){return 42}f()}")?;
-    // 14.7.4.8 copies a Block binding of a loop per iteration, which the
-    // lowering does not take.
-    let source = "var r=[];for(var i=0;i<2;i=i+1){let a=i;r.push(function(){return a})}r[0]()";
-    let program = compile(source, Limits::default())?;
-    assert!(!program.uses_register_backend(), "{source}");
-    let _ =
-        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost);
-    Ok(())
+    // 14.2.3 gives the Block of an iteration an Environment Record of its
+    // own, which the per-iteration copy of 14.7.4.4 carries.
+    differential("var r=[];for(var i=0;i<2;i=i+1){let a=i;r.push(function(){return a})}r[0]()")
 }
 
 #[test]
@@ -12527,5 +12522,31 @@ fn a_case_block_of_a_function_body_declares_a_function_and_a_var() -> Result<(),
         &answer,
         &Value::String("function".encode_utf16().collect())
     ));
+    Ok(())
+}
+
+#[test]
+fn a_block_binding_of_a_loop_is_read_per_iteration() -> Result<(), Error> {
+    // 14.2.3 gives the Block of an iteration an Environment Record of its
+    // own, which the per-iteration copy of 14.7.4.4 carries.
+    for source in [
+        "var f=[];for(let i=0;i<3;i++){let a=i*2;f.push(()=>a)}f.map(g=>g()).join(',')",
+        "var f=[];for(var i=0;i<3;i++){let a=i*2;f.push(()=>a)}f.map(g=>g()).join(',')",
+        "var f=[];for(let i=0;i<2;i++){let a=i;f.push(()=>a+i)}f.map(g=>g()).join(',')",
+        // A `var` of the body is one binding of the frame, which every
+        // iteration writes.
+        "var f=[];for(let i=0;i<3;i++){var v=i;f.push(()=>v)}f.map(g=>g()).join(',')",
+        // 14.7.5.6 step 7.f copies where the head is read by a closure.
+        "var f=[];for(const x of [1,2]){let a=x;f.push(()=>a+x)}f.map(g=>g()).join(',')",
+    ] {
+        differential(source)?;
+    }
+    // A closure made before the loop reads the context the copy would take,
+    // so the loop is a gap instead.
+    let source = "var o=1;var h=()=>o;for(let i=0;i<2;i++){let a=i;h=()=>a}h()";
+    assert!(
+        !compile(source, Limits::default())?.uses_register_backend(),
+        "{source}"
+    );
     Ok(())
 }
