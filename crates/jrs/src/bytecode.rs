@@ -908,6 +908,10 @@ struct RegisterLowerer {
     /// enclosing scope binds. 10.2.11 step 28 keeps them out of the
     /// environment the Initializers of the parameters run in.
     body_var_names: Vec<String>,
+    /// Every name 10.2.11 gives the body a `var` binding of, including the
+    /// ones an enclosing scope binds already: B.3.2.1 writes to those and
+    /// creates no second binding for them.
+    body_binding_names: BTreeSet<String>,
     /// How many formal parameters 10.4.4.7 could map the indices of the
     /// arguments object onto.
     mapped_parameters: usize,
@@ -1178,6 +1182,7 @@ impl RegisterLowerer {
             open_iterators: Vec::new(),
             arguments_binding: None,
             body_var_names: Vec::new(),
+            body_binding_names: BTreeSet::new(),
             mapped_parameters: 0,
             maps_arguments: false,
             dead_parameters: Vec::new(),
@@ -1903,6 +1908,7 @@ impl RegisterLowerer {
             return Some(());
         }
         let names = register_body_var_names_of(body, self.code.strict)?;
+        self.body_binding_names.clone_from(&names);
         let initialized_names = register_body_initialized_var_names(body)?;
         for (index, statement) in body.iter().enumerate() {
             let Stmt::Function(declared_name, function) = statement else {
@@ -7840,7 +7846,7 @@ impl RegisterLowerer {
             Option<RegisterBinding>,
         )],
     ) -> bool {
-        if self.parameter_names.contains(name) {
+        if self.parameter_names.contains(name) || name == ARGUMENTS {
             return false;
         }
         // 16.1.7 keeps a top-level `var` of a Script on the Global
@@ -7854,19 +7860,28 @@ impl RegisterLowerer {
         if self.block_depth != 1 {
             return false;
         }
-        self.body_var_names.iter().any(|held| held == name)
+        self.body_binding_names.contains(name)
             && scoped
                 .iter()
                 .any(|(bound, _, previous)| bound == name && previous.is_some())
     }
 
-    /// Whether B.3.2.1 leaves the name out of its var bindings: a lexical
-    /// declaration of a scope around the Block makes replacing the
-    /// declaration with a `var` an early error. 16.1.7 binds every other
-    /// name of a Script, so a Block of one takes no binding from this
-    /// lowering and the write names the global wherever it stands.
+    /// Whether B.3.2.1 leaves the name out of its var bindings: a formal
+    /// parameter binds it, or a lexical declaration of a scope around the
+    /// Block makes replacing the declaration with a `var` an early error.
+    ///
+    /// 16.1.7 binds every other name of a Script, so a Block of one takes no
+    /// binding from this lowering and the write names the global wherever it
+    /// stands; a function body carries the eligible names of 10.2.11 in
+    /// `body_binding_names`.
     fn skips_the_var_binding(&self, name: &str) -> bool {
-        self.script_globals && !self.script_var_names.contains(name)
+        if self.parameter_names.contains(name) {
+            return true;
+        }
+        if self.script_globals {
+            return !self.script_var_names.contains(name);
+        }
+        !self.body_binding_names.contains(name)
     }
 
     /// B.3.2.1: the function the Block binds is written to the `var` binding
@@ -7935,6 +7950,10 @@ impl RegisterLowerer {
                 })
             {
                 self.refuse("a function declaration in a sloppy Block");
+                return None;
+            }
+            if !self.code.strict && declares_arguments(body) {
+                self.refuse("a Block function named `arguments`");
                 return None;
             }
             for statement in body {
@@ -8273,6 +8292,30 @@ impl RegisterLowerer {
         outcome
     }
 
+    /// 14.12.4 puts a `var` of a clause in the var environment around the
+    /// statement, and the dispatch enters a clause by a jump as well as by
+    /// fallthrough, so such a name carries no single type at either entry: it
+    /// takes the top of the lattice for the whole `CaseBlock`.
+    fn widen_the_var_names_of_the_clauses(
+        &mut self,
+        clauses: &[(Option<Expr>, Vec<Stmt>)],
+    ) -> Option<()> {
+        let mut declared = BTreeSet::new();
+        for (_, body) in clauses {
+            for statement in body {
+                register_statement_var_names(statement, &mut declared, false)?;
+            }
+        }
+        for name in declared {
+            if let Some(binding) = self.bindings.get_mut(&name)
+                && binding.value_type.is_some()
+            {
+                binding.value_type = Some(RegisterType::Unknown);
+            }
+        }
+        Some(())
+    }
+
     fn lower_switch_body(
         &mut self,
         discriminant: &Expr,
@@ -8301,10 +8344,15 @@ impl RegisterLowerer {
             self.refuse("a function declaration in a sloppy CaseBlock");
             return None;
         }
+        if !self.code.strict && clauses.iter().any(|(_, body)| declares_arguments(body)) {
+            self.refuse("a Block function named `arguments`");
+            return None;
+        }
         if carries_a_function {
             self.instantiate_case_block_functions(clauses)?;
         }
 
+        self.widen_the_var_names_of_the_clauses(clauses)?;
         let bindings_before = self.bindings.clone();
         let layouts_before = self.object_layouts.clone();
         let mut selected = Vec::new();
@@ -12247,9 +12295,25 @@ fn register_body_var_names_of(body: &[Stmt], strict: bool) -> Option<BTreeSet<St
     // takes the function where the declaration is evaluated. Strict code
     // keeps the function in the Block alone.
     if !strict {
+        let mut added = BTreeSet::new();
         for statement in body {
-            register_block_function_names(statement, &mut names);
+            register_block_function_names(statement, &mut added);
         }
+        // A lexical declaration of the body makes replacing the declaration
+        // with a `var` of the same name an early error, which takes the name
+        // out again.
+        for statement in body {
+            if let Stmt::Declare(bindings) = statement {
+                for (pattern, _, _) in bindings {
+                    let mut bound = Vec::new();
+                    pattern.names(&mut bound);
+                    for name in bound {
+                        added.remove(&name);
+                    }
+                }
+            }
+        }
+        names.extend(added);
     }
     Some(names)
 }
@@ -12836,6 +12900,14 @@ fn register_scoped_statement_writes_names(
 /// follows it.
 /// The name 10.4.4 binds in every ordinary function.
 const ARGUMENTS: &str = "arguments";
+
+/// Whether a `StatementList` declares a function named `arguments`, which
+/// 10.2.11 step 22 bound already: the write of B.3.2.1 lands on that binding
+/// and the two suites disagree on the result, so the lowering names a gap.
+fn declares_arguments(body: &[Stmt]) -> bool {
+    body.iter()
+        .any(|statement| matches!(statement, Stmt::Function(name, _) if name == ARGUMENTS))
+}
 
 /// The name 13.3.6.1 makes a call a direct eval.
 const EVAL_NAME: &str = "eval";
@@ -13997,19 +14069,22 @@ fn register_scoped_clause_references(
 ) -> Option<()> {
     let mut local_names = BTreeSet::new();
     for statement in body {
-        if let Stmt::Declare(bindings) = statement {
-            for (pattern, _, _) in bindings {
-                let mut bound = Vec::new();
-                pattern.names(&mut bound);
-                for name in bound {
-                    if !local_names.insert(name) {
-                        return None;
+        match statement {
+            Stmt::Declare(bindings) => {
+                for (pattern, _, _) in bindings {
+                    let mut bound = Vec::new();
+                    pattern.names(&mut bound);
+                    for name in bound {
+                        if !local_names.insert(name) {
+                            return None;
+                        }
                     }
                 }
             }
-        }
-        if matches!(statement, Stmt::Function(_, _)) {
-            return None;
+            // 14.2.2 makes a function declaration of a clause a binding of
+            // the CaseBlock, which 14.12.4 holds for every clause at once.
+            Stmt::Function(name, _) if !local_names.insert(name.clone()) => return None,
+            _ => {}
         }
     }
     let mut direct = BTreeSet::new();

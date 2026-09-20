@@ -4736,13 +4736,17 @@ fn a_case_block_carries_the_lexical_declarations_of_every_clause() -> Result<(),
     ] {
         differential(source)?;
     }
-    // B.3.2.4 writes a function declaration of a clause on the variable scope
-    // around the CaseBlock as well, which this lowering does not make.
-    let source = "switch(1){default:function f(){}}";
-    assert!(
-        !compile(source, Limits::default())?.uses_register_backend(),
-        "{source}"
-    );
+    // B.3.2.2 writes a function declaration of a clause to the `var` binding
+    // of the scope around the CaseBlock, which the stack path omits.
+    let source = "switch(1){default:function f(){}};typeof f";
+    let program = compile(source, Limits::default())?;
+    assert!(program.uses_register_backend(), "{source}");
+    let answer =
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost)?;
+    assert!(same_value(
+        &answer,
+        &Value::String("function".encode_utf16().collect())
+    ));
     Ok(())
 }
 
@@ -12492,6 +12496,33 @@ fn a_destructuring_catch_parameter_takes_its_names_out_of_b_3_2_1() -> Result<()
     let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
     let answer =
         realm.evaluate("try { throw null; } catch (f) { { function f() {} } } typeof f;")?;
+    assert!(same_value(
+        &answer,
+        &Value::String("function".encode_utf16().collect())
+    ));
+    Ok(())
+}
+
+#[test]
+fn a_case_block_of_a_function_body_declares_a_function_and_a_var() -> Result<(), Error> {
+    // 14.2.2 binds a function of a clause in the CaseBlock and 14.12.4 puts
+    // a `var` of one in the var environment around the statement, which the
+    // scan of the body reaches.
+    differential("function g(){switch(1){case 1: var x=1} return x} g()")?;
+    // B.3.2.1 leaves out a name the body declares lexically.
+    differential_scripts(&["function g(){ let f = 123; { function f(){} } return f} g()"])?;
+    // B.3.2.2 writes the clause's function to the `var` binding, which the
+    // stack path omits: this one is engine-only.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    let answer = realm.evaluate(
+        "function g(){ switch(1){case 1: function f(){return 1}} \
+         function f(){return 2} return f()} g()",
+    )?;
+    assert!(same_value(&answer, &Value::Number(1.0)));
+    let answer = realm.evaluate(
+        "function g(){ var f; switch(1){case 1: function f(){return 1}} return typeof f} g()",
+    )?;
     assert!(same_value(
         &answer,
         &Value::String("function".encode_utf16().collect())
