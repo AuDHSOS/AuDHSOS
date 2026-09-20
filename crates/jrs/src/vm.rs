@@ -728,9 +728,19 @@ impl Execution<'_> {
                     }
                     compiled = Some(crate::engine::interpreter::Compiled::Printed);
                 }
-                Ok(crate::engine::interpreter::Outcome::Evaluate(source, strict)) => {
+                Ok(crate::engine::interpreter::Outcome::Evaluate(source, strict, direct)) => {
                     self.fuel = vm.fuel;
-                    let answer = self.evaluate_nested_script(agent, &source, strict, depth);
+                    // 19.2.1.1 step 5 evaluates the text of a direct eval
+                    // against the Variable Environment of the frame the call
+                    // stands in, which is the record that frame holds.
+                    let shared = direct.then(|| vm.current_context()).flatten();
+                    let answer = self.evaluate_nested_script(
+                        agent,
+                        &source,
+                        (strict, direct),
+                        shared,
+                        depth,
+                    );
                     vm.fuel = self.fuel;
                     compiled = Some(answer);
                 }
@@ -749,17 +759,19 @@ impl Execution<'_> {
         &mut self,
         agent: &mut crate::engine::agent::Agent,
         source: &[u16],
-        strict_caller: bool,
+        how: (bool, bool),
+        shared: Option<crate::engine::context::ContextRef>,
         depth: usize,
     ) -> crate::engine::interpreter::Compiled {
         /// How deep one run nests evals before the budget is the answer.
         const NESTING_LIMIT: usize = 8;
+        let (strict_caller, direct) = how;
         if depth >= NESTING_LIMIT {
             return crate::engine::interpreter::Compiled::Evaluated(Err(
                 crate::engine::interpreter::VMError::CallStackOverflow,
             ));
         }
-        let compiled = self.compile_eval_unit(source, strict_caller);
+        let compiled = self.compile_eval_unit(source, strict_caller, direct);
         let crate::engine::interpreter::Compiled::Unit(unit) = compiled else {
             return compiled;
         };
@@ -773,6 +785,7 @@ impl Execution<'_> {
         nested.set_property_limit(self.limits.properties);
         nested.set_call_frame_limit(self.limits.call_frames);
         nested.set_binding_limit(self.limits.binding_slots);
+        nested.set_current_context(shared);
         let answer = self.run_engine_unit(&mut nested, agent, unit, depth.saturating_add(1));
         self.fuel = nested.fuel;
         crate::engine::interpreter::Compiled::Evaluated(answer)
@@ -786,6 +799,7 @@ impl Execution<'_> {
         &mut self,
         source: &[u16],
         strict_caller: bool,
+        direct: bool,
     ) -> crate::engine::interpreter::Compiled {
         // A text no Script accepts is the `SyntaxError` of 19.2.1.1 step 8; a
         // Script the register lowering does not take is a gap of the migration
@@ -800,10 +814,28 @@ impl Execution<'_> {
         let Some(code) = program.register_code.as_ref() else {
             return crate::engine::interpreter::Compiled::Unlowered;
         };
-        self.register_unit(code).map_or(
-            crate::engine::interpreter::Compiled::Unlowered,
-            crate::engine::interpreter::Compiled::Unit,
-        )
+        // 19.2.1.1 step 5 resolves a free name of a direct eval against the
+        // record chain of the frame the call stands in. Step 5.d places a
+        // name the text declares in that Variable Environment, which is the
+        // named gap below.
+        let rewritten = if direct {
+            let mut unit = (**code).clone();
+            if !crate::engine::bytecode::resolve_by_name(&mut unit) {
+                return crate::engine::interpreter::Compiled::Evaluated(Err(
+                    crate::engine::interpreter::VMError::Unsupported(
+                        "a declaration in the text of a direct eval",
+                    ),
+                ));
+            }
+            Some(alloc::rc::Rc::new(unit))
+        } else {
+            None
+        };
+        self.register_unit(rewritten.as_ref().unwrap_or(code))
+            .map_or(
+                crate::engine::interpreter::Compiled::Unlowered,
+                crate::engine::interpreter::Compiled::Unit,
+            )
     }
 
     /// Compiles the body 20.2.1.1 built and gives it a unit of this Realm.

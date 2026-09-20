@@ -911,6 +911,41 @@ impl GenerationalHeap {
         Ok(ContextRef::young(index, self.nursery.generation))
     }
 
+    /// `CreateMutableBinding` of 9.1.1.1.2 on one record: the slot the name
+    /// takes, which is the one it already stands at where the record names
+    /// it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a reference the heap no
+    /// longer holds, and [`HeapError::ReferenceSpaceExhausted`] where the
+    /// record holds as many bindings as a slot index can name.
+    pub fn declare_in_context(
+        &mut self,
+        context: ContextRef,
+        name: &alloc::rc::Rc<[u16]>,
+    ) -> Result<u16, HeapError> {
+        let index = context.index() as usize;
+        let record = if context.is_old() {
+            let entry = self
+                .old_gen
+                .contexts
+                .get_mut(index)
+                .ok_or(HeapError::InvalidReference)?;
+            (u32::from(entry.generation) == context.generation())
+                .then_some(entry.value.as_mut())
+                .flatten()
+        } else {
+            (self.nursery.generation == context.generation())
+                .then(|| self.nursery.contexts.get_mut(index).map(|e| &mut e.value))
+                .flatten()
+        };
+        record
+            .ok_or(HeapError::InvalidReference)?
+            .declare(name)
+            .ok_or(HeapError::ReferenceSpaceExhausted)
+    }
+
     /// Reads one context slot by following `depth` outer links.
     #[must_use]
     pub fn context_slot(&self, mut context: ContextRef, depth: u16, slot: u16) -> Option<Value> {

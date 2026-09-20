@@ -1667,6 +1667,10 @@ pub struct RegisterVM {
     direct_eval_strict: bool,
     /// The same, for the Script the embedding is about to evaluate.
     pending_strict: bool,
+    /// Whether the text waiting to be compiled is the one of a direct eval of
+    /// 13.3.6.1, which runs against the record chain of the frame it stands
+    /// in rather than against the global environment alone.
+    pending_direct: bool,
     /// Whether that text is a line the embedding was asked to write.
     pending_print: bool,
     /// Where the run continues once that unit exists.
@@ -1759,9 +1763,11 @@ pub enum Outcome {
     /// stopped once [`RegisterVM::resume_unit`] is given the unit.
     Compile(alloc::rc::Rc<[u16]>),
     /// 19.2.1 evaluates a Script of the same Realm, which the embedding runs
-    /// on the heap and Realm this one is using. The flag is `strictCaller` of
-    /// 19.2.1.1.
-    Evaluate(alloc::rc::Rc<[u16]>, bool),
+    /// on the heap and Realm this one is using. The first flag is
+    /// `strictCaller` of 19.2.1.1, the second whether 13.3.6.1 makes the call
+    /// a direct eval, which 19.2.1.1 step 5 evaluates against the Variable
+    /// Environment of the frame the call stands in.
+    Evaluate(alloc::rc::Rc<[u16]>, bool, bool),
     /// The Script called `print`, which only the embedding can answer: it
     /// writes the line and the call instruction runs again.
     Print(alloc::rc::Rc<[u16]>),
@@ -1818,6 +1824,7 @@ impl RegisterVM {
             direct_eval: false,
             direct_eval_strict: false,
             pending_strict: false,
+            pending_direct: false,
             pending_print: false,
             resume_pc: 0,
             resume_code_id: None,
@@ -27111,7 +27118,15 @@ impl RegisterVM {
             ));
         }
         let direct = core::mem::take(&mut self.direct_eval);
-        if direct && call.caller_code_id.is_some() {
+        // Step 5: a direct eval inside a function evaluates against the
+        // Variable Environment of that function, which is the record of
+        // 9.1.1.1 the frame holds. The record holds only the bindings the
+        // lowering captured into it, and a binding that stayed in a register
+        // is one the text cannot name, so the gap stands until every binding
+        // of such a body takes a slot.
+        self.pending_direct = direct && call.caller_code_id.is_some();
+        if self.pending_direct {
+            self.pending_direct = false;
             return Err(VMError::Unsupported("a direct eval inside a function"));
         }
         // Step 10: a direct eval of a strict caller evaluates strict text,
@@ -32767,6 +32782,38 @@ impl RegisterVM {
         self.run_loop(units, feedback, heap, realm, pc, current_code_id)
     }
 
+    /// The Declarative Environment Record of 9.1.1.1 the running frame holds,
+    /// which is the Variable Environment a direct eval of 13.3.6.1 shares.
+    #[must_use]
+    pub const fn current_context(&self) -> Option<ContextRef> {
+        self.current_context
+    }
+
+    /// Starts this run in the record a frame of another run holds, which
+    /// 19.2.1.1 step 5 gives the text of a direct eval.
+    pub const fn set_current_context(&mut self, context: Option<ContextRef>) {
+        self.current_context = context;
+    }
+
+    /// What the run stopped for, where a text is waiting for the embedding.
+    ///
+    /// 20.2.1.1 and 19.2.1 both stop the run where the call stands, and the
+    /// instruction runs again once the unit exists.
+    fn pending_outcome(&mut self) -> Option<Outcome> {
+        let source = self.pending_source.take()?;
+        if core::mem::take(&mut self.pending_print) {
+            return Some(Outcome::Print(source));
+        }
+        if core::mem::take(&mut self.pending_script) {
+            return Some(Outcome::Evaluate(
+                source,
+                core::mem::take(&mut self.pending_strict),
+                core::mem::take(&mut self.pending_direct),
+            ));
+        }
+        Some(Outcome::Compile(source))
+    }
+
     /// Continues a run that stopped for [`Outcome::Compile`], with the unit
     /// the embedding made of the text, or `None` where it refused it.
     ///
@@ -32827,17 +32874,8 @@ impl RegisterVM {
                 Ok(None) => {
                     // 20.2.1.1 stopped the run where the call stands, and the
                     // instruction runs again once the unit exists.
-                    if let Some(source) = self.pending_source.take() {
-                        if core::mem::take(&mut self.pending_print) {
-                            return Ok(Outcome::Print(source));
-                        }
-                        if core::mem::take(&mut self.pending_script) {
-                            return Ok(Outcome::Evaluate(
-                                source,
-                                core::mem::take(&mut self.pending_strict),
-                            ));
-                        }
-                        return Ok(Outcome::Compile(source));
+                    if let Some(outcome) = self.pending_outcome() {
+                        return Ok(outcome);
                     }
                 }
                 Ok(Some(value)) => return Ok(Outcome::Done(value)),

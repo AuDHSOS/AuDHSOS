@@ -937,6 +937,37 @@ pub struct ParameterMap {
     pub mask: u64,
 }
 
+/// Makes every free name of a unit resolve against the record chain of
+/// 9.1.1.1 rather than against the Global Environment Record alone.
+///
+/// This is the unit of a direct eval of 13.3.6.1, which 19.2.1.1 step 5
+/// evaluates against the Variable Environment of the frame the call stands
+/// in. A read that found no record of the chain still reaches the global
+/// environment, so the two resolutions stay one path.
+///
+/// Answers `false` where the unit declares a name, which step 5.d of
+/// 19.2.1.1 places in that Variable Environment and this pass does not.
+/// Nested units are rewritten too, because a function the text makes closes
+/// over the record chain the eval runs in.
+#[must_use]
+pub fn resolve_by_name(unit: &mut BytecodeFunction) -> bool {
+    for instruction in &mut unit.instructions {
+        *instruction = match *instruction {
+            Instruction::LdaGlobal(index) => Instruction::LdaName(index),
+            Instruction::LdaGlobalForTypeOf(index) => Instruction::LdaNameForTypeOf(index),
+            Instruction::StaGlobal { name, strict } => Instruction::StaName { name, strict },
+            Instruction::VerifyGlobalVar(_)
+            | Instruction::DeclareGlobalVar(_)
+            | Instruction::VerifyGlobalFunction(_)
+            | Instruction::DeclareGlobalFunction(_)
+            | Instruction::VerifyGlobalLexical(_)
+            | Instruction::DeclareGlobalLexical { .. } => return false,
+            other => other,
+        };
+    }
+    unit.functions.iter_mut().all(resolve_by_name)
+}
+
 /// Compiled bytecode unit for a function or top-level script.
 #[derive(Clone, Debug)]
 #[expect(
