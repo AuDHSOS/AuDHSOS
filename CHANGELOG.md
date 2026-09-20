@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- The suite tester reads the text `dbtotxt` writes as the bytes of a
+  database file and writes them back as the database of the connection,
+  so a file that holds a database broken in one place reaches the
+  engine. D-360 records it. `corruptL.test` goes from 6 cases passing to
+  25.
+
 - `db-sqlite` answers `PRAGMA lock_status`, and a blob handle reads how
   far the value reaches before it reads whether the handle stands, so an
   offset past the value, a row the handle no longer reaches and a write

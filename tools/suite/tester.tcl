@@ -849,8 +849,13 @@ proc sqlite3 {args} {
         }
         return [lindex $::peeked($sub) $at]
       }
+      deserialize {
+        binary scan [lindex $args end] H* digits
+        harness_send deserialize %N% $digits
+        return {}
+      }
       copy - collation_needed - enable_load_extension - interrupt -
-      rekey - timeout - version - config - deserialize -
+      rekey - timeout - version - config -
       serialize - backup - restore {
         return {}
       }
@@ -1376,6 +1381,39 @@ proc file_control_reservebytes {db {bytes -1}} {
 proc strftime {format seconds} {
   set held [string map [list %% \x00 %F %Y-%m-%d] $format]
   return [clock format $seconds -format [string map [list \x00 %%] $held] -gmt 1]
+}
+
+# `decode_hexdb TEXT` of `research/sqlite/src/test1.c:8846`: the bytes
+# of a database file out of the text `dbtotxt` writes, which names the
+# size and the page size on one line, the offset of a page on another,
+# and sixteen bytes per line after it.
+proc decode_hexdb {txt} {
+  set digits ""
+  set pages 0
+  set offset 0
+  foreach line [split $txt "\n"] {
+    set line [string trim $line]
+    if {$digits eq ""} {
+      if {[regexp {^\| size (\d+) pagesize (\d+)} $line -> size page]} {
+        set pages [expr {(($size + $page - 1) / $page) * $page}]
+        set digits [string repeat 00 $pages]
+      }
+      continue
+    }
+    if {[regexp {^\| page \d+ offset (\d+)} $line -> at]} {
+      set offset $at
+      continue
+    }
+    if {[regexp {^\| *(\d+): ((?:[0-9a-fA-F]{2} )+[0-9a-fA-F]{2})} $line -> at bytes]} {
+      set bytes [string map {" " ""} $bytes]
+      set from [expr {($offset + $at) * 2}]
+      set upto [expr {$from + [string length $bytes] - 1}]
+      if {$upto < $pages * 2} {
+        set digits [string replace $digits $from $upto $bytes]
+      }
+    }
+  }
+  return [binary format H* $digits]
 }
 
 # The blob handles of this interpreter, by the name each answers to:

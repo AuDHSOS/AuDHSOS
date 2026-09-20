@@ -839,6 +839,11 @@ impl Session {
             "normalize" => Ok(alloc_one(&normalized(first))),
             "columnmeta" => self.column_meta(first, second, args.get(2).map_or("", String::as_str)),
             "eval" => self.eval(first, second),
+            // `DB deserialize BYTES` of
+            // `research/sqlite/src/tclsqlite.c`: the database of the
+            // connection is read again from the bytes the tester hands
+            // over, which it carries as hexadecimal digits.
+            "deserialize" => self.deserialize(first, second),
             // `sqlite3_blob_open`, `sqlite3_blob_bytes`,
             // `sqlite3_blob_read` and `sqlite3_blob_write` of
             // `research/sqlite/src/test_blob.c`.
@@ -1010,6 +1015,25 @@ impl Session {
                 vec![code, String::new(), refusal(&error)]
             }
         })
+    }
+
+    /// The database of a connection, read again from the bytes the
+    /// tester handed over.
+    ///
+    /// Reading them costs O(n) in the bytes.
+    fn deserialize(&mut self, name: &str, data: &str) -> Result<Vec<String>, String> {
+        let path = self
+            .connections
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("no such connection: {name}"))?;
+        let bytes = binary(data);
+        let mut writer = Writer::opened(&bytes).map_err(|error| refusal(&error))?;
+        writer.defines(DEFINED);
+        writer.groups(GROUPED);
+        self.held.insert(path, writer);
+        self.stamped(name);
+        Ok(Vec::new())
     }
 
     /// `sqlite3_table_column_metadata`: what the schema says about one
