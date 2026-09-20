@@ -1910,6 +1910,64 @@ impl Writer {
         Ok(())
     }
 
+    /// `PRAGMA integrity_check` over every database the connection holds,
+    /// in the order `PRAGMA database_list` answers them.
+    ///
+    /// Each database is read on its own, because a tree of another file
+    /// would be read as a second reference to the pages of this one, and
+    /// the count of problems the pragma answers is spent across all of
+    /// them. The walk costs what one walk costs per database.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what reading one of the files refuses.
+    fn integrity(
+        &self,
+        quick: bool,
+        asked: &crate::check::Checking,
+    ) -> Result<Vec<Vec<Value>>, Error> {
+        let mut held: Vec<(usize, Vec<u8>, Vec<u8>)> =
+            alloc::vec![(self.called.place, self.called.name.clone(), self.image())];
+        for beside in self.in_place() {
+            held.push((
+                beside.called.place,
+                beside.called.name.clone(),
+                written_image(&beside.held),
+            ));
+        }
+        held.sort_by_key(|(place, _, _)| *place);
+        let mut left = crate::check::allowed(asked);
+        let mut found = Vec::new();
+        let mut named = false;
+        for (_, name, bytes) in &held {
+            let database = self.reading(bytes)?;
+            // `sqlite3LocateTable` of `research/sqlite/src/build.c` finds
+            // the table a name carries in the first database that holds
+            // it, and `tableSkipIntegrityCheck` then walks that table
+            // alone, so no other database is read.
+            if let crate::check::Checking::Table(wanted) = asked {
+                if named || !crate::check::holds_object(&database, wanted) {
+                    continue;
+                }
+                named = true;
+            }
+            let more = crate::check::integrity(&database, quick, (asked, name), &mut left)?;
+            found.extend(more);
+        }
+        if let crate::check::Checking::Table(wanted) = asked
+            && !named
+        {
+            return Err(Error::NoTable(wanted.clone()));
+        }
+        if found.is_empty() {
+            found.push(b"ok".to_vec());
+        }
+        Ok(found
+            .into_iter()
+            .map(|text| alloc::vec![Value::Text(text)])
+            .collect())
+    }
+
     /// The rows of `sqlite_schema` a `DROP` takes out and the roots it
     /// destroys: a table takes its indexes with it, an index takes only
     /// itself.
@@ -3384,17 +3442,8 @@ impl Writer {
             return Ok(self.checkpoint(how));
         }
         if let Some(quick) = quick {
-            // The walk is over the one database the pragma names, which
-            // is the one the connection writes, so the reader carries no
-            // other: a tree of another file would be read as a second
-            // reference to the pages of this one.
-            let bytes = self.image();
-            let database = self.reading(&bytes)?;
             let asked = crate::check::checking(asked.value.map(|value| value.text(sql)));
-            return Ok(crate::check::integrity(&database, quick, &asked)?
-                .into_iter()
-                .map(|text| alloc::vec![Value::Text(text)])
-                .collect());
+            return self.integrity(quick, &asked);
         }
         let Some(value) = asked.value else {
             return self.pragma_read(setting);

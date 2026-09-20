@@ -32,6 +32,27 @@ pub enum Checking {
     Table(Vec<u8>),
 }
 
+/// Whether the schema of `database` holds an object the pragma may be
+/// given: a table of that name, or the schema's own table, which
+/// `sqlite3LocateTable` finds and every index of which it does not.
+#[must_use]
+pub fn holds_object(database: &Database<'_>, name: &[u8]) -> bool {
+    crate::db::schema_named(name)
+        || database
+            .tables()
+            .any(|table| table.name.eq_ignore_ascii_case(name))
+}
+
+/// How many problems the pragma answers at most, which a name stands for
+/// the hundred of.
+#[must_use]
+pub const fn allowed(asked: &Checking) -> usize {
+    match asked {
+        Checking::Most(most) => *most,
+        Checking::Table(_) => MOST,
+    }
+}
+
 /// What the pragma was given, read out of the text after the equals
 /// sign: a word of digits is a count and every other word is a name,
 /// which is why `PRAGMA integrity_check='4'` names a table.
@@ -48,17 +69,25 @@ pub fn checking(written: Option<&[u8]>) -> Checking {
     Checking::Table(crate::schema::dequote(text))
 }
 
-/// What one run of the check found, which `sqlite3Pragma` writes in two
-/// runs: the pages and the counts of the indexes first, the rows after.
+/// What one run of the check found, which `sqlite3Pragma` writes in
+/// three runs: the pages of the file, the counts of the indexes, the
+/// rows.
 struct Found {
-    /// The problems of the pages and the counts.
+    /// The problems of the pages, which one row carries.
+    pages: Vec<Vec<u8>>,
+    /// The problems of the counts.
     problems: Vec<Vec<u8>>,
     /// The problems of the rows.
     rows: Vec<Vec<u8>>,
 }
 
 impl Found {
-    /// One problem of the pages or of a count written down.
+    /// One problem of a page written down.
+    fn note_page(&mut self, text: &[u8]) {
+        self.pages.push(text.to_vec());
+    }
+
+    /// One problem of a count written down.
     fn note(&mut self, text: &[u8]) {
         self.problems.push(text.to_vec());
     }
@@ -68,13 +97,33 @@ impl Found {
         self.rows.push(text.to_vec());
     }
 
-    /// The problems in the order `sqlite3Pragma` writes them, up to
-    /// `most` of them.
-    fn taken(mut self, most: usize) -> Vec<Vec<u8>> {
-        self.problems.append(&mut self.rows);
-        self.problems.truncate(most);
-        self.problems
+    /// The problems in the order `sqlite3Pragma` writes them, taking
+    /// what `left` still allows and counting it down.
+    ///
+    /// The problems of the pages are one row, which
+    /// `sqlite3BtreeIntegrityCheck` writes as one text of lines under
+    /// the name of the database, and each line of it counts as one.
+    fn taken(self, named: &[u8], left: &mut usize) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        let pages = taken_from(self.pages, left);
+        if !pages.is_empty() {
+            let mut text = b"*** in database ".to_vec();
+            text.extend_from_slice(named);
+            text.extend_from_slice(b" ***\n");
+            text.extend_from_slice(&pages.join(&b'\n'));
+            out.push(text);
+        }
+        out.extend(taken_from(self.problems, left));
+        out.extend(taken_from(self.rows, left));
+        out
     }
+}
+
+/// The first `left` of the problems, with `left` counted down by as many.
+fn taken_from(mut held: Vec<Vec<u8>>, left: &mut usize) -> Vec<Vec<u8>> {
+    held.truncate(*left);
+    *left = left.saturating_sub(held.len());
+    held
 }
 
 /// What `PRAGMA integrity_check` answers over `database`: one row per
@@ -90,9 +139,11 @@ impl Found {
 pub fn integrity(
     database: &Database<'_>,
     quick: bool,
-    asked: &Checking,
+    (asked, named): (&Checking, &[u8]),
+    left: &mut usize,
 ) -> Result<Vec<Vec<u8>>, Error> {
     let mut found = Found {
+        pages: Vec::new(),
         problems: Vec::new(),
         rows: Vec::new(),
     };
@@ -102,16 +153,10 @@ pub fn integrity(
     // object of the schema carries is refused.
     let over: Vec<&crate::schema::Table> = match asked {
         Checking::Most(_) => tables.iter().collect(),
-        Checking::Table(name) => {
-            let held: Vec<&crate::schema::Table> = tables
-                .iter()
-                .filter(|table| table.name.eq_ignore_ascii_case(name))
-                .collect();
-            if held.is_empty() && !crate::db::schema_named(name) && database.index(name).is_none() {
-                return Err(Error::NoTable(name.clone()));
-            }
-            held
-        }
+        Checking::Table(name) => tables
+            .iter()
+            .filter(|table| table.name.eq_ignore_ascii_case(name))
+            .collect(),
     };
     // The pages of the file are walked where the pragma names no table,
     // because a page of a table it does not name is one the walk would
@@ -122,15 +167,7 @@ pub fn integrity(
     for table in over {
         rows_held(database, table, quick, &mut found)?;
     }
-    let most = match asked {
-        Checking::Most(most) => *most,
-        Checking::Table(_) => MOST,
-    };
-    let mut problems = found.taken(most);
-    if problems.is_empty() {
-        problems.push(b"ok".to_vec());
-    }
-    Ok(problems)
+    Ok(found.taken(named, left))
 }
 
 /// Every page of the file reached once: from a tree the schema names,
@@ -152,7 +189,7 @@ fn pages_used(database: &Database<'_>, found: &mut Found) -> Result<(), Error> {
     }
     for (at, slot) in seen.iter().enumerate().skip(1) {
         if *slot == 0 {
-            found.note(&text(
+            found.note_page(&text(
                 b"Page ",
                 u32::try_from(at).unwrap_or(0),
                 b": never used",
@@ -172,7 +209,7 @@ fn mark(seen: &mut [u8], number: u32, found: &mut Found) -> bool {
         *slot = 1;
     }
     if !first {
-        found.note(&text(b"2nd reference to page ", number, b""));
+        found.note_page(&text(b"2nd reference to page ", number, b""));
     }
     first
 }

@@ -2877,7 +2877,17 @@ impl<'a> Database<'a> {
         };
         if let Some(quick) = quick {
             let asked = crate::check::checking(asked.value.map(|value| value.text(sql)));
-            let rows = crate::check::integrity(self, quick, &asked)?
+            if let crate::check::Checking::Table(wanted) = &asked
+                && !crate::check::holds_object(self, wanted)
+            {
+                return Err(Error::NoTable(wanted.clone()));
+            }
+            let mut left = crate::check::allowed(&asked);
+            let mut found = crate::check::integrity(self, quick, (&asked, &self.named), &mut left)?;
+            if found.is_empty() {
+                found.push(b"ok".to_vec());
+            }
+            let rows = found
                 .into_iter()
                 .map(|text| alloc::vec![Value::Text(text)])
                 .collect();

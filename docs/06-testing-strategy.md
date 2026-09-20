@@ -6456,3 +6456,16 @@ Document 16 step Q8.
 - A number in quotes is a name and not a count.
 - A name no table, index or schema table carries is refused.
 - A connection that writes reads the same argument as one that reads.
+
+### 6.6.237 Every database the integrity check walks (`db-sqlite`)
+
+Document 16 step Q8.
+
+- The problems of the pages of one database are one row under the name of
+  that database, and each line of it counts as one problem.
+- A connection that holds several databases walks each in turn and spends
+  one count of problems across all of them.
+- A name after the equals sign is walked in the first database that holds
+  a table of it, and no other database is read.
+- A name no database holds a table of is refused, the name of an index
+  among them.

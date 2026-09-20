@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` walks every database the connection holds for
+  `PRAGMA integrity_check`, spends one count of problems across all of
+  them, writes the problems of the pages of each as one row under
+  `*** in database <name> ***`, and walks for a name the first database
+  that holds a table of it. D-349 records it. Catalog 6.6.237.
+  `pragma.test` goes from 81 cases passing to 85.
+
 - `db-sqlite` writes the problems of the pages and the counts of the
   indexes before the problems of the rows for `PRAGMA integrity_check`,
   reads a number after the equals sign as how many problems to answer and

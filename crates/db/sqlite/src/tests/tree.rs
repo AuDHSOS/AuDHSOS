@@ -4219,7 +4219,7 @@ fn what_the_integrity_check_finds_in_a_file_written_over() {
     grown[30] = 0;
     grown[31] = u8::try_from(sound.len() / 512).unwrap() + 1;
     assert_eq!(
-        found(&grown),
+        pages_found(&grown),
         [alloc::format!("Page {}: never used", sound.len() / 512 + 1).into_bytes()]
     );
 
@@ -4247,6 +4247,22 @@ fn checked(bytes: &[u8]) -> Vec<Vec<u8>> {
             Some(Value::Text(text)) => Some(text.clone()),
             _ => None,
         })
+        .collect()
+}
+
+/// The problems of the pages the check found, which one row carries under
+/// the name of the database.
+fn pages_found(bytes: &[u8]) -> Vec<Vec<u8>> {
+    let held = checked(bytes);
+    let Some(first) = held.first() else {
+        return Vec::new();
+    };
+    let under = b"*** in database main ***\n".as_slice();
+    let Some(tail) = first.strip_prefix(under) else {
+        return Vec::new();
+    };
+    tail.split(|byte| *byte == b'\n')
+        .map(<[u8]>::to_vec)
         .collect()
 }
 
@@ -4295,20 +4311,30 @@ fn what_the_integrity_check_is_given() {
     // object of the schema carries is refused.
     assert_eq!(checked_for(&broken, "u").unwrap(), [b"ok".to_vec()]);
     assert_eq!(checked_for(&broken, "t").unwrap().len(), 2);
-    // The name of an index is an object of the schema, and the walk is
-    // over no table.
-    assert_eq!(checked_for(&broken, "i").unwrap(), [b"ok".to_vec()]);
+    // The schema's own table is an object `sqlite3LocateTable` finds, and
+    // the walk is then over no table of the file.
     assert_eq!(
         checked_for(&broken, "sqlite_schema").unwrap(),
         [b"ok".to_vec()]
     );
-    // A connection that writes reads the same argument.
+    // A connection that writes reads the same argument, walks the first
+    // database that holds the name and reads no other, and answers the
+    // problems of the one it walked.
+    let mut writer = Writer::opened(&broken).unwrap();
+    writer.opens(|_| Some(Vec::new()));
+    writer.run(b"ATTACH ':memory:' AS aux").unwrap();
+    writer.run(b"CREATE TABLE aux.v(c)").unwrap();
+    let ok = alloc::vec![alloc::vec![Value::Text(b"ok".to_vec())]];
+    assert_eq!(writer.run(b"PRAGMA integrity_check=u").unwrap(), ok);
+    assert_eq!(writer.run(b"PRAGMA integrity_check=v").unwrap(), ok);
+    assert_eq!(writer.run(b"PRAGMA integrity_check=t").unwrap().len(), 2);
     assert_eq!(
-        writer.run(b"PRAGMA integrity_check=u").unwrap(),
-        [alloc::vec![Value::Text(b"ok".to_vec())]]
+        writer.run(b"PRAGMA integrity_check=nope").unwrap_err(),
+        crate::db::Error::NoTable(b"nope".to_vec())
     );
-    // A number in quotes is a name and not a count.
-    for written in ["'4'", "xyz"] {
+    // A number in quotes is a name and not a count, and the name of an
+    // index is no table.
+    for written in ["'4'", "xyz", "i"] {
         assert_eq!(
             checked_for(&broken, written).unwrap_err().message(),
             alloc::format!("no such table: {}", written.trim_matches('\''))
@@ -4375,7 +4401,7 @@ fn the_integrity_check_answers_a_hundred_problems_and_no_more() {
     let mut grown = sound.clone();
     grown.extend(core::iter::repeat_n(0, 101 * 512));
     grown[28..32].copy_from_slice(&(held + 101).to_be_bytes());
-    let found = checked(&grown);
+    let found = pages_found(&grown);
     assert_eq!(found.len(), 100);
     assert_eq!(
         found.first().map(Vec::as_slice),
@@ -4402,7 +4428,7 @@ fn the_integrity_check_answers_a_hundred_problems_and_no_more() {
     let second = root_at(&shared, b'u');
     shared[second] = root;
     assert_eq!(
-        checked(&shared),
+        pages_found(&shared),
         [
             alloc::format!("2nd reference to page {root}").into_bytes(),
             alloc::format!("Page {}: never used", root + 1).into_bytes()
@@ -4440,7 +4466,7 @@ fn the_integrity_check_walks_a_tree_of_levels_and_a_file_that_names_a_page_twice
     let head = 3_u32;
     let at = (usize::try_from(head).unwrap() - 1) * 512;
     ring[at..at + 4].copy_from_slice(&head.to_be_bytes());
-    let found = checked(&ring);
+    let found = pages_found(&ring);
     assert_eq!(
         found.first().map(Vec::as_slice),
         Some(alloc::format!("2nd reference to page {head}").as_bytes())
@@ -4459,7 +4485,7 @@ fn the_integrity_check_walks_a_tree_of_levels_and_a_file_that_names_a_page_twice
     let at = (usize::try_from(trunk).unwrap() - 1) * 512;
     listed[at..at + 4].copy_from_slice(&trunk.to_be_bytes());
     assert_eq!(
-        checked(&listed).first().map(Vec::as_slice),
+        pages_found(&listed).first().map(Vec::as_slice),
         Some(alloc::format!("2nd reference to page {trunk}").as_bytes())
     );
 }
