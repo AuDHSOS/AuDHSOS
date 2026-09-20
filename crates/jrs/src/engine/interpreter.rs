@@ -878,6 +878,24 @@ pub enum Resume {
         /// Where `new` keeps its object, when this was a construct.
         construct: Option<Construction>,
     },
+    /// Step 2 of 22.2.7.2 reads `lastIndex` once, before the clause does
+    /// anything else, and 7.1.20 of an Object the read answered runs a
+    /// method of the Script. The clause starts again with what it answered.
+    LastIndex {
+        /// The intrinsic that asked, by [`Intrinsic::id`].
+        intrinsic: u32,
+        /// Root holding the `this` value of the call.
+        receiver: Root,
+        /// Root holding the value 7.1.20 is converting.
+        held: Root,
+        /// Which method 7.1.1 has already asked: 0 before any, 1 after
+        /// `valueOf`, 2 after `toString`.
+        step: u8,
+        /// First argument register of the call.
+        arg_start: Reg,
+        /// Number of arguments the call passed.
+        arg_count: u16,
+    },
     /// A job of 9.5 called its handler.
     ///
     /// The frame stands on no caller: the unit that enqueued the job has
@@ -1671,6 +1689,10 @@ pub struct RegisterVM {
     /// 13.3.6.1, which runs against the record chain of the frame it stands
     /// in rather than against the global environment alone.
     pending_direct: bool,
+    /// The `lastIndex` of 22.2.7.2 step 2, once 7.1.20 has converted an
+    /// Object the read answered. The clause runs again and takes it in place
+    /// of the read, and nothing of the Script runs between the two.
+    pending_last_index: Option<i64>,
     /// Whether that text is a line the embedding was asked to write.
     pending_print: bool,
     /// Where the run continues once that unit exists.
@@ -1825,6 +1847,7 @@ impl RegisterVM {
             direct_eval_strict: false,
             pending_strict: false,
             pending_direct: false,
+            pending_last_index: None,
             pending_print: false,
             resume_pc: 0,
             resume_code_id: None,
@@ -6713,6 +6736,39 @@ impl RegisterVM {
                 ));
             }
         }
+        // Step 2 of 22.2.7.2 reads `lastIndex` before the clause does
+        // anything else, and 7.1.20 of an Object the read answered runs a
+        // method of the Script.
+        if self.pending_last_index.is_none()
+            && let Some(object) = Self::last_index_holder(intrinsic, &call, heap)
+        {
+            let key = PropertyKey::String(heap.strings.intern("lastIndex")?);
+            let found = heap.lookup_named(object, key)?;
+            if found
+                .is_some_and(|property| !property.flags.is_accessor && property.value.is_object())
+            {
+                let raw = found.map_or(VALUE_UNDEFINED, |property| property.value);
+                heap.enter_scope();
+                let receiver = heap.push_root(call.receiver)?;
+                let held = heap.push_root(raw)?;
+                let resume = Resume::LastIndex {
+                    intrinsic: intrinsic.id(),
+                    receiver,
+                    held,
+                    step: 0,
+                    arg_start: call.arg_start,
+                    arg_count: call.arg_count,
+                };
+                return self.convert_the_last_index(
+                    resume,
+                    call,
+                    units,
+                    active_feedback,
+                    heap,
+                    realm,
+                );
+            }
+        }
         // 7.3.18 reads the `length` before the clause does anything else. A
         // getter there runs a method of the Script, and so does 7.1.20 of an
         // Object the read answered.
@@ -7819,6 +7875,226 @@ impl RegisterVM {
                 | Intrinsic::ArrayPrototypeToSpliced
                 | Intrinsic::ArrayPrototypeToReversed
         )
+    }
+
+    /// Which clause reads the `lastIndex` of 22.2.7.2 step 2 before it does
+    /// anything else, so an Object the read answers is converted first.
+    const fn reads_a_last_index(intrinsic: Intrinsic) -> bool {
+        // 22.2.6.2 reads `lastIndex` with nothing of the Script between the
+        // read and the clause, because 7.1.17 of its argument ran before the
+        // clause did. Every other clause reaches 22.2.7.2 through 22.2.7.1,
+        // which reads `exec` first, so a conversion here would run before a
+        // read the clause makes earlier.
+        matches!(intrinsic, Intrinsic::RegExpPrototypeExec)
+    }
+
+    /// The object whose `lastIndex` that clause reads, which for 22.2.6 is
+    /// the receiver.
+    fn last_index_holder(
+        intrinsic: Intrinsic,
+        call: &Call,
+        heap: &GenerationalHeap,
+    ) -> Option<ObjectRef> {
+        Self::reads_a_last_index(intrinsic)
+            .then(|| call.receiver.as_object())
+            .flatten()
+            .filter(|object| Self::regexp_pattern(*object, heap).is_some())
+    }
+
+    /// Step 2 of 22.2.7.2 where the read answered an Object: 7.1.1 asks its
+    /// methods for a primitive, each in a frame of its own, and the clause
+    /// runs again with what they answered.
+    fn convert_the_last_index(
+        &mut self,
+        resume: Resume,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let Resume::LastIndex {
+            intrinsic,
+            receiver,
+            held,
+            mut step,
+            arg_start,
+            arg_count,
+        } = resume
+        else {
+            return Ok(None);
+        };
+        loop {
+            let object = heap
+                .root_value(held)
+                .and_then(Value::as_object)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            // 7.1.1 step 1 would pass a hint to `@@toPrimitive`, which needs
+            // a register of the caller this clause has none of.
+            if step == 0
+                && heap
+                    .lookup_named(object, super::realm::WellKnownSymbol::ToPrimitive.key())?
+                    .is_some()
+            {
+                heap.exit_scope();
+                return Err(VMError::Unsupported("the @@toPrimitive of a `lastIndex`"));
+            }
+            step = step.saturating_add(1);
+            let name = match step {
+                1 => "valueOf",
+                2 => "toString",
+                _ => {
+                    heap.exit_scope();
+                    return Err(type_error(heap, realm, "an object has no primitive value"));
+                }
+            };
+            let key = PropertyKey::String(heap.strings.intern(name)?);
+            let object = heap
+                .root_value(held)
+                .and_then(Value::as_object)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let method = heap
+                .lookup_named(object, key)?
+                .map(Self::plain_value)
+                .transpose()?
+                .filter(|method| Self::is_callable(*method, heap));
+            let Some(method) = method else {
+                continue;
+            };
+            let mut next = call;
+            next.receiver = Value::from_object(object);
+            next.arg_count = 0;
+            next.arg_start = Reg(0);
+            next.construct = None;
+            next.resume = Some(Resume::LastIndex {
+                intrinsic,
+                receiver,
+                held,
+                step,
+                arg_start,
+                arg_count,
+            });
+            if let Some(code_id) =
+                self.enter_call_value(method, units, active_feedback, heap, realm, next)?
+            {
+                return Ok(Some(code_id));
+            }
+            // A method of the Realm answered without a frame of its own.
+            let answered = self.acc;
+            if !answered.is_object() {
+                return self.the_clause_takes_the_last_index(
+                    (intrinsic, answered),
+                    (receiver, arg_start, arg_count),
+                    call,
+                    units,
+                    active_feedback,
+                    heap,
+                    realm,
+                );
+            }
+        }
+    }
+
+    /// The answer of one method of 7.1.1, which either is the primitive the
+    /// clause runs with or sends the conversion to the next method.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a conversion opens a frame, which needs what a call needs"
+    )]
+    fn finish_the_last_index(
+        &mut self,
+        resume: Resume,
+        return_pc: usize,
+        caller_code_id: Option<u32>,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let Resume::LastIndex {
+            intrinsic,
+            receiver,
+            held,
+            step,
+            arg_start,
+            arg_count,
+        } = resume
+        else {
+            return Ok(None);
+        };
+        let call = Call {
+            receiver: heap.root_value(receiver).unwrap_or(VALUE_UNDEFINED),
+            func: arg_start,
+            arg_start,
+            arg_count,
+            slot: 0,
+            resume: Some(resume),
+            construct: None,
+            return_pc,
+            caller_code_id,
+            coerced: 0,
+        };
+        let answered = self.acc;
+        if answered.is_object() {
+            let held = if step == 0 {
+                heap.push_root(answered)?
+            } else {
+                held
+            };
+            let resume = Resume::LastIndex {
+                intrinsic,
+                receiver,
+                held,
+                step,
+                arg_start,
+                arg_count,
+            };
+            return self.convert_the_last_index(resume, call, units, active_feedback, heap, realm);
+        }
+        self.the_clause_takes_the_last_index(
+            (intrinsic, answered),
+            (receiver, arg_start, arg_count),
+            call,
+            units,
+            active_feedback,
+            heap,
+            realm,
+        )
+    }
+
+    /// Runs the clause again with the `lastIndex` 7.1.20 made of the answer.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a clause that runs again needs what its call had"
+    )]
+    fn the_clause_takes_the_last_index(
+        &mut self,
+        answered: (u32, Value),
+        frame: (Root, Reg, u16),
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let (intrinsic, answered) = answered;
+        let (receiver, arg_start, arg_count) = frame;
+        let held = heap.root_value(receiver).unwrap_or(VALUE_UNDEFINED);
+        heap.exit_scope();
+        let intrinsic = Intrinsic::from_id(intrinsic).ok_or(VMError::TypeError)?;
+        // 7.1.20 clamps into 0..2^53-1, and step 2 of 22.2.7.2 takes it.
+        self.pending_last_index = Some(integer_argument(answered, heap, realm)?.max(0));
+        let call = Call {
+            receiver: held,
+            arg_start,
+            arg_count,
+            resume: None,
+            construct: None,
+            ..call
+        };
+        let entered = self.dispatch_native(intrinsic, call, units, active_feedback, heap, realm);
+        self.pending_last_index = None;
+        entered
     }
 
     /// Takes what a method answered for the `length` and either runs the
@@ -28537,11 +28813,17 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Option<audhsos_regex::Match>, VMError> {
         let stateful = pattern.global || pattern.sticky;
-        let key = PropertyKey::String(heap.strings.intern("lastIndex")?);
-        let held = heap
-            .lookup_named(receiver, key)?
-            .map_or(VALUE_UNDEFINED, |property| property.value);
-        let index = integer_argument(held, heap, realm)?;
+        // Step 2 converted an Object the read answered before the clause ran
+        // again, and nothing of the Script has run since.
+        let index = if let Some(index) = self.pending_last_index.take() {
+            index
+        } else {
+            let key = PropertyKey::String(heap.strings.intern("lastIndex")?);
+            let held = heap
+                .lookup_named(receiver, key)?
+                .map_or(VALUE_UNDEFINED, |property| property.value);
+            integer_argument(held, heap, realm)?
+        };
         let from = if !stateful || index <= 0 {
             0
         } else {
@@ -36323,6 +36605,7 @@ impl RegisterVM {
                                     | Resume::IteratorElement { .. }
                                     | Resume::IteratorResult { .. }
                                     | Resume::Length { .. }
+                                    | Resume::LastIndex { .. }
                                     | Resume::Descriptor { .. }
                                     | Resume::Getter
                                     | Resume::Spread { .. }
@@ -36473,6 +36756,15 @@ impl RegisterVM {
                                             call, next, index, units, feedback, heap, realm,
                                         )?
                                     }
+                                    Resume::LastIndex { .. } => self.finish_the_last_index(
+                                        resume,
+                                        pc,
+                                        current_code_id,
+                                        units,
+                                        feedback,
+                                        heap,
+                                        realm,
+                                    )?,
                                     Resume::Length { .. } => self.finish_array_like_length(
                                         resume,
                                         pc,

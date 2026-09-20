@@ -12053,6 +12053,26 @@ fn step_3_of_20_1_2_24_reads_every_property_through_its_getter() -> Result<(), E
 }
 
 #[test]
+fn the_last_index_of_22_2_7_2_goes_through_7_1_20() -> Result<(), Error> {
+    for source in [
+        // Step 2 converts an Object the read answered, which runs a `valueOf`
+        // of the Script, and the clause searches from what it answered.
+        "var r=/a/g;r.lastIndex={valueOf:function(){return 1}};JSON.stringify(r.exec('aab'))+'|'+r.lastIndex",
+        // 7.1.1 asks `toString` where `valueOf` answers no primitive.
+        "var r=/b/g;r.lastIndex={valueOf:null,toString:function(){return '0'}};JSON.stringify(r.exec('xb'))",
+        // 7.1.17 of the argument runs before step 2 reads `lastIndex`.
+        "var l=[];var r=/a/g;r.lastIndex={valueOf:function(){l.push('lastIndex');return 0}};r.exec({toString:function(){l.push('arg');return 'a'}});l.join(',')",
+        // A method that throws leaves the clause.
+        "var r=/c/g;r.lastIndex={valueOf:function(){throw new TypeError()}};var e;try{r.exec('c')}catch(x){e=x instanceof TypeError};''+e",
+        // A `lastIndex` that is a primitive keeps the answer it had.
+        "var r=/a/g;r.lastIndex=1;JSON.stringify(r.exec('aab'))+'|'+r.lastIndex",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn the_read_and_the_write_of_10_5_answer_out_of_the_handler() -> Result<(), Error> {
     let mut host = SilentHost;
     let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
