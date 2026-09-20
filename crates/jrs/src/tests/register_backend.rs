@@ -12441,3 +12441,28 @@ fn the_key_tests_and_the_call_of_10_5_answer_out_of_the_handler() -> Result<(), 
     }
     Ok(())
 }
+
+#[test]
+fn a_block_function_of_a_script_the_script_declares_too() -> Result<(), Error> {
+    // B.3.2.1: 16.1.7 binds `f` already, so the CaseBlock makes no second
+    // binding of the body and the write still names the global.
+    // The stack path omits the write, so this is engine-only.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    let answer = realm.evaluate(
+        "var out = f(); switch (1) { case 1: function f() { return 'inner'; } } \
+         function f() { return 'outer'; } out + '/' + f();",
+    )?;
+    assert!(same_value(
+        &answer,
+        &Value::String("outer/inner".encode_utf16().collect())
+    ));
+    Ok(())
+}
+
+#[test]
+fn a_block_function_a_lexical_declaration_takes_out() -> Result<(), Error> {
+    // B.3.2.1 leaves the name out where replacing the declaration with a
+    // `var` is an early error; the CaseBlock still lowers.
+    differential_scripts(&["let f = 123; switch (1) { case 1: function f() {} } f;"])
+}

@@ -1768,21 +1768,30 @@ impl RegisterLowerer {
         // B.3.2.1 and B.3.2.2 give a function declared in a Block or a
         // `CaseBlock` of sloppy code a `var` binding of the Script as well.
         // Replacing the declaration with a `var` of the same name is an early
-        // error where the Script already declares it, which takes the name
+        // error where the Script lexically declares it, which takes the name
         // out again.
         if !self.code.strict {
             let mut names = BTreeSet::new();
             for statement in body {
                 register_block_function_names(statement, &mut names);
             }
-            names.retain(|name| {
-                !lexical.iter().any(|(taken, _)| taken == name)
-                    && !variables.iter().any(|taken| taken == name)
-                    && !body.iter().any(|statement| {
-                        matches!(statement, Stmt::Function(declared, _) if declared == name)
-                    })
-            });
-            variables.extend(names.iter().cloned());
+            // A lexical declaration of the Script makes replacing the
+            // declaration with a `var` an early error, which takes the name
+            // out. A `var` or a function of the Script does not: the name is
+            // one 16.1.7 already binds, so the write happens and no second
+            // binding is created for it.
+            names.retain(|name| !lexical.iter().any(|(taken, _)| taken == name));
+            let fresh: Vec<String> = names
+                .iter()
+                .filter(|name| {
+                    !variables.iter().any(|taken| taken == *name)
+                        && !body.iter().any(|statement| {
+                            matches!(statement, Stmt::Function(declared, _) if &declared == name)
+                        })
+                })
+                .cloned()
+                .collect();
+            variables.extend(fresh);
             self.script_var_names = names;
         }
         variables.dedup();
@@ -7845,6 +7854,15 @@ impl RegisterLowerer {
                 .any(|(bound, _, previous)| bound == name && previous.is_some())
     }
 
+    /// Whether B.3.2.1 leaves the name out of its var bindings: a lexical
+    /// declaration of a scope around the Block makes replacing the
+    /// declaration with a `var` an early error. 16.1.7 binds every other
+    /// name of a Script, so a Block of one takes no binding from this
+    /// lowering and the write names the global wherever it stands.
+    fn skips_the_var_binding(&self, name: &str) -> bool {
+        self.script_globals && !self.script_var_names.contains(name)
+    }
+
     /// B.3.2.1: the function the Block binds is written to the `var` binding
     /// of the body around it, where the declaration of it is evaluated.
     fn copy_to_the_var_binding(
@@ -7903,7 +7921,10 @@ impl RegisterLowerer {
             // Global Environment Record.
             if !self.code.strict
                 && body.iter().any(|statement| match statement {
-                    Stmt::Function(name, _) => !self.takes_a_var_binding(name, &scoped_bindings),
+                    Stmt::Function(name, _) => {
+                        !self.skips_the_var_binding(name)
+                            && !self.takes_a_var_binding(name, &scoped_bindings)
+                    }
                     _ => false,
                 })
             {
@@ -8225,7 +8246,9 @@ impl RegisterLowerer {
         self.code.strict
             || clauses.iter().all(|(_, body)| {
                 body.iter().all(|statement| match statement {
-                    Stmt::Function(name, _) => self.takes_a_var_binding(name, scoped),
+                    Stmt::Function(name, _) => {
+                        self.skips_the_var_binding(name) || self.takes_a_var_binding(name, scoped)
+                    }
                     _ => true,
                 })
             })
