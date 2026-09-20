@@ -2256,8 +2256,20 @@ impl RegisterVM {
         slot_count: u16,
     ) -> Result<ContextRef, VMError> {
         let mut parent = parent;
+        // A body that carries a direct eval of 13.3.6.1 holds its bindings in
+        // the record of 9.1.1.1, whose slots the text of the eval may name.
+        let names: Vec<alloc::rc::Rc<[u16]>> = code
+            .own_context_names
+            .iter()
+            .map(|name| alloc::rc::Rc::from(name.as_slice()))
+            .collect();
         loop {
-            match heap.allocate_context(parent, usize::from(slot_count)) {
+            let made = if names.is_empty() {
+                heap.allocate_context(parent, usize::from(slot_count))
+            } else {
+                heap.allocate_named_context(parent, names.clone())
+            };
+            match made {
                 Ok(context) => return Ok(context),
                 Err(HeapError::NurseryFull) => {
                     self.current_context = parent;
@@ -32995,6 +33007,61 @@ impl RegisterVM {
                         .ok_or(VMError::InvalidRegister)?;
                     self.acc = self.allocate_string(heap, units)?;
                 }
+                Instruction::LdaName(index) | Instruction::LdaNameForTypeOf(index) => {
+                    let units = active_code
+                        .string_constants
+                        .get(index as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    // 9.4.2 resolves the name against the chain of records
+                    // first, and reaches the global environment only where no
+                    // record of the chain names it.
+                    let found = self
+                        .current_context
+                        .and_then(|context| heap.context_binding(context, units));
+                    if let Some((record, slot)) = found {
+                        let held = heap
+                            .context_slot(record, 0, slot)
+                            .ok_or(VMError::InvalidRegister)?;
+                        // 9.1.1.1.6 refuses a binding 9.1.1.1.1 has not
+                        // initialized, for `typeof` as for every other read.
+                        if held == VALUE_UNINITIALIZED {
+                            return Err(raise(
+                                heap,
+                                realm,
+                                super::realm::NativeErrorKind::ReferenceError,
+                                "a binding read before its declaration",
+                            ));
+                        }
+                        self.acc = held;
+                    } else {
+                        let for_type_of = matches!(inst, Instruction::LdaNameForTypeOf(_));
+                        let name = PropertyKey::String(heap.strings.intern_units(units)?);
+                        self.acc = match realm.global_environment().get_binding_value(heap, name)? {
+                            Ok(value) => value,
+                            Err(super::realm::BindingOutcome::Unresolvable) if for_type_of => {
+                                VALUE_UNDEFINED
+                            }
+                            Err(outcome) => {
+                                return Err(Self::binding_error(heap, realm, outcome, units));
+                            }
+                        };
+                    }
+                }
+                Instruction::DeclareName(index) => {
+                    let units = active_code
+                        .string_constants
+                        .get(index as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    // Step 5.d of 19.2.1.1 gives a `var` of the text a binding
+                    // of the Variable Environment, which is the record of the
+                    // frame the call stands in.
+                    let name: alloc::rc::Rc<[u16]> = alloc::rc::Rc::from(units.as_slice());
+                    let record = self.current_context.ok_or(VMError::InvalidRegister)?;
+                    // 9.1.1.1.2 gives the binding the value undefined, which a
+                    // name the record already holds keeps instead.
+                    heap.declare_in_context(record, &name)
+                        .map_err(VMError::Heap)?;
+                }
                 Instruction::LdaGlobalForTypeOf(index) => {
                     let units = active_code
                         .string_constants
@@ -33052,6 +33119,53 @@ impl RegisterVM {
                         .global_environment()
                         .get_binding_value(heap, name)?
                         .map_err(|outcome| Self::binding_error(heap, realm, outcome, units))?;
+                }
+                Instruction::StaName {
+                    name: index,
+                    strict,
+                } => {
+                    let code_units = units;
+                    let units = active_code
+                        .string_constants
+                        .get(index as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    let value = self.acc;
+                    let found = self
+                        .current_context
+                        .and_then(|context| heap.context_binding(context, units));
+                    if let Some((record, slot)) = found {
+                        // 9.1.1.1.5 writes the slot the record names.
+                        heap.set_context_slot(record, 0, slot, value)
+                            .map_err(VMError::Heap)?;
+                    } else {
+                        let units = units.clone();
+                        let name = PropertyKey::String(heap.strings.intern_units(&units)?);
+                        let written = realm
+                            .global_environment()
+                            .set_mutable_binding(heap, name, value, strict)?;
+                        if let Err(super::realm::BindingOutcome::Accessor(accessor)) = written {
+                            let target =
+                                Value::from_object(realm.global_environment().global_object(heap)?);
+                            if let Some(code_id) = self.enter_accessor(
+                                accessor,
+                                target,
+                                Some((value, strict)),
+                                pc,
+                                current_code_id,
+                                code_units,
+                                active_feedback,
+                                heap,
+                                realm,
+                            )? {
+                                current_code_id = Some(code_id);
+                                pc = self.pending_pc.take().unwrap_or(0);
+                            }
+                        } else {
+                            written.map_err(|outcome| {
+                                Self::binding_error(heap, realm, outcome, &units)
+                            })?;
+                        }
+                    }
                 }
                 Instruction::StaGlobal {
                     name: index,
@@ -37849,6 +37963,72 @@ mod tests {
             feedback.function(0).and_then(|vector| vector.get_binary(0)),
             Some(BinaryOpFeedback::Generic)
         );
+    }
+
+    #[test]
+    fn a_name_resolves_against_the_record_chain_before_the_global_environment() {
+        // A frame whose unit names its slots holds the record of 9.1.1.1, and
+        // `LdaName` resolves against it the way 9.4.2 does.
+        let mut root = BytecodeFunction::new(1, 0);
+        root.own_context_slot_count = Some(1);
+        root.own_context_names.push("x".encode_utf16().collect());
+        root.string_constants.push("x".encode_utf16().collect());
+        root.string_constants.push("y".encode_utf16().collect());
+        root.emit(Instruction::LdaSmi(7));
+        root.emit(Instruction::StaName {
+            name: 0,
+            strict: true,
+        });
+        // Step 5.d of 19.2.1.1 gives a name the record does not hold a
+        // binding of its own, which starts as undefined.
+        root.emit(Instruction::DeclareName(1));
+        root.emit(Instruction::LdaSmi(35));
+        root.emit(Instruction::StaName {
+            name: 1,
+            strict: true,
+        });
+        root.emit(Instruction::LdaName(0));
+        root.emit(Instruction::Star(Reg(0)));
+        root.emit(Instruction::LdaName(1));
+        root.emit(Instruction::Add(Reg(0)));
+        root.emit(Instruction::Return);
+
+        let mut heap = GenerationalHeap::new();
+        let realm = Realm::new(&mut heap).unwrap();
+        let mut feedback = FeedbackVector::for_code(&root);
+        let mut vm = RegisterVM::new(100);
+        assert_eq!(
+            vm.run(&root, &mut feedback, &mut heap, &realm),
+            Ok(Value::from_smi(42))
+        );
+
+        // A name no record of the chain holds reaches the global environment,
+        // where 13.5.3 answers undefined and every other read throws.
+        let mut absent = BytecodeFunction::new(1, 0);
+        absent
+            .string_constants
+            .push("nowhere".encode_utf16().collect());
+        absent.emit(Instruction::LdaNameForTypeOf(0));
+        absent.emit(Instruction::Return);
+        let mut feedback = FeedbackVector::for_code(&absent);
+        let mut vm = RegisterVM::new(100);
+        assert_eq!(
+            vm.run(&absent, &mut feedback, &mut heap, &realm),
+            Ok(VALUE_UNDEFINED)
+        );
+
+        let mut thrown = BytecodeFunction::new(1, 0);
+        thrown
+            .string_constants
+            .push("nowhere".encode_utf16().collect());
+        thrown.emit(Instruction::LdaName(0));
+        thrown.emit(Instruction::Return);
+        let mut feedback = FeedbackVector::for_code(&thrown);
+        let mut vm = RegisterVM::new(100);
+        assert!(matches!(
+            vm.run(&thrown, &mut feedback, &mut heap, &realm),
+            Err(VMError::Thrown(..))
+        ));
     }
 
     #[test]

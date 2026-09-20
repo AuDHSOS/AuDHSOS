@@ -244,6 +244,30 @@ pub enum Instruction {
         /// 9.1.1.2.5 refuses for a name nothing binds.
         strict: bool,
     },
+    /// `acc = GetBindingValue(strings[index])` of 9.1.1.1.6 on the first
+    /// Declarative Environment Record of the chain that names it, as
+    /// `ResolveBinding` of 9.4.2 resolves it, and the read
+    /// [`Instruction::LdaGlobal`] makes where no record does.
+    ///
+    /// This is the read of a name in a body that carries a direct eval of
+    /// 13.3.6.1, whose bindings the text of the eval may name.
+    LdaName(u16),
+    /// The same read for the operand of `typeof`, which 13.5.3 answers with
+    /// undefined for an unresolvable Reference instead of throwing.
+    LdaNameForTypeOf(u16),
+    /// `SetMutableBinding(strings[index], acc, strict)` of 9.1.1.1.5 on the
+    /// first record of the chain that names it, and the write
+    /// [`Instruction::StaGlobal`] makes where no record does.
+    StaName {
+        /// Index of the name in the string constants.
+        name: u16,
+        /// Whether the assignment is evaluated under strict mode.
+        strict: bool,
+    },
+    /// `CreateMutableBinding(strings[index], true)` of 9.1.1.1.2 on the
+    /// record of this frame, which step 5.d of 19.2.1.1 performs for a `var`
+    /// the text of a direct eval declares.
+    DeclareName(u16),
     /// Step 4 of 16.1.7 for one `var` name: a lexical declaration of the same
     /// name in this Realm is a `SyntaxError`.
     VerifyGlobalVar(u16),
@@ -1003,6 +1027,10 @@ pub struct BytecodeFunction {
     pub source: Option<u16>,
     /// Own heap-context slot count, when this frame creates a lexical context.
     pub own_context_slot_count: Option<u16>,
+    /// The name of each slot of the own context, for a body that carries a
+    /// direct eval of 13.3.6.1 and whose bindings the text of the eval may
+    /// name; empty for a context every read of addresses by slot.
+    pub own_context_names: Vec<Vec<u16>>,
     /// Slots of the own context a Block binding of 14.3.1 took before its
     /// declaration ran, which 9.1.1.1.1 leaves uninitialized until it does.
     pub lexical_context_slots: Vec<u16>,
@@ -1057,6 +1085,7 @@ impl BytecodeFunction {
             source: None,
             realm_script: false,
             own_context_slot_count: None,
+            own_context_names: Vec::new(),
             lexical_context_slots: Vec::new(),
             outer_context_slot_counts: Vec::new(),
             feedback_slots: Vec::new(),
@@ -1442,6 +1471,10 @@ impl BytecodeFunction {
             | Instruction::LdaString(index)
             | Instruction::LdaGlobal(index)
             | Instruction::LdaGlobalForTypeOf(index)
+            | Instruction::LdaName(index)
+            | Instruction::LdaNameForTypeOf(index)
+            | Instruction::DeclareName(index)
+            | Instruction::StaName { name: index, .. }
             | Instruction::DeleteGlobal(index)
             | Instruction::VerifyGlobalVar(index)
             | Instruction::DeclareGlobalVar(index)
