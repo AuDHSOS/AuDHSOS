@@ -922,6 +922,9 @@ Size: L.
 94. The five columns an `ALTER TABLE ... ADD COLUMN` refuses, and the
     three of them that stand over a table holding no row. Built, which
     D-347 records.
+95. The order `PRAGMA integrity_check` writes its problems in, and the
+    count or the table name after its equals sign. Built, which D-348
+    records.
 
 ### Done when
 
@@ -931,8 +934,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 108 100 cases in 798 files, 95 666
-pass, 3188 answer differently, and 9246 name something the engine
+under the `tclsh` of the machine. Of 108 095 cases in 798 files, 95 668
+pass, 3181 answer differently, and 9246 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the three-minute
 deadline and are counted with the cases they ran by then. One run over

@@ -6444,3 +6444,15 @@ Document 16 step Q8.
   `DEFAULT (-(1+2))` do not.
 - A column that points at a row of another table is refused only where the
   connection holds the keys and the table holds a row.
+
+### 6.6.236 What `PRAGMA integrity_check` is given (`db-sqlite`)
+
+Document 16 step Q8.
+
+- The count of an index comes before the rows missing from it.
+- A number after the equals sign is how many problems the pragma answers,
+  and nought stands for the hundred it answers by default.
+- A word that is no number is the name of the one table the walk is over.
+- A number in quotes is a name and not a count.
+- A name no table, index or schema table carries is refused.
+- A connection that writes reads the same argument as one that reads.

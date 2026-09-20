@@ -4250,6 +4250,72 @@ fn checked(bytes: &[u8]) -> Vec<Vec<u8>> {
         .collect()
 }
 
+/// What the pragma answers over `bytes` for the text after the equals
+/// sign.
+fn checked_for(bytes: &[u8], written: &str) -> Result<Vec<Vec<u8>>, crate::db::Error> {
+    let database = crate::db::Database::open(bytes).expect("a database");
+    let mut sql = b"PRAGMA integrity_check=".to_vec();
+    sql.extend_from_slice(written.as_bytes());
+    Ok(database
+        .query(&sql)?
+        .rows
+        .iter()
+        .filter_map(|row| match row.first() {
+            Some(Value::Text(text)) => Some(text.clone()),
+            _ => None,
+        })
+        .collect())
+}
+
+/// `PRAGMA integrity_check=N` answers at most `N` problems, and
+/// `PRAGMA integrity_check=name` walks the one table the name carries.
+#[test]
+fn what_the_integrity_check_is_given() {
+    use crate::change::Writer;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a)".as_slice(),
+        b"CREATE UNIQUE INDEX i ON t(a)",
+        b"INSERT INTO t VALUES(1),(2)",
+        b"CREATE TABLE u(b)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let mut broken = writer.written();
+    broken[2 * 512 + 3] = 0;
+    broken[2 * 512 + 4] = 1;
+    // A number is how many problems the pragma answers, and nought
+    // stands for the hundred it answers by default.
+    assert_eq!(
+        checked_for(&broken, "1").unwrap(),
+        [b"wrong # of entries in index i".to_vec()]
+    );
+    assert_eq!(checked_for(&broken, "0").unwrap().len(), 2);
+    // A word that is no number is the name of a table, and a name no
+    // object of the schema carries is refused.
+    assert_eq!(checked_for(&broken, "u").unwrap(), [b"ok".to_vec()]);
+    assert_eq!(checked_for(&broken, "t").unwrap().len(), 2);
+    // The name of an index is an object of the schema, and the walk is
+    // over no table.
+    assert_eq!(checked_for(&broken, "i").unwrap(), [b"ok".to_vec()]);
+    assert_eq!(
+        checked_for(&broken, "sqlite_schema").unwrap(),
+        [b"ok".to_vec()]
+    );
+    // A connection that writes reads the same argument.
+    assert_eq!(
+        writer.run(b"PRAGMA integrity_check=u").unwrap(),
+        [alloc::vec![Value::Text(b"ok".to_vec())]]
+    );
+    // A number in quotes is a name and not a count.
+    for written in ["'4'", "xyz"] {
+        assert_eq!(
+            checked_for(&broken, written).unwrap_err().message(),
+            alloc::format!("no such table: {}", written.trim_matches('\''))
+        );
+    }
+}
+
 #[test]
 fn what_the_integrity_check_finds_in_an_index_written_over() {
     use crate::change::Writer;
@@ -4265,15 +4331,17 @@ fn what_the_integrity_check_finds_in_an_index_written_over() {
     assert_eq!(checked(&sound), [b"ok".to_vec()]);
 
     // The index says it holds one entry where it holds two, so the row
-    // the entry it no longer counts belongs to is missing from it.
+    // the entry it no longer counts belongs to is missing from it. The
+    // count comes before the row, which is the order `sqlite3Pragma`
+    // writes the two runs of the check in.
     let mut fewer = sound.clone();
     fewer[2 * 512 + 3] = 0;
     fewer[2 * 512 + 4] = 1;
     assert_eq!(
         checked(&fewer),
         [
-            b"row 2 missing from index i".to_vec(),
-            b"wrong # of entries in index i".to_vec()
+            b"wrong # of entries in index i".to_vec(),
+            b"row 2 missing from index i".to_vec()
         ]
     );
 

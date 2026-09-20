@@ -2876,7 +2876,8 @@ impl<'a> Database<'a> {
             rows,
         };
         if let Some(quick) = quick {
-            let rows = crate::check::integrity(self, quick)?
+            let asked = crate::check::checking(asked.value.map(|value| value.text(sql)));
+            let rows = crate::check::integrity(self, quick, &asked)?
                 .into_iter()
                 .map(|text| alloc::vec![Value::Text(text)])
                 .collect();

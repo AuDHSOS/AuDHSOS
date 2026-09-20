@@ -3390,7 +3390,8 @@ impl Writer {
             // reference to the pages of this one.
             let bytes = self.image();
             let database = self.reading(&bytes)?;
-            return Ok(crate::check::integrity(&database, quick)?
+            let asked = crate::check::checking(asked.value.map(|value| value.text(sql)));
+            return Ok(crate::check::integrity(&database, quick, &asked)?
                 .into_iter()
                 .map(|text| alloc::vec![Value::Text(text)])
                 .collect());

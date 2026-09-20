@@ -74,7 +74,7 @@ fn the_rows_the_indexes_and_the_triggers_stand_after_a_vacuum() {
         [alloc::vec![Value::Int(0)]]
     );
     assert_eq!(
-        crate::check::integrity(&database, false).unwrap(),
+        crate::check::integrity(&database, false, &crate::check::checking(None)).unwrap(),
         [b"ok".to_vec()]
     );
 }
@@ -159,7 +159,7 @@ fn a_file_that_vacuums_itself_and_an_index_a_unique_made_stand() {
     let bytes = writer.written();
     let database = Database::open(&bytes).unwrap();
     assert_eq!(
-        crate::check::integrity(&database, false).unwrap(),
+        crate::check::integrity(&database, false, &crate::check::checking(None)).unwrap(),
         [b"ok".to_vec()]
     );
 }

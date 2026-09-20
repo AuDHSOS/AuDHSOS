@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` writes the problems of the pages and the counts of the
+  indexes before the problems of the rows for `PRAGMA integrity_check`,
+  reads a number after the equals sign as how many problems to answer and
+  every other word as the name of the one table to walk, and refuses a
+  name no object of the schema carries. D-348 records it. Catalog 6.6.236.
+  `pragma.test` goes from 73 cases passing to 81.
+
 - `db-sqlite` refuses the five columns an `ALTER TABLE ... ADD COLUMN` may
   not add with the words the C library writes, and adds a `NOT NULL`
   column and one whose default is no value of its own over a table that
