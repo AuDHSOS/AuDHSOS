@@ -10,6 +10,10 @@ crate that handles secrets: no branch and no index on a secret value.
 Lengths, protocol constants, and certificate contents are public. Keys,
 shared secrets, traffic secrets, and plaintext are not.
 
+`wipe`, `wipe_u32`, and `wipe_u64` are the same erase for a buffer that
+cannot be a `Secret`: the padded key inside HMAC, the key words of a
+stream cipher, the limb arrays of a modular exponentiation.
+
 One limit is honest rather than hidden. Erasing memory reliably needs a
 volatile write, and a crate that forbids `unsafe` has none. `Secret<N>`
 overwrites its bytes on drop and passes the buffer through

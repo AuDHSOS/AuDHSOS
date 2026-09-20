@@ -277,9 +277,42 @@ fn the_two_multiplications_answer_the_same_point() {
 fn the_two_scalar_products_answer_the_same_scalar() {
     let one = Scalar::from_bytes_reduced(&[1u8; 32]);
     let two = Scalar::from_bytes_reduced(&[0xFEu8; 32]);
-    for left in [Scalar::ZERO, one, two] {
-        for right in [Scalar::ZERO, one, two] {
-            assert_eq!(left.mul_secret(right), left.mul(right));
+    for (row, left) in [Scalar::ZERO, one, two].into_iter().enumerate() {
+        for (column, right) in [Scalar::ZERO, one, two].into_iter().enumerate() {
+            assert_eq!(
+                hex(&left.mul_secret(right).to_bytes()),
+                hex(&left.mul(right).to_bytes()),
+                "scalar {row} times scalar {column}"
+            );
         }
     }
+}
+
+#[test]
+fn clearing_a_scalar_overwrites_its_limbs() {
+    let mut scalar = Scalar::from_bytes_reduced(&[0x5Au8; 32]);
+    assert_ne!(scalar.to_bytes(), Scalar::ZERO.to_bytes());
+    scalar.clear();
+    assert_eq!(scalar.to_bytes(), Scalar::ZERO.to_bytes());
+}
+
+#[test]
+fn scalar_debug_names_the_type_and_shows_no_limb() {
+    let rendered = format!("{:?}", Scalar::from_bytes_reduced(&[0x5Au8; 32]));
+    assert_eq!(rendered, "Scalar");
+    assert!(!rendered.chars().any(|c| c.is_ascii_digit()));
+}
+
+#[test]
+fn signing_wipes_its_own_copies_and_not_the_caller_s_secret() {
+    let secret = [0x9Du8; 32];
+    let first = sign(&secret, b"a message");
+    let second = sign(&secret, b"a message");
+    assert_eq!(
+        hex(&first),
+        hex(&second),
+        "the secret survived the first signature"
+    );
+    assert_eq!(hex(&secret), hex(&[0x9Du8; 32]));
+    assert_eq!(hex(&public_key(&secret)), hex(&public_key(&secret)));
 }

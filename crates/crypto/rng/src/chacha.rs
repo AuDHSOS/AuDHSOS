@@ -136,12 +136,13 @@ impl<E: Entropy> ChaChaRng<E> {
     }
 
     /// Replaces the key with block zero of the current stream and advances
-    /// the sequence.
+    /// the sequence. The block holds the new key and is overwritten.
     fn rekey(&mut self) {
-        let block = ChaCha20::new(self.key.as_bytes()).block(&self.nonce(), 0);
+        let mut block = ChaCha20::new(self.key.as_bytes()).block(&self.nonce(), 0);
         for (slot, byte) in self.key.as_bytes_mut().iter_mut().zip(block) {
             *slot = byte;
         }
+        wipe(&mut block);
         self.sequence = self.sequence.wrapping_add(1);
     }
 }

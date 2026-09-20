@@ -366,3 +366,15 @@ fn property_what_is_sealed_opens_and_nothing_else_does() {
         Ok(())
     });
 }
+
+#[test]
+fn clearing_the_mode_overwrites_the_hash_key() {
+    let mut mode = crate::aesgcm::AesGcm::new(Aes::new_128(&[0x77u8; 16]));
+    assert_ne!(
+        mode.hash_key(),
+        &[0u8; 16],
+        "the hash key is derived from the key"
+    );
+    mode.clear();
+    assert_eq!(mode.hash_key(), &[0u8; 16]);
+}

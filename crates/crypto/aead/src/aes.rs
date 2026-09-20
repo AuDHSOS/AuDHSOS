@@ -16,7 +16,10 @@
 //! Invariants: a plane word holds one bit of sixteen bytes in each of four
 //! sixteen-bit groups; every permutation of lanes stays inside its group;
 //! every index into the state and into the round keys is a literal or comes
-//! from an iterator.
+//! from an iterator; the round keys and the expanded schedule are
+//! overwritten before they go out of scope.
+
+use crypto_ct::{wipe, wipe_u64};
 
 /// Blocks that share one set of plane words.
 pub const LANES: usize = 4;
@@ -63,24 +66,26 @@ impl Aes {
     /// The cipher under a 128-bit key.
     #[must_use]
     pub fn new_128(key: &[u8; 16]) -> Aes {
-        let expanded = expand_128(key);
+        let mut expanded = expand_128(key);
         let mut keys = [ZERO; 11];
         let (blocks, _) = expanded.as_chunks::<BLOCK_LEN>();
         for (slot, block) in keys.iter_mut().zip(blocks) {
             *slot = slice(&[*block; LANES]);
         }
+        wipe(&mut expanded);
         Aes::Aes128(keys)
     }
 
     /// The cipher under a 256-bit key.
     #[must_use]
     pub fn new_256(key: &[u8; 32]) -> Aes {
-        let expanded = expand_256(key);
+        let mut expanded = expand_256(key);
         let mut keys = [ZERO; 15];
         let (blocks, _) = expanded.as_chunks::<BLOCK_LEN>();
         for (slot, block) in keys.iter_mut().zip(blocks) {
             *slot = slice(&[*block; LANES]);
         }
+        wipe(&mut expanded);
         Aes::Aes256(keys)
     }
 
@@ -99,12 +104,34 @@ impl Aes {
         *block = first;
     }
 
+    /// Overwrites the round keys with zeros. `Drop` calls this; a cleared
+    /// cipher encrypts under the all-zero key and is for dropping only.
+    pub(crate) fn clear(&mut self) {
+        for plane in self.round_keys_mut() {
+            wipe_u64(plane);
+        }
+    }
+
     /// The round keys, oldest first.
     const fn round_keys(&self) -> &[Planes] {
         match self {
             Aes::Aes128(keys) => keys,
             Aes::Aes256(keys) => keys,
         }
+    }
+
+    /// The round keys, for the overwrite.
+    const fn round_keys_mut(&mut self) -> &mut [Planes] {
+        match self {
+            Aes::Aes128(keys) => keys,
+            Aes::Aes256(keys) => keys,
+        }
+    }
+}
+
+impl Drop for Aes {
+    fn drop(&mut self) {
+        self.clear();
     }
 }
 

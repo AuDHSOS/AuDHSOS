@@ -12,8 +12,12 @@
 //! multiplication is by a multiple of the cofactor within the right range,
 //! which is what makes the ladder safe against small-order peer values in
 //! the first place.
+//!
+//! Invariant: the clamped scalar, the four working registers, and the
+//! intermediates of the last round are overwritten before the ladder
+//! returns; those intermediates alone recompute the shared secret.
 
-use crypto_ct::Choice;
+use crypto_ct::{Choice, wipe};
 
 use crate::error::EcError;
 use crate::fe25519::Fe;
@@ -63,7 +67,7 @@ pub fn x25519(
     reason = "the working values are named as in RFC 7748, section 5"
 )]
 fn ladder(scalar: &[u8; SCALAR_LEN], point: &[u8; PUBLIC_LEN]) -> [u8; PUBLIC_LEN] {
-    let clamped = clamp(scalar);
+    let mut clamped = clamp(scalar);
     let x1 = Fe::from_bytes(point);
 
     let mut x2 = Fe::ONE;
@@ -72,6 +76,19 @@ fn ladder(scalar: &[u8; SCALAR_LEN], point: &[u8; PUBLIC_LEN]) -> [u8; PUBLIC_LE
     let mut z3 = Fe::ONE;
     let mut swap = Choice::NO;
 
+    // Declared here rather than in the loop, so that the last round's
+    // values, which recompute the shared secret, are still named after the
+    // loop and can be overwritten.
+    let mut a = Fe::ZERO;
+    let mut b = Fe::ZERO;
+    let mut aa = Fe::ZERO;
+    let mut bb = Fe::ZERO;
+    let mut e = Fe::ZERO;
+    let mut c = Fe::ZERO;
+    let mut d = Fe::ZERO;
+    let mut da = Fe::ZERO;
+    let mut cb = Fe::ZERO;
+
     for position in (0..255u8).rev() {
         let bit = bit_of(&clamped, position);
         swap = swap ^ bit;
@@ -79,15 +96,15 @@ fn ladder(scalar: &[u8; SCALAR_LEN], point: &[u8; PUBLIC_LEN]) -> [u8; PUBLIC_LE
         Fe::swap(swap, &mut z2, &mut z3);
         swap = bit;
 
-        let a = x2.add(z2);
-        let b = x2.sub(z2);
-        let aa = a.square();
-        let bb = b.square();
-        let e = aa.sub(bb);
-        let c = x3.add(z3);
-        let d = x3.sub(z3);
-        let da = d.mul(a);
-        let cb = c.mul(b);
+        a = x2.add(z2);
+        b = x2.sub(z2);
+        aa = a.square();
+        bb = b.square();
+        e = aa.sub(bb);
+        c = x3.add(z3);
+        d = x3.sub(z3);
+        da = d.mul(a);
+        cb = c.mul(b);
 
         x3 = da.add(cb).square();
         z3 = x1.mul(da.sub(cb).square());
@@ -97,7 +114,16 @@ fn ladder(scalar: &[u8; SCALAR_LEN], point: &[u8; PUBLIC_LEN]) -> [u8; PUBLIC_LE
 
     Fe::swap(swap, &mut x2, &mut x3);
     Fe::swap(swap, &mut z2, &mut z3);
-    x2.mul(z2.invert()).to_bytes()
+    let shared = x2.mul(z2.invert()).to_bytes();
+
+    wipe(&mut clamped);
+    for register in [
+        &mut x2, &mut z2, &mut x3, &mut z3, &mut a, &mut b, &mut aa, &mut bb, &mut e, &mut c,
+        &mut d, &mut da, &mut cb,
+    ] {
+        register.clear();
+    }
+    shared
 }
 
 /// The scalar with the bits RFC 7748 prescribes cleared and set.

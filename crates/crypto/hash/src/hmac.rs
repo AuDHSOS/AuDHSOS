@@ -3,9 +3,10 @@
 
 //! HMAC from RFC 2104, over any hash of this crate.
 //!
-//! Invariants: the key never reaches a formatter; the padded key is
-//! overwritten before it goes out of scope; verification compares tags in
-//! time that does not depend on where they differ.
+//! Invariants: the key never reaches a formatter; the padded key and the
+//! digest of an over-long key are overwritten before they go out of scope;
+//! the two hash states overwrite their chaining words on drop; verification
+//! compares tags in time that does not depend on where they differ.
 
 use crypto_ct::{Choice, ct_eq, wipe};
 
@@ -36,10 +37,11 @@ impl<H: Hash> Hmac<H> {
     pub fn new(key: &[u8]) -> Hmac<H> {
         let mut pad = H::ZERO_BLOCK;
         if key.len() > pad.as_ref().len() {
-            let digest = H::digest(key);
+            let mut digest = H::digest(key);
             for (slot, byte) in pad.as_mut().iter_mut().zip(digest.as_ref()) {
                 *slot = *byte;
             }
+            wipe(digest.as_mut());
         } else {
             for (slot, byte) in pad.as_mut().iter_mut().zip(key) {
                 *slot = *byte;

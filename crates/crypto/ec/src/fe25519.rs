@@ -12,8 +12,11 @@
 //! Invariants: no operation branches on the value of an element, and none
 //! indexes with one. `to_bytes` is the only fully reduced representation,
 //! and it is the only place where the comparison with the prime happens.
+//! The limbs reach no formatter, and [`Fe::clear`] overwrites them.
 
-use crypto_ct::{Choice, ct_select_u64};
+use core::fmt;
+
+use crypto_ct::{Choice, ct_select_u64, wipe_u64};
 
 /// Bytes of an encoded element.
 pub const BYTES: usize = 32;
@@ -23,14 +26,29 @@ const MASK: u64 = (1 << 51) - 1;
 
 /// An element of the field, as five limbs of 51 bits, least significant
 /// first.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct Fe([u64; 5]);
+
+impl fmt::Debug for Fe {
+    /// Prints the type name and no limb: an element may be an X25519
+    /// ladder register or the shared secret.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Fe")
+    }
+}
 
 impl Fe {
     /// The additive identity.
     pub const ZERO: Fe = Fe([0; 5]);
     /// The multiplicative identity.
     pub const ONE: Fe = Fe([1, 0, 0, 0, 0]);
+
+    /// Overwrites the limbs with zeros, for a caller that holds a
+    /// secret-derived element and is done with it. `Fe` is `Copy`, so it
+    /// cannot have a `Drop` and the caller has to say when.
+    pub fn clear(&mut self) {
+        wipe_u64(&mut self.0);
+    }
 
     /// The element with the given limbs, for the constants of the curves.
     #[must_use]

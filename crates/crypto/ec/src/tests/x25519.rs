@@ -155,3 +155,20 @@ fn the_errors_render_a_message() {
         assert!(!format!("{error:?}").is_empty());
     }
 }
+
+#[test]
+fn the_ladder_wipes_its_registers_and_not_its_caller_s_scalar() {
+    let scalar = unhex32("a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4");
+    let point = unhex32("e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c");
+    let first = x25519(&scalar, &point).unwrap();
+    let second = x25519(&scalar, &point).unwrap();
+    assert_eq!(
+        hex(&first),
+        hex(&second),
+        "the scalar survived the first call"
+    );
+    assert_eq!(
+        hex(&scalar),
+        "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4"
+    );
+}

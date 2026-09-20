@@ -224,3 +224,32 @@ fn property_any_split_of_a_message_gives_the_same_digest() {
         Ok(())
     });
 }
+
+#[test]
+fn a_cleared_sha512_state_keeps_nothing_of_its_message() {
+    let mut first = Sha512::new();
+    first.update(b"one message");
+    let mut second = Sha512::new();
+    second.update(b"a different message, longer than the first");
+    first.clear();
+    second.clear();
+    assert_eq!(hex(&first.finish()), hex(&second.finish()));
+}
+
+#[test]
+fn a_cleared_sha384_state_keeps_nothing_of_its_message() {
+    let mut first = Sha384::new();
+    first.update(b"one message");
+    let mut second = Sha384::new();
+    second.update(b"a different message, longer than the first");
+    first.clear();
+    second.clear();
+    assert_eq!(hex(&first.finish()), hex(&second.finish()));
+}
+
+#[test]
+fn a_cleared_sha512_state_is_not_a_fresh_state() {
+    let mut cleared = Sha512::new();
+    cleared.clear();
+    assert_ne!(hex(&cleared.finish()), hex(&Sha512::digest(b"")));
+}
