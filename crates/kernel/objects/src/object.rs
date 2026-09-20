@@ -535,8 +535,9 @@ impl Endpoint {
 pub struct Reply {
     /// The thread that waits for the answer.
     pub caller: ThreadId,
-    /// Whether the answer has been given, after which the object refuses a
-    /// second one.
+    /// Whether the object owes its caller nothing: the answer was given, or
+    /// a kill, a suspend, or an exit took the caller out of the wait. The
+    /// object refuses an answer either way.
     pub consumed: bool,
 }
 

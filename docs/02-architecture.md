@@ -126,7 +126,9 @@ generation. Pools are plain arrays in safe Rust and are tested on the host.
   named one afterwards name nothing, which is what a stale handle is.
 - Destroying an endpoint or notification wakes every blocked thread with
   `ObjectDestroyed`. Dropping a reply object without replying wakes its
-  caller with `ReplyDropped`.
+  caller with `ReplyDropped`, unless the caller stopped waiting for the
+  answer: a kill, a suspend, or an exit consumes the object and the drop
+  wakes nobody.
 - Destroying a process kills its threads, drops its mappings, and closes its
   handle table, and every handle it closes releases the reference that handle
   held.
@@ -389,7 +391,9 @@ Queueing: senders wait in a queue on the endpoint ordered by priority, then
 FIFO. Receivers wait in a second queue. A rendezvous happens as soon as both
 queues are non-empty. Killing a thread removes it from any queue.
 Destroying the endpoint wakes all waiters with `ObjectDestroyed`. Dropping
-a `Reply` object without replying wakes the caller with `ReplyDropped`.
+a `Reply` object without replying wakes the caller with `ReplyDropped`, and
+wakes nobody when a kill, a suspend, or an exit took the caller out of the
+wait first.
 
 ### 2.6.2 Message layout
 

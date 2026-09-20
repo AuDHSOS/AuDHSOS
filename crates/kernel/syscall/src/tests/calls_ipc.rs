@@ -1088,3 +1088,68 @@ fn a_refused_sender_that_outranks_the_receiver_earns_the_switch_the_refusal_carr
         Some(Error::InvalidHandle)
     );
 }
+
+#[test]
+fn closing_a_reply_handle_leaves_a_caller_that_waits_on_an_endpoint_where_it_is() {
+    // Issue #52: the caller was suspended out of its wait for the answer and
+    // blocked on a second endpoint afterwards. Waking it there would make it
+    // ready while its links still chain it into that endpoint's queue.
+    let mut fixture = Fixture::new();
+    let (endpoint_id, handle) = endpoint(&mut fixture);
+    let (second_id, _second) = endpoint(&mut fixture);
+    let client = fixture.process(8);
+    let caller = fixture.running(client, 4);
+    let theirs = install_endpoint(&mut fixture, client, endpoint_id, Rights::SEND);
+    let reply = queue_a_call(&mut fixture, caller, theirs, handle);
+
+    let manage = fixture
+        .install(AnyObjectId::of(caller), Rights::MANAGE)
+        .raw();
+    assert_eq!(
+        error_of(&mut fixture, request(Syscall::ThreadSuspend, &[manage])),
+        None
+    );
+    assert_eq!(
+        error_of(&mut fixture, request(Syscall::ThreadResume, &[manage])),
+        None
+    );
+    fixture.objects.threads.with(caller, |thread| {
+        thread.state = ThreadState::Running;
+    });
+    let _ = fixture
+        .scheduler
+        .dequeue(&mut fixture.objects.threads, caller);
+    let receiving = install_endpoint(&mut fixture, client, second_id, Rights::RECV);
+    receive_on(&mut fixture, caller, receiving);
+
+    let (status, _, _) = call(
+        &mut fixture,
+        &mut request(Syscall::HandleClose, &[reply.raw()]),
+    );
+    assert_eq!(status.error(), None);
+    assert_eq!(fixture.objects.replies.live(), 0, "the object went with it");
+    assert_eq!(
+        fixture.objects.threads.get(caller).unwrap().state,
+        ThreadState::BlockedRecv,
+        "the caller keeps waiting for a sender"
+    );
+    assert_eq!(
+        fixture.objects.threads.get(caller).unwrap().wait,
+        kernel_objects::object::Wait::Endpoint {
+            endpoint: second_id,
+            queue: kernel_objects::object::Queue::Receivers,
+            badge: 0
+        }
+    );
+    assert_eq!(
+        fixture
+            .objects
+            .endpoints
+            .get(second_id)
+            .unwrap()
+            .receivers
+            .iter(&fixture.objects.threads)
+            .collect::<Vec<_>>(),
+        vec![caller]
+    );
+}
