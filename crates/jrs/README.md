@@ -584,9 +584,9 @@ negative-test passes. Other parser/builtin completeness gaps remain open.
 The engine is the target of the migration and the stack backend the
 source (architecture, section 17.1). What gates the switch is not the
 count either path reaches but the set of variants the stack path passes
-and the engine does not. At `d8392ed` that set holds 1,651 variants:
-none of them the engine fails, and 1,651 it names as gaps. The engine
-passes 25,539 variants the stack path does not. Only the failures are
+and the engine does not. At `9a1f440` that set holds 1,650 variants:
+none of them the engine fails, and 1,650 it names as gaps. The engine
+passes 25,546 variants the stack path does not. Only the failures are
 breaches of the equality duty; a gap costs coverage and answers nothing
 wrongly.
 
@@ -775,6 +775,7 @@ more than eight variants.
 | `a1adb83` | 1,686 | **0** | 1,686 |
 | `849ba4e` | 1,666 | **0** | 1,666 |
 | `d8392ed` | 1,651 | **0** | 1,651 |
+| `9a1f440` | 1,650 | **0** | 1,650 |
 
 The list is the join of the two per-variant runs, without `--summary`:
 
@@ -1174,7 +1175,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | 13.3.7.1 with a spread element in the argument list (focused) | focused | `03d3688` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/super test/staging/sm/class --summary` | 188 | 371 | 232 (62.53%) | 14 (3.77%) | 125 (33.69%) |
 | The same, on the stack backend (focused) | focused | `03d3688` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/super test/staging/sm/class --summary` | 188 | 371 | 258 (69.54%) | 61 (16.44%) | 52 (14.02%) |
 | Complete pinned suite on the register engine, before the close of 14.7.5.7 step 3.j (outdated) | full | `33ffe90` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 58,747 (57.08%) | 20,543 (19.96%) | 23,635 (22.96%) |
-| Complete pinned suite on the register engine | full | `d8392ed` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,242 (61.44%) | 18,961 (18.42%) | 20,722 (20.13%) |
+| Complete pinned suite on the register engine | full | `9a1f440` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,250 (61.45%) | 18,961 (18.42%) | 20,714 (20.13%) |
+| B.3.2.1 for a function of a Block (focused) | focused | `9a1f440` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/annexB/language --summary` | 845 | 895 | 40 (4.47%) | 59 (6.59%) | 796 (88.94%) |
+| The same, on the stack backend (focused) | focused | `9a1f440` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/annexB/language --summary` | 845 | 895 | 176 (19.66%) | 207 (23.13%) | 512 (57.21%) |
+| Complete pinned suite on the register engine, before B.3.2.1 for a function of a Block (outdated) | full | `d8392ed` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,242 (61.44%) | 18,961 (18.42%) | 20,722 (20.13%) |
 | A function declaration of a `CaseBlock` (focused) | focused | `d8392ed` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/switch --summary` | 111 | 216 | 182 (84.26%) | 19 (8.80%) | 15 (6.94%) |
 | The same, on the stack backend (focused) | focused | `d8392ed` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/switch --summary` | 111 | 216 | 187 (86.57%) | 19 (8.80%) | 10 (4.63%) |
 | Complete pinned suite on the register engine, before a function declaration of a `CaseBlock` (outdated) | full | `849ba4e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,227 (61.43%) | 18,961 (18.42%) | 20,737 (20.15%) |
