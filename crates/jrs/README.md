@@ -620,6 +620,16 @@ every site of the reason a name of its own and running the suite once:
 | 56 | `ToPrimitive` of an Object outside a call | sites of 8 variants or fewer |
 | 68 | `ToString` of an Object | 26 `property_key`, the rest in ten sites of 4 or fewer |
 
+The 26 of `property_key` stand at three instructions, each of which
+holds the key in a register: `DefineAccessorByValue` (12),
+`DefineMethodByValue` (8) and `TestIn` (4). The first two take
+`convert_key` the way `SetByValue` and `DeleteByValue` do, and
+answered alike for an object literal; inside a class body the
+instruction that runs again answers `invalid bytecode`, twelve
+variants of it, so the conversion waits until the re-entry of a class
+body is understood. `TestIn` holds its key in the accumulator, which
+`convert_key` does not read.
+
 The two largest sites of that reason are closed: the `lastIndex` of
 22.2.7.2 by `Resume::LastIndex` and the `length` of 10.4.2.4 by
 `Resume::ArrayLength`. What is left is a tail no site of which holds
