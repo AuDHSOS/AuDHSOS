@@ -14,10 +14,11 @@
 #![allow(clippy::arithmetic_side_effects)]
 
 use std::num::NonZeroUsize;
+use std::path::{Path, PathBuf};
 
 use audhsos_encoding::pem;
 
-use crate::ssh::{fingerprint_of, seed_of};
+use crate::ssh::{Material, configuration, fingerprint_of, seed_of};
 
 /// A public key line whose key is thirty-two `0x42` octets.
 const FIXTURE: &str =
@@ -177,4 +178,28 @@ fn a_key_under_another_label_is_refused() {
     out.truncate(len);
 
     assert!(seed_of(&out).is_err());
+}
+
+/// Key material naming two paths, for the configuration tests.
+fn material() -> Material {
+    Material {
+        host_key: PathBuf::from("/keys/host_ed25519"),
+        authorized: PathBuf::from("/keys/client_ed25519.pub"),
+        seed: SEED,
+        fingerprints: vec![FIXTURE_FINGERPRINT.to_owned()],
+    }
+}
+
+#[test]
+fn the_server_admits_a_public_key_of_root_where_the_check_runs_as_root() {
+    let text = configuration(22, &material(), Path::new("/run"), "root");
+
+    assert!(text.contains("PermitRootLogin prohibit-password\n"));
+}
+
+#[test]
+fn the_server_refuses_root_where_the_check_runs_as_another_account() {
+    let text = configuration(22, &material(), Path::new("/run"), "runner");
+
+    assert!(text.contains("PermitRootLogin no\n"));
 }

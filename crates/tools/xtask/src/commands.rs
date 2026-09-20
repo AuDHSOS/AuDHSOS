@@ -701,7 +701,7 @@ fn tls_lines(port: u16, root: &Path) -> Result<Vec<(String, String)>, Error> {
 fn test_the_secure_shell_client(machine: &Machine, path: &Path, root: &Path) -> Result<(), Error> {
     let material = ssh::material(root)?;
     let account = ssh::account()?;
-    let server = ssh::Server::start(root, &material)?;
+    let server = ssh::Server::start(root, &material, &account)?;
     note!(
         "sshd: port {}, {} fingerprint(s) trusted",
         server.port(),
@@ -744,8 +744,24 @@ fn test_the_secure_shell_client(machine: &Machine, path: &Path, root: &Path) -> 
 /// reports no status both fail here. The three needles that quote the
 /// command are built from the constants the command itself is built from,
 /// so the check cannot drift away from what the guest is told to run.
-fn ssh_lines() -> [(String, &'static str); 6] {
+///
+/// The first two lines are checkpoints and not assertions of their own.
+/// Each line of this list gets [`E2E_TIMEOUT`] to itself, and `app-ssh`
+/// is the fifteenth program the root task starts, eleven of them read
+/// off the scratch volume one message of two kibibytes at a time:
+/// without the checkpoints one timeout would have to cover the firmware,
+/// the kernel and all fifteen (D-92). The run that failed in CI reached
+/// `app-net` and lost the budget there.
+fn ssh_lines() -> [(String, &'static str); 8] {
     [
+        (
+            "[init] started server-net".to_owned(),
+            "the machine did not get as far as the network server",
+        ),
+        (
+            "[init] started app-net".to_owned(),
+            "the machine did not get as far as the program before `app-ssh`",
+        ),
         (
             "[init] started app-ssh".to_owned(),
             "the Secure Shell client did not start",

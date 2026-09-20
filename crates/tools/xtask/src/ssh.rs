@@ -66,6 +66,10 @@ const OPENSSH_MAGIC: &[u8] = b"openssh-key-v1\0";
 /// The key algorithm of 14.5, which is the only one either file holds.
 const ED25519: &[u8] = b"ssh-ed25519";
 
+/// The account `sshd` refuses by default, and the one a container of the
+/// cloud runner starts the check as.
+const ROOT: &str = "root";
+
 /// How long the runner waits for the server to take its port.
 const LISTEN_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -346,7 +350,7 @@ impl Server {
     ///
     /// The server runs as the person who started the check and
     /// authenticates that same account, which is what `sshd` without
-    /// privileges can do; nothing here needs a password or a root.
+    /// privileges can do; nothing here needs a password.
     ///
     /// # Errors
     ///
@@ -354,7 +358,7 @@ impl Server {
     /// or when the server did not take its port within
     /// [`LISTEN_TIMEOUT`], and [`Error::Io`] when the configuration cannot
     /// be written.
-    pub(crate) fn start(root: &Path, material: &Material) -> Result<Server, Error> {
+    pub(crate) fn start(root: &Path, material: &Material, account: &str) -> Result<Server, Error> {
         let program = locate()?;
         let port = crate::qemu::free_port()
             .ok_or_else(|| Error::Usage("no free port for the interop server".to_owned()))?;
@@ -364,7 +368,7 @@ impl Server {
         let config = directory.join("sshd_config");
         fs::write_bytes(
             &config,
-            configuration(port, material, &directory).as_bytes(),
+            configuration(port, material, &directory, account).as_bytes(),
         )?;
 
         let log = std::fs::File::create(directory.join("sshd.log"))
@@ -448,7 +452,17 @@ impl Drop for Server {
 /// The three paths are quoted, because sshd splits a keyword's arguments
 /// on whitespace and a checkout whose path holds a space would otherwise
 /// make it refuse the file with `extra arguments at end of line`.
-fn configuration(port: u16, material: &Material, directory: &Path) -> String {
+///
+/// `PermitRootLogin` admits a public key where `account` is `root`, which
+/// a container that runs the check as `root` needs and which D-189
+/// decided; `sshd` refuses the one account the run authenticates
+/// otherwise.
+pub(crate) fn configuration(
+    port: u16,
+    material: &Material,
+    directory: &Path,
+    account: &str,
+) -> String {
     format!(
         "Port {port}\n\
          ListenAddress 127.0.0.1\n\
@@ -459,12 +473,17 @@ fn configuration(port: u16, material: &Material, directory: &Path) -> String {
          UsePAM no\n\
          PasswordAuthentication no\n\
          KbdInteractiveAuthentication no\n\
-         PermitRootLogin no\n\
+         PermitRootLogin {root}\n\
          KexAlgorithms curve25519-sha256,diffie-hellman-group14-sha256\n\
          HostKeyAlgorithms ssh-ed25519\n\
          PubkeyAcceptedAlgorithms ssh-ed25519\n\
          Ciphers chacha20-poly1305@openssh.com\n\
          LogLevel DEBUG1\n",
+        root = if account == ROOT {
+            "prohibit-password"
+        } else {
+            "no"
+        },
         host = material.host_key.display(),
         authorized = material.authorized.display(),
         pid = directory.join("sshd.pid").display(),
