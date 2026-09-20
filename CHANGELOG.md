@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` refuses a `RAISE` outside the body of a trigger with
+  `RAISE() may only be used within a trigger-program` and refuses the
+  statement a trigger fired for with the message the `RAISE` carries,
+  which the engine answers where the trigger reaches it, under
+  `SQLITE_CONSTRAINT_TRIGGER`. D-353 records
+  it. Catalog 6.6.241. `trigger1.test` goes from 60 cases passing to 62
+  and `triggerC.test` from 22 to 23.
+
 - `db-sqlite` answers the columns of a view for `PRAGMA table_info`,
   refuses a column list of another width than the view's statement with
   `expected <n> columns for '<name>' but got <m>`, refuses a word after a

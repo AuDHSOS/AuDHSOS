@@ -6505,3 +6505,16 @@ Document 16 step Q8.
 - A word after a name of the column list is refused naming that name.
 - A `DROP TABLE` over a view and a `DROP VIEW` over a table each name the
   kind the schema holds.
+
+### 6.6.241 Where a `RAISE` stands and what it says (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A `RAISE` in the body of a trigger refuses the statement that fired the
+  trigger with the message it carries.
+- The refusal holds the action and the message as text, and carries
+  `SQLITE_CONSTRAINT_TRIGGER`.
+- `RAISE(IGNORE)` passes the row over and leaves the statement running.
+- A message the engine cannot answer takes the place of the refusal.
+- A `RAISE` outside the body of a trigger is refused where the statement
+  is read.

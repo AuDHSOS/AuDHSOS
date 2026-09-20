@@ -50,8 +50,8 @@ pub enum Error {
     /// source of bytes to answer them from.
     NoRandom,
     /// A `RAISE` the statement reached, which says what the statement
-    /// that reached it does.
-    Raised(crate::ast::Raise),
+    /// that reached it does, and the message it wrote as text.
+    Raised(crate::ast::Raise, Vec<u8>),
     /// A statement used as a value that answers a number of columns
     /// the place it stands in does not take, which
     /// `sqlite3SubselectError` refuses as `sub-select returns N
@@ -149,6 +149,7 @@ impl Error {
                 "FILTER clause may only be used with aggregate window functions".to_string()
             }
             Error::RowValue => "row value misused".to_string(),
+            Error::Raised(_, text) => shown(text),
             Error::HexTooBig(text) => {
                 alloc::format!("hex literal too big: {}", shown(text))
             }
@@ -623,9 +624,36 @@ fn answer(
         } => used(row, Used::InTable(value, schema, table, negated)),
         // `RAISE` answers no value: it says what the statement that
         // reached it does.
-        Node::Raise { action, .. } => Err(Error::Raised(action)),
+        Node::Raise { action, message } => Err(raised(arena, (action, message), sql, row, deeper)),
         Node::Row(_) => Err(Error::RowValue),
         Node::Variable(_) => Err(Error::Unsupported),
+    }
+}
+
+/// What a `RAISE` the statement reached says, which is the action it
+/// carries and the message it wrote as text.
+///
+/// `OP_Halt` of `research/sqlite/src/vdbe.c:1337` writes that message as
+/// the words the statement is refused with, reading it as text, and a
+/// message the engine cannot answer takes the place of it. Answering
+/// costs what the message costs.
+fn raised(
+    arena: &Arena,
+    raise: (crate::ast::Raise, Option<ExprId>),
+    sql: &[u8],
+    row: &dyn Row,
+    deeper: u32,
+) -> Error {
+    let (action, message) = raise;
+    let text = match message {
+        None => Ok(Vec::new()),
+        Some(id) => {
+            answer(arena, id, sql, row, deeper).map(|held| held.value.text().unwrap_or_default())
+        }
+    };
+    match text {
+        Ok(text) => Error::Raised(action, text),
+        Err(refused) => refused,
     }
 }
 

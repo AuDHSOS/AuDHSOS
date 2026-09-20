@@ -3500,14 +3500,45 @@ fn what_a_trigger_raises_and_where_it_stops() {
     ] {
         writer.run(sql).unwrap();
     }
+    // The words the statement is refused with are the message the
+    // `RAISE` carries.
+    let refused = writer.run(b"INSERT INTO t VALUES(-1)").unwrap_err();
     assert_eq!(
-        writer.run(b"INSERT INTO t VALUES(-1)").err(),
-        Some(crate::db::Error::Eval(crate::eval::Error::Raised(
-            crate::ast::Raise::Abort
-        )))
+        refused,
+        crate::db::Error::Eval(crate::eval::Error::Raised(
+            crate::ast::Raise::Abort,
+            b"nope".to_vec()
+        ))
+    );
+    assert_eq!(refused.message(), "nope");
+    // The code the refusal carries is the one the trigger program names.
+    assert_eq!(refused.code().extended, 1811);
+    assert_eq!(refused.code().extended_name, b"SQLITE_CONSTRAINT_TRIGGER");
+    // A message the engine cannot answer takes the place of the words the
+    // `RAISE` would have carried.
+    writer
+        .run(
+            b"CREATE TRIGGER r2 BEFORE INSERT ON t BEGIN \
+              SELECT RAISE(ABORT, abs(-9223372036854775808)) WHERE new.a=7; END",
+        )
+        .unwrap();
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO t VALUES(7)")
+            .unwrap_err()
+            .message(),
+        "integer overflow"
     );
     let written = writer.written();
     let database = Database::open(&written).unwrap();
+    // A `RAISE` outside the body of a trigger reaches no statement.
+    assert_eq!(
+        database
+            .query(b"SELECT RAISE(ABORT,'nope')")
+            .unwrap_err()
+            .message(),
+        "RAISE() may only be used within a trigger-program"
+    );
     assert_eq!(
         database
             .query(b"SELECT group_concat(a) FROM t")

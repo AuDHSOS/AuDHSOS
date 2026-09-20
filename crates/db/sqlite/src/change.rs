@@ -4056,7 +4056,7 @@ impl Writer {
             self.counted.rowid = held;
             self.running.pop();
             match ran {
-                Err(Error::Eval(crate::eval::Error::Raised(crate::ast::Raise::Ignore))) => {
+                Err(Error::Eval(crate::eval::Error::Raised(crate::ast::Raise::Ignore, _))) => {
                     return Ok(false);
                 }
                 other => other?,

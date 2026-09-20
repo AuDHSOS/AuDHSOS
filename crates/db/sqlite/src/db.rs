@@ -227,6 +227,8 @@ pub enum Error {
     /// with the name, how many names it wrote and how many columns the
     /// statement answers.
     ViewWidth(Vec<u8>, usize, usize),
+    /// A `RAISE` outside the body of a trigger.
+    RaiseInTrigger,
     /// Two `WITH` terms of one statement under one name.
     DuplicateTerm(Vec<u8>),
     /// `WITH` terms that read each other.
@@ -517,6 +519,9 @@ impl Error {
                 "expected {written} columns for '{}' but got {answered}",
                 shown(name)
             ),
+            Error::RaiseInTrigger => {
+                alloc::string::String::from("RAISE() may only be used within a trigger-program")
+            }
             Error::IndexedView => alloc::string::String::from("views may not be indexed"),
             Error::ConstraintIndex => alloc::string::String::from(
                 "index associated with UNIQUE or PRIMARY KEY constraint cannot be dropped",
@@ -802,6 +807,11 @@ impl Error {
             }
             Error::StoredType(..) => Code::broke(3091, b"SQLITE_CONSTRAINT_DATATYPE"),
             Error::CommitHook => Code::broke(531, b"SQLITE_CONSTRAINT_COMMITHOOK"),
+            // `OP_Halt` of `research/sqlite/src/vdbe.c:1337` carries the
+            // code the trigger program named, which
+            // `sqlite3ExprCodeTarget` sets to this one for a `RAISE` the
+            // body of a trigger holds.
+            Error::Eval(eval::Error::Raised(..)) => Code::broke(1811, b"SQLITE_CONSTRAINT_TRIGGER"),
             Error::Constraint | Error::HeldConstraint(_) => Code::plain(19, b"SQLITE_CONSTRAINT"),
             Error::Auth(_) => Code::plain(23, b"SQLITE_AUTH"),
             Error::Mismatch => Code::plain(20, b"SQLITE_MISMATCH"),
@@ -987,6 +997,9 @@ impl Error {
         }
         if error.expected == parse::Expected::AfterViewColumn {
             return Error::AfterViewColumn(held.unwrap_or_default().to_vec());
+        }
+        if error.expected == parse::Expected::RaiseInTrigger {
+            return Error::RaiseInTrigger;
         }
         match held.filter(|token| !token.is_empty()) {
             Some(token) => Error::Syntax(token.to_vec()),

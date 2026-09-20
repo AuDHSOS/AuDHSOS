@@ -934,6 +934,8 @@ Size: L.
 99. The columns a view answers, the width its column list may write, and
     the kind a `DROP` of the other kind names. Built, which D-352
     records.
+100. Where a `RAISE` may stand and the message it refuses the statement
+     with. Built, which D-353 records.
 
 ### Done when
 
@@ -943,8 +945,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 108 094 cases in 798 files, 95 720
-pass, 3160 answer differently, and 9214 name something the engine
+under the `tclsh` of the machine. Of 108 081 cases in 798 files, 95 711
+pass, 3157 answer differently, and 9213 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the three-minute
 deadline and are counted with the cases they ran by then. One run over

@@ -98,6 +98,8 @@ pub enum Expected {
     /// Nothing: a word after a name of the column list of a `CREATE
     /// VIEW`, which the span names.
     AfterViewColumn,
+    /// Nothing: a `RAISE` outside the body of a trigger.
+    RaiseInTrigger,
     /// `AS`, in a `WITH` clause.
     WithAs,
     /// `SELECT`, `VALUES` or `WITH`.
@@ -212,6 +214,9 @@ pub struct Parser<'a> {
     depth: u32,
     /// The kind of the token last taken, which three words are read by.
     last: Option<Kind>,
+    /// Whether the body of a trigger is being read, which is where a
+    /// `RAISE` may stand.
+    in_trigger: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -226,6 +231,7 @@ impl<'a> Parser<'a> {
             arena: Arena::new(),
             depth: 0,
             last: None,
+            in_trigger: false,
         };
         parser.ahead = [parser.read(), parser.read(), parser.read()];
         parser
@@ -1522,13 +1528,19 @@ impl<'a> Parser<'a> {
         };
         self.expect_keyword(Keyword::Begin, Expected::Body)?;
         let mut steps = Vec::new();
-        loop {
-            steps.push(self.trigger_step()?);
-            self.expect(Kind::Semi, Expected::Semi)?;
-            if self.eat_keyword(Keyword::End) {
-                break;
+        let held = self.in_trigger;
+        self.in_trigger = true;
+        let read = (|| {
+            loop {
+                steps.push(self.trigger_step()?);
+                self.expect(Kind::Semi, Expected::Semi)?;
+                if self.eat_keyword(Keyword::End) {
+                    return Ok(());
+                }
             }
-        }
+        })();
+        self.in_trigger = held;
+        read?;
         let body = self.arena.push_steps(&steps);
         let written = Span {
             start,
@@ -1552,6 +1564,17 @@ impl<'a> Parser<'a> {
     /// `RAISE(IGNORE)` and `RAISE(action, message)`.
     fn raise(&mut self) -> Result<ExprId, Error> {
         use crate::ast::Raise;
+        // `sqlite3ExprCodeTarget` of `research/sqlite/src/expr.c:5747`
+        // refuses a `RAISE` the parser reached with no trigger table,
+        // where no statement is there for it to say anything about.
+        if !self.in_trigger {
+            let token = self.peek();
+            return Err(Error {
+                at: token.map_or(self.end, |token| token.start),
+                len: token.map_or(0, |token| token.len),
+                expected: Expected::RaiseInTrigger,
+            });
+        }
         self.bump();
         self.expect(Kind::Lp, Expected::OpenParen)?;
         let action = if self.eat_keyword(Keyword::Ignore) {
@@ -3544,6 +3567,9 @@ pub fn change(sql: &[u8]) -> Result<(Arena, Change), Error> {
 /// Where the statement is not one expression.
 pub fn expression(sql: &[u8]) -> Result<(Arena, ExprId), Error> {
     let mut parser = Parser::new(sql);
+    // One expression on its own is no statement, so a `RAISE` in it says
+    // nothing about one and is read as the body of a trigger reads it.
+    parser.in_trigger = true;
     let root = parser.only_expression()?;
     Ok((parser.into_arena(), root))
 }
