@@ -10,10 +10,12 @@
 //! request produced, and the sequence never repeats a nonce under one key
 //! because the key changes with it.
 //!
-//! Invariants: the key is replaced after every request that produces
-//! bytes; a reseed mixes fresh material into the key rather than replacing
-//! it, so a source that turns out to be predictable cannot take the state
-//! over; and no bytes are produced when a due reseed fails.
+//! Invariants: the key is replaced after every run of output; a reseed
+//! mixes fresh material into the key rather than replacing it, so a
+//! source that turns out to be predictable cannot take the state over;
+//! no key produces more than [`RESEED_BYTES`], because a request wider
+//! than the budget is served in runs with a reseed between them; and a
+//! request whose reseed fails hands the caller no bytes.
 
 use crypto_aead::chacha20::{self, ChaCha20};
 use crypto_ct::{Secret, wipe};
@@ -115,6 +117,24 @@ impl<E: Entropy> ChaChaRng<E> {
         nonce
     }
 
+    /// Writes the keystream of the current key from block one into
+    /// `chunk`, then replaces the key.
+    ///
+    /// `chunk` is at most [`RESEED_BYTES`] long, which is 2^14 blocks, so
+    /// the counter stays far below its range of 2^32 and the stream
+    /// cannot run out under one key.
+    fn produce(&mut self, chunk: &mut [u8]) {
+        let cipher = ChaCha20::new(self.key.as_bytes());
+        let nonce = self.nonce();
+        for (index, block) in chunk.chunks_mut(chacha20::BLOCK_LEN).enumerate() {
+            let counter = u32::try_from(index).unwrap_or(u32::MAX).saturating_add(1);
+            for (slot, byte) in block.iter_mut().zip(cipher.block(&nonce, counter)) {
+                *slot = byte;
+            }
+        }
+        self.rekey();
+    }
+
     /// Replaces the key with block zero of the current stream and advances
     /// the sequence.
     fn rekey(&mut self) {
@@ -127,22 +147,35 @@ impl<E: Entropy> ChaChaRng<E> {
 }
 
 impl<E: Entropy> Rng for ChaChaRng<E> {
+    /// A request wider than what the budget still allows is served in
+    /// runs: each run takes at most the remaining budget from one key,
+    /// and the generator reseeds between two runs. A request of `n`
+    /// bytes therefore costs at most `n / RESEED_BYTES` reseeds, rounded
+    /// up, and no key ever produces more than [`RESEED_BYTES`].
+    ///
+    /// A reseed that fails wipes the bytes the request has produced so
+    /// far and leaves the rest of `out` as it was, so a refusal hands the
+    /// caller no bytes.
     fn fill(&mut self, out: &mut [u8]) -> Result<(), RngError> {
-        if out.is_empty() {
-            return Ok(());
+        let mut done = 0usize;
+        while done < out.len() {
+            let (produced, rest) = out.split_at_mut(done);
+            if self.budget == 0
+                && let Err(error) = self.reseed()
+            {
+                wipe(produced);
+                return Err(error);
+            }
+            let take = usize::try_from(self.budget)
+                .unwrap_or(usize::MAX)
+                .min(rest.len());
+            let (chunk, _) = rest.split_at_mut(take);
+            self.produce(chunk);
+            self.budget = self
+                .budget
+                .saturating_sub(u64::try_from(take).unwrap_or(u64::MAX));
+            done = done.saturating_add(take);
         }
-        let wanted = u64::try_from(out.len()).unwrap_or(u64::MAX);
-        if wanted > self.budget {
-            self.reseed()?;
-        }
-
-        out.fill(0);
-        let cipher = ChaCha20::new(self.key.as_bytes());
-        cipher
-            .apply_keystream(&self.nonce(), 1, out)
-            .map_err(|_| RngError::Exhausted)?;
-        self.rekey();
-        self.budget = self.budget.saturating_sub(wanted);
         Ok(())
     }
 }

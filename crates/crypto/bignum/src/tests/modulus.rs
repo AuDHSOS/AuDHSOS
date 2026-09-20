@@ -418,3 +418,30 @@ fn the_secret_exponentiation_refuses_an_output_below_the_width_of_the_modulus() 
         .expect("a buffer of the width of the modulus is accepted");
     assert_eq!(hex(&wide), format!("{}{}", hex(&[0u8; 32]), hex(&exact)));
 }
+
+/// An output too narrow for the result is refused before anything is
+/// written, so a caller that ignores the result does not find a
+/// truncated value where a full one would be.
+#[test]
+fn a_refused_exponentiation_leaves_the_output_alone() {
+    let modulus = Modulus::new(&fixed(1024)).expect("the fixed modulus is well formed");
+    let base = fixed(1016);
+    let mut out = vec![0xAAu8; 8];
+    assert_eq!(
+        modulus.pow(&base, 3, &mut out),
+        Err(BignumError::OutputTooShort)
+    );
+    assert_eq!(out, vec![0xAAu8; 8]);
+}
+
+/// A result narrower than `out` is written into the end of it, whatever
+/// the width of the modulus is.
+#[test]
+fn an_output_narrower_than_the_modulus_holds_a_result_that_fits() {
+    let modulus = Modulus::new(&fixed(1024)).expect("the fixed modulus is well formed");
+    let mut out = vec![0xAAu8; 2];
+    modulus
+        .pow(&[7u8], 2, &mut out)
+        .expect("forty-nine fits in two bytes");
+    assert_eq!(out, vec![0x00u8, 0x31u8]);
+}
