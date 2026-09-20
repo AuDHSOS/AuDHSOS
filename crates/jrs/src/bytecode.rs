@@ -532,11 +532,13 @@ pub(crate) fn compile_eval(
 ) -> Result<Program, Error> {
     let (strict_caller, evaluated) = how;
     let body = parser::parse_eval(source, limits, strict_caller)?;
-    compile_parsed_as(&body, limits, true, evaluated)
+    // Step 10 of 19.2.1.1: a direct eval of a strict caller evaluates strict
+    // text, whatever the Directive Prologue of the text itself says.
+    compile_parsed_as(&body, limits, true, (evaluated, strict_caller))
 }
 
 fn compile_parsed(body: &[Stmt], limits: Limits, realm: bool) -> Result<Program, Error> {
-    compile_parsed_as(body, limits, realm, false)
+    compile_parsed_as(body, limits, realm, (false, false))
 }
 
 /// The same, where `evaluated` says the text is the one of an eval, whose
@@ -545,8 +547,9 @@ fn compile_parsed_as(
     body: &[Stmt],
     limits: Limits,
     realm: bool,
-    evaluated: bool,
+    how: (bool, bool),
 ) -> Result<Program, Error> {
+    let (evaluated, strict_caller) = how;
     let mut compiler = Compiler {
         program: Program {
             code: Vec::new(),
@@ -585,7 +588,7 @@ fn compile_parsed_as(
     compiler.finish();
     let (register_code, register_refusal) = lower_register_script(
         body,
-        (realm, evaluated),
+        (realm, evaluated, strict_caller),
         u64::try_from(compiler.program.total_instructions).unwrap_or(u64::MAX),
         limits.properties,
     );
@@ -933,6 +936,10 @@ struct RegisterLowerer {
     /// Environment Record rather than to the unit. Only a Realm Script does;
     /// a function of one keeps its own var scope.
     script_globals: bool,
+    /// The names B.3.2.1 and B.3.2.2 gave the Global Environment Record for
+    /// this Script, which a Block or a `CaseBlock` of it writes the function
+    /// it declares into.
+    script_var_names: BTreeSet<String>,
     /// The innermost construct this lowering would not take. The first one
     /// recorded is the one that stopped it; an enclosing node fails only
     /// because this one did, so it does not overwrite the name.
@@ -1180,6 +1187,7 @@ impl RegisterLowerer {
             return_type: None,
             realm: false,
             script_globals: false,
+            script_var_names: BTreeSet::new(),
             refusal: None,
         }
     }
@@ -1756,6 +1764,26 @@ impl RegisterLowerer {
                 continue;
             }
             var_names(statement, &mut variables);
+        }
+        // B.3.2.1 and B.3.2.2 give a function declared in a Block or a
+        // `CaseBlock` of sloppy code a `var` binding of the Script as well.
+        // Replacing the declaration with a `var` of the same name is an early
+        // error where the Script already declares it, which takes the name
+        // out again.
+        if !self.code.strict {
+            let mut names = BTreeSet::new();
+            for statement in body {
+                register_block_function_names(statement, &mut names);
+            }
+            names.retain(|name| {
+                !lexical.iter().any(|(taken, _)| taken == name)
+                    && !variables.iter().any(|taken| taken == name)
+                    && !body.iter().any(|statement| {
+                        matches!(statement, Stmt::Function(declared, _) if declared == name)
+                    })
+            });
+            variables.extend(names.iter().cloned());
+            self.script_var_names = names;
         }
         variables.dedup();
         // 16.1.7 takes the last declaration of each function name.
@@ -7797,9 +7825,16 @@ impl RegisterLowerer {
             Option<RegisterBinding>,
         )],
     ) -> bool {
-        self.block_depth == 1
-            && !self.parameter_names.contains(name)
-            && self.body_var_names.iter().any(|held| held == name)
+        if self.block_depth != 1 || self.parameter_names.contains(name) {
+            return false;
+        }
+        // 16.1.7 keeps a top-level `var` of a Script on the Global
+        // Environment Record, so the write goes there and not to a binding
+        // one scope out.
+        if self.script_globals {
+            return self.script_var_names.contains(name);
+        }
+        self.body_var_names.iter().any(|held| held == name)
             && scoped
                 .iter()
                 .any(|(bound, _, previous)| bound == name && previous.is_some())
@@ -7817,6 +7852,17 @@ impl RegisterLowerer {
         )],
     ) -> Option<()> {
         let held = *self.bindings.get(name)?;
+        if self.script_globals {
+            self.load_binding(held);
+            let units: Vec<u16> = name.encode_utf16().collect();
+            let index = self.string_constant(&units)?;
+            self.code
+                .emit(crate::engine::bytecode::Instruction::StaGlobal {
+                    name: index,
+                    strict: false,
+                });
+            return Some(());
+        }
         let outer = scoped
             .iter()
             .find(|(bound, _, _)| bound == name)
@@ -12139,29 +12185,58 @@ fn register_body_var_names_of(body: &[Stmt], strict: bool) -> Option<BTreeSet<St
 /// A declaration of the body itself is not one of them, and the scan stops at
 /// every nested function, whose Blocks name the bindings of that body.
 fn register_block_function_names(statement: &Stmt, names: &mut BTreeSet<String>) {
-    match statement {
-        Stmt::Block(body) => {
-            for inner in body {
-                if let Stmt::Function(name, _) = inner {
-                    names.insert(name.clone());
+    register_block_function_names_under(statement, names, &BTreeSet::new());
+}
+
+/// The same, where `outer` holds the names every scope around this statement
+/// declares lexically: a function whose name one of them binds keeps no `var`
+/// binding, because replacing it would be an early error there.
+fn register_block_function_names_under(
+    statement: &Stmt,
+    names: &mut BTreeSet<String>,
+    outer: &BTreeSet<String>,
+) {
+    /// The functions one `StatementList` declares, minus every name it also
+    /// declares lexically: replacing such a declaration with a `var` of the
+    /// same name is the early error B.3.2.1 asks about.
+    fn of_a_list(lists: &[&[Stmt]], names: &mut BTreeSet<String>, outer: &BTreeSet<String>) {
+        let mut lexical = outer.clone();
+        for statement in lists.iter().copied().flatten() {
+            if let Stmt::Declare(bindings) = statement {
+                for (pattern, _, _) in bindings {
+                    let mut bound = Vec::new();
+                    pattern.names(&mut bound);
+                    lexical.extend(bound);
                 }
-                register_block_function_names(inner, names);
             }
         }
-        Stmt::Switch(_, clauses) => {
-            for (_, body) in clauses {
-                for inner in body {
-                    if let Stmt::Function(name, _) = inner {
-                        names.insert(name.clone());
-                    }
-                    register_block_function_names(inner, names);
-                }
+        for statement in lists.iter().copied().flatten() {
+            // B.3.2.1 speaks of a `FunctionDeclaration` alone: a generator of
+            // 27.5 and an async function of 27.7 keep the binding of the
+            // Block and take none of the body around it.
+            if let Stmt::Function(name, function) = statement
+                && !function.generator
+                && matches!(function.async_kind, parser::AsyncKind::Sync)
+                && !lexical.contains(name)
+            {
+                names.insert(name.clone());
             }
+            register_block_function_names_under(statement, names, &lexical);
+        }
+    }
+
+    match statement {
+        Stmt::Block(body) => of_a_list(&[body], names, outer),
+        // 14.12.4 makes one Environment Record for the whole CaseBlock, so
+        // every clause of it is one list for this question.
+        Stmt::Switch(_, clauses) => {
+            let lists: Vec<&[Stmt]> = clauses.iter().map(|(_, body)| body.as_slice()).collect();
+            of_a_list(&lists, names, outer);
         }
         Stmt::If(_, yes, no) => {
-            register_block_function_names(yes, names);
+            register_block_function_names_under(yes, names, outer);
             if let Some(no) = no {
-                register_block_function_names(no, names);
+                register_block_function_names_under(no, names, outer);
             }
         }
         Stmt::While(_, body)
@@ -12169,38 +12244,23 @@ fn register_block_function_names(statement: &Stmt, names: &mut BTreeSet<String>)
         | Stmt::Labelled(_, body)
         | Stmt::ForIn { body, .. }
         | Stmt::ForOf { body, .. } => {
-            register_block_function_names(body, names);
+            register_block_function_names_under(body, names, outer);
         }
         Stmt::For(initializer, _, _, body) => {
-            register_block_function_names(initializer, names);
-            register_block_function_names(body, names);
+            register_block_function_names_under(initializer, names, outer);
+            register_block_function_names_under(body, names, outer);
         }
         Stmt::Try {
             body,
             catch,
             finally,
         } => {
-            for inner in body {
-                if let Stmt::Function(name, _) = inner {
-                    names.insert(name.clone());
-                }
-                register_block_function_names(inner, names);
-            }
+            of_a_list(&[body], names, outer);
             if let Some((_, catch)) = catch {
-                for inner in catch {
-                    if let Stmt::Function(name, _) = inner {
-                        names.insert(name.clone());
-                    }
-                    register_block_function_names(inner, names);
-                }
+                of_a_list(&[catch], names, outer);
             }
             if let Some(finally) = finally {
-                for inner in finally {
-                    if let Stmt::Function(name, _) = inner {
-                        names.insert(name.clone());
-                    }
-                    register_block_function_names(inner, names);
-                }
+                of_a_list(&[finally], names, outer);
             }
         }
         _ => {}
@@ -14093,14 +14153,14 @@ fn register_directive_prologue_is_strict(body: &[Stmt]) -> bool {
 
 fn lower_register_script(
     body: &[Stmt],
-    how: (bool, bool),
+    how: (bool, bool, bool),
     entry_fuel_cost: u64,
     property_limit: usize,
 ) -> (
     Option<crate::engine::bytecode::BytecodeFunction>,
     Option<&'static str>,
 ) {
-    let (realm, evaluated) = how;
+    let (realm, evaluated, strict_caller) = how;
     if body
         .iter()
         .any(register_statement_has_unsupported_binding_pattern)
@@ -14114,7 +14174,7 @@ fn lower_register_script(
         maximum.max(register_statement_stack_requirement(statement))
     });
     let mut lowerer = RegisterLowerer::new(entry_fuel_cost, stack_requirement, property_limit, 0);
-    lowerer.code.strict = register_directive_prologue_is_strict(body);
+    lowerer.code.strict = strict_caller || register_directive_prologue_is_strict(body);
     lowerer.realm = realm;
     lowerer.script_globals = realm;
     lowerer.code.deletable_globals = evaluated;
