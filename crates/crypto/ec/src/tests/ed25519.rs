@@ -279,9 +279,8 @@ fn the_two_scalar_products_answer_the_same_scalar() {
     let two = Scalar::from_bytes_reduced(&[0xFEu8; 32]);
     for (row, left) in [Scalar::ZERO, one, two].into_iter().enumerate() {
         for (column, right) in [Scalar::ZERO, one, two].into_iter().enumerate() {
-            assert_eq!(
-                hex(&left.mul_secret(right).to_bytes()),
-                hex(&left.mul(right).to_bytes()),
+            assert!(
+                left.mul_secret(right).ct_eq(left.mul(right)).is_true(),
                 "scalar {row} times scalar {column}"
             );
         }

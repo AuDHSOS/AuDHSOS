@@ -10,6 +10,14 @@ crate that handles secrets: no branch and no index on a secret value.
 Lengths, protocol constants, and certificate contents are public. Keys,
 shared secrets, traffic secrets, and plaintext are not.
 
+`Choice` passes each byte it derives from a value through
+`core::hint::black_box`, so the optimizer cannot prove the byte is `0` or
+`1` and turn a mask into a branch or an indexed load; the two named
+constants and the operators need none. Neither `Choice` nor
+`Secret<N>` carries `PartialEq`, so a comparison names itself:
+`Choice::is_true` for the deliberate exit from constant time,
+`Secret::ct_eq` for the comparison that folds every byte.
+
 `wipe`, `wipe_u32`, and `wipe_u64` are the same erase for a buffer that
 cannot be a `Secret`: the padded key inside HMAC, the key words of a
 stream cipher, the limb arrays of a modular exponentiation.

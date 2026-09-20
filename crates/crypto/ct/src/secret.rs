@@ -78,7 +78,7 @@ impl<const N: usize> Secret<N> {
 /// as the padded key inside HMAC.
 pub fn wipe(bytes: &mut [u8]) {
     bytes.fill(0);
-    let _ = black_box(&bytes);
+    let _ = black_box(&*bytes);
 }
 
 /// Overwrites `words` with zeros.

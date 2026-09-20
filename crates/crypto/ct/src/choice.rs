@@ -7,6 +7,7 @@
 //! constructor establishes it, every operation preserves it, and the masks
 //! derived from it are therefore `0x00` or all ones.
 
+use core::hint::black_box;
 use core::ops::{BitAnd, BitOr, BitXor, Not};
 
 /// The result of comparing values that must not be branched on.
@@ -17,7 +18,24 @@ use core::ops::{BitAnd, BitOr, BitXor, Not};
 /// program acts on, and therefore observable; that is allowed exactly where
 /// the decision is public anyway, such as accepting or rejecting a
 /// record whose tag failed to verify.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Each constructor that derives its byte from a value passes the byte
+/// through [`core::hint::black_box`], so that the optimizer cannot prove
+/// the value is `0` or `1` and rewrite a mask into a branch or an indexed
+/// load. [`Choice::YES`], [`Choice::NO`] and the operators carry no
+/// barrier of their own: a choice the source names is public, and an
+/// operator keeps the opacity of its operands. A `const` evaluation folds
+/// the barrier away, which costs nothing because a constant is public.
+///
+/// The type carries no `PartialEq`: `choice == Choice::YES` is
+/// [`Choice::is_true`] without the name that marks the exit from constant
+/// time. A caller that wants the byte calls [`Choice::value`].
+///
+/// ```compile_fail
+/// use crypto_ct::Choice;
+/// let _ = Choice::YES == Choice::NO;
+/// ```
+#[derive(Clone, Copy, Debug)]
 pub struct Choice(u8);
 
 impl Choice {
@@ -30,7 +48,7 @@ impl Choice {
     /// discarded, so any accumulator can be turned into a choice.
     #[must_use]
     pub const fn from_lsb(value: u8) -> Choice {
-        Choice(value & 1)
+        Choice(black_box(value & 1))
     }
 
     /// The choice that is true exactly when `value` is zero.
@@ -40,7 +58,7 @@ impl Choice {
     #[must_use]
     pub const fn is_zero_u8(value: u8) -> Choice {
         let folded = value | value.wrapping_neg();
-        Choice(folded.wrapping_shr(7) ^ 1)
+        Choice(black_box(folded.wrapping_shr(7) ^ 1))
     }
 
     /// The choice that is true exactly when `value` is zero.
@@ -56,7 +74,7 @@ impl Choice {
     )]
     pub const fn is_zero_u64(value: u64) -> Choice {
         let folded = value | value.wrapping_neg();
-        Choice((folded.wrapping_shr(63) as u8) ^ 1)
+        Choice(black_box((folded.wrapping_shr(63) as u8) ^ 1))
     }
 
     /// The wrapped byte, `0` or `1`.
@@ -99,7 +117,7 @@ impl Choice {
 
 impl From<bool> for Choice {
     fn from(value: bool) -> Choice {
-        Choice(u8::from(value))
+        Choice(black_box(u8::from(value)))
     }
 }
 

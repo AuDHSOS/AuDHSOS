@@ -36,7 +36,17 @@ const ORDER: [u64; 4] = [
 ];
 
 /// A residue modulo the order, as four limbs, least significant first.
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+///
+/// The type carries no `PartialEq`: a derived `==` compares limb by limb
+/// and stops at the first difference, which is the leak `Secret<N>` of
+/// `crypto-ct` withholds `==` to prevent. [`Scalar::ct_eq`] folds all four
+/// limbs and answers a [`Choice`].
+///
+/// ```compile_fail
+/// use crypto_ec::Scalar;
+/// let _ = Scalar::ZERO == Scalar::ZERO;
+/// ```
+#[derive(Clone, Copy, Default)]
 pub struct Scalar([u64; 4]);
 
 impl fmt::Debug for Scalar {
@@ -173,10 +183,22 @@ impl Scalar {
         bit_of_slice(&bytes, position)
     }
 
-    /// Whether the scalar is zero.
+    /// Whether two scalars are equal, in time that does not depend on
+    /// where they differ: every limb is folded into one accumulator.
     #[must_use]
-    pub fn is_zero(self) -> bool {
-        self.0 == [0; 4]
+    pub fn ct_eq(self, other: Scalar) -> Choice {
+        let mut difference = 0u64;
+        for (left, right) in self.0.iter().zip(other.0) {
+            difference |= left ^ right;
+        }
+        Choice::is_zero_u64(difference)
+    }
+
+    /// Whether the scalar is zero, folding all four limbs so that the
+    /// answer costs the same for every value.
+    #[must_use]
+    pub fn is_zero(self) -> Choice {
+        self.ct_eq(Scalar::ZERO)
     }
 
     /// Twice the scalar.
