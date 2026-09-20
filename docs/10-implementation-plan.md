@@ -1939,11 +1939,18 @@ validated first (`word_count <= 480`, `handle_count <= 4`), then all four
 handles are resolved in the sender's list and checked for `TRANSFER`, and
 only then are the words copied and the handles installed. A handle without
 `TRANSFER` therefore fails before any other handle of the same message is
-installed. The reserved label range is not checked here but at the entry
-of `ipc_send` and `ipc_call`, where the message is one a user thread
-wrote: the fault message of 10.6.4 is the kernel's own and carries a
-reserved label by construction, and a check inside `transfer` would refuse
-exactly the message it exists for. Installation stops when
+installed. The reserved label range is checked here, against the
+`kernel_message` parameter: the fault message of 10.6.4 passes `true` and
+carries a reserved label by construction, every message a user thread
+wrote passes `false` and is refused such a label. The check belongs to
+`transfer` because the sender's IPC buffer is mapped in the sender's
+process, where a second thread of that process can write it after
+`ipc_send` or `ipc_call` checked the header and before a queued message is
+copied. A queued sender's `kernel_message` travels with it in
+`Wait::Endpoint`, and the receive builds a queued fault message again from
+the `Fault` the thread record carries instead of reading the sender's
+buffer, so a sibling thread can change neither the label nor the words.
+Installation stops when
 the receiver's list is full: the message is delivered, `handle_count` in
 the receiver's buffer says how many arrived, `truncated` is set, and the
 receiver's status word carries `Status::PARTIAL`, which is the error flag

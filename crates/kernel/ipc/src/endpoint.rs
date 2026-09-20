@@ -51,6 +51,9 @@ pub enum Reception {
         wants_reply: bool,
         /// The badge of the capability it sent through.
         badge: u64,
+        /// Whether the kernel wrote the message, which is what allows it a
+        /// label of the reserved range.
+        kernel_message: bool,
     },
     /// Nobody was waiting; the caller is in the receivers queue and blocks.
     Queued(Outcome),
@@ -68,6 +71,9 @@ pub struct Intent {
     pub wants_reply: bool,
     /// The badge of the capability the sender used.
     pub badge: u64,
+    /// `true` for the fault message the kernel wrote, which is the only
+    /// message allowed a label of the reserved range.
+    pub kernel_message: bool,
 }
 
 impl Intent {
@@ -75,6 +81,7 @@ impl Intent {
     pub const PLAIN: Intent = Intent {
         wants_reply: false,
         badge: 0,
+        kernel_message: false,
     };
 
     /// A send through a capability carrying `badge`.
@@ -83,6 +90,7 @@ impl Intent {
         Intent {
             wants_reply: false,
             badge,
+            kernel_message: false,
         }
     }
 
@@ -92,6 +100,18 @@ impl Intent {
         Intent {
             wants_reply: true,
             badge,
+            kernel_message: false,
+        }
+    }
+
+    /// A call carrying a message the kernel wrote, which the fault path
+    /// uses and no system call reaches.
+    #[must_use]
+    pub const fn kernel_call(badge: u64) -> Self {
+        Intent {
+            wants_reply: true,
+            badge,
+            kernel_message: true,
         }
     }
 }
@@ -137,7 +157,11 @@ pub fn send<const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
     endpoint: EndpointId,
     intent: Intent,
 ) -> Result<Meeting, Error> {
-    let (wants_reply, badge) = (intent.wants_reply, intent.badge);
+    let Intent {
+        wants_reply,
+        badge,
+        kernel_message,
+    } = intent;
     let mut held = objects
         .endpoints
         .get(endpoint)
@@ -161,6 +185,7 @@ pub fn send<const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
             endpoint,
             queue,
             badge,
+            kernel_message,
         },
     );
     let blocked = block(&mut objects.threads, scheduler, sender, Event::BlockSend);
@@ -200,15 +225,22 @@ pub fn recv<const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
         .copied()
         .map_err(|_| Error::InvalidHandle)?;
     if let Some(sender) = held.senders.dequeue_front(&mut objects.threads) {
-        let (wants_reply, badge) = match objects.threads.get(sender).map(|thread| thread.wait) {
-            Ok(Wait::Endpoint { queue, badge, .. }) => (queue.wants_reply(), badge),
-            _ => (false, 0),
-        };
+        let (wants_reply, badge, kernel_message) =
+            match objects.threads.get(sender).map(|thread| thread.wait) {
+                Ok(Wait::Endpoint {
+                    queue,
+                    badge,
+                    kernel_message,
+                    ..
+                }) => (queue.wants_reply(), badge, kernel_message),
+                _ => (false, 0, false),
+            };
         write_back(objects, endpoint, held);
         return Ok(Reception::Sender {
             sender,
             wants_reply,
             badge,
+            kernel_message,
         });
     }
     if !blocking {
@@ -222,6 +254,7 @@ pub fn recv<const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
             endpoint,
             queue: Queue::Receivers,
             badge: 0,
+            kernel_message: false,
         },
     );
     match block(&mut objects.threads, scheduler, receiver, Event::BlockRecv) {
@@ -330,6 +363,7 @@ pub fn undo_meeting<const NP: usize, const NT: usize, const NM: usize, const NH:
     peer: ThreadId,
     queue: Queue,
     badge: u64,
+    kernel_message: bool,
 ) {
     {
         let Objects {
@@ -354,6 +388,7 @@ pub fn undo_meeting<const NP: usize, const NT: usize, const NM: usize, const NH:
             endpoint,
             queue,
             badge,
+            kernel_message,
         },
     );
 }

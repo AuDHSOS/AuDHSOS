@@ -19,6 +19,7 @@ use audhsos_abi::ipc_buffer::{Buffer, BufferMut, SIZE, Status};
 use audhsos_abi::{Error, Handle, Rights};
 use kernel_ipc::endpoint::{Handover, Intent, Meeting, Reception};
 use kernel_ipc::outcome::{Outcome as IpcOutcome, Wakeup};
+use kernel_ipc::transfer::Transferred;
 use kernel_ipc::{endpoint, transfer};
 use kernel_objects::object::{
     AnyObjectId, Endpoint, EndpointId, ProcessId, Queue, Reply as ReplyObject, ReplyId, ThreadId,
@@ -135,6 +136,7 @@ pub fn send<E: Environment, const NP: usize, const NT: usize, const NM: usize, c
     let intent = Intent {
         wants_reply,
         badge: entry.badge,
+        kernel_message: false,
     };
     deliver(machine, caller, process, endpoint, intent, buffer)
 }
@@ -169,14 +171,28 @@ pub fn deliver<
     // Two threads never share an IPC buffer, so this is a check on the
     // argument and not a state the kernel can reach.
     if receiver_frame == sender_frame {
-        endpoint::undo_meeting(machine.objects, endpoint, receiver, Queue::Receivers, 0);
+        endpoint::undo_meeting(
+            machine.objects,
+            endpoint,
+            receiver,
+            Queue::Receivers,
+            0,
+            false,
+        );
         return Err(Error::InvalidArgument);
     }
     let opened = if intent.wants_reply {
         match endpoint::open_reply(machine.objects, sender, receiver_process) {
             Ok(pair) => Some(pair),
             Err(error) => {
-                endpoint::undo_meeting(machine.objects, endpoint, receiver, Queue::Receivers, 0);
+                endpoint::undo_meeting(
+                    machine.objects,
+                    endpoint,
+                    receiver,
+                    Queue::Receivers,
+                    0,
+                    false,
+                );
                 return Err(error);
             }
         }
@@ -186,7 +202,14 @@ pub fn deliver<
     let moved = {
         let objects = &mut *machine.objects;
         machine.environment.with_buffer(receiver_frame, |to| {
-            transfer::transfer(buffer, to, objects, sender_process, receiver_process)
+            transfer::transfer(
+                buffer,
+                to,
+                objects,
+                sender_process,
+                receiver_process,
+                intent.kernel_message,
+            )
         })?
     };
     let moved = match moved {
@@ -195,7 +218,14 @@ pub fn deliver<
             if let Some((reply, handle)) = opened {
                 endpoint::close_reply(machine.objects, reply, receiver_process, handle);
             }
-            endpoint::undo_meeting(machine.objects, endpoint, receiver, Queue::Receivers, 0);
+            endpoint::undo_meeting(
+                machine.objects,
+                endpoint,
+                receiver,
+                Queue::Receivers,
+                0,
+                false,
+            );
             return Err(error);
         }
     };
@@ -256,6 +286,7 @@ pub fn recv<E: Environment, const NP: usize, const NT: usize, const NM: usize, c
             sender,
             wants_reply,
             badge,
+            kernel_message,
         } = found
         else {
             if matches!(found, Reception::Empty) {
@@ -267,6 +298,7 @@ pub fn recv<E: Environment, const NP: usize, const NT: usize, const NM: usize, c
             sender,
             wants_reply,
             badge,
+            kernel_message,
         };
         let taken = match take_message(machine, caller, process, endpoint, buffer, queued) {
             Ok(taken) => taken,
@@ -316,6 +348,8 @@ struct Queued {
     wants_reply: bool,
     /// The badge of the capability it sent through.
     badge: u64,
+    /// Whether the kernel wrote the message it left behind.
+    kernel_message: bool,
 }
 
 /// What one rendezvous of [`recv`] came to.
@@ -357,6 +391,7 @@ fn take_message<
         sender,
         wants_reply,
         badge,
+        kernel_message,
     } = queued;
     let queue = if wants_reply {
         Queue::Callers
@@ -367,24 +402,57 @@ fn take_message<
     let sender_frame = machine.objects.threads.get(sender)?.ipc_buffer;
     let own_frame = machine.objects.threads.get(caller)?.ipc_buffer;
     if sender_frame == own_frame {
-        endpoint::undo_meeting(machine.objects, endpoint, sender, queue, badge);
+        endpoint::undo_meeting(
+            machine.objects,
+            endpoint,
+            sender,
+            queue,
+            badge,
+            kernel_message,
+        );
         return Err(Error::InvalidArgument);
     }
     let opened = if wants_reply {
         match endpoint::open_reply(machine.objects, sender, process) {
             Ok(pair) => Some(pair),
             Err(error) => {
-                endpoint::undo_meeting(machine.objects, endpoint, sender, queue, badge);
+                endpoint::undo_meeting(
+                    machine.objects,
+                    endpoint,
+                    sender,
+                    queue,
+                    badge,
+                    kernel_message,
+                );
                 return Err(error);
             }
         }
     } else {
         None
     };
-    let moved = {
+    let moved = if kernel_message {
+        // The message the kernel wrote waits in the sender's IPC buffer,
+        // which every thread of the sender's process can write while it
+        // waits. It is built again here from the fault the thread record
+        // carries, which only the kernel writes, so the handler reads the
+        // fault that happened and not what a sibling thread left.
+        match machine.objects.threads.get(sender)?.fault {
+            Some(fault) => {
+                crate::fault::write_message(buffer, fault);
+                Ok(Transferred {
+                    words: u16::try_from(crate::fault::WORDS).unwrap_or(0),
+                    handles: 0,
+                    truncated: false,
+                })
+            }
+            // A sender carries the kernel's flag only out of the fault
+            // path, which writes the fault before it sends.
+            None => Err(Error::InvalidArgument),
+        }
+    } else {
         let objects = &mut *machine.objects;
         machine.environment.with_buffer(sender_frame, |from| {
-            transfer::transfer(&*from, buffer, objects, sender_process, process)
+            transfer::transfer(&*from, buffer, objects, sender_process, process, false)
         })?
     };
     let moved = match moved {
@@ -527,7 +595,7 @@ fn answer<E: Environment, const NP: usize, const NT: usize, const NM: usize, con
     let moved = {
         let objects = &mut *machine.objects;
         machine.environment.with_buffer(target_frame, |to| {
-            transfer::transfer(buffer, to, objects, process, target_process)
+            transfer::transfer(buffer, to, objects, process, target_process, false)
         })?
     }?;
     endpoint::replied(
@@ -548,14 +616,20 @@ const fn status_of(truncated: bool) -> Status {
     }
 }
 
-/// The header of a message a user thread wrote, checked before anything is
-/// copied.
+/// The header of a message a user thread wrote, checked at the entry of the
+/// call so that a thread learns at once what it wrote wrong instead of
+/// queueing and being refused later.
+///
+/// `kernel_ipc::transfer` repeats both checks against the buffer it copies,
+/// which is what makes the reserved range reserved: this one reads the
+/// sender's buffer before the message waits in a queue, and a second thread
+/// of the sender's process can write that buffer in between.
 ///
 /// # Errors
 ///
 /// [`Error::InvalidArgument`] when a count is above what the message area
 /// holds, and when the label lies in the range the kernel keeps for its own
-/// messages, which is what makes that range reserved.
+/// messages.
 pub fn check_header(buffer: &[u8; SIZE]) -> Result<(), Error> {
     let message = Buffer::new(buffer).message().map_err(Error::from)?;
     if message.is_kernel_label() {
