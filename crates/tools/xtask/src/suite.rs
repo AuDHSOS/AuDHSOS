@@ -3013,59 +3013,32 @@ fn words(sql: &str) -> Vec<String> {
     out
 }
 
-/// The statements of one case, split on the semicolons that stand
-/// outside a string.
+/// The statements of one case, split at the semicolons that end one.
+///
+/// `sqlite3_complete` reads how far a text is a statement, which
+/// [`db_sqlite::token::complete`] answers: a semicolon inside a string,
+/// a comment or the body of a `CREATE TRIGGER` ends none. Each
+/// semicolon is read against the statement it may end, so the walk is
+/// O(n) in the text and O(k) again for each semicolon of one statement
+/// of k bytes.
 pub(crate) fn statements(sql: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut start = 0;
-    let mut quote: Option<char> = None;
     for (at, character) in sql.char_indices() {
-        match quote {
-            Some(mark) if character == mark => quote = None,
-            Some(_) => {}
-            None => match character {
-                '\'' | '"' | '`' => quote = Some(character),
-                // A `CREATE TRIGGER` carries semicolons inside its
-                // body, so the one that ends it is the one after the
-                // word `END`, which is what `sqlite3_complete` reads.
-                ';' if ends(sql.get(start..at).unwrap_or_default()) => {
-                    if let Some(piece) = sql.get(start..at) {
-                        out.push(piece);
-                    }
-                    start = at.saturating_add(1);
-                }
-                _ => {}
-            },
+        if character != ';' {
+            continue;
+        }
+        let after = at.saturating_add(1);
+        let piece = sql.get(start..after).unwrap_or_default();
+        if db_sqlite::token::complete(piece.as_bytes()) {
+            out.push(sql.get(start..at).unwrap_or_default());
+            start = after;
         }
     }
     if let Some(piece) = sql.get(start..) {
         out.push(piece);
     }
     out
-}
-
-/// Whether a semicolon after this much text ends the statement, which
-/// it does for everything but a `CREATE TRIGGER` whose `END` has not
-/// been read yet.
-fn ends(text: &str) -> bool {
-    let words = words(text);
-    let mut names = words.iter().map(String::as_str);
-    let Some(first) = names.next() else {
-        return true;
-    };
-    if !first.eq_ignore_ascii_case("create") {
-        return true;
-    }
-    if !words
-        .iter()
-        .take(6)
-        .any(|word| word.eq_ignore_ascii_case("trigger"))
-    {
-        return true;
-    }
-    words
-        .last()
-        .is_some_and(|word| word.eq_ignore_ascii_case("end"))
 }
 
 /// One value as an element of a TCL list: nothing is the empty element,

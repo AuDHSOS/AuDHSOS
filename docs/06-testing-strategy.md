@@ -6544,3 +6544,15 @@ Document 16 step Q8.
   and one whose free list holds no page at or below the end.
 - `PRAGMA integrity_check` over a file with more than one pointer-map
   page names no page never used.
+
+### 6.6.243 Where a script of the suite ends a statement (`db-sqlite`)
+
+Document 17 step T5.
+
+- The tester splits a script at the semicolons `sqlite3_complete` ends a
+  statement at, so a body of a `CREATE TRIGGER` that holds a `CASE ...
+  END` is one statement.
+- `verify_ex_errcode` holds the extended code of the last refusal
+  against the name of a code.
+- `strftime` answers what the C library of the machine writes, `%F`
+  among its fields.

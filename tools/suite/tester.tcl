@@ -1183,21 +1183,20 @@ proc memdebug_log_sql {args} {}
 # that reads the answer of one of these is refused, because the command
 # raises rather than answering nothing.
 foreach cmd {
-  sqlite3_memory_used sqlite3_memory_highwater
   sqlite3_config sqlite3_db_config
   sqlite3_db_status sqlite3_status
-  sqlite3_reset_auto_extension sqlite3_create_function sqlite3_limit
+  sqlite3_create_function sqlite3_limit
   sqlite3_extended_result_codes
   sqlite3_enable_shared_cache sqlite3_release_memory sqlite3_db_release_memory
   sqlite3_memdebug_vfs_oom_test sqlite3_memdebug_settitle sqlite3_memdebug_fail
   sqlite3_memdebug_pending sqlite3_memdebug_log sqlite3_stmt_status
-  testvfs test_syscall test_sqlite3_log
+  testvfs test_syscall
   register_wholenumber_module register_echo_module register_tclvar_module
   register_fs_module register_dbstat_vtab register_schema_module
   run_thread_tests test_cli_invocation
   test_find_cli test_find_sqldiff
   file_control_chunksize_test file_control_sizehint_test file_control_lockproxy_test
-  file_control_persist_wal file_control_powersafe_overwrite file_control_vfsname
+  file_control_persist_wal file_control_powersafe_overwrite
   file_control_tempfilename file_control_external_reader
   speed_trial speed_trial_init speed_trial_summary
   tcl_variable_type
@@ -1215,10 +1214,11 @@ foreach cmd {
 # way for every setting: the value it was given.
 proc sqlite3_db_config {args} { return [lindex $args 2] }
 
-# What a file holds the extended error code to, which this engine has
-# none of: the case is not run rather than scored against a made-up
-# code.
-proc verify_ex_errcode {args} {}
+# `verify_ex_errcode` of the suite's own tester: one case that holds the
+# extended code of the last refusal against the name of a code.
+proc verify_ex_errcode {name expected {db db}} {
+  do_test $name [list sqlite3_extended_errcode $db] $expected
+}
 
 # What a file says about itself, which changes nothing here.
 proc breakpoint {args} {}
@@ -1333,6 +1333,43 @@ proc sqlite3_soft_heap_limit64 {args} { return 0 }
 proc sqlite3_config_uri {args} { return 0 }
 proc sqlite3_register_cksumvfs {args} { return 0 }
 proc sqlite3_multiplex_initialize {args} { return 0 }
+proc sqlite3_config_pmasz {args} { return 0 }
+proc sqlite3_config_lookaside {args} { return 0 }
+proc sqlite3_config_memstatus {args} { return 0 }
+proc sqlite3_config_alt_pcache {args} { return 0 }
+proc sqlite3_config_sorterref {args} { return 0 }
+proc sqlite3_hard_heap_limit64 {args} { return 0 }
+proc sqlite3_test_control_fault_install {args} { return 0 }
+proc sqlite3_reset_auto_extension {args} { return 0 }
+proc sqlite3_extended_result_codes {args} { return 0 }
+proc test_sqlite3_log {args} { return "" }
+# The codec the library is built without, whose commands answer as they
+# do for a connection that holds no key.
+proc sqlite3_rekey {args} { return 0 }
+proc sqlite3_key {args} { return 0 }
+# The bytes the C library counts for itself, which this engine holds
+# none of.
+proc sqlite3_memory_used {args} { return 0 }
+proc sqlite3_memory_highwater {args} { return 0 }
+# What the machine answers about itself.
+proc test_pwd {args} { return [pwd] }
+proc file_control_vfsname {args} { return "memory" }
+# `file_control_reservebytes DB N` sets the bytes of every page the
+# b-tree layer may not use, which `PRAGMA reserved_bytes` writes.
+proc file_control_reservebytes {db {bytes -1}} {
+  if {$bytes >= 0} { $db eval "PRAGMA reserved_bytes = $bytes" }
+  return [lindex [$db eval {PRAGMA reserved_bytes}] 0]
+}
+# `strftime` of `test_func.c`, which is the one of the machine and what
+# a case holds the answer of the SQL function of that name against.
+#
+# `%F` is the date, which every C library writes and the `clock` of the
+# interpreter leaves as it stands, so it is written out first; the
+# placeholder keeps a `%%` from being read as one.
+proc strftime {format seconds} {
+  set held [string map [list %% \x00 %F %Y-%m-%d] $format]
+  return [clock format $seconds -format [string map [list \x00 %%] $held] -gmt 1]
+}
 
 # `sqlite3_prepare` and the commands that read a statement it answered.
 # The harness holds the statement under a name, which stands for the

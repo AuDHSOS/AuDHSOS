@@ -7,6 +7,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- The suite tester splits a script at the semicolons `sqlite3_complete`
+  ends a statement at, scores `verify_ex_errcode` as a case, answers
+  `strftime` out of the C library of the machine, and answers nought for
+  the commands that size what the C library keeps for itself. D-355
+  records it. Catalog 6.6.243. 17 files that ran no case run, among them
+  `date4.test` with 7280 cases passing, `sort.test` with 66, `types.test`
+  with 51 and `uri.test` with 37; the run goes from 97 121 cases passing
+  to 104 740.
+
 - `db-sqlite` writes `PRAGMA incremental_vacuum(N)`, which gives up as
   many as N pages at the end of a file that vacuums itself and answers
   one row of no column per page, and reads the page a cell of an index

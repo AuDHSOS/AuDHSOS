@@ -55,10 +55,10 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-109 544 cases of 807 files: 97 121 pass, 3234 answer differently and
-9189 are refused.
+117 336 cases of 824 files: 104 740 pass, 3299 answer differently and
+9297 are refused.
 
-What the 9189 refusals are for, most first: `db status` (2106), which
+What the 9297 refusals are for, most first: `db status` (2106), which
 answers counters of memory and of the page cache; `sqlite3_memdebug_fail`
 (1260), which fails one allocation of the C library; `crash_on_write`
 (960) and the crash the harness does not simulate (435); a table an
@@ -76,7 +76,7 @@ What each answers, over the same files:
 
 | Configuration | Passed | Answered differently | Refused |
 |---------------|-------:|---------------------:|--------:|
-| `utf8-4096-delete` | 97 121 | 3234 | 9189 |
+| `utf8-4096-delete` | 104 740 | 3299 | 9297 |
 | `utf16le-4096-delete` | 61 214 | 2392 | 9500 |
 | `utf16be-4096-delete` | 61 229 | 2392 | 9500 |
 | `utf8-512-delete` | 61 073 | 2452 | 9435 |
@@ -427,6 +427,11 @@ Size: S.
     answers is a connection of the tester's own, which D-351 records.
 24. `ifcapable autovacuum` answers that this engine has it, so the 16
     files that stopped at it run, which D-354 records.
+25. A script is split at the semicolons `sqlite3_complete` ends a
+    statement at, `verify_ex_errcode` scores a case, `strftime` answers
+    what the C library of the machine writes, and the commands that
+    size what the C library keeps for itself answer nought rather than
+    raising, which D-355 records.
 
 ### Produces
 
