@@ -32,8 +32,8 @@ pub enum Error {
     /// `CREATE TABLE ... AS SELECT` writes into `sqlite_schema` is the
     /// columns it worked out.
     FromSelect,
-    /// Two columns of one name.
-    DuplicateColumn,
+    /// Two columns of one name, named.
+    DuplicateColumn(Vec<u8>),
     /// A collation no engine has.
     NoCollation(alloc::vec::Vec<u8>),
     /// A `likelihood` whose second argument is not a real between
@@ -46,22 +46,23 @@ pub enum Error {
     AllGenerated,
     /// A generated column in the primary key.
     GeneratedKey,
-    /// More than one primary key.
-    ManyKeys,
+    /// More than one primary key, with the name of the table.
+    ManyKeys(Vec<u8>),
     /// `AUTOINCREMENT` on a key that is not the rowid.
     Autoincrement,
     /// `AUTOINCREMENT` on a table with no rowid to count.
     AutoincrementWithoutRowid,
-    /// `WITHOUT ROWID` with no primary key to take its place.
-    MissingKey,
+    /// `WITHOUT ROWID` with no primary key to take its place, with the
+    /// name of the table.
+    MissingKey(Vec<u8>),
     /// `STRICT` with a column that has no type, with the table and the
     /// column.
     MissingType(Vec<u8>, Vec<u8>),
     /// `STRICT` with a column whose type is not one of the six, with the
     /// table, the column and the type as the statement wrote it.
     UnknownType(Vec<u8>, Vec<u8>, Vec<u8>),
-    /// A primary key naming a column the table does not have.
-    NoSuchColumn,
+    /// A primary key naming a column the table does not have, named.
+    NoSuchColumn(Vec<u8>),
     /// A `FOREIGN KEY` over a column the table does not hold, named.
     ForeignColumn(Vec<u8>),
     /// A `FOREIGN KEY` that names a different number of columns from
@@ -238,7 +239,7 @@ pub struct Foreign {
 /// One `PRIMARY KEY` or `UNIQUE` as the statement wrote it: the name
 /// and the order of each column, the conflict clause, and whether the
 /// constraint is the `PRIMARY KEY`.
-type Written = (Vec<(Vec<u8>, Order)>, crate::ast::Conflict, bool);
+type Written = (Vec<(usize, Order)>, crate::ast::Conflict, bool);
 
 /// One `PRIMARY KEY` or `UNIQUE` an index of the table's own holds the
 /// entries of, which is `sqlite_autoindex_<table>_<n>`.
@@ -318,23 +319,21 @@ pub fn own_index(table: &Table, at: usize) -> Option<Index> {
 /// table's own, which is `sqlite3CreateIndex` over the constraints of
 /// a `CREATE TABLE`.
 ///
+/// Every column of every constraint was read against the columns of the
+/// table before this, so each carries the place it stands at.
+///
 /// Comparing `n` constraints of `k` columns costs O(n^2 k).
-fn own_keys(table: &Table, written: &[Written]) -> Result<Vec<Keys>, Error> {
+fn own_keys(table: &Table, written: &[Written]) -> Vec<Keys> {
     let mut keys: Vec<Keys> = Vec::new();
     for (columns, conflict, primary) in written {
         let mut keyed = Vec::new();
-        for (name, order) in columns {
-            let at = table
-                .columns
-                .iter()
-                .position(|column| column.name.eq_ignore_ascii_case(name))
-                .ok_or(Error::NoSuchColumn)?;
+        for (at, order) in columns {
             let collation = table
                 .columns
-                .get(at)
+                .get(*at)
                 .map_or(Collation::Binary, |column| column.collation);
             keyed.push(Keyed {
-                of: Of::Place(at),
+                of: Of::Place(*at),
                 order: *order,
                 collation,
             });
@@ -374,7 +373,7 @@ fn own_keys(table: &Table, written: &[Written]) -> Result<Vec<Keys>, Error> {
             primary: *primary,
         });
     }
-    Ok(keys)
+    keys
 }
 
 /// What one place of an index entry holds.
@@ -870,7 +869,7 @@ pub fn table(
             .iter()
             .any(|column| column.name.eq_ignore_ascii_case(&name))
         {
-            return Err(Error::DuplicateColumn);
+            return Err(Error::DuplicateColumn(name));
         }
         // A type that trims to nothing is no type at all, which is
         // what `GENERATED ALWAYS` before an `AS` leaves behind.
@@ -935,11 +934,11 @@ pub fn table(
                     conflict,
                 } => {
                     own_key = Some((order, autoincrement));
-                    written_keys.push((alloc::vec![(named.clone(), order)], conflict, true));
+                    written_keys.push((alloc::vec![(table.columns.len(), order)], conflict, true));
                 }
                 ColumnConstraint::Unique(conflict) => {
                     written_keys.push((
-                        alloc::vec![(named.clone(), Order::Unspecified)],
+                        alloc::vec![(table.columns.len(), Order::Unspecified)],
                         conflict,
                         false,
                     ));
@@ -958,7 +957,7 @@ pub fn table(
         table.columns.push(column);
         if let Some((order, autoincrement)) = own_key {
             if key.is_some() {
-                return Err(Error::ManyKeys);
+                return Err(Error::ManyKeys(table.name.clone()));
             }
             key = Some((alloc::vec![at], order, autoincrement));
         }
@@ -999,8 +998,10 @@ pub fn table(
             // A term that is not a name is refused where the key's own
             // index would be built.
             let column = key_name(arena, term.expr).ok_or(Error::KeyExpression)?;
-            written.push((dequote(column.text(sql)), term.order));
-            named.push(index_of(&table, column, sql).ok_or(Error::NoSuchColumn)?);
+            let place = index_of(&table, column, sql)
+                .ok_or_else(|| Error::NoSuchColumn(dequote(column.text(sql))))?;
+            written.push((place, term.order));
+            named.push(place);
         }
         let primary = matches!(*constraint, TableConstraint::PrimaryKey { .. });
         written_keys.push((written, conflict, primary));
@@ -1008,7 +1009,7 @@ pub fn table(
             continue;
         };
         if key.is_some() {
-            return Err(Error::ManyKeys);
+            return Err(Error::ManyKeys(table.name.clone()));
         }
         key = Some((named, order, autoincrement));
     }
@@ -1050,7 +1051,7 @@ pub fn table(
         }
     }
 
-    table.keys = own_keys(&table, &written_keys)?;
+    table.keys = own_keys(&table, &written_keys);
     table.foreign = pointing(arena, &table, &pointed, sql)?;
     table.checks = checks;
 
@@ -1083,7 +1084,7 @@ pub fn table(
             return Err(Error::AutoincrementWithoutRowid);
         }
         if !table.columns.iter().any(|column| column.key > 0) {
-            return Err(Error::MissingKey);
+            return Err(Error::MissingKey(table.name.clone()));
         }
         table.rowid_alias = None;
         for column in &mut table.columns {

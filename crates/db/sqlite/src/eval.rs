@@ -68,8 +68,9 @@ pub enum Error {
     /// The tree is deeper than the engine walks.
     TooDeep,
     /// A hex literal of more than sixteen digits, which SQLite refuses
-    /// rather than reading as a real.
-    HexTooBig,
+    /// rather than reading as a real, as the statement wrote it with the
+    /// sign before it.
+    HexTooBig(Vec<u8>),
     /// The fraction argument of a percentile aggregate that is not a
     /// number between nought and the largest the aggregate takes, with
     /// the name and that largest as it is written.
@@ -148,6 +149,11 @@ impl Error {
                 "FILTER clause may only be used with aggregate window functions".to_string()
             }
             Error::RowValue => "row value misused".to_string(),
+            Error::HexTooBig(text) => {
+                alloc::format!("hex literal too big: {}", shown(text))
+            }
+            Error::BadEscape => "ESCAPE expression must be a single character".to_string(),
+            Error::Overflow => "integer overflow".to_string(),
             Error::Json(refused) => refused.message(),
             other => alloc::format!("{other:?}"),
         }
@@ -828,7 +834,9 @@ fn integer_literal(text: &[u8], negated: bool) -> Result<Value, Error> {
         || (negated && value == i64::MIN)
     {
         if hexadecimal {
-            return Err(Error::HexTooBig);
+            let mut shown = if negated { b"-".to_vec() } else { Vec::new() };
+            shown.extend_from_slice(text);
+            return Err(Error::HexTooBig(shown));
         }
         let real = number::real(text).value;
         return Ok(Value::Real(if negated { -real } else { real }));

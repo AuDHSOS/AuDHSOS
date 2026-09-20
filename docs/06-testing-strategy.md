@@ -6410,3 +6410,20 @@ Document 16 step Q8.
 - The row of `sqlite_sequence` never counts back down.
 - `AUTOINCREMENT` off an `INTEGER PRIMARY KEY` and over a `WITHOUT ROWID`
   table each carry the words `sqlite3AddPrimaryKey` writes.
+
+### 6.6.234 The words a refusal carries (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A duplicate column name, more than one primary key, a `WITHOUT ROWID`
+  table with no primary key, a key naming a column the table does not
+  hold and a key written as an expression each carry the words
+  `sqlite3AddColumn`, `sqlite3AddPrimaryKey` and `sqlite3CreateIndex`
+  write.
+- A `NATURAL` join with a condition on it and a `USING` naming a column
+  one side does not hold carry different words.
+- A `WITH` term that writes another number of column names than its
+  statement answers names the term and both counts.
+- A hex literal too big to read names the literal as it was written, an
+  `ESCAPE` of more than one character and an integer that overflows each
+  carry their own words.

@@ -193,8 +193,14 @@ fn the_rowid_is_another_name_for_a_key_only_where_it_is_spelled_integer() {
 #[test]
 fn what_a_statement_says_that_makes_it_no_table() {
     use crate::schema::Error;
-    assert_eq!(build("CREATE TABLE t(x, x)"), Err(Error::DuplicateColumn));
-    assert_eq!(build("CREATE TABLE t(x, X)"), Err(Error::DuplicateColumn));
+    assert_eq!(
+        build("CREATE TABLE t(x, x)"),
+        Err(Error::DuplicateColumn(b"x".to_vec()))
+    );
+    assert_eq!(
+        build("CREATE TABLE t(x, X)"),
+        Err(Error::DuplicateColumn(b"X".to_vec()))
+    );
     assert_eq!(
         build("CREATE TABLE t(x COLLATE nosuch)"),
         Err(Error::NoCollation(b"nosuch".to_vec()))
@@ -210,11 +216,11 @@ fn what_a_statement_says_that_makes_it_no_table() {
     );
     assert_eq!(
         build("CREATE TABLE t(x PRIMARY KEY, y PRIMARY KEY)"),
-        Err(Error::ManyKeys)
+        Err(Error::ManyKeys(b"t".to_vec()))
     );
     assert_eq!(
         build("CREATE TABLE t(x PRIMARY KEY, PRIMARY KEY(x))"),
-        Err(Error::ManyKeys)
+        Err(Error::ManyKeys(b"t".to_vec()))
     );
     assert_eq!(
         build("CREATE TABLE t(x PRIMARY KEY AUTOINCREMENT)"),
@@ -226,7 +232,7 @@ fn what_a_statement_says_that_makes_it_no_table() {
     );
     assert_eq!(
         build("CREATE TABLE t(x) WITHOUT ROWID"),
-        Err(Error::MissingKey)
+        Err(Error::MissingKey(b"t".to_vec()))
     );
     assert_eq!(
         build("CREATE TABLE t(x) STRICT"),
@@ -242,7 +248,7 @@ fn what_a_statement_says_that_makes_it_no_table() {
     );
     assert_eq!(
         build("CREATE TABLE t(x, PRIMARY KEY(nosuch))"),
-        Err(Error::NoSuchColumn)
+        Err(Error::NoSuchColumn(b"nosuch".to_vec()))
     );
     assert_eq!(build("CREATE TABLE t AS SELECT 1"), Err(Error::FromSelect));
 }

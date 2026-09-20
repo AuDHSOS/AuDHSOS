@@ -78,6 +78,27 @@ fn what_a_name_sqlite_keeps_and_a_key_that_counts_up_are_refused_with() {
             b"CREATE TABLE t9(a INTEGER PRIMARY KEY AUTOINCREMENT, b) WITHOUT ROWID",
             "AUTOINCREMENT not allowed on WITHOUT ROWID tables",
         ),
+        (b"CREATE TABLE t9(a, a)", "duplicate column name: a"),
+        (
+            b"CREATE TABLE t9(a PRIMARY KEY, b PRIMARY KEY)",
+            "table \"t9\" has more than one primary key",
+        ),
+        (
+            b"CREATE TABLE t9(a, b) WITHOUT ROWID",
+            "PRIMARY KEY missing on table t9",
+        ),
+        (
+            b"CREATE TABLE t9(a, PRIMARY KEY(nosuch))",
+            "no such column: nosuch",
+        ),
+        (
+            b"CREATE TABLE t9(a, UNIQUE(nosuch))",
+            "no such column: nosuch",
+        ),
+        (
+            b"CREATE TABLE t9(a, PRIMARY KEY(a+1))",
+            "expressions prohibited in PRIMARY KEY and UNIQUE constraints",
+        ),
     ] {
         assert_eq!(refused(&mut writer, sql), message, "{sql:?}");
     }

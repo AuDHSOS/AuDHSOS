@@ -173,7 +173,7 @@ fn a_schema_this_crate_cannot_read_is_refused() {
     bytes[at] = b'a';
     assert_eq!(
         Database::open(&bytes).unwrap_err(),
-        Error::Schema(schema::Error::DuplicateColumn)
+        Error::Schema(schema::Error::DuplicateColumn(b"a".to_vec()))
     );
 }
 

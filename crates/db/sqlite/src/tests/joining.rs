@@ -24,6 +24,43 @@ fn three() -> alloc::vec::Vec<u8> {
     writer.written()
 }
 
+/// A `NATURAL` join with a condition on it, a `USING` naming a column one
+/// side does not hold, and a `WITH` term writing another number of column
+/// names than its statement answers.
+#[test]
+fn what_a_join_the_two_sides_cannot_be_made_into_is_refused_with() {
+    let image = three();
+    let database = Database::open(&image).expect("a database");
+    for (sql, message) in [
+        (
+            "SELECT * FROM aa NATURAL JOIN bb ON 1",
+            "a NATURAL join may not have an ON or USING clause",
+        ),
+        (
+            "SELECT * FROM aa NATURAL JOIN bb USING(a)",
+            "a NATURAL join may not have an ON or USING clause",
+        ),
+        (
+            "SELECT * FROM aa JOIN bb USING(nosuch)",
+            "cannot join using column nosuch - column not present in both tables",
+        ),
+        (
+            "WITH i(x,y) AS (SELECT 1) SELECT * FROM i",
+            "table i has 1 values for 2 columns",
+        ),
+        (
+            "WITH i(x) AS (SELECT 1, 2) SELECT * FROM i",
+            "table i has 2 values for 1 columns",
+        ),
+    ] {
+        assert_eq!(
+            database.query(sql.as_bytes()).unwrap_err().message(),
+            message,
+            "{sql}"
+        );
+    }
+}
+
 /// A combination of words no join is written with is refused naming
 /// the words, which `sqlite3JoinType` does: a word no join carries, and
 /// `INNER` beside `OUTER`.

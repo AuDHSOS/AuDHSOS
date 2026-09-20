@@ -158,8 +158,27 @@ fn what_is_not_written_yet_refuses_rather_than_guessing() {
     assert_eq!(refusal("EXISTS (SELECT 1)"), Error::Unsupported);
     assert_eq!(refusal("1 IN (SELECT 1)"), Error::Unsupported);
     assert_eq!(refusal("1 IN t"), Error::Unsupported);
-    assert_eq!(refusal("-0x8000000000000000"), Error::HexTooBig);
-    assert_eq!(refusal("0xFFFFFFFFFFFFFFFFF"), Error::HexTooBig);
+    assert_eq!(
+        refusal("-0x8000000000000000"),
+        Error::HexTooBig(b"-0x8000000000000000".to_vec())
+    );
+    assert_eq!(
+        refusal("0xFFFFFFFFFFFFFFFFF"),
+        Error::HexTooBig(b"0xFFFFFFFFFFFFFFFFF".to_vec())
+    );
+    // The words the refusal carries name the literal as it was written.
+    assert_eq!(
+        refusal("0xFFFFFFFFFFFFFFFFF").message(),
+        "hex literal too big: 0xFFFFFFFFFFFFFFFFF"
+    );
+    assert_eq!(
+        refusal("'a' LIKE 'b' ESCAPE 'xy'").message(),
+        "ESCAPE expression must be a single character"
+    );
+    assert_eq!(
+        refusal("abs(-9223372036854775808)").message(),
+        "integer overflow"
+    );
 }
 
 #[test]

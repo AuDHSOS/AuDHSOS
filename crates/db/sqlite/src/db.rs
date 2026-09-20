@@ -183,10 +183,12 @@ pub enum Error {
     /// than the last, with which clause it is and the word that joins
     /// that core to the one after it.
     BeforeCompound(bool, Compound),
-    /// A join that cannot be made: a `NATURAL` with a condition written
-    /// on it as well, or a `USING` that names a column one of the two
-    /// tables does not have.
-    Join,
+    /// A `NATURAL` join with a condition written on it as well, which
+    /// `sqlite3ProcessJoin` refuses.
+    NaturalJoin,
+    /// A `USING` that names a column one of the two tables does not
+    /// have, named.
+    JoinColumn(Vec<u8>),
     /// A `*` over two tables of one name, every column of which two
     /// tables would answer.
     Ambiguous,
@@ -194,8 +196,9 @@ pub enum Error {
     /// has.
     Computed,
     /// A `WITH` term that writes more or fewer column names than its
-    /// statement answers columns.
-    Names,
+    /// statement answers columns, with the name of the term, how many
+    /// values its statement answers and how many names it wrote.
+    Names(Vec<u8>, usize, usize),
     /// A statement used as a value, or looked in by an `IN`, that
     /// answers another number of columns than the place it stands in
     /// takes, with the two counts.
@@ -444,9 +447,35 @@ impl Error {
             Error::NotDroppable(name) => {
                 alloc::format!("table {} may not be dropped", shown(name))
             }
+            Error::NaturalJoin => {
+                alloc::string::String::from("a NATURAL join may not have an ON or USING clause")
+            }
+            Error::JoinColumn(name) => alloc::format!(
+                "cannot join using column {} - column not present in both tables",
+                shown(name)
+            ),
+            Error::Names(name, answered, written) => alloc::format!(
+                "table {} has {answered} values for {written} columns",
+                shown(name)
+            ),
             Error::IndexedView => alloc::string::String::from("views may not be indexed"),
             Error::ConstraintIndex => alloc::string::String::from(
                 "index associated with UNIQUE or PRIMARY KEY constraint cannot be dropped",
+            ),
+            Error::Schema(schema::Error::DuplicateColumn(name)) => {
+                alloc::format!("duplicate column name: {}", shown(name))
+            }
+            Error::Schema(schema::Error::ManyKeys(name)) => {
+                alloc::format!("table \"{}\" has more than one primary key", shown(name))
+            }
+            Error::Schema(schema::Error::MissingKey(name)) => {
+                alloc::format!("PRIMARY KEY missing on table {}", shown(name))
+            }
+            Error::Schema(schema::Error::NoSuchColumn(name)) => {
+                alloc::format!("no such column: {}", shown(name))
+            }
+            Error::Schema(schema::Error::KeyExpression) => alloc::string::String::from(
+                "expressions prohibited in PRIMARY KEY and UNIQUE constraints",
             ),
             Error::Schema(schema::Error::Autoincrement) => alloc::string::String::from(
                 "AUTOINCREMENT is only allowed on an INTEGER PRIMARY KEY",
@@ -3153,7 +3182,7 @@ impl<'a> Database<'a> {
                 .collect();
             let using = if source.join.natural {
                 if source.on.is_some() || !written.is_empty() {
-                    return Err(Error::Join);
+                    return Err(Error::NaturalJoin);
                 }
                 // A `NATURAL` join matches by every name both sides
                 // hold, in the order the side read last holds them.
@@ -3166,7 +3195,7 @@ impl<'a> Database<'a> {
             } else {
                 for name in &written {
                     if !holds(&out, name) || !shape.has(name) {
-                        return Err(Error::Join);
+                        return Err(Error::JoinColumn(name.clone()));
                     }
                 }
                 written
@@ -3424,7 +3453,7 @@ impl<'a> Database<'a> {
             Some(answered) => answered,
             None => self.statement(arena, cte.select, sql, scope)?,
         };
-        renamed(arena, cte.columns, sql, &mut answered)?;
+        renamed(arena, cte.columns, (sql, name), &mut answered)?;
         Ok(answered)
     }
 
@@ -3469,7 +3498,7 @@ impl<'a> Database<'a> {
             return Err(Error::Unsupported);
         }
         let mut answered = self.started(arena, &links, first, sql, scope)?;
-        renamed(arena, cte.columns, sql, &mut answered)?;
+        renamed(arena, cte.columns, (sql, name), &mut answered)?;
         let collations = self.collations(&answered.shape);
         let width = answered.answer.names.len();
         let mut rows: Vec<Vec<Value>> = Vec::new();
@@ -5921,7 +5950,7 @@ fn reads(arena: &Arena, core: &Select, sql: &[u8], name: &[u8]) -> bool {
 fn renamed(
     arena: &Arena,
     columns: Range,
-    sql: &[u8],
+    (sql, name): (&[u8], &[u8]),
     answered: &mut Answered,
 ) -> Result<(), Error> {
     let written = arena.names(columns);
@@ -5929,7 +5958,11 @@ fn renamed(
         return Ok(());
     }
     if written.len() != answered.answer.names.len() {
-        return Err(Error::Names);
+        return Err(Error::Names(
+            name.to_vec(),
+            answered.answer.names.len(),
+            written.len(),
+        ));
     }
     for (column, span) in answered.shape.columns.iter_mut().zip(written) {
         column.name = dequote(span.text(sql));

@@ -7,6 +7,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` writes the words the C library writes for eleven refusals
+  that carried the name of the variant, among them
+  `duplicate column name: a`, `table "t" has more than one primary key`,
+  `PRIMARY KEY missing on table t`, `a NATURAL join may not have an ON or
+  USING clause`, `table i has 1 values for 2 columns` and
+  `hex literal too big: 0x10000000000000000`. D-346 records it.
+  Catalog 6.6.234. `hexlit.test` goes from 128 cases passing to 132 and
+  `with1.test` from 75 to 79.
+
 - `db-sqlite` refuses a `DROP TABLE` or a `DROP VIEW` over a name SQLite
   keeps for itself with `table <name> may not be dropped`, beside
   `sqlite_stat` and `sqlite_parameters`, writes the row of
